@@ -4,6 +4,7 @@ use std::{
     fs::File,
     io::{BufReader, BufWriter, Read, Write},
     mem::size_of,
+    ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -725,6 +726,10 @@ pub(crate) struct GlobalPqChunkRef {
     pub(crate) exact_offset_bytes: usize,
     pub(crate) exact_size_bytes: usize,
     pub(crate) cell_index: u16,
+    /// Arrow IPC padding between the scan buffer and identity offsets.
+    pub(crate) identity_offsets_padding_bytes: u16,
+    /// Arrow IPC padding between identity offsets and identity values.
+    pub(crate) identity_values_padding_bytes: u8,
     pub(crate) row_start: usize,
     pub(crate) rows: usize,
     pub(crate) size_bytes: usize,
@@ -732,6 +737,58 @@ pub(crate) struct GlobalPqChunkRef {
     /// scan-only layout, not an error or a compatibility fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) graph: Option<GlobalCellGraphRef>,
+}
+
+impl GlobalPqChunkRef {
+    pub(crate) fn identity_ranges(&self) -> Result<(Range<usize>, Range<usize>)> {
+        let code_end = self
+            .offset_bytes
+            .checked_add(self.size_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ code range overflows".to_string())
+            })?;
+        let expected_offsets = self
+            .rows
+            .checked_add(1)
+            .and_then(|rows| rows.checked_mul(size_of::<i32>()))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global identity offsets size overflows".to_string())
+            })?;
+        let offsets_start = code_end
+            .checked_add(usize::from(self.identity_offsets_padding_bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global identity offsets range overflows".to_string())
+            })?;
+        let minimum_values_end = self
+            .rows
+            .checked_mul(size_of::<u64>())
+            .and_then(|size| {
+                offsets_start
+                    .checked_add(expected_offsets)
+                    .and_then(|offsets_end| {
+                        offsets_end.checked_add(usize::from(self.identity_values_padding_bytes))
+                    })
+                    .and_then(|values_start| values_start.checked_add(size))
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global identity values size overflows".to_string())
+            })?;
+        let offsets_end = offsets_start.checked_add(expected_offsets).ok_or_else(|| {
+            BorsukError::InvalidStorage("global identity offsets range overflows".to_string())
+        })?;
+        let values_start = offsets_end
+            .checked_add(usize::from(self.identity_values_padding_bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global identity values range overflows".to_string())
+            })?;
+        if minimum_values_end > self.exact_offset_bytes {
+            return invalid("global PQ identity ranges are invalid");
+        }
+        Ok((
+            offsets_start..offsets_end,
+            values_start..self.exact_offset_bytes,
+        ))
+    }
 }
 
 /// Disk-backed external partitioner for the global IVF/PQ serving artifact.
@@ -1123,8 +1180,8 @@ pub(crate) struct GlobalPqDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum GlobalPqBundleLayout {
-    #[serde(rename = "identity-v1")]
-    IdentityV1,
+    #[serde(rename = "identity-v2")]
+    IdentityV2,
 }
 
 impl GlobalPqDescriptor {
@@ -1186,6 +1243,7 @@ impl GlobalPqDescriptor {
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage("global PQ exact range overflows".to_string())
                 })?;
+            chunk.identity_ranges()?;
             let expected_exact = chunk
                 .rows
                 .checked_mul(vector_element_type.fixed_width_bytes(quantizer_dimensions)?)
@@ -1208,7 +1266,7 @@ impl GlobalPqDescriptor {
             return invalid("chunk rows do not match the vector count");
         }
         Ok(Self {
-            bundle_layout: GlobalPqBundleLayout::IdentityV1,
+            bundle_layout: GlobalPqBundleLayout::IdentityV2,
             quantizer,
             coarse_quantizer,
             vectors,
@@ -2031,6 +2089,8 @@ impl GlobalCellGraph {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index: self.cell_index,
+            identity_offsets_padding_bytes: 0,
+            identity_values_padding_bytes: 0,
             row_start: self.row_start,
             rows: self.rows,
             size_bytes: self.chunk.len(),
@@ -2323,9 +2383,11 @@ mod tests {
                 checksum: "ab".repeat(32),
                 offset_bytes: 0,
                 exact_checksum: "cd".repeat(32).into_boxed_str(),
-                exact_offset_bytes: 0,
+                exact_offset_bytes: 192_028,
                 exact_size_bytes: 1_024_000,
                 cell_index: (segment % 16) as u16,
+                identity_offsets_padding_bytes: 0,
+                identity_values_padding_bytes: 0,
                 row_start: segment as usize * 4_000,
                 rows: 4_000,
                 size_bytes: 144_024,
@@ -2367,9 +2429,11 @@ mod tests {
             checksum: "ab".repeat(32),
             offset_bytes: 0,
             exact_checksum: "cd".repeat(32).into_boxed_str(),
-            exact_offset_bytes: 0,
+            exact_offset_bytes: 80,
             exact_size_bytes: 64 * size_of::<f32>(),
             cell_index: 0,
+            identity_offsets_padding_bytes: 0,
+            identity_values_padding_bytes: 0,
             row_start: 0,
             rows: 1,
             size_bytes: 64,
@@ -2403,11 +2467,16 @@ mod tests {
             Vec::new(),
         )
         .unwrap();
-        let mut json = serde_json::to_value(descriptor).unwrap();
+        let mut json = serde_json::to_value(&descriptor).unwrap();
         json.as_object_mut().unwrap().remove("bundle_layout");
 
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
         assert!(error.to_string().contains("bundle_layout"));
+
+        let mut json = serde_json::to_value(descriptor).unwrap();
+        json["bundle_layout"] = serde_json::Value::String("identity-v1".to_string());
+        let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
+        assert!(error.to_string().contains("identity-v1"));
     }
 
     #[test]
@@ -2459,9 +2528,13 @@ mod tests {
             checksum: blake3::hash(&chunk.bytes).to_hex().to_string(),
             offset_bytes: 0,
             exact_checksum: String::new().into_boxed_str(),
-            exact_offset_bytes: 0,
+            exact_offset_bytes: chunk.bytes.len()
+                + (vectors.len() + 1) * size_of::<i32>()
+                + vectors.len() * size_of::<u64>(),
             exact_size_bytes: vectors.len() * 64 * size_of::<f32>(),
             cell_index: 7,
+            identity_offsets_padding_bytes: 0,
+            identity_values_padding_bytes: 0,
             row_start: 4_096,
             rows: vectors.len(),
             size_bytes: chunk.bytes.len(),
@@ -2553,9 +2626,13 @@ mod tests {
                 checksum: blake3::hash(&chunk.bytes).to_hex().to_string(),
                 offset_bytes: 0,
                 exact_checksum: "cd".repeat(32).into_boxed_str(),
-                exact_offset_bytes: 0,
+                exact_offset_bytes: chunk.bytes.len()
+                    + (chunk.rows + 1) * size_of::<i32>()
+                    + chunk.rows * size_of::<u64>(),
                 exact_size_bytes: 16_384,
                 cell_index: segment as u16,
+                identity_offsets_padding_bytes: 0,
+                identity_values_padding_bytes: 0,
                 row_start,
                 rows: chunk.rows,
                 size_bytes: chunk.bytes.len(),
@@ -2598,11 +2675,13 @@ mod tests {
                 checksum: "ab".repeat(32),
                 offset_bytes: 0,
                 exact_checksum: "cd".repeat(32).into_boxed_str(),
-                exact_offset_bytes: 0,
+                exact_offset_bytes: 1_796,
                 exact_size_bytes: 16_384,
                 // Segments 0/2 and 1/3 represent the same two semantic
                 // regions, produced by separate bounded ingest checkpoints.
                 cell_index: (segment % 2) as u16,
+                identity_offsets_padding_bytes: 0,
+                identity_values_padding_bytes: 0,
                 row_start: segment as usize * 64,
                 rows: 64,
                 size_bytes: 1_024,
@@ -2696,9 +2775,13 @@ mod tests {
                         .to_hex()
                         .to_string()
                         .into_boxed_str(),
-                    exact_offset_bytes: 0,
+                    exact_offset_bytes: chunk.bytes.len()
+                        + (chunk.rows + 1) * size_of::<i32>()
+                        + chunk.rows * size_of::<u64>(),
                     exact_size_bytes: chunk.exact_bytes.len(),
                     cell_index: cell,
+                    identity_offsets_padding_bytes: 0,
+                    identity_values_padding_bytes: 0,
                     row_start,
                     rows: chunk.rows,
                     size_bytes: chunk.bytes.len(),

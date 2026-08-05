@@ -12224,6 +12224,38 @@ impl BorsukIndex {
             for (entry, slice) in pending.iter().zip(&encoded.slices) {
                 let code = &encoded.bytes[slice.code_range.clone()];
                 let exact = &encoded.bytes[slice.exact_range.clone()];
+                let identity_offsets_padding_bytes = u16::try_from(
+                    slice
+                        .identity_offsets_range
+                        .start
+                        .checked_sub(slice.code_range.end)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global identity offsets overlap scan payload".to_string(),
+                            )
+                        })?,
+                )
+                .map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "global identity offsets padding exceeds u16".to_string(),
+                    )
+                })?;
+                let identity_values_padding_bytes = u8::try_from(
+                    slice
+                        .identity_values_range
+                        .start
+                        .checked_sub(slice.identity_offsets_range.end)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global identity values overlap offsets".to_string(),
+                            )
+                        })?,
+                )
+                .map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "global identity values padding exceeds u8".to_string(),
+                    )
+                })?;
                 let graph = self
                     .manifest
                     .build_config
@@ -12243,6 +12275,8 @@ impl BorsukIndex {
                                 exact_offset_bytes: slice.exact_range.start,
                                 exact_size_bytes: exact.len(),
                                 cell_index: entry.cell_index,
+                                identity_offsets_padding_bytes,
+                                identity_values_padding_bytes,
                                 row_start: entry.row_start,
                                 rows: entry.chunk.rows,
                                 size_bytes: code.len(),
@@ -12282,6 +12316,8 @@ impl BorsukIndex {
                     exact_offset_bytes: slice.exact_range.start,
                     exact_size_bytes: exact.len(),
                     cell_index: entry.cell_index,
+                    identity_offsets_padding_bytes,
+                    identity_values_padding_bytes,
                     row_start: entry.row_start,
                     rows: entry.chunk.rows,
                     size_bytes: code.len(),
@@ -16519,7 +16555,7 @@ impl BorsukIndex {
                 })?;
                 requested.push((start as u64..end as u64, RequestedRow::Exact { node }));
             }
-            let (offsets_range, values_range) = global_pq_identity_ranges(chunk)?;
+            let (offsets_range, values_range) = chunk.identity_ranges()?;
             requested.push((
                 offsets_range.start as u64..offsets_range.end as u64,
                 RequestedRow::IdentityOffsets {
@@ -17536,45 +17572,6 @@ struct EncodedGlobalPqBundle {
     slices: Vec<GlobalPqBundleSlice>,
 }
 
-const GLOBAL_PQ_ARROW_BUFFER_ALIGNMENT: usize = 64;
-
-fn global_pq_identity_buffer_ranges(
-    code_end: usize,
-    rows: usize,
-    exact_offset: usize,
-) -> Result<(Range<usize>, Range<usize>)> {
-    let offsets_start = code_end
-        .checked_next_multiple_of(GLOBAL_PQ_ARROW_BUFFER_ALIGNMENT)
-        .and_then(|value| value.checked_add(GLOBAL_PQ_ARROW_BUFFER_ALIGNMENT))
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage("global identity offsets overflow".to_string())
-        })?;
-    let offsets_end = offsets_start
-        .checked_add(rows.saturating_add(1).saturating_mul(4))
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage("global identity offsets overflow".to_string())
-        })?;
-    let values_start = offsets_end
-        .checked_next_multiple_of(GLOBAL_PQ_ARROW_BUFFER_ALIGNMENT)
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage("global identity values overflow".to_string())
-        })?;
-    if values_start > exact_offset {
-        return Err(BorsukError::InvalidStorage(
-            "global identity buffers overlap the exact-vector payload".to_string(),
-        ));
-    }
-    Ok((offsets_start..offsets_end, values_start..exact_offset))
-}
-
-fn global_pq_identity_ranges(chunk: &GlobalPqChunkRef) -> Result<(Range<usize>, Range<usize>)> {
-    let code_end = chunk
-        .offset_bytes
-        .checked_add(chunk.size_bytes)
-        .ok_or_else(|| BorsukError::InvalidStorage("global code range overflows".to_string()))?;
-    global_pq_identity_buffer_ranges(code_end, chunk.rows, chunk.exact_offset_bytes)
-}
-
 fn encode_global_pq_arrow_bundle(
     pending: &[PendingGlobalPqChunk],
     code_width: usize,
@@ -17677,21 +17674,6 @@ fn encode_global_pq_arrow_bundle(
         writer.finish()?;
     }
     let slices = global_pq_arrow_buffer_ranges(&bytes, pending.len())?;
-    for slice in &slices {
-        let (offsets, values) = global_pq_identity_buffer_ranges(
-            slice.code_range.end,
-            (slice.identity_offsets_range.len() / 4).saturating_sub(1),
-            slice.exact_range.start,
-        )?;
-        if offsets != slice.identity_offsets_range
-            || values.start != slice.identity_values_range.start
-            || values.end < slice.identity_values_range.end
-        {
-            return Err(BorsukError::InvalidStorage(
-                "global PQ Arrow identity layout is not range-addressable".to_string(),
-            ));
-        }
-    }
     Ok(EncodedGlobalPqBundle { bytes, slices })
 }
 
@@ -22269,6 +22251,8 @@ mod tests {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index: 0,
+            identity_offsets_padding_bytes: 0,
+            identity_values_padding_bytes: 0,
             row_start: 0,
             rows: 1,
             size_bytes,
@@ -22295,6 +22279,8 @@ mod tests {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index,
+            identity_offsets_padding_bytes: 0,
+            identity_values_padding_bytes: 0,
             row_start: 0,
             rows: 1,
             size_bytes,
@@ -22333,6 +22319,8 @@ mod tests {
             exact_offset_bytes: 1_000_000,
             exact_size_bytes: 4,
             cell_index,
+            identity_offsets_padding_bytes: 0,
+            identity_values_padding_bytes: 0,
             row_start: cell_index as usize,
             rows: 1,
             size_bytes: 100,
@@ -22440,6 +22428,44 @@ mod tests {
                 .flat_map(f32::to_le_bytes)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn global_pq_bundle_keeps_large_identity_buffers_range_addressable() {
+        const ROWS: usize = 5_461;
+        const DIMENSIONS: usize = 768;
+        const CODE_WIDTH: usize = 32;
+        let location = LocationEncoding::for_layout(1, 65_536).unwrap();
+        let scan_row_width = CODE_WIDTH + location.width_bytes();
+        let identities = (0..ROWS)
+            .map(|row| (RecordId::from(format!("cohere-row-{row}")), row as u64))
+            .collect();
+        let pending = vec![PendingGlobalPqChunk {
+            cell_index: 0,
+            row_start: 0,
+            chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
+                bytes: vec![0; ROWS * scan_row_width],
+                exact_bytes: vec![0; ROWS * DIMENSIONS * size_of::<f32>()],
+                identities,
+                rows: ROWS,
+            },
+        }];
+
+        let encoded = encode_global_pq_arrow_bundle(
+            &pending,
+            CODE_WIDTH,
+            location,
+            DIMENSIONS,
+            crate::VectorElementType::Float32,
+        )
+        .unwrap();
+
+        assert_eq!(encoded.slices.len(), 1);
+        assert_eq!(
+            encoded.slices[0].identity_offsets_range.len(),
+            (ROWS + 1) * size_of::<i32>()
+        );
+        assert!(!encoded.slices[0].identity_values_range.is_empty());
     }
 
     #[test]
