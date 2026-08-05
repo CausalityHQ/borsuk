@@ -213,10 +213,11 @@ for cells in "${CELL_COUNTS[@]}"; do
     BORSUK_ROUTING_DIMENSIONS="$DIMENSIONS" \
     "$ROUTING_BINARY" build
   for repetition in $(seq 1 "$REPETITIONS"); do
-    rotation="$(((repetition - 1) % ${#WRITERS[@]}))"
-    rotate_order "$rotation" "${WRITERS[@]}"
+    writer_rotation="$(((repetition - 1) % ${#WRITERS[@]}))"
+    lane_rotation="$(((repetition - 1) % ${#WORKER_LANES[@]}))"
+    rotate_order "$writer_rotation" "${WRITERS[@]}"
     ORDER=("${ROTATED_ORDER[@]}")
-    rotate_order "$rotation" "${WORKER_LANES[@]}"
+    rotate_order "$lane_rotation" "${WORKER_LANES[@]}"
     LANE_ORDER=("${ROTATED_ORDER[@]}")
     if [[ "$SMOKE" == "1" ]]; then ORDER=(1); LANE_ORDER=(1); fi
     for worker_lanes in "${LANE_ORDER[@]}"; do
@@ -235,6 +236,7 @@ for cells in "${CELL_COUNTS[@]}"; do
       mkdir -p "$(dirname "$cell_output")"
       CURRENT_CELL="$cell_output"
       resource_output="${cell_output}.resources.csv"
+      storage_trace_output="${cell_output}.storage-access.csv"
       set +e
       env \
         BORSUK_GROUP_COMMIT_PROTOCOL="$PROTOCOL" \
@@ -259,6 +261,7 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_READ_QUERIES="$READ_QUERIES" \
         BORSUK_GROUP_COMMIT_PIPELINE_DEPTH="$PIPELINE_DEPTH" \
         BORSUK_GROUP_COMMIT_WORKER_LANES="$worker_lanes" \
+        BORSUK_STORAGE_TRACE="$storage_trace_output" \
         python3 "$ROOT_DIR/scripts/benchmark_with_resources.py" \
           --output "$resource_output" \
           --interval-ms "$RESOURCE_INTERVAL_MS" \
@@ -267,6 +270,7 @@ for cells in "${CELL_COUNTS[@]}"; do
       set -e
       mkdir -p "$cell_output"
       mv "$resource_output" "$cell_output/resources.csv"
+      mv "$storage_trace_output" "$cell_output/storage-access.csv"
       printf '%s\n' "$status" > "$cell_output/process_exit.txt"
       if (( status != 0 )); then
         exit "$status"
@@ -322,7 +326,7 @@ for name in ("summary.csv", "samples.csv", "reads.csv"):
 PY
 
 if [[ "$SMOKE" == "1" ]]; then
-  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\npreregistered_lane_factor_safety,pass\n' > "$OUTPUT/correctness.csv"
+  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\npreregistered_lane_factor_safety,pass\ntransient_spill_failure_recovery,pass\npersistent_spill_failure_backpressure,pass\n' > "$OUTPUT/correctness.csv"
 else
   run_exact_test group_commit concurrent_appends_share_one_durable_wal_transaction
   run_exact_test fault_injection collection_transaction_is_invisible_when_pending_publication_fails
@@ -331,7 +335,9 @@ else
   run_exact_test group_commit alternating_writer_lanes_preserve_sequential_last_write_wins
   run_exact_test group_commit drain_checkpoints_every_preceding_group_and_removes_pending_objects
   run_exact_test group_commit preregistered_worker_lane_factors_preserve_ack_reopen_last_write_and_drain
-  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\npreregistered_lane_factor_safety,pass\n' > "$OUTPUT/correctness.csv"
+  run_exact_test fault_injection failed_post_ack_spill_keeps_inline_records_visible_and_retries_before_next_append
+  run_exact_test fault_injection persistent_spill_failure_keeps_the_lane_backpressured
+  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\npreregistered_lane_factor_safety,pass\ntransient_spill_failure_recovery,pass\npersistent_spill_failure_backpressure,pass\n' > "$OUTPUT/correctness.csv"
 fi
 
 printf 'complete\n' > "$OUTPUT/GROUP_COMMIT_SCALABILITY_COMPLETE"

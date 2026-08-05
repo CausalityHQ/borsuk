@@ -35,6 +35,8 @@ class ValidatorTests(unittest.TestCase):
             "min_inserted_id_recall_at_10": 1.0,
             "max_read_p95_ms": 200.0,
             "max_write_p95_ms": 200.0,
+            "max_acknowledgement_bytes": 4096,
+            "max_physical_write_amplification": 16.0,
             "min_records_per_second": 10_000.0,
             "min_end_to_end_records_per_second": 100.0,
             "throughput_gate_writers": [],
@@ -121,6 +123,25 @@ class ValidatorTests(unittest.TestCase):
             "heads": "0", "lists": "1", "bytes_read": "1024", "segments_searched": "4",
         }]
         self._write_csv(cell / "reads.csv", read_fields, reads)
+        self._write_csv(
+            cell / "storage-access.csv",
+            [
+                "operation", "object_role", "path", "physical_format",
+                "object_bytes", "request_count", "bytes_fetched",
+                "logical_projection", "row_selection", "logical_rows_requested",
+                "logical_rows_decoded", "decode_cpu_ns", "cache_state", "status",
+            ],
+            [
+                {
+                    "operation": "write", "object_role": "lane_head",
+                    "path": "lane-log/lanes/0000/HEAD", "physical_format": "packed",
+                    "object_bytes": "512", "request_count": "1", "bytes_fetched": "0",
+                    "logical_projection": "", "row_selection": "",
+                    "logical_rows_requested": "", "logical_rows_decoded": "",
+                    "decode_cpu_ns": "", "cache_state": "backing", "status": "ok",
+                }
+            ],
+        )
         self._write_csv(
             cell / "resources.csv",
             ["elapsed_ms", "cpu_percent", "rss_bytes"],
@@ -212,6 +233,37 @@ class ValidatorTests(unittest.TestCase):
         records[0]["p95_ms"] = "200.001"
         self._write_csv(summary_path, fields, records)
         with self.assertRaisesRegex(ValidationError, "production p95"):
+            validate(self.root, self.manifest_path)
+
+    def test_acknowledgement_byte_bound_fails_closed(self) -> None:
+        summary_path = self.root / "cells/c64/r01/l1/w1/summary.csv"
+        sample_path = self.root / "cells/c64/r01/l1/w1/samples.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["max_acknowledgement_bytes"] = "4097"
+        records[0]["total_acknowledgement_bytes"] = "4097"
+        self._write_csv(summary_path, fields, records)
+        with sample_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        for record in records:
+            record["acknowledgement_bytes"] = "4097"
+        self._write_csv(sample_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "acknowledgement byte bound"):
+            validate(self.root, self.manifest_path)
+
+    def test_physical_write_amplification_fails_closed(self) -> None:
+        trace_path = self.root / "cells/c64/r01/l1/w1/storage-access.csv"
+        with trace_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["object_bytes"] = str(2 * 8 * 4 * 16 + 1)
+        self._write_csv(trace_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "physical write amplification"):
             validate(self.root, self.manifest_path)
 
     def test_summary_write_percentiles_must_match_raw_samples(self) -> None:

@@ -18,6 +18,8 @@
   "read_queries_per_cell": 1,
   "max_read_segments": 4,
   "min_inserted_id_recall_at_10": 1.0,
+  "max_acknowledgement_bytes": 1048576,
+  "max_physical_write_amplification": 1000000.0,
   "required_artifacts": [
     "summary.csv",
     "samples.csv",
@@ -33,7 +35,9 @@
     "acknowledged_lane_reopen_recovery",
     "sequential_last_write_wins",
     "drain_checkpoint",
-    "preregistered_lane_factor_safety"
+    "preregistered_lane_factor_safety",
+    "transient_spill_failure_recovery",
+    "persistent_spill_failure_backpressure"
   ],
   "comparison_contract": "Structural smoke only; ineligible for performance claims."
 }

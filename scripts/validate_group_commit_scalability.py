@@ -315,6 +315,28 @@ def validate(
             == integer(summary["max_acknowledgement_bytes"], "maximum acknowledgement bytes"),
             f"acknowledgement byte maximum drift in {cell}",
         )
+        require(
+            max_acknowledgement_bytes <= int(manifest["max_acknowledgement_bytes"]),
+            f"acknowledgement byte bound exceeded in {cell}",
+        )
+        storage_events = rows(cell / "storage-access.csv")
+        require(bool(storage_events), f"missing physical storage evidence in {cell}")
+        physical_write_bytes = 0
+        for event in storage_events:
+            object_bytes = integer(event["object_bytes"], "physical object bytes")
+            request_count = integer(event["request_count"], "physical request count")
+            require(
+                object_bytes >= 0 and request_count >= 0,
+                f"negative physical storage evidence in {cell}",
+            )
+            if event["operation"] == "write" and event["status"] == "ok":
+                physical_write_bytes += object_bytes
+        input_vector_bytes = expected_records * int(manifest["dimensions"]) * 4
+        require(
+            physical_write_bytes
+            <= input_vector_bytes * float(manifest["max_physical_write_amplification"]),
+            f"physical write amplification exceeded in {cell}",
+        )
         total_requests = sum(evidence[2] for evidence in groups.values())
         require(total_requests == integer(summary["storage_requests"], "storage requests"), f"request reconciliation failed in {cell}")
         require(len(groups) == integer(summary["groups"], "groups"), f"group count mismatch in {cell}")

@@ -42,6 +42,8 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertEqual(manifest["pipeline_depth_per_writer"], 4)
         self.assertEqual(manifest["throughput_gate_writers"], [32])
         self.assertEqual(manifest["min_end_to_end_records_per_second"], 10_000.0)
+        self.assertEqual(manifest["max_acknowledgement_bytes"], 2_097_152)
+        self.assertEqual(manifest["max_physical_write_amplification"], 16.0)
         self.assertEqual(manifest["execution_order_policy"], "cyclic-latin-order-per-repetition")
         self.assertEqual(
             manifest["correctness_gates"],
@@ -53,6 +55,8 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
                 "sequential_last_write_wins",
                 "drain_checkpoint",
                 "preregistered_lane_factor_safety",
+                "transient_spill_failure_recovery",
+                "persistent_spill_failure_backpressure",
             ],
         )
 
@@ -118,8 +122,16 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
 
     def test_repetitions_rotate_writer_and_lane_order(self) -> None:
         self.assertIn("rotate_order()", RUNNER)
-        self.assertIn('rotate_order "$rotation" "${WRITERS[@]}"', RUNNER)
-        self.assertIn('rotate_order "$rotation" "${WORKER_LANES[@]}"', RUNNER)
+        self.assertIn('writer_rotation="$(((repetition - 1) % ${#WRITERS[@]}))"', RUNNER)
+        self.assertIn('lane_rotation="$(((repetition - 1) % ${#WORKER_LANES[@]}))"', RUNNER)
+        self.assertIn('rotate_order "$writer_rotation" "${WRITERS[@]}"', RUNNER)
+        self.assertIn('rotate_order "$lane_rotation" "${WORKER_LANES[@]}"', RUNNER)
+
+    def test_runner_records_physical_storage_trace_for_spill_amplification(self) -> None:
+        self.assertIn('BORSUK_STORAGE_TRACE="$storage_trace_output"', RUNNER)
+        self.assertIn('mv "$storage_trace_output" "$cell_output/storage-access.csv"', RUNNER)
+        self.assertIn("transient_spill_failure_recovery", RUNNER)
+        self.assertIn("persistent_spill_failure_backpressure", RUNNER)
 
     def test_lane_treatments_use_identical_record_ids(self) -> None:
         self.assertIn("production_record_id(ordinal)", BENCH)
