@@ -75,31 +75,31 @@
 - Consumes: `BORSUK_BENCH_INSERT_ONLY=1`, a previously built immutable base URI, `BORSUK_BENCH_WRITE_BATCH_SIZE`, and `BORSUK_BENCH_WRITE_OPS`.
 - Produces: `bench_write_costs.csv`, `bench_write_samples.csv`, `INSERT_VISIBILITY_COMPLETE`, and no fabricated fully-indexed or consolidation fields.
 
-- [ ] **Step 1: Write a RED phase-selection test**
+- [x] **Step 1: Write a RED phase-selection test**
 
   Add `validate_insert_only(insert_only, build_only, read_only)` and assert insert-only rejects build-only/read-only combinations but accepts an ordinary mutable run.
 
-- [ ] **Step 2: Run the RED test**
+- [x] **Step 2: Run the RED test**
 
   Run: `cargo test -p borsuk --example production_bench insert_only_is_a_distinct_mutation_phase --no-run`
 
   Expected: unresolved import/function failure for `validate_insert_only`.
 
-- [ ] **Step 3: Extract aggregate/sample artifact writing**
+- [x] **Step 3: Extract aggregate/sample artifact writing**
 
   Move the existing write-cost and write-sample serialization into `write_cost_artifacts(config: &ResolvedConfig, rows: &[WriteRow]) -> BenchResult<()>` without changing headers or numeric formulas.
 
-- [ ] **Step 4: Implement insert-only execution**
+- [x] **Step 4: Implement insert-only execution**
 
   After build-only handling and before recall/query phases, open the base, call `measure_inserts`, validate all sampled inserted IDs with one `get_records` call, write only the insert row/raw samples, create `INSERT_VISIBILITY_COMPLETE`, and return.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
   Run: `cargo test -p borsuk --example production_bench`
 
   Run: `cargo clippy -p borsuk --example production_bench --all-features -- -D warnings`
 
-- [ ] **Step 6: Commit and fast-forward push**
+- [x] **Step 6: Commit and fast-forward push**
 
   Commit message: `bench: isolate durable insert qualification`
 
@@ -266,4 +266,3 @@
 - [ ] **Step 4: Commit and fast-forward push terminal history**
 
   Commit message: `docs: record realistic production qualification`
-
