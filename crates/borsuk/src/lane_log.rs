@@ -20,6 +20,16 @@ const MAX_UNMATERIALIZED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_UNMATERIALIZED_RECORDS: u64 = 65_536;
 const ID_AUTHORITY_ENTRY_OVERHEAD_BYTES: u64 = 80;
 
+/// Durable identity and foreground object-store cost of one lane append.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LaneLogReceipt {
+    pub(crate) lane: u16,
+    pub(crate) lease_epoch: u64,
+    pub(crate) sequence: u64,
+    pub(crate) records: u64,
+    pub(crate) requests: RequestCounts,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaneIdState {
     Live,
@@ -867,7 +877,7 @@ impl LaneLogWriter {
     }
 
     #[cfg(test)]
-    fn append(&mut self, payload: &[u8], records: u64) -> Result<()> {
+    fn append(&mut self, payload: &[u8], records: u64) -> Result<LaneLogReceipt> {
         self.append_with_deltas(payload, records, &[])
     }
 
@@ -876,21 +886,29 @@ impl LaneLogWriter {
         payload: &[u8],
         records: u64,
         deltas: &[LaneIdDelta],
-    ) -> Result<()> {
+    ) -> Result<LaneLogReceipt> {
         if self.recovery_required {
             return Err(BorsukError::ConcurrentModification {
                 path: format!("{}/RECOVERY_REQUIRED", head_path(self.head.lane)),
             });
         }
+        let before = self.request_counts();
         let sequence = self.head.committed_sequence.checked_add(1).ok_or_else(|| {
             BorsukError::InvalidStorage("lane-log sequence exceeds u64".to_string())
         })?;
         let block = self.stage_block_with_deltas(sequence, payload, records, deltas)?;
-        self.publish_staged(block)
+        self.publish_staged(block)?;
+        Ok(LaneLogReceipt {
+            lane: self.head.lane,
+            lease_epoch: self.head.lease_epoch,
+            sequence,
+            records,
+            requests: self.request_counts().delta(&before),
+        })
     }
 
     #[cfg(test)]
-    fn append_at(&mut self, payload: &[u8], records: u64, now_ms: u64) -> Result<()> {
+    fn append_at(&mut self, payload: &[u8], records: u64, now_ms: u64) -> Result<LaneLogReceipt> {
         if now_ms >= self.head.lease_expires_at_ms {
             return Err(BorsukError::ConcurrentModification {
                 path: format!("{}/LEASE_EXPIRED", head_path(self.head.lane)),
@@ -899,7 +917,12 @@ impl LaneLogWriter {
         self.append(payload, records)
     }
 
-    fn append_insert_at(&mut self, payload: &[u8], ids: &[&[u8]], now_ms: u64) -> Result<()> {
+    fn append_insert_at(
+        &mut self,
+        payload: &[u8],
+        ids: &[&[u8]],
+        now_ms: u64,
+    ) -> Result<LaneLogReceipt> {
         let authority = self.id_authority.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage(
                 "strict lane insert requires an exact ID authority".to_string(),
@@ -918,15 +941,20 @@ impl LaneLogWriter {
                 state: LaneIdDeltaState::Live,
             })
             .collect::<Vec<_>>();
-        self.append_with_deltas(payload, ids.len() as u64, &deltas)?;
+        let receipt = self.append_with_deltas(payload, ids.len() as u64, &deltas)?;
         self.id_authority
             .as_mut()
             .expect("exact authority remains installed")
             .commit_insert(prepared, resident_bytes);
-        Ok(())
+        Ok(receipt)
     }
 
-    fn append_upsert_at(&mut self, payload: &[u8], ids: &[&[u8]], now_ms: u64) -> Result<()> {
+    fn append_upsert_at(
+        &mut self,
+        payload: &[u8],
+        ids: &[&[u8]],
+        now_ms: u64,
+    ) -> Result<LaneLogReceipt> {
         let authority = self.id_authority.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage("lane upsert requires an exact ID authority".to_string())
         })?;
@@ -940,7 +968,12 @@ impl LaneLogWriter {
         )
     }
 
-    fn append_delete_at(&mut self, payload: &[u8], ids: &[&[u8]], now_ms: u64) -> Result<()> {
+    fn append_delete_at(
+        &mut self,
+        payload: &[u8],
+        ids: &[&[u8]],
+        now_ms: u64,
+    ) -> Result<LaneLogReceipt> {
         let authority = self.id_authority.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage("lane delete requires an exact ID authority".to_string())
         })?;
@@ -955,7 +988,12 @@ impl LaneLogWriter {
         )
     }
 
-    fn append_purge_at(&mut self, payload: &[u8], ids: &[&[u8]], now_ms: u64) -> Result<()> {
+    fn append_purge_at(
+        &mut self,
+        payload: &[u8],
+        ids: &[&[u8]],
+        now_ms: u64,
+    ) -> Result<LaneLogReceipt> {
         let authority = self.id_authority.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage("lane purge requires an exact ID authority".to_string())
         })?;
@@ -977,7 +1015,7 @@ impl LaneLogWriter {
         state: LaneIdDeltaState,
         now_ms: u64,
         resident_bytes: u64,
-    ) -> Result<()> {
+    ) -> Result<LaneLogReceipt> {
         if now_ms >= self.head.lease_expires_at_ms {
             return Err(BorsukError::ConcurrentModification {
                 path: format!("{}/LEASE_EXPIRED", head_path(self.head.lane)),
@@ -990,12 +1028,12 @@ impl LaneLogWriter {
                 state,
             })
             .collect::<Vec<_>>();
-        self.append_with_deltas(payload, ids.len() as u64, &deltas)?;
+        let receipt = self.append_with_deltas(payload, ids.len() as u64, &deltas)?;
         self.id_authority
             .as_mut()
             .expect("exact authority remains installed")
             .commit_state(ids.to_vec(), state, resident_bytes);
-        Ok(())
+        Ok(receipt)
     }
 
     fn renew_at(&mut self, now_ms: u64, ttl_ms: u64) -> Result<()> {
@@ -1070,11 +1108,14 @@ mod tests {
     fn warm_lane_append_is_exactly_two_puts_and_zero_reads() {
         let mut writer = writer("memory:///lane-two-write-boundary");
         writer.append(b"first", 1).unwrap();
-        let before = writer.request_counts();
 
-        writer.append(b"second", 1).unwrap();
+        let receipt = writer.append(b"second", 1).unwrap();
 
-        let requests = writer.request_counts().delta(&before);
+        assert_eq!(receipt.lane, 3);
+        assert_eq!(receipt.lease_epoch, 7);
+        assert_eq!(receipt.sequence, 2);
+        assert_eq!(receipt.records, 1);
+        let requests = receipt.requests;
         assert_eq!(requests.puts, 2, "one block plus one HEAD: {requests:?}");
         assert_eq!(
             requests.gets, 0,
