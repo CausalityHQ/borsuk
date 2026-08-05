@@ -622,7 +622,7 @@ pub struct BorsukIndex {
     /// snapshot.
     cell_wal_snapshot: Vec<CommittedCellWalTransaction>,
     /// HEAD-reachable records from the format-v25 fixed ownership lanes.
-    lane_log_snapshot: Vec<VectorRecord>,
+    lane_log_snapshot: Vec<crate::lane_log::LaneLogRecordBlock>,
     lane_log_committed_sequences: Vec<u64>,
     lane_log_head_checksums: Vec<[u8; 32]>,
     /// Unstable double-collect attempts before the current cell-WAL snapshot.
@@ -1915,7 +1915,11 @@ impl BorsukIndex {
         }
 
         let mut newest = HashMap::<Vec<u8>, VectorRecord>::new();
-        for record in &self.lane_log_snapshot {
+        for record in self
+            .lane_log_snapshot
+            .iter()
+            .flat_map(|block| block.records.iter())
+        {
             let key = record.id.as_bytes().to_vec();
             match newest.entry(key) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
@@ -1993,7 +1997,11 @@ impl BorsukIndex {
             self.collection_storage.clone(),
             u16::from(self.manifest.cell_wal_config.lane_count),
         )?
-        .read_snapshot_if_changed(&self.lane_log_head_checksums, &self.wal_tail_runtime)
+        .read_snapshot_if_changed(
+            &self.lane_log_head_checksums,
+            &self.lane_log_snapshot,
+            &self.wal_tail_runtime,
+        )
     }
 
     /// Clone the pinned handle state for an independent foreground writer lane.
@@ -3090,7 +3098,7 @@ impl BorsukIndex {
                 "new index handle did not receive an initial lane-log snapshot".to_string(),
             )
         })?;
-        index.lane_log_snapshot = lane_log_snapshot.records;
+        index.lane_log_snapshot = lane_log_snapshot.record_blocks;
         index.lane_log_committed_sequences = lane_log_snapshot.committed_sequences;
         index.lane_log_head_checksums = lane_log_snapshot.head_checksums;
         index.manifest.cell_wal_visible_runs = cell_wal_run_count(&index.cell_wal_snapshot);
@@ -3624,7 +3632,7 @@ impl BorsukIndex {
         self.manifest_reference = own_reference;
         self.cell_wal_snapshot = latest_cell_wal_snapshot;
         if let Some(latest_lane_log_snapshot) = latest_lane_log_snapshot {
-            self.lane_log_snapshot = latest_lane_log_snapshot.records;
+            self.lane_log_snapshot = latest_lane_log_snapshot.record_blocks;
             self.lane_log_committed_sequences = latest_lane_log_snapshot.committed_sequences;
             self.lane_log_head_checksums = latest_lane_log_snapshot.head_checksums;
         }
@@ -8613,7 +8621,9 @@ impl BorsukIndex {
         selected_cells: Option<&BTreeSet<LogicalCellId>>,
     ) -> Result<Vec<VectorRecord>> {
         let mut tail = self.wal_tail_for_cells(selected_cells)?.as_ref().clone();
-        tail.extend(self.lane_log_snapshot.iter().cloned());
+        for block in &self.lane_log_snapshot {
+            tail.extend(block.records.iter().cloned());
+        }
         if tail.is_empty() {
             return Ok(Vec::new());
         }

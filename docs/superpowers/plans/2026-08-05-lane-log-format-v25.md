@@ -149,10 +149,14 @@ one fixed GET per lane HEAD, but an unchanged HEAD set now reuses the pinned
 snapshot without fetching or decoding any immutable block. When a HEAD advances,
 reachable blocks are resolved concurrently across all lanes and previously
 decoded checksum-addressed blocks are reused from the byte-bounded WAL cache, so
-only new blocks issue GETs. Real request-counter regressions cover both cases and
-the public refresh path. The remaining public refresh LIST belongs to the legacy
-cell-WAL compatibility path and must disappear with the format-v25 activation
-cutover; this slice does not claim the final zero-LIST read gate.
+only new blocks issue GETs. The pinned snapshot also owns immutable per-block
+record arcs keyed by path and generation. An advancing HEAD therefore reuses old
+decoded blocks even with a zero-byte cache instead of copying the entire bounded
+tail; retired descriptors release their snapshot references naturally. Real
+request-counter and pointer-identity regressions cover these cases and the public
+refresh path. The remaining public refresh LIST belongs to the legacy cell-WAL
+compatibility path and must disappear with the format-v25 activation cutover;
+this slice does not claim the final zero-LIST read gate.
 
 ## Exact gates before AWS
 
