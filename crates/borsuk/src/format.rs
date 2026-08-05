@@ -100,7 +100,9 @@ use crate::{
 // flush assigns physical cells. Old per-cell tails must not mix with bundles.
 // Bumped 22 -> 23 when bundled ID-directory entries became hash-partitioned by
 // logical cell, allowing insert-only validation to avoid decoding vector runs.
-const CURRENT_VERSION: u16 = 23;
+// Bumped 23 -> 24 when production segment/routing ID blooms expanded while
+// live tombstone-run blooms retained their separate compact width.
+const CURRENT_VERSION: u16 = 24;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

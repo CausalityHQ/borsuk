@@ -5525,7 +5525,7 @@ impl BorsukIndex {
             decoded_tombstone_overlay_bytes(&decoded),
         );
         Ok(Some(TombstoneSummary {
-            id_bloom: segment_id_bloom(entries.iter().map(|(id, _)| id)),
+            id_bloom: crate::manifest::tombstone_id_bloom(entries.iter().map(|(id, _)| id)),
             count: entries.len() as u64,
             path,
             checksum,
@@ -7969,7 +7969,9 @@ impl BorsukIndex {
                     cell: bundle_cell,
                     kind: CellWalRunKind::Tombstones,
                     metadata: cell_wal_tombstone_metadata_bytes(&CellWalTombstoneMetadata {
-                        id_bloom: segment_id_bloom(bundled_tombstones.iter().map(|(id, _)| id)),
+                        id_bloom: crate::manifest::tombstone_id_bloom(
+                            bundled_tombstones.iter().map(|(id, _)| id),
+                        ),
                         created_at: tombstone.created_at,
                     })?,
                     bytes,

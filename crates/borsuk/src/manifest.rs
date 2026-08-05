@@ -13,7 +13,8 @@ use crate::{
 };
 
 pub(crate) const TABLE_EXTENSION: &str = "parquet";
-pub(crate) const SEGMENT_ID_BLOOM_BYTES: usize = 128;
+pub(crate) const SEGMENT_ID_BLOOM_BYTES: usize = 8 * 1024;
+pub(crate) const TOMBSTONE_ID_BLOOM_BYTES: usize = 128;
 pub(crate) const SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES: usize = 256;
 /// Default number of routing page refs grouped into each routing parent page.
 pub const DEFAULT_ROUTING_PAGE_FANOUT: usize = 128;
@@ -390,10 +391,10 @@ pub(crate) struct TombstoneSummary {
 impl TombstoneSummary {
     /// Bloom fast-path: `false` means the id is definitely not deleted.
     pub(crate) fn might_contain_record_id(&self, id: impl AsRef<[u8]>) -> bool {
-        if self.id_bloom.len() != SEGMENT_ID_BLOOM_BYTES {
+        if self.id_bloom.len() != TOMBSTONE_ID_BLOOM_BYTES {
             return true;
         }
-        bloom_contains(&self.id_bloom, id)
+        bloom_contains_with_bits(&self.id_bloom, id, TOMBSTONE_ID_BLOOM_BYTES * 8)
     }
 
     pub(crate) fn resident_bytes_estimate(&self) -> usize {
@@ -932,6 +933,16 @@ pub(crate) fn segment_id_bloom(ids: impl IntoIterator<Item = impl AsRef<[u8]>>) 
     bloom
 }
 
+pub(crate) fn tombstone_id_bloom(ids: impl IntoIterator<Item = impl AsRef<[u8]>>) -> Vec<u8> {
+    let mut bloom = vec![0_u8; TOMBSTONE_ID_BLOOM_BYTES];
+    for id in ids {
+        for position in bloom_positions_with_bits(id, TOMBSTONE_ID_BLOOM_BYTES * 8) {
+            bloom[position / 8] |= 1_u8 << (position % 8);
+        }
+    }
+    bloom
+}
+
 pub(crate) fn segment_vector_signature_bloom<'a>(
     vectors: impl IntoIterator<Item = &'a [f32]>,
 ) -> Vec<u8> {
@@ -1093,9 +1104,15 @@ fn normalized_euclidean_lower_bound_to_metric(
 }
 
 fn bloom_positions(id: impl AsRef<[u8]>) -> [usize; SEGMENT_ID_BLOOM_HASHES] {
+    bloom_positions_with_bits(id, SEGMENT_ID_BLOOM_BYTES * 8)
+}
+
+fn bloom_positions_with_bits(
+    id: impl AsRef<[u8]>,
+    bit_count: usize,
+) -> [usize; SEGMENT_ID_BLOOM_HASHES] {
     let hash = blake3::hash(id.as_ref());
     let bytes = hash.as_bytes();
-    let bit_count = SEGMENT_ID_BLOOM_BYTES * 8;
     let mut positions = [0_usize; SEGMENT_ID_BLOOM_HASHES];
     for (index, position) in positions.iter_mut().enumerate() {
         let start = index * 4;
@@ -1108,6 +1125,12 @@ fn bloom_positions(id: impl AsRef<[u8]>) -> [usize; SEGMENT_ID_BLOOM_HASHES] {
         *position = value as usize % bit_count;
     }
     positions
+}
+
+fn bloom_contains_with_bits(bloom: &[u8], id: impl AsRef<[u8]>, bit_count: usize) -> bool {
+    bloom_positions_with_bits(id, bit_count)
+        .into_iter()
+        .all(|position| bloom[position / 8] & (1_u8 << (position % 8)) != 0)
 }
 
 fn vector_signature_bloom_positions(
@@ -1133,6 +1156,29 @@ fn vector_signature_bloom_positions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_segment_id_bloom_keeps_absent_lookup_amplification_bounded() {
+        let stored = (0..5_461)
+            .map(|ordinal| format!("stored-{ordinal}"))
+            .collect::<Vec<_>>();
+        let bloom = segment_id_bloom(&stored);
+
+        assert!(stored.iter().all(|id| bloom_contains(&bloom, id)));
+        let false_positives = (0..10_000)
+            .map(|ordinal| format!("absent-{ordinal}"))
+            .filter(|id| bloom_contains(&bloom, id))
+            .count();
+        assert!(
+            false_positives <= 100,
+            "one production-sized segment admitted {false_positives}/10000 absent IDs"
+        );
+    }
+
+    #[test]
+    fn tombstone_run_bloom_stays_compact() {
+        assert_eq!(tombstone_id_bloom(["deleted"]).len(), 128);
+    }
 
     #[test]
     fn simd_routing_bounds_match_scalar_reference() {
