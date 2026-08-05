@@ -20,6 +20,7 @@ mod global_pq_sidecar;
 mod global_read_planner;
 mod group_commit;
 mod index;
+mod lane_log;
 mod late_interaction;
 mod late_interaction_sidecar;
 mod lexical_build;
