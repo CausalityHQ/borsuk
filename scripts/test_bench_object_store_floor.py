@@ -14,6 +14,7 @@ class ObjectStoreFloorRunnerTest(unittest.TestCase):
         self.assertIn("BORSUK_RUN_OBJECT_STORE_FLOOR", RUNNER)
         self.assertIn('[[ ! -e "$OUTPUT" ]]', RUNNER)
         self.assertIn("refusing to replace output", BENCH)
+        self.assertIn("a frozen source archive must provide BORSUK_SOURCE_SHA256", RUNNER)
 
     def test_chain_times_payload_then_conditional_head_update(self) -> None:
         self.assertIn('"put_then_conditional_update"', BENCH)
