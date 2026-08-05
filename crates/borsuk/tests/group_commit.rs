@@ -241,6 +241,53 @@ fn independent_commit_lanes_publish_every_concurrent_append() {
 }
 
 #[test]
+fn independent_commit_lanes_report_lane_local_requests() {
+    const LANES: usize = 4;
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///group-lane-local-request-counts";
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: LANES,
+        },
+    )
+    .unwrap();
+    let barrier = Arc::new(Barrier::new(LANES));
+    let handles = (0..LANES)
+        .map(|ordinal| {
+            let writer = writer.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                writer
+                    .append(vec![VectorRecord::new(
+                        format!("request-lane-{ordinal}"),
+                        vec![ordinal as f32, 0.0],
+                    )])
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let receipts = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    let by_lane = receipts
+        .iter()
+        .map(|receipt| (receipt.commit_lane, receipt.requests.total()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(by_lane.len(), LANES);
+    let minimum = *by_lane.values().min().unwrap();
+    let maximum = *by_lane.values().max().unwrap();
+    assert!(
+        maximum - minimum <= 1,
+        "only one lane may pay the one-time generation-lease reservation; lane zero must not be charged for other lanes: {by_lane:?}"
+    );
+}
+
+#[test]
 fn repeated_groups_amortize_last_write_wins_generation_coordination() {
     const GROUPS: usize = 12;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
