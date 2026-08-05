@@ -58,6 +58,24 @@ pub enum BorsukError {
         budget_bytes: u64,
     },
 
+    /// Foreground ingest reached the configured durable-tail bound and must
+    /// wait for background materialization to advance the lane.
+    #[error(
+        "ingest backpressure on lane {lane}: tail would reach {tail_bytes} bytes/{tail_records} records (limits {max_bytes} bytes/{max_records} records)"
+    )]
+    IngestBackpressure {
+        /// Lane whose durable tail is full.
+        lane: u16,
+        /// Bytes the append would retain in the tail.
+        tail_bytes: u64,
+        /// Records the append would retain in the tail.
+        tail_records: u64,
+        /// Hard byte limit.
+        max_bytes: u64,
+        /// Hard record limit.
+        max_records: u64,
+    },
+
     /// Guaranteed-recall search could not honor a hard search budget.
     #[error("recall guarantee violated by search termination `{reason}`")]
     RecallGuaranteeViolated {
@@ -156,6 +174,7 @@ impl BorsukError {
             Self::InvalidSearchOptions(_) => "invalid_search_options",
             Self::LeafModeNotConfigured { .. } => "leaf_mode_not_configured",
             Self::RamBudgetExceeded { .. } => "ram_budget_exceeded",
+            Self::IngestBackpressure { .. } => "ingest_backpressure",
             Self::RecallGuaranteeViolated { .. } => "recall_guarantee_violated",
             Self::InvalidStorage(_) => "invalid_storage",
             Self::IndexNotFound(_) => "index_not_found",

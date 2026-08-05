@@ -889,7 +889,8 @@ impl PrefetchReadContext {
         relative: &str,
         range: Range<u64>,
     ) -> Result<(Vec<u8>, bool)> {
-        if let Some(bytes) = self.read_cache_file(relative)? {
+        let cacheable = !is_mutable_lane_head(relative);
+        if cacheable && let Some(bytes) = self.read_cache_file(relative)? {
             let start = usize::try_from(range.start).map_err(|_| {
                 BorsukError::InvalidStorage("cached range start exceeds usize".to_string())
             })?;
@@ -905,12 +906,14 @@ impl PrefetchReadContext {
             return Ok((slice.to_vec(), true));
         }
         let cache_key = range_cache_key(relative, range.start, range.end);
-        if let Some(bytes) = self.read_cache_file(&cache_key)? {
+        if cacheable && let Some(bytes) = self.read_cache_file(&cache_key)? {
             return Ok((bytes, true));
         }
         let requested_bytes = range.end.saturating_sub(range.start);
         let (bytes, object_bytes) = self.read_range_uncached(relative, range).await?;
-        self.write_cache_file(&cache_key, &bytes)?;
+        if cacheable {
+            self.write_cache_file(&cache_key, &bytes)?;
+        }
         self.storage_trace
             .record(StorageAccessEvent::observed_read(
                 relative,
@@ -938,6 +941,9 @@ impl PrefetchReadContext {
     }
 
     fn cache_path(&self, relative: &str) -> Option<PathBuf> {
+        if is_mutable_lane_head(relative) {
+            return None;
+        }
         let cache_dir = self.cache_dir.as_ref()?;
         let mut path = cache_dir.clone();
         for component in Path::new(relative.trim_matches('/')).components() {
@@ -2959,7 +2965,8 @@ impl Storage {
     }
 
     pub(crate) fn read_range(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {
-        if let Some(bytes) = self.read_cache_file(relative)? {
+        let cacheable = !is_mutable_lane_head(relative);
+        if cacheable && let Some(bytes) = self.read_cache_file(relative)? {
             let start = usize::try_from(range.start).map_err(|_| {
                 BorsukError::InvalidStorage(format!(
                     "range start {} does not fit usize",
@@ -2987,7 +2994,7 @@ impl Storage {
         }
 
         let range_cache_key = range_cache_key(relative, range.start, range.end);
-        if let Some(bytes) = self.read_cache_file(&range_cache_key)? {
+        if cacheable && let Some(bytes) = self.read_cache_file(&range_cache_key)? {
             self.storage_trace.record(StorageAccessEvent::cached_read(
                 relative,
                 physical_format_for_path(relative),
@@ -3015,7 +3022,9 @@ impl Storage {
             .block_on(result.bytes())
             .map(|bytes| bytes.to_vec())
             .map_err(|err| map_object_store_error(relative, err))?;
-        self.write_cache_file(&range_cache_key, &bytes)?;
+        if cacheable {
+            self.write_cache_file(&range_cache_key, &bytes)?;
+        }
         self.storage_trace
             .record(StorageAccessEvent::observed_read(
                 relative,
@@ -3033,7 +3042,8 @@ impl Storage {
     }
 
     pub(crate) fn read_suffix(&self, relative: &str, length: u64) -> Result<ReadBytes> {
-        if let Some(bytes) = self.read_cache_file(relative)? {
+        let cacheable = !is_mutable_lane_head(relative);
+        if cacheable && let Some(bytes) = self.read_cache_file(relative)? {
             let length = usize::try_from(length)
                 .unwrap_or(usize::MAX)
                 .min(bytes.len());
@@ -3050,7 +3060,7 @@ impl Storage {
             });
         }
         let suffix_cache_key = range_cache_key(relative, u64::MAX, length);
-        if let Some(bytes) = self.read_cache_file(&suffix_cache_key)? {
+        if cacheable && let Some(bytes) = self.read_cache_file(&suffix_cache_key)? {
             self.storage_trace.record(StorageAccessEvent::cached_read(
                 relative,
                 physical_format_for_path(relative),
@@ -3080,7 +3090,9 @@ impl Storage {
             .block_on(result.bytes())
             .map(|bytes| bytes.to_vec())
             .map_err(|err| map_object_store_error(relative, err))?;
-        self.write_cache_file(&suffix_cache_key, &bytes)?;
+        if cacheable {
+            self.write_cache_file(&suffix_cache_key, &bytes)?;
+        }
         self.storage_trace
             .record(StorageAccessEvent::observed_read(
                 relative,
@@ -3106,7 +3118,8 @@ impl Storage {
     /// merged physical spans (including bytes between requested rows), and the
     /// request counter observes each physical GET.
     pub(crate) fn read_ranges(&self, relative: &str, ranges: &[Range<u64>]) -> Result<ReadRanges> {
-        if let Some(bytes) = self.read_cache_file(relative)? {
+        let cacheable = !is_mutable_lane_head(relative);
+        if cacheable && let Some(bytes) = self.read_cache_file(relative)? {
             let mut out = Vec::with_capacity(ranges.len());
             for range in ranges {
                 let start = usize::try_from(range.start).map_err(|_| {
@@ -3144,7 +3157,7 @@ impl Storage {
         }
 
         let bundle_key = range_bundle_cache_key(relative, ranges);
-        if let Some(bytes) = self.read_cache_file(&bundle_key)? {
+        if cacheable && let Some(bytes) = self.read_cache_file(&bundle_key)? {
             self.storage_trace.record(StorageAccessEvent::cached_read(
                 relative,
                 physical_format_for_path(relative),
@@ -3196,7 +3209,9 @@ impl Storage {
             .collect::<Vec<_>>();
         let bytes_fetched = physical_bytes.load(Ordering::Relaxed);
         let bundle = chunks.concat();
-        self.write_cache_file(&bundle_key, &bundle)?;
+        if cacheable {
+            self.write_cache_file(&bundle_key, &bundle)?;
+        }
         let request_count = self.request_counts().delta(&requests_before).gets;
         self.storage_trace
             .record(StorageAccessEvent::observed_read(
@@ -3559,6 +3574,9 @@ impl Storage {
     }
 
     fn cache_path(&self, relative: &str) -> Option<PathBuf> {
+        if is_mutable_lane_head(relative) {
+            return None;
+        }
         let cache_dir = self.cache_dir.as_ref()?;
         let mut path = cache_dir.clone();
         for component in Path::new(relative.trim_matches('/')).components() {
@@ -3629,6 +3647,11 @@ impl Storage {
     fn enforce_cache_max_bytes(&self) -> Result<()> {
         enforce_cache_max_bytes(self.cache_dir.as_deref(), self.cache_max_bytes)
     }
+}
+
+fn is_mutable_lane_head(relative: &str) -> bool {
+    let relative = relative.trim_matches('/');
+    relative.starts_with("lane-log/lanes/") && relative.ends_with("/HEAD")
 }
 
 fn map_conditional_put_error(relative: &str, err: object_store::Error) -> BorsukError {
@@ -4333,6 +4356,36 @@ mod tests {
                 .unwrap(),
             pending,
             "a retry or conflicting create must not replace the first durable object"
+        );
+    }
+
+    #[test]
+    fn mutable_lane_head_is_never_admitted_to_the_read_through_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let storage =
+            Storage::from_uri_with_cache(&file_uri(dir.path()), Some(cache.path().to_path_buf()))
+                .unwrap();
+
+        assert!(storage.cache_path("lane-log/lanes/0003/HEAD").is_none());
+        assert!(
+            storage
+                .cache_path("lane-log/lanes/0003/blocks/one.blk")
+                .is_some()
+        );
+        let head = "lane-log/lanes/0003/HEAD";
+        storage
+            .write_coordination_object(head, b"abcdefgh", None)
+            .unwrap();
+        let before = storage.request_counts();
+        assert_eq!(storage.read_range(head, 0..4).unwrap(), b"abcd");
+        assert_eq!(storage.read_range(head, 0..4).unwrap(), b"abcd");
+        assert_eq!(storage.read_suffix(head, 4).unwrap().bytes, b"efgh");
+        assert_eq!(storage.read_suffix(head, 4).unwrap().bytes, b"efgh");
+        assert_eq!(
+            storage.request_counts().delta(&before).gets,
+            4,
+            "mutable HEAD ranges and suffixes must always be fetched fresh"
         );
     }
 
