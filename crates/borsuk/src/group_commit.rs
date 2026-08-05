@@ -68,8 +68,8 @@ pub struct GroupCommitLaneReceipt {
     pub commit_sequence: u64,
     /// Fencing epoch that owns this durable sequence.
     pub lease_epoch: u64,
-    /// Process-local lane ordinal; paired with `commit_sequence`, this uniquely
-    /// identifies the durable group.
+    /// Persisted ownership-lane ordinal; paired with `commit_sequence`, this
+    /// uniquely identifies the durable group.
     pub commit_lane: usize,
     /// Physical requests issued by the whole shared commit.
     pub requests: RequestCounts,

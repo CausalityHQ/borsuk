@@ -303,7 +303,7 @@ for name in ("summary.csv", "samples.csv", "reads.csv"):
 PY
 
 if [[ "$SMOKE" == "1" ]]; then
-  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\n' > "$OUTPUT/correctness.csv"
+  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\npreregistered_lane_factor_safety,pass\n' > "$OUTPUT/correctness.csv"
 else
   run_exact_test group_commit concurrent_appends_share_one_durable_wal_transaction
   run_exact_test fault_injection collection_transaction_is_invisible_when_pending_publication_fails
@@ -311,7 +311,8 @@ else
   run_exact_test group_commit lane_log_ack_is_two_puts_and_visible_after_reopen
   run_exact_test group_commit alternating_writer_lanes_preserve_sequential_last_write_wins
   run_exact_test group_commit drain_checkpoints_every_preceding_group_and_removes_pending_objects
-  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\n' > "$OUTPUT/correctness.csv"
+  run_exact_test group_commit preregistered_worker_lane_factors_preserve_ack_reopen_last_write_and_drain
+  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\npreregistered_lane_factor_safety,pass\n' > "$OUTPUT/correctness.csv"
 fi
 
 printf 'complete\n' > "$OUTPUT/GROUP_COMMIT_SCALABILITY_COMPLETE"
