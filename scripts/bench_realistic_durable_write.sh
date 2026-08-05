@@ -86,7 +86,7 @@ if [[ "$SMOKE" != "1" ]]; then
   "$PYTHON" scripts/fetch_vdbbench_dataset.py \
     --dataset "$(basename "$DATASET_DIR")" \
     --output-root "$(dirname "$DATASET_DIR")" \
-    --validate-existing >/dev/null
+    --check-existing >/dev/null
 fi
 DATASET_SHA256="$(sha256_file "$DATASET_DIR/dataset.json")"
 if [[ "$SMOKE" != "1" && "$DATASET_SHA256" != "$(json_value "$MANIFEST" dataset_sha256)" ]]; then

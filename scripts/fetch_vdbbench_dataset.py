@@ -142,6 +142,63 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def metadata_document(
+    dataset: str,
+    contract: DatasetContract,
+    *,
+    n_test: int,
+    k: int,
+) -> dict[str, Any]:
+    return {
+        "name": dataset,
+        "metric": contract.metric,
+        "dim": contract.dimensions,
+        "n_train": contract.rows,
+        "n_test": n_test,
+        "k": k,
+    }
+
+
+def descriptor_document(
+    dataset: str,
+    dataset_dir: Path,
+    remote_files: list[str],
+    contract: DatasetContract,
+) -> dict[str, Any]:
+    meta_path = dataset_dir / "meta.json"
+    prepared_files = [dataset_dir / name for name in remote_files]
+    file_rows: list[dict[str, Any]] = []
+    source_digest = hashlib.sha256()
+    for path in [*prepared_files, meta_path]:
+        digest = sha256_file(path)
+        file_rows.append(
+            {"path": path.name, "bytes": path.stat().st_size, "sha256": digest}
+        )
+        if path != meta_path:
+            source_digest.update(path.name.encode())
+            source_digest.update(b"\0")
+            source_digest.update(digest.encode())
+            source_digest.update(b"\n")
+    return {
+        "schema_version": 1,
+        "dataset": dataset,
+        "workload": contract.workload,
+        "dimensions": contract.dimensions,
+        "scale": str(contract.rows),
+        "source": source_uri(contract),
+        "source_sha256": source_digest.hexdigest(),
+        "license": contract.license,
+        "license_source": contract.license_source,
+        "adapter": contract.adapter,
+        "physical_format": "Parquet",
+        "files": file_rows,
+    }
+
+
 def parquet_contract(dataset_dir: Path, contract: DatasetContract) -> tuple[int, int]:
     try:
         import pyarrow as pa
@@ -232,62 +289,13 @@ def finalize_dataset(dataset: str, dataset_dir: Path, remote_files: list[str]) -
     validate_local_files(dataset_dir, remote_files)
 
     n_test, k = parquet_contract(dataset_dir, contract)
-    meta_path = dataset_dir / "meta.json"
-    meta_path.write_text(
-        json.dumps(
-            {
-                "name": dataset,
-                "metric": contract.metric,
-                "dim": contract.dimensions,
-                "n_train": contract.rows,
-                "n_test": n_test,
-                "k": k,
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
+    write_json(
+        dataset_dir / "meta.json",
+        metadata_document(dataset, contract, n_test=n_test, k=k),
     )
-
-    prepared_files = [dataset_dir / name for name in remote_files]
-    file_rows: list[dict[str, Any]] = []
-    source_digest = hashlib.sha256()
-    for path in [*prepared_files, meta_path]:
-        digest = sha256_file(path)
-        file_rows.append(
-            {
-                "path": path.name,
-                "bytes": path.stat().st_size,
-                "sha256": digest,
-            }
-        )
-        if path != meta_path:
-            source_digest.update(path.name.encode())
-            source_digest.update(b"\0")
-            source_digest.update(digest.encode())
-            source_digest.update(b"\n")
-
-    descriptor_path = dataset_dir / "dataset.json"
-    descriptor_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "dataset": dataset,
-                "workload": contract.workload,
-                "dimensions": contract.dimensions,
-                "scale": str(contract.rows),
-                "source": source_uri(contract),
-                "source_sha256": source_digest.hexdigest(),
-                "license": contract.license,
-                "license_source": contract.license_source,
-                "adapter": contract.adapter,
-                "physical_format": "Parquet",
-                "files": file_rows,
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
+    write_json(
+        dataset_dir / "dataset.json",
+        descriptor_document(dataset, dataset_dir, remote_files, contract),
     )
     return dataset_dir
 
@@ -301,22 +309,48 @@ def validate_existing_dataset(dataset: str, output_root: Path) -> Path:
     return finalize_dataset(dataset, dataset_dir, remote_files)
 
 
+def check_existing_dataset(dataset: str, output_root: Path) -> Path:
+    """Recompute the complete frozen contract without modifying the dataset."""
+    contract = DATASETS[dataset]
+    dataset_dir = output_root / dataset
+    if not dataset_dir.is_dir():
+        raise FileNotFoundError(f"missing existing dataset directory {dataset_dir}")
+    remote_files = select_files(list_remote(contract), contract.train_files)
+    validate_local_files(dataset_dir, remote_files)
+    n_test, k = parquet_contract(dataset_dir, contract)
+    expected_meta = metadata_document(dataset, contract, n_test=n_test, k=k)
+    actual_meta = json.loads((dataset_dir / "meta.json").read_text())
+    if actual_meta != expected_meta:
+        raise ValueError("frozen meta.json differs from validated dataset contract")
+    expected_descriptor = descriptor_document(
+        dataset, dataset_dir, remote_files, contract
+    )
+    actual_descriptor = json.loads((dataset_dir / "dataset.json").read_text())
+    if actual_descriptor != expected_descriptor:
+        raise ValueError("frozen dataset.json differs from validated source bytes")
+    return dataset_dir
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", choices=tuple(DATASETS), required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--execute-download", action="store_true")
     parser.add_argument("--validate-existing", action="store_true")
+    parser.add_argument("--check-existing", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.execute_download and args.validate_existing:
-        raise ValueError("choose either --execute-download or --validate-existing")
+    modes = sum((args.execute_download, args.validate_existing, args.check_existing))
+    if modes > 1:
+        raise ValueError(
+            "choose one of --execute-download, --validate-existing, or --check-existing"
+        )
     contract = DATASETS[args.dataset]
     files = select_files(list_remote(contract), contract.train_files)
-    if not args.execute_download and not args.validate_existing:
+    if modes == 0:
         print(
             json.dumps(
                 {
@@ -332,7 +366,9 @@ def main() -> int:
             )
         )
         return 0
-    if args.validate_existing:
+    if args.check_existing:
+        print(check_existing_dataset(args.dataset, args.output_root))
+    elif args.validate_existing:
         print(validate_existing_dataset(args.dataset, args.output_root))
     else:
         print(download_dataset(args.dataset, args.output_root))
