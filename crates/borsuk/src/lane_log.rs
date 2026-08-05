@@ -9,7 +9,10 @@ use std::{
     sync::Arc,
 };
 
-use crate::{BorsukError, RequestCounts, Result, storage::Storage};
+use crate::{
+    BorsukError, PhysicalFormat, RequestCounts, Result, VectorElementType, VectorRecord,
+    storage::Storage,
+};
 use object_store::{ObjectStore, UpdateVersion};
 
 const BLOCK_MAGIC: &[u8; 8] = b"BRSLBL25";
@@ -604,6 +607,63 @@ struct LaneLogWriter {
     recovery_required: bool,
 }
 
+/// Fixed-fanout reader for HEAD-reachable format-v25 lane records.
+struct LaneLogReader {
+    storage: Storage,
+    lane_count: u16,
+}
+
+impl LaneLogReader {
+    fn new(store: Arc<dyn ObjectStore>, uri: impl Into<String>, lane_count: u16) -> Result<Self> {
+        if lane_count == 0 || lane_count > 64 {
+            return Err(BorsukError::InvalidStorage(
+                "lane-log reader lane_count must be between 1 and 64".to_string(),
+            ));
+        }
+        Ok(Self {
+            storage: Storage::from_object_store(uri.into(), store)?,
+            lane_count,
+        })
+    }
+
+    fn request_counts(&self) -> RequestCounts {
+        self.storage.request_counts()
+    }
+
+    fn read_records(&self) -> Result<Vec<VectorRecord>> {
+        let mut records = Vec::new();
+        for lane in 0..self.lane_count {
+            let Some(stored) = self.storage.read_coordination_object(&head_path(lane))? else {
+                continue;
+            };
+            let head = head_from_bytes(&stored.bytes, lane, u64::MAX)?;
+            for block in &head.blocks {
+                let path = block.path(lane);
+                let bytes = self
+                    .storage
+                    .read_coordination_object(&path)?
+                    .map(|stored| stored.bytes)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "committed lane-log block `{path}` is missing"
+                        ))
+                    })?;
+                if blake3::hash(&bytes).as_bytes() != &block.checksum {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "lane-log block `{path}` checksum mismatch"
+                    )));
+                }
+                let payload = block_payload(&bytes)?.to_vec();
+                records.extend(crate::format::wal_records_from_table(
+                    payload,
+                    "lane-records.parquet",
+                )?);
+            }
+        }
+        Ok(records)
+    }
+}
+
 impl LaneLogWriter {
     #[cfg(test)]
     fn acquire(
@@ -702,9 +762,14 @@ impl LaneLogWriter {
         let (head, expected) = Self::prepare_acquisition(&storage, lane, owner, now_ms, ttl_ms)?;
         for block in &head.blocks {
             let path = block.path(head.lane);
-            let bytes = storage.read_object_fresh(&path)?.ok_or_else(|| {
-                BorsukError::InvalidStorage(format!("committed lane-log block `{path}` is missing"))
-            })?;
+            let bytes = storage
+                .read_coordination_object(&path)?
+                .map(|stored| stored.bytes)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "committed lane-log block `{path}` is missing"
+                    ))
+                })?;
             if blake3::hash(&bytes).as_bytes() != &block.checksum {
                 return Err(BorsukError::InvalidStorage(format!(
                     "lane-log block `{path}` checksum mismatch"
@@ -949,6 +1014,25 @@ impl LaneLogWriter {
         Ok(receipt)
     }
 
+    fn append_insert_records_at(
+        &mut self,
+        records: &[VectorRecord],
+        dimensions: usize,
+        now_ms: u64,
+    ) -> Result<LaneLogReceipt> {
+        let payload = crate::format::wal_records_to_table(
+            records,
+            dimensions,
+            VectorElementType::Float32,
+            PhysicalFormat::Parquet,
+        )?;
+        let ids = records
+            .iter()
+            .map(|record| record.id.as_bytes())
+            .collect::<Vec<_>>();
+        self.append_insert_at(&payload, &ids, now_ms)
+    }
+
     fn append_upsert_at(
         &mut self,
         payload: &[u8],
@@ -1076,12 +1160,16 @@ impl LaneLogWriter {
             .iter()
             .map(|block| {
                 let path = block.path(self.head.lane);
-                let bytes = self.storage.read_object_fresh(&path)?.ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "committed lane-log block `{}` is missing",
-                        path
-                    ))
-                })?;
+                let bytes = self
+                    .storage
+                    .read_coordination_object(&path)?
+                    .map(|stored| stored.bytes)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "committed lane-log block `{}` is missing",
+                            path
+                        ))
+                    })?;
                 if blake3::hash(&bytes).as_bytes() != &block.checksum {
                     return Err(BorsukError::InvalidStorage(format!(
                         "lane-log block `{}` checksum mismatch",
@@ -1091,6 +1179,17 @@ impl LaneLogWriter {
                 Ok(block_payload(&bytes)?.to_vec())
             })
             .collect()
+    }
+
+    fn visible_records(&self) -> Result<Vec<VectorRecord>> {
+        let mut records = Vec::new();
+        for payload in self.visible_payloads()? {
+            records.extend(crate::format::wal_records_from_table(
+                payload,
+                "lane-records.parquet",
+            )?);
+        }
+        Ok(records)
     }
 }
 
@@ -1415,6 +1514,76 @@ mod tests {
 
         assert!(matches!(error, BorsukError::InvalidRecordInput(_)));
         assert_eq!(writer.request_counts().delta(&before).total(), 0);
+    }
+
+    #[test]
+    fn committed_lane_record_payload_round_trips_losslessly() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let authority =
+            LaneIdAuthority::from_entries(std::iter::empty::<(&[u8], LaneIdState)>(), 4_096)
+                .unwrap();
+        let mut writer = LaneLogWriter::acquire_with_authority(
+            store,
+            "memory:///lane-record-round-trip",
+            3,
+            [1; 16],
+            10,
+            100,
+            authority,
+        )
+        .unwrap();
+        let records = vec![
+            crate::VectorRecord::new_bytes(vec![0, 255], vec![1.0, 2.0]),
+            crate::VectorRecord::new("second", vec![3.0, 4.0]),
+        ];
+
+        let receipt = writer.append_insert_records_at(&records, 2, 11).unwrap();
+
+        assert_eq!(receipt.records, 2);
+        assert_eq!(writer.visible_records().unwrap(), records);
+    }
+
+    #[test]
+    fn reader_uses_fixed_lane_head_fanout_without_listing() {
+        const LANES: u16 = 4;
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///lane-fixed-reader";
+        let records = [
+            (0_u16, VectorRecord::new("zero", vec![1.0, 2.0])),
+            (2_u16, VectorRecord::new("two", vec![3.0, 4.0])),
+        ];
+        for (lane, record) in &records {
+            let authority =
+                LaneIdAuthority::from_entries(std::iter::empty::<(&[u8], LaneIdState)>(), 1_024)
+                    .unwrap();
+            let mut writer = LaneLogWriter::acquire_with_authority(
+                Arc::clone(&store),
+                uri,
+                *lane,
+                [(*lane as u8) + 1; 16],
+                10,
+                100,
+                authority,
+            )
+            .unwrap();
+            writer
+                .append_insert_records_at(std::slice::from_ref(record), 2, 11)
+                .unwrap();
+        }
+        let reader = LaneLogReader::new(store, uri, LANES).unwrap();
+
+        let mut visible = reader.read_records().unwrap();
+        visible.sort_by(|left, right| left.id.cmp(&right.id));
+
+        assert_eq!(
+            visible,
+            vec![records[1].1.clone(), records[0].1.clone()],
+            "reader must return records from every configured ownership lane"
+        );
+        let requests = reader.request_counts();
+        assert_eq!(requests.gets, u64::from(LANES) + records.len() as u64);
+        assert_eq!(requests.lists, 0);
+        assert_eq!(requests.heads, 0);
     }
 
     #[test]
