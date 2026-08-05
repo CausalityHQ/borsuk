@@ -75,6 +75,7 @@ class ValidatorTests(unittest.TestCase):
             "records", "groups", "mean_group_records", "elapsed_ms", "drain_ms", "end_to_end_records_per_second", "p50_ms",
             "p95_ms", "records_per_second", "vector_mib_per_second", "storage_requests", "storage_gets",
             "storage_puts", "storage_heads", "requests_per_record",
+            "total_acknowledgement_bytes", "max_acknowledgement_bytes",
             "visible_records", "recall_queries", "max_read_segments", "inserted_id_recall_at_10",
             "read_p50_ms", "read_p95_ms", "read_storage_requests", "read_storage_gets",
             "read_storage_puts", "read_storage_deletes", "read_storage_heads",
@@ -86,7 +87,8 @@ class ValidatorTests(unittest.TestCase):
             "mean_group_records": "2", "elapsed_ms": "10", "drain_ms": "10", "end_to_end_records_per_second": "100", "p50_ms": "6",
             "p95_ms": "6", "records_per_second": "200", "vector_mib_per_second": "0.006103515625", "storage_requests": "5",
             "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",
-            "requests_per_record": "2.5", "visible_records": "2",
+            "requests_per_record": "2.5", "total_acknowledgement_bytes": "2048",
+            "max_acknowledgement_bytes": "2048", "visible_records": "2",
             "recall_queries": "1", "max_read_segments": "4", "inserted_id_recall_at_10": "1",
             "read_p50_ms": "6", "read_p95_ms": "6",
             "read_storage_requests": "6", "read_storage_gets": "5",
@@ -97,12 +99,14 @@ class ValidatorTests(unittest.TestCase):
         self._write_csv(cell / "summary.csv", summary_fields, [summary])
         sample_fields = [
             "writer", "operation", "record_id", "latency_ms", "commit_lane", "commit_sequence",
-            "committed_records", "group_requests", "group_gets", "group_puts", "group_heads",
+            "committed_records", "acknowledgement_bytes", "group_requests", "group_gets",
+            "group_puts", "group_heads",
         ]
         samples = [
             {"writer": "0", "operation": str(operation), "record_id": f"id-{operation}",
              "latency_ms": str(5 + operation), "commit_lane": "0", "commit_sequence": "1",
-             "committed_records": "2", "group_requests": "5", "group_gets": "1",
+             "committed_records": "2", "acknowledgement_bytes": "2048",
+             "group_requests": "5", "group_gets": "1",
              "group_puts": "4", "group_heads": "0"}
             for operation in range(2)
         ]

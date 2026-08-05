@@ -59,8 +59,12 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         || path.starts_with("pivots/")
     {
         PhysicalObjectRole::Catalog
-    } else if path.starts_with("cells/") && path.ends_with("/HEAD") {
+    } else if (path.starts_with("cells/") || path.starts_with("lane-log/lanes/"))
+        && path.ends_with("/HEAD")
+    {
         PhysicalObjectRole::LaneHead
+    } else if path.starts_with("lane-log/lanes/") && path.contains("/blocks/") {
+        PhysicalObjectRole::WalRun
     } else if path.starts_with("cells/")
         && path.contains("/wal/")
         && path.contains("/runs/tombstones/")
@@ -75,7 +79,12 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         PhysicalObjectRole::WalRun
     } else if path.starts_with("cells/") && path.contains("/wal/") && path.contains("/frontier/") {
         PhysicalObjectRole::LaneHead
-    } else if path.starts_with("transactions/") || path.starts_with("collection/wal-frontier/") {
+    } else if path.starts_with("transactions/")
+        || path.starts_with("collection/wal-frontier/")
+        || (path.starts_with("collection/write-epochs/")
+            && path.contains("/pending/")
+            && path.ends_with(".commit"))
+    {
         PhysicalObjectRole::CommitMarker
     } else if path.starts_with("wal/") {
         PhysicalObjectRole::WalRun

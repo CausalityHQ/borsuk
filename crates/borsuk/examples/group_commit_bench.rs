@@ -30,6 +30,7 @@ struct Sample {
     commit_lane: usize,
     commit_sequence: u64,
     committed_records: usize,
+    acknowledgement_bytes: u64,
     group_requests: RequestCounts,
 }
 
@@ -395,6 +396,7 @@ fn main() -> BenchResult<()> {
                         commit_lane: receipt.commit_lane,
                         commit_sequence: receipt.commit_sequence,
                         committed_records: receipt.committed_records,
+                        acknowledgement_bytes: receipt.acknowledgement_bytes,
                         group_requests: receipt.requests,
                     });
                 }
@@ -408,6 +410,7 @@ fn main() -> BenchResult<()> {
                         commit_lane: receipt.commit_lane,
                         commit_sequence: receipt.commit_sequence,
                         committed_records: receipt.committed_records,
+                        acknowledgement_bytes: receipt.acknowledgement_bytes,
                         group_requests: receipt.requests,
                     });
                 }
@@ -436,13 +439,24 @@ fn main() -> BenchResult<()> {
         .into_inner()
         .unwrap();
     samples.sort_by_key(|sample| (sample.writer, sample.operation));
-    let mut groups = BTreeMap::<(usize, u64), (usize, RequestCounts)>::new();
+    let mut groups = BTreeMap::<(usize, u64), (usize, u64, RequestCounts)>::new();
     for sample in &samples {
         match groups.insert(
             (sample.commit_lane, sample.commit_sequence),
-            (sample.committed_records, sample.group_requests),
+            (
+                sample.committed_records,
+                sample.acknowledgement_bytes,
+                sample.group_requests,
+            ),
         ) {
-            Some(previous) if previous != (sample.committed_records, sample.group_requests) => {
+            Some(previous)
+                if previous
+                    != (
+                        sample.committed_records,
+                        sample.acknowledgement_bytes,
+                        sample.group_requests,
+                    ) =>
+            {
                 return Err("callers disagree about shared group evidence".into());
             }
             _ => {}
@@ -451,7 +465,7 @@ fn main() -> BenchResult<()> {
     let request_totals =
         groups
             .values()
-            .fold(RequestCounts::default(), |mut totals, (_, requests)| {
+            .fold(RequestCounts::default(), |mut totals, (_, _, requests)| {
                 totals.gets += requests.gets;
                 totals.puts += requests.puts;
                 totals.deletes += requests.deletes;
@@ -460,7 +474,16 @@ fn main() -> BenchResult<()> {
                 totals
             });
     let total_requests = request_totals.total();
-    let committed_records = groups.values().map(|(records, _)| *records).sum::<usize>();
+    let committed_records = groups
+        .values()
+        .map(|(records, _, _)| *records)
+        .sum::<usize>();
+    let acknowledgement_bytes = groups
+        .values()
+        .map(|(_, bytes, _)| *bytes)
+        .collect::<Vec<_>>();
+    let max_acknowledgement_bytes = acknowledgement_bytes.iter().copied().max().unwrap_or(0);
+    let total_acknowledgement_bytes = acknowledgement_bytes.iter().sum::<u64>();
     if committed_records != samples.len() {
         return Err("group record totals do not reconcile with caller samples".into());
     }
@@ -558,11 +581,11 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,end_to_end_records_per_second,p50_ms,p95_ms,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
+        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,end_to_end_records_per_second,p50_ms,p95_ms,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,total_acknowledgement_bytes,max_acknowledgement_bytes,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
     )?;
     writeln!(
         summary,
-        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{end_to_end_records_per_second:.9},{:.9},{:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9},{},{},{},{},{},{},{read_bytes},{read_segments_searched}",
+        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{end_to_end_records_per_second:.9},{:.9},{:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{total_acknowledgement_bytes},{max_acknowledgement_bytes},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9},{},{},{},{},{},{},{read_bytes},{read_segments_searched}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
@@ -586,12 +609,12 @@ fn main() -> BenchResult<()> {
     let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
     writeln!(
         raw,
-        "writer,operation,record_id,latency_ms,commit_lane,commit_sequence,committed_records,group_requests,group_gets,group_puts,group_heads"
+        "writer,operation,record_id,latency_ms,commit_lane,commit_sequence,committed_records,acknowledgement_bytes,group_requests,group_gets,group_puts,group_heads"
     )?;
     for sample in samples {
         writeln!(
             raw,
-            "{},{},{},{:.9},{},{},{},{},{},{},{}",
+            "{},{},{},{:.9},{},{},{},{},{},{},{},{}",
             sample.writer,
             sample.operation,
             sample.record_id,
@@ -599,6 +622,7 @@ fn main() -> BenchResult<()> {
             sample.commit_lane,
             sample.commit_sequence,
             sample.committed_records,
+            sample.acknowledgement_bytes,
             sample.group_requests.total(),
             sample.group_requests.gets,
             sample.group_requests.puts,

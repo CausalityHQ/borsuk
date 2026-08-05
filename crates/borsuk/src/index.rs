@@ -2720,6 +2720,12 @@ impl BorsukIndex {
         manifest.text_tokenizer = Some(tokenizer.fingerprint());
         manifest.wal_config = wal;
         enforce_ram_budget(&manifest, None)?;
+        if collection_root {
+            crate::lane_log::initialize_empty_lane_heads(
+                &storage,
+                u16::from(manifest.cell_wal_config.lane_count),
+            )?;
+        }
         let staged = storage.stage_manifest(modality, &manifest, None)?;
         let manifest = staged.manifest;
         let manifest_reference = staged.reference;

@@ -117,6 +117,146 @@ fn accepted_retryable_lane_head_is_acknowledged_once() {
 }
 
 #[test]
+fn failed_post_ack_spill_keeps_inline_records_visible_and_retries_before_next_append() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///failed-inline-spill";
+    drop(
+        BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+        )
+        .unwrap(),
+    );
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            true,
+            |operation, path| {
+                operation == common::StoreOperation::Put && path.as_ref().contains("/blocks/")
+            },
+        ));
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(faulting, uri).unwrap(),
+        GroupCommitConfig {
+            max_delay: Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    let ids = (0_u64..)
+        .map(|ordinal| format!("spill-fault-{ordinal}"))
+        .filter(|id| {
+            let digest = blake3::hash(id.as_bytes());
+            let mut prefix = [0_u8; 8];
+            prefix.copy_from_slice(&digest.as_bytes()[..8]);
+            u64::from_le_bytes(prefix) % 8 == 0
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+
+    for (ordinal, id) in ids.iter().enumerate() {
+        writer
+            .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
+            .unwrap();
+    }
+    drop(writer);
+
+    assert_eq!(
+        BorsukIndex::open_with_object_store(inner, uri)
+            .unwrap()
+            .list_records(0, ids.len())
+            .unwrap()
+            .len(),
+        ids.len()
+    );
+}
+
+#[test]
+fn persistent_spill_failure_keeps_the_lane_backpressured() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///persistent-inline-spill-failure";
+    drop(
+        BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+        )
+        .unwrap(),
+    );
+    let faulting: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            false,
+            |operation, path| {
+                operation == common::StoreOperation::Put && path.as_ref().contains("/blocks/")
+            },
+        ));
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(faulting, uri).unwrap(),
+        GroupCommitConfig {
+            max_delay: Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    let ids = (0_u64..)
+        .map(|ordinal| format!("persistent-spill-{ordinal}"))
+        .filter(|id| {
+            let digest = blake3::hash(id.as_bytes());
+            let mut prefix = [0_u8; 8];
+            prefix.copy_from_slice(&digest.as_bytes()[..8]);
+            u64::from_le_bytes(prefix) % 8 == 0
+        })
+        .take(6)
+        .collect::<Vec<_>>();
+
+    for (ordinal, id) in ids.iter().take(4).enumerate() {
+        writer
+            .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
+            .unwrap();
+    }
+    assert!(
+        writer
+            .append(vec![VectorRecord::new(&ids[4], vec![4.0, 0.0])])
+            .is_err()
+    );
+    assert!(
+        writer
+            .append(vec![VectorRecord::new(&ids[5], vec![5.0, 0.0])])
+            .is_err()
+    );
+    drop(writer);
+
+    assert_eq!(
+        BorsukIndex::open_with_object_store(inner, uri)
+            .unwrap()
+            .list_records(0, ids.len())
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+#[test]
 fn multimodal_collection_transaction_is_invisible_when_root_publication_fails() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///multimodal-root-publication-failure";

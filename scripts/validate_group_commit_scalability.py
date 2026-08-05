@@ -291,12 +291,31 @@ def validate(
             )
             evidence = tuple(
                 integer(sample[field], field)
-                for field in ("committed_records", "group_requests", "group_gets", "group_puts", "group_heads")
+                for field in (
+                    "committed_records",
+                    "acknowledgement_bytes",
+                    "group_requests",
+                    "group_gets",
+                    "group_puts",
+                    "group_heads",
+                )
             )
             require(group not in groups or groups[group] == evidence, f"inconsistent shared group evidence in {cell}")
             groups[group] = evidence
         require(sum(evidence[0] for evidence in groups.values()) == expected_records, f"group record reconciliation failed in {cell}")
-        total_requests = sum(evidence[1] for evidence in groups.values())
+        total_acknowledgement_bytes = sum(evidence[1] for evidence in groups.values())
+        max_acknowledgement_bytes = max(evidence[1] for evidence in groups.values())
+        require(
+            total_acknowledgement_bytes
+            == integer(summary["total_acknowledgement_bytes"], "total acknowledgement bytes"),
+            f"acknowledgement byte total drift in {cell}",
+        )
+        require(
+            max_acknowledgement_bytes
+            == integer(summary["max_acknowledgement_bytes"], "maximum acknowledgement bytes"),
+            f"acknowledgement byte maximum drift in {cell}",
+        )
+        total_requests = sum(evidence[2] for evidence in groups.values())
         require(total_requests == integer(summary["storage_requests"], "storage requests"), f"request reconciliation failed in {cell}")
         require(len(groups) == integer(summary["groups"], "groups"), f"group count mismatch in {cell}")
         require_close(
@@ -354,9 +373,9 @@ def validate(
             f"requests per record does not reconcile in {cell}",
         )
         for summary_field, evidence_index in (
-            ("storage_gets", 2),
-            ("storage_puts", 3),
-            ("storage_heads", 4),
+            ("storage_gets", 3),
+            ("storage_puts", 4),
+            ("storage_heads", 5),
         ):
             require(
                 integer(summary[summary_field], summary_field)

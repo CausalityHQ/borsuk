@@ -16,6 +16,11 @@ fn persisted_paths_have_stable_physical_object_roles() {
         ("manifests/0001.parquet", PhysicalObjectRole::Catalog),
         ("wal/0001.parquet", PhysicalObjectRole::WalRun),
         ("cells/1/42/wal/3/HEAD", PhysicalObjectRole::LaneHead),
+        ("lane-log/lanes/0003/HEAD", PhysicalObjectRole::LaneHead),
+        (
+            "lane-log/lanes/0003/blocks/0001-deadbeef.blk",
+            PhysicalObjectRole::WalRun,
+        ),
         (
             "cells/1/42/wal/3/frontier/abc.bin",
             PhysicalObjectRole::LaneHead,
@@ -32,6 +37,10 @@ fn persisted_paths_have_stable_physical_object_roles() {
         ),
         (
             "collection/wal-frontier/07/HEAD",
+            PhysicalObjectRole::CommitMarker,
+        ),
+        (
+            "collection/write-epochs/schema-abc/pending/txn.commit",
             PhysicalObjectRole::CommitMarker,
         ),
         (
@@ -234,12 +243,27 @@ fn real_index_writes_are_traced_at_the_common_storage_boundary() {
                 fields.first() == Some(&"write")
                     && fields.get(1) == Some(&"commit_marker")
                     && fields.get(2).is_some_and(|path| {
-                        path.starts_with("collection/wal-frontier/") && path.ends_with("/HEAD")
+                        path.starts_with("collection/write-epochs/")
+                            && path.contains("/pending/")
+                            && path.ends_with(".commit")
                     })
             })
             .count(),
-        3,
-        "one logical mutation reserves and commits one root HEAD, then explicit flush prunes it once"
+        1,
+        "one logical mutation publishes exactly one immutable collection commit"
+    );
+    assert_eq!(
+        csv.lines()
+            .filter(|line| {
+                let fields = line.split(',').collect::<Vec<_>>();
+                fields.first() == Some(&"write")
+                    && fields
+                        .get(2)
+                        .is_some_and(|path| path.starts_with("collection/wal-frontier/"))
+            })
+            .count(),
+        0,
+        "ordinary publication must not coordinate through a mutable WAL frontier"
     );
     assert!(csv.lines().any(|line| {
         let fields = line.split(',').collect::<Vec<_>>();
