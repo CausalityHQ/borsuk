@@ -116,25 +116,25 @@
 - Consumes: frozen source SHA-256, dataset descriptor SHA-256, fresh S3 base/result prefixes, batch sizes `1,32,128,1024`, and repetitions.
 - Produces: per-cell phase markers, raw write samples, resource telemetry, aggregate summaries, `REALISTIC_DURABLE_WRITE_COMPLETE`, or `REALISTIC_DURABLE_WRITE_FAILED`.
 
-- [ ] **Step 1: Write RED validator fixtures**
+- [x] **Step 1: Write RED validator fixtures**
 
   Cover missing root completion, a root failure marker, source/dataset/manifest hash mismatch, missing raw samples, unreconciled batch counts, batch records above the configured factor, write p95 at or above 200 ms, visibility below 1.0, and a missing resource exit status.
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
   Run: `PYTHONPATH=scripts python3 -m unittest scripts.test_validate_realistic_durable_write`
 
   Expected: import failure for `validate_realistic_durable_write`.
 
-- [ ] **Step 3: Implement the validator**
+- [x] **Step 3: Implement the validator**
 
   Require each planned `(dataset, repetition, batch_records)` cell, exact manifest copy, exact hashes, at least 100 raw durable batches, p95 below 200 ms, all sampled inserts visible, reconciled object-store request totals, time-aligned resource rows, and successful process exit.
 
-- [ ] **Step 4: Implement the runner**
+- [x] **Step 4: Implement the runner**
 
   Refuse reused outputs and indexes; create phase markers only after successful phases; wrap each cell with `benchmark_with_resources.py`; upload raw artifacts after the cell becomes terminal; install a trap that writes/uploads the root failure marker.
 
-- [ ] **Step 5: Run local structural smoke**
+- [x] **Step 5: Run local structural smoke**
 
   Use a generated 64-row/8D local Parquet fixture, two batch factors, and one repetition. Run the validator over the terminal smoke directory.
 
@@ -153,7 +153,7 @@
 - Consumes: official unshuffled VectorDBBench Parquet objects and the public DBpedia OpenAI source.
 - Produces: `dataset.json`, `meta.json`, original Parquet files, per-file bytes/SHA-256, aggregate source SHA-256, row/dimension/query/neighbor validation.
 
-- [ ] **Step 1: Finish and validate Cohere Medium 1M/768D**
+- [x] **Step 1: Finish and validate Cohere Medium 1M/768D**
 
   Require 1,000,000 train rows, 768 float32 dimensions, aligned test/neighbor counts, at least ten ground-truth neighbours, original filenames, and immutable hashes.
 

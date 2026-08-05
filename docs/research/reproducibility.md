@@ -49,6 +49,31 @@ every downloaded object, and writes `dataset.json` plus `meta.json`.
 Shuffled train files are rejected because positional generated ids would no
 longer match the supplied ground-truth ids.
 
+The terminal Causality preparation of `cohere-medium-1M` validated exactly
+1,000,000 768-dimensional float32 train vectors, 1,000 test queries, and 1,000
+shipped neighbours per query. Its frozen descriptor SHA-256 is
+`54c733e39adfcaa9ee10f3ed8bd8e66ada9f8f9a1a73e9753f5c5c2044b79254` and
+its aggregate source SHA-256 is
+`c0c572f0265181a182ae904383f97d0e3137521eb52bd3c05d1a3935bab0273b`.
+The descriptor, metadata, validation script, and exact dependency pins are
+preserved below
+`s3://borsuk-bench-453182569524-euc1/research/datasets/cohere-medium-1M/preparation/3040883/`.
+Dataset descriptors are provenance artifacts, not benchmark measurements.
+
+Run the local Parquet structural smoke for the durable-write campaign with an
+environment containing the pinned NumPy and PyArrow versions:
+
+```bash
+BORSUK_BENCH_PYTHON=/path/to/pinned-venv/bin/python \
+  BORSUK_REALISTIC_DURABLE_WRITE_SMOKE=1 \
+  scripts/bench_realistic_durable_write.sh
+```
+
+Paid execution additionally requires the explicit execution flag, validated
+dataset directory, fresh disjoint index/result prefixes, architecture and
+instance identity, and a frozen source SHA-256. The runner rejects prefix
+reuse and validates each terminal cell before advancing.
+
 Build all market executables, create a checksum-gated plan, then execute paid
 rows only after inspecting its `status`/`blocker` columns:
 
