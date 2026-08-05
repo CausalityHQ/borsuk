@@ -695,29 +695,37 @@ impl LaneLogReader {
             };
             let head_checksum = *blake3::hash(&stored.bytes).as_bytes();
             let head = head_from_bytes(&stored.bytes, lane, u64::MAX)?;
-            for block in &head.blocks {
-                let path = block.path(lane);
-                let bytes = self
-                    .storage
-                    .read_coordination_object(&path)?
-                    .map(|stored| stored.bytes)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "committed lane-log block `{path}` is missing"
-                        ))
-                    })?;
-                if blake3::hash(&bytes).as_bytes() != &block.checksum {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "lane-log block `{path}` checksum mismatch"
-                    )));
-                }
-                let payload = block_payload(&bytes)?.to_vec();
-                let mut decoded =
-                    crate::format::wal_records_from_table(payload, "lane-records.parquet")?;
-                for record in &mut decoded {
-                    record.generation = block.generation;
-                }
-                records.extend(decoded);
+            let decoded = crate::parallel::install_io(|| {
+                head.blocks
+                    .par_iter()
+                    .map(|block| {
+                        let path = block.path(lane);
+                        let bytes = self
+                            .storage
+                            .read_coordination_object(&path)?
+                            .map(|stored| stored.bytes)
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(format!(
+                                    "committed lane-log block `{path}` is missing"
+                                ))
+                            })?;
+                        if blake3::hash(&bytes).as_bytes() != &block.checksum {
+                            return Err(BorsukError::InvalidStorage(format!(
+                                "lane-log block `{path}` checksum mismatch"
+                            )));
+                        }
+                        let payload = block_payload(&bytes)?.to_vec();
+                        let mut records =
+                            crate::format::wal_records_from_table(payload, "lane-records.parquet")?;
+                        for record in &mut records {
+                            record.generation = block.generation;
+                        }
+                        Ok(records)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })?;
+            for mut block_records in decoded {
+                records.append(&mut block_records);
             }
             Ok((records, head.committed_sequence, head_checksum))
         })?;
@@ -1246,6 +1254,22 @@ impl LaneLogWriter {
         self.append_upsert_at(&payload, &ids, now_ms)
     }
 
+    pub(crate) fn append_upsert_records_with_renewal_at(
+        &mut self,
+        records: &[VectorRecord],
+        dimensions: usize,
+        now_ms: u64,
+        ttl_ms: u64,
+    ) -> Result<LaneLogReceipt> {
+        let before = self.request_counts();
+        if self.head.lease_expires_at_ms.saturating_sub(now_ms) <= ttl_ms / 2 {
+            self.renew_at(now_ms, ttl_ms)?;
+        }
+        let mut receipt = self.append_upsert_records_at(records, dimensions, now_ms)?;
+        receipt.requests = self.request_counts().delta(&before);
+        Ok(receipt)
+    }
+
     fn append_delete_at(
         &mut self,
         payload: &[u8],
@@ -1677,6 +1701,36 @@ mod tests {
         assert_eq!(requests.puts, 1);
         assert_eq!(requests.gets, 0);
         writer.append_at(b"after-original-expiry", 1, 150).unwrap();
+    }
+
+    #[test]
+    fn long_lived_upsert_renews_before_half_the_lease_remains() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let authority =
+            LaneIdAuthority::from_entries(std::iter::empty::<(&[u8], LaneIdState)>(), 1_024)
+                .unwrap();
+        let mut writer = LaneLogWriter::acquire_with_authority(
+            store,
+            "memory:///lane-auto-renew",
+            3,
+            [1; 16],
+            10,
+            100,
+            authority,
+        )
+        .unwrap();
+
+        let receipt = writer
+            .append_upsert_records_with_renewal_at(
+                &[VectorRecord::new("renewed", vec![1.0, 2.0])],
+                2,
+                61,
+                100,
+            )
+            .unwrap();
+
+        assert_eq!(receipt.requests.puts, 3);
+        assert_eq!(writer.head.lease_expires_at_ms, 161);
     }
 
     #[test]

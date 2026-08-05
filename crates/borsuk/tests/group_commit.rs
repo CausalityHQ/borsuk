@@ -571,7 +571,7 @@ fn repeated_groups_have_zero_read_two_write_acknowledgements() {
 }
 
 #[test]
-fn periodic_drains_keep_sustained_ingest_below_the_hard_tail_bound() {
+fn background_materialization_keeps_sustained_ingest_below_the_hard_tail_bound() {
     const GROUPS: usize = 600;
     const RECORDS_PER_GROUP: usize = 4;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -597,10 +597,8 @@ fn periodic_drains_keep_sustained_ingest_below_the_hard_tail_bound() {
             })
             .collect();
         writer.append(records).unwrap();
-        if (group + 1) % 100 == 0 {
-            writer.drain().unwrap();
-        }
     }
+    writer.drain().unwrap();
     drop(writer);
 
     let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
