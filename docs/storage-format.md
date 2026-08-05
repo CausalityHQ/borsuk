@@ -33,6 +33,13 @@ only the requested IDs' partitions and never decodes accumulated vector runs.
 Format v22 artifacts are intentionally rejected: their directory runs used the
 record bundle cell and cannot support the bounded lookup invariant.
 
+Storage format v24 expands immutable segment and routing ID blooms to 8 KiB,
+which keeps a production-sized 5,461-record segment below a one-percent
+deterministic absent-ID false-positive bound. Small live tombstone runs retain
+their separate 128-byte bloom so foreground upserts do not acquire 8 KiB of
+metadata per mutation. Format v23 artifacts are rejected because their
+1,024-bit segment blooms saturate at production segment sizes.
+
 For this use case, Arrow + Parquet is the canonical choice. Avro and Protobuf
 are useful formats, but they are not acceptable substitutes for BORSUK's
 persisted vector, graph, routing, manifest, or record output.
