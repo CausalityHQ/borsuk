@@ -144,6 +144,7 @@ struct ResolvedConfig {
     skip_exact_recall: bool,
     recluster_build: bool,
     read_only: bool,
+    insert_only: bool,
     preload_serving: bool,
     _uri_temp: Option<tempfile::TempDir>,
     _cache_temp: Option<tempfile::TempDir>,
@@ -578,6 +579,25 @@ fn run() -> BenchResult<()> {
         return Ok(());
     }
 
+    if config.insert_only {
+        let mut index = open_serving_index(&config)?;
+        let write_ops = write_operation_count(dataset.train_count, config.write_ops)?;
+        let insert = measure_inserts(&config, &dataset, &mut index, write_ops)?;
+        let (samples, visible) = verify_insert_visibility(&dataset, &index, write_ops)?;
+        if visible != samples {
+            return Err(invalid_input(&format!(
+                "durable insert visibility failed: {visible}/{samples} sampled records visible"
+            ))
+            .into());
+        }
+        write_cost_artifacts(&config, &[insert.row])?;
+        fs::write(
+            config.output_dir.join("INSERT_VISIBILITY_COMPLETE"),
+            b"complete\n",
+        )?;
+        return Ok(());
+    }
+
     if !config.skip_recall && config.cache_profile != BenchmarkCacheProfile::MixedCoverage {
         let reader = Arc::new(open_serving_index(&config)?);
         eprintln!("index build_config={:?}", reader.build_config());
@@ -896,6 +916,8 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let skip_exact_recall = env_flag("BORSUK_BENCH_SKIP_EXACT_RECALL")?;
     validate_phase_selection(recall_only, skip_recall)?;
     let read_only = env_flag("BORSUK_BENCH_READ_ONLY")?;
+    let insert_only = env_flag("BORSUK_BENCH_INSERT_ONLY")?;
+    validate_insert_only(insert_only, build_only, read_only)?;
     let preload_serving = env_flag("BORSUK_BENCH_PRELOAD_SERVING")?;
     let recluster_build = env_flag("BORSUK_BENCH_RECLUSTER_BUILD")?;
 
@@ -950,6 +972,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         skip_exact_recall,
         recluster_build,
         read_only,
+        insert_only,
         preload_serving,
         _uri_temp: uri_temp,
         _cache_temp: cache_temp,
@@ -966,7 +989,7 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} segment_table_format={} wal_table_format={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} segment_table_format={} wal_table_format={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
@@ -1025,6 +1048,7 @@ fn print_config(config: &ResolvedConfig) {
         config.skip_exact_recall,
         config.recluster_build,
         config.read_only,
+        config.insert_only,
         config.preload_serving,
     );
 }
@@ -2283,6 +2307,16 @@ fn validate_build_only(build_only: bool, build_index: bool) -> BenchResult<()> {
     Ok(())
 }
 
+fn validate_insert_only(insert_only: bool, build_only: bool, read_only: bool) -> BenchResult<()> {
+    if insert_only && (build_only || read_only) {
+        return Err(invalid_input(
+            "BORSUK_BENCH_INSERT_ONLY cannot be combined with build-only or read-only",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn write_concurrency_csv(
     config: &ResolvedConfig,
     dataset: &Dataset,
@@ -2915,10 +2949,16 @@ fn write_write_costs_csv(
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
 
+    write_cost_artifacts(config, &rows)?;
+    write_mutation_query_artifacts(config, &query_stages)?;
+    Ok(())
+}
+
+fn write_cost_artifacts(config: &ResolvedConfig, rows: &[WriteRow]) -> BenchResult<()> {
     let path = config.output_dir.join("bench_write_costs.csv");
     let mut writer = csv_writer(&path)?;
     writeln!(writer, "{WRITE_COST_HEADER}")?;
-    for row in &rows {
+    for row in rows {
         let ops_per_second = if row.wall_ms == 0.0 {
             row.ops as f64
         } else {
@@ -2969,7 +3009,6 @@ fn write_write_costs_csv(
         )?;
     }
     sample_writer.flush()?;
-    write_mutation_query_artifacts(config, &query_stages)?;
     eprintln!("wrote {} rows={}", path.display(), rows.len());
     eprintln!(
         "wrote {} rows={}",
@@ -3133,19 +3172,24 @@ fn verify_insert_visibility(
     count: usize,
 ) -> BenchResult<(usize, usize)> {
     let samples = count.min(16);
-    let mut visible = 0_usize;
-    for sample in 0..samples {
-        let offset = if samples <= 1 {
-            0
-        } else {
-            sample.saturating_mul(count.saturating_sub(1)) / samples.saturating_sub(1)
-        };
-        let id = format!(
-            "bench-insert-{}",
-            dataset.train_count.saturating_add(offset)
-        );
-        visible = visible.saturating_add(usize::from(index.get_vector(&id)?.is_some()));
-    }
+    let ids = (0..samples)
+        .map(|sample| {
+            let offset = if samples <= 1 {
+                0
+            } else {
+                sample.saturating_mul(count.saturating_sub(1)) / samples.saturating_sub(1)
+            };
+            format!(
+                "bench-insert-{}",
+                dataset.train_count.saturating_add(offset)
+            )
+        })
+        .collect::<Vec<_>>();
+    let visible = index
+        .get_records(&ids)?
+        .into_iter()
+        .filter(Option::is_some)
+        .count();
     Ok((samples, visible))
 }
 
@@ -3709,8 +3753,8 @@ mod tests {
         recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
         sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_build_only, validate_disk_cached_network, validate_generated_id_range,
-        validate_leaf_capability_modes, validate_phase_selection, vector_row, write_batch_len,
-        write_operation_count,
+        validate_insert_only, validate_leaf_capability_modes, validate_phase_selection, vector_row,
+        write_batch_len, write_operation_count,
     };
 
     #[test]
@@ -4065,6 +4109,14 @@ mod tests {
         assert!(validate_build_only(true, true).is_ok());
         assert!(validate_build_only(false, false).is_ok());
         assert!(validate_build_only(true, false).is_err());
+    }
+
+    #[test]
+    fn insert_only_is_a_distinct_mutation_phase() {
+        assert!(validate_insert_only(true, false, false).is_ok());
+        assert!(validate_insert_only(true, true, false).is_err());
+        assert!(validate_insert_only(true, false, true).is_err());
+        assert!(validate_insert_only(false, true, true).is_ok());
     }
 
     #[test]
