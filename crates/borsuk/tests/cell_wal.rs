@@ -506,6 +506,37 @@ fn repeated_explicit_id_batches_do_not_rescan_the_accumulated_wal_frontier() {
 }
 
 #[test]
+fn warm_scalar_append_does_not_recreate_prepared_transaction_state() {
+    let object_store = store();
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::clone(&object_store),
+        IndexConfig {
+            uri: "memory:///warm-scalar-request-budget".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 10_000,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    index
+        .add_with_report(vec![vec![1.0, 0.0]], Some(vec!["first".to_string()]))
+        .unwrap();
+
+    let (_, report) = index
+        .add_with_report(vec![vec![2.0, 0.0]], Some(vec!["second".to_string()]))
+        .unwrap();
+
+    assert!(
+        report.requests.puts <= 7,
+        "a warm scalar append must not recreate an already-prepared transaction state: {:?}",
+        report.requests
+    );
+}
+
+#[test]
 fn cold_writer_explicit_id_add_does_not_double_collect_every_root_shard() {
     let object_store = store();
     let uri = "memory:///cold-writer-explicit-id-coordination";

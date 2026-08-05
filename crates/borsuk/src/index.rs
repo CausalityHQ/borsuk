@@ -892,6 +892,7 @@ fn decoded_wal_records_bytes(records: &[VectorRecord]) -> u64 {
 #[derive(Clone, Copy)]
 struct CellWalAppendTransaction<'a> {
     id: &'a str,
+    state_prepared: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -4918,6 +4919,7 @@ impl BorsukIndex {
             &requests_before,
             CellWalAppendTransaction {
                 id: &transaction_id,
+                state_prepared: false,
             },
         )?;
         if self.active_collection_transaction.is_none() {
@@ -7129,6 +7131,7 @@ impl BorsukIndex {
         // bounded live tail; flush/compaction builds their immutable posting
         // shards once.
         if self.manifest.wal_config.enabled {
+            let transaction_state_prepared = write_claims.is_some();
             let mut report = self.append_wal_and_publish(
                 records,
                 next_generated_id,
@@ -7137,6 +7140,7 @@ impl BorsukIndex {
                 &requests_before,
                 CellWalAppendTransaction {
                     id: &transaction_id,
+                    state_prepared: transaction_state_prepared,
                 },
             )?;
             if let Some(mut claims) = write_claims.take() {
@@ -8021,7 +8025,14 @@ impl BorsukIndex {
             .expect("cell WAL publication checked the active transaction above");
         let (committed, validated_generation) = crate::parallel::install_io(|| {
             rayon::join(
-                || cell_wal.stage_root_authorized_with_metadata(transaction.id, &inputs, &metadata),
+                || {
+                    cell_wal.stage_root_authorized_with_metadata(
+                        transaction.id,
+                        &inputs,
+                        &metadata,
+                        transaction.state_prepared,
+                    )
+                },
                 || {
                     self.collection_storage
                         .collection_snapshot_generation_if_schema_compatible(
