@@ -18,6 +18,7 @@ class ValidationError(RuntimeError):
 
 PHASE_MARKERS = (
     "INGEST_COMPLETE",
+    "ACTIVE_TAIL_READ_QUALIFICATION_COMPLETE",
     "DRAIN_COMPLETE",
     "POINT_VISIBILITY_COMPLETE",
     "READ_QUALIFICATION_COMPLETE",
@@ -222,6 +223,8 @@ def validate(
             "requests_per_record",
             "read_p50_ms",
             "read_p95_ms",
+            "active_tail_read_p50_ms",
+            "active_tail_read_p95_ms",
         ):
             require(finite(summary[field], field) >= 0.0, f"negative {field} in {cell}")
         if manifest.get("protocol_kind") in {"production", "architecture-qualification"}:
@@ -249,6 +252,11 @@ def validate(
                 f"production read p95 gate failed in {cell}",
             )
             require(
+                finite(summary["active_tail_read_p95_ms"], "active_tail_read_p95_ms")
+                < float(manifest["max_read_p95_ms"]),
+                f"production active-tail read p95 gate failed in {cell}",
+            )
+            require(
                 (cell / "PRODUCTION_PERFORMANCE_GATE_COMPLETE").is_file(),
                 f"missing production performance gate marker in {cell}",
             )
@@ -261,6 +269,7 @@ def validate(
                 "PRODUCTION_WRITE_THROUGHPUT_FAILED",
                 "PRODUCTION_END_TO_END_THROUGHPUT_FAILED",
                 "PRODUCTION_READ_P95_FAILED",
+                "PRODUCTION_ACTIVE_TAIL_READ_P95_FAILED",
                 "PRODUCTION_INSERTED_ID_RECALL_AT_10_FAILED",
             )
             require(
@@ -453,6 +462,34 @@ def validate(
             recall_hits / len(read_samples),
             f"inserted-ID recall does not match raw samples in {cell}",
         )
+        active_tail_reads = rows(cell / "active-tail-reads.csv")
+        require(
+            len(active_tail_reads) == int(manifest["read_queries_per_cell"]),
+            f"active-tail raw read sample count mismatch in {cell}",
+        )
+        active_tail_latencies: list[float] = []
+        for query, read in enumerate(active_tail_reads):
+            require(
+                integer(read["query"], "active-tail read query") == query,
+                f"active-tail read query order drift in {cell}",
+            )
+            require(
+                read["contains_record_id"] == "true",
+                f"active-tail inserted-ID recall failure in {cell}",
+            )
+            active_tail_latencies.append(
+                finite(read["latency_ms"], "active-tail read latency")
+            )
+        require_close(
+            finite(summary["active_tail_read_p50_ms"], "active_tail_read_p50_ms"),
+            percentile(active_tail_latencies, 0.50),
+            f"active-tail read p50 does not match raw samples in {cell}",
+        )
+        require_close(
+            finite(summary["active_tail_read_p95_ms"], "active_tail_read_p95_ms"),
+            percentile(active_tail_latencies, 0.95),
+            f"active-tail read p95 does not match raw samples in {cell}",
+        )
 
         resource_path = cell / "resources.csv"
         require(resource_path.is_file(), f"missing resource telemetry {resource_path}")
@@ -490,11 +527,17 @@ def validate(
     aggregate_summary = rows(root / "summary.csv")
     aggregate_samples = rows(root / "samples.csv")
     aggregate_reads = rows(root / "reads.csv")
+    aggregate_active_tail_reads = rows(root / "active-tail-reads.csv")
     require(len(aggregate_summary) == len(expected_cells), "aggregate summary count mismatch")
     require(len(aggregate_samples) == expected_sample_total, "aggregate sample count mismatch")
     require(
         len(aggregate_reads) == len(expected_cells) * int(manifest["read_queries_per_cell"]),
         "aggregate read sample count mismatch",
+    )
+    require(
+        len(aggregate_active_tail_reads)
+        == len(expected_cells) * int(manifest["read_queries_per_cell"]),
+        "aggregate active-tail read sample count mismatch",
     )
     aggregate_keys = {
         (

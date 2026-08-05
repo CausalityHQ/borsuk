@@ -24,6 +24,7 @@
     "summary.csv",
     "samples.csv",
     "reads.csv",
+    "active-tail-reads.csv",
     "correctness.csv",
     "GROUP_COMMIT_SCALABILITY_COMPLETE"
   ],
