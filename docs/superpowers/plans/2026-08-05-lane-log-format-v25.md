@@ -64,6 +64,15 @@ read/write paths.
 - Remove claim pages, synchronized checkpoints, transaction-state ownership,
   generation shards, and shared generation counters.
 
+**Implementation status:** The lane HEAD now carries the owner, monotonic lease
+epoch, and expiry. Acquisition rebuilds and budget-checks exact ID state from a
+caller-supplied materialized base plus every checksummed HEAD-reachable block
+before its lease CAS. Blocks carry live/deleted/purged ID deltas; strict duplicates and expired
+leases fail before object-store I/O; takeover, renewal, ambiguous-CAS poisoning,
+and delete/upsert/purge transitions have deterministic tests. The old
+claim/counter path remains authoritative until the Stage 3 public write-path
+cutover, so this stage is not a performance claim by itself.
+
 ## Stage 3: fixed-cost refresh and fresh reads
 
 - Add RED tests requiring exactly `lane_count` parallel HEAD GETs and zero LISTs
