@@ -241,8 +241,104 @@ fn independent_commit_lanes_publish_every_concurrent_append() {
 }
 
 #[test]
+fn producer_clones_route_the_same_id_to_one_ownership_lane() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create(config(&uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 4,
+        },
+    )
+    .unwrap();
+    let first = writer.clone();
+    let second = writer.clone();
+
+    let first_receipt = first
+        .append(vec![VectorRecord::new("shared-id", vec![1.0, 0.0])])
+        .unwrap();
+    let second_receipt = second
+        .append(vec![VectorRecord::new("shared-id", vec![2.0, 0.0])])
+        .unwrap();
+
+    assert_eq!(
+        first_receipt.commit_lane, second_receipt.commit_lane,
+        "producer identity must not change the ownership lane for an id"
+    );
+}
+
+#[test]
+fn one_append_fans_records_out_to_their_ownership_lanes() {
+    let probe_directory = tempfile::tempdir().unwrap();
+    let probe_uri = probe_directory.path().to_string_lossy().into_owned();
+    let probe = GroupCommitWriter::new(
+        BorsukIndex::create(config(&probe_uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 4,
+        },
+    )
+    .unwrap();
+    let mut ids_by_lane = std::collections::BTreeMap::new();
+    for ordinal in 0..64 {
+        let id = format!("probe-{ordinal}");
+        let receipt = probe
+            .append(vec![VectorRecord::new(
+                id.clone(),
+                vec![ordinal as f32, 0.0],
+            )])
+            .unwrap();
+        ids_by_lane.entry(receipt.commit_lane).or_insert(id);
+        if ids_by_lane.len() == 4 {
+            break;
+        }
+    }
+    assert_eq!(ids_by_lane.len(), 4, "probe ids must cover every test lane");
+    let selected = ids_by_lane.into_iter().take(2).collect::<Vec<_>>();
+
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create(config(&uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 4,
+        },
+    )
+    .unwrap();
+    let receipt = writer
+        .append(
+            selected
+                .iter()
+                .enumerate()
+                .map(|(ordinal, (_, id))| VectorRecord::new(id.clone(), vec![ordinal as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+
+    assert_eq!(receipt.records, 2);
+    assert_eq!(receipt.lane_receipts.len(), 2);
+    assert_eq!(
+        receipt
+            .lane_receipts
+            .iter()
+            .map(|lane| lane.commit_lane)
+            .collect::<std::collections::BTreeSet<_>>(),
+        selected
+            .iter()
+            .map(|(lane, _)| *lane)
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+}
+
+#[test]
 fn independent_commit_lanes_report_lane_local_requests() {
     const LANES: usize = 4;
+    const RECORDS: usize = 64;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///group-lane-local-request-counts";
     let writer = GroupCommitWriter::new(
@@ -254,8 +350,8 @@ fn independent_commit_lanes_report_lane_local_requests() {
         },
     )
     .unwrap();
-    let barrier = Arc::new(Barrier::new(LANES));
-    let handles = (0..LANES)
+    let barrier = Arc::new(Barrier::new(RECORDS));
+    let handles = (0..RECORDS)
         .map(|ordinal| {
             let writer = writer.clone();
             let barrier = Arc::clone(&barrier);
