@@ -293,6 +293,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "bench_write_costs.csv",
                 [
                     "op",
+                    "configured_batch_records",
                     "ops",
                     "batches",
                     "wall_ms",
@@ -307,7 +308,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     "gets",
                     "puts",
                 ],
-                [["upsert", 2048, 2, 20, 102400, 10, 1, 9, 11, 11, 11, 0.01, 2, 4]],
+                [["upsert", 1024, 2048, 2, 20, 102400, 10, 1, 9, 11, 11, 11, 0.01, 2, 4]],
             )
             self.write_csv(
                 root,
