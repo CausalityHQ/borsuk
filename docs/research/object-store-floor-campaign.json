@@ -1,0 +1,20 @@
+{
+  "campaign_id": "object-store-floor-v1",
+  "protocol_kind": "architecture-floor",
+  "architecture": "aarch64",
+  "instance_type": "c7g.8xlarge",
+  "region": "eu-central-1",
+  "samples": 1000,
+  "warmups": 32,
+  "payload_bytes": 3072,
+  "head_bytes": 4096,
+  "operations": [
+    "put",
+    "conditional_create",
+    "conditional_update",
+    "put_then_conditional_update"
+  ],
+  "proceed_max_chained_p95_ms": 160.0,
+  "unreachable_min_chained_p95_ms": 200.0,
+  "decision_contract": "Proceed with the two-write lane-log architecture only when put_then_conditional_update p95 is below 160 ms. A p95 at or above 200 ms disproves the sub-200 ms scalar acknowledgement gate for a two-dependent-write S3 durability boundary on this host/region. Values from 160 ms through below 200 ms are inconclusive and require a second isolated qualification before architecture selection."
+}
