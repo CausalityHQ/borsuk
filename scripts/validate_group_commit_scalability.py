@@ -16,6 +16,14 @@ class ValidationError(RuntimeError):
     pass
 
 
+PHASE_MARKERS = (
+    "INGEST_COMPLETE",
+    "DRAIN_COMPLETE",
+    "POINT_VISIBILITY_COMPLETE",
+    "READ_QUALIFICATION_COMPLETE",
+)
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValidationError(message)
@@ -90,6 +98,8 @@ def validate(
     expected_sample_total = 0
     for cell_count, repetition, writers in sorted(expected_cells):
         cell = root / "cells" / f"c{cell_count}" / f"r{repetition:02d}" / f"w{writers}"
+        for marker in PHASE_MARKERS:
+            require((cell / marker).is_file(), f"missing phase marker {marker} in {cell}")
         summary_rows = rows(cell / "summary.csv")
         require(len(summary_rows) == 1, f"{cell} must contain one summary row")
         summary = summary_rows[0]

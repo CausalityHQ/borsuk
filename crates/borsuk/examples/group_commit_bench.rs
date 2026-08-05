@@ -223,6 +223,7 @@ fn main() -> BenchResult<()> {
     if output.exists() {
         return Err(format!("refusing to replace output {}", output.display()).into());
     }
+    fs::create_dir_all(&output)?;
 
     let index = BorsukIndex::open(&uri)?;
     let diagnostic_protocol = protocol == "diagnostic";
@@ -307,9 +308,11 @@ fn main() -> BenchResult<()> {
             .map_err(|_| "group commit writer panicked")??;
     }
     let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    fs::write(output.join("INGEST_COMPLETE"), b"complete\n")?;
     let drain_started = Instant::now();
     writer.drain()?;
     let drain_ms = drain_started.elapsed().as_secs_f64() * 1_000.0;
+    fs::write(output.join("DRAIN_COMPLETE"), b"complete\n")?;
     drop(writer);
 
     let mut samples = Arc::try_unwrap(samples)
@@ -357,6 +360,10 @@ fn main() -> BenchResult<()> {
                 .is_some_and(|(stored, _)| stored == expected),
         );
     }
+    if visible != samples.len() {
+        return Err("post-reopen point visibility gate failed".into());
+    }
+    fs::write(output.join("POINT_VISIBILITY_COMPLETE"), b"complete\n")?;
     let mut recall_hits = 0_usize;
     let max_read_segments = if diagnostic_protocol { 0 } else { 4 };
     let recall_queries = if diagnostic_protocol {
@@ -414,11 +421,11 @@ fn main() -> BenchResult<()> {
                 .is_some_and(|hit| hit.id.as_str() == sample.record_id),
         );
     }
-    if visible != samples.len() || recall_hits != recall_queries {
-        return Err("post-reopen visibility or exact recall gate failed".into());
+    if recall_hits != recall_queries {
+        return Err("post-reopen exact recall gate failed".into());
     }
+    fs::write(output.join("READ_QUALIFICATION_COMPLETE"), b"complete\n")?;
 
-    fs::create_dir_all(&output)?;
     let latencies = samples
         .iter()
         .map(|sample| sample.latency_ms)

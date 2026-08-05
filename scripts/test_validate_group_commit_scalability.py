@@ -101,6 +101,13 @@ class ValidatorTests(unittest.TestCase):
         self._write_csv(cell / "reads.csv", read_fields, reads)
         Path(f"{cell}.resources.txt").write_text("Exit status: 0\n", encoding="utf-8")
         (cell / "PRODUCTION_PERFORMANCE_GATE_COMPLETE").touch()
+        for marker in (
+            "INGEST_COMPLETE",
+            "DRAIN_COMPLETE",
+            "POINT_VISIBILITY_COMPLETE",
+            "READ_QUALIFICATION_COMPLETE",
+        ):
+            (cell / marker).touch()
         self._write_csv(
             self.root / "summary.csv", ["cell_count", "repetition"] + summary_fields,
             [{"cell_count": "64", "repetition": "1", **summary}],
@@ -207,6 +214,11 @@ class ValidatorTests(unittest.TestCase):
     def test_missing_raw_read_sample_fails(self) -> None:
         (self.root / "cells/c64/r01/w1/reads.csv").unlink()
         with self.assertRaisesRegex(ValidationError, "raw read sample"):
+            validate(self.root, self.manifest_path)
+
+    def test_missing_phase_marker_fails(self) -> None:
+        (self.root / "cells/c64/r01/w1/DRAIN_COMPLETE").unlink()
+        with self.assertRaisesRegex(ValidationError, "missing phase marker"):
             validate(self.root, self.manifest_path)
 
 
