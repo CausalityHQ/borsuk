@@ -11967,6 +11967,7 @@ impl BorsukIndex {
             return Ok(None);
         }
         const PQ_TRAINING_SAMPLE_LIMIT: usize = 4_096;
+        const GLOBAL_PQ_BUILD_READS: usize = 8;
         let training_sample_limit =
             global_pq_training_sample_limit(self.manifest.config.dimensions);
         let normalize = self
@@ -11981,28 +11982,33 @@ impl BorsukIndex {
         // First pass retains only a bounded, deterministic reservoir for fitting.
         // In particular, a 1M x 960-d GIST build no longer holds ~3.8 GiB of
         // dense vectors while constructing its compact serving artifact.
-        for summary in summaries {
-            let (segment, _, _, _) = self.read_segment(summary)?;
-            for record in &segment.records {
-                if self.is_suppressed(record)? {
-                    continue;
-                }
-                let vector = if normalize {
-                    crate::metric::unit_l2_normalized(&record.vector)
-                } else {
-                    record.vector.clone()
-                };
-                vectors_seen = vectors_seen.saturating_add(1);
-                if training_sample.len() < training_sample_limit {
-                    training_sample.push(vector);
-                } else {
-                    let replacement = splitmix_index(&mut reservoir_state, vectors_seen);
-                    if replacement < training_sample_limit {
-                        training_sample[replacement] = vector;
+        for_each_bounded_io_wave(
+            summaries,
+            GLOBAL_PQ_BUILD_READS,
+            |summary| self.read_segment(summary),
+            |_summary, (segment, _, _, _)| {
+                for record in &segment.records {
+                    if self.is_suppressed(record)? {
+                        continue;
+                    }
+                    let vector = if normalize {
+                        crate::metric::unit_l2_normalized(&record.vector)
+                    } else {
+                        record.vector.clone()
+                    };
+                    vectors_seen = vectors_seen.saturating_add(1);
+                    if training_sample.len() < training_sample_limit {
+                        training_sample.push(vector);
+                    } else {
+                        let replacement = splitmix_index(&mut reservoir_state, vectors_seen);
+                        if replacement < training_sample_limit {
+                            training_sample[replacement] = vector;
+                        }
                     }
                 }
-            }
-        }
+                Ok(())
+            },
+        )?;
         if vectors_seen == 0 {
             return Ok(None);
         }
@@ -12217,53 +12223,60 @@ impl BorsukIndex {
             Ok(())
         };
         let mut storage_bytes = 0_u64;
-        for (segment_index, summary) in summaries.iter().enumerate() {
-            let segment_index = u32::try_from(segment_index).map_err(|_| {
-                BorsukError::InvalidStorage(
-                    "resident global PQ has more than u32 segments".to_string(),
-                )
-            })?;
-            let (segment, _, _, _) = self.read_segment(summary)?;
-            let active = segment
-                .records
-                .iter()
-                .enumerate()
-                .filter_map(|(row_index, record)| match self.is_suppressed(record) {
-                    Ok(true) => None,
-                    Ok(false) => Some(Ok((
-                        row_index,
-                        if normalize {
-                            crate::metric::unit_l2_normalized(&record.vector)
-                        } else {
-                            record.vector.clone()
+        let mut segment_index = 0_usize;
+        for_each_bounded_io_wave(
+            summaries,
+            GLOBAL_PQ_BUILD_READS,
+            |summary| self.read_segment(summary),
+            |_summary, (segment, _, _, _)| {
+                let segment_ordinal = u32::try_from(segment_index).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "resident global PQ has more than u32 segments".to_string(),
+                    )
+                })?;
+                let active = segment
+                    .records
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(row_index, record)| match self.is_suppressed(record) {
+                        Ok(true) => None,
+                        Ok(false) => Some(Ok((
+                            row_index,
+                            if normalize {
+                                crate::metric::unit_l2_normalized(&record.vector)
+                            } else {
+                                record.vector.clone()
+                            },
+                        ))),
+                        Err(error) => Some(Err(error)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let encoded = crate::parallel::install(|| {
+                    active
+                        .par_iter()
+                        .map(|(_, vector)| spool.encode_vector(vector))
+                        .collect::<Result<Vec<_>>>()
+                })?;
+                for ((row_index, _vector), (cell, code)) in active.into_iter().zip(encoded) {
+                    let record = &segment.records[row_index];
+                    spool.push_encoded(
+                        cell,
+                        &code,
+                        GlobalPqRow {
+                            segment_index: segment_ordinal,
+                            row_index: u32::try_from(row_index).map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "resident global PQ segment has more than u32 rows".to_string(),
+                                )
+                            })?,
                         },
-                    ))),
-                    Err(error) => Some(Err(error)),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let encoded = crate::parallel::install(|| {
-                active
-                    .par_iter()
-                    .map(|(_, vector)| spool.encode_vector(vector))
-                    .collect::<Result<Vec<_>>>()
-            })?;
-            for ((row_index, _vector), (cell, code)) in active.into_iter().zip(encoded) {
-                let record = &segment.records[row_index];
-                spool.push_encoded(
-                    cell,
-                    &code,
-                    GlobalPqRow {
-                        segment_index,
-                        row_index: u32::try_from(row_index).map_err(|_| {
-                            BorsukError::InvalidStorage(
-                                "resident global PQ segment has more than u32 rows".to_string(),
-                            )
-                        })?,
-                    },
-                    &record.vector,
-                )?;
-            }
-        }
+                        &record.vector,
+                    )?;
+                }
+                segment_index = segment_index.saturating_add(1);
+                Ok(())
+            },
+        )?;
         let parent_contiguous_bundles = matches!(
             &coarse_quantizer_state,
             crate::global_pq_sidecar::GlobalCoarseQuantizerState::Hierarchical(_)
@@ -19426,6 +19439,33 @@ where
     output
 }
 
+/// Map one bounded I/O wave at a time and consume its results in input order.
+/// Unlike [`bounded_io_map_with_gate`], completed values from earlier waves are
+/// released before the next wave starts, which bounds decoded segment memory
+/// during corpus-wide maintenance passes.
+fn for_each_bounded_io_wave<T, U, E, Map, Consume>(
+    values: &[T],
+    width: usize,
+    map: Map,
+    mut consume: Consume,
+) -> std::result::Result<(), E>
+where
+    T: Sync,
+    U: Send,
+    E: Send,
+    Map: Fn(&T) -> std::result::Result<U, E> + Sync,
+    Consume: FnMut(&T, U) -> std::result::Result<(), E>,
+{
+    let width = width.max(1);
+    for wave in values.chunks(width) {
+        let mapped = bounded_io_map_with_gate(wave, width, None, &map);
+        for (value, result) in wave.iter().zip(mapped) {
+            consume(value, result?)?;
+        }
+    }
+    Ok(())
+}
+
 fn kth_largest_score(scores: impl Iterator<Item = f64>, k: usize) -> Option<f64> {
     if k == 0 {
         return None;
@@ -22995,6 +23035,42 @@ mod tests {
                 "blocking I/O must not be serialized by the CPU compute cap"
             );
         }
+    }
+
+    #[test]
+    fn global_build_io_waves_parallelize_and_preserve_order() {
+        let active = std::sync::atomic::AtomicUsize::new(0);
+        let peak = std::sync::atomic::AtomicUsize::new(0);
+        let values = (0..12).collect::<Vec<_>>();
+        let mut consumed = Vec::new();
+
+        for_each_bounded_io_wave(
+            &values,
+            4,
+            |value| {
+                let now = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                peak.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, ()>(value * 2)
+            },
+            |value, mapped| {
+                consumed.push((*value, mapped));
+                Ok::<_, ()>(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            consumed,
+            (0..12).map(|value| (value, value * 2)).collect::<Vec<_>>()
+        );
+        let peak = peak.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(peak > 1, "global build reads must overlap");
+        assert!(
+            peak <= 4,
+            "one wave must retain at most its configured width"
+        );
     }
 
     #[test]
