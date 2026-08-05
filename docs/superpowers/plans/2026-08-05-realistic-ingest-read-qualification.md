@@ -228,11 +228,11 @@
 - Consumes: committed source revision, frozen manifests, dataset hashes, fresh prefixes, idle Causality host.
 - Produces: immutable terminal artifacts and exact failure/root-cause records.
 
-- [ ] **Step 1: Verify launch preconditions**
+- [x] **Step 1: Verify launch preconditions**
 
   Fetch `origin/main`; verify exact source archive SHA-256 and manifest SHA-256 remotely; require empty result/index prefixes, no benchmark process, at least 32 GiB available memory, and enough disk for dataset plus peak scratch.
 
-- [ ] **Step 2: Launch three-repetition architecture qualification**
+- [x] **Step 2: Launch sustained architecture qualification**
 
   Run Cohere 1M/768D batch and commit-lane matrices from a committed source. Preserve raw artifacts and resource telemetry.
 
