@@ -1367,8 +1367,17 @@ impl CellWalStore {
         let mut paths = BTreeSet::new();
         let mut transactions = Vec::with_capacity(transaction_ids.len());
         for transaction_id in transaction_ids {
+            let expected_runs = consumed_run_identities
+                .iter()
+                .filter(|identity| {
+                    identity
+                        .split_once(':')
+                        .is_some_and(|(candidate, _)| candidate == transaction_id)
+                })
+                .cloned()
+                .collect::<BTreeSet<_>>();
             let transaction = self
-                .load_committed_transaction(&transaction_id)?
+                .load_retained_transaction(&transaction_id, &expected_runs)?
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage(format!(
                         "retained manifest references missing cell WAL transaction `{transaction_id}`"
@@ -1387,6 +1396,49 @@ impl CellWalStore {
             transactions.push(transaction);
         }
         Ok((paths, transactions))
+    }
+
+    /// Resolve immutable transaction metadata authorized by a retained
+    /// manifest. Collection-root publication is the visibility authority and
+    /// its frontier entry may already be compacted, so GC is allowed to recover
+    /// the content-addressed descriptor only when exactly one descriptor
+    /// contains every run identity named by that retained manifest.
+    fn load_retained_transaction(
+        &self,
+        transaction_id: &str,
+        expected_run_identities: &BTreeSet<String>,
+    ) -> Result<Option<CommittedCellWalTransaction>> {
+        if let Some(transaction) = self.load_committed_transaction(transaction_id)? {
+            return Ok(Some(transaction));
+        }
+        let prefix = format!("transactions/{transaction_id}/descriptors/");
+        let mut matches = Vec::new();
+        for object in self.storage.list_objects(&prefix)? {
+            let Some(checksum) = object
+                .path
+                .strip_prefix(&prefix)
+                .and_then(|name| name.strip_suffix(".bin"))
+            else {
+                continue;
+            };
+            let transaction =
+                self.load_authorized_descriptor(transaction_id, &object.path, checksum)?;
+            let descriptor_runs = transaction
+                .runs
+                .iter()
+                .map(cell_wal_run_identity)
+                .collect::<BTreeSet<_>>();
+            if expected_run_identities.is_subset(&descriptor_runs) {
+                matches.push(transaction);
+            }
+        }
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.pop()),
+            count => Err(BorsukError::InvalidStorage(format!(
+                "retained cell WAL transaction `{transaction_id}` has {count} matching descriptors"
+            ))),
+        }
     }
 
     pub(crate) fn object_paths_detached_by_pruning(
@@ -2679,6 +2731,90 @@ mod tests {
                 .run_identities_without_root_authorization(&[cell], &BTreeSet::new())
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn retained_manifest_recovers_root_authorized_descriptor_without_legacy_marker() {
+        let store = CellWalStore::new(
+            std::sync::Arc::new(object_store::memory::InMemory::new()),
+            "memory:///retained-root-authorized-descriptor",
+            CellWalConfig::default(),
+            b"writer".to_vec(),
+        )
+        .unwrap();
+        let transaction = store
+            .stage_root_authorized_with_metadata(
+                "root-authorized",
+                &[CellWalRunInput {
+                    cell: LogicalCellId::new(3, 4),
+                    kind: CellWalRunKind::Records,
+                    metadata: Vec::new(),
+                    bytes: b"retained".to_vec(),
+                    record_count: 1,
+                    extension: "parquet".to_string(),
+                }],
+                b"metadata",
+                true,
+            )
+            .unwrap();
+        let consumed = transaction
+            .runs
+            .iter()
+            .map(cell_wal_run_identity)
+            .collect::<BTreeSet<_>>();
+
+        let (paths, recovered) = store.retained_consumed_objects(&consumed).unwrap();
+
+        assert_eq!(recovered, vec![transaction.clone()]);
+        assert!(paths.contains(&transaction.descriptor_path));
+        assert!(paths.contains(&transaction.runs[0].path));
+    }
+
+    #[test]
+    fn retained_manifest_rejects_ambiguous_root_authorized_descriptors() {
+        let store = CellWalStore::new(
+            std::sync::Arc::new(object_store::memory::InMemory::new()),
+            "memory:///ambiguous-retained-descriptor",
+            CellWalConfig::default(),
+            b"writer".to_vec(),
+        )
+        .unwrap();
+        let input = CellWalRunInput {
+            cell: LogicalCellId::new(3, 4),
+            kind: CellWalRunKind::Records,
+            metadata: Vec::new(),
+            bytes: b"retained".to_vec(),
+            record_count: 1,
+            extension: "parquet".to_string(),
+        };
+        let first = store
+            .stage_root_authorized_with_metadata(
+                "ambiguous-root-authorized",
+                std::slice::from_ref(&input),
+                b"first",
+                true,
+            )
+            .unwrap();
+        store
+            .stage_root_authorized_with_metadata(
+                "ambiguous-root-authorized",
+                &[input],
+                b"second",
+                true,
+            )
+            .unwrap();
+        let consumed = first
+            .runs
+            .iter()
+            .map(cell_wal_run_identity)
+            .collect::<BTreeSet<_>>();
+
+        let error = store.retained_consumed_objects(&consumed).unwrap_err();
+
+        assert!(
+            error.to_string().contains("2 matching descriptors"),
+            "{error}"
         );
     }
 
