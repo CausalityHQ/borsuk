@@ -79,6 +79,7 @@ class ValidatorTests(unittest.TestCase):
             "storage_puts", "storage_heads", "requests_per_record",
             "total_acknowledgement_bytes", "max_acknowledgement_bytes",
             "visible_records", "recall_queries", "max_read_segments", "inserted_id_recall_at_10",
+            "active_tail_read_p50_ms", "active_tail_read_p95_ms",
             "read_p50_ms", "read_p95_ms", "read_storage_requests", "read_storage_gets",
             "read_storage_puts", "read_storage_deletes", "read_storage_heads",
             "read_storage_lists", "read_bytes", "read_segments_searched",
@@ -93,6 +94,7 @@ class ValidatorTests(unittest.TestCase):
             "max_acknowledgement_bytes": "2048", "visible_records": "2",
             "recall_queries": "1", "max_read_segments": "4", "inserted_id_recall_at_10": "1",
             "read_p50_ms": "6", "read_p95_ms": "6",
+            "active_tail_read_p50_ms": "7", "active_tail_read_p95_ms": "7",
             "read_storage_requests": "6", "read_storage_gets": "5",
             "read_storage_puts": "0", "read_storage_deletes": "0",
             "read_storage_heads": "0", "read_storage_lists": "1",
@@ -123,6 +125,8 @@ class ValidatorTests(unittest.TestCase):
             "heads": "0", "lists": "1", "bytes_read": "1024", "segments_searched": "4",
         }]
         self._write_csv(cell / "reads.csv", read_fields, reads)
+        active_tail_reads = [{**reads[0], "latency_ms": "7"}]
+        self._write_csv(cell / "active-tail-reads.csv", read_fields, active_tail_reads)
         self._write_csv(
             cell / "storage-access.csv",
             [
@@ -154,6 +158,7 @@ class ValidatorTests(unittest.TestCase):
         (cell / "PRODUCTION_PERFORMANCE_GATE_COMPLETE").touch()
         for marker in (
             "INGEST_COMPLETE",
+            "ACTIVE_TAIL_READ_QUALIFICATION_COMPLETE",
             "DRAIN_COMPLETE",
             "POINT_VISIBILITY_COMPLETE",
             "READ_QUALIFICATION_COMPLETE",
@@ -171,6 +176,14 @@ class ValidatorTests(unittest.TestCase):
         self._write_csv(
             self.root / "reads.csv", ["cell_count", "repetition", "worker_lanes"] + read_fields,
             [{"cell_count": "64", "repetition": "1", "worker_lanes": "1", **read} for read in reads],
+        )
+        self._write_csv(
+            self.root / "active-tail-reads.csv",
+            ["cell_count", "repetition", "worker_lanes"] + read_fields,
+            [
+                {"cell_count": "64", "repetition": "1", "worker_lanes": "1", **read}
+                for read in active_tail_reads
+            ],
         )
         self._write_csv(
             self.root / "correctness.csv", ["gate", "status"],
@@ -352,6 +365,17 @@ class ValidatorTests(unittest.TestCase):
     def test_missing_raw_read_sample_fails(self) -> None:
         (self.root / "cells/c64/r01/l1/w1/reads.csv").unlink()
         with self.assertRaisesRegex(ValidationError, "raw read sample"):
+            validate(self.root, self.manifest_path)
+
+    def test_active_tail_latency_regression_fails(self) -> None:
+        summary_path = self.root / "cells/c64/r01/l1/w1/summary.csv"
+        with summary_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        records[0]["active_tail_read_p95_ms"] = "200"
+        self._write_csv(summary_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "active-tail read p95"):
             validate(self.root, self.manifest_path)
 
     def test_missing_phase_marker_fails(self) -> None:

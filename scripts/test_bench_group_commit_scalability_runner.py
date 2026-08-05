@@ -30,6 +30,14 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("let point_records = reopened.get_records(", BENCH)
         self.assertNotIn("reopened\n                .get_record", BENCH)
 
+    def test_active_tail_reads_are_measured_before_drain_and_gated(self) -> None:
+        self.assertLess(
+            BENCH.index("ACTIVE_TAIL_READ_QUALIFICATION_COMPLETE"),
+            BENCH.index("writer.drain()?"),
+        )
+        self.assertIn("PRODUCTION_ACTIVE_TAIL_READ_P95_FAILED", BENCH)
+        self.assertIn('"active-tail-reads.csv"', RUNNER)
+
     def test_realistic_campaign_uses_pinned_768d_vectors_and_independent_lane_factors(self) -> None:
         manifest = json.loads(REALISTIC_MANIFEST.read_text())
         self.assertEqual(manifest["dataset"], "cohere-medium-1M")

@@ -294,7 +294,7 @@ import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
-for name in ("summary.csv", "samples.csv", "reads.csv"):
+for name in ("summary.csv", "samples.csv", "reads.csv", "active-tail-reads.csv"):
     sources = sorted(root.glob(f"cells/**/{name}"))
     if not sources:
         raise SystemExit(f"no cell artifacts for {name}")

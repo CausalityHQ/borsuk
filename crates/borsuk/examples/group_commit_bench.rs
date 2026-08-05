@@ -45,6 +45,24 @@ struct ReadSample {
     segments_searched: usize,
 }
 
+struct ReadMeasurement {
+    samples: Vec<ReadSample>,
+    latencies: Vec<f64>,
+    requests: RequestCounts,
+    bytes: u64,
+    segments_searched: usize,
+    hits: usize,
+}
+
+#[derive(Clone, Copy)]
+struct ReadConfig {
+    operations: usize,
+    query_count: usize,
+    diagnostic_protocol: bool,
+    max_read_segments: usize,
+    refresh_before_each: bool,
+}
+
 struct PendingAppend {
     operation: usize,
     record_id: String,
@@ -171,12 +189,106 @@ fn production_record_id(ordinal: usize) -> String {
     format!("group-o{ordinal:08}")
 }
 
+fn measure_reads(
+    index: &mut BorsukIndex,
+    samples: &[Sample],
+    input_vectors: &[Vec<f32>],
+    config: ReadConfig,
+) -> BenchResult<ReadMeasurement> {
+    let mut measurement = ReadMeasurement {
+        samples: Vec::with_capacity(config.query_count),
+        latencies: Vec::with_capacity(config.query_count),
+        requests: RequestCounts::default(),
+        bytes: 0,
+        segments_searched: 0,
+        hits: 0,
+    };
+    for (query_index, sample) in samples.iter().take(config.query_count).enumerate() {
+        let ordinal = sample.writer * config.operations + sample.operation;
+        let read_started = Instant::now();
+        if config.refresh_before_each {
+            index.refresh()?;
+        }
+        let report = index.search_with_report(
+            &input_vectors[ordinal],
+            if config.diagnostic_protocol {
+                SearchOptions::exact(1)
+            } else {
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(config.max_read_segments)
+                    .with_max_candidates_per_segment(64)
+            },
+        )?;
+        let latency_ms = read_started.elapsed().as_secs_f64() * 1_000.0;
+        measurement.latencies.push(latency_ms);
+        measurement.requests.gets += report.requests.gets;
+        measurement.requests.puts += report.requests.puts;
+        measurement.requests.deletes += report.requests.deletes;
+        measurement.requests.heads += report.requests.heads;
+        measurement.requests.lists += report.requests.lists;
+        measurement.bytes = measurement.bytes.saturating_add(report.bytes_read);
+        measurement.segments_searched = measurement
+            .segments_searched
+            .saturating_add(report.segments_searched);
+        let hit_id = report
+            .hits
+            .first()
+            .map_or_else(String::new, |hit| hit.id.as_str().to_string());
+        let contains_record_id = report
+            .hits
+            .iter()
+            .any(|hit| hit.id.as_str() == sample.record_id);
+        measurement.samples.push(ReadSample {
+            query: query_index,
+            record_id: sample.record_id.clone(),
+            hit_id,
+            contains_record_id,
+            latency_ms,
+            requests: report.requests,
+            bytes_read: report.bytes_read,
+            segments_searched: report.segments_searched,
+        });
+        measurement.hits += usize::from(contains_record_id);
+    }
+    Ok(measurement)
+}
+
+fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
+    let mut reads = BufWriter::new(File::create(path)?);
+    writeln!(
+        reads,
+        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched"
+    )?;
+    for sample in samples {
+        writeln!(
+            reads,
+            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{}",
+            sample.query,
+            sample.record_id,
+            sample.hit_id,
+            sample.contains_record_id,
+            sample.latency_ms,
+            sample.requests.total(),
+            sample.requests.gets,
+            sample.requests.puts,
+            sample.requests.deletes,
+            sample.requests.heads,
+            sample.requests.lists,
+            sample.bytes_read,
+            sample.segments_searched,
+        )?;
+    }
+    reads.flush()?;
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct PerformanceObservation {
     p95_ms: f64,
     records_per_second: f64,
     end_to_end_records_per_second: f64,
     read_p95_ms: f64,
+    active_tail_read_p95_ms: f64,
     inserted_id_recall_at_10: f64,
 }
 
@@ -209,6 +321,9 @@ fn production_performance_gate_failures(
     }
     if observed.read_p95_ms >= thresholds.max_read_p95_ms {
         failures.push("PRODUCTION_READ_P95_FAILED");
+    }
+    if observed.active_tail_read_p95_ms >= thresholds.max_read_p95_ms {
+        failures.push("PRODUCTION_ACTIVE_TAIL_READ_P95_FAILED");
     }
     if observed.inserted_id_recall_at_10 < thresholds.min_inserted_id_recall_at_10 {
         failures.push("PRODUCTION_INSERTED_ID_RECALL_AT_10_FAILED");
@@ -426,6 +541,44 @@ fn main() -> BenchResult<()> {
     }
     let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
     fs::write(output.join("INGEST_COMPLETE"), b"complete\n")?;
+    let mut samples = Arc::try_unwrap(samples)
+        .map_err(|_| "sample owners remain")?
+        .into_inner()
+        .unwrap();
+    samples.sort_by_key(|sample| (sample.writer, sample.operation));
+    let max_read_segments = if diagnostic_protocol { 0 } else { 4 };
+    let recall_queries = if diagnostic_protocol {
+        20
+    } else if protocol == "scalability" {
+        number("BORSUK_GROUP_COMMIT_READ_QUERIES")?
+    } else {
+        1
+    }
+    .min(samples.len());
+    let mut active_tail_index = BorsukIndex::open(&uri)?;
+    let active_tail_reads = measure_reads(
+        &mut active_tail_index,
+        &samples,
+        &input_vectors,
+        ReadConfig {
+            operations,
+            query_count: recall_queries,
+            diagnostic_protocol,
+            max_read_segments,
+            refresh_before_each: true,
+        },
+    )?;
+    if active_tail_reads.hits != recall_queries {
+        return Err("active-tail inserted-ID recall gate failed".into());
+    }
+    write_read_samples(
+        &output.join("active-tail-reads.csv"),
+        &active_tail_reads.samples,
+    )?;
+    fs::write(
+        output.join("ACTIVE_TAIL_READ_QUALIFICATION_COMPLETE"),
+        b"complete\n",
+    )?;
     let drain_started = Instant::now();
     writer.drain()?;
     let drain_ms = drain_started.elapsed().as_secs_f64() * 1_000.0;
@@ -434,11 +587,6 @@ fn main() -> BenchResult<()> {
     fs::write(output.join("DRAIN_COMPLETE"), b"complete\n")?;
     drop(writer);
 
-    let mut samples = Arc::try_unwrap(samples)
-        .map_err(|_| "sample owners remain")?
-        .into_inner()
-        .unwrap();
-    samples.sort_by_key(|sample| (sample.writer, sample.operation));
     let mut groups = BTreeMap::<(usize, u64), (usize, u64, RequestCounts)>::new();
     for sample in &samples {
         match groups.insert(
@@ -488,7 +636,7 @@ fn main() -> BenchResult<()> {
         return Err("group record totals do not reconcile with caller samples".into());
     }
 
-    let reopened = BorsukIndex::open(&uri)?;
+    let mut reopened = BorsukIndex::open(&uri)?;
     let point_records = reopened.get_records(
         &samples
             .iter()
@@ -505,64 +653,19 @@ fn main() -> BenchResult<()> {
         return Err("post-reopen point visibility gate failed".into());
     }
     fs::write(output.join("POINT_VISIBILITY_COMPLETE"), b"complete\n")?;
-    let mut recall_hits = 0_usize;
-    let max_read_segments = if diagnostic_protocol { 0 } else { 4 };
-    let recall_queries = if diagnostic_protocol {
-        20
-    } else if protocol == "scalability" {
-        number("BORSUK_GROUP_COMMIT_READ_QUERIES")?
-    } else {
-        1
-    }
-    .min(samples.len());
-    let mut read_latencies = Vec::with_capacity(recall_queries);
-    let mut read_requests = RequestCounts::default();
-    let mut read_bytes = 0_u64;
-    let mut read_segments_searched = 0_usize;
-    let mut read_samples = Vec::with_capacity(recall_queries);
-    for (query_index, sample) in samples.iter().take(recall_queries).enumerate() {
-        let ordinal = sample.writer * operations + sample.operation;
-        let read_started = Instant::now();
-        let report = reopened.search_with_report(
-            &input_vectors[ordinal],
-            if diagnostic_protocol {
-                SearchOptions::exact(1)
-            } else {
-                SearchOptions::approx(10, LeafMode::SrhtPqScan)
-                    .with_max_segments(max_read_segments)
-                    .with_max_candidates_per_segment(64)
-            },
-        )?;
-        let latency_ms = read_started.elapsed().as_secs_f64() * 1_000.0;
-        read_latencies.push(latency_ms);
-        read_requests.gets += report.requests.gets;
-        read_requests.puts += report.requests.puts;
-        read_requests.deletes += report.requests.deletes;
-        read_requests.heads += report.requests.heads;
-        read_requests.lists += report.requests.lists;
-        read_bytes = read_bytes.saturating_add(report.bytes_read);
-        read_segments_searched = read_segments_searched.saturating_add(report.segments_searched);
-        let hit_id = report
-            .hits
-            .first()
-            .map_or_else(String::new, |hit| hit.id.as_str().to_string());
-        let contains_record_id = report
-            .hits
-            .iter()
-            .any(|hit| hit.id.as_str() == sample.record_id);
-        read_samples.push(ReadSample {
-            query: query_index,
-            record_id: sample.record_id.clone(),
-            hit_id,
-            contains_record_id,
-            latency_ms,
-            requests: report.requests,
-            bytes_read: report.bytes_read,
-            segments_searched: report.segments_searched,
-        });
-        recall_hits += usize::from(contains_record_id);
-    }
-    if recall_hits != recall_queries {
+    let reads = measure_reads(
+        &mut reopened,
+        &samples,
+        &input_vectors,
+        ReadConfig {
+            operations,
+            query_count: recall_queries,
+            diagnostic_protocol,
+            max_read_segments,
+            refresh_before_each: false,
+        },
+    )?;
+    if reads.hits != recall_queries {
         return Err("post-reopen exact recall gate failed".into());
     }
     fs::write(output.join("READ_QUALIFICATION_COMPLETE"), b"complete\n")?;
@@ -575,17 +678,19 @@ fn main() -> BenchResult<()> {
     let p95_ms = percentile(&latencies, 0.95);
     let records_per_second = samples.len() as f64 / (elapsed_ms / 1_000.0);
     let vector_mib_per_second = vector_mib_per_second(records_per_second, dimensions);
-    let read_p50_ms = percentile(&read_latencies, 0.50);
-    let read_p95_ms = percentile(&read_latencies, 0.95);
-    let inserted_id_recall_at_10 = recall_hits as f64 / recall_queries as f64;
+    let read_p50_ms = percentile(&reads.latencies, 0.50);
+    let read_p95_ms = percentile(&reads.latencies, 0.95);
+    let active_tail_read_p50_ms = percentile(&active_tail_reads.latencies, 0.50);
+    let active_tail_read_p95_ms = percentile(&active_tail_reads.latencies, 0.95);
+    let inserted_id_recall_at_10 = reads.hits as f64 / recall_queries as f64;
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,end_to_end_records_per_second,p50_ms,p95_ms,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,total_acknowledgement_bytes,max_acknowledgement_bytes,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
+        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,end_to_end_records_per_second,p50_ms,p95_ms,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,total_acknowledgement_bytes,max_acknowledgement_bytes,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,active_tail_read_p50_ms,active_tail_read_p95_ms,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
     )?;
     writeln!(
         summary,
-        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{end_to_end_records_per_second:.9},{:.9},{:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{total_acknowledgement_bytes},{max_acknowledgement_bytes},{visible},{recall_queries},{max_read_segments},{:.9},{:.9},{:.9},{},{},{},{},{},{},{read_bytes},{read_segments_searched}",
+        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{end_to_end_records_per_second:.9},{:.9},{:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{total_acknowledgement_bytes},{max_acknowledgement_bytes},{visible},{recall_queries},{max_read_segments},{:.9},{active_tail_read_p50_ms:.9},{active_tail_read_p95_ms:.9},{:.9},{:.9},{},{},{},{},{},{},{},{}",
         samples.len(),
         groups.len(),
         samples.len() as f64 / groups.len() as f64,
@@ -599,12 +704,14 @@ fn main() -> BenchResult<()> {
         inserted_id_recall_at_10,
         read_p50_ms,
         read_p95_ms,
-        read_requests.total(),
-        read_requests.gets,
-        read_requests.puts,
-        read_requests.deletes,
-        read_requests.heads,
-        read_requests.lists,
+        reads.requests.total(),
+        reads.requests.gets,
+        reads.requests.puts,
+        reads.requests.deletes,
+        reads.requests.heads,
+        reads.requests.lists,
+        reads.bytes,
+        reads.segments_searched,
     )?;
     let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
     writeln!(
@@ -629,30 +736,7 @@ fn main() -> BenchResult<()> {
             sample.group_requests.heads,
         )?;
     }
-    let mut reads = BufWriter::new(File::create(output.join("reads.csv"))?);
-    writeln!(
-        reads,
-        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched"
-    )?;
-    for sample in read_samples {
-        writeln!(
-            reads,
-            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{}",
-            sample.query,
-            sample.record_id,
-            sample.hit_id,
-            sample.contains_record_id,
-            sample.latency_ms,
-            sample.requests.total(),
-            sample.requests.gets,
-            sample.requests.puts,
-            sample.requests.deletes,
-            sample.requests.heads,
-            sample.requests.lists,
-            sample.bytes_read,
-            sample.segments_searched,
-        )?;
-    }
+    write_read_samples(&output.join("reads.csv"), &reads.samples)?;
     summary.flush()?;
     raw.flush()?;
     if let Some(thresholds) = performance_gate {
@@ -662,6 +746,7 @@ fn main() -> BenchResult<()> {
                 records_per_second,
                 end_to_end_records_per_second,
                 read_p95_ms,
+                active_tail_read_p95_ms,
                 inserted_id_recall_at_10,
             },
             thresholds,
@@ -725,6 +810,7 @@ mod tests {
                     records_per_second: 160.0,
                     end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
+                    active_tail_read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0,
                 },
                 thresholds,
@@ -738,6 +824,7 @@ mod tests {
                     records_per_second: 160.0,
                     end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
+                    active_tail_read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0
                 },
                 thresholds,
@@ -751,6 +838,7 @@ mod tests {
                     records_per_second: 159.999,
                     end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
+                    active_tail_read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0
                 },
                 thresholds,
@@ -764,6 +852,7 @@ mod tests {
                     records_per_second: 1.0,
                     end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
+                    active_tail_read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0,
                 },
                 PerformanceThresholds {
@@ -780,6 +869,7 @@ mod tests {
                     records_per_second: 160.0,
                     end_to_end_records_per_second: 119.999,
                     read_p95_ms: 199.999,
+                    active_tail_read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0,
                 },
                 thresholds,
@@ -793,6 +883,7 @@ mod tests {
                     records_per_second: 160.0,
                     end_to_end_records_per_second: 120.0,
                     read_p95_ms: 200.0,
+                    active_tail_read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 1.0
                 },
                 thresholds,
@@ -806,6 +897,21 @@ mod tests {
                     records_per_second: 160.0,
                     end_to_end_records_per_second: 120.0,
                     read_p95_ms: 199.999,
+                    active_tail_read_p95_ms: 200.0,
+                    inserted_id_recall_at_10: 1.0,
+                },
+                thresholds,
+            ),
+            vec!["PRODUCTION_ACTIVE_TAIL_READ_P95_FAILED"]
+        );
+        assert_eq!(
+            production_performance_gate_failures(
+                PerformanceObservation {
+                    p95_ms: 199.999,
+                    records_per_second: 160.0,
+                    end_to_end_records_per_second: 120.0,
+                    read_p95_ms: 199.999,
+                    active_tail_read_p95_ms: 199.999,
                     inserted_id_recall_at_10: 0.99
                 },
                 thresholds,
