@@ -40,6 +40,7 @@ const CELL_GRAPH_VERSION: u32 = 1;
 const CELL_GRAPH_HEADER_LEN: usize = 52;
 pub(crate) const DEFAULT_GLOBAL_PQ_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const DEFAULT_GLOBAL_EXACT_CHUNK_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const BUILD_SCRATCH_DIR_ENV: &str = "BORSUK_BUILD_SCRATCH_DIR";
 const HIERARCHICAL_PARENT_ASSIGNMENT_WIDTH: usize = 4;
 
@@ -729,6 +730,7 @@ pub(crate) struct GlobalPqChunkRef {
     pub(crate) size_bytes: usize,
     /// Optional immutable graph for this exact cell chunk. Absence is a normal
     /// scan-only layout, not an error or a compatibility fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) graph: Option<GlobalCellGraphRef>,
 }
 
@@ -751,6 +753,55 @@ pub(crate) struct GlobalPqCellSpool {
     dimensions: usize,
     vector_element_type: VectorElementType,
     rows: usize,
+}
+
+struct SpoolRow {
+    fixed: Vec<u8>,
+    generation: u64,
+    id: Vec<u8>,
+}
+
+fn read_spool_row(
+    reader: &mut BufReader<File>,
+    path: &Path,
+    fixed_width: usize,
+) -> Result<Option<SpoolRow>> {
+    let mut fixed = vec![0_u8; fixed_width];
+    match reader.read(&mut fixed[..1]) {
+        Ok(0) => return Ok(None),
+        Ok(1) => {}
+        Ok(_) => unreachable!("one-byte read"),
+        Err(source) => return Err(io_error(path, source)),
+    }
+    reader
+        .read_exact(&mut fixed[1..])
+        .map_err(|source| io_error(path, source))?;
+    let mut generation = [0_u8; 8];
+    let mut id_len = [0_u8; 4];
+    reader
+        .read_exact(&mut generation)
+        .and_then(|()| reader.read_exact(&mut id_len))
+        .map_err(|source| io_error(path, source))?;
+    let mut id = vec![0_u8; u32::from_le_bytes(id_len) as usize];
+    reader
+        .read_exact(&mut id)
+        .map_err(|source| io_error(path, source))?;
+    Ok(Some(SpoolRow {
+        fixed,
+        generation: u64::from_le_bytes(generation),
+        id,
+    }))
+}
+
+fn write_spool_row(writer: &mut BufWriter<File>, path: &Path, row: &SpoolRow) -> Result<()> {
+    let id_len = u32::try_from(row.id.len())
+        .map_err(|_| BorsukError::InvalidStorage("record id exceeds u32 bytes".to_string()))?;
+    writer
+        .write_all(&row.fixed)
+        .and_then(|()| writer.write_all(&row.generation.to_le_bytes()))
+        .and_then(|()| writer.write_all(&id_len.to_le_bytes()))
+        .and_then(|()| writer.write_all(&row.id))
+        .map_err(|source| io_error(path, source))
 }
 
 impl GlobalPqCellSpool {
@@ -806,9 +857,11 @@ impl GlobalPqCellSpool {
         vector: &[f32],
         row: GlobalPqRow,
         exact_vector: &[f32],
+        id: &[u8],
+        generation: u64,
     ) -> Result<()> {
         let (cell, code) = self.encode_vector(vector)?;
-        self.push_encoded(cell, &code, row, exact_vector)
+        self.push_encoded(cell, &code, row, exact_vector, id, generation)
     }
 
     pub(crate) fn encode_vector(&self, vector: &[f32]) -> Result<(u16, Vec<u8>)> {
@@ -824,6 +877,8 @@ impl GlobalPqCellSpool {
         code: &[u8],
         row: GlobalPqRow,
         exact_vector: &[f32],
+        id: &[u8],
+        generation: u64,
     ) -> Result<()> {
         if exact_vector.len() != self.dimensions {
             return invalid("exact vector dimension does not match the spool");
@@ -859,6 +914,16 @@ impl GlobalPqCellSpool {
         }
         writer
             .write_all(&self.vector_element_type.encode_fixed_width(exact_vector)?)
+            .map_err(|source| io_error(&self.primary_paths[primary], source))?;
+        writer
+            .write_all(&generation.to_le_bytes())
+            .and_then(|()| {
+                let len = u32::try_from(id.len()).map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "record id exceeds u32")
+                })?;
+                writer.write_all(&len.to_le_bytes())
+            })
+            .and_then(|()| writer.write_all(id))
             .map_err(|source| io_error(&self.primary_paths[primary], source))?;
         self.rows = self.rows.saturating_add(1);
         Ok(())
@@ -920,7 +985,7 @@ impl GlobalPqCellSpool {
         secondary_paths: &[PathBuf],
         writers: &mut [BufWriter<File>],
     ) -> Result<()> {
-        let payload_width = self.quantizer.code_bytes_per_vector()
+        let fixed_width = self.quantizer.code_bytes_per_vector()
             + usize::from(self.location.width)
             + self
                 .vector_element_type
@@ -928,7 +993,6 @@ impl GlobalPqCellSpool {
         let mut reader = BufReader::new(
             File::open(primary_path).map_err(|source| io_error(primary_path, source))?,
         );
-        let mut payload = vec![0_u8; payload_width];
         loop {
             let mut secondary = [0_u8; 1];
             match reader.read(&mut secondary) {
@@ -937,16 +1001,14 @@ impl GlobalPqCellSpool {
                 Ok(_) => unreachable!("one-byte read"),
                 Err(source) => return Err(io_error(primary_path, source)),
             }
-            reader
-                .read_exact(&mut payload)
-                .map_err(|source| io_error(primary_path, source))?;
+            let row = read_spool_row(&mut reader, primary_path, fixed_width)?.ok_or_else(|| {
+                BorsukError::InvalidStorage("cell spool row is truncated".to_string())
+            })?;
             let index = usize::from(secondary[0]);
             let writer = writers.get_mut(index).ok_or_else(|| {
                 BorsukError::InvalidStorage("secondary coarse cell is invalid".to_string())
             })?;
-            writer
-                .write_all(&payload)
-                .map_err(|source| io_error(&secondary_paths[index], source))?;
+            write_spool_row(writer, &secondary_paths[index], &row)?;
         }
         for (path, writer) in secondary_paths.iter().zip(writers) {
             writer.flush().map_err(|source| io_error(path, source))?;
@@ -966,65 +1028,80 @@ impl GlobalPqCellSpool {
         let exact_row_width = self
             .vector_element_type
             .fixed_width_bytes(self.dimensions)?;
-        let row_width = code_row_width.saturating_add(exact_row_width);
         let max_code_rows = self.max_chunk_bytes / code_row_width;
         let max_exact_rows = self.max_exact_chunk_bytes / exact_row_width.max(1);
         let max_rows = max_code_rows.min(max_exact_rows).max(1);
         let mut reader = BufReader::new(File::open(path).map_err(|source| io_error(path, source))?);
-        let mut interleaved = vec![0_u8; max_rows.saturating_mul(row_width)];
+        let mut pending_row = None;
         loop {
-            let mut bytes_read = 0_usize;
-            while bytes_read < interleaved.len() {
-                match reader.read(&mut interleaved[bytes_read..]) {
-                    Ok(0) => break,
-                    Ok(count) => bytes_read += count,
-                    Err(source) => return Err(io_error(path, source)),
+            let mut chunk_rows = Vec::with_capacity(max_rows);
+            let mut identity_bytes = 0_usize;
+            while chunk_rows.len() < max_rows {
+                let row = if let Some(row) = pending_row.take() {
+                    row
+                } else if let Some(row) =
+                    read_spool_row(&mut reader, path, code_row_width + exact_row_width)?
+                {
+                    row
+                } else {
+                    break;
+                };
+                let next_identity_bytes = identity_bytes
+                    .saturating_add(row.id.len())
+                    .saturating_add(12);
+                if !chunk_rows.is_empty()
+                    && next_identity_bytes > DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES
+                {
+                    pending_row = Some(row);
+                    break;
                 }
+                identity_bytes = next_identity_bytes;
+                chunk_rows.push(row);
             }
-            if bytes_read == 0 {
+            if chunk_rows.is_empty() {
                 break;
             }
-            if !bytes_read.is_multiple_of(row_width) {
-                return invalid("cell spool row is truncated");
-            }
-            let rows = bytes_read / row_width;
+            let rows = chunk_rows.len();
             let mut order = (0..rows)
                 .map(|row| {
-                    let start = row * row_width;
                     (
-                        product_code_locality_key(&interleaved[start..start + code_width]),
+                        product_code_locality_key(&chunk_rows[row].fixed[..code_width]),
                         row,
                     )
                 })
                 .collect::<Vec<_>>();
             order.sort_unstable_by(|left, right| {
-                let left_start = left.1 * row_width;
-                let right_start = right.1 * row_width;
                 left.0
                     .cmp(&right.0)
                     .then_with(|| {
-                        interleaved[left_start..left_start + code_width]
-                            .cmp(&interleaved[right_start..right_start + code_width])
+                        chunk_rows[left.1].fixed[..code_width]
+                            .cmp(&chunk_rows[right.1].fixed[..code_width])
                     })
                     .then_with(|| left.1.cmp(&right.1))
             });
             let mut bytes = Vec::with_capacity(rows * code_row_width);
             for &(_, row) in &order {
-                let start = row * row_width;
-                bytes.extend_from_slice(&interleaved[start..start + code_width]);
-                bytes.extend_from_slice(&interleaved[start + code_width..start + code_row_width]);
+                bytes.extend_from_slice(&chunk_rows[row].fixed[..code_row_width]);
             }
             let mut exact_bytes = Vec::with_capacity(rows * exact_row_width);
             for &(_, row) in &order {
-                let start = row * row_width;
-                exact_bytes
-                    .extend_from_slice(&interleaved[start + code_row_width..start + row_width]);
+                exact_bytes.extend_from_slice(&chunk_rows[row].fixed[code_row_width..]);
             }
+            let identities = order
+                .iter()
+                .map(|&(_, row)| {
+                    (
+                        crate::RecordId::from_bytes(chunk_rows[row].id.clone()),
+                        chunk_rows[row].generation,
+                    )
+                })
+                .collect();
             emit(
                 cell,
                 GlobalPqChunkBytes {
                     bytes,
                     exact_bytes,
+                    identities,
                     rows,
                 },
             )?;
@@ -1035,12 +1112,19 @@ impl GlobalPqCellSpool {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GlobalPqDescriptor {
+    bundle_layout: GlobalPqBundleLayout,
     quantizer: GlobalScanQuantizerState,
     coarse_quantizer: GlobalCoarseQuantizerState,
     vectors: usize,
     vector_element_type: VectorElementType,
     location: LocationEncoding,
     chunks: Vec<GlobalPqChunkRef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum GlobalPqBundleLayout {
+    #[serde(rename = "identity-v1")]
+    IdentityV1,
 }
 
 impl GlobalPqDescriptor {
@@ -1124,6 +1208,7 @@ impl GlobalPqDescriptor {
             return invalid("chunk rows do not match the vector count");
         }
         Ok(Self {
+            bundle_layout: GlobalPqBundleLayout::IdentityV1,
             quantizer,
             coarse_quantizer,
             vectors,
@@ -1307,6 +1392,7 @@ impl GlobalPqDescriptor {
 pub(crate) struct GlobalPqChunkBytes {
     pub(crate) bytes: Vec<u8>,
     pub(crate) exact_bytes: Vec<u8>,
+    pub(crate) identities: Vec<(crate::RecordId, u64)>,
     pub(crate) rows: usize,
 }
 
@@ -1389,6 +1475,7 @@ impl ResidentGlobalPqBuilder {
         Ok(Some(GlobalPqChunkBytes {
             bytes,
             exact_bytes: Vec::new(),
+            identities: Vec::new(),
             rows,
         }))
     }
@@ -2303,6 +2390,27 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_rejects_pre_identity_bundle_layouts() {
+        let fit = vectors(32, 64);
+        let descriptor = GlobalPqDescriptor::new(
+            RotatedProductQuantizer::fit(config(), &fit)
+                .unwrap()
+                .state(),
+            coarse_state(&fit),
+            0,
+            VectorElementType::Float32,
+            LocationEncoding::for_layout(1, fit.len()).unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+        let mut json = serde_json::to_value(descriptor).unwrap();
+        json.as_object_mut().unwrap().remove("bundle_layout");
+
+        let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
+        assert!(error.to_string().contains("bundle_layout"));
+    }
+
+    #[test]
     fn production_turboquant_state_drives_global_scan_without_dense_state() {
         let quantizer = crate::turboquant::FastTurboQuantProdScanQuantizer::new(23, 64, 4).unwrap();
         let state = GlobalScanQuantizerState::FastTurboQuantProd(quantizer.state());
@@ -2560,6 +2668,8 @@ mod tests {
                             row_index: row,
                         },
                         &vectors[(segment * 64 + row) as usize],
+                        format!("row-{segment}-{row}").as_bytes(),
+                        u64::from(row),
                     )
                     .unwrap();
             }
@@ -2662,6 +2772,8 @@ mod tests {
                         row_index: row as u32,
                     },
                     vector,
+                    format!("row-{row}").as_bytes(),
+                    row as u64,
                 )
                 .unwrap();
         }
@@ -2717,6 +2829,8 @@ mod tests {
                         row_index: row as u32,
                     },
                     vector,
+                    format!("row-{row}").as_bytes(),
+                    row as u64,
                 )
                 .unwrap();
         }
