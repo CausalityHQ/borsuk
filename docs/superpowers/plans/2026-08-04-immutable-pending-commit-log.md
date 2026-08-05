@@ -210,6 +210,15 @@ as lane-WAL `COMMIT` markers.
   the exact ID. Identity data is bounded per chunk and included in bundle-size
   admission. Cooperative 1,000-object admission remains open.
 
+  Terminal v24 qualified `identity-v1` at 119.527, 108.870, and 100.886 ms
+  read p95 for 1, 8, and 32 writers with recall@1 1.0, but isolated a write
+  batching defect at 32 writers: the experimental 64-record campaign cap split
+  128 outstanding tickets into two sequential full groups and produced 240.997
+  ms write p95. The scalability runner now reads the preregistered group bound
+  and fail-closes unless it equals the library's 1,024-record production
+  default. This permits the measured 32-writer cohort to form one 128-record
+  group without removing the production memory/request bound.
+
 - [ ] **Step 6: Run correctness and lifecycle suites GREEN**
 
   Run group-commit, consistency, crash, fault, and cell-WAL suites plus strict Clippy.
