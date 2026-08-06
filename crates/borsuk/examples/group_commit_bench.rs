@@ -15,7 +15,7 @@ use std::{
 use arrow_array::{Array, FixedSizeListArray, Float32Array, LargeListArray, ListArray};
 use borsuk::{
     BorsukIndex, GroupCommitConfig, GroupCommitLaneReceipt, GroupCommitTicket, GroupCommitWriter,
-    LeafMode, RequestCounts, SearchOptions, VectorRecord,
+    LeafMode, OpenOptions, RequestCounts, SearchOptions, VectorRecord,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -75,6 +75,18 @@ struct PendingAppend {
 
 fn required(name: &str) -> BenchResult<String> {
     env::var(name).map_err(|_| format!("missing required environment variable {name}").into())
+}
+
+fn open_benchmark_index(uri: &str) -> borsuk::Result<BorsukIndex> {
+    BorsukIndex::open_with_options(
+        uri,
+        OpenOptions {
+            // Keep repeated post-drain probes local after the first decode;
+            // this is the bounded production read profile for object storage.
+            segment_cache_max_bytes: Some(64 * 1024 * 1024),
+            ..OpenOptions::default()
+        },
+    )
 }
 
 fn number<T: std::str::FromStr>(name: &str) -> BenchResult<T>
@@ -553,7 +565,7 @@ fn main() -> BenchResult<()> {
     // Production invariant: dataset vectors must be decoded before durable timing.
     let input_vectors = Arc::new(input_vectors);
 
-    let index = BorsukIndex::open(&uri)?;
+    let index = open_benchmark_index(&uri)?;
     let writer = GroupCommitWriter::new(
         index,
         GroupCommitConfig {
@@ -669,7 +681,7 @@ fn main() -> BenchResult<()> {
         1
     }
     .min(samples.len());
-    let mut active_tail_index = BorsukIndex::open(&uri)?;
+    let mut active_tail_index = open_benchmark_index(&uri)?;
     let active_tail_reads = measure_reads(
         &mut active_tail_index,
         &samples,
@@ -745,7 +757,7 @@ fn main() -> BenchResult<()> {
         return Err("group record totals do not reconcile with caller samples".into());
     }
 
-    let mut reopened = BorsukIndex::open(&uri)?;
+    let mut reopened = open_benchmark_index(&uri)?;
     let point_ids = samples
         .iter()
         .flat_map(|sample| sample.record_ids.iter().map(String::as_str))
