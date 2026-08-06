@@ -443,6 +443,14 @@ const LEXICAL_RAM_BUDGET_DIVISOR: u64 = 2;
 /// budget. A deliberately unbounded research profile can set
 /// [`OpenOptions::ram_budget_bytes`] to `None` explicitly.
 pub const DEFAULT_RAM_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+/// Keep a stable collection-metadata partition so mutable manifests can grow
+/// without silently expanding beyond the runtime's total RAM envelope.
+///
+/// The production 512 MiB budget therefore reserves 128 MiB for manifests,
+/// routing summaries, and cell centroids. Retained caches and transient decode
+/// work split the remaining 384 MiB. The immutable partition also avoids
+/// racing capacity shrink against permits held by cloned readers.
+const COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR: u64 = 4;
 const DEFAULT_GLOBAL_PQ_RERANK_READS: usize = 64;
 const DEFAULT_GLOBAL_PQ_CODE_READS: usize = 32;
 /// Maximum unselected byte gap folded into one global-PQ code range GET.
@@ -799,6 +807,7 @@ impl WalTailRuntime {
 }
 
 struct CollectionReadRuntime {
+    resident_capacity_bytes: Option<u64>,
     retained_pool: Option<Arc<RetainedBytePool>>,
     transient_admission: Option<Arc<ByteAdmissionGate>>,
     lexical_admission: Option<Arc<ByteAdmissionGate>>,
@@ -1714,8 +1723,12 @@ impl CollectionReadRuntime {
         effective_ram_budget: Option<u64>,
         collection_resident_bytes: u64,
     ) -> Arc<Self> {
-        let remaining =
-            effective_ram_budget.map(|budget| budget.saturating_sub(collection_resident_bytes));
+        let resident_capacity_bytes = effective_ram_budget.map(|budget| {
+            collection_resident_bytes.max(budget / COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR)
+        });
+        let remaining = effective_ram_budget
+            .zip(resident_capacity_bytes)
+            .map(|(budget, resident_capacity)| budget.saturating_sub(resident_capacity));
         let retained_capacity = remaining.map(|bytes| bytes / 2);
         let transient_capacity = remaining.map(|bytes| bytes.saturating_sub(bytes / 2));
         let retained_pool =
@@ -1778,6 +1791,7 @@ impl CollectionReadRuntime {
             },
         );
         Arc::new(Self {
+            resident_capacity_bytes,
             retained_pool: retained_pool.clone(),
             transient_admission,
             lexical_admission,
@@ -1832,6 +1846,18 @@ impl CollectionReadRuntime {
                 wal_decode_admission,
             )),
         })
+    }
+
+    fn enforce_resident_capacity(&self, resident_bytes: u64) -> Result<()> {
+        if let Some(budget_bytes) = self.resident_capacity_bytes
+            && resident_bytes > budget_bytes
+        {
+            return Err(BorsukError::RamBudgetExceeded {
+                resident_bytes,
+                budget_bytes,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -3515,6 +3541,8 @@ impl BorsukIndex {
                 budget_bytes,
             });
         }
+        self.read_runtime
+            .enforce_resident_capacity(collection_resident_bytes)?;
         let own_modality = self.manifest_reference.modality.clone();
         let own_reference = latest_collection
             .snapshot
@@ -8945,6 +8973,8 @@ impl BorsukIndex {
                     budget_bytes,
                 });
             }
+            self.read_runtime
+                .enforce_resident_capacity(collection_resident_bytes)?;
             match self
                 .collection_storage
                 .compare_and_swap_collection_snapshot_with_report(

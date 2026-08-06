@@ -431,6 +431,30 @@
   preserved terminal code64 artifacts and results above remain the latest
   measurement evidence for restart/resume.
 
+  The first committed-default repetition at `da2fad1` completed its fresh
+  Cohere Medium 1M build in 318.792 seconds, but fail-closed build validation
+  rejected it before any read phase. The writer reported 6,234,415 bytes of
+  collection metadata plus two 268,434,876-byte runtime capacities under a
+  536,870,912-byte budget. The same validator reproduces the defect on the
+  earlier explicit code64 build: creation split the nearly empty manifest's
+  budget once, while later manifest publication grew resident metadata without
+  resizing the clone-shared runtime. The terminal arm is preserved with
+  `LOCAL_BUILD_VALIDATION_FAILED`; it is not qualification evidence.
+
+  The causal correction gives each finite runtime an immutable metadata
+  partition equal to at least one quarter of its total RAM budget and splits
+  only the remainder between retained and transient work. Publication and
+  refresh reject metadata that would cross that partition, avoiding any race
+  with outstanding clone-shared permits. At 512 MiB this leaves 128 MiB for
+  manifests/routing/cell centroids and 384 MiB for serving work; the raw
+  preregistered 16K-by-768D float32 centroid matrix is 49,152,000 bytes before
+  bounded routing metadata. A public TDD regression failed
+  with the exact overcommit and then passed. The complete 483-test library
+  gate (477 passed, 6 ignored), all Rust integration-test binaries, the
+  named-vector memory suite, strict all-target/all-feature Clippy, and
+  formatting passed. A fresh build from the corrected commit remains required
+  before read qualification resumes.
+
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.
