@@ -455,6 +455,18 @@
   formatting passed. A fresh build from the corrected commit remains required
   before read qualification resumes.
 
+  The fresh committed-default Cohere Medium 1M build at `9b437a7` then reached
+  `LOCAL_BUILD_COMPLETE` and passed the repository's fail-closed artifact
+  validator. It indexed all 1,000,000 768-dimensional vectors in 162.312
+  seconds and completed compaction in 155.396 seconds. The resulting active
+  index is 6.701 GB. Under the 512 MiB governed RAM budget, collection metadata
+  was 6,234,415 bytes and the corrected retained/transient capacities were
+  201,326,592 bytes each, with no measured retained or transient overrun. This
+  closes the mutable-manifest budget defect, but it is a build-only repetition:
+  it does not qualify recall, read latency, concurrent scalability, or the AWS
+  write path. Per the control-plane checkpoint instruction, no subsequent read
+  or qualification arm was started in this session.
+
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.
