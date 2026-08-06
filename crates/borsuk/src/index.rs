@@ -109,6 +109,10 @@ const PACKED_INDEX_CONTROL_CHECKSUM_LEN: usize = 32;
 /// builder accounts for variable paths/checksums, so high segment counts do not
 /// turn a nominal page into an unbounded allocation.
 const DEFAULT_LEXICAL_TERM_PAGE_BYTES: usize = 1024 * 1024;
+/// Bound concurrent immutable-object reads for one batched point lookup.
+/// Newest segments are still resolved first; only independent candidates in a
+/// bounded window are fetched together to hide object-store RTT.
+const POINT_READ_IO_BATCH: usize = 8;
 
 fn elapsed_ns(started: Instant) -> u64 {
     started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
@@ -9541,24 +9545,48 @@ impl BorsukIndex {
     ) -> Result<()> {
         // Newest segment and newest row win, exactly matching scalar point
         // lookup. Remove an ID once resolved so older copies are never read.
-        for summary in summaries.iter().rev() {
+        // Read independent candidate windows concurrently: this hides S3 RTT
+        // without changing newest-copy precedence or fetching unrelated cells.
+        let matching = summaries
+            .iter()
+            .rev()
+            .filter(|summary| {
+                unresolved
+                    .keys()
+                    .any(|id| summary.might_contain_record_id(id))
+            })
+            .collect::<Vec<_>>();
+        for window in matching.chunks(POINT_READ_IO_BATCH) {
             if unresolved.is_empty() {
                 break;
             }
-            if !unresolved
-                .keys()
-                .any(|id| summary.might_contain_record_id(id))
-            {
+            let window = window
+                .iter()
+                .copied()
+                .filter(|summary| {
+                    unresolved
+                        .keys()
+                        .any(|id| summary.might_contain_record_id(id))
+                })
+                .collect::<Vec<_>>();
+            if window.is_empty() {
                 continue;
             }
-            let (segment, _, _, _) = self.read_segment(summary)?;
-            for record in segment.records.iter().rev() {
-                let id = record.id.as_bytes();
-                if !unresolved.contains_key(id) || self.is_suppressed(record)? {
-                    continue;
-                }
-                for position in unresolved.remove(id).unwrap_or_default() {
-                    results[position] = Some((record.vector.clone(), record.metadata.clone()));
+            let reads = crate::parallel::install_io(|| {
+                window
+                    .par_iter()
+                    .map(|summary| self.read_segment(summary))
+                    .collect::<Result<Vec<_>>>()
+            })?;
+            for (_, (segment, _, _, _)) in window.into_iter().zip(reads) {
+                for record in segment.records.iter().rev() {
+                    let id = record.id.as_bytes();
+                    if !unresolved.contains_key(id) || self.is_suppressed(record)? {
+                        continue;
+                    }
+                    for position in unresolved.remove(id).unwrap_or_default() {
+                        results[position] = Some((record.vector.clone(), record.metadata.clone()));
+                    }
                 }
             }
         }
