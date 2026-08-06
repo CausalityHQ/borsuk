@@ -543,6 +543,12 @@ pub(crate) struct Storage {
     storage_trace: StorageAccessTrace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CreateOutcome {
+    Created,
+    Existing,
+}
+
 impl Storage {
     pub(crate) fn clone_with_independent_request_counters(&self) -> Self {
         self.isolated_read_scope()
@@ -2569,6 +2575,44 @@ impl Storage {
         }
     }
 
+    pub(crate) fn create_bytes_verified(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        expected_checksum: &str,
+    ) -> Result<CreateOutcome> {
+        let actual_checksum = blake3::hash(bytes).to_hex().to_string();
+        if expected_checksum.len() != 64
+            || expected_checksum != actual_checksum
+            || !expected_checksum
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "create-only object `{relative}` checksum does not match its bytes"
+            )));
+        }
+        match self.write_bytes_if_absent(relative, bytes) {
+            Ok(_) => Ok(CreateOutcome::Created),
+            Err(
+                error @ (BorsukError::ConcurrentModification { .. }
+                | BorsukError::ObjectStoreRetryable { .. }),
+            ) => match self.read_object_fresh(relative)? {
+                Some(existing)
+                    if existing.len() == bytes.len()
+                        && blake3::hash(&existing).to_hex().as_str() == expected_checksum =>
+                {
+                    Ok(CreateOutcome::Existing)
+                }
+                Some(_) => Err(BorsukError::InvalidStorage(format!(
+                    "create-only object `{relative}` conflicts with existing content"
+                ))),
+                None => Err(error),
+            },
+            Err(error) => Err(error),
+        }
+    }
+
     /// Create an object only if it does not already exist. Returns `true` when
     /// this call created it and `false` when another writer already holds it.
     /// Backs maintenance leases and instance membership (correctness of publishes
@@ -4225,7 +4269,7 @@ mod tests {
     };
 
     use super::{
-        CacheReadCounts, PrefetchedRead, RangedColumns, ReadBytes,
+        CacheReadCounts, CreateOutcome, PrefetchedRead, RangedColumns, ReadBytes,
         SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
         plan_bounded_ranges,
     };
@@ -4269,6 +4313,35 @@ mod tests {
             LeafCapability::PqScanOnly,
             BuildConfig::default(),
         )
+    }
+
+    #[test]
+    fn create_bytes_verified_is_idempotent_and_rejects_conflicting_content() {
+        let storage = Storage::from_uri("memory:///verified-create").unwrap();
+        let bytes = b"immutable extent";
+        let checksum = blake3::hash(bytes).to_hex().to_string();
+
+        assert_eq!(
+            storage
+                .create_bytes_verified("extent.wal", bytes, &checksum)
+                .unwrap(),
+            CreateOutcome::Created
+        );
+        assert_eq!(
+            storage
+                .create_bytes_verified("extent.wal", bytes, &checksum)
+                .unwrap(),
+            CreateOutcome::Existing
+        );
+        assert!(
+            storage
+                .create_bytes_verified(
+                    "extent.wal",
+                    b"conflicting extent",
+                    &blake3::hash(b"conflicting extent").to_hex().to_string(),
+                )
+                .is_err()
+        );
     }
 
     fn root_commit(transaction_id: &str) -> CollectionCommit {

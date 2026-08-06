@@ -963,6 +963,79 @@ pub(crate) struct LaneLogWriter {
     recovery_required: bool,
 }
 
+struct LaneEpochWriter {
+    storage: Storage,
+    head: LaneEpochHead,
+}
+
+impl LaneEpochWriter {
+    #[cfg(test)]
+    fn new_empty(
+        store: Arc<dyn ObjectStore>,
+        uri: impl Into<String>,
+        lane: u16,
+        lease_epoch: u64,
+        lease_expires_at_ms: u64,
+    ) -> Result<Self> {
+        Ok(Self {
+            storage: Storage::from_object_store(uri.into(), store)?,
+            head: LaneEpochHead {
+                lane,
+                lease_epoch,
+                lease_owner: [1; 16],
+                lease_expires_at_ms,
+                durable_sequence: 0,
+                materialized_sequence: 0,
+                generation_base: 0,
+                sealed_epoch: None,
+            },
+        })
+    }
+
+    fn append_extent_at(
+        &mut self,
+        payload: &[u8],
+        records: u64,
+        completed_at_ms: u64,
+    ) -> Result<LaneLogReceipt> {
+        let before = self.storage.request_counts();
+        let sequence = self.head.durable_sequence.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("epoch lane-log sequence exceeds u64".to_string())
+        })?;
+        let first_generation = self.head.generation_base.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("epoch lane-log generation exceeds u64".to_string())
+        })?;
+        let extent = LaneExtent {
+            lane: self.head.lane,
+            lease_epoch: self.head.lease_epoch,
+            sequence,
+            first_generation,
+            records,
+            payload: payload.to_vec(),
+        };
+        let bytes = extent_bytes(&extent)?;
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = extent_path(self.head.lane, self.head.lease_epoch, sequence, &checksum)?;
+        self.storage
+            .create_bytes_verified(&path, &bytes, &checksum)?;
+        if completed_at_ms >= self.head.lease_expires_at_ms {
+            return Err(BorsukError::ConcurrentModification {
+                path: format!("{path}/LEASE_EXPIRED"),
+            });
+        }
+        self.head.durable_sequence = sequence;
+        self.head.generation_base = first_generation;
+        Ok(LaneLogReceipt {
+            lane: self.head.lane,
+            lease_epoch: self.head.lease_epoch,
+            sequence,
+            records,
+            acknowledgement_bytes: bytes.len() as u64,
+            requests: self.storage.request_counts().delta(&before),
+        })
+    }
+}
+
 impl Drop for LaneLogWriter {
     fn drop(&mut self) {
         if self.recovery_required || self.head_version.is_none() || self.head.lease_owner == [0; 16]
@@ -2034,6 +2107,61 @@ mod tests {
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert!(extent_from_bytes(&path, &trailing, 3, 7, 11, &checksum).is_err());
+    }
+
+    #[test]
+    fn v27_extent_put_is_the_acknowledgement_boundary() {
+        let mut writer = LaneEpochWriter::new_empty(
+            Arc::new(InMemory::new()),
+            "memory:///epoch-extent-ack",
+            3,
+            7,
+            100,
+        )
+        .unwrap();
+
+        let receipt = writer.append_extent_at(b"durable", 1, 99).unwrap();
+
+        assert_eq!(receipt.lane, 3);
+        assert_eq!(receipt.lease_epoch, 7);
+        assert_eq!(receipt.sequence, 1);
+        assert_eq!(receipt.records, 1);
+        assert_eq!(receipt.requests.puts, 1);
+        assert_eq!(receipt.requests.gets, 0);
+        assert_eq!(writer.head.durable_sequence, 1);
+        assert_eq!(
+            writer
+                .storage
+                .list_objects("lane-log/lanes/0003/epochs/0000000000000007/extents")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn v27_extent_completing_after_lease_guard_is_not_acknowledged() {
+        let mut writer = LaneEpochWriter::new_empty(
+            Arc::new(InMemory::new()),
+            "memory:///epoch-expired-extent",
+            3,
+            7,
+            100,
+        )
+        .unwrap();
+
+        let error = writer.append_extent_at(b"ambiguous", 1, 100).unwrap_err();
+
+        assert!(matches!(error, BorsukError::ConcurrentModification { .. }));
+        assert_eq!(writer.head.durable_sequence, 0);
+        assert_eq!(
+            writer
+                .storage
+                .list_objects("lane-log/lanes/0003/epochs/0000000000000007/extents")
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
