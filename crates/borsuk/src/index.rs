@@ -1549,11 +1549,7 @@ type PersistedQuantizerCache =
 /// layers share this cache; active summary resolution remains snapshot-local.
 type ResidentGlobalPqCache = Arc<Mutex<HashMap<String, Arc<ResidentGlobalPq>>>>;
 /// Resident immutable base plus the materialized segments not covered by it.
-type LoadedResidentGlobalPq = (
-    Arc<ResidentGlobalPq>,
-    Arc<Vec<SegmentSummary>>,
-    Arc<Vec<SegmentSummary>>,
-);
+type LoadedResidentGlobalPq = (Arc<ResidentGlobalPq>, usize, Arc<Vec<SegmentSummary>>);
 
 struct SidecarIndexCache {
     entries: HashMap<
@@ -2302,8 +2298,9 @@ impl BorsukIndex {
         manifest.logical_cells = logical_cells;
         manifest.logical_cell_centroids = centroids;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.manifest =
-            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+            manifest, &previous,
+        )?;
         Ok(())
     }
 
@@ -3295,8 +3292,9 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.config.segment_max_vectors = segment_max_vectors;
-        self.manifest =
-            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+            manifest, &previous,
+        )?;
         Ok(())
     }
 
@@ -8836,9 +8834,14 @@ impl BorsukIndex {
     /// topology would publish an empty index.
     fn publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
         &mut self,
-        manifest: Manifest,
+        mut manifest: Manifest,
         previous: &Manifest,
     ) -> Result<Manifest> {
+        if let Some(reference) = manifest.global_pq_ref.as_mut()
+            && reference.covered_manifest_version == previous.version
+        {
+            reference.covered_manifest_version = manifest.version;
+        }
         if manifest.segments.is_empty() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 previous.version,
@@ -11675,31 +11678,32 @@ impl BorsukIndex {
         let Some(global_ref) = self.manifest.global_pq_ref.clone() else {
             return Ok(None);
         };
-        let active_summaries = self.active_segment_summaries()?;
-        let active_by_checksum = active_summaries
-            .iter()
-            .map(|summary| (summary.checksum.as_str(), summary))
-            .collect::<HashMap<_, _>>();
-        let mut base_summaries = Vec::with_capacity(global_ref.segments.len());
-        for checksum in &global_ref.segments {
-            let Some(summary) = active_by_checksum.get(checksum.as_str()) else {
-                // A compaction replaced a segment covered by this artifact.
-                // Its persisted row ordinal is no longer resolvable, so the
-                // artifact is invalid for this snapshot.
-                return Ok(None);
+        let (base_segment_count, delta_summaries) =
+            if global_ref.covered_manifest_version == self.manifest.version {
+                (global_ref.segments.len(), Arc::new(Vec::new()))
+            } else {
+                let active_summaries = self.active_segment_summaries()?;
+                let active_by_checksum = active_summaries
+                    .iter()
+                    .map(|summary| (summary.checksum.as_str(), summary))
+                    .collect::<HashMap<_, _>>();
+                for checksum in &global_ref.segments {
+                    if !active_by_checksum.contains_key(checksum.as_str()) {
+                        // A compaction replaced a segment covered by this
+                        // artifact. Its row ordinal is no longer resolvable.
+                        return Ok(None);
+                    }
+                }
+                let mut covered = global_ref.segments.iter().collect::<HashSet<_>>();
+                if let Some(delta) = &global_ref.delta {
+                    covered.extend(delta.segments.iter());
+                }
+                let fringe = active_summaries
+                    .into_iter()
+                    .filter(|summary| !covered.contains(&summary.checksum))
+                    .collect::<Vec<_>>();
+                (global_ref.segments.len(), Arc::new(fringe))
             };
-            base_summaries.push((*summary).clone());
-        }
-        let mut covered = global_ref.segments.iter().collect::<HashSet<_>>();
-        if let Some(delta) = &global_ref.delta {
-            covered.extend(delta.segments.iter());
-        }
-        let delta_summaries = active_summaries
-            .into_iter()
-            .filter(|summary| !covered.contains(&summary.checksum))
-            .collect::<Vec<_>>();
-        let summaries = Arc::new(base_summaries);
-        let delta_summaries = Arc::new(delta_summaries);
         let cached = self
             .resident_global_pq
             .lock()
@@ -11737,7 +11741,7 @@ impl BorsukIndex {
                 .insert(global_ref.checksum.clone(), Arc::clone(&index));
             index
         };
-        Ok(Some((index, summaries, delta_summaries)))
+        Ok(Some((index, base_segment_count, delta_summaries)))
     }
 
     fn cached_global_cell_graph(
@@ -11808,7 +11812,8 @@ impl BorsukIndex {
         let Some(global_ref) = self.manifest.global_pq_ref.as_ref() else {
             return Ok(None);
         };
-        let Some((index, summaries, delta_summaries)) = self.load_resident_global_pq()? else {
+        let Some((index, base_segment_count, delta_summaries)) = self.load_resident_global_pq()?
+        else {
             return Ok(None);
         };
 
@@ -12126,7 +12131,7 @@ impl BorsukIndex {
         } else {
             Vec::new()
         };
-        let segments_total = summaries.len();
+        let segments_total = base_segment_count;
         let segments_searched = searched_chunks.len();
         let termination_reason = if max_bytes.is_some_and(|limit| bytes_read >= limit) {
             SearchTerminationReason::MaxBytes
@@ -12402,6 +12407,11 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.quantizer_ref = quantizer_ref;
+        if let Some(reference) = manifest.global_pq_ref.as_mut()
+            && reference.covered_manifest_version == previous.version
+        {
+            reference.covered_manifest_version = manifest.version;
+        }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
 
         // A quantizer-ref-only publish changes no segments or routing pages. When
@@ -12885,6 +12895,7 @@ impl BorsukIndex {
             resident_bytes,
             sidecar_index_bytes,
             storage_bytes,
+            covered_manifest_version: self.manifest.version.saturating_add(1),
             segments: summaries
                 .iter()
                 .map(|summary| summary.checksum.clone())
@@ -12985,15 +12996,13 @@ impl BorsukIndex {
         if promote {
             manifest.global_pq_ref = Some(desired);
         } else {
-            manifest
-                .global_pq_ref
-                .as_mut()
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "resident global base disappeared during refresh".into(),
-                    )
-                })?
-                .delta = Some(Box::new(desired));
+            let reference = manifest.global_pq_ref.as_mut().ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "resident global base disappeared during refresh".into(),
+                )
+            })?;
+            reference.delta = Some(Box::new(desired));
+            reference.covered_manifest_version = manifest.version;
         }
         manifest.global_pq_ref.as_ref().unwrap().validate_layout()?;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
@@ -13043,6 +13052,7 @@ impl BorsukIndex {
             })?,
             sidecar_index_bytes: 0,
             storage_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            covered_manifest_version: self.manifest.version.saturating_add(1),
             segments: Vec::new(),
             delta: None,
         };
@@ -13325,6 +13335,7 @@ impl BorsukIndex {
             })?,
             sidecar_index_bytes: 0,
             storage_bytes,
+            covered_manifest_version: self.manifest.version.saturating_add(1),
             segments,
             delta: None,
         })
@@ -23838,6 +23849,7 @@ mod tests {
             resident_bytes: 360 * 1024 * 1024,
             sidecar_index_bytes: 120 * 1024 * 1024,
             storage_bytes: 720 * 1024 * 1024,
+            covered_manifest_version: 9,
             segments: vec!["cd".repeat(32)],
             delta: None,
         };
@@ -23932,6 +23944,18 @@ mod tests {
         assert_eq!(report.routing_pages_read, 0);
         assert!(report.records_scored <= 64);
         assert!(report.bytes_read > 0);
+        assert!(
+            report.requests.gets <= 4,
+            "a current global artifact must not scan routing pages to rediscover its own segment coverage: {:?}, manifest={}, covered={}",
+            report.requests,
+            index.manifest.version,
+            index
+                .manifest
+                .global_pq_ref
+                .as_ref()
+                .unwrap()
+                .covered_manifest_version
+        );
         assert!(
             report.requests.gets
                 <= (report.segments_searched as u64)

@@ -7019,6 +7019,7 @@ mod tests {
             resident_bytes: 48_000_000,
             sidecar_index_bytes: 12_000_000,
             storage_bytes: 96_000_000,
+            covered_manifest_version: 41,
             segments: vec!["cd".repeat(32), "ef".repeat(32)],
             delta: Some(Box::new(crate::manifest::GlobalPqRef {
                 layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
@@ -7031,6 +7032,7 @@ mod tests {
                 resident_bytes: 1_500_000,
                 sidecar_index_bytes: 0,
                 storage_bytes: 3_000_000,
+                covered_manifest_version: 41,
                 segments: vec!["34".repeat(32)],
                 delta: None,
             })),
@@ -7056,6 +7058,7 @@ mod tests {
             resident_bytes: 1,
             sidecar_index_bytes: 0,
             storage_bytes: 1,
+            covered_manifest_version: 7,
             segments: vec!["cd".repeat(32)],
             delta: None,
         });
