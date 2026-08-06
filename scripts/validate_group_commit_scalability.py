@@ -152,8 +152,16 @@ def validate(
         require(summary["manifest_sha256"] == manifest_sha, f"manifest identity drift in {cell}")
         require(integer(summary["writers"], "writers") == writers, f"writer drift in {cell}")
         operations = int(manifest["operations_per_writer"])
-        expected_records = writers * operations
+        records_per_operation = int(manifest.get("records_per_operation", 1))
+        expected_operations = writers * operations
+        expected_records = expected_operations * records_per_operation
         require(integer(summary["operations"], "operations") == operations, f"operation drift in {cell}")
+        if "records_per_operation" in summary:
+            require(
+                integer(summary["records_per_operation"], "records per operation")
+                == records_per_operation,
+                f"records-per-operation drift in {cell}",
+            )
         require(
             integer(summary["pipeline_depth"], "pipeline depth")
             == int(manifest.get("pipeline_depth_per_writer", 1)),
@@ -278,7 +286,7 @@ def validate(
             )
 
         samples = rows(cell / "samples.csv")
-        require(len(samples) == expected_records, f"raw sample count mismatch in {cell}")
+        require(len(samples) == expected_operations, f"raw sample count mismatch in {cell}")
         ids: set[str] = set()
         groups: dict[tuple[int, int], tuple[int, int, int, int, int]] = {}
         writer_operations: set[tuple[int, int]] = set()
@@ -289,8 +297,23 @@ def validate(
             require(0 <= writer < writers and 0 <= operation < operations, f"sample coordinate out of range in {cell}")
             require((writer, operation) not in writer_operations, f"duplicate sample coordinate in {cell}")
             writer_operations.add((writer, operation))
-            require(sample["record_id"] not in ids, f"duplicate record id in {cell}")
-            ids.add(sample["record_id"])
+            if "batch_records" in sample:
+                require(
+                    integer(sample["batch_records"], "sample batch records")
+                    == records_per_operation,
+                    f"sample batch length drift in {cell}",
+                )
+                record_ids = sample["record_ids"].split("|")
+                require(
+                    len(record_ids) == records_per_operation,
+                    f"sample record identity count drift in {cell}",
+                )
+                require(sample["first_record_id"] == record_ids[0], f"sample first ID drift in {cell}")
+            else:
+                require(records_per_operation == 1, f"legacy sample cannot represent bulk cell {cell}")
+                record_ids = [sample["record_id"]]
+            require(not ids.intersection(record_ids), f"duplicate record id in {cell}")
+            ids.update(record_ids)
             sample_latency = finite(sample["latency_ms"], "sample latency")
             require(sample_latency >= 0.0, f"negative sample latency in {cell}")
             write_latencies.append(sample_latency)
@@ -370,6 +393,12 @@ def validate(
             expected_records_per_second,
             f"throughput does not match records and elapsed time in {cell}",
         )
+        if "operations_per_second" in summary:
+            require_close(
+                finite(summary["operations_per_second"], "operations_per_second"),
+                expected_operations / (elapsed_ms / 1_000.0),
+                f"operation throughput does not match operations and elapsed time in {cell}",
+            )
         drain_ms = finite(summary["drain_ms"], "drain_ms")
         expected_end_to_end_records_per_second = expected_records / (
             (elapsed_ms + drain_ms) / 1_000.0
@@ -519,7 +548,7 @@ def validate(
             f"nonzero resource exit in {cell}",
         )
         observed_cells.add((cell_count, repetition, lanes, writers))
-        expected_sample_total += expected_records
+        expected_sample_total += expected_operations
 
     require(observed_cells == expected_cells, "matrix coverage mismatch")
     if terminal_cell is not None:

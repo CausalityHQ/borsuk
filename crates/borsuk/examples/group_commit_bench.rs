@@ -25,7 +25,8 @@ type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 struct Sample {
     writer: usize,
     operation: usize,
-    record_id: String,
+    record_ids: Vec<String>,
+    batch_records: usize,
     latency_ms: f64,
     commit_lane: usize,
     commit_sequence: u64,
@@ -57,6 +58,7 @@ struct ReadMeasurement {
 #[derive(Clone, Copy)]
 struct ReadConfig {
     operations: usize,
+    records_per_operation: usize,
     query_count: usize,
     diagnostic_protocol: bool,
     max_read_segments: usize,
@@ -65,7 +67,7 @@ struct ReadConfig {
 
 struct PendingAppend {
     operation: usize,
-    record_id: String,
+    record_ids: Vec<String>,
     started: Instant,
     ticket: GroupCommitTicket,
 }
@@ -185,6 +187,30 @@ fn vector_mib_per_second(records_per_second: f64, dimensions: usize) -> f64 {
     records_per_second * dimensions as f64 * size_of::<f32>() as f64 / (1024.0 * 1024.0)
 }
 
+fn validate_throughput_concurrency(
+    writers: usize,
+    pipeline_depth: usize,
+    records_per_operation: usize,
+    min_records_per_second: f64,
+    max_p95_ms: f64,
+) -> BenchResult<()> {
+    if min_records_per_second <= 0.0 {
+        return Ok(());
+    }
+    let outstanding_records = writers
+        .checked_mul(pipeline_depth)
+        .and_then(|value| value.checked_mul(records_per_operation))
+        .ok_or("group-commit outstanding-record count exceeds usize")?;
+    let required = min_records_per_second * max_p95_ms / 1_000.0;
+    if outstanding_records as f64 >= required {
+        return Ok(());
+    }
+    Err(format!(
+        "group-commit workload exposes {outstanding_records} outstanding records but needs at least {required:.3} to express {min_records_per_second:.3} records/s at {max_p95_ms:.3} ms p95"
+    )
+    .into())
+}
+
 fn production_record_id(ordinal: usize) -> String {
     format!("group-o{ordinal:08}")
 }
@@ -204,7 +230,9 @@ fn measure_reads(
         hits: 0,
     };
     for (query_index, sample) in samples.iter().take(config.query_count).enumerate() {
-        let ordinal = sample.writer * config.operations + sample.operation;
+        let ordinal =
+            (sample.writer * config.operations + sample.operation) * config.records_per_operation;
+        let record_id = &sample.record_ids[0];
         let read_started = Instant::now();
         if config.refresh_before_each {
             index.refresh()?;
@@ -234,13 +262,10 @@ fn measure_reads(
             .hits
             .first()
             .map_or_else(String::new, |hit| hit.id.as_str().to_string());
-        let contains_record_id = report
-            .hits
-            .iter()
-            .any(|hit| hit.id.as_str() == sample.record_id);
+        let contains_record_id = report.hits.iter().any(|hit| hit.id.as_str() == record_id);
         measurement.samples.push(ReadSample {
             query: query_index,
-            record_id: sample.record_id.clone(),
+            record_id: record_id.clone(),
             hit_id,
             contains_record_id,
             latency_ms,
@@ -353,8 +378,16 @@ fn main() -> BenchResult<()> {
     } else {
         1
     };
+    let records_per_operation = if matches!(protocol.as_str(), "scalability" | "smoke") {
+        number("BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION")?
+    } else {
+        1
+    };
     if pipeline_depth == 0 {
         return Err("group-commit pipeline depth must be positive".into());
+    }
+    if records_per_operation == 0 {
+        return Err("group-commit records per operation must be positive".into());
     }
     let (_cell_count, repetition, performance_gate) = match protocol.as_str() {
         "diagnostic" => {
@@ -381,6 +414,7 @@ fn main() -> BenchResult<()> {
                 || max_records != 1_024
                 || !matches!(worker_lanes, 1 | 2 | 4 | 8)
                 || pipeline_depth != 4
+                || !matches!(records_per_operation, 1 | 16)
             {
                 return Err(
                     "group-commit cell differs from the frozen scalability protocol".into(),
@@ -401,6 +435,13 @@ fn main() -> BenchResult<()> {
             {
                 return Err("production performance thresholds must be positive".into());
             }
+            validate_throughput_concurrency(
+                writers,
+                pipeline_depth,
+                records_per_operation,
+                min_records_per_second.max(min_end_to_end_records_per_second),
+                max_p95_ms,
+            )?;
             (
                 cell_count,
                 repetition,
@@ -423,6 +464,7 @@ fn main() -> BenchResult<()> {
                 || dimensions != 8
                 || max_delay_ms != 1
                 || max_records != 8
+                || !matches!(records_per_operation, 1 | 16)
             {
                 return Err("group-commit cell differs from the structural smoke".into());
             }
@@ -450,9 +492,13 @@ fn main() -> BenchResult<()> {
         {
             return Err("invalid group-commit dataset identity".into());
         }
-        read_parquet_vectors(&dataset, writers * operations, dimensions)?
+        read_parquet_vectors(
+            &dataset,
+            writers * operations * records_per_operation,
+            dimensions,
+        )?
     } else {
-        (0..writers * operations)
+        (0..writers * operations * records_per_operation)
             .map(|ordinal| vector(vector_seed, ordinal as u64, dimensions))
             .collect()
     };
@@ -482,19 +528,35 @@ fn main() -> BenchResult<()> {
                 let mut local = Vec::with_capacity(operations);
                 let mut pending = VecDeque::<PendingAppend>::with_capacity(pipeline_depth);
                 for operation in 0..operations {
-                    let ordinal = writer_ordinal * operations + operation;
-                    let record_id = if diagnostic_protocol {
-                        format!("group-w{writer_ordinal:02}-o{operation:03}")
-                    } else {
-                        production_record_id(ordinal)
-                    };
-                    let record_vector = input_vectors[ordinal].clone();
+                    let first_ordinal =
+                        (writer_ordinal * operations + operation) * records_per_operation;
+                    let record_ids = (0..records_per_operation)
+                        .map(|batch_ordinal| {
+                            let ordinal = first_ordinal + batch_ordinal;
+                            if diagnostic_protocol {
+                                format!(
+                                    "group-w{writer_ordinal:02}-o{operation:03}-b{batch_ordinal:03}"
+                                )
+                            } else {
+                                production_record_id(ordinal)
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let records = record_ids
+                        .iter()
+                        .enumerate()
+                        .map(|(batch_ordinal, record_id)| {
+                            VectorRecord::new(
+                                record_id.clone(),
+                                input_vectors[first_ordinal + batch_ordinal].clone(),
+                            )
+                        })
+                        .collect();
                     let append_started = Instant::now();
-                    let ticket = writer
-                        .append_async(vec![VectorRecord::new(record_id.clone(), record_vector)])?;
+                    let ticket = writer.append_async(records)?;
                     pending.push_back(PendingAppend {
                         operation,
-                        record_id,
+                        record_ids,
                         started: append_started,
                         ticket,
                     });
@@ -506,7 +568,8 @@ fn main() -> BenchResult<()> {
                     local.push(Sample {
                         writer: writer_ordinal,
                         operation: completed.operation,
-                        record_id: completed.record_id,
+                        batch_records: completed.record_ids.len(),
+                        record_ids: completed.record_ids,
                         latency_ms: completed.started.elapsed().as_secs_f64() * 1_000.0,
                         commit_lane: receipt.commit_lane,
                         commit_sequence: receipt.commit_sequence,
@@ -520,7 +583,8 @@ fn main() -> BenchResult<()> {
                     local.push(Sample {
                         writer: writer_ordinal,
                         operation: completed.operation,
-                        record_id: completed.record_id,
+                        batch_records: completed.record_ids.len(),
+                        record_ids: completed.record_ids,
                         latency_ms: completed.started.elapsed().as_secs_f64() * 1_000.0,
                         commit_lane: receipt.commit_lane,
                         commit_sequence: receipt.commit_sequence,
@@ -562,6 +626,7 @@ fn main() -> BenchResult<()> {
         &input_vectors,
         ReadConfig {
             operations,
+            records_per_operation,
             query_count: recall_queries,
             diagnostic_protocol,
             max_read_segments,
@@ -582,8 +647,9 @@ fn main() -> BenchResult<()> {
     let drain_started = Instant::now();
     writer.drain()?;
     let drain_ms = drain_started.elapsed().as_secs_f64() * 1_000.0;
+    let total_record_count = writers * operations * records_per_operation;
     let end_to_end_records_per_second =
-        (writers * operations) as f64 / ((elapsed_ms + drain_ms) / 1_000.0);
+        total_record_count as f64 / ((elapsed_ms + drain_ms) / 1_000.0);
     fs::write(output.join("DRAIN_COMPLETE"), b"complete\n")?;
     drop(writer);
 
@@ -632,24 +698,22 @@ fn main() -> BenchResult<()> {
         .collect::<Vec<_>>();
     let max_acknowledgement_bytes = acknowledgement_bytes.iter().copied().max().unwrap_or(0);
     let total_acknowledgement_bytes = acknowledgement_bytes.iter().sum::<u64>();
-    if committed_records != samples.len() {
+    if committed_records != total_record_count {
         return Err("group record totals do not reconcile with caller samples".into());
     }
 
     let mut reopened = BorsukIndex::open(&uri)?;
-    let point_records = reopened.get_records(
-        &samples
-            .iter()
-            .map(|sample| sample.record_id.as_str())
-            .collect::<Vec<_>>(),
-    )?;
+    let point_ids = samples
+        .iter()
+        .flat_map(|sample| sample.record_ids.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    let point_records = reopened.get_records(&point_ids)?;
     let mut visible = 0_usize;
-    for (sample, point_record) in samples.iter().zip(point_records) {
-        let ordinal = sample.writer * operations + sample.operation;
+    for (ordinal, point_record) in point_records.into_iter().enumerate() {
         let expected = &input_vectors[ordinal];
         visible += usize::from(point_record.is_some_and(|(stored, _)| &stored == expected));
     }
-    if visible != samples.len() {
+    if visible != total_record_count {
         return Err("post-reopen point visibility gate failed".into());
     }
     fs::write(output.join("POINT_VISIBILITY_COMPLETE"), b"complete\n")?;
@@ -659,6 +723,7 @@ fn main() -> BenchResult<()> {
         &input_vectors,
         ReadConfig {
             operations,
+            records_per_operation,
             query_count: recall_queries,
             diagnostic_protocol,
             max_read_segments,
@@ -676,7 +741,8 @@ fn main() -> BenchResult<()> {
         .collect::<Vec<_>>();
     let p50_ms = percentile(&latencies, 0.50);
     let p95_ms = percentile(&latencies, 0.95);
-    let records_per_second = samples.len() as f64 / (elapsed_ms / 1_000.0);
+    let operations_per_second = samples.len() as f64 / (elapsed_ms / 1_000.0);
+    let records_per_second = total_record_count as f64 / (elapsed_ms / 1_000.0);
     let vector_mib_per_second = vector_mib_per_second(records_per_second, dimensions);
     let read_p50_ms = percentile(&reads.latencies, 0.50);
     let read_p95_ms = percentile(&reads.latencies, 0.95);
@@ -686,21 +752,21 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,end_to_end_records_per_second,p50_ms,p95_ms,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,total_acknowledgement_bytes,max_acknowledgement_bytes,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,active_tail_read_p50_ms,active_tail_read_p95_ms,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
+        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,records_per_operation,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,end_to_end_records_per_second,p50_ms,p95_ms,operations_per_second,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,total_acknowledgement_bytes,max_acknowledgement_bytes,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,active_tail_read_p50_ms,active_tail_read_p95_ms,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
     )?;
     writeln!(
         summary,
-        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{end_to_end_records_per_second:.9},{:.9},{:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{total_acknowledgement_bytes},{max_acknowledgement_bytes},{visible},{recall_queries},{max_read_segments},{:.9},{active_tail_read_p50_ms:.9},{active_tail_read_p95_ms:.9},{:.9},{:.9},{},{},{},{},{},{},{},{}",
-        samples.len(),
+        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{records_per_operation},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{end_to_end_records_per_second:.9},{:.9},{:.9},{operations_per_second:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{total_acknowledgement_bytes},{max_acknowledgement_bytes},{visible},{recall_queries},{max_read_segments},{:.9},{active_tail_read_p50_ms:.9},{active_tail_read_p95_ms:.9},{:.9},{:.9},{},{},{},{},{},{},{},{}",
+        total_record_count,
         groups.len(),
-        samples.len() as f64 / groups.len() as f64,
+        total_record_count as f64 / groups.len() as f64,
         p50_ms,
         p95_ms,
         records_per_second,
         request_totals.gets,
         request_totals.puts,
         request_totals.heads,
-        total_requests as f64 / samples.len() as f64,
+        total_requests as f64 / total_record_count as f64,
         inserted_id_recall_at_10,
         read_p50_ms,
         read_p95_ms,
@@ -716,15 +782,17 @@ fn main() -> BenchResult<()> {
     let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
     writeln!(
         raw,
-        "writer,operation,record_id,latency_ms,commit_lane,commit_sequence,committed_records,acknowledgement_bytes,group_requests,group_gets,group_puts,group_heads"
+        "writer,operation,batch_records,first_record_id,record_ids,latency_ms,commit_lane,commit_sequence,committed_records,acknowledgement_bytes,group_requests,group_gets,group_puts,group_heads"
     )?;
     for sample in samples {
         writeln!(
             raw,
-            "{},{},{},{:.9},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{}",
             sample.writer,
             sample.operation,
-            sample.record_id,
+            sample.batch_records,
+            sample.record_ids[0],
+            sample.record_ids.join("|"),
             sample.latency_ms,
             sample.commit_lane,
             sample.commit_sequence,
@@ -776,6 +844,15 @@ mod tests {
     #[test]
     fn vector_throughput_reports_payload_mib_per_second() {
         assert_eq!(vector_mib_per_second(10_000.0, 768), 29.296875);
+    }
+
+    #[test]
+    fn throughput_preflight_rejects_scalar_but_accepts_preregistered_bulk_concurrency() {
+        let scalar = validate_throughput_concurrency(32, 4, 1, 10_000.0, 200.0)
+            .unwrap_err()
+            .to_string();
+        assert!(scalar.contains("128 outstanding records"), "{scalar}");
+        validate_throughput_concurrency(32, 4, 16, 10_000.0, 200.0).unwrap();
     }
 
     #[test]

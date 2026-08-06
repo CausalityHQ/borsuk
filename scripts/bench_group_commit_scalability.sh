@@ -10,12 +10,17 @@ MAX_READ_P95_MS=""
 MIN_INSERTED_ID_RECALL_AT_10=""
 READ_QUERIES=""
 PIPELINE_DEPTH="1"
+RECORDS_PER_OPERATION="${BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION:-1}"
 WORKER_LANES=(1)
 THROUGHPUT_GATE_WRITERS=()
 DATASET_DIR=""
 DATASET_SHA256=""
 if [[ "$SMOKE" == "1" ]]; then
-  MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-smoke.json"
+  if [[ "$RECORDS_PER_OPERATION" == "16" ]]; then
+    MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-smoke-bulk.json"
+  else
+    MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-smoke.json"
+  fi
   CELL_COUNTS=(64)
   WRITERS=(1)
   REPETITIONS=1
@@ -53,6 +58,7 @@ else
   MIN_INSERTED_ID_RECALL_AT_10="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["min_inserted_id_recall_at_10"])' "$MANIFEST")"
   READ_QUERIES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["read_queries_per_cell"])' "$MANIFEST")"
   PIPELINE_DEPTH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pipeline_depth_per_writer"])' "$MANIFEST")"
+  RECORDS_PER_OPERATION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("records_per_operation", 1))' "$MANIFEST")"
   mapfile -t WORKER_LANES < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["worker_lanes"], sep="\n")' "$MANIFEST")
   mapfile -t THROUGHPUT_GATE_WRITERS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["throughput_gate_writers"], sep="\n")' "$MANIFEST")
   DATASET_DIR="${BORSUK_GROUP_COMMIT_DATASET:?set validated Cohere dataset directory}"
@@ -260,6 +266,7 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_MIN_INSERTED_ID_RECALL_AT_10="$MIN_INSERTED_ID_RECALL_AT_10" \
         BORSUK_GROUP_COMMIT_READ_QUERIES="$READ_QUERIES" \
         BORSUK_GROUP_COMMIT_PIPELINE_DEPTH="$PIPELINE_DEPTH" \
+        BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION="$RECORDS_PER_OPERATION" \
         BORSUK_GROUP_COMMIT_WORKER_LANES="$worker_lanes" \
         BORSUK_STORAGE_TRACE="$storage_trace_output" \
         python3 "$ROOT_DIR/scripts/benchmark_with_resources.py" \
