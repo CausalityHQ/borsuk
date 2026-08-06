@@ -4338,7 +4338,7 @@ mod tests {
                 .create_bytes_verified(
                     "extent.wal",
                     b"conflicting extent",
-                    &blake3::hash(b"conflicting extent").to_hex().to_string(),
+                    blake3::hash(b"conflicting extent").to_hex().as_ref(),
                 )
                 .is_err()
         );
