@@ -292,10 +292,16 @@ for cells in "${CELL_COUNTS[@]}"; do
         exit "$status"
       fi
       printf 'complete\n' > "$cell_output/CELL_COMPLETE"
-      python3 "$ROOT_DIR/scripts/validate_group_commit_scalability.py" \
+      validation_error="$cell_output/validation-error.txt"
+      if ! python3 "$ROOT_DIR/scripts/validate_group_commit_scalability.py" \
         --manifest "$MANIFEST" \
         --terminal-cell "c${cells}/r${repetition}/l${worker_lanes}/w${writers}" \
-        "$OUTPUT"
+        "$OUTPUT" >"$validation_error" 2>&1; then
+        printf 'validation failed\n' > "$cell_output/CELL_VALIDATION_FAILED"
+        cat "$validation_error" >&2
+        exit 1
+      fi
+      rm -f "$validation_error"
       sync_results
       CURRENT_CELL=""
     done
