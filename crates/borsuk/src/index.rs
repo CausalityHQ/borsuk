@@ -6037,16 +6037,7 @@ impl BorsukIndex {
                         "non-empty tombstone bucket produced no page".to_string(),
                     )
                 })?;
-                pages.insert(
-                    bucket,
-                    TombstonePageRef {
-                        bucket,
-                        path: summary.path,
-                        checksum: summary.checksum,
-                        count: summary.count,
-                        created_at: summary.created_at,
-                    },
-                );
+                pages.insert(bucket, TombstonePageRef::from_summary(bucket, summary));
             }
             manifest.tombstone = None;
             manifest.tombstone_frontier.clear();
@@ -6281,6 +6272,7 @@ impl BorsukIndex {
             .manifest
             .tombstone_pages
             .binary_search_by_key(&bucket, |page| page.bucket)
+            && self.manifest.tombstone_pages[index].might_contain_record_id(id)
             && let Some(generation) = self
                 .load_tombstone_page(&self.manifest.tombstone_pages[index])?
                 .get(id)
@@ -26492,7 +26484,7 @@ mod tests {
     fn tombstone_flush_copy_on_writes_only_the_affected_hash_bucket() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
-        let index = BorsukIndex::create(IndexConfig {
+        let mut index = BorsukIndex::create(IndexConfig {
             uri,
             metric: VectorMetric::Euclidean,
             dimensions: 2,
@@ -26559,6 +26551,25 @@ mod tests {
         assert_eq!(
             second_read.gets, 0,
             "a decoded immutable tombstone page must be reused in-process"
+        );
+
+        let absent_same_bucket = (0_u64..)
+            .map(|value| format!("absent-{value}").into_bytes())
+            .find(|id| tombstone_bucket(id) == first_bucket && !page.might_contain_record_id(id))
+            .unwrap();
+        index.manifest = manifest;
+        index.tombstone_cache =
+            Arc::new(DecodedObjectCache::new(DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES));
+        let before_absent = index.storage.request_counts();
+
+        assert_eq!(
+            index.min_visible_generation(&absent_same_bucket).unwrap(),
+            None
+        );
+        assert_eq!(
+            index.storage.request_counts().delta(&before_absent).gets,
+            0,
+            "a definite-negative stable page bloom must avoid object storage"
         );
     }
 

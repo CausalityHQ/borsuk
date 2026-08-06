@@ -104,7 +104,10 @@ use crate::{
 // live tombstone-run blooms retained their separate compact width.
 // Bumped 24 -> 25 when lane-log HEADs made the complete newest block inline so
 // one conditional write is the durable acknowledgement boundary.
-const CURRENT_VERSION: u16 = 25;
+// Bumped 25 -> 26 when stable tombstone-page references gained required
+// resident ID blooms. Without them, every ANN candidate whose hash bucket had
+// any historical mutation fetched a separate object before reranking.
+const CURRENT_VERSION: u16 = 26;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -7109,6 +7112,7 @@ mod tests {
             path: "tombstones/cd/page.parquet".to_string(),
             checksum: "cd".repeat(32),
             count: 9,
+            id_bloom: crate::manifest::tombstone_id_bloom(["page-id"]),
             created_at: datetime_from_millis(1235).unwrap(),
         }];
         expected.bm25_stats_delta_frontier = vec![crate::manifest::Bm25StatsDeltaRef {

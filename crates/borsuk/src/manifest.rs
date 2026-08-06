@@ -456,12 +456,35 @@ pub(crate) struct TombstonePageRef {
     pub path: String,
     pub checksum: String,
     pub count: u64,
+    /// Resident negative-membership filter for the stable page. Search must
+    /// consult this before fetching the page from object storage.
+    pub id_bloom: Vec<u8>,
     pub created_at: DateTime<Utc>,
 }
 
 impl TombstonePageRef {
+    pub(crate) fn from_summary(bucket: u16, summary: TombstoneSummary) -> Self {
+        Self {
+            bucket,
+            path: summary.path,
+            checksum: summary.checksum,
+            count: summary.count,
+            id_bloom: summary.id_bloom,
+            created_at: summary.created_at,
+        }
+    }
+
+    /// `false` is an exact negative and lets an unrelated candidate avoid a
+    /// remote stable-page read. A malformed filter fails open for correctness.
+    pub(crate) fn might_contain_record_id(&self, id: impl AsRef<[u8]>) -> bool {
+        if self.id_bloom.len() != TOMBSTONE_ID_BLOOM_BYTES {
+            return true;
+        }
+        bloom_contains_with_bits(&self.id_bloom, id, TOMBSTONE_ID_BLOOM_BYTES * 8)
+    }
+
     pub(crate) fn resident_bytes_estimate(&self) -> usize {
-        size_of::<Self>() + self.path.len() + self.checksum.len()
+        size_of::<Self>() + self.path.len() + self.checksum.len() + self.id_bloom.len()
     }
 }
 
@@ -1234,6 +1257,21 @@ mod tests {
     #[test]
     fn tombstone_run_bloom_stays_compact() {
         assert_eq!(tombstone_id_bloom(["deleted"]).len(), 128);
+    }
+
+    #[test]
+    fn stable_tombstone_page_rejects_definitely_absent_ids_without_io() {
+        let summary = TombstoneSummary {
+            path: "tombstones/ab/page.parquet".to_string(),
+            checksum: "ab".repeat(32),
+            count: 1,
+            id_bloom: tombstone_id_bloom(["mutated-id"]),
+            created_at: chrono::Utc::now(),
+        };
+        let page = TombstonePageRef::from_summary(17, summary);
+
+        assert!(page.might_contain_record_id("mutated-id"));
+        assert!(!page.might_contain_record_id("never-mutated-id"));
     }
 
     #[test]
