@@ -259,7 +259,7 @@
   Format v26 now makes that boundary explicit. Index creation writes every
   empty ownership-lane HEAD before publishing `CURRENT`, and readers fail
   closed if any HEAD is later missing. Each foreground group acknowledges one
-  inline HEAD CAS. At four inline blocks or 8 MiB, the owning worker returns
+  inline HEAD CAS. At 8 MiB of inline payload, the owning worker returns
   the receipt first, uploads checksum-addressed blocks, then installs external
   descriptors with one fenced HEAD CAS; a failed upload leaves the inline copy
   authoritative and must be retried before that lane accepts another append.
@@ -272,8 +272,21 @@
   terminal correctness artifact. Multi-lane API failures now return structured
   committed and failed lane sets. The local structural smoke, full Rust suite,
   448 Python tests, strict Clippy, formatting, and policy checks passed at the
-  committed v31 source revision. Fresh prefixes and isolated-host preflight are
-  the remaining launch prerequisites.
+  committed v31 source revision.
+
+  v31 then terminated in its first `c2000/r01/l1/w1` cell after every phase
+  marker completed. Fail-closed root and terminal-cell validation rejected the
+  campaign before measurement inspection. The complete terminal cell recorded
+  1,000 records in 836 groups, 2.210 acknowledged records/s, 1.849
+  drain-inclusive records/s, 603.825 ms write p95, 951.618 ms active-tail read
+  p95, 73.770 ms post-drain read p95, and inserted-ID recall@10 of 1.0. Its
+  physical trace recorded 920,705,087 write bytes for 3,072,000 input vector
+  bytes (~299.71x). Causal inspection found a synchronous four-block spill in
+  the owning append worker and a corpus-wide global-PQ rebuild during drain.
+  The next revision removes the tiny-block trigger and the drain rebuild. It
+  does not claim the still-open whole-query base/delta/WAL budget, bounded
+  delta-compaction, sticky maintenance-demand, or fully asynchronous spill
+  gates identified by the subsequent GPT-5.6 Sol review.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 

@@ -198,7 +198,6 @@ enum WorkerRequest {
         sequence: u64,
         response: Sender<std::result::Result<(), String>>,
     },
-    Optimize(Sender<std::result::Result<(), String>>),
 }
 
 /// Cloneable high-throughput writer that group-commits concurrent appends.
@@ -442,17 +441,7 @@ impl GroupCommitWriter {
                 })?
                 .map_err(BorsukError::InvalidStorage)?;
         }
-        let (done, wait) = mpsc::channel();
-        self.requests[0]
-            .send(WorkerRequest::Optimize(done))
-            .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
-        wait.recv()
-            .map_err(|_| {
-                BorsukError::InvalidStorage(
-                    "group commit worker stopped before drain optimization completed".to_string(),
-                )
-            })?
-            .map_err(BorsukError::InvalidStorage)
+        Ok(())
     }
 }
 
@@ -510,14 +499,6 @@ fn run_worker(
                     .and_then(|writer| writer.mark_materialized_through(sequence))
                     .map_err(|error| error.to_string());
                 let _ = response.send(result);
-                continue;
-            }
-            WorkerRequest::Optimize(done) => {
-                let result = index
-                    .refresh()
-                    .and_then(|_| index.optimize_drained_reads())
-                    .map_err(|error| error.to_string());
-                let _ = done.send(result);
                 continue;
             }
         };

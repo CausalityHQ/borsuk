@@ -19,7 +19,6 @@ use rayon::prelude::*;
 const BLOCK_MAGIC: &[u8; 8] = b"BRSLBL25";
 const HEAD_MAGIC: &[u8; 8] = b"BRSLHD26";
 const CHECKSUM_BYTES: usize = 32;
-const INLINE_SPILL_BLOCK_THRESHOLD: usize = 4;
 const INLINE_SPILL_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024;
 const MAX_UNMATERIALIZED_BLOCKS: usize = 128;
 const MAX_UNMATERIALIZED_BYTES: u64 = 64 * 1024 * 1024;
@@ -1309,15 +1308,13 @@ impl LaneLogWriter {
     }
 
     pub(crate) fn inline_spill_needed(&self) -> bool {
-        let mut blocks = 0_usize;
         let mut bytes = 0_u64;
         for block in &self.head.blocks {
             if block.inline_bytes.is_some() {
-                blocks += 1;
                 bytes = bytes.saturating_add(block.bytes);
             }
         }
-        blocks >= INLINE_SPILL_BLOCK_THRESHOLD || bytes >= INLINE_SPILL_BYTE_THRESHOLD
+        bytes >= INLINE_SPILL_BYTE_THRESHOLD
     }
 
     pub(crate) fn mark_materialized_through(&mut self, sequence: u64) -> Result<()> {

@@ -108,7 +108,7 @@ The v26 cutover collapses the two dependent acknowledgement PUTs into one
 conditional HEAD PUT by carrying new blocks inline. The storage-version bump
 is also the activation contract: creation installs every empty lane HEAD before
 publishing `CURRENT`, so a valid v26 index can never treat a missing HEAD as an
-unused lane. The owner spills at four inline blocks or 8 MiB after returning
+unused lane. The owner spills at 8 MiB of inline payload after returning
 the durable receipt: it uploads checksum-addressed block objects first, then
 CAS-replaces only the inline representations with external descriptors. A
 failed spill leaves the authoritative inline bytes untouched and is retried
@@ -136,7 +136,8 @@ the benchmark validator recomputes their total and maximum from raw samples.
 **Implementation status:** explicit `GroupCommitWriter::drain` now barriers all
 workers, publishes the captured lane tail into immutable segments, advances
 each lane's materialized prefix only after that manifest publication, retains
-post-snapshot suffix blocks, then rebuilds drained read artifacts. The bounded
+post-snapshot suffix blocks, and retains the immutable global search base while
+the new segments remain a materialized delta. The bounded
 tail survives repeated drain cycles in integration coverage. A serialized
 background materializer now triggers at each 64-block lane interval; a
 2,400-record integration stream crosses multiple former pressure boundaries
