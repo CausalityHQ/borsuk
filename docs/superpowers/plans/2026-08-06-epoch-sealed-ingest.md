@@ -231,7 +231,7 @@
 
 **Files:**
 - Modify: `crates/borsuk/examples/group_commit_bench.rs`
-- Modify: `docs/research/realistic-group-commit-campaign.json`
+- Create: `docs/research/realistic-group-commit-v32-epoch-campaign.json`
 - Modify: `scripts/bench_group_commit_scalability.sh`
 - Modify: `scripts/validate_group_commit_scalability.py`
 - Test: `scripts/test_bench_group_commit_scalability_runner.py`
@@ -256,7 +256,8 @@
   Keep scalar batches at one record for the latency gate. Configure bulk batches
   at 16 records, yielding 2,048 outstanding records for 32 writers and depth
   four. Recompute operation and record rates from raw samples; reject any batch
-  identity or record-count mismatch.
+  identity or record-count mismatch. Preserve the terminal v31 manifest and all
+  of its artifacts unchanged.
 
 - [ ] **Step 4: Replace obsolete correctness gates**
 
@@ -320,4 +321,3 @@
 - [ ] **Step 6: Record terminal evidence and fast-forward push**
 
   Commit: `docs: record epoch ingest qualification`
-
