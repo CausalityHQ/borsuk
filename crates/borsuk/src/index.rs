@@ -12073,6 +12073,7 @@ impl BorsukIndex {
             );
             let page = &selected_chunks[wave_start..wave_end];
             let mut scan_page = Vec::with_capacity(page.len());
+            let mut cached_page = Vec::new();
             for chunk in page {
                 let graph = if use_cached_graphs {
                     self.cached_global_cell_graph(chunk)?
@@ -12097,11 +12098,26 @@ impl BorsukIndex {
                         graph_candidates_added.saturating_add(candidates.len());
                     candidate_pages.push(candidates);
                 } else {
-                    scan_chunks_used = scan_chunks_used.saturating_add(1);
-                    scan_page.push(chunk.clone());
+                    if max_bytes.is_none()
+                        && let Some(bytes) = index.cached_code(&chunk.checksum)
+                    {
+                        scan_chunks_used = scan_chunks_used.saturating_add(1);
+                        cached_page.push((chunk.clone(), bytes));
+                    } else {
+                        scan_chunks_used = scan_chunks_used.saturating_add(1);
+                        scan_page.push(chunk.clone());
+                    }
                 }
             }
             if scan_page.is_empty() {
+                if !cached_page.is_empty() {
+                    candidate_pages.push(index.candidates_in_chunks(
+                        &pq_query,
+                        candidate_limit,
+                        &cached_page,
+                        crate::configured_cpu_threads(),
+                    )?);
+                }
                 wave_start = wave_end;
                 continue;
             }
@@ -12164,6 +12180,10 @@ impl BorsukIndex {
                 loaded.append(&mut chunks);
                 bytes_read = bytes_read.saturating_add(count);
             }
+            for (chunk, bytes) in &loaded {
+                index.cache_code(chunk.checksum.clone(), bytes.clone());
+            }
+            loaded.extend(cached_page);
             candidate_pages.push(index.candidates_in_chunks(
                 &pq_query,
                 candidate_limit,
