@@ -113,3 +113,11 @@ selection. Its ordering regression and all 18 global-PQ tests, plus the full
 library, group-commit, and fault-injection gates, pass. It changes no persisted
 layout or routing semantics; a fresh terminal throughput run is still needed
 before assigning it a numeric gain.
+
+Terminal r34 then measured the fixed parent selector from the source-identified
+`5aa2c35` revision on a fresh 1M-row Cohere 768D base. All five local markers
+were present with recall@10 1.0, write p95 61.875 ms, active-tail read p95
+82.675 ms, post-drain read p95 12.770 ms, and drain-inclusive throughput
+5,659.450 records/s. This is neutral to r33's 5,716.636 records/s within the
+single-cell noise; the factor is retained for bounded allocation behavior but
+is not credited with a throughput gain.

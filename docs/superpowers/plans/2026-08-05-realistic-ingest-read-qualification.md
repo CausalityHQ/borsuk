@@ -72,6 +72,12 @@
   ordering with a fixed four-entry selector. The focused ordering test, 18
   global-PQ tests, full library, group-commit, and fault-injection gates pass;
   no throughput number is assigned until a fresh terminal benchmark runs.
+- Source-identified terminal r34 measured that factor on a fresh 1M-row
+  Cohere 768D base: recall@10 1.0, write p95 61.875 ms, active-tail read p95
+  82.675 ms, post-drain read p95 12.770 ms, and drain-inclusive throughput
+  5,659.450 records/s. This is neutral to r33 within single-cell noise, so
+  it is retained for bounded memory behavior but does not close the bulk
+  throughput gap.
 
 ## Global Constraints
 
