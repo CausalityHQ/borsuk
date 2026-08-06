@@ -96,3 +96,13 @@ post-reopen exact-recall gate; its partial measurement files were not
 inspected. A regression now covers non-power-of-two dimensions and clears the
 entire caller-owned rotation buffer before each transform. The fix requires a
 new pristine-base terminal run.
+
+The corrected terminal r33 used a freshly built 1M-row Cohere 768D base,
+32 writers, 32 operations per writer, 16 records per operation, pipeline
+depth four, and eight worker lanes. All five local phase markers were present,
+the process exited successfully, and the source archive identity matched
+`d382a64`. It preserved inserted-ID recall@10 1.0, write p95 59.045 ms,
+active-tail read p95 81.341 ms, post-drain read p95 28.218 ms, and
+drain-inclusive throughput 5,716.636 records/s. This is a terminal local
+architecture result, not a 10,000-record/s pass and not 100M-scale or AWS
+evidence; the paired five-repetition production campaign remains unlaunched.

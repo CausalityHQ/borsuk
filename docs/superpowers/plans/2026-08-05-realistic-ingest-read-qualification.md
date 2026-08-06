@@ -61,6 +61,12 @@
   for 768D vectors; a regression now covers non-power-of-two dimensions and
   the rotation buffer is fully cleared before every transform. Its partial
   CSVs remain uninspected, and a new pristine-base run is required.
+- Terminal r33 finally completed from a pristine 1M-row Cohere 768D base with
+  the source archive identity for `d382a64`. Recall@10 was 1.0, write p95 was
+  59.045 ms, active-tail read p95 81.341 ms, post-drain read p95 28.218 ms,
+  and drain-inclusive throughput 5,716.636 records/s. This passes the latency
+  and recall gates but remains below the 10,000-record/s local bulk target and
+  does not qualify 100M-scale or AWS performance.
 
 ## Global Constraints
 
