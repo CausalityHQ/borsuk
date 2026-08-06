@@ -2008,7 +2008,7 @@ impl BorsukIndex {
                 manifest.config.metric.clone(),
                 manifest.config.dimensions,
                 chunk.to_vec(),
-                manifest.build_config.quantizer,
+                QuantizerKind::ScalarBounds,
                 manifest.build_config.normalized_angular_coarse_geometry,
             )?);
             if segments_to_write.len() == write_batch_size {
@@ -22612,6 +22612,63 @@ mod tests {
             materialized.get_vector("frontier").unwrap(),
             Some(vec![1.0, 0.0])
         );
+    }
+
+    #[test]
+    fn lane_log_materialization_uses_cheap_scalar_segment_codes() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        assert!(matches!(
+            index.manifest.build_config.quantizer,
+            QuantizerKind::TurboQuant { .. }
+        ));
+        let group =
+            crate::GroupCommitWriter::new(index, crate::GroupCommitConfig::default()).unwrap();
+        group
+            .append(
+                (0..16)
+                    .map(|row| {
+                        VectorRecord::new(
+                            format!("scalar-{row}"),
+                            (0..8)
+                                .map(|dimension| (row * 8 + dimension) as f32)
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        group.drain().unwrap();
+
+        let materialized = BorsukIndex::open(&uri).unwrap();
+        let summary = materialized
+            .active_segment_summaries()
+            .unwrap()
+            .pop()
+            .unwrap();
+        let (segment, _, _, _) = materialized.read_segment(&summary).unwrap();
+        let scalar = Segment::from_records_with_quantizer(
+            "expected".to_string(),
+            segment.level,
+            segment.metric.clone(),
+            segment.dimensions,
+            segment.records.clone(),
+            QuantizerKind::ScalarBounds,
+        )
+        .unwrap();
+        assert_eq!(segment.pq_min, scalar.pq_min);
+        assert_eq!(segment.pq_max, scalar.pq_max);
+        assert_eq!(segment.pq_codes, scalar.pq_codes);
     }
 
     #[test]
