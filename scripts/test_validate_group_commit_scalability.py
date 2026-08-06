@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from validate_group_commit_scalability import ValidationError, validate
+from validate_group_commit_scalability import ValidationError, lane_receipt_evidence, validate
 
 
 class ValidatorTests(unittest.TestCase):
@@ -203,6 +203,16 @@ class ValidatorTests(unittest.TestCase):
 
     def test_valid_terminal_campaign_passes(self) -> None:
         validate(self.root, self.manifest_path)
+
+    def test_bulk_samples_preserve_every_lane_receipt(self) -> None:
+        evidence = lane_receipt_evidence(
+            {
+                "lane_receipts": "0:7:3:2:100:5:1:2:0:2:0;1:9:3:1:60:4:1:1:0:2:0"
+            }
+        )
+        self.assertEqual(len(evidence), 2)
+        self.assertEqual(evidence[0][:5], (0, 7, 3, 2, 100))
+        self.assertEqual(evidence[1][5:], (4, 1, 1, 0, 2, 0))
 
     def test_incomplete_campaign_fails_before_csv_use(self) -> None:
         (self.root / "GROUP_COMMIT_SCALABILITY_COMPLETE").unlink()
