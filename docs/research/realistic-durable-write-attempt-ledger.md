@@ -130,3 +130,13 @@ the prior coverage certificate is stale. Full library (498 passed),
 group-commit (29 passed), fault-injection (12 passed), strict Clippy, and
 formatting gates pass. No performance claim is made until a fresh terminal
 arm verifies recall and manifest coverage.
+
+The source-identified r35 terminal arm then used a fresh 1M-row Cohere 768D
+base at `49fc20e`, with 32 writers, 32 operations per writer, 16 records per
+operation, pipeline depth four, and eight worker lanes. All five phase markers
+were present and no failure marker was present. It recorded recall@10 1.0,
+write p95 76.483 ms, active-tail read p95 118.712 ms, post-drain read p95
+29.026 ms, and drain-inclusive throughput 43,696.802 records/s for 16,384
+records. This is a local paired-cell result showing a large throughput gain
+over r34, not 100M-scale or AWS evidence; the five-repetition campaign and
+production default freeze remain pending.
