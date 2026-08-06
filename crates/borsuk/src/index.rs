@@ -2030,11 +2030,38 @@ impl BorsukIndex {
         manifest
             .segments
             .extend(self.write_segment_batch(&mut segments_to_write)?);
+        let delta_update = manifest
+            .global_pq_ref
+            .clone()
+            .map(|base| {
+                let fringe_records = (base.covered_manifest_version == previous.version)
+                    .then_some(records.as_slice());
+                self.build_resident_global_delta(&base, &manifest.segments, false, fringe_records)
+            })
+            .transpose()?
+            .flatten();
+        let delta_updated = delta_update.is_some();
+        if let Some((desired, promote)) = delta_update {
+            debug_assert!(!promote, "foreground lane drain cannot promote the base");
+            let reference = manifest.global_pq_ref.as_mut().ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "resident global base disappeared during lane drain".into(),
+                )
+            })?;
+            reference.delta = Some(Box::new(desired));
+            reference.covered_manifest_version = manifest.version;
+            reference.validate_layout()?;
+        }
         manifest.rebuild_pivots();
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        self.refresh_resident_global_delta(false)?;
+        if delta_updated {
+            self.resident_global_pq
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clear();
+        }
         Ok(committed_sequences)
     }
 
@@ -12937,11 +12964,13 @@ impl BorsukIndex {
     /// newly uncovered segments. Ordinary foreground flushes pass `false` so
     /// they never turn a bounded WAL drain into a corpus-wide base rebuild;
     /// explicit maintenance such as compaction may pass `true`.
-    fn refresh_resident_global_delta(&mut self, allow_base_promotion: bool) -> Result<bool> {
-        let Some(base_reference) = self.manifest.global_pq_ref.clone() else {
-            return Ok(false);
-        };
-        let active = self.active_segment_summaries()?;
+    fn build_resident_global_delta(
+        &self,
+        base_reference: &crate::manifest::GlobalPqRef,
+        active: &[SegmentSummary],
+        allow_base_promotion: bool,
+        fringe_records: Option<&[VectorRecord]>,
+    ) -> Result<Option<(crate::manifest::GlobalPqRef, bool)>> {
         let active_checksums = active
             .iter()
             .map(|summary| summary.checksum.as_str())
@@ -12966,7 +12995,7 @@ impl BorsukIndex {
             .cloned()
             .collect::<Vec<_>>();
         if fringe.is_empty() && !stale_delta {
-            return Ok(false);
+            return Ok(None);
         }
         let fringe_vectors = fringe.iter().fold(0_usize, |total, summary| {
             total.saturating_add(summary.object_count)
@@ -12979,7 +13008,7 @@ impl BorsukIndex {
                 .segment_max_vectors
                 .clamp(1, DELTA_BOOTSTRAP_MAX_VECTORS);
             if fringe_vectors < bootstrap_vectors {
-                return Ok(false);
+                return Ok(None);
             }
         }
 
@@ -12997,7 +13026,7 @@ impl BorsukIndex {
         let promote =
             allow_base_promotion && !stale_delta && pending_delta_vectors >= promotion_vectors;
         let desired = if promote {
-            self.persist_resident_global_pq(&active)?.ok_or_else(|| {
+            self.persist_resident_global_pq(active)?.ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "resident global base promotion contains no visible vectors".to_string(),
                 )
@@ -13009,9 +13038,30 @@ impl BorsukIndex {
                 )
             })?
         } else if let Some(previous_delta) = base_reference.delta.as_deref() {
-            self.append_resident_global_delta(previous_delta, &fringe)?
+            if let Some(records) = fringe_records {
+                self.append_resident_global_delta_from_records(previous_delta, &fringe, records)?
+            } else {
+                self.append_resident_global_delta(previous_delta, &fringe)?
+            }
         } else {
-            self.bootstrap_resident_global_delta(&base_reference, &fringe)?
+            if let Some(records) = fringe_records {
+                self.bootstrap_resident_global_delta_from_records(base_reference, &fringe, records)?
+            } else {
+                self.bootstrap_resident_global_delta(base_reference, &fringe)?
+            }
+        };
+        Ok(Some((desired, promote)))
+    }
+
+    fn refresh_resident_global_delta(&mut self, allow_base_promotion: bool) -> Result<bool> {
+        let Some(base_reference) = self.manifest.global_pq_ref.clone() else {
+            return Ok(false);
+        };
+        let active = self.active_segment_summaries()?;
+        let Some((desired, promote)) =
+            self.build_resident_global_delta(&base_reference, &active, allow_base_promotion, None)?
+        else {
+            return Ok(false);
         };
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
@@ -13042,6 +13092,24 @@ impl BorsukIndex {
         &self,
         base: &crate::manifest::GlobalPqRef,
         fringe: &[SegmentSummary],
+    ) -> Result<crate::manifest::GlobalPqRef> {
+        self.bootstrap_resident_global_delta_with_records(base, fringe, None)
+    }
+
+    fn bootstrap_resident_global_delta_from_records(
+        &self,
+        base: &crate::manifest::GlobalPqRef,
+        fringe: &[SegmentSummary],
+        records: &[VectorRecord],
+    ) -> Result<crate::manifest::GlobalPqRef> {
+        self.bootstrap_resident_global_delta_with_records(base, fringe, Some(records))
+    }
+
+    fn bootstrap_resident_global_delta_with_records(
+        &self,
+        base: &crate::manifest::GlobalPqRef,
+        fringe: &[SegmentSummary],
+        records: Option<&[VectorRecord]>,
     ) -> Result<crate::manifest::GlobalPqRef> {
         let read = self
             .storage
@@ -13078,13 +13146,35 @@ impl BorsukIndex {
             segments: Vec::new(),
             delta: None,
         };
-        self.append_resident_global_delta(&seed, fringe)
+        if let Some(records) = records {
+            self.append_resident_global_delta_from_records(&seed, fringe, records)
+        } else {
+            self.append_resident_global_delta(&seed, fringe)
+        }
     }
 
     fn append_resident_global_delta(
         &self,
         previous: &crate::manifest::GlobalPqRef,
         fringe: &[SegmentSummary],
+    ) -> Result<crate::manifest::GlobalPqRef> {
+        self.append_resident_global_delta_with_records(previous, fringe, None)
+    }
+
+    fn append_resident_global_delta_from_records(
+        &self,
+        previous: &crate::manifest::GlobalPqRef,
+        fringe: &[SegmentSummary],
+        records: &[VectorRecord],
+    ) -> Result<crate::manifest::GlobalPqRef> {
+        self.append_resident_global_delta_with_records(previous, fringe, Some(records))
+    }
+
+    fn append_resident_global_delta_with_records(
+        &self,
+        previous: &crate::manifest::GlobalPqRef,
+        fringe: &[SegmentSummary],
+        records: Option<&[VectorRecord]>,
     ) -> Result<crate::manifest::GlobalPqRef> {
         const GLOBAL_PQ_BUILD_READS: usize = 8;
         let read = self
@@ -13112,62 +13202,88 @@ impl BorsukIndex {
         )?;
         let mut segment_index = previous.segments.len();
         let mut appended_vectors = 0_usize;
-        for_each_bounded_io_wave(
-            fringe,
-            GLOBAL_PQ_BUILD_READS,
-            |summary| self.read_segment(summary),
-            |_summary, (segment, _, _, _)| {
-                let segment_ordinal = u32::try_from(segment_index).map_err(|_| {
+        let mut append_records = |segment_records: &[VectorRecord]| -> Result<()> {
+            let segment_ordinal = u32::try_from(segment_index).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "resident global PQ has more than u32 segments".to_string(),
+                )
+            })?;
+            let active = segment_records
+                .iter()
+                .enumerate()
+                .filter_map(|(row_index, record)| match self.is_suppressed(record) {
+                    Ok(true) => None,
+                    Ok(false) => Some(Ok((
+                        row_index,
+                        if normalize {
+                            crate::metric::unit_l2_normalized(&record.vector)
+                        } else {
+                            record.vector.clone()
+                        },
+                    ))),
+                    Err(error) => Some(Err(error)),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let encoded = crate::parallel::install(|| {
+                active
+                    .par_iter()
+                    .map(|(_, vector)| spool.encode_vector(vector))
+                    .collect::<Result<Vec<_>>>()
+            })?;
+            for ((row_index, _), (cell, code)) in active.into_iter().zip(encoded) {
+                let record = &segment_records[row_index];
+                spool.push_encoded(
+                    cell,
+                    &code,
+                    GlobalPqRow {
+                        segment_index: segment_ordinal,
+                        row_index: u32::try_from(row_index).map_err(|_| {
+                            BorsukError::InvalidStorage(
+                                "resident global PQ segment has more than u32 rows".to_string(),
+                            )
+                        })?,
+                    },
+                    &record.vector,
+                    record.id.as_bytes(),
+                    record.generation,
+                )?;
+                appended_vectors = appended_vectors.saturating_add(1);
+            }
+            segment_index = segment_index.saturating_add(1);
+            Ok(())
+        };
+        if let Some(records) = records {
+            let expected_records = fringe.iter().try_fold(0_usize, |total, summary| {
+                total.checked_add(summary.object_count).ok_or_else(|| {
                     BorsukError::InvalidStorage(
-                        "resident global PQ has more than u32 segments".to_string(),
+                        "resident global delta record count exceeds usize".to_string(),
+                    )
+                })
+            })?;
+            if records.len() != expected_records {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "resident global delta received {} in-memory records for {expected_records} segment rows",
+                    records.len()
+                )));
+            }
+            let mut offset = 0_usize;
+            for summary in fringe {
+                let end = offset.checked_add(summary.object_count).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "resident global delta record range overflows".to_string(),
                     )
                 })?;
-                let active = segment
-                    .records
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(row_index, record)| match self.is_suppressed(record) {
-                        Ok(true) => None,
-                        Ok(false) => Some(Ok((
-                            row_index,
-                            if normalize {
-                                crate::metric::unit_l2_normalized(&record.vector)
-                            } else {
-                                record.vector.clone()
-                            },
-                        ))),
-                        Err(error) => Some(Err(error)),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let encoded = crate::parallel::install(|| {
-                    active
-                        .par_iter()
-                        .map(|(_, vector)| spool.encode_vector(vector))
-                        .collect::<Result<Vec<_>>>()
-                })?;
-                for ((row_index, _), (cell, code)) in active.into_iter().zip(encoded) {
-                    let record = &segment.records[row_index];
-                    spool.push_encoded(
-                        cell,
-                        &code,
-                        GlobalPqRow {
-                            segment_index: segment_ordinal,
-                            row_index: u32::try_from(row_index).map_err(|_| {
-                                BorsukError::InvalidStorage(
-                                    "resident global PQ segment has more than u32 rows".to_string(),
-                                )
-                            })?,
-                        },
-                        &record.vector,
-                        record.id.as_bytes(),
-                        record.generation,
-                    )?;
-                    appended_vectors = appended_vectors.saturating_add(1);
-                }
-                segment_index = segment_index.saturating_add(1);
-                Ok(())
-            },
-        )?;
+                append_records(&records[offset..end])?;
+                offset = end;
+            }
+        } else {
+            for_each_bounded_io_wave(
+                fringe,
+                GLOBAL_PQ_BUILD_READS,
+                |summary| self.read_segment(summary),
+                |_summary, (segment, _, _, _)| append_records(&segment.records),
+            )?;
+        }
         if appended_vectors == 0 {
             return Err(BorsukError::InvalidStorage(
                 "resident global delta append contains no visible vectors".to_string(),
@@ -22859,8 +22975,8 @@ mod tests {
         let drained = BorsukIndex::open(&uri).unwrap();
         assert_eq!(
             drained.manifest.version,
-            version_before_drain + 2,
-            "drain must publish materialized segments and the global delta without a redundant quantizer-only manifest"
+            version_before_drain + 1,
+            "drain must publish materialized segments and their global delta atomically"
         );
         assert!(drained.manifest.quantizer_ref.is_none());
         let global = drained.manifest.global_pq_ref.as_ref().unwrap();
@@ -24644,15 +24760,10 @@ mod tests {
         )
         .unwrap();
 
-        index
-            .add(
-                (0..16)
-                    .map(|row| {
-                        VectorRecord::new(format!("delta-b-{row}"), vec![40.0 + row as f32; 8])
-                    })
-                    .collect(),
-            )
-            .unwrap();
+        let delta_b_records = (0..16)
+            .map(|row| VectorRecord::new(format!("delta-b-{row}"), vec![40.0 + row as f32; 8]))
+            .collect::<Vec<_>>();
+        index.add(delta_b_records.clone()).unwrap();
         index.flush().unwrap();
         let base = index.manifest.global_pq_ref.as_ref().unwrap();
         let second_reference = base.delta.as_ref().unwrap();
@@ -24671,6 +24782,27 @@ mod tests {
         assert_eq!(base.checksum, base_checksum);
         assert_eq!(second_reference.vectors, first_reference.vectors + 16);
         assert_eq!(second_reference.segments.len(), 2);
+        let covered_before_delta_b = base
+            .segments
+            .iter()
+            .chain(first_reference.segments.iter())
+            .collect::<HashSet<_>>();
+        let delta_b_summaries = index
+            .active_segment_summaries()
+            .unwrap()
+            .into_iter()
+            .filter(|summary| !covered_before_delta_b.contains(&summary.checksum))
+            .collect::<Vec<_>>();
+        let direct = index
+            .append_resident_global_delta_from_records(
+                &first_reference,
+                &delta_b_summaries,
+                &delta_b_records,
+            )
+            .unwrap();
+        assert_eq!(direct.checksum, second_reference.checksum);
+        assert_eq!(direct.segments, second_reference.segments);
+        assert_eq!(direct.vectors, second_reference.vectors);
         assert_eq!(
             &second_descriptor.chunks()[..first_descriptor.chunks().len()],
             first_descriptor.chunks(),

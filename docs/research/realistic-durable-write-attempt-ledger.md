@@ -64,3 +64,15 @@ logical cells, and 20 read queries per phase.
   after the certified routing-walk optimization. All base/delta append,
   promotion, and stale-generation regressions now preserve the nested coverage
   invariant.
+- The following single-publication r20 built the delta from the active summaries
+  already held by lane drain and published segments plus complete base/delta
+  coverage atomically. It preserved recall@10 1.0, 59.467 ms write p95,
+  101.041 ms active-tail p95, and 3.204 ms post-drain p95. Drain fell from
+  3.857 to 3.398 s and end-to-end throughput rose from 3,893 to 4,371
+  records/s. Direct in-memory delta encoding in r21 then produced the same
+  descriptor checksum as the persisted-segment path and removed the
+  object-store reread of every just-written segment. On the warm local
+  filesystem it was only a small improvement: 3.353 s drain and 4,436
+  end-to-end records/s, with recall 1.0 and 62.484/97.532/3.122 ms
+  write/active-read/post-read p95. The remaining gap is duplicate segment and
+  global-bundle encoding/writes, not routing discovery or local rereads.

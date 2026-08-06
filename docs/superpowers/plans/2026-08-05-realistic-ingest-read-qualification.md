@@ -39,6 +39,16 @@
   It reduced drain to 3.857 s and raised end-to-end throughput to 3,893
   records/s without changing recall or read gates. Keep this factor; next fuse
   segment/global-delta construction and avoid serial manifest republishes.
+- The next TDD factor now constructs the delta before publication from the
+  already-held active summaries, so drain publishes segments and base/delta
+  coverage in one manifest version. Terminal local r20 reduced drain to 3.398 s
+  and raised end-to-end throughput to 4,371 records/s. A byte-equivalence test
+  then proved direct encoding from the in-memory records produces the same
+  descriptor checksum, segment order, and vector count as rereading persisted
+  segments. Terminal r21 removed those object-store rereads but moved the warm
+  local result only to 3.353 s and 4,436 records/s. Next remove or overlap the
+  duplicate segment/global exact-vector encoding and writes; do not spend more
+  cycles on routing discovery for this drain bottleneck.
 
 ## Global Constraints
 
