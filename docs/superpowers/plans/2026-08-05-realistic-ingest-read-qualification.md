@@ -467,6 +467,38 @@
   write path. Per the control-plane checkpoint instruction, no subsequent read
   or qualification arm was started in this session.
 
+  The corrected read arm for that index subsequently reached
+  `LOCAL_READ_COMPLETE` and passed fail-closed structural validation. At the
+  persisted 16-probe/128-candidate serving point it measured recall@10 0.952,
+  27.065 ms disk-cached p95, and 70.778/76.065/74.889/71.341/78.375 QPS at
+  1/2/4/8/16 clients. Corresponding p95 latency was
+  30.076/48.373/83.292/155.823/249.069 ms, so the 16-client scalability gate
+  failed. Each query selected 42.44 physical chunks and measured about 12.54
+  MB from the all-cached concurrency profile. Descriptor diagnostics found a
+  73,515-row largest cell, 18.8 times the 3,906-row mean, identifying
+  undertrained coarse routing rather than CPU count as the primary excess-work
+  cause.
+
+  Commit `e8713bf` increases the dimension-byte-bounded coarse-training
+  reservoir from 16 MiB to 64 MiB: 768D training rises from 5,461 to 21,845
+  rows while the source and rotated copies remain bounded by 128 MiB inside
+  the 192 MiB transient partition. Its fresh Cohere 1M build completed ingest
+  plus compaction in 313.957 seconds and passed fail-closed validation. A
+  terminal boundary sweep found the first measured qualified serving point at
+  28 probes/128 candidates: recall@10 0.952 and 19.263 ms disk-cached p95.
+  The terminal concurrency arm at that point measured
+  88.977/98.331/102.411/101.622/101.157 QPS and
+  16.926/44.357/62.147/95.353/192.205 ms p95 at 1/2/4/8/16 clients. It selected
+  38.79 chunks and measured about 9.47 MB per all-cached query. Thus this single
+  local architecture repetition preserves the recall gate, passes the read
+  p95 gate through 16 clients, and improves 16-client throughput by about 29%
+  versus the corrected baseline. One earlier identical 32-probe arm contained
+  a terminal 16-client 952 ms outlier; its repeat was 210 ms, so no publication
+  claim or frozen default is inferred from one repetition. Commit `c803a27`
+  persists the measured 28-probe default. The complete 483-test library gate,
+  strict all-target/all-feature Clippy, formatting, and diff checks passed
+  before both source commits were fast-forwarded to `origin/main`.
+
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.
