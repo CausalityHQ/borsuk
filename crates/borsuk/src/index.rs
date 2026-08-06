@@ -9556,7 +9556,12 @@ impl BorsukIndex {
                     .any(|id| summary.might_contain_record_id(id))
             })
             .collect::<Vec<_>>();
-        for window in matching.chunks(POINT_READ_IO_BATCH) {
+        let window_size = if matching.len() >= POINT_READ_IO_BATCH {
+            POINT_READ_IO_BATCH
+        } else {
+            1
+        };
+        for window in matching.chunks(window_size) {
             if unresolved.is_empty() {
                 break;
             }
