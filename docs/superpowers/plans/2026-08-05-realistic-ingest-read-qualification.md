@@ -264,10 +264,16 @@
   descriptors with one fenced HEAD CAS; a failed upload leaves the inline copy
   authoritative and must be retried before that lane accepts another append.
   Raw group samples now record exact acknowledgement HEAD bytes, and the
-  validator reconciles total and maximum bytes from those samples. A local
-  structural smoke generated and independently validated a complete artifact
-  tree under this schema. AWS remains blocked on the full repository gate and
-  a committed source archive.
+  validator reconciles total and maximum bytes from those samples. Every cell
+  also preserves the complete physical storage trace and fails above the
+  preregistered 16x write-amplification ceiling. Pre-drain refresh-plus-search
+  probes expose mutable-HEAD read cost under the same 200 ms p95 bound, factor
+  rotations cover every lane position, and spill-failure gates are part of the
+  terminal correctness artifact. Multi-lane API failures now return structured
+  committed and failed lane sets. The local structural smoke, full Rust suite,
+  448 Python tests, strict Clippy, formatting, and policy checks passed at the
+  committed v31 source revision. Fresh prefixes and isolated-host preflight are
+  the remaining launch prerequisites.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
