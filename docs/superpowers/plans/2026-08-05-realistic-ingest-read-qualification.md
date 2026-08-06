@@ -349,9 +349,16 @@
   manifest and cannot turn a successful flush into a reported failure. Both
   flat and paged compaction now rebuild the delta from the replacement segment
   set and publish coverage atomically; a persisted regression verifies that no
-  compacted checksum remains referenced. Hard delta rollover/retraining,
-  shared byte/deadline charging, and realistic latency and recall qualification
-  remain open.
+  compacted checksum remains referenced. The hard rollover is geometric: once
+  the materialized delta plus uncovered fringe reaches half the stable base's
+  vector count, the background refresh writes one content-addressed ANN over
+  the active segment set, atomically promotes it to the base, and resets the
+  delta. Below that boundary refresh remains append-only. This caps the two ANN
+  layers at 1.5x the stable vector count and makes every full retraining grow
+  the base by at least 50%, avoiding fixed-size quadratic rebuilds without
+  moving work onto the durable foreground acknowledgement path. Shared
+  byte/deadline charging and realistic latency and recall qualification remain
+  open.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 

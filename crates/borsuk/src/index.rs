@@ -12791,6 +12791,9 @@ impl BorsukIndex {
         if fringe.is_empty() && !stale_delta {
             return Ok(false);
         }
+        let fringe_vectors = fringe.iter().fold(0_usize, |total, summary| {
+            total.saturating_add(summary.object_count)
+        });
         if base_reference.delta.is_none() {
             const DELTA_BOOTSTRAP_MAX_VECTORS: usize = 1_024;
             let bootstrap_vectors = self
@@ -12798,36 +12801,58 @@ impl BorsukIndex {
                 .config
                 .segment_max_vectors
                 .clamp(1, DELTA_BOOTSTRAP_MAX_VECTORS);
-            let fringe_vectors = fringe.iter().fold(0_usize, |total, summary| {
-                total.saturating_add(summary.object_count)
-            });
             if fringe_vectors < bootstrap_vectors {
                 return Ok(false);
             }
         }
 
-        let desired = if stale_delta {
-            self.persist_resident_global_pq(&fringe)?
+        // Keep the two-layer read amplification and resident footprint hard
+        // bounded. Promotion grows the stable base by at least 50%, so a
+        // streaming workload cannot repeatedly rebuild at a fixed delta size.
+        // This method runs after the durable WAL acknowledgement boundary.
+        let pending_delta_vectors = base_reference
+            .delta
+            .as_ref()
+            .map_or(0, |delta| delta.vectors)
+            .saturating_add(fringe_vectors);
+        let promotion_vectors = base_reference.vectors.saturating_add(1) / 2;
+        let promote = !stale_delta && pending_delta_vectors >= promotion_vectors;
+        let desired = if promote {
+            self.persist_resident_global_pq(&active)?.ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "resident global base promotion contains no visible vectors".to_string(),
+                )
+            })?
+        } else if stale_delta {
+            self.persist_resident_global_pq(&fringe)?.ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "resident global delta rebuild contains no visible vectors".to_string(),
+                )
+            })?
         } else if let Some(previous_delta) = base_reference.delta.as_deref() {
-            Some(self.append_resident_global_delta(previous_delta, &fringe)?)
+            self.append_resident_global_delta(previous_delta, &fringe)?
         } else {
-            Some(self.persist_resident_global_pq(&fringe)?.ok_or_else(|| {
+            self.persist_resident_global_pq(&fringe)?.ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "resident global delta bootstrap contains no visible vectors".to_string(),
                 )
-            })?)
+            })?
         };
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
-        manifest
-            .global_pq_ref
-            .as_mut()
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "resident global base disappeared during refresh".into(),
-                )
-            })?
-            .delta = desired.map(Box::new);
+        if promote {
+            manifest.global_pq_ref = Some(desired);
+        } else {
+            manifest
+                .global_pq_ref
+                .as_mut()
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "resident global base disappeared during refresh".into(),
+                    )
+                })?
+                .delta = Some(Box::new(desired));
+        }
         manifest.global_pq_ref.as_ref().unwrap().validate_layout()?;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
@@ -23822,6 +23847,88 @@ mod tests {
                 .any(|checksum| !refreshed.segments.contains(checksum)),
             "the test must replace at least one covered segment"
         );
+    }
+
+    #[test]
+    fn resident_global_delta_promotes_at_half_the_stable_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let stable_base_checksum = index
+            .manifest
+            .global_pq_ref
+            .as_ref()
+            .unwrap()
+            .checksum
+            .clone();
+
+        for batch in 0..3 {
+            index
+                .add(
+                    (0..16)
+                        .map(|row| {
+                            VectorRecord::new(
+                                format!("delta-{batch}-{row}"),
+                                vec![1_000.0 + (batch * 16 + row) as f32; 8],
+                            )
+                        })
+                        .collect(),
+                )
+                .unwrap();
+            index.flush().unwrap();
+        }
+        let before_promotion = index.manifest.global_pq_ref.as_ref().unwrap();
+        assert_eq!(before_promotion.checksum, stable_base_checksum);
+        assert_eq!(before_promotion.delta.as_ref().unwrap().vectors, 48);
+
+        index
+            .add(
+                (0..16)
+                    .map(|row| {
+                        VectorRecord::new(format!("delta-3-{row}"), vec![1_048.0 + row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.flush().unwrap();
+
+        let promoted = index.manifest.global_pq_ref.as_ref().unwrap();
+        assert_ne!(promoted.checksum, stable_base_checksum);
+        assert_eq!(promoted.vectors, 192);
+        assert!(
+            promoted.delta.is_none(),
+            "promotion must reset the bounded delta: {promoted:?}"
+        );
+        assert_eq!(promoted.segments.len(), 12);
+
+        let report = BorsukIndex::open(&index.manifest.config.uri)
+            .unwrap()
+            .search_with_report(
+                &[1_063.0; 8],
+                SearchOptions::approx(3, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("delta-3-15"));
+        assert!(report.global_scan_chunks_searched > 0);
     }
 
     #[test]
