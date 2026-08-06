@@ -109,6 +109,8 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("benchmark_with_resources.py", RUNNER)
         self.assertIn("resource_sample_interval_ms", RUNNER)
         self.assertIn("process_exit.txt", RUNNER)
+        self.assertIn("CELL_VALIDATION_FAILED", RUNNER)
+        self.assertIn("validation-error.txt", RUNNER)
 
     def test_runner_refuses_identity_and_s3_prefix_reuse(self) -> None:
         self.assertIn("source SHA-256 differs from checked-out HEAD archive", RUNNER)
