@@ -356,9 +356,12 @@
   delta. Below that boundary refresh remains append-only. This caps the two ANN
   layers at 1.5x the stable vector count and makes every full retraining grow
   the base by at least 50%, avoiding fixed-size quadratic rebuilds without
-  moving work onto the durable foreground acknowledgement path. Shared
-  byte/deadline charging and realistic latency and recall qualification remain
-  open.
+  moving work onto the durable foreground acknowledgement path. Base and delta
+  ANN execution now subtract predecessor bytes and elapsed time before entering
+  the recursive layer, stops instead of constructing an invalid zero budget,
+  and preserves the layer that exhausted the request in the merged termination
+  report. WAL overlay byte/deadline charging and realistic latency and recall
+  qualification remain open.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
