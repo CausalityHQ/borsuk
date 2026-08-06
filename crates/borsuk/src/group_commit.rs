@@ -3,7 +3,6 @@
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering as AtomicOrdering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
     time::{Duration, Instant},
@@ -13,6 +12,39 @@ use crate::{BorsukError, BorsukIndex, RequestCounts, Result, VectorRecord};
 
 const LANE_LEASE_TTL_MS: u64 = 60 * 60 * 1_000;
 const BACKGROUND_MATERIALIZATION_BLOCK_INTERVAL: u64 = 64;
+
+#[derive(Default)]
+struct MaintenanceState {
+    running: bool,
+    requested: bool,
+}
+
+impl MaintenanceState {
+    fn request_pass(&mut self) -> bool {
+        self.requested = true;
+        if self.running {
+            return false;
+        }
+        self.running = true;
+        self.requested = false;
+        true
+    }
+
+    fn finish_pass(&mut self) -> bool {
+        if self.requested {
+            self.requested = false;
+            true
+        } else {
+            self.running = false;
+            false
+        }
+    }
+
+    fn stop(&mut self) {
+        self.running = false;
+        self.requested = false;
+    }
+}
 
 /// Bounds for process-local WAL group commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,7 +246,7 @@ pub struct GroupCommitWriter {
     requests: Arc<[Sender<WorkerRequest>]>,
     lane_count: u16,
     drain_lock: Arc<Mutex<()>>,
-    maintenance_running: Arc<AtomicBool>,
+    maintenance_state: Arc<Mutex<MaintenanceState>>,
     maintenance_error: Arc<Mutex<Option<String>>>,
 }
 
@@ -224,7 +256,7 @@ impl Clone for GroupCommitWriter {
             requests: Arc::clone(&self.requests),
             lane_count: self.lane_count,
             drain_lock: Arc::clone(&self.drain_lock),
-            maintenance_running: Arc::clone(&self.maintenance_running),
+            maintenance_state: Arc::clone(&self.maintenance_state),
             maintenance_error: Arc::clone(&self.maintenance_error),
         }
     }
@@ -279,7 +311,7 @@ impl GroupCommitWriter {
             requests: requests.into(),
             lane_count,
             drain_lock: Arc::new(Mutex::new(())),
-            maintenance_running: Arc::new(AtomicBool::new(false)),
+            maintenance_state: Arc::new(Mutex::new(MaintenanceState::default())),
             maintenance_error: Arc::new(Mutex::new(None)),
         })
     }
@@ -352,29 +384,53 @@ impl GroupCommitWriter {
         if !receipts.iter().any(|receipt| {
             receipt.commit_sequence > 0
                 && receipt.commit_sequence % BACKGROUND_MATERIALIZATION_BLOCK_INTERVAL == 0
-        }) || self.maintenance_running.swap(true, AtomicOrdering::AcqRel)
-        {
+        }) {
+            return;
+        }
+        let should_spawn = match self.maintenance_state.lock() {
+            Ok(mut state) => state.request_pass(),
+            Err(_) => {
+                if let Ok(mut slot) = self.maintenance_error.lock() {
+                    *slot = Some("group commit maintenance state lock is poisoned".to_string());
+                }
+                return;
+            }
+        };
+        if !should_spawn {
             return;
         }
         let writer = self.clone();
-        let running = Arc::clone(&self.maintenance_running);
+        let state = Arc::clone(&self.maintenance_state);
         let error_slot = Arc::clone(&self.maintenance_error);
         let spawn = std::thread::Builder::new()
             .name("borsuk-lane-materializer".to_string())
             .spawn(move || {
-                if let Err(error) = writer.drain()
-                    && let Ok(mut slot) = error_slot.lock()
-                {
-                    *slot = Some(error.to_string());
+                loop {
+                    if let Err(error) = writer.drain() {
+                        if let Ok(mut slot) = error_slot.lock() {
+                            *slot = Some(error.to_string());
+                        }
+                        if let Ok(mut state) = state.lock() {
+                            state.stop();
+                        }
+                        break;
+                    }
+                    let run_again = match state.lock() {
+                        Ok(mut state) => state.finish_pass(),
+                        Err(_) => false,
+                    };
+                    if !run_again {
+                        break;
+                    }
                 }
-                running.store(false, AtomicOrdering::Release);
             });
         if let Err(error) = spawn {
             if let Ok(mut slot) = self.maintenance_error.lock() {
                 *slot = Some(format!("failed to start lane materializer: {error}"));
             }
-            self.maintenance_running
-                .store(false, AtomicOrdering::Release);
+            if let Ok(mut state) = self.maintenance_state.lock() {
+                state.stop();
+            }
         }
     }
 
@@ -450,6 +506,30 @@ fn lane_for_id(id: &[u8], lane_count: usize) -> usize {
     let mut prefix = [0_u8; 8];
     prefix.copy_from_slice(&digest.as_bytes()[..8]);
     (u64::from_le_bytes(prefix) % lane_count as u64) as usize
+}
+
+#[cfg(test)]
+mod maintenance_state_tests {
+    use super::MaintenanceState;
+
+    #[test]
+    fn demand_arriving_during_a_pass_is_claimed_before_the_worker_exits() {
+        let mut state = MaintenanceState::default();
+
+        assert!(state.request_pass());
+        assert!(!state.request_pass());
+        assert!(state.finish_pass());
+        assert!(!state.finish_pass());
+    }
+
+    #[test]
+    fn demand_after_worker_exit_starts_a_new_worker() {
+        let mut state = MaintenanceState::default();
+
+        assert!(state.request_pass());
+        assert!(!state.finish_pass());
+        assert!(state.request_pass());
+    }
 }
 
 fn current_time_ms() -> Result<u64> {
