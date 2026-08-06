@@ -239,8 +239,14 @@ pub(crate) struct QuantizerRef {
 }
 
 /// Content-addressed resident global product-code artifact for one manifest.
+pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GlobalPqRef {
+    /// Version of this embedded reference graph. This is intentionally required:
+    /// unreleased single-layer references must be rebuilt rather than silently
+    /// interpreted as the bounded-delta layout.
+    pub(crate) layout_version: u8,
     pub(crate) path: String,
     pub(crate) checksum: String,
     pub(crate) vectors: usize,
@@ -261,6 +267,10 @@ pub(crate) struct GlobalPqRef {
     /// Active segment checksums in the exact ordinal order encoded by row
     /// locations in the artifact.
     pub(crate) segments: Vec<String>,
+    /// A geometrically rebuilt ANN artifact over post-base segments. Nested
+    /// deltas are invalid; the remaining uncovered segments form the exact
+    /// fringe.
+    pub(crate) delta: Option<Box<GlobalPqRef>>,
 }
 
 /// Reference to one global hierarchical lexical root Parquet table.
@@ -349,6 +359,29 @@ impl LexicalRootRef {
 }
 
 impl GlobalPqRef {
+    pub(crate) fn validate_layout(&self) -> Result<()> {
+        if self.layout_version != GLOBAL_PQ_REF_LAYOUT_VERSION {
+            return Err(BorsukError::InvalidStorage(format!(
+                "unsupported global PQ reference layout version {}; rebuild the unreleased index",
+                self.layout_version
+            )));
+        }
+        if self
+            .delta
+            .as_ref()
+            .is_some_and(|delta| delta.delta.is_some())
+        {
+            return Err(BorsukError::InvalidStorage(
+                "global PQ reference contains a nested delta; rebuild the unreleased index"
+                    .to_string(),
+            ));
+        }
+        if let Some(delta) = &self.delta {
+            delta.validate_layout()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn resident_bytes_estimate(&self) -> usize {
         [
             size_of::<Self>(),
@@ -361,6 +394,11 @@ impl GlobalPqRef {
         ]
         .into_iter()
         .fold(0_usize, usize::saturating_add)
+        .saturating_add(
+            self.delta
+                .as_ref()
+                .map_or(0, |delta| delta.resident_bytes_estimate()),
+        )
     }
 }
 

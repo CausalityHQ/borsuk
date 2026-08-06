@@ -298,9 +298,13 @@ fn manifest_global_pq_ref(batch: &RecordBatch) -> Result<Option<crate::manifest:
         return Ok(None);
     }
     let json = string_value(batch, column, 0, "global_pq_ref_json")?;
-    serde_json::from_str(json)
-        .map(Some)
-        .map_err(|err| BorsukError::InvalidStorage(format!("failed to parse global PQ ref: {err}")))
+    let reference: crate::manifest::GlobalPqRef = serde_json::from_str(json).map_err(|err| {
+        BorsukError::InvalidStorage(format!(
+            "failed to parse global PQ ref; rebuild the unreleased index: {err}"
+        ))
+    })?;
+    reference.validate_layout()?;
+    Ok(Some(reference))
 }
 
 fn manifest_lexical_roots(batch: &RecordBatch) -> Result<Vec<crate::manifest::LexicalRootRef>> {
@@ -7002,6 +7006,7 @@ mod tests {
     fn manifest_round_trips_resident_global_pq_reference() {
         let mut expected = valid_manifest();
         expected.global_pq_ref = Some(crate::manifest::GlobalPqRef {
+            layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
             path: "global-pq/ab/artifact.parquet".to_string(),
             checksum: "ab".repeat(32),
             vectors: 1_183_514,
@@ -7012,12 +7017,58 @@ mod tests {
             sidecar_index_bytes: 12_000_000,
             storage_bytes: 96_000_000,
             segments: vec!["cd".repeat(32), "ef".repeat(32)],
+            delta: Some(Box::new(crate::manifest::GlobalPqRef {
+                layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
+                path: "global-pq/12/delta.parquet".to_string(),
+                checksum: "12".repeat(32),
+                vectors: 32_000,
+                subspaces: 32,
+                candidates: 48,
+                probes: 8,
+                resident_bytes: 1_500_000,
+                sidecar_index_bytes: 0,
+                storage_bytes: 3_000_000,
+                segments: vec!["34".repeat(32)],
+                delta: None,
+            })),
         });
 
         let manifest_bytes = manifest_to_parquet(&expected).unwrap();
         let decoded = manifest_metadata_from_parquet(&manifest_bytes).unwrap();
 
         assert_eq!(decoded.global_pq_ref, expected.global_pq_ref);
+    }
+
+    #[test]
+    fn manifest_rejects_unversioned_global_pq_reference() {
+        let mut expected = valid_manifest();
+        expected.global_pq_ref = Some(crate::manifest::GlobalPqRef {
+            layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
+            path: "global-pq/ab/artifact.parquet".to_string(),
+            checksum: "ab".repeat(32),
+            vectors: 1,
+            subspaces: 1,
+            candidates: 1,
+            probes: 1,
+            resident_bytes: 1,
+            sidecar_index_bytes: 0,
+            storage_bytes: 1,
+            segments: vec!["cd".repeat(32)],
+            delta: None,
+        });
+        let json = serde_json::to_string(expected.global_pq_ref.as_ref().unwrap()).unwrap();
+        let unversioned = json.replacen(
+            &format!(
+                "\"layout_version\":{},",
+                crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION
+            ),
+            "",
+            1,
+        );
+        let error = serde_json::from_str::<crate::manifest::GlobalPqRef>(&unversioned)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("layout_version"), "{error}");
     }
 
     #[test]
