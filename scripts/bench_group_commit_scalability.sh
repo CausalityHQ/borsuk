@@ -178,6 +178,14 @@ run_exact_test() {
   grep -Fq 'test result: ok. 1 passed; 0 failed;' <<<"$output"
 }
 
+run_exact_lib_test() {
+  local test_name="$1"
+  local output
+  output="$(cargo test --locked -p borsuk --lib "$test_name" -- --exact 2>&1)"
+  printf '%s\n' "$output"
+  grep -Fq 'test result: ok. 1 passed; 0 failed;' <<<"$output"
+}
+
 failed() {
   status=$?
   if (( status != 0 )); then
@@ -333,18 +341,18 @@ for name in ("summary.csv", "samples.csv", "reads.csv", "active-tail-reads.csv")
 PY
 
 if [[ "$SMOKE" == "1" ]]; then
-  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\npreregistered_lane_factor_safety,pass\ntransient_spill_failure_recovery,pass\npersistent_spill_failure_backpressure,pass\n' > "$OUTPUT/correctness.csv"
+  printf 'gate,status\ngrouped_durable_ack,pass\nextent_idempotency,pass\npost_completion_lease_fencing,pass\nstale_watermark_reopen,pass\nepoch_zombie_exclusion,pass\nowner_only_head_mutation,pass\nsequential_last_write_wins,pass\ntail_backpressure,pass\ndelta_drain_frontier_safety,pass\n' > "$OUTPUT/correctness.csv"
 else
   run_exact_test group_commit concurrent_appends_share_one_durable_wal_transaction
-  run_exact_test fault_injection collection_transaction_is_invisible_when_pending_publication_fails
-  run_exact_test fault_injection rejected_lane_head_publication_is_not_visible
-  run_exact_test group_commit lane_log_ack_is_one_put_and_visible_after_reopen
+  run_exact_lib_test lane_log::tests::v28_extent_put_is_the_acknowledgement_boundary
+  run_exact_lib_test lane_log::tests::v28_extent_completing_after_lease_guard_is_not_acknowledged
+  run_exact_lib_test lane_log::tests::v28_linearizable_reader_recovers_extents_beyond_a_stale_watermark
+  run_exact_lib_test lane_log::tests::v28_sealed_epoch_excludes_a_late_zombie_extent
+  run_exact_test group_commit small_groups_publish_only_immutable_extents_before_release
   run_exact_test group_commit alternating_writer_lanes_preserve_sequential_last_write_wins
+  run_exact_test group_commit background_materialization_keeps_sustained_ingest_below_the_hard_tail_bound
   run_exact_test group_commit drain_checkpoints_every_preceding_group_and_removes_pending_objects
-  run_exact_test group_commit preregistered_worker_lane_factors_preserve_ack_reopen_last_write_and_drain
-  run_exact_test fault_injection failed_post_ack_spill_keeps_inline_records_visible_and_retries_before_next_append
-  run_exact_test fault_injection persistent_spill_failure_keeps_the_lane_backpressured
-  printf 'gate,status\ngrouped_durable_ack,pass\npending_publication_failure,pass\nlane_head_rejection,pass\nacknowledged_lane_reopen_recovery,pass\nsequential_last_write_wins,pass\ndrain_checkpoint,pass\npreregistered_lane_factor_safety,pass\ntransient_spill_failure_recovery,pass\npersistent_spill_failure_backpressure,pass\n' > "$OUTPUT/correctness.csv"
+  printf 'gate,status\ngrouped_durable_ack,pass\nextent_idempotency,pass\npost_completion_lease_fencing,pass\nstale_watermark_reopen,pass\nepoch_zombie_exclusion,pass\nowner_only_head_mutation,pass\nsequential_last_write_wins,pass\ntail_backpressure,pass\ndelta_drain_frontier_safety,pass\n' > "$OUTPUT/correctness.csv"
 fi
 
 printf 'complete\n' > "$OUTPUT/GROUP_COMMIT_SCALABILITY_COMPLETE"

@@ -32,14 +32,14 @@
   "execution_order_policy": "cyclic-latin-order-per-repetition",
   "correctness_gates": [
     "grouped_durable_ack",
-    "pending_publication_failure",
-    "lane_head_rejection",
-    "acknowledged_lane_reopen_recovery",
+    "extent_idempotency",
+    "post_completion_lease_fencing",
+    "stale_watermark_reopen",
+    "epoch_zombie_exclusion",
+    "owner_only_head_mutation",
     "sequential_last_write_wins",
-    "drain_checkpoint",
-    "preregistered_lane_factor_safety",
-    "transient_spill_failure_recovery",
-    "persistent_spill_failure_backpressure"
+    "tail_backpressure",
+    "delta_drain_frontier_safety"
   ],
   "comparison_contract": "Every cell uses the same treatment-independent record IDs and the same decoded prefix of vectors from the checksum-pinned official Cohere Medium 1M train Parquet before starting any durable-ticket timer. Writer-lane count, writer count, and logical-cell count are independent matrix factors and each factor uses its own complete cyclic rotation across repetitions. Each acknowledgement is the public lane-log durability boundary and its authoritative HEAD must remain below 2 MiB. The complete physical storage trace, including post-acknowledgement spill and drain I/O, is preserved separately from acknowledgement request accounting. The 1,000 operations per writer cross repeated background-materialization boundaries; both acknowledgement throughput and end-to-end throughput through the final drain must reach 10,000 vectors/s in preregistered 32-writer cells. Write p95 applies to every cell. Before drain, 20 refresh-plus-search probes must preserve inserted-ID recall@10 and remain below the same 200 ms read-p95 gate, explicitly measuring mutable-HEAD refresh cost; post-drain reads repeat the gate. These synthetic-base inserted-ID checks are visibility/read-path invariants, not corpus ANN recall or the production read-latency qualification. Five paired repetitions qualify architecture only; publication requires a separately frozen campaign from the selected revision."
 }

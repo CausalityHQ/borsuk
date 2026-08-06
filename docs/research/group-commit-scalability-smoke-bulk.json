@@ -32,14 +32,14 @@
   "terminal_failure_marker": "GROUP_COMMIT_SCALABILITY_FAILED",
   "correctness_gates": [
     "grouped_durable_ack",
-    "pending_publication_failure",
-    "lane_head_rejection",
-    "acknowledged_lane_reopen_recovery",
+    "extent_idempotency",
+    "post_completion_lease_fencing",
+    "stale_watermark_reopen",
+    "epoch_zombie_exclusion",
+    "owner_only_head_mutation",
     "sequential_last_write_wins",
-    "drain_checkpoint",
-    "preregistered_lane_factor_safety",
-    "transient_spill_failure_recovery",
-    "persistent_spill_failure_backpressure"
+    "tail_backpressure",
+    "delta_drain_frontier_safety"
   ],
   "comparison_contract": "Structural bulk smoke only; ineligible for performance claims."
 }
