@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Replace format v26 outright with format v27; do not retain a v26 reader or migration path.
+- Replace format v26 outright with format v28; do not retain a v26 reader or migration path.
 - Acknowledge only a checksum-verified immutable extent created inside the owning lease.
 - Keep lane HEAD payload-free and bounded independently of extent count.
 - Preserve partial-lane receipts, last-write-wins order, reopen visibility, and fail-closed recovery.
@@ -22,7 +22,7 @@
 
 ---
 
-### Task 1: Encode bounded format-v27 HEADs and immutable extents
+### Task 1: Encode bounded format-v28 HEADs and immutable extents
 
 **Files:**
 - Modify: `crates/borsuk/src/lane_log.rs`
@@ -30,27 +30,27 @@
 - Test: `crates/borsuk/src/lane_log.rs`
 
 **Interfaces:**
-- Produces: `LaneEpochHead`, `LaneExtent`, `extent_path(lane, epoch, sequence, checksum)`, `extent_bytes`, and `extent_from_bytes`.
+- Produces: `LaneEpochHead`, `LaneExtent`, `extent_path(lane, epoch, sequence)`, `extent_bytes`, and `extent_from_bytes`.
 - Removes: inline bytes and per-block descriptors from persisted lane HEADs.
 
 - [ ] **Step 1: Write RED codec tests**
 
-  Add tests named `v27_head_size_is_constant_across_extent_counts`,
-  `v27_extent_round_trips_identity_and_records`, and
-  `v27_extent_rejects_path_or_checksum_identity_mismatch`. Construct heads with
+  Add tests named `v28_head_size_is_constant_across_extent_counts`,
+  `v28_extent_round_trips_identity_and_records`, and
+  `v28_extent_rejects_path_or_checksum_identity_mismatch`. Construct heads with
   durable sequences 1 and 1,000,000 and require equal encoded length. Require
   corrupted lane, epoch, sequence, checksum, truncation, and trailing bytes to
   fail.
 
 - [ ] **Step 2: Verify RED**
 
-  Run: `rtk cargo test -p borsuk --lib lane_log::tests::v27_`
+  Run: `rtk cargo test -p borsuk --lib lane_log::tests::v28_`
 
-  Expected: compilation fails because the v27 types and codec do not exist.
+  Expected: compilation fails because the v28 types and codec do not exist.
 
 - [ ] **Step 3: Implement the minimal codec**
 
-  Set the lane-log format marker to 27. Define a fixed HEAD containing lane,
+  Set the lane-log format marker to 28. Define a fixed HEAD containing lane,
   epoch owner/expiry, durable sequence, materialized sequence, generation base,
   and a bounded prior-epoch seal. Define a self-describing extent containing
   lane, epoch, sequence, first generation, records, payload bytes, and checksum.
@@ -58,13 +58,13 @@
 
 - [ ] **Step 4: Verify GREEN**
 
-  Run: `rtk cargo test -p borsuk --lib lane_log::tests::v27_`
+  Run: `rtk cargo test -p borsuk --lib lane_log::tests::v28_`
 
   Run: `rtk cargo fmt --all -- --check`
 
 - [ ] **Step 5: Commit and fast-forward push**
 
-  Commit: `storage: define epoch-sealed lane log v27`
+  Commit: `storage: define epoch-sealed lane log v28`
 
 ### Task 2: Make immutable extent creation the durability boundary
 

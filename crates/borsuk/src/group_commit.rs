@@ -671,6 +671,9 @@ fn run_worker(
                     );
                     let _ = request.response.send(response);
                 }
+                if committed.is_ok() {
+                    let _ = writer.publish_durable_watermark_if_due();
+                }
             });
     }
 }

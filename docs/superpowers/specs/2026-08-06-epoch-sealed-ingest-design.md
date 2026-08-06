@@ -39,13 +39,13 @@ The design deliberately rejects two incremental alternatives:
 - Immutable extents followed by a synchronous HEAD CAS are simple but require
   two dependent object-store round trips and retain a one-RTT-per-lane ceiling.
 
-## Persistent format v27
+## Persistent format v28
 
 For lane `L`, lease epoch `E`, and sequence `S`:
 
 ```text
 lane-log/lanes/L/HEAD
-lane-log/lanes/L/epochs/E/extents/S-<checksum>.wal
+lane-log/lanes/L/epochs/E/extents/S.wal
 ```
 
 `HEAD` is a fenced, checksummed control record containing only:
@@ -56,9 +56,10 @@ lane-log/lanes/L/epochs/E/extents/S-<checksum>.wal
 - bounded sealed-epoch summaries needed for recovery.
 
 An extent is immutable, self-describing, and contains its lane, epoch, sequence,
-generation range, record count, payload checksum, and records. Extent creation
-uses create-only semantics. Retrying the same key succeeds only when the stored
-checksum matches; a mismatch is a fencing violation.
+generation range, record count, payload checksum, and records. Its fixed
+sequence-addressed key permits bounded direct reads without prefix enumeration.
+Extent creation uses create-only semantics. Retrying the same key succeeds only
+when the stored checksum matches; a mismatch is a fencing violation.
 
 The initial implementation retains the existing WAL table codec so the protocol
 can be qualified independently. If framing overhead prevents the physical-write
@@ -94,7 +95,8 @@ implicit full-HEAD decoding:
 - `Committed`: read through the published durable watermark. This is the
   bounded-staleness search default.
 - `Linearizable`: additionally probe a bounded sequence window beyond the
-  watermark to provide refresh-plus-read visibility for acknowledged writes.
+  watermark by fixed object key, without listing the epoch prefix, to provide
+  refresh-plus-read visibility for acknowledged writes.
 
 Point reads compute the ownership lane from the ID and read only that lane.
 Multi-lane search reads lane metadata in bounded parallelism. Materialization
