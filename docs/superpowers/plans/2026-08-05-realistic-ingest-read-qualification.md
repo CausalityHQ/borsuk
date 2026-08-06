@@ -8,6 +8,28 @@
 
 **Tech Stack:** Rust, `BorsukIndex`, `GroupCommitWriter`, Arrow/Parquet, Python fail-closed validators, AWS S3 and EC2 via profile `causality`, systemd, official VectorDBBench datasets.
 
+## Current checkpoint (2026-08-06)
+
+- The immutable base plus materialized-delta query path is the selected serving
+  architecture. Revision `771e29b` added a versioned coverage certificate and
+  removed one full routing-tree validation walk.
+- Terminal local r16 preserved recall@10 1.0 and measured 165.893 ms post-drain
+  read p95, but active-tail read p95 remained 202.953 ms and drain-inclusive
+  ingest remained 2,714 records/s. The production gates therefore remain open;
+  BORSUK is not yet qualified at 100M vectors.
+- The active implementation slice makes current-manifest coverage authoritative
+  in both the outer global dispatcher and recursive materialized-delta search,
+  while retaining checksum-walk validation for stale coverage. Its focused RED
+  reproduction was 11 GETs plus 5 HEADs; GREEN is 7 GETs plus 1 HEAD with delta
+  correctness, shared budgets, and WAL-only telemetry preserved.
+- After this checkpoint is committed and fast-forward pushed, do not infer 100M
+  readiness from the 1M local run. Resume with a fresh terminal local causal run
+  from the exact committed revision. If active read p95 is still at or above
+  200 ms, prioritize bounded searchable quantized WAL extents; if
+  drain-inclusive throughput remains below 10,000 records/s, remove synchronous
+  drain/global-delta construction from the acknowledgement workload before AWS
+  scale qualification.
+
 ## Global Constraints
 
 - Do not create pull requests; commit verified slices and fast-forward push directly to `origin/main` without force.

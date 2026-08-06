@@ -12256,11 +12256,22 @@ impl BorsukIndex {
             .as_ref()
             .map(|reference| reference.segments.iter().collect::<HashSet<_>>())
             .unwrap_or_default();
-        let mut delta_segments = self
-            .active_segment_summaries()?
-            .into_iter()
-            .filter(|summary| delta_covered.contains(&summary.checksum))
-            .collect::<Vec<_>>();
+        let coverage_is_current = self
+            .manifest
+            .global_pq_ref
+            .as_ref()
+            .is_some_and(|reference| {
+                reference.covered_manifest_version == self.manifest.version
+                    && reference.delta.is_some()
+            });
+        let mut delta_segments = if coverage_is_current && delta_summaries.is_empty() {
+            Vec::new()
+        } else {
+            self.active_segment_summaries()?
+                .into_iter()
+                .filter(|summary| delta_covered.contains(&summary.checksum))
+                .collect::<Vec<_>>()
+        };
         delta_segments.extend_from_slice(delta_summaries);
         delta.manifest.global_pq_ref = delta_reference.clone();
         delta.manifest.quantizer_ref = None;
@@ -14306,26 +14317,48 @@ impl BorsukIndex {
             && options.filter.is_none()
             && !options.include_metadata
             && self.manifest.global_pq_ref.is_some();
-        let global_active_segments = if global_eligible {
-            Some(self.active_segment_summaries()?)
-        } else {
-            None
-        };
-        let global_available = global_active_segments.as_ref().is_some_and(|active| {
-            let active_checksums = active
-                .iter()
-                .map(|summary| summary.checksum.as_str())
-                .collect::<HashSet<_>>();
-            self.manifest
+        let global_coverage_is_current = global_eligible
+            && self
+                .manifest
                 .global_pq_ref
                 .as_ref()
                 .is_some_and(|reference| {
-                    reference
-                        .segments
-                        .iter()
-                        .all(|checksum| active_checksums.contains(checksum.as_str()))
-                })
-        });
+                    reference.covered_manifest_version == self.manifest.version
+                });
+        let global_active_segments = if global_eligible && !global_coverage_is_current {
+            Some(self.active_segment_summaries()?)
+        } else if global_eligible {
+            Some(Vec::new())
+        } else {
+            None
+        };
+        let global_available = global_coverage_is_current
+            || global_active_segments.as_ref().is_some_and(|active| {
+                let active_checksums = active
+                    .iter()
+                    .map(|summary| summary.checksum.as_str())
+                    .collect::<HashSet<_>>();
+                self.manifest
+                    .global_pq_ref
+                    .as_ref()
+                    .is_some_and(|reference| {
+                        reference
+                            .segments
+                            .iter()
+                            .all(|checksum| active_checksums.contains(checksum.as_str()))
+                    })
+            });
+        let global_active_segment_count = if global_coverage_is_current {
+            self.manifest.global_pq_ref.as_ref().map(|reference| {
+                reference.segments.len()
+                    + reference
+                        .delta
+                        .as_ref()
+                        .map_or(0, |delta| delta.segments.len())
+            })
+        } else {
+            global_active_segments.as_ref().map(Vec::len)
+        };
         let mut wal_execution = if zero_distance_wal_eligible || global_available {
             self.search_live_wal_execution(
                 query,
@@ -14349,9 +14382,10 @@ impl BorsukIndex {
                 &mut execution,
                 SearchTerminationReason::ExactPruned,
                 RecallGuarantee::Exact,
-                global_active_segments
-                    .as_ref()
-                    .map_or(self.active_segment_summaries()?.len(), Vec::len),
+                match global_active_segment_count {
+                    Some(count) => count,
+                    None => self.active_segment_summaries()?.len(),
+                },
                 started,
                 &requests_before,
             );
@@ -14370,9 +14404,10 @@ impl BorsukIndex {
                 &mut execution,
                 reason,
                 RecallGuarantee::Degraded,
-                global_active_segments
-                    .as_ref()
-                    .map_or(self.active_segment_summaries()?.len(), Vec::len),
+                match global_active_segment_count {
+                    Some(count) => count,
+                    None => self.active_segment_summaries()?.len(),
+                },
                 started,
                 &requests_before,
             );
@@ -24357,7 +24392,9 @@ mod tests {
             .unwrap();
         let previous = index.manifest.clone();
         let mut manifest = index.manifest.next_version();
-        manifest.global_pq_ref.as_mut().unwrap().delta = Some(Box::new(delta_reference));
+        let global = manifest.global_pq_ref.as_mut().unwrap();
+        global.delta = Some(Box::new(delta_reference));
+        global.covered_manifest_version = manifest.version;
         index.manifest = index
             .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))
             .unwrap();
@@ -24371,7 +24408,15 @@ mod tests {
             )
             .unwrap();
 
-        assert!(report.hits[0].id.as_bytes().starts_with(b"delta-1-"));
+        assert!(
+            report.hits[0].id.as_bytes().starts_with(b"delta-1-"),
+            "delta artifact must win exact rerank: {report:?}"
+        );
+        assert!(
+            report.requests.gets <= 7 && report.requests.heads <= 1,
+            "current base+delta coverage must not reread routing pages: {:?}",
+            report.requests
+        );
         assert!(
             report.segments_searched <= 4,
             "base and delta ANN layers must share one segment budget: {report:?}"

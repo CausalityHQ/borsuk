@@ -23,3 +23,23 @@ claim-ineligible until a committed source revision is archived, fresh prefixes
 are recorded above, the root completion marker exists without a failure marker,
 and the repository validator reconciles every frozen cell. Publication requires
 a separate five-repetition campaign from the selected frozen revision.
+
+## Local causal read-path checkpoints
+
+These terminal local runs are architecture diagnostics, not AWS or publication
+claims. They use the pinned Cohere Medium 1M source descriptor but a 16,000-row
+mutation workload over a freshly cloned 1M-row/768D base, 32 writers, four
+in-flight operations per writer, 16 records per operation, eight lanes, 2,000
+logical cells, and 20 read queries per phase.
+
+- Revision `771e29b`, format v26/global descriptor layout v2, terminal r16:
+  recall@10 was 1.0; scalar durable-write p95 was 57.101 ms; acknowledgement
+  throughput was 51,502 records/s; drain took 5.720 s; drain-inclusive
+  throughput was 2,714 records/s. Post-drain read p95 was 165.893 ms and passed
+  the 200 ms gate; active-tail read p95 was 202.953 ms and narrowly failed it.
+  Compared with the preceding current-format diagnostic, post-drain requests
+  fell from 114 to 78 and HEADs from 54 to 36; active HEADs fell from 36 to 18.
+  The result proves one redundant routing walk was removed, but it does not
+  qualify ingest because drain-inclusive throughput remains below 10,000
+  records/s and it does not qualify reads because active-tail p95 remains above
+  200 ms.
