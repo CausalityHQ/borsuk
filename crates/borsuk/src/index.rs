@@ -2117,19 +2117,39 @@ impl BorsukIndex {
                     *checksum = actual.clone();
                 }
             }
+            let provisional_to_actual_summary = planned_segments
+                .iter()
+                .zip(&new_segment_summaries)
+                .map(|((id, _), summary)| (provisional_segment_checksum(id), summary.clone()))
+                .collect::<HashMap<_, _>>();
+            for summary in &mut desired.exact_fringe {
+                if let Some(actual) = provisional_to_actual_summary.get(&summary.checksum) {
+                    *summary = actual.clone();
+                }
+            }
             (desired, promote)
         });
         let delta_updated = delta_update.is_some();
         if let Some((desired, promote)) = delta_update {
             debug_assert!(!promote, "foreground lane drain cannot promote the base");
-            let reference = manifest.global_pq_ref.as_mut().ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "resident global base disappeared during lane drain".into(),
-                )
-            })?;
-            reference.delta = Some(Box::new(desired));
-            reference.covered_manifest_version = manifest.version;
-            reference.validate_layout()?;
+            let install_as_top_level = manifest.global_pq_ref.as_ref().is_some_and(|base| {
+                desired.checksum == base.checksum
+                    || desired.segments == base.segments
+                    || (desired.delta.is_none() && !desired.exact_fringe.is_empty())
+            });
+            if install_as_top_level {
+                manifest.global_pq_ref = Some(desired);
+            } else {
+                let reference = manifest.global_pq_ref.as_mut().ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "resident global base disappeared during lane drain".into(),
+                    )
+                })?;
+                reference.delta = Some(Box::new(desired));
+                reference.exact_fringe.clear();
+                reference.covered_manifest_version = manifest.version;
+                reference.validate_layout()?;
+            }
         }
         manifest.rebuild_pivots();
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
@@ -5815,6 +5835,9 @@ impl BorsukIndex {
                     .as_mut()
                     .expect("global reference checked above")
                     .delta = rebuilt_delta.map(Box::new);
+                if let Some(global) = manifest.global_pq_ref.as_mut() {
+                    global.exact_fringe.clear();
+                }
             }
             self.rebuild_lexical_roots(&mut manifest)?;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
@@ -8501,6 +8524,12 @@ impl BorsukIndex {
     pub fn flush(&mut self) -> Result<()> {
         let transactions_before_flush = self.collection_wal_transactions_by_modality();
         self.flush_wal()?;
+        // A no-op/legacy flush can still have advanced the immutable segment
+        // set without producing a delta ANN. Publish the exact-fringe coverage
+        // certificate before readers reopen the index.
+        if !self.refresh_resident_global_exact_fringe()? {
+            let _ = self.refresh_resident_global_delta(false)?;
+        }
         for child in self.named.values_mut() {
             child.flush_wal()?;
         }
@@ -8549,6 +8578,11 @@ impl BorsukIndex {
             && self.manifest.tombstone_frontier.is_empty()
             && self.manifest.bm25_stats_delta_frontier.is_empty()
         {
+            // Even when the legacy frontier is already empty, an older
+            // manifest may have appended a small immutable segment without a
+            // delta ANN. Refresh the global reference's exact-fringe summary
+            // so cold readers do not rediscover that fringe through routing.
+            let _ = self.refresh_resident_global_delta(false)?;
             return Ok(());
         }
         // Resolve the CURRENT active segment set. For a paged index (e.g. after a
@@ -10247,6 +10281,9 @@ impl BorsukIndex {
                 .as_mut()
                 .expect("preserved global base checked above")
                 .delta = rebuilt_delta.map(Box::new);
+            if let Some(global) = manifest.global_pq_ref.as_mut() {
+                global.exact_fringe.clear();
+            }
         } else {
             let global_pq_summaries = manifest.segments.clone();
             manifest.global_pq_ref = self.persist_resident_global_pq(&global_pq_summaries)?;
@@ -11841,7 +11878,10 @@ impl BorsukIndex {
         };
         let (base_segment_count, delta_summaries) =
             if global_ref.covered_manifest_version == self.manifest.version {
-                (global_ref.segments.len(), Arc::new(Vec::new()))
+                (
+                    global_ref.segments.len(),
+                    Arc::new(global_ref.exact_fringe.clone()),
+                )
             } else {
                 let active_summaries = self.active_segment_summaries()?;
                 let active_by_checksum = active_summaries
@@ -12445,14 +12485,15 @@ impl BorsukIndex {
                 reference.covered_manifest_version == self.manifest.version
                     && reference.delta.is_some()
             });
-        let mut delta_segments = if coverage_is_current && delta_summaries.is_empty() {
-            Vec::new()
-        } else {
-            self.active_segment_summaries()?
-                .into_iter()
-                .filter(|summary| delta_covered.contains(&summary.checksum))
-                .collect::<Vec<_>>()
-        };
+        let mut delta_segments =
+            if delta_reference.is_none() || (coverage_is_current && delta_summaries.is_empty()) {
+                Vec::new()
+            } else {
+                self.active_segment_summaries()?
+                    .into_iter()
+                    .filter(|summary| delta_covered.contains(&summary.checksum))
+                    .collect::<Vec<_>>()
+            };
         delta_segments.extend_from_slice(delta_summaries);
         delta.manifest.global_pq_ref = delta_reference.clone();
         delta.manifest.quantizer_ref = None;
@@ -13104,6 +13145,7 @@ impl BorsukIndex {
                 .iter()
                 .map(|summary| summary.checksum.clone())
                 .collect(),
+            exact_fringe: Vec::new(),
             delta: None,
         }))
     }
@@ -13150,7 +13192,16 @@ impl BorsukIndex {
             .cloned()
             .collect::<Vec<_>>();
         if fringe.is_empty() && !stale_delta {
-            return Ok(None);
+            if base_reference.covered_manifest_version == self.manifest.version.saturating_add(1)
+                && base_reference.exact_fringe.is_empty()
+            {
+                return Ok(None);
+            }
+            let mut desired = base_reference.clone();
+            desired.covered_manifest_version = self.manifest.version.saturating_add(1);
+            desired.exact_fringe.clear();
+            desired.validate_layout()?;
+            return Ok(Some((desired, false)));
         }
         let fringe_vectors = fringe.iter().fold(0_usize, |total, summary| {
             total.saturating_add(summary.object_count)
@@ -13163,7 +13214,11 @@ impl BorsukIndex {
                 .segment_max_vectors
                 .clamp(1, DELTA_BOOTSTRAP_MAX_VECTORS);
             if fringe_vectors < bootstrap_vectors {
-                return Ok(None);
+                let mut desired = base_reference.clone();
+                desired.covered_manifest_version = self.manifest.version.saturating_add(1);
+                desired.exact_fringe = fringe;
+                desired.validate_layout()?;
+                return Ok(Some((desired, false)));
             }
         }
 
@@ -13220,7 +13275,11 @@ impl BorsukIndex {
         };
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
-        if promote {
+        if promote
+            || desired.checksum == base_reference.checksum
+            || desired.segments == base_reference.segments
+            || (desired.delta.is_none() && !desired.exact_fringe.is_empty())
+        {
             manifest.global_pq_ref = Some(desired);
         } else {
             let reference = manifest.global_pq_ref.as_mut().ok_or_else(|| {
@@ -13229,6 +13288,10 @@ impl BorsukIndex {
                 )
             })?;
             reference.delta = Some(Box::new(desired));
+            // The newly built delta now covers every previously certified
+            // fringe segment; retaining the certificate would make the
+            // base/delta coverage overlap on the next validation.
+            reference.exact_fringe.clear();
             reference.covered_manifest_version = manifest.version;
         }
         manifest.global_pq_ref.as_ref().unwrap().validate_layout()?;
@@ -13240,6 +13303,57 @@ impl BorsukIndex {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clear();
+        Ok(true)
+    }
+
+    /// Publish a bounded exact-fringe certificate when a flush adds too few
+    /// vectors to justify a delta ANN. The summaries are already available on
+    /// the flush path; retaining at most the bootstrap-sized fringe avoids a
+    /// cold reader's full routing walk without making memory proportional to
+    /// the corpus.
+    fn refresh_resident_global_exact_fringe(&mut self) -> Result<bool> {
+        let Some(base_reference) = self.manifest.global_pq_ref.clone() else {
+            return Ok(false);
+        };
+        if base_reference.delta.is_some() {
+            return Ok(false);
+        }
+        let active = self.active_segment_summaries()?;
+        let covered = base_reference.segments.iter().collect::<HashSet<_>>();
+        let fringe = active
+            .iter()
+            .filter(|summary| !covered.contains(&summary.checksum))
+            .cloned()
+            .collect::<Vec<_>>();
+        let fringe_vectors = fringe
+            .iter()
+            .map(|summary| summary.object_count)
+            .fold(0_usize, usize::saturating_add);
+        const DELTA_BOOTSTRAP_MAX_VECTORS: usize = 1_024;
+        let fringe_limit = self
+            .manifest
+            .config
+            .segment_max_vectors
+            .clamp(1, DELTA_BOOTSTRAP_MAX_VECTORS);
+        if fringe_vectors >= fringe_limit {
+            return Ok(false);
+        }
+        if base_reference.covered_manifest_version == self.manifest.version
+            && base_reference.exact_fringe == fringe
+        {
+            return Ok(false);
+        }
+        let mut desired = base_reference;
+        desired.covered_manifest_version = self.manifest.version.saturating_add(1);
+        desired.exact_fringe = fringe;
+        desired.validate_layout()?;
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.global_pq_ref = Some(desired);
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+            manifest, &previous,
+        )?;
         Ok(true)
     }
 
@@ -13299,6 +13413,7 @@ impl BorsukIndex {
             storage_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             covered_manifest_version: self.manifest.version.saturating_add(1),
             segments: Vec::new(),
+            exact_fringe: Vec::new(),
             delta: None,
         };
         if let Some(records) = records {
@@ -13635,6 +13750,7 @@ impl BorsukIndex {
             storage_bytes,
             covered_manifest_version: self.manifest.version.saturating_add(1),
             segments,
+            exact_fringe: Vec::new(),
             delta: None,
         })
     }
@@ -14642,6 +14758,7 @@ impl BorsukIndex {
                         .delta
                         .as_ref()
                         .map_or(0, |delta| delta.segments.len())
+                    + reference.exact_fringe.len()
             })
         } else {
             global_active_segments.as_ref().map(Vec::len)
@@ -24251,6 +24368,7 @@ mod tests {
             storage_bytes: 720 * 1024 * 1024,
             covered_manifest_version: 9,
             segments: vec!["cd".repeat(32)],
+            exact_fringe: Vec::new(),
             delta: None,
         };
         assert!(reference.resident_bytes_estimate() >= 480 * 1024 * 1024);
@@ -24502,6 +24620,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("wal-tail"));
+        assert_eq!(report.routing_page_indexes_read, 0);
+        assert_eq!(report.routing_pages_read, 0);
+        assert!(
+            report.requests.heads <= 2,
+            "post-drain global search must not rediscover paged routing coverage: {report:?}"
+        );
         assert!(
             report.global_scan_chunks_searched > 0,
             "the materialized delta must be merged without abandoning the stable base: {report:?}"
