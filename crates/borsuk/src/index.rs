@@ -425,6 +425,10 @@ pub const MIN_RECOMMENDED_SEGMENT_MAX_VECTORS: usize = 64;
 /// Largest automatically selected cell row count, limiting build batches while
 /// avoiding excessive routing metadata and object counts at 100M scale.
 pub const MAX_RECOMMENDED_SEGMENT_MAX_VECTORS: usize = 131_072;
+// Group-commit WAL extents are already immutable and independently fenced;
+// materialization should coalesce them into object-store-sized segments even
+// when a research routing fixture intentionally uses one-vector base segments.
+const LANE_LOG_MATERIALIZATION_SEGMENT_MAX_VECTORS: usize = 4_096;
 
 /// Recommend a dimension-aware immutable-cell row count for TurboQuant pq-scan.
 ///
@@ -2020,7 +2024,10 @@ impl BorsukIndex {
         // bucket on the latency-sensitive drain path. Explicit maintenance can
         // consolidate these runs later; readers already merge pages and
         // frontiers with newest-generation-wins semantics.
-        let segment_max_vectors = manifest.config.segment_max_vectors.max(1);
+        let segment_max_vectors = manifest
+            .config
+            .segment_max_vectors
+            .max(LANE_LOG_MATERIALIZATION_SEGMENT_MAX_VECTORS);
         let write_batch_size = parallel_segment_write_batch_size(segment_max_vectors);
         let previous_active_segments = manifest.segments.clone();
         let planned_segments = records
