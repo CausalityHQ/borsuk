@@ -73,7 +73,7 @@ sudo -iu ec2-user bash -lc "cd \"\$workspace\" && uv run --python 3.12 --with-re
 sudo -iu ec2-user tmux new-session -d -s "\$session" -c "\$workspace"
 sudo -iu ec2-user tmux set-option -t "\$session" remain-on-exit on
 sentinel="/home/ec2-user/borsuk-group-commit-runner-started-${RUN_ID}"
-cmd="printf 'started\\n' > \"\$sentinel\" && exec env AWS_REGION='${REGION}' AWS_DEFAULT_REGION='${REGION}' BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT='/home/ec2-user/borsuk-group-commit-results/${RUN_ID}' BORSUK_GROUP_COMMIT_SCALABILITY_INDEX_ROOT=\"\$index_uri\" BORSUK_GROUP_COMMIT_SCALABILITY_RESULT_URI=\"\$result_uri\" BORSUK_GROUP_COMMIT_DATASET='/home/ec2-user/borsuk-datasets/cohere-medium-1M' BORSUK_ARCHITECTURE=aarch64 BORSUK_INSTANCE_TYPE='${instance_type}' BORSUK_RUN_GROUP_COMMIT_SCALABILITY=1 bash scripts/bench_group_commit_scalability.sh"
+cmd="printf 'started\\n' > \"\$sentinel\" && exec env AWS_REGION='${REGION}' AWS_DEFAULT_REGION='${REGION}' BORSUK_SOURCE_ARCHIVE=/tmp/borsuk-group-commit-source.tar BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT='/home/ec2-user/borsuk-group-commit-results/${RUN_ID}' BORSUK_GROUP_COMMIT_SCALABILITY_INDEX_ROOT=\"\$index_uri\" BORSUK_GROUP_COMMIT_SCALABILITY_RESULT_URI=\"\$result_uri\" BORSUK_GROUP_COMMIT_DATASET='/home/ec2-user/borsuk-datasets/cohere-medium-1M' BORSUK_ARCHITECTURE=aarch64 BORSUK_INSTANCE_TYPE='${instance_type}' BORSUK_RUN_GROUP_COMMIT_SCALABILITY=1 bash scripts/bench_group_commit_scalability.sh"
 sudo -iu ec2-user tmux send-keys -t "\$session" -l -- "\$cmd"
 sudo -iu ec2-user tmux send-keys -t "\$session" Enter
 for _ in \$(seq 1 120); do
