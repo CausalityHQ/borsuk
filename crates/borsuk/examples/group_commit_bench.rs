@@ -100,6 +100,29 @@ fn vector(seed: u64, ordinal: u64, dimensions: usize) -> Vec<f32> {
         .collect()
 }
 
+fn lane_receipts_field(receipts: &[GroupCommitLaneReceipt]) -> String {
+    receipts
+        .iter()
+        .map(|receipt| {
+            format!(
+                "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+                receipt.commit_lane,
+                receipt.commit_sequence,
+                receipt.lease_epoch,
+                receipt.committed_records,
+                receipt.acknowledgement_bytes,
+                receipt.requests.total(),
+                receipt.requests.gets,
+                receipt.requests.puts,
+                receipt.requests.deletes,
+                receipt.requests.heads,
+                receipt.requests.lists,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 fn parquet_vector_row(array: &dyn Array, row: usize, dimensions: usize) -> BenchResult<Vec<f32>> {
     let values = if let Some(vectors) = array.as_any().downcast_ref::<FixedSizeListArray>() {
         vectors.value(row)
@@ -799,12 +822,12 @@ fn main() -> BenchResult<()> {
     let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
     writeln!(
         raw,
-        "writer,operation,batch_records,first_record_id,record_ids,latency_ms,commit_lane,commit_sequence,committed_records,acknowledgement_bytes,group_requests,group_gets,group_puts,group_heads"
+        "writer,operation,batch_records,first_record_id,record_ids,latency_ms,commit_lane,commit_sequence,committed_records,acknowledgement_bytes,group_requests,group_gets,group_puts,group_heads,lane_receipts"
     )?;
     for sample in samples {
         writeln!(
             raw,
-            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{}",
             sample.writer,
             sample.operation,
             sample.batch_records,
@@ -819,6 +842,7 @@ fn main() -> BenchResult<()> {
             sample.group_requests.gets,
             sample.group_requests.puts,
             sample.group_requests.heads,
+            lane_receipts_field(&sample.lane_receipts),
         )?;
     }
     write_read_samples(&output.join("reads.csv"), &reads.samples)?;

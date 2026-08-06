@@ -69,6 +69,40 @@ def require_close(observed: float, expected: float, message: str) -> None:
     )
 
 
+def lane_receipt_evidence(sample: dict[str, str]) -> list[tuple[int, ...]]:
+    """Return per-lane durable evidence, including bulk multi-lane appends.
+
+    Older scalar artifacts expose only the first lane identity and aggregate
+    receipt fields. New bulk artifacts serialize every lane receipt so shared
+    group reconciliation cannot conflate two callers that touched different
+    ownership lanes.
+    """
+    encoded = sample.get("lane_receipts")
+    if encoded is None:
+        return [
+            (
+                integer(sample["commit_lane"], "commit lane"),
+                integer(sample["commit_sequence"], "commit sequence"),
+                0,
+                integer(sample["committed_records"], "committed records"),
+                integer(sample["acknowledgement_bytes"], "acknowledgement bytes"),
+                integer(sample["group_requests"], "group requests"),
+                integer(sample["group_gets"], "group gets"),
+                integer(sample["group_puts"], "group puts"),
+                0,
+                integer(sample["group_heads"], "group heads"),
+                0,
+            )
+        ]
+    require(bool(encoded), "empty lane receipt evidence")
+    evidence = []
+    for item in encoded.split(";"):
+        fields = item.split(":")
+        require(len(fields) == 11, "invalid lane receipt evidence")
+        evidence.append(tuple(integer(value, "lane receipt field") for value in fields))
+    return evidence
+
+
 def environment(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -317,23 +351,14 @@ def validate(
             sample_latency = finite(sample["latency_ms"], "sample latency")
             require(sample_latency >= 0.0, f"negative sample latency in {cell}")
             write_latencies.append(sample_latency)
-            group = (
-                integer(sample["commit_lane"], "commit lane"),
-                integer(sample["commit_sequence"], "commit sequence"),
-            )
-            evidence = tuple(
-                integer(sample[field], field)
-                for field in (
-                    "committed_records",
-                    "acknowledgement_bytes",
-                    "group_requests",
-                    "group_gets",
-                    "group_puts",
-                    "group_heads",
+            for evidence in lane_receipt_evidence(sample):
+                group = (evidence[0], evidence[1])
+                normalized = evidence[3:]
+                require(
+                    group not in groups or groups[group] == normalized,
+                    f"inconsistent shared group evidence in {cell}",
                 )
-            )
-            require(group not in groups or groups[group] == evidence, f"inconsistent shared group evidence in {cell}")
-            groups[group] = evidence
+                groups[group] = normalized
         require(sum(evidence[0] for evidence in groups.values()) == expected_records, f"group record reconciliation failed in {cell}")
         total_acknowledgement_bytes = sum(evidence[1] for evidence in groups.values())
         max_acknowledgement_bytes = max(evidence[1] for evidence in groups.values())

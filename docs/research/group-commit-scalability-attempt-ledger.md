@@ -106,3 +106,15 @@ failure marker exists, the service exits successfully, and the fail-closed
 validator reconciles every matrix cell, raw sample, group receipt, request
 total, resource exit, visibility result, exact-recall result, and correctness
 gate.
+
+## Bulk receipt-evidence harness correction
+
+The local bulk smoke exposed a validator defect: a single append can touch
+multiple ownership lanes, while the original `samples.csv` exposed only the
+first lane identity and aggregate acknowledgement bytes. The validator could
+therefore conflate distinct lane groups and reject otherwise coherent output.
+The benchmark now records every lane receipt in a delimiter-safe field, and
+the validator reconciles those per-lane records before reading any production
+campaign measurements. The corrected local 64-cell, one-writer, 16-record
+structural smoke completed all phase markers and passed fail-closed validation;
+it remains claim-ineligible.
