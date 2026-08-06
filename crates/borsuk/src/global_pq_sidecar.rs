@@ -371,18 +371,10 @@ impl HierarchicalCoarseQuantizer {
             });
         }
         let prepared = self.parent.prepare_query(vector)?;
-        let mut parents = (0..self.primary_count())
-            .map(|primary| Ok((prepared.distance(&[primary as u8])?, primary)))
-            .collect::<Result<Vec<_>>>()?;
-        parents.sort_by(|left, right| {
-            left.0
-                .total_cmp(&right.0)
-                .then_with(|| left.1.cmp(&right.1))
-        });
-        parents.truncate(HIERARCHICAL_PARENT_ASSIGNMENT_WIDTH.min(parents.len()));
+        let parents = top_parent_candidates(&prepared, self.primary_count())?;
 
         let mut best = (f32::INFINITY, 0_usize, 0_usize);
-        for (_, primary) in parents {
+        for (_, primary) in parents.into_iter().flatten() {
             let start = usize::from(self.child_offsets[primary]);
             let end = usize::from(self.child_offsets[primary + 1]);
             for (local, centroid) in self.child_centroids
@@ -442,6 +434,38 @@ impl HierarchicalCoarseQuantizer {
             + self.child_offsets.capacity() * size_of::<u16>()
             + self.child_centroids.capacity() * size_of::<f32>()
     }
+}
+
+/// Keep only the fixed number of parent cells examined by hierarchical
+/// routing. The previous implementation allocated and sorted every parent
+/// distance even though only the best four were used. Stable total ordering
+/// preserves the old distance-then-index tie behavior.
+fn top_parent_candidates(
+    prepared: &crate::rotated_product_quantizer::PreparedAdc,
+    primary_count: usize,
+) -> Result<[Option<(f32, usize)>; HIERARCHICAL_PARENT_ASSIGNMENT_WIDTH]> {
+    let mut best: [Option<(f32, usize)>; HIERARCHICAL_PARENT_ASSIGNMENT_WIDTH] =
+        [None; HIERARCHICAL_PARENT_ASSIGNMENT_WIDTH];
+    for primary in 0..primary_count {
+        let candidate = (prepared.distance(&[primary as u8])?, primary);
+        let position = best.iter().position(|current| {
+            current.is_none_or(|current| {
+                candidate
+                    .0
+                    .total_cmp(&current.0)
+                    .then_with(|| candidate.1.cmp(&current.1))
+                    .is_lt()
+            })
+        });
+        let Some(position) = position else {
+            continue;
+        };
+        for index in (position + 1..best.len()).rev() {
+            best[index] = best[index - 1];
+        }
+        best[position] = Some(candidate);
+    }
+    Ok(best)
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -2492,6 +2516,20 @@ mod tests {
         let restored = HierarchicalCoarseQuantizer::from_state(coarse.state()).unwrap();
         assert_eq!(restored.encode_cell(&fit[35]).unwrap(), encoded);
         assert_eq!(restored.cell_count(), coarse.cell_count());
+    }
+
+    #[test]
+    fn fixed_parent_selection_matches_distance_then_index_order() {
+        let prepared = crate::rotated_product_quantizer::PreparedAdc {
+            subspaces: 1,
+            centroids: 8,
+            tables: vec![7.0, 2.0, 2.0, 9.0, 1.0, 6.0, 4.0, 3.0],
+        };
+        let selected = top_parent_candidates(&prepared, 8).unwrap();
+        assert_eq!(
+            selected.into_iter().flatten().collect::<Vec<_>>(),
+            vec![(1.0, 4), (2.0, 1), (2.0, 2), (3.0, 7)]
+        );
     }
 
     #[test]

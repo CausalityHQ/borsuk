@@ -67,6 +67,11 @@
   and drain-inclusive throughput 5,716.636 records/s. This passes the latency
   and recall gates but remains below the 10,000-record/s local bulk target and
   does not qualify 100M-scale or AWS performance.
+- The next causal factor removes the per-vector allocation and full sort from
+  hierarchical coarse-cell assignment, retaining exact distance/index tie
+  ordering with a fixed four-entry selector. The focused ordering test, 18
+  global-PQ tests, full library, group-commit, and fault-injection gates pass;
+  no throughput number is assigned until a fresh terminal benchmark runs.
 
 ## Global Constraints
 

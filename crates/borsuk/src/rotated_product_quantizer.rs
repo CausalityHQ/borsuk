@@ -42,9 +42,9 @@ pub(crate) struct RotatedProductQuantizer {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PreparedAdc {
-    subspaces: usize,
-    centroids: usize,
-    tables: Vec<f32>,
+    pub(crate) subspaces: usize,
+    pub(crate) centroids: usize,
+    pub(crate) tables: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
