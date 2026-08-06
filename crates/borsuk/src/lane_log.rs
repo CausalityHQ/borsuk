@@ -427,6 +427,17 @@ impl LaneExtent {
     }
 }
 
+fn extent_generation_end(extent: &LaneExtent) -> Result<u64> {
+    extent
+        .first_generation
+        .checked_add(extent.records.saturating_sub(1))
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "epoch lane-log extent generation range exceeds u64".to_string(),
+            )
+        })
+}
+
 impl LaneLogHead {
     fn empty(lane: u16, lease_epoch: u64) -> Self {
         Self {
@@ -1032,6 +1043,8 @@ pub(crate) struct LaneLogWriter {
 struct LaneEpochWriter {
     storage: Storage,
     head: LaneEpochHead,
+    head_version: Option<UpdateVersion>,
+    id_authority: Option<LaneIdAuthority>,
 }
 
 impl LaneEpochWriter {
@@ -1055,7 +1068,142 @@ impl LaneEpochWriter {
             sealed_epoch: None,
         };
         storage.write_coordination_object(&head_path(lane), &epoch_head_bytes(&head)?, None)?;
-        Ok(Self { storage, head })
+        Ok(Self {
+            storage,
+            head,
+            head_version: None,
+            id_authority: None,
+        })
+    }
+
+    fn acquire_with_storage(
+        storage: Storage,
+        lane: u16,
+        owner: [u8; 16],
+        now_ms: u64,
+        ttl_ms: u64,
+        id_budget_bytes: u64,
+        minimum_generation: u64,
+    ) -> Result<Self> {
+        if owner == [0; 16] || ttl_ms == 0 {
+            return Err(BorsukError::InvalidRecordInput(
+                "epoch lane lease requires a nonzero owner and TTL".to_string(),
+            ));
+        }
+        let lease_expires_at_ms = now_ms.checked_add(ttl_ms).ok_or_else(|| {
+            BorsukError::InvalidRecordInput("epoch lane lease expiry exceeds u64".to_string())
+        })?;
+        let path = head_path(lane);
+        let current = storage.read_coordination_object(&path)?;
+        let expected = current.as_ref().map(|stored| stored.version.clone());
+        let reader = LaneEpochReader::from_storage(storage.clone(), 64)?;
+        let mut authority = LaneIdAuthority::from_entries(
+            std::iter::empty::<(&[u8], LaneIdState)>(),
+            id_budget_bytes,
+        )?;
+        let mut recovered = Vec::new();
+        let head = match current {
+            None => LaneEpochHead {
+                lane,
+                lease_epoch: 1,
+                lease_owner: owner,
+                lease_expires_at_ms,
+                durable_sequence: 0,
+                materialized_sequence: 0,
+                generation_base: minimum_generation,
+                sealed_epoch: None,
+            },
+            Some(stored) => {
+                let current_head = epoch_head_from_bytes(&stored.bytes, lane)?;
+                if current_head.lease_expires_at_ms > now_ms
+                    && current_head.lease_owner != owner
+                {
+                    return Err(BorsukError::ConcurrentModification { path });
+                }
+                if let Some(seal) = current_head.sealed_epoch {
+                    recovered.extend(reader.read_epoch(
+                        lane,
+                        seal.lease_epoch,
+                        Some(seal.durable_sequence),
+                    )?);
+                }
+                let current_extents = reader.read_epoch(lane, current_head.lease_epoch, None)?;
+                recovered.extend(current_extents.iter().cloned());
+                if current_head.lease_owner == owner && current_head.lease_expires_at_ms > now_ms {
+                    let durable_sequence = current_extents
+                        .iter()
+                        .map(|extent| extent.sequence)
+                        .max()
+                        .unwrap_or(current_head.durable_sequence)
+                        .max(current_head.durable_sequence);
+                    LaneEpochHead {
+                        lease_expires_at_ms,
+                        durable_sequence,
+                        generation_base: current_extents.iter().try_fold(
+                            current_head.generation_base.max(minimum_generation),
+                            |generation, extent| extent_generation_end(extent).map(|end| generation.max(end)),
+                        )?,
+                        ..current_head
+                    }
+                } else {
+                    let generation_end = current_extents.iter().try_fold(
+                        current_head.generation_base.max(minimum_generation),
+                        |generation, extent| extent_generation_end(extent).map(|end| generation.max(end)),
+                    )?;
+                    LaneEpochHead {
+                        lane,
+                        lease_epoch: current_head.lease_epoch.checked_add(1).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "epoch lane lease epoch exceeds u64".to_string(),
+                            )
+                        })?,
+                        lease_owner: owner,
+                        lease_expires_at_ms,
+                        durable_sequence: 0,
+                        materialized_sequence: 0,
+                        generation_base: generation_end,
+                        sealed_epoch: Some(LaneEpochSeal {
+                            lease_epoch: current_head.lease_epoch,
+                            durable_sequence: current_extents
+                                .iter()
+                                .map(|extent| extent.sequence)
+                                .max()
+                                .unwrap_or(0),
+                            generation_end,
+                        }),
+                    }
+                }
+            }
+        };
+        for extent in &recovered {
+            let (_, deltas) = extent.decode_wal_records()?;
+            for delta in &deltas {
+                authority.apply_recovered(delta)?;
+            }
+        }
+        let bytes = epoch_head_bytes(&head)?;
+        let head_version = match storage.write_coordination_object(&path, &bytes, expected) {
+            Ok(version) => version,
+            Err(
+                error @ (BorsukError::ConcurrentModification { .. }
+                | BorsukError::ObjectStoreRetryable { .. }),
+            ) => {
+                let Some(observed) = storage.read_coordination_object(&path)? else {
+                    return Err(error);
+                };
+                if observed.bytes != bytes {
+                    return Err(error);
+                }
+                observed.version
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(Self {
+            storage,
+            head,
+            head_version: Some(head_version),
+            id_authority: Some(authority),
+        })
     }
 
     fn append_extent_at(
@@ -1113,6 +1261,14 @@ impl LaneEpochWriter {
             ));
         }
         let before = self.storage.request_counts();
+        let ids = records
+            .iter()
+            .map(|record| record.id.as_bytes())
+            .collect::<Vec<_>>();
+        let prepared = match self.id_authority.as_ref() {
+            Some(authority) => Some(authority.prepare_upsert(&ids)?),
+            None => None,
+        };
         let sequence = self.head.durable_sequence.checked_add(1).ok_or_else(|| {
             BorsukError::InvalidStorage("epoch lane-log sequence exceeds u64".to_string())
         })?;
@@ -1125,10 +1281,13 @@ impl LaneEpochWriter {
             VectorElementType::Float32,
             PhysicalFormat::Parquet,
         )?;
-        let deltas = records
-            .iter()
-            .map(|record| LaneIdDelta {
-                id: record.id.as_bytes().to_vec(),
+        let deltas = prepared
+            .as_ref()
+            .map(|(ids, _)| ids.clone())
+            .unwrap_or_else(|| ids.iter().map(|id| id.to_vec()).collect())
+            .into_iter()
+            .map(|id| LaneIdDelta {
+                id,
                 state: LaneIdDeltaState::Live,
             })
             .collect::<Vec<_>>();
@@ -1161,6 +1320,11 @@ impl LaneEpochWriter {
                     "epoch lane-log generation range exceeds u64".to_string(),
                 )
             })?;
+        if let (Some(authority), Some((ids, resident_bytes))) =
+            (self.id_authority.as_mut(), prepared)
+        {
+            authority.commit_state(ids, LaneIdDeltaState::Live, resident_bytes);
+        }
         Ok(LaneLogReceipt {
             lane: self.head.lane,
             lease_epoch: self.head.lease_epoch,
@@ -1192,6 +1356,18 @@ impl LaneEpochReader {
         }
         Ok(Self {
             storage: Storage::from_object_store(uri.into(), store)?,
+            lane_count,
+        })
+    }
+
+    fn from_storage(storage: Storage, lane_count: u16) -> Result<Self> {
+        if lane_count == 0 || lane_count > 64 {
+            return Err(BorsukError::InvalidStorage(
+                "epoch lane-log reader lane_count must be between 1 and 64".to_string(),
+            ));
+        }
+        Ok(Self {
+            storage,
             lane_count,
         })
     }
@@ -2593,6 +2769,94 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![b"acknowledged".to_vec()]
         );
+    }
+
+    #[test]
+    fn v27_expired_takeover_seals_prior_epoch_and_recovers_id_authority() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///epoch-takeover";
+        let storage = Storage::from_object_store(uri.to_string(), Arc::clone(&store)).unwrap();
+        let mut first = LaneEpochWriter::acquire_with_storage(
+            storage.clone(),
+            3,
+            [1; 16],
+            10,
+            100,
+            4_096,
+            0,
+        )
+        .unwrap();
+        first
+            .append_upsert_records_at(&[VectorRecord::new("first", vec![1.0, 2.0])], 2, 11)
+            .unwrap();
+        drop(first);
+
+        let successor = LaneEpochWriter::acquire_with_storage(
+            storage,
+            3,
+            [2; 16],
+            111,
+            100,
+            4_096,
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(successor.head.lease_epoch, 2);
+        assert_eq!(
+            successor.head.sealed_epoch,
+            Some(LaneEpochSeal {
+                lease_epoch: 1,
+                durable_sequence: 1,
+                generation_end: 1,
+            })
+        );
+        assert!(
+            successor
+                .id_authority
+                .as_ref()
+                .unwrap()
+                .states
+                .contains_key(b"first".as_slice())
+        );
+    }
+
+    #[test]
+    fn v27_same_owner_reopen_reconciles_stale_watermark_before_next_sequence() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///epoch-owner-reopen";
+        let storage = Storage::from_object_store(uri.to_string(), store).unwrap();
+        let mut first = LaneEpochWriter::acquire_with_storage(
+            storage.clone(),
+            3,
+            [1; 16],
+            10,
+            100,
+            4_096,
+            0,
+        )
+        .unwrap();
+        first
+            .append_upsert_records_at(&[VectorRecord::new("first", vec![1.0, 2.0])], 2, 11)
+            .unwrap();
+        drop(first);
+
+        let mut reopened = LaneEpochWriter::acquire_with_storage(
+            storage,
+            3,
+            [1; 16],
+            20,
+            100,
+            4_096,
+            0,
+        )
+        .unwrap();
+        let receipt = reopened
+            .append_upsert_records_at(&[VectorRecord::new("second", vec![3.0, 4.0])], 2, 21)
+            .unwrap();
+
+        assert_eq!(receipt.sequence, 2);
+        assert_eq!(reopened.head.generation_base, 2);
     }
 
     #[test]
