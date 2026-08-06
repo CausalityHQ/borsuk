@@ -14,9 +14,9 @@ use rayon::prelude::*;
 const LANE_LEASE_TTL_MS: u64 = 60 * 60 * 1_000;
 // Keep the active WAL bounded while allowing one materialization pass to
 // coalesce enough extents into production-sized immutable segments. A smaller
-// interval creates many tiny delta segments and makes post-drain reads pay the
-// resulting object fan-out.
-const BACKGROUND_MATERIALIZATION_BLOCK_INTERVAL: u64 = 256;
+// interval repeatedly rewrites the growing delta and can exceed the frozen
+// physical-write-amplification gate before the caller reaches drain.
+const BACKGROUND_MATERIALIZATION_BLOCK_INTERVAL: u64 = 1_024;
 
 #[derive(Default)]
 struct MaintenanceState {
