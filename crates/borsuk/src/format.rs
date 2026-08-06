@@ -7021,6 +7021,7 @@ mod tests {
             storage_bytes: 96_000_000,
             covered_manifest_version: 41,
             segments: vec!["cd".repeat(32), "ef".repeat(32)],
+            exact_fringe: Vec::new(),
             delta: Some(Box::new(crate::manifest::GlobalPqRef {
                 layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
                 path: "global-pq/12/delta.parquet".to_string(),
@@ -7034,6 +7035,7 @@ mod tests {
                 storage_bytes: 3_000_000,
                 covered_manifest_version: 41,
                 segments: vec!["34".repeat(32)],
+                exact_fringe: Vec::new(),
                 delta: None,
             })),
         });
@@ -7060,6 +7062,7 @@ mod tests {
             storage_bytes: 1,
             covered_manifest_version: 7,
             segments: vec!["cd".repeat(32)],
+            exact_fringe: Vec::new(),
             delta: None,
         });
         let json = serde_json::to_string(expected.global_pq_ref.as_ref().unwrap()).unwrap();

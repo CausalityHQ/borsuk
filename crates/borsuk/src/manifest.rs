@@ -241,7 +241,7 @@ pub(crate) struct QuantizerRef {
 /// Content-addressed resident global product-code artifact for one manifest.
 pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 2;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GlobalPqRef {
     /// Version of this embedded reference graph. This is intentionally required:
     /// unreleased single-layer references must be rebuilt rather than silently
@@ -271,6 +271,11 @@ pub(crate) struct GlobalPqRef {
     /// Active segment checksums in the exact ordinal order encoded by row
     /// locations in the artifact.
     pub(crate) segments: Vec<String>,
+    /// Small materialized segments not yet worth encoding as a delta ANN.
+    /// Persisting their summaries keeps post-drain exact-fringe reads bounded
+    /// without forcing a cold reader to walk every routing page.
+    #[serde(default)]
+    pub(crate) exact_fringe: Vec<SegmentSummary>,
     /// A geometrically rebuilt ANN artifact over post-base segments. Nested
     /// deltas are invalid; the remaining uncovered segments form the exact
     /// fringe.
@@ -403,6 +408,10 @@ impl GlobalPqRef {
             self.checksum.len(),
             self.segments.capacity().saturating_mul(size_of::<String>()),
             self.segments.iter().map(String::len).sum::<usize>(),
+            self.exact_fringe
+                .iter()
+                .map(|summary| summary.resident_bytes_estimate())
+                .sum::<usize>(),
             usize::try_from(self.resident_bytes).unwrap_or(usize::MAX),
             usize::try_from(self.sidecar_index_bytes).unwrap_or(usize::MAX),
         ]
