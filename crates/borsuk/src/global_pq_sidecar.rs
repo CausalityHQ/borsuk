@@ -1,12 +1,12 @@
 use std::{
     cmp::Reverse,
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashMap},
     fs::File,
     io::{BufReader, BufWriter, Read, Write},
     mem::size_of,
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use arrow_array::{Array, RecordBatch, StringArray};
@@ -43,6 +43,7 @@ pub(crate) const DEFAULT_GLOBAL_PQ_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const DEFAULT_GLOBAL_EXACT_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const BUILD_SCRATCH_DIR_ENV: &str = "BORSUK_BUILD_SCRATCH_DIR";
+const RESIDENT_CODE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const HIERARCHICAL_PARENT_ASSIGNMENT_WIDTH: usize = 4;
 
 /// Hierarchical cell identity. Keeping the semantic parent in the high byte
@@ -1721,6 +1722,7 @@ pub(crate) struct ResidentGlobalPq {
     location: LocationEncoding,
     chunks: Vec<GlobalPqChunkRef>,
     len: usize,
+    code_cache: Arc<Mutex<HashMap<String, Bytes>>>,
 }
 
 impl ResidentGlobalPq {
@@ -1731,7 +1733,27 @@ impl ResidentGlobalPq {
             location: descriptor.location,
             chunks: descriptor.chunks,
             len: descriptor.vectors,
+            code_cache: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    pub(crate) fn cached_code(&self, checksum: &str) -> Option<Bytes> {
+        self.code_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(checksum)
+            .cloned()
+    }
+
+    pub(crate) fn cache_code(&self, checksum: String, bytes: Bytes) {
+        let mut cache = self
+            .code_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let used = cache.values().map(Bytes::len).sum::<usize>();
+        if used.saturating_add(bytes.len()) <= RESIDENT_CODE_CACHE_BYTES {
+            cache.entry(checksum).or_insert(bytes);
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
