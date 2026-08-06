@@ -205,6 +205,35 @@ fn collection_memory_telemetry_is_shared_across_named_modalities() {
 }
 
 #[test]
+fn mutable_writer_memory_capacities_leave_room_for_manifest_growth() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let budget = 1024 * 1024;
+    let mut bounded_config = config(uri);
+    bounded_config.ram_budget_bytes = Some(budget);
+    let mut index = BorsukIndex::create(bounded_config).unwrap();
+
+    index
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0])
+                .with_named_vector("lexical", vec![0.0, 0.0, 0.0, 0.0]),
+            VectorRecord::new("b", vec![1.0, 1.0])
+                .with_named_vector("lexical", vec![1.0, 1.0, 1.0, 1.0]),
+        ])
+        .unwrap();
+    index.flush().unwrap();
+
+    let stats = index.stats();
+    assert!(
+        stats.collection_resident_bytes
+            + stats.retained_capacity_bytes
+            + stats.transient_capacity_bytes
+            <= budget,
+        "mutable writer capacities must reserve room for manifest growth: {stats:?}"
+    );
+}
+
+#[test]
 fn named_vector_search_is_independent_and_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
