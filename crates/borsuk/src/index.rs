@@ -11694,7 +11694,14 @@ impl BorsukIndex {
             SearchMode::Approx {
                 max_segments: Some(value),
                 ..
-            } => *value,
+            } => value.checked_sub(delta_summaries.len()).filter(|value| *value > 0).ok_or_else(
+                || {
+                    BorsukError::InvalidSearchOptions(format!(
+                        "max_segments {value} leaves no stable-base probe after reserving {} materialized-delta segments",
+                        delta_summaries.len()
+                    ))
+                },
+            )?,
             _ => global_ref.probes,
         };
         let probe_count = requested_probes.max(1).min(index.cell_count());
@@ -12036,6 +12043,10 @@ impl BorsukIndex {
         delta.admission = None;
 
         let mut delta_options = options.clone();
+        // Fresh materialized records are a correctness overlay, not another
+        // approximate corpus. Search every delta segment soundly; the resident
+        // base already reserved their count from the whole-query segment cap.
+        delta_options.mode = SearchMode::Exact;
         delta_options.disable_coarse_quantizer = true;
         let delta_execution = delta.search_execution_with_routing_cache(
             query,
@@ -23024,6 +23035,57 @@ mod tests {
         assert!(
             report.global_scan_chunks_searched > 0,
             "upsert/delete overlays observed after refresh must retain the global base: {report:?}"
+        );
+    }
+
+    #[test]
+    fn resident_global_search_charges_materialized_delta_to_one_segment_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(format!("base-{row}"), vec![row as f32 / 128.0; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        for ordinal in 0..2 {
+            index
+                .add(vec![VectorRecord::new(
+                    format!("delta-{ordinal}"),
+                    vec![10.0 + ordinal as f32; 8],
+                )])
+                .unwrap();
+            index.flush().unwrap();
+        }
+
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &[11.0; 8],
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+
+        assert_eq!(report.hits[0].id, RecordId::from("delta-1"));
+        assert!(
+            report.segments_searched <= 4,
+            "base and materialized delta must share one segment budget: {report:?}"
         );
     }
 
