@@ -344,10 +344,10 @@ if [[ "$SMOKE" == "1" ]]; then
   printf 'gate,status\ngrouped_durable_ack,pass\nextent_idempotency,pass\npost_completion_lease_fencing,pass\nstale_watermark_reopen,pass\nepoch_zombie_exclusion,pass\nowner_only_head_mutation,pass\nsequential_last_write_wins,pass\ntail_backpressure,pass\ndelta_drain_frontier_safety,pass\n' > "$OUTPUT/correctness.csv"
 else
   run_exact_test group_commit concurrent_appends_share_one_durable_wal_transaction
-  run_exact_lib_test lane_log::tests::v28_extent_put_is_the_acknowledgement_boundary
-  run_exact_lib_test lane_log::tests::v28_extent_completing_after_lease_guard_is_not_acknowledged
-  run_exact_lib_test lane_log::tests::v28_linearizable_reader_recovers_extents_beyond_a_stale_watermark
-  run_exact_lib_test lane_log::tests::v28_sealed_epoch_excludes_a_late_zombie_extent
+  run_exact_lib_test lane_log::tests::v29_extent_put_is_the_acknowledgement_boundary
+  run_exact_lib_test lane_log::tests::v29_extent_completing_after_lease_guard_is_not_acknowledged
+  run_exact_lib_test lane_log::tests::v29_linearizable_reader_recovers_extents_beyond_a_stale_watermark
+  run_exact_lib_test lane_log::tests::v29_sealed_epoch_excludes_a_late_zombie_extent
   run_exact_test group_commit small_groups_publish_only_immutable_extents_before_release
   run_exact_test group_commit alternating_writer_lanes_preserve_sequential_last_write_wins
   run_exact_test group_commit background_materialization_keeps_sustained_ingest_below_the_hard_tail_bound

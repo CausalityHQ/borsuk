@@ -1948,6 +1948,11 @@ impl BorsukIndex {
             return Ok(committed_sequences);
         }
 
+        let generation_fence_ids = self
+            .lane_log_snapshot
+            .iter()
+            .flat_map(|block| block.generation_fence_ids.iter().cloned())
+            .collect::<HashSet<_>>();
         let mut newest = HashMap::<Vec<u8>, VectorRecord>::new();
         for record in self
             .lane_log_snapshot
@@ -1972,6 +1977,9 @@ impl BorsukIndex {
         let mut overlay = BTreeMap::new();
         let mut new_tombstone_ids = 0_u64;
         for record in &records {
+            if !generation_fence_ids.contains(record.id.as_bytes()) {
+                continue;
+            }
             if !self.id_is_tombstoned(record.id.as_bytes())? {
                 new_tombstone_ids = new_tombstone_ids.checked_add(1).ok_or_else(|| {
                     BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
@@ -22620,7 +22628,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_log_materialization_keeps_generation_updates_in_immutable_frontier() {
+    fn lane_log_materialization_does_not_fence_first_inserts() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let index = BorsukIndex::create(IndexConfig {
@@ -22645,7 +22653,7 @@ mod tests {
             materialized.manifest.tombstone_pages.is_empty(),
             "ordinary lane drain must not rewrite stable generation pages"
         );
-        assert_eq!(materialized.manifest.tombstone_frontier.len(), 1);
+        assert!(materialized.manifest.tombstone_frontier.is_empty());
         assert_eq!(
             materialized.get_vector("frontier").unwrap(),
             Some(vec![1.0, 0.0])

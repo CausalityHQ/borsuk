@@ -52,6 +52,7 @@ pub(crate) struct LaneLogRecordBlock {
     pub(crate) lane: u16,
     pub(crate) bytes: u64,
     pub(crate) records: Arc<Vec<VectorRecord>>,
+    pub(crate) generation_fence_ids: Arc<HashSet<Vec<u8>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,7 @@ enum LaneIdState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaneIdDeltaState {
+    Inserted,
     Live,
     Deleted,
     Purged,
@@ -234,7 +236,7 @@ impl LaneIdAuthority {
     fn commit_state(&mut self, ids: Vec<Vec<u8>>, state: LaneIdDeltaState, resident_bytes: u64) {
         for id in ids {
             match state {
-                LaneIdDeltaState::Live => {
+                LaneIdDeltaState::Inserted | LaneIdDeltaState::Live => {
                     self.states.insert(id, LaneIdState::Live);
                 }
                 LaneIdDeltaState::Deleted => {
@@ -261,12 +263,12 @@ impl LaneIdAuthority {
             ));
         }
         match delta.state {
-            LaneIdDeltaState::Live | LaneIdDeltaState::Deleted => {
+            LaneIdDeltaState::Inserted | LaneIdDeltaState::Live | LaneIdDeltaState::Deleted => {
                 if !self.states.contains_key(delta.id.as_slice()) {
                     self.charge(delta.id.len())?;
                 }
                 let state = match delta.state {
-                    LaneIdDeltaState::Live => LaneIdState::Live,
+                    LaneIdDeltaState::Inserted | LaneIdDeltaState::Live => LaneIdState::Live,
                     LaneIdDeltaState::Deleted => LaneIdState::Deleted,
                     LaneIdDeltaState::Purged => unreachable!(),
                 };
@@ -555,7 +557,7 @@ fn fenced_body<'a>(bytes: &'a [u8], magic: &[u8; 8], label: &str) -> Result<&'a 
 fn epoch_head_bytes(head: &LaneEpochHead) -> Result<Vec<u8>> {
     head.validate(head.lane)?;
     let mut body = Vec::with_capacity(96);
-    body.push(28);
+    body.push(29);
     body.extend_from_slice(&head.lane.to_le_bytes());
     body.extend_from_slice(&head.lease_epoch.to_le_bytes());
     body.extend_from_slice(&head.lease_owner);
@@ -578,7 +580,7 @@ fn epoch_head_bytes(head: &LaneEpochHead) -> Result<Vec<u8>> {
 fn epoch_head_from_bytes(bytes: &[u8], expected_lane: u16) -> Result<LaneEpochHead> {
     let body = fenced_body(bytes, EPOCH_HEAD_MAGIC, "epoch HEAD")?;
     let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 28 {
+    if take_u8(body, &mut cursor)? != 29 {
         return Err(BorsukError::InvalidStorage(
             "unsupported epoch lane-log HEAD version".to_string(),
         ));
@@ -637,7 +639,7 @@ fn extent_bytes(extent: &LaneExtent) -> Result<Vec<u8>> {
         BorsukError::InvalidRecordInput("epoch lane-log extent payload exceeds u64".to_string())
     })?;
     let mut body = Vec::with_capacity(43_usize.saturating_add(extent.payload.len()));
-    body.push(28);
+    body.push(29);
     body.extend_from_slice(&extent.lane.to_le_bytes());
     body.extend_from_slice(&extent.lease_epoch.to_le_bytes());
     body.extend_from_slice(&extent.sequence.to_le_bytes());
@@ -673,7 +675,7 @@ fn extent_from_bytes(
     }
     let body = fenced_body(bytes, EXTENT_MAGIC, "extent")?;
     let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 28 {
+    if take_u8(body, &mut cursor)? != 29 {
         return Err(BorsukError::InvalidStorage(
             "unsupported epoch lane-log extent version".to_string(),
         ));
@@ -734,7 +736,7 @@ fn block_bytes_with_deltas(payload: &[u8], deltas: &[LaneIdDelta]) -> Result<Vec
         BorsukError::InvalidRecordInput("lane-log ID delta count exceeds u32".to_string())
     })?;
     let mut body = Vec::new();
-    body.push(1);
+    body.push(2);
     body.extend_from_slice(&payload_len.to_le_bytes());
     body.extend_from_slice(&delta_count.to_le_bytes());
     body.extend_from_slice(payload);
@@ -745,6 +747,7 @@ fn block_bytes_with_deltas(payload: &[u8], deltas: &[LaneIdDelta]) -> Result<Vec
             ));
         }
         body.push(match delta.state {
+            LaneIdDeltaState::Inserted => 4,
             LaneIdDeltaState::Live => 1,
             LaneIdDeltaState::Deleted => 2,
             LaneIdDeltaState::Purged => 3,
@@ -761,7 +764,7 @@ fn block_bytes_with_deltas(payload: &[u8], deltas: &[LaneIdDelta]) -> Result<Vec
 fn block_from_bytes(bytes: &[u8]) -> Result<(&[u8], Vec<LaneIdDelta>)> {
     let body = fenced_body(bytes, BLOCK_MAGIC, "block")?;
     let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 1 {
+    if take_u8(body, &mut cursor)? != 2 {
         return Err(BorsukError::InvalidStorage(
             "unsupported lane-log block version".to_string(),
         ));
@@ -782,6 +785,7 @@ fn block_from_bytes(bytes: &[u8]) -> Result<(&[u8], Vec<LaneIdDelta>)> {
     let mut deltas = Vec::with_capacity(delta_count);
     for _ in 0..delta_count {
         let state = match take_u8(body, &mut cursor)? {
+            4 => LaneIdDeltaState::Inserted,
             1 => LaneIdDeltaState::Live,
             2 => LaneIdDeltaState::Deleted,
             3 => LaneIdDeltaState::Purged,
@@ -1275,16 +1279,32 @@ impl LaneEpochWriter {
             VectorElementType::Float32,
             PhysicalFormat::Parquet,
         )?;
-        let deltas = prepared
-            .as_ref()
-            .map(|(ids, _)| ids.clone())
-            .unwrap_or_else(|| ids.iter().map(|id| id.to_vec()).collect())
-            .into_iter()
-            .map(|id| LaneIdDelta {
-                id,
-                state: LaneIdDeltaState::Live,
-            })
-            .collect::<Vec<_>>();
+        let deltas: Vec<LaneIdDelta> =
+            prepared
+                .as_ref()
+                .map(|(prepared_ids, _)| {
+                    prepared_ids
+                        .iter()
+                        .map(|id| LaneIdDelta {
+                            id: id.clone(),
+                            state: if self.id_authority.as_ref().is_some_and(|authority| {
+                                authority.states.contains_key(id.as_slice())
+                            }) {
+                                LaneIdDeltaState::Live
+                            } else {
+                                LaneIdDeltaState::Inserted
+                            },
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    ids.iter()
+                        .map(|id| LaneIdDelta {
+                            id: id.to_vec(),
+                            state: LaneIdDeltaState::Live,
+                        })
+                        .collect()
+                });
         let extent = LaneExtent::from_wal(
             self.head.lane,
             self.head.lease_epoch,
@@ -1866,7 +1886,15 @@ impl LaneLogReader {
             .collect::<Vec<_>>();
         let current_blocks = current_blocks
             .iter()
-            .map(|block| (block.key.as_str(), Arc::clone(&block.records)))
+            .map(|block| {
+                (
+                    block.key.as_str(),
+                    (
+                        Arc::clone(&block.records),
+                        Arc::clone(&block.generation_fence_ids),
+                    ),
+                )
+            })
             .collect::<HashMap<_, _>>();
         let extents = states
             .into_iter()
@@ -1881,20 +1909,28 @@ impl LaneLogReader {
                         "lane-epoch:{}:{}:{}:{payload_checksum}",
                         extent.lane, extent.lease_epoch, extent.sequence
                     );
-                    let records = if let Some(records) = current_blocks.get(key.as_str()) {
-                        Arc::clone(records)
-                    } else {
-                        let bytes = u64::try_from(extent.payload.len()).map_err(|_| {
-                            BorsukError::InvalidStorage(
-                                "epoch lane-log payload length exceeds u64".to_string(),
-                            )
-                        })?;
-                        let load = || extent.decode_wal_records().map(|(records, _)| records);
-                        match runtime {
-                            Some(runtime) => runtime.load_record_run(&key, bytes, load)?,
-                            None => Arc::new(load()?),
-                        }
-                    };
+                    let (records, generation_fence_ids) =
+                        if let Some((records, fence_ids)) = current_blocks.get(key.as_str()) {
+                            (Arc::clone(records), Arc::clone(fence_ids))
+                        } else {
+                            let bytes = u64::try_from(extent.payload.len()).map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "epoch lane-log payload length exceeds u64".to_string(),
+                                )
+                            })?;
+                            let load = || extent.decode_wal_records().map(|(records, _)| records);
+                            let records = match runtime {
+                                Some(runtime) => runtime.load_record_run(&key, bytes, load)?,
+                                None => Arc::new(load()?),
+                            };
+                            let (_, deltas) = block_from_bytes(&extent.payload)?;
+                            let fence_ids = deltas
+                                .into_iter()
+                                .filter(|delta| delta.state == LaneIdDeltaState::Live)
+                                .map(|delta| delta.id)
+                                .collect::<HashSet<_>>();
+                            (records, Arc::new(fence_ids))
+                        };
                     Ok(LaneLogRecordBlock {
                         key,
                         lane: extent.lane,
@@ -1904,6 +1940,7 @@ impl LaneLogReader {
                             )
                         })?,
                         records,
+                        generation_fence_ids,
                     })
                 })
                 .collect::<Result<Vec<_>>>()
@@ -1981,6 +2018,7 @@ impl LaneLogReader {
                             lane: *lane,
                             bytes: block.bytes,
                             records: Arc::clone(records),
+                            generation_fence_ids: Arc::new(HashSet::new()),
                         });
                     }
                     let load = || {
@@ -2018,6 +2056,7 @@ impl LaneLogReader {
                         lane: *lane,
                         bytes: block.bytes,
                         records: decoded,
+                        generation_fence_ids: Arc::new(HashSet::new()),
                     })
                 })
                 .collect::<Result<Vec<_>>>()
@@ -2862,7 +2901,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_head_size_is_constant_across_extent_counts() {
+    fn v29_head_size_is_constant_across_extent_counts() {
         let head = |durable_sequence| LaneEpochHead {
             lane: 3,
             lease_epoch: 7,
@@ -2889,7 +2928,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_extent_round_trips_identity_and_records() {
+    fn v29_extent_round_trips_identity_and_records() {
         let extent = LaneExtent {
             lane: 3,
             lease_epoch: 7,
@@ -2905,16 +2944,21 @@ mod tests {
     }
 
     #[test]
-    fn v28_extent_round_trips_wal_records_id_deltas_and_generation_order() {
+    fn v29_extent_round_trips_wal_records_id_deltas_and_generation_order() {
         let records = vec![
             VectorRecord::new("first", vec![1.0, 2.0]),
             VectorRecord::new("second", vec![3.0, 4.0]),
         ];
         let deltas = records
             .iter()
-            .map(|record| LaneIdDelta {
+            .enumerate()
+            .map(|(ordinal, record)| LaneIdDelta {
                 id: record.id.as_bytes().to_vec(),
-                state: LaneIdDeltaState::Live,
+                state: if ordinal == 0 {
+                    LaneIdDeltaState::Inserted
+                } else {
+                    LaneIdDeltaState::Live
+                },
             })
             .collect::<Vec<_>>();
         let payload = crate::format::wal_records_to_table(
@@ -2946,7 +2990,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_extent_rejects_path_or_checksum_identity_mismatch() {
+    fn v29_extent_rejects_path_or_checksum_identity_mismatch() {
         let extent = LaneExtent {
             lane: 3,
             lease_epoch: 7,
@@ -2968,7 +3012,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_extent_put_is_the_acknowledgement_boundary() {
+    fn v29_extent_put_is_the_acknowledgement_boundary() {
         let mut writer = LaneEpochWriter::new_empty(
             Arc::new(InMemory::new()),
             "memory:///epoch-extent-ack",
@@ -2998,7 +3042,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_extent_completing_after_lease_guard_is_not_acknowledged() {
+    fn v29_extent_completing_after_lease_guard_is_not_acknowledged() {
         let mut writer = LaneEpochWriter::new_empty(
             Arc::new(InMemory::new()),
             "memory:///epoch-expired-extent",
@@ -3023,7 +3067,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_linearizable_reader_recovers_extents_beyond_a_stale_watermark() {
+    fn v29_linearizable_reader_recovers_extents_beyond_a_stale_watermark() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-stale-watermark";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3050,7 +3094,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_linearizable_reader_probes_sequences_without_prefix_listing() {
+    fn v29_linearizable_reader_probes_sequences_without_prefix_listing() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-direct-probe";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3071,7 +3115,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_periodic_watermark_keeps_direct_probe_window_bounded() {
+    fn v29_periodic_watermark_keeps_direct_probe_window_bounded() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-bounded-probe";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 10_000).unwrap();
@@ -3105,7 +3149,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_writer_and_reader_round_trip_production_wal_records() {
+    fn v29_writer_and_reader_round_trip_production_wal_records() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-production-wal";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3132,7 +3176,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_sealed_epoch_excludes_a_late_zombie_extent() {
+    fn v29_sealed_epoch_excludes_a_late_zombie_extent() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-zombie-seal";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3179,7 +3223,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_expired_takeover_seals_prior_epoch_and_recovers_id_authority() {
+    fn v29_expired_takeover_seals_prior_epoch_and_recovers_id_authority() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-takeover";
         let storage = Storage::from_object_store(uri.to_string(), Arc::clone(&store)).unwrap();
@@ -3214,7 +3258,7 @@ mod tests {
     }
 
     #[test]
-    fn v28_released_owner_reopens_in_a_new_epoch_without_generation_reuse() {
+    fn v29_released_owner_reopens_in_a_new_epoch_without_generation_reuse() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-owner-reopen";
         let storage = Storage::from_object_store(uri.to_string(), store).unwrap();
