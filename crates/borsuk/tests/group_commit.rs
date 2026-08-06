@@ -41,18 +41,23 @@ fn ids_in_ownership_lane(lane: usize, count: usize) -> Vec<String> {
 }
 
 #[test]
-fn drain_rebuilds_global_search_artifact_over_materialized_delta() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 8,
-        segment_max_vectors: 16,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+fn drain_keeps_global_base_and_searches_materialized_delta_without_rebuild() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///group-drain-global-delta";
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::new(traced),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
     .unwrap();
     index
         .add(
@@ -69,6 +74,7 @@ fn drain_rebuilds_global_search_artifact_over_materialized_delta() {
         )
         .unwrap();
     index.finish_bulk_load().unwrap();
+    operations.clear();
 
     let delta = vec![10.0; 8];
     let writer = GroupCommitWriter::new(
@@ -85,7 +91,14 @@ fn drain_rebuilds_global_search_artifact_over_materialized_delta() {
         .unwrap();
     writer.drain().unwrap();
 
-    let report = BorsukIndex::open(&uri)
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("global-pq/")
+        }),
+        0,
+        "drain must not rebuild the corpus-wide global PQ artifact"
+    );
+    let report = BorsukIndex::open_with_object_store(inner, uri)
         .unwrap()
         .search_with_report(
             &delta,
@@ -96,8 +109,8 @@ fn drain_rebuilds_global_search_artifact_over_materialized_delta() {
         .unwrap();
     assert_eq!(report.hits[0].id.as_str(), "delta");
     assert!(
-        report.segments_searched <= 4,
-        "drain must leave one read-optimized global artifact within the whole-query segment budget: {report:?}"
+        report.global_scan_chunks_searched > 0,
+        "drain must retain and search the immutable global base: {report:?}"
     );
 }
 
@@ -588,7 +601,7 @@ fn repeated_groups_have_zero_read_one_write_acknowledgements() {
 }
 
 #[test]
-fn inline_spill_runs_after_receipt_and_bounds_the_next_acknowledgement() {
+fn small_inline_groups_do_not_trigger_synchronous_spill_maintenance() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
         common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
@@ -626,15 +639,15 @@ fn inline_spill_runs_after_receipt_and_bounds_the_next_acknowledgement() {
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put && path.contains("/blocks/")
         }),
-        4,
-        "the first four inline blocks are uploaded together after their receipts"
+        0,
+        "small groups must remain inline until the byte-bound or background materialization"
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put && path.ends_with("/HEAD")
         }),
-        6,
-        "five ACK CASes plus one descriptor-compaction CAS"
+        5,
+        "each small group must issue only its acknowledgement HEAD CAS"
     );
     drop(writer);
     assert_eq!(
@@ -1131,7 +1144,7 @@ fn unchanged_refresh_cost_does_not_scale_with_committed_lane_blocks() {
     drop(writer);
     let mut with_tail = BorsukIndex::open(&tail_uri).unwrap();
     let tail_before = with_tail.request_counts();
-    assert!(!with_tail.refresh().unwrap());
+    with_tail.refresh().unwrap();
     let tail_refresh = with_tail.request_counts().delta(&tail_before);
 
     assert_eq!(tail_refresh.gets, empty_refresh.gets);

@@ -14,6 +14,18 @@ use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 
 const LARGE_OBJECT_BYTES: usize = 64 * 1024 * 1024 + 1;
 
+fn spill_test_vector(seed: u32, dimensions: usize) -> Vec<f32> {
+    let mut state = seed.max(1);
+    (0..dimensions)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as f32 / u32::MAX as f32
+        })
+        .collect()
+}
+
 #[test]
 fn rejected_lane_head_publication_is_not_visible() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -118,6 +130,7 @@ fn accepted_retryable_lane_head_is_acknowledged_once() {
 
 #[test]
 fn failed_post_ack_spill_keeps_inline_records_visible_and_retries_before_next_append() {
+    const DIMENSIONS: usize = 600_000;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///failed-inline-spill";
     drop(
@@ -126,7 +139,7 @@ fn failed_post_ack_spill_keeps_inline_records_visible_and_retries_before_next_ap
             IndexConfig {
                 uri: uri.to_string(),
                 metric: VectorMetric::Euclidean,
-                dimensions: 2,
+                dimensions: DIMENSIONS,
                 segment_max_vectors: 16,
                 ram_budget_bytes: None,
                 text: false,
@@ -166,7 +179,10 @@ fn failed_post_ack_spill_keeps_inline_records_visible_and_retries_before_next_ap
 
     for (ordinal, id) in ids.iter().enumerate() {
         writer
-            .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
+            .append(vec![VectorRecord::new(
+                id,
+                spill_test_vector(ordinal as u32 + 1, DIMENSIONS),
+            )])
             .unwrap();
     }
     drop(writer);
@@ -183,6 +199,7 @@ fn failed_post_ack_spill_keeps_inline_records_visible_and_retries_before_next_ap
 
 #[test]
 fn persistent_spill_failure_keeps_the_lane_backpressured() {
+    const DIMENSIONS: usize = 600_000;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///persistent-inline-spill-failure";
     drop(
@@ -191,7 +208,7 @@ fn persistent_spill_failure_keeps_the_lane_backpressured() {
             IndexConfig {
                 uri: uri.to_string(),
                 metric: VectorMetric::Euclidean,
-                dimensions: 2,
+                dimensions: DIMENSIONS,
                 segment_max_vectors: 16,
                 ram_budget_bytes: None,
                 text: false,
@@ -229,19 +246,28 @@ fn persistent_spill_failure_keeps_the_lane_backpressured() {
         .take(6)
         .collect::<Vec<_>>();
 
-    for (ordinal, id) in ids.iter().take(4).enumerate() {
+    for (ordinal, id) in ids.iter().take(3).enumerate() {
         writer
-            .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
+            .append(vec![VectorRecord::new(
+                id,
+                spill_test_vector(ordinal as u32 + 11, DIMENSIONS),
+            )])
             .unwrap();
     }
     assert!(
         writer
-            .append(vec![VectorRecord::new(&ids[4], vec![4.0, 0.0])])
+            .append(vec![VectorRecord::new(
+                &ids[3],
+                spill_test_vector(14, DIMENSIONS),
+            )])
             .is_err()
     );
     assert!(
         writer
-            .append(vec![VectorRecord::new(&ids[5], vec![5.0, 0.0])])
+            .append(vec![VectorRecord::new(
+                &ids[4],
+                spill_test_vector(15, DIMENSIONS),
+            )])
             .is_err()
     );
     drop(writer);
@@ -252,7 +278,7 @@ fn persistent_spill_failure_keeps_the_lane_backpressured() {
             .list_records(0, ids.len())
             .unwrap()
             .len(),
-        4
+        3
     );
 }
 
