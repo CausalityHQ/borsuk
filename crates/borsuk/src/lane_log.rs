@@ -3110,8 +3110,11 @@ mod tests {
 
         assert_eq!(extents.len(), 2);
         assert_eq!(requests.lists, 0);
-        assert_eq!(requests.heads, 3, "probe two extents and one end key");
-        assert_eq!(requests.gets, 3, "read the lane HEAD and two extents");
+        assert_eq!(requests.heads, 0, "whole-object probes use GET metadata");
+        assert_eq!(
+            requests.gets, 4,
+            "read the lane HEAD, two extents, and end probe"
+        );
     }
 
     #[test]

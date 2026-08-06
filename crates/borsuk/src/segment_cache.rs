@@ -180,6 +180,14 @@ impl<T> DecodedObjectCache<T> {
         );
     }
 
+    pub(crate) fn remove(&self, checksum: &str) {
+        let mut shard = self
+            .shard_for(checksum)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        Self::remove_entry(&mut shard, checksum);
+    }
+
     fn oldest_key(shard: &ObjectCacheShard<T>) -> Option<String> {
         shard
             .entries
