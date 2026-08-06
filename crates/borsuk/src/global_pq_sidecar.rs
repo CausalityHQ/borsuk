@@ -1276,6 +1276,61 @@ impl GlobalPqDescriptor {
         })
     }
 
+    /// Return a new descriptor that reuses every existing immutable chunk and
+    /// appends only newly encoded contiguous rows under the same trained
+    /// quantizers and packed-location layout.
+    pub(crate) fn append_chunks(
+        &self,
+        appended_vectors: usize,
+        appended_chunks: Vec<GlobalPqChunkRef>,
+    ) -> Result<Self> {
+        let vectors = self.vectors.checked_add(appended_vectors).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ vector count overflows".to_string())
+        })?;
+        let mut chunks = self.chunks.clone();
+        chunks.extend(appended_chunks);
+        Self::new(
+            self.quantizer.clone(),
+            self.coarse_quantizer.clone(),
+            vectors,
+            self.vector_element_type,
+            self.location,
+            chunks,
+        )
+    }
+
+    /// Create an external spool that encodes new rows with this descriptor's
+    /// already-trained scan and coarse quantizers. The declared physical layout
+    /// must still fit the persisted packed-location width.
+    pub(crate) fn append_spool(
+        &self,
+        max_chunk_bytes: usize,
+        dimensions: usize,
+        segment_count: usize,
+        max_rows_per_segment: usize,
+    ) -> Result<GlobalPqCellSpool> {
+        let segment_index = u32::try_from(segment_count.saturating_sub(1)).map_err(|_| {
+            BorsukError::InvalidStorage("resident global PQ has more than u32 segments".to_string())
+        })?;
+        let row_index = u32::try_from(max_rows_per_segment.saturating_sub(1)).map_err(|_| {
+            BorsukError::InvalidStorage(
+                "resident global PQ segment has more than u32 rows".to_string(),
+            )
+        })?;
+        self.location.pack(GlobalPqRow {
+            segment_index,
+            row_index,
+        })?;
+        GlobalPqCellSpool::new(
+            GlobalScanQuantizer::from_state(self.quantizer.clone())?,
+            GlobalCoarseQuantizer::from_state(self.coarse_quantizer.clone())?,
+            self.location,
+            max_chunk_bytes,
+            dimensions,
+            self.vector_element_type,
+        )
+    }
+
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
         let json = serde_json::to_string(self).map_err(|error| {
             BorsukError::InvalidStorage(format!("failed to encode global PQ descriptor: {error}"))
@@ -1394,6 +1449,17 @@ impl GlobalPqDescriptor {
 
     pub(crate) fn vector_element_type(&self) -> VectorElementType {
         self.vector_element_type
+    }
+
+    pub(crate) fn location_encoding(&self) -> LocationEncoding {
+        self.location
+    }
+
+    pub(crate) fn hierarchical_coarse(&self) -> bool {
+        matches!(
+            self.coarse_quantizer,
+            GlobalCoarseQuantizerState::Hierarchical(_)
+        )
     }
 
     /// Descriptor/codebook bytes kept in RAM. Code chunks deliberately stay in
@@ -2414,6 +2480,79 @@ mod tests {
         let decoded = GlobalPqDescriptor::decode(&encoded).unwrap();
         assert_eq!(decoded.vectors(), 100_000_000);
         assert_eq!(decoded.chunks().len(), 25_000);
+    }
+
+    #[test]
+    fn descriptor_append_reuses_old_chunks_and_extends_contiguous_rows() {
+        let fit = vectors(128, 64);
+        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let location = LocationEncoding::for_layout(4, 64).unwrap();
+        let chunk = |path: &str, row_start: usize| GlobalPqChunkRef {
+            path: path.to_string(),
+            checksum: blake3::hash(path.as_bytes()).to_hex().to_string(),
+            offset_bytes: 0,
+            exact_checksum: blake3::hash(format!("exact-{path}").as_bytes())
+                .to_hex()
+                .to_string()
+                .into_boxed_str(),
+            exact_offset_bytes: 8_192,
+            exact_size_bytes: 64 * 64 * size_of::<f32>(),
+            cell_index: 0,
+            identity_offsets_padding_bytes: 0,
+            identity_values_padding_bytes: 0,
+            row_start,
+            rows: 64,
+            size_bytes: 4_096,
+            graph: None,
+        };
+        let old_chunk = chunk("old", 0);
+        let descriptor = GlobalPqDescriptor::new(
+            quantizer.state(),
+            coarse_state(&fit),
+            64,
+            VectorElementType::Float32,
+            location,
+            vec![old_chunk.clone()],
+        )
+        .unwrap();
+        let appended = descriptor
+            .append_chunks(64, vec![chunk("new", 64)])
+            .unwrap();
+
+        assert_eq!(appended.vectors(), 128);
+        assert_eq!(appended.chunks()[0], old_chunk);
+        assert_eq!(appended.chunks()[1].path, "new");
+        assert_eq!(appended.chunks()[1].row_start, 64);
+        assert!(appended.encode().unwrap().starts_with(b"PAR1"));
+    }
+
+    #[test]
+    fn descriptor_append_spool_reuses_quantizers_and_rejects_location_overflow() {
+        let fit = vectors(128, 64);
+        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let coarse = RotatedProductQuantizer::fit(
+            ProductQuantizerConfig {
+                subspaces: 1,
+                ..config()
+            },
+            &fit,
+        )
+        .unwrap();
+        let descriptor = GlobalPqDescriptor::new(
+            quantizer.state(),
+            coarse.state(),
+            0,
+            VectorElementType::Float32,
+            LocationEncoding::for_layout(4, 64).unwrap(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        let spool = descriptor.append_spool(4_096, 64, 4, 64).unwrap();
+        let (cell, code) = spool.encode_vector(&fit[17]).unwrap();
+        assert_eq!(cell & 0xff, u16::from(coarse.encode(&fit[17]).unwrap()[0]));
+        assert_eq!(code, quantizer.encode(&fit[17]).unwrap());
+        assert!(descriptor.append_spool(4_096, 64, 4, 65).is_err());
     }
 
     #[test]
