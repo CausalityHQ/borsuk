@@ -107,8 +107,30 @@ impl RotatedProductQuantizer {
 
     pub(crate) fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
         self.validate_vector(vector)?;
-        let rotated = transform_vector(self.rotation.as_ref(), vector);
-        let mut code = Vec::with_capacity(self.subspaces);
+        let mut rotated = Vec::new();
+        let mut code = Vec::new();
+        self.encode_into(vector, &mut rotated, &mut code)?;
+        Ok(code)
+    }
+
+    /// Encode using caller-owned scratch buffers. This is the hot path for
+    /// immutable materialization, where many vectors are coded in one batch.
+    /// The output is byte-identical to [`Self::encode`].
+    pub(crate) fn encode_into(
+        &self,
+        vector: &[f32],
+        rotated: &mut Vec<f32>,
+        code: &mut Vec<u8>,
+    ) -> Result<()> {
+        self.validate_vector(vector)?;
+        if let Some(rotation) = self.rotation.as_ref() {
+            rotation.rotate_into(vector, rotated);
+        } else {
+            rotated.clear();
+            rotated.extend_from_slice(vector);
+        }
+        code.clear();
+        code.reserve(self.subspaces);
         for subspace in 0..self.subspaces {
             let start = self.subspace_offsets[subspace];
             let end = self.subspace_offsets[subspace + 1];
@@ -116,7 +138,7 @@ impl RotatedProductQuantizer {
             let centroid = nearest_flat_centroid(&rotated[start..end], codebook, end - start);
             code.push(centroid as u8);
         }
-        Ok(code)
+        Ok(())
     }
 
     pub(crate) fn prepare_query(&self, query: &[f32]) -> Result<PreparedAdc> {
@@ -643,6 +665,23 @@ mod tests {
         assert_eq!(pq.encode(&fit[0]).unwrap().len(), 4);
         assert_eq!(pq.code_bytes_per_vector(), 4);
         assert_eq!(pq.codebook_bytes(), 4 * 8 * 4 * size_of::<f32>());
+    }
+
+    #[test]
+    fn encode_into_reuses_scratch_and_matches_allocating_encoder() {
+        let fit = fixture_vectors(64, 16);
+        let pq = RotatedProductQuantizer::fit(test_config(), &fit).unwrap();
+        let expected = pq.encode(&fit[17]).unwrap();
+        let mut rotated = Vec::new();
+        let mut code = Vec::new();
+        pq.encode_into(&fit[17], &mut rotated, &mut code).unwrap();
+        assert_eq!(code, expected);
+        let rotated_capacity = rotated.capacity();
+        let code_capacity = code.capacity();
+        pq.encode_into(&fit[18], &mut rotated, &mut code).unwrap();
+        assert_eq!(code, pq.encode(&fit[18]).unwrap());
+        assert_eq!(rotated.capacity(), rotated_capacity);
+        assert_eq!(code.capacity(), code_capacity);
     }
 
     #[test]

@@ -162,42 +162,60 @@ impl VectorElementType {
     }
 
     /// Encode one vector as a compact, little-endian fixed-width row.
+    #[cfg(test)]
     pub(crate) fn encode_fixed_width(self, vector: &[f32]) -> Result<Vec<u8>> {
         let canonical = self.canonicalize(vector)?;
-        let mut encoded = Vec::with_capacity(self.fixed_width_bytes(canonical.len())?);
+        let mut encoded = Vec::new();
+        self.encode_canonical_fixed_width_into(&canonical, &mut encoded)?;
+        Ok(encoded)
+    }
+
+    /// Encode values that already passed [`Self::canonicalize`] into a reusable
+    /// row buffer. Persisted segment/WAL records use this path when another
+    /// immutable artifact needs the same physical values; external input
+    /// boundaries remain responsible for checked canonicalization.
+    pub(crate) fn encode_canonical_fixed_width_into(
+        self,
+        canonical: &[f32],
+        encoded: &mut Vec<u8>,
+    ) -> Result<()> {
+        let expected = self.fixed_width_bytes(canonical.len())?;
+        encoded.clear();
+        encoded.reserve(expected);
         match self {
             Self::Float32 => {
-                for value in canonical {
+                for value in canonical.iter().copied() {
                     encoded.extend_from_slice(&value.to_le_bytes());
                 }
             }
             Self::Float16 => {
-                for value in canonical {
+                for value in canonical.iter().copied() {
                     encoded.extend_from_slice(&half::f16::from_f32(value).to_bits().to_le_bytes());
                 }
             }
             Self::BFloat16 => {
-                for value in canonical {
+                for value in canonical.iter().copied() {
                     encoded.extend_from_slice(&half::bf16::from_f32(value).to_bits().to_le_bytes());
                 }
             }
             Self::Float8E4M3Fn => {
-                encoded.extend(canonical.into_iter().map(crate::float8::encode_e4m3fn));
+                encoded.extend(canonical.iter().copied().map(crate::float8::encode_e4m3fn));
             }
             Self::Float8E5M2 => {
-                encoded.extend(canonical.into_iter().map(crate::float8::encode_e5m2));
+                encoded.extend(canonical.iter().copied().map(crate::float8::encode_e5m2));
             }
-            Self::Int8 => encoded.extend(canonical.into_iter().map(|value| value as i8 as u8)),
+            Self::Int8 => encoded.extend(canonical.iter().map(|value| *value as i8 as u8)),
             Self::Binary => {
-                encoded.resize(vector.len().div_ceil(8), 0);
-                for (dimension, value) in canonical.into_iter().enumerate() {
+                encoded.resize(canonical.len().div_ceil(8), 0);
+                for (dimension, value) in canonical.iter().copied().enumerate() {
                     if value != 0.0 {
                         encoded[dimension / 8] |= 1 << (dimension % 8);
                     }
                 }
             }
         }
-        Ok(encoded)
+        debug_assert_eq!(encoded.len(), expected);
+        Ok(())
     }
 
     /// Decode one compact fixed-width row into canonical public `f32` values.
@@ -2676,6 +2694,39 @@ mod vector_element_physical_tests {
                 expected_bytes,
                 "{element_type}"
             );
+        }
+    }
+
+    #[test]
+    fn canonical_fixed_width_encoding_reuses_the_output_buffer() {
+        let input = [1.0, -2.0, 0.0, 1.0, 0.5, -0.25, 3.0, 4.0, 1.0];
+        for element_type in [
+            VectorElementType::Float32,
+            VectorElementType::Float16,
+            VectorElementType::BFloat16,
+            VectorElementType::Float8E4M3Fn,
+            VectorElementType::Float8E5M2,
+            VectorElementType::Int8,
+            VectorElementType::Binary,
+        ] {
+            let source = match element_type {
+                VectorElementType::Int8 => vec![1.0, -2.0, 0.0, 1.0, 0.0, -1.0, 3.0, 4.0, 1.0],
+                VectorElementType::Binary => vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
+                _ => input.to_vec(),
+            };
+            let canonical = element_type.canonicalize(&source).unwrap();
+            let expected = element_type.encode_fixed_width(&canonical).unwrap();
+            let mut encoded = Vec::with_capacity(expected.len());
+            element_type
+                .encode_canonical_fixed_width_into(&canonical, &mut encoded)
+                .unwrap();
+            assert_eq!(encoded, expected, "{element_type}");
+            let capacity = encoded.capacity();
+            element_type
+                .encode_canonical_fixed_width_into(&canonical, &mut encoded)
+                .unwrap();
+            assert_eq!(encoded, expected, "{element_type}");
+            assert_eq!(encoded.capacity(), capacity, "{element_type}");
         }
     }
 
