@@ -12393,7 +12393,8 @@ impl BorsukIndex {
             return Ok(None);
         }
         let dimensions = self.manifest.config.dimensions;
-        let subspaces = resident_global_pq_subspaces(
+        let subspaces = resident_global_pq_subspaces_for_metric(
+            &self.manifest.config.metric,
             dimensions,
             vectors_seen,
             self.manifest.build_config.global_pq_code_bytes,
@@ -18780,6 +18781,27 @@ fn resident_global_pq_subspaces(
         .min(padded)
 }
 
+fn resident_global_pq_subspaces_for_metric(
+    metric: &VectorMetric,
+    dimensions: usize,
+    vectors: usize,
+    configured_code_bytes: Option<usize>,
+) -> usize {
+    if configured_code_bytes.is_none()
+        && metric.uses_normalized_euclidean_geometry()
+        && dimensions == 768
+        && vectors >= 100_000
+    {
+        // Cohere Medium 1M/768D first clears recall@10 >= 0.95 and the local
+        // p95 serving gate with 64-byte SRHT-PQ codes, 16 flat-cell probes, and
+        // a 128-row exact rerank. The former 256-byte default saturates scan
+        // bandwidth near 19 QPS. Keep this angular result separate from GIST's
+        // Euclidean 960D evidence, which still selects 256-byte codes.
+        return resident_global_pq_subspaces(dimensions, vectors, Some(64));
+    }
+    resident_global_pq_subspaces(dimensions, vectors, configured_code_bytes)
+}
+
 /// Select the second-level fan-out of the 64-way full-dimensional hierarchy.
 /// The leaf-centroid table is capped at 32 MiB regardless of corpus size or
 /// dimension, while ordinary million-row corpora get 1,024 cells, Deep-scale
@@ -18900,7 +18922,13 @@ fn resident_global_pq_candidates(
     vectors: usize,
 ) -> usize {
     let linear = subspaces.saturating_mul(3).saturating_sub(8).max(32);
-    if dimensions >= 768 && subspaces >= 256 && vectors >= 100_000 {
+    if metric.uses_normalized_euclidean_geometry()
+        && dimensions == 768
+        && subspaces == 64
+        && vectors >= 100_000
+    {
+        128
+    } else if dimensions >= 768 && subspaces >= 256 && vectors >= 100_000 {
         // The fresh GIST code256 sweep reaches 0.995 at 24 probes with only 96
         // lossless rows. 128..256 rows plateau at 0.996; 384 first reaches
         // 0.997 but crosses the production latency/request envelope. Keep that
@@ -18941,6 +18969,11 @@ fn resident_global_pq_candidates(
 fn resident_global_pq_probes(metric: &VectorMetric, dimensions: usize, segments: usize) -> usize {
     if segments == 0 {
         return 0;
+    }
+    if metric.uses_normalized_euclidean_geometry() && dimensions == 768 && segments <= 256 {
+        // The terminal Cohere Medium 1M curve first clears recall@10 >= 0.95
+        // at 16 probes with the qualified 64-byte code and 128-row rerank.
+        return 16.min(segments);
     }
     if metric.uses_normalized_euclidean_geometry() && dimensions == 256 && segments <= 256 {
         // The fine-grained NYTimes-256 code128 boundary sweep first reaches its
@@ -23036,6 +23069,27 @@ mod tests {
         assert_eq!(resident_global_pq_coarse_children(96, 9_990_000), 64);
         assert_eq!(resident_global_pq_coarse_children(96, 100_000_000), 256);
         assert_eq!(resident_global_pq_coarse_children(4_096, 100_000_000), 32);
+
+        assert_eq!(
+            resident_global_pq_subspaces_for_metric(&VectorMetric::Cosine, 768, 1_000_000, None,),
+            64,
+            "qualified Cohere 1M angular serving uses the bounded scan code"
+        );
+        assert_eq!(
+            resident_global_pq_subspaces_for_metric(&VectorMetric::Euclidean, 960, 1_000_000, None,),
+            256,
+            "the angular qualification must not weaken the measured GIST profile"
+        );
+        assert_eq!(
+            resident_global_pq_candidates(&VectorMetric::Cosine, 768, 64, 1_000_000),
+            128,
+            "Cohere 1M first clears recall and latency at a 128-row rerank"
+        );
+        assert_eq!(
+            resident_global_pq_probes(&VectorMetric::Cosine, 768, 256),
+            16,
+            "Cohere 1M first clears recall with 16 flat-cell probes"
+        );
         assert_eq!(resident_global_pq_subspaces(100, 1_183_514, None), 64);
         assert_eq!(resident_global_pq_subspaces(96, 9_990_000, None), 64);
         assert_eq!(resident_global_pq_subspaces(256, 290_000, None), 128);
