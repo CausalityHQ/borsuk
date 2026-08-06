@@ -75,6 +75,15 @@ five phase markers existed and the process exited successfully.
   proves codebook reuse is material but insufficient; writer-side searchable
   extent codes, sparse generation fences, and a lower-request read merge remain
   required before AWS qualification.
+- `cf5003f` replaced v28 with v29 and persisted whether each acknowledged ID
+  was a first insert or a replacement. Fresh inserts now create no generation
+  fence, while repeated-upsert tests preserve last-write-wins. The terminal
+  cell remained effectively unchanged at recall 1.0, 59.849 ms write p95,
+  47,998 acknowledged records/s, 5.766 s drain, 2,683 drain-inclusive
+  records/s, 347.326 ms active-tail p95, and 271.876 ms post-drain p95. This
+  rules out dense generation-frontier reads as the dominant latency source in
+  this local shape; the fixed base/delta object-request merge and unindexed raw
+  active tail remain causal targets.
 
 The campaign is claim-ineligible until the root completion marker exists, no
 failure marker exists, the service exits successfully, and the fail-closed
