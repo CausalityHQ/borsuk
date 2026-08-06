@@ -60,20 +60,33 @@ actual="\$(sha256sum /tmp/borsuk-group-commit-source.tar | awk '{print \$1}')"
 tar -xf /tmp/borsuk-group-commit-source.tar -C "\$workspace"
 printf '%s\n' "${source_sha}" > "\$workspace/source.ready"
 sudo chown -R ec2-user:ec2-user "\$workspace"
+dataset_root=/home/ec2-user/borsuk-datasets
+dataset_dir="\$dataset_root/cohere-medium-1M"
+if [[ ! -f "\$dataset_dir/dataset.json" || ! -f "\$dataset_dir/train.parquet" ]]; then
+  sudo -iu ec2-user bash -lc "cd \"\$workspace\" && uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/fetch_vdbbench_dataset.py --dataset cohere-medium-1M --output-root \"\$dataset_root\""
+fi
+[[ -f "\$dataset_dir/dataset.json" && -f "\$dataset_dir/train.parquet" ]] || {
+  echo 'pinned Cohere dataset preparation failed' >&2
+  exit 7
+}
 sudo -iu ec2-user tmux new-session -d -s "\$session" -c "\$workspace"
 sudo -iu ec2-user tmux set-option -t "\$session" remain-on-exit on
-cmd="env AWS_REGION='${REGION}' AWS_DEFAULT_REGION='${REGION}' BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT='/home/ec2-user/borsuk-group-commit-results/${RUN_ID}' BORSUK_GROUP_COMMIT_SCALABILITY_INDEX_ROOT=\"\$index_uri\" BORSUK_GROUP_COMMIT_SCALABILITY_RESULT_URI=\"\$result_uri\" BORSUK_GROUP_COMMIT_DATASET='/home/ec2-user/borsuk-datasets/cohere-medium-1M' BORSUK_ARCHITECTURE=aarch64 BORSUK_INSTANCE_TYPE='${instance_type}' BORSUK_RUN_GROUP_COMMIT_SCALABILITY=1 bash scripts/bench_group_commit_scalability.sh"
+sentinel="/home/ec2-user/borsuk-group-commit-results/${RUN_ID}/RUNNER_STARTED"
+cmd="mkdir -p '/home/ec2-user/borsuk-group-commit-results/${RUN_ID}' && printf 'started\\n' > \"\$sentinel\" && exec env AWS_REGION='${REGION}' AWS_DEFAULT_REGION='${REGION}' BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT='/home/ec2-user/borsuk-group-commit-results/${RUN_ID}' BORSUK_GROUP_COMMIT_SCALABILITY_INDEX_ROOT=\"\$index_uri\" BORSUK_GROUP_COMMIT_SCALABILITY_RESULT_URI=\"\$result_uri\" BORSUK_GROUP_COMMIT_DATASET='/home/ec2-user/borsuk-datasets/cohere-medium-1M' BORSUK_ARCHITECTURE=aarch64 BORSUK_INSTANCE_TYPE='${instance_type}' BORSUK_RUN_GROUP_COMMIT_SCALABILITY=1 bash scripts/bench_group_commit_scalability.sh"
 sudo -iu ec2-user tmux send-keys -t "\$session" -l -- "\$cmd"
 sudo -iu ec2-user tmux send-keys -t "\$session" Enter
 for _ in \$(seq 1 120); do
   dead="\$(sudo -iu ec2-user tmux display-message -p -t "\$session:0.0" '#{pane_dead}' 2>/dev/null || printf 1)"
   [[ "\$dead" == 0 ]] || break
-  if sudo -iu ec2-user tmux capture-pane -p -t "\$session:0.0" -S -30 2>/dev/null | grep -Fq 'group-commit scalability'; then
+  if sudo -iu ec2-user test -f "\$sentinel"; then
     break
   fi
   sleep 1
 done
-[[ "\$dead" == 0 ]] || { sudo -iu ec2-user tmux capture-pane -p -t "\$session:0.0" -S -100 >&2 || true; exit 6; }
+[[ "\$dead" == 0 ]] && sudo -iu ec2-user test -f "\$sentinel" || {
+  sudo -iu ec2-user tmux capture-pane -p -t "\$session:0.0" -S -100 >&2 || true
+  exit 6
+}
 printf 'started session=%s source_sha256=%s result=%s index=%s\n' "\$session" '${source_sha}' "\$result_uri" "\$index_uri"
 EOF
 )"
