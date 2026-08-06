@@ -1878,7 +1878,7 @@ impl BorsukIndex {
         now_ms: u64,
         ttl_ms: u64,
         minimum_generation: u64,
-    ) -> Result<crate::lane_log::LaneLogWriter> {
+    ) -> Result<crate::lane_log::LaneEpochWriter> {
         let lane_count = u16::from(self.manifest.cell_wal_config.lane_count);
         if lane >= lane_count {
             return Err(BorsukError::InvalidStorage(format!(
@@ -1889,7 +1889,7 @@ impl BorsukIndex {
             .effective_ram_budget_bytes()
             .unwrap_or(DEFAULT_RAM_BUDGET_BYTES);
         let lane_budget = total_budget / u64::from(lane_count);
-        crate::lane_log::LaneLogWriter::acquire_for_upserts(
+        crate::lane_log::LaneEpochWriter::acquire_with_storage(
             self.collection_storage
                 .clone_with_independent_request_counters(),
             lane,

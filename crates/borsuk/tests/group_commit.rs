@@ -597,13 +597,14 @@ fn repeated_groups_have_zero_read_one_write_acknowledgements() {
             >= GROUPS,
         "post-ACK spill may add maintenance PUTs"
     );
-    assert!(
+    assert_eq!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put
-                && path.starts_with("lane-log/lanes/")
-                && path.ends_with("/HEAD")
-        }) >= GROUPS,
-        "every acknowledgement PUT targets its authoritative lane HEAD; spill may add HEAD CASes"
+                && path.contains("/extents/")
+                && path.ends_with(".wal")
+        }),
+        GROUPS,
+        "every acknowledgement PUT must create exactly one immutable extent"
     );
     drop(writer);
     assert_eq!(
@@ -617,7 +618,7 @@ fn repeated_groups_have_zero_read_one_write_acknowledgements() {
 }
 
 #[test]
-fn small_inline_groups_do_not_trigger_synchronous_spill_maintenance() {
+fn small_groups_publish_only_immutable_extents_before_release() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
         common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
@@ -656,14 +657,23 @@ fn small_inline_groups_do_not_trigger_synchronous_spill_maintenance() {
             operation == common::StoreOperation::Put && path.contains("/blocks/")
         }),
         0,
-        "small groups must remain inline until the byte-bound or background materialization"
+        "v27 must never publish legacy mutable blocks"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.contains("/extents/")
+                && path.ends_with(".wal")
+        }),
+        5,
+        "each small group must issue only its immutable extent acknowledgement"
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put && path.ends_with("/HEAD")
         }),
-        5,
-        "each small group must issue only its acknowledgement HEAD CAS"
+        0,
+        "HEAD progress publication must stay outside foreground acknowledgement"
     );
     drop(writer);
     assert_eq!(
@@ -934,7 +944,7 @@ fn lane_append_revives_an_id_deleted_by_the_manifest_writer() {
 }
 
 #[test]
-fn live_lane_writer_does_not_recreate_a_disappeared_head() {
+fn live_lane_writer_does_not_recreate_a_disappeared_head_and_reopen_fails_closed() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let index = BorsukIndex::create(config(&uri)).unwrap();
@@ -957,18 +967,19 @@ fn live_lane_writer_does_not_recreate_a_disappeared_head() {
     )
     .unwrap();
 
-    let error = writer
+    writer
         .append(vec![VectorRecord::new("before-loss", vec![2.0, 0.0])])
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("concurrent modification"),
-        "unexpected error: {error}"
-    );
+        .unwrap();
     assert!(
         !directory
             .path()
             .join(format!("lane-log/lanes/{:04}/HEAD", receipt.commit_lane))
             .exists()
+    );
+    drop(writer);
+    assert!(
+        BorsukIndex::open(&uri).is_err(),
+        "a missing lease authority must fail closed during reopen"
     );
 }
 

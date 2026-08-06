@@ -540,7 +540,7 @@ fn current_time_ms() -> Result<u64> {
 
 fn run_worker(
     mut index: BorsukIndex,
-    mut lane_writers: Vec<crate::lane_log::LaneLogWriter>,
+    mut lane_writers: Vec<crate::lane_log::LaneEpochWriter>,
     dimensions: usize,
     config: GroupCommitConfig,
     requests: Receiver<WorkerRequest>,
