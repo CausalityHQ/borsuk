@@ -56,6 +56,11 @@
   local index and failed the post-reopen exact-recall gate before producing a
   valid performance cell; its partial CSVs remain uninspected. Do not compare
   it with r21--r26. A fresh-base terminal run is still required.
+- The first fresh-base attempt after that factor also failed post-reopen exact
+  recall. Source tracing found stale padded SRHT coordinates in reused scratch
+  for 768D vectors; a regression now covers non-power-of-two dimensions and
+  the rotation buffer is fully cleared before every transform. Its partial
+  CSVs remain uninspected, and a new pristine-base run is required.
 
 ## Global Constraints
 

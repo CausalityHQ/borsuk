@@ -685,6 +685,20 @@ mod tests {
     }
 
     #[test]
+    fn encode_into_clears_padded_rotation_tail_between_vectors() {
+        let mut config = test_config();
+        config.dimensions = 12;
+        config.subspaces = 4;
+        let fit = fixture_vectors(64, 12);
+        let pq = RotatedProductQuantizer::fit(config, &fit).unwrap();
+        let mut rotated = Vec::new();
+        let mut code = Vec::new();
+        pq.encode_into(&fit[0], &mut rotated, &mut code).unwrap();
+        pq.encode_into(&fit[1], &mut rotated, &mut code).unwrap();
+        assert_eq!(code, pq.encode(&fit[1]).unwrap());
+    }
+
+    #[test]
     fn product_code_fit_is_deterministic() {
         let fit = fixture_vectors(64, 16);
         let config = test_config();

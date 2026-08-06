@@ -88,3 +88,11 @@ previously materialized diagnostic index rather than a pristine base; its
 partial measurement files were not inspected and it provides no numeric
 performance evidence. A fresh-base terminal run is required before attributing
 any throughput change to this factor.
+
+The first fresh-base attempt then exposed a real scratch-buffer correctness
+defect: padded SRHT coordinates were not cleared between vectors, so 768D
+inputs (padded to 1,024) could contaminate later codes. The attempt failed the
+post-reopen exact-recall gate; its partial measurement files were not
+inspected. A regression now covers non-power-of-two dimensions and clears the
+entire caller-owned rotation buffer before each transform. The fix requires a
+new pristine-base terminal run.
