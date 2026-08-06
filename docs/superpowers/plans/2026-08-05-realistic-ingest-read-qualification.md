@@ -360,8 +360,13 @@
   ANN execution now subtract predecessor bytes and elapsed time before entering
   the recursive layer, stops instead of constructing an invalid zero budget,
   and preserves the layer that exhausted the request in the merged termination
-  report. WAL overlay byte/deadline charging and realistic latency and recall
-  qualification remain open.
+  report. Search now scores the bounded live WAL once and reserves its exact
+  persisted cell-run and lane-block bytes plus elapsed time before entering the
+  immutable layers. If that consumes the request, the fresh WAL top-k returns
+  directly with degraded recall and no immutable reads; otherwise base and
+  delta receive only the remainder. Lane-log snapshots retain exact descriptor
+  byte counts and expose their lanes, runs, and records in query telemetry.
+  Realistic latency and recall qualification remains open.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
