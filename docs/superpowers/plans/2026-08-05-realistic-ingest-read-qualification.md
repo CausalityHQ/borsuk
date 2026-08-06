@@ -308,6 +308,27 @@
   to scan the full eight-chunk probe set and now scans exactly one. Delta/WAL
   byte charging and resident-global latency-budget enforcement remain open.
 
+  The unbounded materialized-delta gate is now frozen to a two-ANN-layer
+  design. A manifest may reference one stable base artifact and at most one
+  delta artifact; segments covered by neither are the exact fringe. Delta
+  coverage must be disjoint from base coverage, every referenced checksum must
+  still be active, and a nested delta is invalid. The embedded reference graph
+  carries required layout marker `1`, so unreleased single-layer JSON is
+  rejected with a rebuild instruction instead of being guessed compatible.
+  Artifact objects are written content-addressed before the manifest CAS and GC
+  traces both descriptors and all of their chunks/graphs. The rebuild trigger
+  is geometric: once the exact fringe reaches a small production floor or the
+  current delta's covered-segment count, whichever is larger, maintenance
+  rebuilds only delta-plus-fringe and publishes it atomically. This bounds the
+  exact fringe between completed maintenance passes and amortizes rebuild work
+  without touching the stable corpus. Query work must remain one stable ANN,
+  one delta ANN, one bounded exact fringe, and one WAL overlay under shared
+  segment/candidate/byte/deadline accounting. A bounded GPT-5.6 Sol review
+  independently confirmed the existing linear exact-delta behavior and budget
+  failure, but exhausted before issuing a final recommendation; the invariants
+  above therefore remain subject to repository tests and measured qualification,
+  not model authority.
+
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.

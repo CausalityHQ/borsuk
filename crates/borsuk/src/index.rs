@@ -11155,25 +11155,28 @@ impl BorsukIndex {
             paths.insert(quantizer_ref.path.clone());
         }
         if let Some(global_pq_ref) = &self.manifest.global_pq_ref {
-            paths.insert(global_pq_ref.path.clone());
-            let descriptor_read = self.storage.read_bytes_with_cache_status_and_checksum(
-                &global_pq_ref.path,
-                &global_pq_ref.checksum,
-            )?;
-            let descriptor = GlobalPqDescriptor::decode(&descriptor_read.bytes)?;
-            read.bytes_read = read
-                .bytes_read
-                .saturating_add(descriptor_read.bytes.len() as u64);
-            if descriptor_read.cache_hit {
-                read.object_cache_hits += 1;
-            } else {
-                read.object_cache_misses += 1;
-            }
-            for chunk in descriptor.chunks() {
-                paths.insert(chunk.path.clone());
-                paths.insert(chunk.path.clone());
-                if let Some(graph) = &chunk.graph {
-                    paths.insert(graph.path.clone());
+            for reference in
+                std::iter::once(global_pq_ref).chain(global_pq_ref.delta.as_deref().into_iter())
+            {
+                paths.insert(reference.path.clone());
+                let descriptor_read = self.storage.read_bytes_with_cache_status_and_checksum(
+                    &reference.path,
+                    &reference.checksum,
+                )?;
+                let descriptor = GlobalPqDescriptor::decode(&descriptor_read.bytes)?;
+                read.bytes_read = read
+                    .bytes_read
+                    .saturating_add(descriptor_read.bytes.len() as u64);
+                if descriptor_read.cache_hit {
+                    read.object_cache_hits += 1;
+                } else {
+                    read.object_cache_misses += 1;
+                }
+                for chunk in descriptor.chunks() {
+                    paths.insert(chunk.path.clone());
+                    if let Some(graph) = &chunk.graph {
+                        paths.insert(graph.path.clone());
+                    }
                 }
             }
         }
@@ -12632,6 +12635,7 @@ impl BorsukIndex {
         );
         self.storage.write_bytes_content_addressed(&path, &bytes)?;
         Ok(Some(crate::manifest::GlobalPqRef {
+            layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
             path,
             checksum,
             vectors: vectors_seen,
@@ -12654,6 +12658,7 @@ impl BorsukIndex {
                 .iter()
                 .map(|summary| summary.checksum.clone())
                 .collect(),
+            delta: None,
         }))
     }
 
@@ -22749,6 +22754,7 @@ mod tests {
     #[test]
     fn global_pq_ram_budget_accounts_for_artifact_and_sidecar_indexes() {
         let reference = crate::manifest::GlobalPqRef {
+            layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
             path: "global-pq/descriptor".to_string(),
             checksum: "ab".repeat(32),
             vectors: 9_990_000,
@@ -22759,6 +22765,7 @@ mod tests {
             sidecar_index_bytes: 120 * 1024 * 1024,
             storage_bytes: 720 * 1024 * 1024,
             segments: vec!["cd".repeat(32)],
+            delta: None,
         };
         assert!(reference.resident_bytes_estimate() >= 480 * 1024 * 1024);
     }
