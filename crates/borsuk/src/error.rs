@@ -76,6 +76,19 @@ pub enum BorsukError {
         max_records: u64,
     },
 
+    /// A multi-lane group append committed at least zero lanes and failed at
+    /// least one. The durable subset is explicit so callers can retry only the
+    /// failed lanes without pretending the call was atomic.
+    #[error(
+        "group commit failed on {failed_lanes:?}; already committed {committed_lane_receipts:?}"
+    )]
+    PartialGroupCommit {
+        /// Receipts for ownership lanes that are already durably visible.
+        committed_lane_receipts: Vec<crate::group_commit::GroupCommitLaneReceipt>,
+        /// Ownership lanes that did not acknowledge.
+        failed_lanes: Vec<crate::group_commit::GroupCommitLaneFailure>,
+    },
+
     /// Guaranteed-recall search could not honor a hard search budget.
     #[error("recall guarantee violated by search termination `{reason}`")]
     RecallGuaranteeViolated {
@@ -175,6 +188,7 @@ impl BorsukError {
             Self::LeafModeNotConfigured { .. } => "leaf_mode_not_configured",
             Self::RamBudgetExceeded { .. } => "ram_budget_exceeded",
             Self::IngestBackpressure { .. } => "ingest_backpressure",
+            Self::PartialGroupCommit { .. } => "partial_group_commit",
             Self::RecallGuaranteeViolated { .. } => "recall_guarantee_violated",
             Self::InvalidStorage(_) => "invalid_storage",
             Self::IndexNotFound(_) => "index_not_found",
