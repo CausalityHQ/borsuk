@@ -57,14 +57,14 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
             manifest["correctness_gates"],
             [
                 "grouped_durable_ack",
-                "pending_publication_failure",
-                "lane_head_rejection",
-                "acknowledged_lane_reopen_recovery",
+                "extent_idempotency",
+                "post_completion_lease_fencing",
+                "stale_watermark_reopen",
+                "epoch_zombie_exclusion",
+                "owner_only_head_mutation",
                 "sequential_last_write_wins",
-                "drain_checkpoint",
-                "preregistered_lane_factor_safety",
-                "transient_spill_failure_recovery",
-                "persistent_spill_failure_backpressure",
+                "tail_backpressure",
+                "delta_drain_frontier_safety",
             ],
         )
 
@@ -138,8 +138,8 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
     def test_runner_records_physical_storage_trace_for_spill_amplification(self) -> None:
         self.assertIn('BORSUK_STORAGE_TRACE="$storage_trace_output"', RUNNER)
         self.assertIn('mv "$storage_trace_output" "$cell_output/storage-access.csv"', RUNNER)
-        self.assertIn("transient_spill_failure_recovery", RUNNER)
-        self.assertIn("persistent_spill_failure_backpressure", RUNNER)
+        self.assertIn("extent_idempotency", RUNNER)
+        self.assertIn("post_completion_lease_fencing", RUNNER)
 
     def test_lane_treatments_use_identical_record_ids(self) -> None:
         self.assertIn("production_record_id(ordinal)", BENCH)
