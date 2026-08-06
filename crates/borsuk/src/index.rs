@@ -16182,7 +16182,7 @@ impl BorsukIndex {
         &self,
         parent_refs: &[RoutingLayerPageRef],
         mut decoded_parent_pages: Option<&mut HashMap<String, Vec<RoutingLayerPageRef>>>,
-        mut routing_page_cache: Option<&mut RoutingPageReadCache>,
+        routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<RoutingPageRefsRead> {
         let expected_page_refs = parent_refs
             .iter()
@@ -16192,6 +16192,25 @@ impl BorsukIndex {
             page_refs: Vec::with_capacity(expected_page_refs),
             ..Default::default()
         };
+
+        let pages_to_read = parent_refs
+            .iter()
+            .filter(|parent_ref| {
+                decoded_parent_pages
+                    .as_deref()
+                    .and_then(|cache| cache.get(&parent_ref.path))
+                    .is_none()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let page_reads = self
+            .read_routing_pages_with_cache(&pages_to_read, routing_page_cache)
+            .map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "routing parent page batch could not be read: {err}"
+                ))
+            })?;
+        let mut page_reads = page_reads.into_iter();
 
         for parent_ref in parent_refs {
             if let Some(cache) = decoded_parent_pages.as_deref_mut()
@@ -16216,18 +16235,12 @@ impl BorsukIndex {
                     "routing parent page read requested for L0 page".to_string(),
                 )
             })?;
-            let page_read = self
-                .read_routing_page_with_cache(
-                    &parent_ref.path,
-                    &parent_ref.checksum,
-                    routing_page_cache.as_deref_mut(),
-                )
-                .map_err(|err| {
-                    BorsukError::InvalidStorage(format!(
-                        "routing parent page `{}` could not be read: {err}",
-                        parent_ref.path
-                    ))
-                })?;
+            let page_read = page_reads.next().ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "routing parent page `{}` was omitted from the read batch",
+                    parent_ref.path
+                ))
+            })?;
             let read = page_read.read;
             read_result.bytes_read += read.bytes.len() as u64;
             read_result.routing_pages_read += 1;
@@ -16323,6 +16336,68 @@ impl BorsukIndex {
         })
     }
 
+    /// Read independent routing pages concurrently while preserving manifest
+    /// order and request-scoped cache semantics. Cache hits are resolved before
+    /// misses enter the bounded I/O pool; successful misses are admitted after
+    /// the parallel batch completes, so the mutable cache is never shared by
+    /// I/O workers.
+    fn read_routing_pages_with_cache(
+        &self,
+        page_refs: &[RoutingLayerPageRef],
+        mut routing_page_cache: Option<&mut RoutingPageReadCache>,
+    ) -> Result<Vec<RoutingPageRead>> {
+        let mut reads = std::iter::repeat_with(|| None)
+            .take(page_refs.len())
+            .collect::<Vec<Option<RoutingPageRead>>>();
+        let mut misses = Vec::new();
+
+        for (index, page_ref) in page_refs.iter().enumerate() {
+            if let Some(cache) = routing_page_cache.as_deref_mut()
+                && let Some(read) = cache.reads.get(&page_ref.path)
+            {
+                reads[index] = Some(RoutingPageRead {
+                    read: read.clone(),
+                    request_cache_hit: true,
+                });
+            } else {
+                misses.push((index, page_ref));
+            }
+        }
+
+        let fetched = crate::parallel::install_io(|| {
+            misses
+                .into_par_iter()
+                .map(|(index, page_ref)| {
+                    (
+                        index,
+                        self.read_routing_page_with_cache(&page_ref.path, &page_ref.checksum, None),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+
+        for (index, result) in fetched {
+            let page_read = result?;
+            if let Some(cache) = routing_page_cache.as_deref_mut() {
+                cache
+                    .reads
+                    .insert(page_refs[index].path.clone(), page_read.read.clone());
+            }
+            reads[index] = Some(page_read);
+        }
+
+        reads
+            .into_iter()
+            .map(|read| {
+                read.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "routing page batch omitted a requested page".to_string(),
+                    )
+                })
+            })
+            .collect()
+    }
+
     fn routing_summaries_read_from_page_refs(
         &self,
         page_refs: &[RoutingLayerPageRef],
@@ -16333,7 +16408,7 @@ impl BorsukIndex {
     fn routing_summaries_read_from_page_refs_with_cache(
         &self,
         page_refs: &[RoutingLayerPageRef],
-        mut routing_page_cache: Option<&mut RoutingPageReadCache>,
+        routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<RoutingSummariesRead> {
         let expected_summaries = page_refs
             .iter()
@@ -16344,19 +16419,15 @@ impl BorsukIndex {
             ..Default::default()
         };
 
-        for page_ref in page_refs {
-            let page_read = self
-                .read_routing_page_with_cache(
-                    &page_ref.path,
-                    &page_ref.checksum,
-                    routing_page_cache.as_deref_mut(),
-                )
-                .map_err(|err| {
-                    BorsukError::InvalidStorage(format!(
-                        "routing layer page `{}` could not be read: {err}",
-                        page_ref.path
-                    ))
-                })?;
+        let page_reads = self
+            .read_routing_pages_with_cache(page_refs, routing_page_cache)
+            .map_err(|err| {
+                BorsukError::InvalidStorage(format!(
+                    "routing layer page batch could not be read: {err}"
+                ))
+            })?;
+
+        for (page_ref, page_read) in page_refs.iter().zip(page_reads) {
             let read = page_read.read;
             read_result.bytes_read += read.bytes.len() as u64;
             read_result.routing_pages_read += 1;
