@@ -1977,7 +1977,11 @@ impl BorsukIndex {
                     BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
                 })?;
         }
-        self.consolidate_mutation_frontiers(&mut manifest, false)?;
+        // Keep lane-drain generation fences as immutable frontier runs. Folding
+        // them into stable hash pages here would read and rewrite every touched
+        // bucket on the latency-sensitive drain path. Explicit maintenance can
+        // consolidate these runs later; readers already merge pages and
+        // frontiers with newest-generation-wins semantics.
         let segment_max_vectors = manifest.config.segment_max_vectors.max(1);
         let write_batch_size = parallel_segment_write_batch_size(segment_max_vectors);
         let mut segments_to_write = Vec::with_capacity(write_batch_size);
@@ -22468,6 +22472,39 @@ mod tests {
                 .unwrap()
                 .get_vector("pending-gc")
                 .unwrap(),
+            Some(vec![1.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn lane_log_materialization_keeps_generation_updates_in_immutable_frontier() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let group =
+            crate::GroupCommitWriter::new(index, crate::GroupCommitConfig::default()).unwrap();
+        group
+            .append(vec![VectorRecord::new("frontier", vec![1.0, 0.0])])
+            .unwrap();
+        group.drain().unwrap();
+
+        let materialized = BorsukIndex::open(&uri).unwrap();
+        assert!(
+            materialized.manifest.tombstone_pages.is_empty(),
+            "ordinary lane drain must not rewrite stable generation pages"
+        );
+        assert_eq!(materialized.manifest.tombstone_frontier.len(), 1);
+        assert_eq!(
+            materialized.get_vector("frontier").unwrap(),
             Some(vec![1.0, 0.0])
         );
     }
