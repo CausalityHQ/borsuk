@@ -395,6 +395,24 @@
   oversized 256-byte scan code while keeping the same coarse routing and exact
   rerank contract.
 
+  Terminal same-corpus code-width arms then established that factor causally.
+  A 128-byte SRHT-PQ index preserved recall@10 0.975 at nprobe 16 and
+  candidates 128 while reducing disk-cached p95 to 151.363 ms, but concurrency
+  saturated near 25 QPS and p95 exceeded 200 ms at two clients. The 64-byte
+  index completed ingest plus ANN construction in 311.126 seconds. Its
+  terminal recall curve passed structural validation and found the minimal
+  qualified point at nprobe 16/candidates 128: recall@10 0.952 and
+  disk-cached p95 24.960 ms. A separate terminal serving run at that exact
+  point also passed structural validation. Its homogeneous disk-cached row
+  recorded recall@10 0.952 and p95 131.994 ms. The raw concurrency artifact
+  recorded 72.781/78.493/80.920/80.628/81.192 QPS and p95
+  26.981/54.105/79.862/143.261/240.922 ms at 1/2/4/8/16 clients,
+  respectively, with 12,540,249.64 average measured bytes per query in the
+  concurrency phase. The serving point therefore satisfies the local recall
+  and read-p95 gates through eight clients, but 16-client tail latency and the
+  approximately 81 QPS saturation remain explicit scalability gaps. No
+  production default is frozen from this single local repetition.
+
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.
