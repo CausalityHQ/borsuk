@@ -12,7 +12,11 @@ use crate::{BorsukError, BorsukIndex, RequestCounts, Result, VectorRecord};
 use rayon::prelude::*;
 
 const LANE_LEASE_TTL_MS: u64 = 60 * 60 * 1_000;
-const BACKGROUND_MATERIALIZATION_BLOCK_INTERVAL: u64 = 64;
+// Keep the active WAL bounded while allowing one materialization pass to
+// coalesce enough extents into production-sized immutable segments. A smaller
+// interval creates many tiny delta segments and makes post-drain reads pay the
+// resulting object fan-out.
+const BACKGROUND_MATERIALIZATION_BLOCK_INTERVAL: u64 = 256;
 
 #[derive(Default)]
 struct MaintenanceState {
