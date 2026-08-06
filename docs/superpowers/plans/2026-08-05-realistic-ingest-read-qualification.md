@@ -413,6 +413,16 @@
   approximately 81 QPS saturation remain explicit scalability gaps. No
   production default is frozen from this single local repetition.
 
+  The next source slice promotes that terminal evidence only for the matched
+  regime: adaptive 768D angular indexes with at least 100,000 vectors resolve
+  to a 64-byte SRHT-PQ code, 16 flat-cell probes, and a 128-row exact rerank.
+  Explicit code-width overrides remain authoritative, and the independently
+  measured 960D Euclidean GIST default remains 256 bytes. A TDD regression
+  failed before the metric-aware resolver existed and now pins all four
+  decisions. Publication defaults remain unfrozen until repeated qualification
+  from the committed revision; this source selection is the architecture
+  candidate, not a publication claim.
+
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.
