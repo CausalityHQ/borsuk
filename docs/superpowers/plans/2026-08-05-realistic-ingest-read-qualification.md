@@ -423,6 +423,14 @@
   from the committed revision; this source selection is the architecture
   candidate, not a publication claim.
 
+  Control-plane checkpoint (2026-08-06): the already-active isolated-target
+  release build for `production_bench` completed successfully at commit
+  `740f27a` in 9m18s. It used
+  `/data/target/agents/borsuk-prod-ready-v9`; `/data` retained 68 GiB free at
+  completion. No benchmark or further qualification arm was launched. The
+  preserved terminal code64 artifacts and results above remain the latest
+  measurement evidence for restart/resume.
+
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.
