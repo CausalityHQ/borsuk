@@ -92,6 +92,14 @@ five phase markers existed and the process exited successfully.
   and was reverted. The invariant 54 HEADs per ordinary query trace instead to
   candidate-by-candidate generation visibility resolution; batch resolution is
   the next causal experiment.
+- `611d652` added required stable tombstone-page blooms and rebuilt a fresh v26
+  logical-cell base. Its terminal cell preserved recall 1.0, 64.508 ms write
+  p95, 46,540 acknowledged records/s, 5.665 s drain, and 2,723 drain-inclusive
+  records/s, but post-drain p95 remained 261.752 ms with 54 HEADs per ordinary
+  query. A second terminal run with storage tracing attributed the invariant
+  fan-out to a full paged-routing walk used only to rediscover that the current
+  global base plus delta still covered the active segment set. The Bloom is
+  still required for mutation-heavy scale, but it is causally neutral here.
 
 The campaign is claim-ineligible until the root completion marker exists, no
 failure marker exists, the service exits successfully, and the fail-closed

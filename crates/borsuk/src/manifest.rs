@@ -239,7 +239,7 @@ pub(crate) struct QuantizerRef {
 }
 
 /// Content-addressed resident global product-code artifact for one manifest.
-pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 1;
+pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GlobalPqRef {
@@ -264,6 +264,10 @@ pub(crate) struct GlobalPqRef {
     /// bundles, and optional cell graphs.
     #[serde(default)]
     pub(crate) storage_bytes: u64,
+    /// Manifest version whose complete active segment set is covered by this
+    /// base plus its optional delta. Equality skips a routing-tree walk; every
+    /// segment-changing publish necessarily invalidates the shortcut.
+    pub(crate) covered_manifest_version: u64,
     /// Active segment checksums in the exact ordinal order encoded by row
     /// locations in the artifact.
     pub(crate) segments: Vec<String>,
