@@ -58,7 +58,6 @@ aws s3 cp "\$source_uri" /tmp/borsuk-group-commit-source.tar --only-show-errors
 actual="\$(sha256sum /tmp/borsuk-group-commit-source.tar | awk '{print \$1}')"
 [[ "\$actual" == "${source_sha}" ]] || { echo 'source archive checksum mismatch' >&2; exit 5; }
 tar -xf /tmp/borsuk-group-commit-source.tar -C "\$workspace"
-printf '%s\n' "${source_sha}" > "\$workspace/source.ready"
 sudo chown -R ec2-user:ec2-user "\$workspace"
 dataset_root=/home/ec2-user/borsuk-datasets
 dataset_dir="\$dataset_root/cohere-medium-1M"
