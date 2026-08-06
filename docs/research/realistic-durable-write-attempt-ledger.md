@@ -106,3 +106,10 @@ active-tail read p95 81.341 ms, post-drain read p95 28.218 ms, and
 drain-inclusive throughput 5,716.636 records/s. This is a terminal local
 architecture result, not a 10,000-record/s pass and not 100M-scale or AWS
 evidence; the paired five-repetition production campaign remains unlaunched.
+
+The next unbenchmarked factor replaces hierarchical coarse assignment's
+full-parent allocation and sort with a fixed four-entry distance/index
+selection. Its ordering regression and all 18 global-PQ tests, plus the full
+library, group-commit, and fault-injection gates, pass. It changes no persisted
+layout or routing semantics; a fresh terminal throughput run is still needed
+before assigning it a numeric gain.
