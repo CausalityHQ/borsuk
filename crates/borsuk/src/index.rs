@@ -15130,7 +15130,7 @@ impl BorsukIndex {
                 );
                 gate.acquire_owned(bytes)
             });
-        let mut parallel_projected_reads = bounded_parallel_map_with_gate(
+        let mut parallel_projected_reads = bounded_io_map_with_gate(
             &candidates[..parallel_projected_budget],
             options.prefetch_depth,
             self.decode_admission.as_deref(),
@@ -21004,6 +21004,7 @@ where
     bounded_parallel_map_with_gate(values, width, None, work)
 }
 
+#[cfg(test)]
 fn bounded_parallel_map_with_gate<T, U, F>(
     values: &[T],
     width: usize,
