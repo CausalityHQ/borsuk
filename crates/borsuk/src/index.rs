@@ -18933,14 +18933,16 @@ fn resident_global_pq_product_coarse_subspaces(
 /// Bound the dense coarse-training reservoir by both rows and bytes.
 ///
 /// The 65,536-row ceiling preserves enough samples for low-dimensional
-/// hierarchical cells. The 16 MiB byte ceiling leaves room for the rotated and
-/// clustered working copies created while fitting, so an already-warm serving
-/// process stays inside the default 512 MiB envelope. One vector is the
-/// irreducible minimum; fitted codebooks reduce their centroid count when fewer
-/// than 256 samples fit the budget.
+/// hierarchical cells. The 64 MiB byte ceiling gives a 768-dimensional flat
+/// router 21,845 training rows instead of only 5,461: roughly 85 observations
+/// per cell rather than 21. Fitting retains both the source and one rotated
+/// copy, so their 128 MiB combined ceiling still leaves 64 MiB for codebooks,
+/// assignments, and allocator slack inside the default 192 MiB transient
+/// partition. One vector is the irreducible minimum; fitted codebooks reduce
+/// their centroid count when fewer than 256 samples fit the budget.
 fn global_pq_training_sample_limit(dimensions: usize) -> usize {
     const MAX_ROWS: usize = 65_536;
-    const TARGET_BYTES: usize = 16 * 1024 * 1024;
+    const TARGET_BYTES: usize = 64 * 1024 * 1024;
     let bytes_per_vector = dimensions.max(1).saturating_mul(std::mem::size_of::<f32>());
     (TARGET_BYTES / bytes_per_vector).clamp(1, MAX_ROWS)
 }
@@ -24789,12 +24791,13 @@ mod tests {
 
     #[test]
     fn global_pq_training_reservoir_is_dimension_byte_bounded() {
-        assert_eq!(global_pq_training_sample_limit(96), 43_690);
-        assert_eq!(global_pq_training_sample_limit(960), 4_369);
-        assert_eq!(global_pq_training_sample_limit(1_024), 4_096);
-        assert_eq!(global_pq_training_sample_limit(8_192), 512);
-        assert_eq!(global_pq_training_sample_limit(65_536), 64);
-        assert_eq!(global_pq_training_sample_limit(1_048_576), 4);
+        assert_eq!(global_pq_training_sample_limit(96), 65_536);
+        assert_eq!(global_pq_training_sample_limit(768), 21_845);
+        assert_eq!(global_pq_training_sample_limit(960), 17_476);
+        assert_eq!(global_pq_training_sample_limit(1_024), 16_384);
+        assert_eq!(global_pq_training_sample_limit(8_192), 2_048);
+        assert_eq!(global_pq_training_sample_limit(65_536), 256);
+        assert_eq!(global_pq_training_sample_limit(1_048_576), 16);
     }
 
     #[test]
