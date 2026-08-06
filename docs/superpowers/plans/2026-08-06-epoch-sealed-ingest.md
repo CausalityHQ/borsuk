@@ -10,7 +10,9 @@
 
 ## Global Constraints
 
-- Replace format v26 outright with format v28; do not retain a v26 reader or migration path.
+- Replace the experimental v28 extent outright with v29; v29 distinguishes
+  first inserts from replacements so ordinary inserts create no generation
+  fence. Do not retain a v26/v28 reader or migration path.
 - Acknowledge only a checksum-verified immutable extent created inside the owning lease.
 - Keep lane HEAD payload-free and bounded independently of extent count.
 - Preserve partial-lane receipts, last-write-wins order, reopen visibility, and fail-closed recovery.
@@ -22,7 +24,7 @@
 
 ---
 
-### Task 1: Encode bounded format-v28 HEADs and immutable extents
+### Task 1: Encode bounded format-v29 HEADs and immutable extents
 
 **Files:**
 - Modify: `crates/borsuk/src/lane_log.rs`
@@ -50,7 +52,7 @@
 
 - [ ] **Step 3: Implement the minimal codec**
 
-  Set the lane-log format marker to 28. Define a fixed HEAD containing lane,
+  Set the lane-log format marker to 29. Define a fixed HEAD containing lane,
   epoch owner/expiry, durable sequence, materialized sequence, generation base,
   and a bounded prior-epoch seal. Define a self-describing extent containing
   lane, epoch, sequence, first generation, records, payload bytes, and checksum.

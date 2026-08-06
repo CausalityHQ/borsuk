@@ -39,7 +39,12 @@ The design deliberately rejects two incremental alternatives:
 - Immutable extents followed by a synchronous HEAD CAS are simple but require
   two dependent object-store round trips and retain a one-RTT-per-lane ceiling.
 
-## Persistent format v28
+## Persistent format v29
+
+Format v29 replaces the unreleased v28 experiment. Its ID delta distinguishes
+a first insert from a replacement: both become live in the lane authority, but
+only a replacement needs a persisted generation fence after materialization.
+Readers reject v28 rather than guessing this missing semantic bit.
 
 For lane `L`, lease epoch `E`, and sequence `S`:
 
