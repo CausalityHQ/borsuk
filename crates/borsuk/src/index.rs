@@ -2025,7 +2025,7 @@ impl BorsukIndex {
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.refresh_persisted_quantizer()?;
-        let _ = self.refresh_resident_global_delta(false);
+        self.refresh_resident_global_delta(false)?;
         Ok(committed_sequences)
     }
 
@@ -22701,6 +22701,48 @@ mod tests {
         assert_eq!(segment.pq_min, scalar.pq_min);
         assert_eq!(segment.pq_max, scalar.pq_max);
         assert_eq!(segment.pq_codes, scalar.pq_codes);
+    }
+
+    #[test]
+    fn lane_log_drain_reports_delta_publication_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let descriptor_path = index.manifest.global_pq_ref.as_ref().unwrap().path.clone();
+        index
+            .storage
+            .write_bytes(&descriptor_path, b"corrupt global descriptor")
+            .unwrap();
+        let group =
+            crate::GroupCommitWriter::new(index, crate::GroupCommitConfig::default()).unwrap();
+        group
+            .append(
+                (0..16)
+                    .map(|row| {
+                        VectorRecord::new(format!("delta-{row}"), vec![1_000.0 + row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+
+        assert!(group.drain().is_err());
     }
 
     #[test]
