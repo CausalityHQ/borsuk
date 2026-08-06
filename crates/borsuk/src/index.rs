@@ -19003,9 +19003,11 @@ fn resident_global_pq_probes(metric: &VectorMetric, dimensions: usize, segments:
         return 0;
     }
     if metric.uses_normalized_euclidean_geometry() && dimensions == 768 && segments <= 256 {
-        // The terminal Cohere Medium 1M curve first clears recall@10 >= 0.95
-        // at 16 probes with the qualified 64-byte code and 128-row rerank.
-        return 16.min(segments);
+        // With the bounded 64 MiB coarse-training reservoir, the terminal
+        // Cohere Medium 1M curve first clears recall@10 >= 0.95 at 28 probes
+        // with the qualified 64-byte code and 128-row rerank. This point also
+        // stays below the 200 ms p95 gate through 16 local clients.
+        return 28.min(segments);
     }
     if metric.uses_normalized_euclidean_geometry() && dimensions == 256 && segments <= 256 {
         // The fine-grained NYTimes-256 code128 boundary sweep first reaches its
@@ -23119,8 +23121,8 @@ mod tests {
         );
         assert_eq!(
             resident_global_pq_probes(&VectorMetric::Cosine, 768, 256),
-            16,
-            "Cohere 1M first clears recall with 16 flat-cell probes"
+            28,
+            "Cohere 1M first clears recall after stronger coarse training with 28 flat-cell probes"
         );
         assert_eq!(resident_global_pq_subspaces(100, 1_183_514, None), 64);
         assert_eq!(resident_global_pq_subspaces(96, 9_990_000, None), 64);
