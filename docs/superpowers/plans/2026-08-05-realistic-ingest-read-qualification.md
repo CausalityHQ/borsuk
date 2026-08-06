@@ -584,6 +584,12 @@
   records/s over 16,384 records. This is evidence for the overlap slice only;
   five repetitions and the 100M-scale/AWS qualification remain outstanding.
 
+  The subsequent fresh r40 cell at `e9be069` added bounded parallel reads for
+  larger point-read candidate windows. It preserved recall@10 1.0, measured
+  66.232 ms write p95, 85.279 ms active-tail read p95, 33.960 ms post-drain
+  read p95, and 46,655.775 drain-inclusive records/s. This is still a single
+  local causal repetition and does not qualify the AWS or 100M gates.
+
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.
 
 ### Task 7: Production-read qualification and completion audit

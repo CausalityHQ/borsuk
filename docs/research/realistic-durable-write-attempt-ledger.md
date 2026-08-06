@@ -140,3 +140,13 @@ write p95 76.483 ms, active-tail read p95 118.712 ms, post-drain read p95
 records. This is a local paired-cell result showing a large throughput gain
 over r34, not 100M-scale or AWS evidence; the five-repetition campaign and
 production default freeze remain pending.
+
+The source-identified r40 arm evaluated the bounded parallel point-read change
+from `e9be069` on a fresh 1M-row Cohere 768D base with the same 32-writer,
+16-record, eight-lane cell. All five phase markers were present and no failure
+marker was present. It recorded recall@10 1.0, write p95 66.232 ms,
+active-tail read p95 85.279 ms, post-drain read p95 33.960 ms, and
+drain-inclusive throughput 46,655.775 records/s for 16,384 records. The
+bounded read window materially reduced active-tail p95 versus r35 while
+preserving the sub-200 ms post-drain gate; this remains a single-cell local
+result, not a five-repetition, AWS, or 100M-scale qualification.
