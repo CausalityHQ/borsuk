@@ -1,0 +1,21 @@
+{
+  "campaign_id": "group-commit-local-768-v28-bulk16-v1",
+  "status": "bounded-local-claim-ineligible",
+  "protocol_kind": "local",
+  "architecture": "aarch64",
+  "instance_type": "devbox-local",
+  "dataset": "cohere-medium-1M",
+  "dataset_sha256": "54c733e39adfcaa9ee10f3ed8bd8e66ada9f8f9a1a73e9753f5c5c2044b79254",
+  "dimensions": 768,
+  "metric": "cosine",
+  "cell_count": 2000,
+  "writers": 32,
+  "operations_per_writer": 32,
+  "records_per_operation": 16,
+  "pipeline_depth_per_writer": 4,
+  "worker_lanes": 8,
+  "max_group_delay_ms": 5,
+  "max_group_records": 1024,
+  "read_queries": 5,
+  "comparison_contract": "Bounded local diagnostic only. It uses checksum-pinned Cohere vectors and production batching, but is ineligible for AWS, 100M-scale, or competitor performance claims."
+}
