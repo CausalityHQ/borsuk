@@ -278,6 +278,22 @@ struct SearchHitWithVector {
     vector: Option<Vec<f32>>,
 }
 
+#[derive(Debug)]
+struct LiveWalRanking {
+    ranked: Vec<SearchHitWithVector>,
+    rows_evaluated: usize,
+    rows_passed_filter: usize,
+    records_scored: usize,
+}
+
+#[derive(Debug)]
+struct LiveWalChunkRanking {
+    ranked: Vec<(usize, f32)>,
+    rows_evaluated: usize,
+    rows_passed_filter: usize,
+    records_scored: usize,
+}
+
 const HYBRID_TEXT_MODALITY: &str = "@text";
 
 #[derive(Debug, Clone)]
@@ -15121,35 +15137,19 @@ impl BorsukIndex {
         if live_wal_tail.is_empty() && wal_bytes == 0 {
             return Ok(None);
         }
-        let mut ranked = Vec::with_capacity(options.k);
-        let mut rows_evaluated = 0;
-        let mut rows_passed_filter = 0;
-        let mut records_scored = 0;
-        for record in live_wal_tail {
-            if let Some(filter) = &options.filter {
-                rows_evaluated += 1;
-                if !filter.matches(&record.metadata) {
-                    continue;
-                }
-                rows_passed_filter += 1;
-            }
-            let distance = self
-                .manifest
-                .config
-                .metric
-                .distance_unchecked(query, &record.vector)?;
-            records_scored += 1;
-            push_hit_with_vector(
-                &mut ranked,
-                SearchHit {
-                    id: record.id.clone(),
-                    distance,
-                    metadata: options.include_metadata.then(|| record.metadata.clone()),
-                },
-                include_vectors.then(|| record.vector.clone()),
-                options.k,
-            );
-        }
+        let ranking = rank_live_wal_exact(
+            &self.manifest.config.metric,
+            query,
+            options,
+            include_vectors,
+            live_wal_tail,
+        )?;
+        let LiveWalRanking {
+            ranked,
+            rows_evaluated,
+            rows_passed_filter,
+            records_scored,
+        } = ranking;
         let vectors = ranked
             .iter()
             .filter_map(|entry| entry.vector.clone())
@@ -21149,6 +21149,111 @@ fn pq_code_distance(segment: &Segment, record_index: usize, query_code: &[u8]) -
     crate::metric::squared_u8_euclidean_simd(code, query_code)
 }
 
+fn rank_live_wal_chunk(
+    metric: &VectorMetric,
+    query: &[f32],
+    options: &SearchOptions,
+    record_offset: usize,
+    records: &[VectorRecord],
+) -> Result<LiveWalChunkRanking> {
+    let mut ranked = Vec::<(usize, f32)>::with_capacity(options.k);
+    let mut rows_evaluated = 0_usize;
+    let mut rows_passed_filter = 0_usize;
+    let mut records_scored = 0_usize;
+    for (local_ordinal, record) in records.iter().enumerate() {
+        if let Some(filter) = &options.filter {
+            rows_evaluated += 1;
+            if !filter.matches(&record.metadata) {
+                continue;
+            }
+            rows_passed_filter += 1;
+        }
+        let distance = metric.distance_unchecked(query, &record.vector)?;
+        records_scored += 1;
+        ranked.push((record_offset + local_ordinal, distance));
+        ranked.sort_by(
+            |(left_ordinal, left_distance), (right_ordinal, right_distance)| {
+                left_distance
+                    .partial_cmp(right_distance)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| {
+                        records[*left_ordinal - record_offset]
+                            .id
+                            .cmp(&records[*right_ordinal - record_offset].id)
+                    })
+            },
+        );
+        ranked.truncate(options.k);
+    }
+    Ok(LiveWalChunkRanking {
+        ranked,
+        rows_evaluated,
+        rows_passed_filter,
+        records_scored,
+    })
+}
+
+fn rank_live_wal_exact(
+    metric: &VectorMetric,
+    query: &[f32],
+    options: &SearchOptions,
+    include_vectors: bool,
+    records: &[VectorRecord],
+) -> Result<LiveWalRanking> {
+    const PARALLEL_WAL_RECORDS: usize = 1_024;
+    const WAL_SCORE_CHUNK_RECORDS: usize = 256;
+    let chunks = if records.len() < PARALLEL_WAL_RECORDS {
+        vec![rank_live_wal_chunk(metric, query, options, 0, records)?]
+    } else {
+        records
+            .par_chunks(WAL_SCORE_CHUNK_RECORDS)
+            .enumerate()
+            .map(|(chunk, rows)| {
+                rank_live_wal_chunk(
+                    metric,
+                    query,
+                    options,
+                    chunk * WAL_SCORE_CHUNK_RECORDS,
+                    rows,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    let mut ranked = chunks
+        .iter()
+        .flat_map(|chunk| chunk.ranked.iter().copied())
+        .collect::<Vec<_>>();
+    ranked.sort_by(
+        |(left_ordinal, left_distance), (right_ordinal, right_distance)| {
+            left_distance
+                .partial_cmp(right_distance)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| records[*left_ordinal].id.cmp(&records[*right_ordinal].id))
+        },
+    );
+    ranked.truncate(options.k);
+    let ranked = ranked
+        .into_iter()
+        .map(|(ordinal, distance)| {
+            let record = &records[ordinal];
+            SearchHitWithVector {
+                hit: SearchHit {
+                    id: record.id.clone(),
+                    distance,
+                    metadata: options.include_metadata.then(|| record.metadata.clone()),
+                },
+                vector: include_vectors.then(|| record.vector.clone()),
+            }
+        })
+        .collect();
+    Ok(LiveWalRanking {
+        ranked,
+        rows_evaluated: chunks.iter().map(|chunk| chunk.rows_evaluated).sum(),
+        rows_passed_filter: chunks.iter().map(|chunk| chunk.rows_passed_filter).sum(),
+        records_scored: chunks.iter().map(|chunk| chunk.records_scored).sum(),
+    })
+}
+
 fn push_hit_with_vector(
     hits: &mut Vec<SearchHitWithVector>,
     hit: SearchHit,
@@ -24540,6 +24645,48 @@ mod tests {
                 .as_ref()
                 .map(|reference| reference.segments.len()),
             Some(3)
+        );
+    }
+
+    #[test]
+    fn parallel_live_wal_ranking_matches_exact_distance_and_id_order() {
+        let records = (0..4_096)
+            .map(|row| {
+                VectorRecord::new(
+                    format!("tail-{row:04}"),
+                    vec![row as f32, (4_095 - row) as f32],
+                )
+            })
+            .collect::<Vec<_>>();
+        let options = SearchOptions::exact(7);
+
+        let ranking = rank_live_wal_exact(
+            &VectorMetric::Euclidean,
+            &[2_047.5, 2_047.5],
+            &options,
+            false,
+            &records,
+        )
+        .unwrap();
+
+        assert_eq!(ranking.records_scored, records.len());
+        assert_eq!(ranking.rows_evaluated, 0);
+        assert_eq!(ranking.rows_passed_filter, 0);
+        assert_eq!(
+            ranking
+                .ranked
+                .iter()
+                .map(|entry| entry.hit.id.to_string())
+                .collect::<Vec<_>>(),
+            [
+                "tail-2047",
+                "tail-2048",
+                "tail-2046",
+                "tail-2049",
+                "tail-2045",
+                "tail-2050",
+                "tail-2044",
+            ]
         );
     }
 
