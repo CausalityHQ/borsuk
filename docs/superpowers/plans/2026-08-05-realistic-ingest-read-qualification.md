@@ -289,7 +289,13 @@
   subsequent GPT-5.6 Sol review. Background materialization demand is now
   sticky: a threshold crossed during an active pass schedules another pass
   before the sole worker relinquishes ownership, with deterministic state-race
-  tests covering both arrival-during-pass and arrival-after-exit orderings.
+  tests covering both arrival-during-pass and arrival-after-exit orderings. The
+  materialized-delta query view also strips both WAL implementations and its
+  shared live-tail cache: the outer query remains the single owner of exact
+  fresh-record scoring. A differential regression proves one newly published
+  WAL record adds exactly one scored record when a stable global base and a
+  materialized delta coexist. Shared immutable segment/byte budgeting and a
+  hard materialized-delta bound remain open architecture gates.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 

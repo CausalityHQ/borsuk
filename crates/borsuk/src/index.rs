@@ -12017,6 +12017,15 @@ impl BorsukIndex {
         delta.manifest.quantizer_ref = None;
         delta.manifest.segments = delta_summaries.to_vec();
         delta.manifest.rebuild_pivots();
+        // The caller already decoded and will merge the live WAL exactly once
+        // after base-plus-delta search. A recursive delta view must therefore
+        // contain only materialized segments; retaining either WAL snapshot
+        // here doubles exact scoring and can reuse the outer live-tail cache.
+        delta.cell_wal_snapshot.clear();
+        delta.lane_log_snapshot.clear();
+        delta.lane_log_committed_sequences.clear();
+        delta.lane_log_head_checksums.clear();
+        delta.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
         delta.resident_routing_summaries = Arc::new(Mutex::new(Some((
             delta.manifest.version,
             Arc::new(delta_summaries.to_vec()),
@@ -22923,14 +22932,38 @@ mod tests {
             "the materialized delta must be merged without abandoning the stable base: {report:?}"
         );
 
-        drop(reader);
         let second_tail_vector = vec![20.0; 8];
+        let before_second_tail = reader
+            .search_with_report(
+                &second_tail_vector,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        drop(reader);
         writer
             .add(vec![VectorRecord::new(
                 "wal-tail-2",
                 second_tail_vector.clone(),
             )])
             .unwrap();
+        let reader = BorsukIndex::open(&uri).unwrap();
+        let with_second_tail = reader
+            .search_with_report(
+                &second_tail_vector,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(with_second_tail.hits[0].id, RecordId::from("wal-tail-2"));
+        assert_eq!(
+            with_second_tail.records_scored,
+            before_second_tail.records_scored + 1,
+            "one live WAL record must be exact-scored once across base and materialized delta"
+        );
+        drop(reader);
         writer.flush().unwrap();
         let compaction = writer.compact(CompactionOptions::default()).unwrap();
         assert!(compaction.compacted);
