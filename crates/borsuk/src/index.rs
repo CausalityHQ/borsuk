@@ -14236,34 +14236,29 @@ impl BorsukIndex {
             observability::record_search_report(&span, &execution.report);
             return Ok(execution);
         }
-        if options.k > 0 {
-            if global_available
-                && let Some(mut execution) = self.search_resident_global_pq(
-                    query,
-                    &options,
+        if options.k > 0
+            && global_available
+            && let Some(mut execution) = self.search_resident_global_pq(
+                query,
+                &options,
+                include_vectors,
+                started,
+                &requests_before,
+            )?
+        {
+            if let Some(wal_execution) = wal_execution.take() {
+                merge_search_execution_hits(
+                    &mut execution,
+                    wal_execution,
+                    options.k,
                     include_vectors,
-                    started,
-                    &requests_before,
-                )?
-            {
-                if let Some(wal_execution) = wal_execution.take() {
-                    merge_search_execution_hits(
-                        &mut execution,
-                        wal_execution,
-                        options.k,
-                        include_vectors,
-                    );
-                    self.apply_wal_search_observation(
-                        &mut execution.report,
-                        wal_query_cells.as_ref(),
-                    );
-                    execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
-                    execution.report.requests =
-                        self.storage.request_counts().delta(&requests_before);
-                }
-                observability::record_search_report(&span, &execution.report);
-                return Ok(execution);
+                );
+                self.apply_wal_search_observation(&mut execution.report, wal_query_cells.as_ref());
+                execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
+                execution.report.requests = self.storage.request_counts().delta(&requests_before);
             }
+            observability::record_search_report(&span, &execution.report);
+            return Ok(execution);
         }
         let prescored_wal_execution = wal_execution.take();
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
@@ -14930,11 +14925,12 @@ impl BorsukIndex {
         // and a later upsert/delete supersedes it. Read-your-writes and
         // snapshot isolation both hold: the tail is exactly this handle's
         // published frontier.
-        for record in prescored_wal_execution
-            .is_none()
-            .then_some(live_wal_tail.as_slice())
-            .unwrap_or_default()
-        {
+        let unscored_wal_tail = if prescored_wal_execution.is_none() {
+            live_wal_tail.as_slice()
+        } else {
+            &[]
+        };
+        for record in unscored_wal_tail {
             records_considered += 1;
             if let Some(filter) = &options.filter {
                 rows_evaluated += 1;
@@ -21600,10 +21596,10 @@ fn restrict_to_remaining_search_budget(
         }
         *max_bytes = Some(limit - bytes_spent);
     }
-    if let Some(limit) = *max_latency_ms {
-        if elapsed_ms >= limit {
-            return Some(SearchTerminationReason::MaxLatency);
-        }
+    if let Some(limit) = *max_latency_ms
+        && elapsed_ms >= limit
+    {
+        return Some(SearchTerminationReason::MaxLatency);
     }
     None
 }
