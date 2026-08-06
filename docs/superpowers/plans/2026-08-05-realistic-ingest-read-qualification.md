@@ -366,6 +366,9 @@
   directly with degraded recall and no immutable reads; otherwise base and
   delta receive only the remainder. Lane-log snapshots retain exact descriptor
   byte counts and expose their lanes, runs, and records in query telemetry.
+  The shared-budget slice passed 477 runnable library tests, all 27 real
+  group-commit integration tests, strict all-target/all-feature Clippy, and
+  formatting at checkpoint `29a8711` plus its mechanical lint cleanup.
   Realistic latency and recall qualification remains open.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
