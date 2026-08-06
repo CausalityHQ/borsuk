@@ -262,6 +262,7 @@ impl StructuredRotation {
     pub(crate) fn rotate_into(&self, vector: &[f32], work: &mut Vec<f32>) {
         debug_assert_eq!(vector.len(), self.dimensions);
         work.resize(self.padded, 0.0);
+        work.fill(0.0);
         let chunks = vector.len() / 8;
         for chunk in 0..chunks {
             let base = chunk * 8;
