@@ -121,6 +121,10 @@ fn parallel_segment_write_batch_size(segment_max_vectors: usize) -> usize {
         .clamp(1, MAX_PARALLEL_SEGMENT_WRITES)
 }
 
+fn provisional_segment_checksum(id: &str) -> String {
+    format!("provisional-segment-{id}")
+}
+
 fn join_rows(rows: &[usize]) -> String {
     rows.iter()
         .map(usize::to_string)
@@ -2010,36 +2014,96 @@ impl BorsukIndex {
         // frontiers with newest-generation-wins semantics.
         let segment_max_vectors = manifest.config.segment_max_vectors.max(1);
         let write_batch_size = parallel_segment_write_batch_size(segment_max_vectors);
-        let mut segments_to_write = Vec::with_capacity(write_batch_size);
-        for chunk in records.chunks(segment_max_vectors) {
-            segments_to_write.push(Segment::from_records_with_quantizer_and_geometry(
-                Uuid::new_v4().to_string(),
-                0,
-                manifest.config.metric.clone(),
-                manifest.config.dimensions,
-                chunk.to_vec(),
-                QuantizerKind::ScalarBounds,
-                manifest.build_config.normalized_angular_coarse_geometry,
-            )?);
-            if segments_to_write.len() == write_batch_size {
-                manifest
-                    .segments
-                    .extend(self.write_segment_batch(&mut segments_to_write)?);
+        let previous_active_segments = manifest.segments.clone();
+        let planned_segments = records
+            .chunks(segment_max_vectors)
+            .map(|chunk| (Uuid::new_v4().to_string(), chunk.len()))
+            .collect::<Vec<_>>();
+        let provisional_template = previous_active_segments.first().cloned();
+        let provisional_active_segments = provisional_template.map(|template| {
+            let mut active = previous_active_segments.clone();
+            active.extend(planned_segments.iter().map(|(id, object_count)| {
+                let mut provisional = template.clone();
+                provisional.id = id.clone();
+                provisional.object_count = *object_count;
+                provisional.checksum = provisional_segment_checksum(id);
+                provisional
+            }));
+            active
+        });
+        let index_ref: &BorsukIndex = &*self;
+        let (new_segment_summaries, delta_update) = std::thread::scope(|scope| {
+            let delta_handle = match (
+                manifest.global_pq_ref.clone(),
+                provisional_active_segments.as_deref(),
+            ) {
+                (Some(base), Some(active)) if base.covered_manifest_version == previous.version => {
+                    let fringe_records = Some(records.as_slice());
+                    Some(scope.spawn(move || {
+                        index_ref.build_resident_global_delta(&base, active, false, fringe_records)
+                    }))
+                }
+                _ => None,
+            };
+            let mut segments_to_write = Vec::with_capacity(write_batch_size);
+            let mut new_summaries = Vec::with_capacity(planned_segments.len());
+            for (chunk, (id, _)) in records.chunks(segment_max_vectors).zip(&planned_segments) {
+                segments_to_write.push(Segment::from_records_with_quantizer_and_geometry(
+                    id.clone(),
+                    0,
+                    manifest.config.metric.clone(),
+                    manifest.config.dimensions,
+                    chunk.to_vec(),
+                    QuantizerKind::ScalarBounds,
+                    manifest.build_config.normalized_angular_coarse_geometry,
+                )?);
+                if segments_to_write.len() == write_batch_size {
+                    new_summaries.extend(index_ref.write_segment_batch(&mut segments_to_write)?);
+                }
             }
-        }
+            new_summaries.extend(index_ref.write_segment_batch(&mut segments_to_write)?);
+            let delta_update = delta_handle
+                .map(|handle| {
+                    handle.join().map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "resident global delta worker panicked".to_string(),
+                        )
+                    })?
+                })
+                .transpose()?
+                .flatten();
+            Ok::<_, BorsukError>((new_summaries, delta_update))
+        })?;
         manifest
             .segments
-            .extend(self.write_segment_batch(&mut segments_to_write)?);
-        let delta_update = manifest
-            .global_pq_ref
-            .clone()
-            .map(|base| {
-                let fringe_records = (base.covered_manifest_version == previous.version)
-                    .then_some(records.as_slice());
-                self.build_resident_global_delta(&base, &manifest.segments, false, fringe_records)
-            })
-            .transpose()?
-            .flatten();
+            .extend(new_segment_summaries.iter().cloned());
+        let delta_update = if delta_update.is_none() {
+            manifest
+                .global_pq_ref
+                .clone()
+                .map(|base| {
+                    self.build_resident_global_delta(&base, &manifest.segments, false, None)
+                })
+                .transpose()?
+                .flatten()
+        } else {
+            delta_update
+        };
+        let delta_update = delta_update.map(|(mut desired, promote)| {
+            let provisional_to_actual = planned_segments
+                .iter()
+                .zip(&new_segment_summaries)
+                .map(|((id, _), summary)| {
+                    (provisional_segment_checksum(id), summary.checksum.clone())
+                })
+                .collect::<HashMap<_, _>>();
+            for checksum in &mut desired.segments {
+                if let Some(actual) = provisional_to_actual.get(checksum) {
+                    *checksum = actual.clone();
+                }
+            }
+            (desired, promote)
+        });
         let delta_updated = delta_update.is_some();
         if let Some((desired, promote)) = delta_update {
             debug_assert!(!promote, "foreground lane drain cannot promote the base");

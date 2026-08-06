@@ -121,3 +121,12 @@ were present with recall@10 1.0, write p95 61.875 ms, active-tail read p95
 5,659.450 records/s. This is neutral to r33's 5,716.636 records/s within the
 single-cell noise; the factor is retained for bounded allocation behavior but
 is not credited with a throughput gain.
+
+The next implementation slice overlaps lane segment persistence with global
+delta construction. It assigns provisional checksums only to the concurrent
+builder, then substitutes the checksums returned by the actual segment writes
+before manifest validation/publication; the fallback remains sequential when
+the prior coverage certificate is stale. Full library (498 passed),
+group-commit (29 passed), fault-injection (12 passed), strict Clippy, and
+formatting gates pass. No performance claim is made until a fresh terminal
+arm verifies recall and manifest coverage.
