@@ -294,8 +294,14 @@
   shared live-tail cache: the outer query remains the single owner of exact
   fresh-record scoring. A differential regression proves one newly published
   WAL record adds exactly one scored record when a stable global base and a
-  materialized delta coexist. Shared immutable segment/byte budgeting and a
-  hard materialized-delta bound remain open architecture gates.
+  materialized delta coexist. Materialized-delta segments are now exact-searched
+  as a correctness overlay and charged first against one declared
+  `max_segments` budget; the stable resident base receives the remainder, and
+  the query fails closed if no base probe remains. A real base-plus-two-delta
+  regression previously measured six searched segments under a limit of four
+  and now remains within four while returning the fresh nearest record. Shared
+  byte budgeting and a hard materialized-delta bound remain open architecture
+  gates.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
