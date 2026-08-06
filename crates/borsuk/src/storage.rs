@@ -90,7 +90,7 @@ pub(crate) fn collection_wal_now_ms() -> Result<u64> {
 // rows are joined to amortize GET latency, while the physical span cap prevents
 // a scattered query from turning into an almost whole-sidecar transfer. The
 // wider cap keeps four-segment k=10 reranks below one GET per sidecar bundle.
-const SIDECAR_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
+const SIDECAR_RANGE_COALESCE_BYTES: u64 = 16 * 1024 * 1024;
 const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 16 * 1024 * 1024;
 const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
@@ -5078,10 +5078,7 @@ mod tests {
             SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
         );
 
-        assert_eq!(
-            plan.physical,
-            vec![0..1536 * 1024 + 4, 5 * 1024 * 1024..5 * 1024 * 1024 + 4,]
-        );
+        assert_eq!(plan.physical, vec![0..5 * 1024 * 1024 + 4,]);
         assert!(
             plan.physical
                 .iter()
@@ -5104,13 +5101,10 @@ mod tests {
             SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
         );
 
-        assert_eq!(
-            plan.physical,
-            vec![0..4, 3 * 1024 * 1024..4 * 1024 * 1024 + 4,]
-        );
-        assert_eq!(plan.slices[0].physical_index, 1);
+        assert_eq!(plan.physical, vec![0..4 * 1024 * 1024 + 4,]);
+        assert_eq!(plan.slices[0].physical_index, 0);
         assert_eq!(plan.slices[1].physical_index, 0);
-        assert_eq!(plan.slices[2].physical_index, 1);
+        assert_eq!(plan.slices[2].physical_index, 0);
     }
 
     #[test]
