@@ -368,17 +368,18 @@ fn main() -> BenchResult<()> {
     let dimensions: usize = number("BORSUK_GROUP_COMMIT_DIMENSIONS")?;
     let max_delay_ms: u64 = number("BORSUK_GROUP_COMMIT_MAX_DELAY_MS")?;
     let max_records: usize = number("BORSUK_GROUP_COMMIT_MAX_RECORDS")?;
+    let realistic_protocol = matches!(protocol.as_str(), "scalability" | "local");
     let worker_lanes = match protocol.as_str() {
-        "scalability" => number("BORSUK_GROUP_COMMIT_WORKER_LANES")?,
+        "scalability" | "local" => number("BORSUK_GROUP_COMMIT_WORKER_LANES")?,
         "diagnostic" => 8,
         _ => 1,
     };
-    let pipeline_depth = if protocol == "scalability" {
+    let pipeline_depth = if realistic_protocol {
         number("BORSUK_GROUP_COMMIT_PIPELINE_DEPTH")?
     } else {
         1
     };
-    let records_per_operation = if matches!(protocol.as_str(), "scalability" | "smoke") {
+    let records_per_operation = if realistic_protocol || protocol == "smoke" {
         number("BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION")?
     } else {
         1
@@ -454,6 +455,26 @@ fn main() -> BenchResult<()> {
                 }),
             )
         }
+        "local" => {
+            let cell_count: usize = number("BORSUK_GROUP_COMMIT_CELL_COUNT")?;
+            let repetition: usize = number("BORSUK_GROUP_COMMIT_REPETITION")?;
+            if cell_count != 2_000
+                || !matches!(writers, 1 | 8 | 32)
+                || repetition != 1
+                || operations != 32
+                || dimensions != 768
+                || max_delay_ms != 5
+                || max_records != 1_024
+                || !matches!(worker_lanes, 1 | 2 | 4 | 8)
+                || pipeline_depth != 4
+                || !matches!(records_per_operation, 1 | 16)
+            {
+                return Err(
+                    "group-commit cell differs from the bounded local qualification".into(),
+                );
+            }
+            (cell_count, repetition, None)
+        }
         "smoke" => {
             let cell_count: usize = number("BORSUK_GROUP_COMMIT_CELL_COUNT")?;
             let repetition: usize = number("BORSUK_GROUP_COMMIT_REPETITION")?;
@@ -479,12 +500,12 @@ fn main() -> BenchResult<()> {
 
     let diagnostic_protocol = protocol == "diagnostic";
     let vector_seed = cohort_seed(diagnostic_protocol, writers, repetition);
-    let dataset_sha = if protocol == "scalability" {
+    let dataset_sha = if realistic_protocol {
         required("BORSUK_GROUP_COMMIT_DATASET_SHA256")?
     } else {
         String::new()
     };
-    let input_vectors = if protocol == "scalability" {
+    let input_vectors = if realistic_protocol {
         let dataset = PathBuf::from(required("BORSUK_GROUP_COMMIT_DATASET")?);
         if !dataset.is_dir()
             || dataset_sha.len() != 64
@@ -613,7 +634,7 @@ fn main() -> BenchResult<()> {
     let max_read_segments = if diagnostic_protocol { 0 } else { 4 };
     let recall_queries = if diagnostic_protocol {
         20
-    } else if protocol == "scalability" {
+    } else if realistic_protocol {
         number("BORSUK_GROUP_COMMIT_READ_QUERIES")?
     } else {
         1
