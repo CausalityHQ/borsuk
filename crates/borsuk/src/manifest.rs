@@ -598,6 +598,14 @@ impl Manifest {
         &self.logical_cells
     }
 
+    /// Maximum records written into each future immutable physical segment.
+    ///
+    /// This is independent from the stable logical-cell routing catalog.
+    #[must_use]
+    pub fn segment_max_vectors(&self) -> usize {
+        self.config.segment_max_vectors
+    }
+
     /// Whether the published, un-flushed WAL frontier is empty (no un-flushed
     /// tail objects). Reads short-circuit the WAL union when this is true.
     #[must_use]

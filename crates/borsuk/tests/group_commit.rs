@@ -1213,3 +1213,29 @@ fn unchanged_refresh_cost_does_not_scale_with_committed_lane_blocks() {
     assert_eq!(tail_refresh.gets, empty_refresh.gets);
     assert_eq!(tail_refresh.heads, empty_refresh.heads);
 }
+
+#[test]
+fn future_segment_size_can_change_without_rebuilding_logical_cell_topology() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        segment_max_vectors: 1,
+        ..config(&uri)
+    })
+    .unwrap();
+    index
+        .add(vec![
+            VectorRecord::new("left", vec![1.0, 0.0]),
+            VectorRecord::new("right", vec![0.0, 1.0]),
+        ])
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    let logical_cells = index.manifest().logical_cells().to_vec();
+
+    index.set_segment_max_vectors(128).unwrap();
+    drop(index);
+    let reopened = BorsukIndex::open(&uri).unwrap();
+
+    assert_eq!(reopened.manifest().logical_cells(), logical_cells);
+    assert_eq!(reopened.manifest().segment_max_vectors(), 128);
+}

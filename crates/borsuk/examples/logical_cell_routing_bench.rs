@@ -20,7 +20,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use borsuk::{BorsukIndex, IndexConfig, OpenOptions, VectorMetric, VectorRecord};
+use borsuk::{
+    BorsukIndex, IndexConfig, OpenOptions, VectorMetric, VectorRecord,
+    recommended_segment_max_vectors,
+};
 
 type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -241,6 +244,9 @@ fn build() -> BenchResult<()> {
     index.finish_bulk_load()?;
     if index.manifest().logical_cells().len() != cell_count {
         return Err("built logical-cell count differs from frozen protocol".into());
+    }
+    if group_commit_base {
+        index.set_segment_max_vectors(recommended_segment_max_vectors(dimensions))?;
     }
     Ok(())
 }

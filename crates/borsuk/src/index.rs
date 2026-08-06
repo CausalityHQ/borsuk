@@ -3243,6 +3243,35 @@ impl BorsukIndex {
         &self.manifest
     }
 
+    /// Change the physical segment row bound used by future writes.
+    ///
+    /// Existing immutable segments and the stable logical-cell topology are
+    /// unchanged. Call this after freezing a routing topology when subsequent
+    /// foreground materialization should use a larger, dimension-aware physical
+    /// segment size.
+    pub fn set_segment_max_vectors(&mut self, segment_max_vectors: usize) -> Result<()> {
+        if segment_max_vectors == 0 {
+            return Err(BorsukError::InvalidRecordInput(
+                "segment_max_vectors must be positive".to_string(),
+            ));
+        }
+        if !self.named.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "segment sizing must be configured before creating named-vector children"
+                    .to_string(),
+            ));
+        }
+        if self.manifest.config.segment_max_vectors == segment_max_vectors {
+            return Ok(());
+        }
+        let previous = self.manifest.clone();
+        let mut manifest = self.manifest.next_version();
+        manifest.config.segment_max_vectors = segment_max_vectors;
+        self.manifest =
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        Ok(())
+    }
+
     /// Cumulative object-store request counts for this index handle, including
     /// dense named-vector child indexes. Snapshot before/after an operation and
     /// use [`RequestCounts::delta`] to attribute its physical requests.
