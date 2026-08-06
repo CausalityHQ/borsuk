@@ -63,8 +63,9 @@ sudo chown -R ec2-user:ec2-user "\$workspace"
 dataset_root=/home/ec2-user/borsuk-datasets
 dataset_dir="\$dataset_root/cohere-medium-1M"
 if [[ ! -f "\$dataset_dir/dataset.json" || ! -f "\$dataset_dir/train.parquet" ]]; then
-  sudo -iu ec2-user bash -lc "cd \"\$workspace\" && uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/fetch_vdbbench_dataset.py --dataset cohere-medium-1M --output-root \"\$dataset_root\""
+  sudo -iu ec2-user bash -lc "cd \"\$workspace\" && uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/fetch_vdbbench_dataset.py --dataset cohere-medium-1M --output-root \"\$dataset_root\" --execute-download"
 fi
+sudo -iu ec2-user bash -lc "cd \"\$workspace\" && uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/fetch_vdbbench_dataset.py --dataset cohere-medium-1M --output-root \"\$dataset_root\" --check-existing" >/dev/null
 [[ -f "\$dataset_dir/dataset.json" && -f "\$dataset_dir/train.parquet" ]] || {
   echo 'pinned Cohere dataset preparation failed' >&2
   exit 7
