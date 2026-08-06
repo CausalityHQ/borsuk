@@ -78,11 +78,14 @@ fn required(name: &str) -> BenchResult<String> {
 }
 
 fn open_benchmark_index(uri: &str) -> borsuk::Result<BorsukIndex> {
+    let cache_dir = env::var_os("BORSUK_GROUP_COMMIT_CACHE_DIR").map(PathBuf::from);
     BorsukIndex::open_with_options(
         uri,
         OpenOptions {
             // Keep repeated post-drain probes local after the first decode;
             // this is the bounded production read profile for object storage.
+            cache_dir,
+            cache_max_bytes: Some(256 * 1024 * 1024),
             segment_cache_max_bytes: Some(64 * 1024 * 1024),
             ..OpenOptions::default()
         },
