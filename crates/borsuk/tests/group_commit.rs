@@ -497,6 +497,42 @@ fn one_append_fans_records_out_to_their_ownership_lanes() {
 }
 
 #[test]
+fn one_worker_uploads_grouped_ownership_lane_extents_concurrently() {
+    const LANES: usize = 4;
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (instrumented, concurrency) = common::FaultInjectingObjectStore::new(inner)
+        .with_latency(std::time::Duration::from_millis(25))
+        .with_put_concurrency_probe();
+    let uri = "memory:///group-parallel-epoch-extents";
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::new(instrumented), config(uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::from_millis(10),
+            max_records: LANES,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    let records = (0..LANES)
+        .map(|lane| {
+            VectorRecord::new(
+                ids_in_ownership_lane(lane, 1).pop().unwrap(),
+                vec![lane as f32, 0.0],
+            )
+        })
+        .collect();
+
+    let receipt = writer.append(records).unwrap();
+
+    assert_eq!(receipt.lane_receipts.len(), LANES);
+    assert!(
+        concurrency.peak() > 1,
+        "one dispatch group must overlap independent lane extent PUTs; peak={}",
+        concurrency.peak()
+    );
+}
+
+#[test]
 fn independent_commit_lanes_report_lane_local_requests() {
     const LANES: usize = 4;
     const RECORDS: usize = 64;
