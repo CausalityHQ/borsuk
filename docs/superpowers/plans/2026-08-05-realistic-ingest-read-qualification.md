@@ -327,11 +327,31 @@
   boundary requires a deliberate rebuild and new evidence. Query work remains
   one stable ANN, one appendable delta ANN, one bounded bootstrap fringe, and
   one WAL overlay under shared segment/candidate/byte/deadline accounting. A
-  bounded GPT-5.6 Sol review
-  independently confirmed the existing linear exact-delta behavior and budget
-  failure, but exhausted before issuing a final recommendation; the invariants
-  above therefore remain subject to repository tests and measured qualification,
-  not model authority.
+  GPT-5.6 Sol review found that immutable appended generations were filtered
+  only after the top-k distance boundary, so stale near-query rows could hide
+  live neighbours. The persisted regression now repeats an upsert across delta
+  appends and proves MVCC filtering and identity deduplication happen before
+  that boundary. The same review correctly identified stale delta checksums
+  after compaction and the still-open unbounded growth/retraining problem.
+
+  The append primitive now reconstructs both scan and coarse quantizers from
+  the persisted descriptor, rejects any new segment/row ordinal that exceeds
+  its packed-location capacity, preserves every old chunk reference byte for
+  byte, and validates contiguous appended row ranges through the normal
+  descriptor constructor. Real sidecar tests cover quantizer-identical encoding,
+  layout overflow, old-chunk reuse, and descriptor serialization. Index-level
+  WAL materialization now bootstraps after one configured segment capped at
+  1,024 vectors, then publishes append descriptors that preserve the old chunk
+  prefix and encode only uncovered segments. A one-record regression proves the
+  system does not freeze a degenerate one-cell quantizer; reaching the local
+  16-vector bootstrap creates coverage for both fringe segments and the next
+  flush appends a third. Refresh is an optimization after the durable segment
+  manifest and cannot turn a successful flush into a reported failure. Both
+  flat and paged compaction now rebuild the delta from the replacement segment
+  set and publish coverage atomically; a persisted regression verifies that no
+  compacted checksum remains referenced. Hard delta rollover/retraining,
+  shared byte/deadline charging, and realistic latency and recall qualification
+  remain open.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
