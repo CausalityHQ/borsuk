@@ -78,6 +78,12 @@
   5,659.450 records/s. This is neutral to r33 within single-cell noise, so
   it is retained for bounded memory behavior but does not close the bulk
   throughput gap.
+- The current implementation slice overlaps lane segment persistence with
+  global-delta construction using provisional internal checksums and replaces
+  them with actual segment checksums before publication; stale-coverage cases
+  retain the sequential fallback. Full library, group-commit,
+  fault-injection, Clippy, and formatting gates pass. A fresh terminal arm is
+  required before assigning a throughput or scalability result.
 
 ## Global Constraints
 
