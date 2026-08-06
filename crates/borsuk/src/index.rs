@@ -17367,96 +17367,56 @@ impl BorsukIndex {
         path: &str,
         chunks: &[(GlobalPqChunkRef, Vec<(usize, usize)>)],
     ) -> Result<(Vec<(usize, Vec<f32>, RecordId, u64)>, u64)> {
-        enum RequestedRow {
-            Exact { node: usize },
-            IdentityOffsets { row_start: usize },
-            IdentityValues { row_start: usize },
-        }
         let dimensions = self.manifest.config.dimensions;
         let vector_element_type = self.manifest.build_config.vector_element_type;
         let row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
-        let mut requested = Vec::<(Range<u64>, RequestedRow)>::new();
+        let envelope = global_exact_bundle_envelope(chunks, row_bytes)?;
+        let bundled = self.storage.read_range(path, envelope.clone())?;
+        let envelope_start = usize::try_from(envelope.start).map_err(|_| {
+            BorsukError::InvalidStorage("global exact-vector envelope start overflows".to_string())
+        })?;
+        let slice = |range: Range<usize>| -> Result<&[u8]> {
+            let start = range.start.checked_sub(envelope_start).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global exact-vector envelope offset underflows".to_string(),
+                )
+            })?;
+            let end = range.end.checked_sub(envelope_start).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global exact-vector envelope offset underflows".to_string(),
+                )
+            })?;
+            bundled.get(start..end).ok_or_else(|| {
+                BorsukError::InvalidStorage("global exact-vector envelope is truncated".to_string())
+            })
+        };
+        let mut rows = Vec::new();
         for (chunk, entries) in chunks {
             if chunk.path != path {
                 return Err(BorsukError::InvalidStorage(
                     "global exact-vector bundle path mismatch".to_string(),
                 ));
             }
-            for &(node, row) in entries {
-                if row >= chunk.rows {
-                    return Err(BorsukError::InvalidStorage(
-                        "global exact-vector row exceeds its chunk".to_string(),
-                    ));
-                }
-                let local_start = row.checked_mul(row_bytes).ok_or_else(|| {
-                    BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
-                })?;
-                let start = chunk
-                    .exact_offset_bytes
-                    .checked_add(local_start)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "global exact-vector bundle offset overflows".to_string(),
-                        )
-                    })?;
-                let end = start.checked_add(row_bytes).ok_or_else(|| {
-                    BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
-                })?;
-                requested.push((start as u64..end as u64, RequestedRow::Exact { node }));
-            }
             let (offsets_range, values_range) = chunk.identity_ranges()?;
-            requested.push((
-                offsets_range.start as u64..offsets_range.end as u64,
-                RequestedRow::IdentityOffsets {
-                    row_start: chunk.row_start,
-                },
-            ));
-            requested.push((
-                values_range.start as u64..values_range.end as u64,
-                RequestedRow::IdentityValues {
-                    row_start: chunk.row_start,
-                },
-            ));
-        }
-        requested.sort_unstable_by_key(|entry| entry.0.start);
-        let ranges = requested
-            .iter()
-            .map(|(range, _)| range.clone())
-            .collect::<Vec<_>>();
-        let fetched = self.storage.read_ranges(path, &ranges)?;
-        let mut vectors = HashMap::new();
-        let mut identity_offsets = HashMap::<usize, Vec<u8>>::new();
-        let mut identity_values = HashMap::<usize, Vec<u8>>::new();
-        let bytes_fetched = fetched.bytes_fetched;
-        for ((_, kind), bytes) in requested.into_iter().zip(&fetched.chunks) {
-            match kind {
-                RequestedRow::Exact { node } => {
-                    if bytes.len() != row_bytes {
-                        return Err(BorsukError::InvalidStorage(
-                            "global exact-vector row is truncated".to_string(),
-                        ));
-                    }
-                    vectors.insert(
-                        node,
-                        vector_element_type.decode_fixed_width(bytes, dimensions)?,
-                    );
-                }
-                RequestedRow::IdentityOffsets { row_start } => {
-                    identity_offsets.insert(row_start, bytes.clone());
-                }
-                RequestedRow::IdentityValues { row_start } => {
-                    identity_values.insert(row_start, bytes.clone());
-                }
+            let offsets = slice(offsets_range)?;
+            let values = slice(values_range)?;
+            let exact_end = chunk
+                .exact_offset_bytes
+                .checked_add(chunk.exact_size_bytes)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global exact-vector chunk range overflows".to_string(),
+                    )
+                })?;
+            let exact = slice(chunk.exact_offset_bytes..exact_end)?;
+            let actual = blake3::hash(exact).to_hex().to_string();
+            if actual != chunk.exact_checksum.as_ref() {
+                return Err(BorsukError::ChecksumMismatch {
+                    path: path.to_string(),
+                    expected: chunk.exact_checksum.to_string(),
+                    actual,
+                });
             }
-        }
-        let mut rows = Vec::new();
-        for (chunk, entries) in chunks {
-            let offsets = identity_offsets.remove(&chunk.row_start).ok_or_else(|| {
-                BorsukError::InvalidStorage("global identity offsets are missing".to_string())
-            })?;
-            let values = identity_values.remove(&chunk.row_start).ok_or_else(|| {
-                BorsukError::InvalidStorage("global identity values are missing".to_string())
-            })?;
             if offsets.len() != (chunk.rows + 1).saturating_mul(4) {
                 return Err(BorsukError::InvalidStorage(
                     "global identity offsets have an invalid size".to_string(),
@@ -17488,11 +17448,23 @@ impl BorsukIndex {
                         "global identity value has no generation".to_string(),
                     )
                 })?;
-                let vector = vectors.remove(&node).ok_or_else(|| {
+                if row >= chunk.rows {
+                    return Err(BorsukError::InvalidStorage(
+                        "global exact-vector row exceeds its chunk".to_string(),
+                    ));
+                }
+                let vector_start = row.checked_mul(row_bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
+                })?;
+                let vector_end = vector_start.checked_add(row_bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
+                })?;
+                let vector_bytes = exact.get(vector_start..vector_end).ok_or_else(|| {
                     BorsukError::InvalidStorage(
-                        "global exact-vector candidate is missing".to_string(),
+                        "global exact-vector candidate is truncated".to_string(),
                     )
                 })?;
+                let vector = vector_element_type.decode_fixed_width(vector_bytes, dimensions)?;
                 rows.push((
                     node,
                     vector,
@@ -17501,7 +17473,7 @@ impl BorsukIndex {
                 ));
             }
         }
-        Ok((rows, bytes_fetched))
+        Ok((rows, bundled.len() as u64))
     }
 
     fn read_prefetched_segment(
@@ -18814,6 +18786,63 @@ fn should_flush_global_pq_bundle(
             || next_code_bytes > DEFAULT_GLOBAL_PQ_BUNDLE_CODE_BYTES
             || next_total_bytes > DEFAULT_GLOBAL_PQ_BUNDLE_BYTES
     })
+}
+
+fn global_exact_bundle_envelope(
+    chunks: &[(GlobalPqChunkRef, Vec<(usize, usize)>)],
+    row_bytes: usize,
+) -> Result<Range<u64>> {
+    let mut start = usize::MAX;
+    let mut end = 0_usize;
+    let mut path = None::<&str>;
+    for (chunk, entries) in chunks {
+        if entries.is_empty() {
+            continue;
+        }
+        if let Some(expected) = path {
+            if chunk.path != expected {
+                return Err(BorsukError::InvalidStorage(
+                    "global exact-vector bundle path mismatch".to_string(),
+                ));
+            }
+        } else {
+            path = Some(&chunk.path);
+        }
+        if entries.iter().any(|(_, row)| *row >= chunk.rows) {
+            return Err(BorsukError::InvalidStorage(
+                "global exact-vector row exceeds its chunk".to_string(),
+            ));
+        }
+        let expected_exact_size = chunk.rows.checked_mul(row_bytes).ok_or_else(|| {
+            BorsukError::InvalidStorage("global exact-vector size overflows".to_string())
+        })?;
+        if chunk.exact_size_bytes != expected_exact_size {
+            return Err(BorsukError::InvalidStorage(
+                "global exact-vector size does not match its rows".to_string(),
+            ));
+        }
+        let (offsets, _) = chunk.identity_ranges()?;
+        let exact_end = chunk
+            .exact_offset_bytes
+            .checked_add(chunk.exact_size_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
+            })?;
+        start = start.min(offsets.start);
+        end = end.max(exact_end);
+    }
+    if start == usize::MAX || start >= end {
+        return Err(BorsukError::InvalidStorage(
+            "global exact-vector bundle selection is empty".to_string(),
+        ));
+    }
+    let bytes = end - start;
+    if bytes > DEFAULT_GLOBAL_PQ_BUNDLE_BYTES {
+        return Err(BorsukError::InvalidStorage(format!(
+            "global exact-vector envelope is {bytes} bytes, above the {DEFAULT_GLOBAL_PQ_BUNDLE_BYTES}-byte bundle cap"
+        )));
+    }
+    Ok(start as u64..end as u64)
 }
 
 fn global_pq_code_read_groups(
@@ -23639,6 +23668,38 @@ mod tests {
 
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].1.len(), 3);
+    }
+
+    #[test]
+    fn global_exact_rerank_uses_one_bounded_envelope_per_bundle() {
+        const ROWS: usize = 5_461;
+        const ROW_BYTES: usize = 768 * size_of::<f32>();
+        const EXACT_OFFSET: usize = 128 * 1024;
+        let chunk = GlobalPqChunkRef {
+            path: "packed-bundle".to_string(),
+            checksum: "code-checksum".to_string(),
+            offset_bytes: 0,
+            exact_checksum: "exact-checksum".into(),
+            exact_offset_bytes: EXACT_OFFSET,
+            exact_size_bytes: ROWS * ROW_BYTES,
+            cell_index: 7,
+            identity_offsets_padding_bytes: 0,
+            identity_values_padding_bytes: 0,
+            row_start: 10_000,
+            rows: ROWS,
+            size_bytes: 64 * 1024,
+            graph: None,
+        };
+        let chunks = vec![(chunk, vec![(10_000, 0), (15_460, ROWS - 1)])];
+
+        let range = global_exact_bundle_envelope(&chunks, ROW_BYTES).unwrap();
+
+        assert_eq!(range.start, 64 * 1024);
+        assert_eq!(range.end, (EXACT_OFFSET + ROWS * ROW_BYTES) as u64);
+        assert!(
+            range.end - range.start <= DEFAULT_GLOBAL_PQ_BUNDLE_BYTES as u64,
+            "one exact-rerank request must remain bounded by the persisted bundle cap"
+        );
     }
 
     #[test]
