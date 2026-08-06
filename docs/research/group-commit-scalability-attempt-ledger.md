@@ -44,6 +44,38 @@ partial summary or samples CSV.
 | v30-sustained | `a595717` | `1e931b1a5eb466b58de16adad705e5cea959dcbfc9e1b7b52370bdaf868085ff` | `be4698ff6cb8defd8008457763c7b0ec00e1101069e0c6c3a62f1856458b9d9c` | `s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260805-v30/results/` | `s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260805-v30/index/` | terminal at the first `c2000/r01/l1/w1` cell. Every phase marker was present, then the exact write-p95 failure marker and root/cell failure markers were emitted; no throughput, end-to-end throughput, read-p95, or inserted-ID visibility failure marker was present. The fail-closed terminal validator rejected the root failure marker before reading CSVs, so the only numeric conclusion is write p95 at least 200 ms. Service exit was 1; the host retained 59 GiB available memory and 86 GiB free disk. Direct source tracing confirms each acknowledgement still serializes an immutable block PUT and a conditional growing-HEAD PUT. GPT-5.6 Sol review selected a one-CAS inline-HEAD with asynchronous spill as the smallest architecture preserving immediate fencing and fixed-fanout reopen. |
 | v31-inline-head | `a5a5573` | `b2e6d04acf0fe3bf7315e79543a8e4cf3b6a56c3decb3ae079e6cb2343f74bc0` | `cd9f8b49a7e624ea948acee1dfe27c68e3036b45b0fa82035ece40d1a15d596f` | `s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260805-v31/results/` | `s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260805-v31/index/` | terminal failure in first cell `c2000/r01/l1/w1`; root/cell fail-closed validators rejected the campaign before measurement inspection. All phase markers were present, with write-p95 and active-tail-read-p95 failure markers and no other phase failure. The complete cell recorded 1,000 records, 836 groups, mean group 1.196, 2.210 acknowledged records/s, 1.849 drain-inclusive records/s, write p50/p95 241.252/603.825 ms, active-tail read p50/p95 812.839/951.618 ms, post-drain read p50/p95 59.284/73.770 ms, visibility 1,000, and inserted-ID recall@10 1.0. The complete physical trace recorded 920,705,087 write bytes and 80,124 write requests for 3,072,000 input vector bytes (~299.71x). Causal inspection identified synchronous four-block spill in the owning append worker and a corpus-wide global-PQ rebuild during drain; the campaign remains immutable failed evidence. |
 
+## Bounded local 768D causal checks after v28
+
+These are single-cell, claim-ineligible diagnostics over 16,384 checksum-pinned
+Cohere 768D vectors with 32 writers, 16 records/operation, pipeline depth four,
+and eight worker lanes. Every numeric row below was inspected only after all
+five phase markers existed and the process exited successfully.
+
+- `8e2f00d` preserved recall 1.0, 62.722 ms write p95, and 47,530 acknowledged
+  records/s. Parallel exact tail ranking did not resolve the whole-query path:
+  active-tail p95 remained 353.006 ms. Deferring stable generation-page folding
+  and foreground base promotion reduced drain only to 13.473 s, yielding 1,186
+  drain-inclusive records/s; post-drain p95 was 273.571 ms.
+- `6f03074` changed only lane-materialized segment-local codes to scalar bounds.
+  Its terminal result was causally neutral: 13.329 s drain, 1,198
+  drain-inclusive records/s, 346.245 ms active-tail p95, and 277.992 ms
+  post-drain p95. The global delta build, not the segment-local quantizer, was
+  therefore the dominant drain stage.
+- `8c0f0a8` reused the stable base codebooks for delta bootstrap and terminated
+  after drain because the delta artifact was absent and four exact-fringe
+  segments exhausted the four-segment query budget. No incomplete CSV was
+  inspected. `569535b` then made the previously discarded refresh error
+  fail-closed and reproduced the exact cause: the one-row logical-cell base
+  location layout could not encode 5,461-row delta segments.
+- `faf0d18` retained the frozen codebooks but derived an independent packed
+  delta location layout. The terminal run preserved recall 1.0, 60.182 ms write
+  p95, and 46,132 acknowledged records/s while reducing drain from 13.329 s to
+  5.685 s and raising drain-inclusive throughput from 1,198 to 2,713 records/s.
+  Active-tail p95 (345.349 ms) and post-drain p95 (273.564 ms) still fail. This
+  proves codebook reuse is material but insufficient; writer-side searchable
+  extent codes, sparse generation fences, and a lower-request read merge remain
+  required before AWS qualification.
+
 The campaign is claim-ineligible until the root completion marker exists, no
 failure marker exists, the service exits successfully, and the fail-closed
 validator reconciles every matrix cell, raw sample, group receipt, request
