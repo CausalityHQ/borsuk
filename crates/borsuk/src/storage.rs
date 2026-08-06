@@ -64,6 +64,7 @@ use crate::{
     manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
     observability,
     record::RequestCounts,
+    segment_cache::DecodedObjectCache,
     storage_trace::{
         StorageAccessEvent, StorageAccessTrace, configured_storage_access_trace,
         physical_format_for_path,
@@ -543,6 +544,7 @@ pub(crate) struct Storage {
     request_counters: Arc<RequestCounters>,
     cache_read_counters: Arc<CacheReadCounters>,
     storage_trace: StorageAccessTrace,
+    immutable_object_sizes: Arc<DecodedObjectCache<u64>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -760,6 +762,7 @@ struct PrefetchReadContext {
     request_counters: Arc<RequestCounters>,
     cache_read_counters: Arc<CacheReadCounters>,
     storage_trace: StorageAccessTrace,
+    immutable_object_sizes: Arc<DecodedObjectCache<u64>>,
 }
 
 impl PrefetchReadContext {
@@ -772,6 +775,7 @@ impl PrefetchReadContext {
             request_counters: Arc::clone(&storage.request_counters),
             cache_read_counters: Arc::clone(&storage.cache_read_counters),
             storage_trace: storage.storage_trace.clone(),
+            immutable_object_sizes: Arc::clone(&storage.immutable_object_sizes),
         }
     }
 
@@ -839,8 +843,18 @@ impl PrefetchReadContext {
         }
 
         let requests_before = self.request_counters.snapshot();
-        let size = self.object_size(relative).await?;
-        let (bytes, _) = self.read_range_uncached(relative, 0..size).await?;
+        let location = self.resolve(relative)?;
+        let result = self
+            .store
+            .get_opts(&location, GetOptions::default())
+            .await
+            .map_err(|err| map_object_store_error(relative, err))?;
+        let size = result.meta.size;
+        let bytes = result
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(|err| map_object_store_error(relative, err))?;
         self.write_cache_file(relative, &bytes)?;
         self.storage_trace
             .record(StorageAccessEvent::observed_read(
@@ -861,12 +875,24 @@ impl PrefetchReadContext {
     }
 
     async fn object_size(&self, relative: &str) -> Result<u64> {
+        if !is_mutable_lane_head(relative)
+            && let Some(size) = self.immutable_object_sizes.get(relative)
+        {
+            return Ok(*size);
+        }
         let location = self.resolve(relative)?;
         let meta = self
             .store
             .head(&location)
             .await
             .map_err(|err| map_object_store_error(relative, err))?;
+        if !is_mutable_lane_head(relative) {
+            self.immutable_object_sizes.insert(
+                relative.to_string(),
+                Arc::new(meta.size),
+                std::mem::size_of::<u64>() as u64,
+            );
+        }
         Ok(meta.size)
     }
 
@@ -1123,6 +1149,7 @@ impl Storage {
             request_counters: Arc::clone(&self.request_counters),
             cache_read_counters: Arc::clone(&self.cache_read_counters),
             storage_trace: self.storage_trace.clone(),
+            immutable_object_sizes: Arc::clone(&self.immutable_object_sizes),
         })
     }
 
@@ -1168,6 +1195,7 @@ impl Storage {
             request_counters,
             cache_read_counters,
             storage_trace: self.storage_trace.clone(),
+            immutable_object_sizes: Arc::clone(&self.immutable_object_sizes),
         }
     }
 
@@ -1206,6 +1234,7 @@ impl Storage {
             request_counters,
             cache_read_counters,
             storage_trace: configured_storage_access_trace()?,
+            immutable_object_sizes: Arc::new(DecodedObjectCache::new(1 << 20)),
         })
     }
 
@@ -2516,6 +2545,7 @@ impl Storage {
     }
 
     pub(crate) fn write_bytes(&self, relative: &str, bytes: &[u8]) -> Result<()> {
+        self.invalidate_cached_object_size(relative);
         if bytes.len() > MULTIPART_WRITE_THRESHOLD_BYTES {
             self.write_bytes_multipart(relative, bytes)?;
         } else {
@@ -2746,6 +2776,7 @@ impl Storage {
         bytes: &[u8],
         mode: PutMode,
     ) -> Result<PutResult> {
+        self.invalidate_cached_object_size(relative);
         let location = self.resolve(relative)?;
         let payload = PutPayload::from(Bytes::copy_from_slice(bytes));
         let requests_before = self.request_counts();
@@ -2807,13 +2838,17 @@ impl Storage {
 
     fn read_bytes_uncached(&self, relative: &str) -> Result<Vec<u8>> {
         let requests_before = self.request_counts();
-        let size = self.object_size(relative)?;
         let location = self.resolve(relative)?;
+        let result = self
+            .runtime
+            .block_on(async { self.store.get_opts(&location, GetOptions::default()).await })
+            .map_err(|err| map_object_store_error(relative, err))?;
+        let size = result.meta.size;
         let bytes = self
             .runtime
-            .block_on(async { self.store.get_range(&location, 0..size).await })
-            .map_err(|err| map_object_store_error(relative, err))?
-            .to_vec();
+            .block_on(result.bytes())
+            .map(|bytes| bytes.to_vec())
+            .map_err(|err| map_object_store_error(relative, err))?;
         self.write_cache_file(relative, &bytes)?;
         self.storage_trace
             .record(StorageAccessEvent::observed_read(
@@ -3534,6 +3569,7 @@ impl Storage {
     }
 
     pub(crate) fn delete_object(&self, relative: &str) -> Result<bool> {
+        self.invalidate_cached_object_size(relative);
         let location = self.resolve(relative)?;
         match self
             .runtime
@@ -3566,13 +3602,8 @@ impl Storage {
         }
     }
 
-    pub(crate) fn object_size(&self, relative: &str) -> Result<u64> {
-        let location = self.resolve(relative)?;
-        let meta = self
-            .runtime
-            .block_on(async { self.store.head(&location).await })
-            .map_err(|err| map_object_store_error(relative, err))?;
-        Ok(meta.size)
+    fn invalidate_cached_object_size(&self, relative: &str) {
+        self.immutable_object_sizes.remove(relative);
     }
 
     fn exists(&self, relative: &str) -> Result<bool> {
@@ -4462,6 +4493,45 @@ mod tests {
             4,
             "mutable HEAD ranges and suffixes must always be fetched fresh"
         );
+
+        let before_whole = storage.request_counts();
+        assert_eq!(
+            storage.read_bytes_with_cache_status(head).unwrap().bytes,
+            b"abcdefgh"
+        );
+        assert_eq!(
+            storage.read_bytes_with_cache_status(head).unwrap().bytes,
+            b"abcdefgh"
+        );
+        let whole_requests = storage.request_counts().delta(&before_whole);
+        assert_eq!(whole_requests.heads, 0);
+        assert_eq!(whole_requests.gets, 2);
+    }
+
+    #[test]
+    fn immutable_whole_object_reads_reuse_size_without_repeating_head() {
+        let storage = Storage::from_uri("memory:///known-object-size").unwrap();
+        storage
+            .write_bytes("segments/object.bin", b"immutable bytes")
+            .unwrap();
+
+        let before = storage.request_counts();
+        let first = storage
+            .read_bytes_with_cache_status("segments/object.bin")
+            .unwrap();
+        let first_requests = storage.request_counts().delta(&before);
+        assert_eq!(first.bytes, b"immutable bytes");
+        assert_eq!(first_requests.heads, 0);
+        assert_eq!(first_requests.gets, 1);
+
+        let before_second = storage.request_counts();
+        let second = storage
+            .read_bytes_with_cache_status("segments/object.bin")
+            .unwrap();
+        let second_requests = storage.request_counts().delta(&before_second);
+        assert_eq!(second.bytes, b"immutable bytes");
+        assert_eq!(second_requests.heads, 0);
+        assert_eq!(second_requests.gets, 1);
     }
 
     #[test]

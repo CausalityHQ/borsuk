@@ -513,7 +513,7 @@ fn missing_segment_during_search_returns_storage_not_found() {
             1,
             false,
             common::InjectedErrorKind::NotFound,
-            |operation, path| operation == common::StoreOperation::Head && is_segment_path(path),
+            |operation, path| operation == common::StoreOperation::Get && is_segment_path(path),
         ),
     );
     let index =
@@ -535,7 +535,7 @@ fn permission_denied_during_search_returns_storage_permission_denied() {
             1,
             false,
             common::InjectedErrorKind::PermissionDenied,
-            |operation, path| operation == common::StoreOperation::Head && is_segment_path(path),
+            |operation, path| operation == common::StoreOperation::Get && is_segment_path(path),
         ),
     );
     let index =
