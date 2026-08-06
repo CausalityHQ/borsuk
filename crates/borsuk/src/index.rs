@@ -12978,11 +12978,7 @@ impl BorsukIndex {
         } else if let Some(previous_delta) = base_reference.delta.as_deref() {
             self.append_resident_global_delta(previous_delta, &fringe)?
         } else {
-            self.persist_resident_global_pq(&fringe)?.ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "resident global delta bootstrap contains no visible vectors".to_string(),
-                )
-            })?
+            self.bootstrap_resident_global_delta(&base_reference, &fringe)?
         };
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
@@ -13009,6 +13005,42 @@ impl BorsukIndex {
             .unwrap_or_else(|error| error.into_inner())
             .clear();
         Ok(true)
+    }
+
+    fn bootstrap_resident_global_delta(
+        &self,
+        base: &crate::manifest::GlobalPqRef,
+        fringe: &[SegmentSummary],
+    ) -> Result<crate::manifest::GlobalPqRef> {
+        let read = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&base.path, &base.checksum)?;
+        let descriptor = GlobalPqDescriptor::decode(&read.bytes)?;
+        let empty = descriptor.empty_reusing_quantizers()?;
+        let bytes = empty.encode()?;
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = format!(
+            "global-pq/descriptors/{}/descriptor-{checksum}.parquet",
+            &checksum[..2]
+        );
+        self.storage.write_bytes_content_addressed(&path, &bytes)?;
+        let seed = crate::manifest::GlobalPqRef {
+            layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
+            path,
+            checksum,
+            vectors: 0,
+            subspaces: empty.subspaces(),
+            candidates: 0,
+            probes: base.probes,
+            resident_bytes: u64::try_from(empty.resident_bytes()).map_err(|_| {
+                BorsukError::InvalidStorage("empty global delta resident bytes exceed u64".into())
+            })?,
+            sidecar_index_bytes: 0,
+            storage_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            segments: Vec::new(),
+            delta: None,
+        };
+        self.append_resident_global_delta(&seed, fringe)
     }
 
     fn append_resident_global_delta(
