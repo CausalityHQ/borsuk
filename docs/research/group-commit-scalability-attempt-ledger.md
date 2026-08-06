@@ -84,6 +84,14 @@ five phase markers existed and the process exited successfully.
   rules out dense generation-frontier reads as the dominant latency source in
   this local shape; the fixed base/delta object-request merge and unindexed raw
   active tail remain causal targets.
+- `0b7ceff` tested one bounded exact-vector envelope GET per selected Arrow
+  bundle. The terminal 16,384-vector cell preserved recall 1.0 and 61.751 ms
+  write p95, but post-drain read p95 only moved from `cf5003f`'s 271.876 ms to
+  265.776 ms. Requests remained 113--114 per query, while mean post-drain bytes
+  rose from 3.31 MiB/query to 5.67 MiB/query. The change is therefore dominated
+  and was reverted. The invariant 54 HEADs per ordinary query trace instead to
+  candidate-by-candidate generation visibility resolution; batch resolution is
+  the next causal experiment.
 
 The campaign is claim-ineligible until the root completion marker exists, no
 failure marker exists, the service exits successfully, and the fail-closed
