@@ -9,6 +9,7 @@ use std::{
 };
 
 use crate::{BorsukError, BorsukIndex, RequestCounts, Result, VectorRecord};
+use rayon::prelude::*;
 
 const LANE_LEASE_TTL_MS: u64 = 60 * 60 * 1_000;
 const BACKGROUND_MATERIALIZATION_BLOCK_INTERVAL: u64 = 64;
@@ -546,7 +547,6 @@ fn run_worker(
     requests: Receiver<WorkerRequest>,
 ) {
     let mut deferred = None;
-    let mut spill_errors = std::collections::HashMap::<u16, String>::new();
     loop {
         let request = match deferred.take().map_or_else(|| requests.recv(), Ok) {
             Ok(request) => request,
@@ -602,58 +602,51 @@ fn run_worker(
             }
         }
 
-        group.sort_by_key(|request| request.lane);
-        while !group.is_empty() {
-            let lane = group[0].lane;
-            let lane_requests = group
-                .iter()
-                .take_while(|request| request.lane == lane)
-                .count();
-            let mut same_lane = group.drain(..lane_requests).collect::<Vec<_>>();
-            let committed_records = same_lane.iter().map(|request| request.records.len()).sum();
-            let mut combined = Vec::with_capacity(committed_records);
-            let caller_sizes = same_lane
-                .iter_mut()
-                .map(|request| {
-                    let len = request.records.len();
-                    combined.append(&mut request.records);
-                    len
-                })
-                .collect::<Vec<_>>();
-            let mut by_id = std::collections::HashMap::<Vec<u8>, usize>::new();
-            let mut deduplicated = Vec::with_capacity(combined.len());
-            for record in combined {
-                let key = record.id.as_bytes().to_vec();
-                if let Some(index) = by_id.get(&key).copied() {
-                    deduplicated[index] = record;
-                } else {
-                    by_id.insert(key, deduplicated.len());
-                    deduplicated.push(record);
-                }
-            }
-            let committed_records = deduplicated.len();
-            let writer = lane_writers
-                .iter_mut()
-                .find(|writer| writer.lane() == lane)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!("worker does not own lane {lane}"))
-                });
-            let committed = writer
-                .and_then(|writer| {
-                    if let std::collections::hash_map::Entry::Occupied(mut spill_error) =
-                        spill_errors.entry(lane)
-                    {
-                        match writer.spill_inline_blocks() {
-                            Ok(()) => {
-                                spill_error.remove();
-                            }
-                            Err(error) => {
-                                spill_error.insert(error.to_string());
-                                return Err(error);
-                            }
-                        }
+        let mut by_lane = std::collections::HashMap::<u16, Vec<AppendRequest>>::new();
+        for request in group {
+            by_lane.entry(request.lane).or_default().push(request);
+        }
+        let lane_work = lane_writers
+            .iter()
+            .map(|writer| by_lane.remove(&writer.lane()))
+            .collect::<Vec<_>>();
+        for orphaned in by_lane.into_values().flatten() {
+            let _ = orphaned.response.send(Err(format!(
+                "worker does not own lane {}",
+                orphaned.lane
+            )));
+        }
+        lane_writers
+            .par_iter_mut()
+            .zip(lane_work.into_par_iter())
+            .for_each(|(writer, same_lane)| {
+                let Some(mut same_lane) = same_lane else {
+                    return;
+                };
+                let grouped_records = same_lane.iter().map(|request| request.records.len()).sum();
+                let mut combined = Vec::with_capacity(grouped_records);
+                let caller_sizes = same_lane
+                    .iter_mut()
+                    .map(|request| {
+                        let len = request.records.len();
+                        combined.append(&mut request.records);
+                        len
+                    })
+                    .collect::<Vec<_>>();
+                let mut by_id = std::collections::HashMap::<Vec<u8>, usize>::new();
+                let mut deduplicated = Vec::with_capacity(combined.len());
+                for record in combined {
+                    let key = record.id.as_bytes().to_vec();
+                    if let Some(index) = by_id.get(&key).copied() {
+                        deduplicated[index] = record;
+                    } else {
+                        by_id.insert(key, deduplicated.len());
+                        deduplicated.push(record);
                     }
-                    current_time_ms().and_then(|now_ms| {
+                }
+                let committed_records = deduplicated.len();
+                let committed = current_time_ms()
+                    .and_then(|now_ms| {
                         writer.append_upsert_records_with_renewal_at(
                             &deduplicated,
                             dimensions,
@@ -661,33 +654,25 @@ fn run_worker(
                             LANE_LEASE_TTL_MS,
                         )
                     })
-                })
-                .map_err(|error| error.to_string());
-            for (request, caller_records) in same_lane.into_iter().zip(caller_sizes) {
-                let response = committed.as_ref().map_or_else(
-                    |error| Err(error.clone()),
-                    |receipt| {
-                        Ok(GroupCommitLaneReceipt {
-                            records: caller_records,
-                            committed_records,
-                            commit_sequence: receipt.sequence,
-                            lease_epoch: receipt.lease_epoch,
-                            commit_lane: usize::from(receipt.lane),
-                            acknowledgement_bytes: receipt.acknowledgement_bytes,
-                            requests: receipt.requests,
-                        })
-                    },
-                );
-                let _ = request.response.send(response);
-            }
-            if committed.is_ok()
-                && let Some(writer) = lane_writers.iter_mut().find(|writer| writer.lane() == lane)
-                && writer.inline_spill_needed()
-                && let Err(error) = writer.spill_inline_blocks()
-            {
-                spill_errors.insert(lane, error.to_string());
-            }
-        }
+                    .map_err(|error| error.to_string());
+                for (request, caller_records) in same_lane.into_iter().zip(caller_sizes) {
+                    let response = committed.as_ref().map_or_else(
+                        |error| Err(error.clone()),
+                        |receipt| {
+                            Ok(GroupCommitLaneReceipt {
+                                records: caller_records,
+                                committed_records,
+                                commit_sequence: receipt.sequence,
+                                lease_epoch: receipt.lease_epoch,
+                                commit_lane: usize::from(receipt.lane),
+                                acknowledgement_bytes: receipt.acknowledgement_bytes,
+                                requests: receipt.requests,
+                            })
+                        },
+                    );
+                    let _ = request.response.send(response);
+                }
+            });
     }
 }
 
