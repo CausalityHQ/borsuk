@@ -11752,6 +11752,10 @@ impl BorsukIndex {
             SearchMode::Approx { max_bytes, .. } => *max_bytes,
             SearchMode::Exact => None,
         };
+        let max_latency_ms = match &options.mode {
+            SearchMode::Approx { max_latency_ms, .. } => *max_latency_ms,
+            SearchMode::Exact => None,
+        };
         let mut candidate_pages =
             Vec::with_capacity(selected_chunks.len().div_ceil(DEFAULT_GLOBAL_PQ_CODE_READS));
         let mut bytes_read = 0_u64;
@@ -11765,6 +11769,12 @@ impl BorsukIndex {
             !matches!(options.cache_execution, crate::CacheExecutionPolicy::Scan);
         while wave_start < selected_chunks.len() {
             if wave_start > 0 && max_bytes.is_some_and(|limit| bytes_read >= limit) {
+                break;
+            }
+            if wave_start > 0
+                && max_latency_ms
+                    .is_some_and(|limit| started.elapsed().as_millis() >= limit as u128)
+            {
                 break;
             }
             let wave_byte_budget = max_bytes
@@ -12002,6 +12012,9 @@ impl BorsukIndex {
         let segments_searched = searched_chunks.len();
         let termination_reason = if max_bytes.is_some_and(|limit| bytes_read >= limit) {
             SearchTerminationReason::MaxBytes
+        } else if max_latency_ms.is_some_and(|limit| started.elapsed().as_millis() >= limit as u128)
+        {
+            SearchTerminationReason::MaxLatency
         } else {
             SearchTerminationReason::Complete
         };
@@ -12092,6 +12105,17 @@ impl BorsukIndex {
             return Ok(());
         }
 
+        let mut delta_options = options.clone();
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if let Some(reason) = restrict_to_remaining_search_budget(
+            &mut delta_options,
+            execution.report.bytes_read,
+            elapsed_ms,
+        ) {
+            execution.report.termination_reason = reason;
+            return Ok(());
+        }
+
         // Build a query-local view over the delta ANN plus exact fringe. It
         // shares immutable object caches, decode gates, and the
         // caller's storage read scope with the base handle, but must not
@@ -12137,7 +12161,6 @@ impl BorsukIndex {
         delta.resident_global_pq = Arc::clone(&self.resident_global_pq);
         delta.admission = None;
 
-        let mut delta_options = options.clone();
         if let Some(reference) = delta_reference {
             if let SearchMode::Approx {
                 max_segments: Some(max_segments),
@@ -20991,6 +21014,10 @@ fn merge_search_execution_hits(
         report: mut delta_report,
         vectors: delta_vectors,
     } = delta;
+    base.report.termination_reason = merged_search_termination_reason(
+        base.report.termination_reason,
+        delta_report.termination_reason,
+    );
     let base_vectors = std::mem::take(&mut base.vectors);
     let mut newest = HashMap::<RecordId, SearchHitWithVector>::new();
     for (index, hit) in std::mem::take(&mut base.report.hits)
@@ -21123,6 +21150,17 @@ fn merge_search_execution_hits(
         .report
         .segments_pruned_by_filter
         .saturating_add(delta_report.segments_pruned_by_filter);
+}
+
+fn merged_search_termination_reason(
+    base: SearchTerminationReason,
+    delta: SearchTerminationReason,
+) -> SearchTerminationReason {
+    if delta == SearchTerminationReason::Complete {
+        base
+    } else {
+        delta
+    }
 }
 
 /// Derive an [`ExplainReport`] (plan + estimated cost) from a measured search.
@@ -21479,6 +21517,37 @@ fn search_stop_reason_before_segment(
     }
 }
 
+/// Restrict a recursive search layer to the request budget its predecessors did
+/// not consume. Returns the first exhausted hard boundary instead of creating
+/// an invalid zero-valued child option.
+fn restrict_to_remaining_search_budget(
+    options: &mut SearchOptions,
+    bytes_spent: u64,
+    elapsed_ms: u64,
+) -> Option<SearchTerminationReason> {
+    let SearchMode::Approx {
+        max_bytes,
+        max_latency_ms,
+        ..
+    } = &mut options.mode
+    else {
+        return None;
+    };
+    if let Some(limit) = *max_bytes {
+        if bytes_spent >= limit {
+            return Some(SearchTerminationReason::MaxBytes);
+        }
+        *max_bytes = Some(limit - bytes_spent);
+    }
+    if let Some(limit) = *max_latency_ms {
+        if elapsed_ms >= limit {
+            return Some(SearchTerminationReason::MaxLatency);
+        }
+        *max_latency_ms = Some(limit - elapsed_ms);
+    }
+    None
+}
+
 fn search_prefetch_segment_budget_exhausted(mode: &SearchMode, reserved_segments: usize) -> bool {
     match mode {
         SearchMode::Exact => false,
@@ -21522,6 +21591,57 @@ mod tests {
 
     use super::*;
     use crate::collection_control::collection_wal_frontier_shard;
+
+    #[test]
+    fn recursive_search_receives_only_the_request_remaining_budgets() {
+        let mut remaining = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+            .with_max_bytes(100)
+            .with_max_latency_ms(50);
+        assert_eq!(
+            restrict_to_remaining_search_budget(&mut remaining, 40, 20),
+            None
+        );
+        let SearchMode::Approx {
+            max_bytes,
+            max_latency_ms,
+            ..
+        } = remaining.mode
+        else {
+            panic!("approximate options changed mode");
+        };
+        assert_eq!(max_bytes, Some(60));
+        assert_eq!(max_latency_ms, Some(30));
+
+        let mut byte_exhausted = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+            .with_max_bytes(100)
+            .with_max_latency_ms(50);
+        assert_eq!(
+            restrict_to_remaining_search_budget(&mut byte_exhausted, 100, 50),
+            Some(SearchTerminationReason::MaxBytes)
+        );
+
+        let mut deadline_exhausted = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+            .with_max_bytes(100)
+            .with_max_latency_ms(50);
+        assert_eq!(
+            restrict_to_remaining_search_budget(&mut deadline_exhausted, 99, 50),
+            Some(SearchTerminationReason::MaxLatency)
+        );
+        assert_eq!(
+            merged_search_termination_reason(
+                SearchTerminationReason::Complete,
+                SearchTerminationReason::MaxLatency,
+            ),
+            SearchTerminationReason::MaxLatency
+        );
+        assert_eq!(
+            merged_search_termination_reason(
+                SearchTerminationReason::MaxSegments,
+                SearchTerminationReason::Complete,
+            ),
+            SearchTerminationReason::MaxSegments
+        );
+    }
 
     #[test]
     fn collection_transaction_admission_skips_a_saturated_frontier_shard() {
@@ -23707,6 +23827,40 @@ mod tests {
                 .len(),
             2,
             "base and delta descriptors must both remain cached"
+        );
+
+        let byte_limited = reader
+            .search_with_report(
+                &[11.0; 8],
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64)
+                    .with_max_bytes(1),
+            )
+            .unwrap();
+        assert_eq!(
+            byte_limited.termination_reason,
+            SearchTerminationReason::MaxBytes
+        );
+        assert_eq!(
+            byte_limited.global_scan_chunks_searched, 1,
+            "base and delta must share one best-effort byte budget: {byte_limited:?}"
+        );
+
+        let delta_exhausted = reader
+            .search_with_report(
+                &[11.0; 8],
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64)
+                    .with_max_bytes(400),
+            )
+            .unwrap();
+        assert!(delta_exhausted.global_scan_chunks_searched >= 2);
+        assert_eq!(
+            delta_exhausted.termination_reason,
+            SearchTerminationReason::MaxBytes,
+            "the merged report must retain delta budget exhaustion: {delta_exhausted:?}"
         );
     }
 
