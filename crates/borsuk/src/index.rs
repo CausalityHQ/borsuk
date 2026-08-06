@@ -1988,6 +1988,12 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.segments = self.active_segment_summaries()?;
+        // The persisted fallback quantizer embeds the previous segment set.
+        // Invalidate it in the same publication that adds materialized lane
+        // segments so no reader can route on stale centroids. Global ANN search
+        // is refreshed below; other modes safely use the authoritative routing
+        // tree until explicit/background maintenance rebuilds this optimization.
+        manifest.quantizer_ref = None;
         if let Some(tombstone) = tombstone {
             manifest.tombstone_frontier.push(tombstone);
             manifest.tombstone_id_count = manifest
@@ -2028,7 +2034,6 @@ impl BorsukIndex {
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        self.refresh_persisted_quantizer()?;
         self.refresh_resident_global_delta(false)?;
         Ok(committed_sequences)
     }
@@ -8841,6 +8846,9 @@ impl BorsukIndex {
             && reference.covered_manifest_version == previous.version
         {
             reference.covered_manifest_version = manifest.version;
+            if let Some(delta) = reference.delta.as_mut() {
+                delta.covered_manifest_version = manifest.version;
+            }
         }
         if manifest.segments.is_empty() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
@@ -12422,6 +12430,9 @@ impl BorsukIndex {
             && reference.covered_manifest_version == previous.version
         {
             reference.covered_manifest_version = manifest.version;
+            if let Some(delta) = reference.delta.as_mut() {
+                delta.covered_manifest_version = manifest.version;
+            }
         }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
 
@@ -22795,6 +22806,84 @@ mod tests {
             .unwrap();
 
         assert!(group.drain().is_err());
+    }
+
+    #[test]
+    fn lane_log_drain_invalidates_fallback_quantizer_without_rebuilding_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let previous = index.manifest.clone();
+        let mut manifest = index.manifest.next_version();
+        manifest.quantizer_ref = Some(QuantizerRef {
+            path: "quantizers/stale.parquet".to_string(),
+            checksum: "a".repeat(64),
+            cells: 128,
+        });
+        index.manifest = index
+            .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))
+            .unwrap();
+        let version_before_drain = index.manifest.version;
+
+        let group =
+            crate::GroupCommitWriter::new(index, crate::GroupCommitConfig::default()).unwrap();
+        group
+            .append(
+                (0..16)
+                    .map(|row| {
+                        VectorRecord::new(format!("delta-{row}"), vec![1_000.0 + row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        group.drain().unwrap();
+
+        let drained = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(
+            drained.manifest.version,
+            version_before_drain + 2,
+            "drain must publish materialized segments and the global delta without a redundant quantizer-only manifest"
+        );
+        assert!(drained.manifest.quantizer_ref.is_none());
+        let global = drained.manifest.global_pq_ref.as_ref().unwrap();
+        assert_eq!(global.covered_manifest_version, drained.manifest.version);
+        assert!(global.delta.is_some());
+        assert_eq!(
+            drained
+                .search_ids(&[1_015.0; 8], SearchOptions::exact(1))
+                .unwrap(),
+            ["delta-15"]
+        );
+        assert_eq!(
+            drained
+                .search_ids(
+                    &[1_015.0; 8],
+                    SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                        .with_max_segments(4)
+                        .with_include_metadata(true),
+                )
+                .unwrap(),
+            ["delta-15"],
+            "metadata-aware approximate search must fall back to current routing pages"
+        );
     }
 
     #[test]

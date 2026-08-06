@@ -29,6 +29,16 @@
   drain-inclusive throughput remains below 10,000 records/s, remove synchronous
   drain/global-delta construction from the acknowledgement workload before AWS
   scale qualification.
+- Terminal r17 from `d4b5ee8` closes the local read gates: recall@10 remained
+  1.0, active-tail p95 fell to 97.701 ms, and post-drain p95 fell to 3.137 ms.
+  Drain remained 5.572 s (2,772 end-to-end records/s). Phase profiling found a
+  redundant 1.919 s persisted fallback-quantizer rebuild immediately before a
+  separate 1.847 s global-delta build. The TDD r19 factor invalidates the stale
+  fallback reference in the segment publication and lets exact/metadata-aware
+  searches fall back to current routing pages until maintenance rebuilds it.
+  It reduced drain to 3.857 s and raised end-to-end throughput to 3,893
+  records/s without changing recall or read gates. Keep this factor; next fuse
+  segment/global-delta construction and avoid serial manifest republishes.
 
 ## Global Constraints
 
