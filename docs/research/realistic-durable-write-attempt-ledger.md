@@ -43,3 +43,24 @@ logical cells, and 20 read queries per phase.
   qualify ingest because drain-inclusive throughput remains below 10,000
   records/s and it does not qualify reads because active-tail p95 remains above
   200 ms.
+- Revision `d4b5ee8`, terminal r17, removed both remaining certified routing
+  walks. The structurally reconciled local arm preserved recall@10 1.0 and
+  measured 68.808 ms write p95, 48,494 acknowledged records/s, 97.701 ms
+  active-tail read p95, and 3.137 ms post-drain read p95. Drain remained
+  5.572 s, limiting end-to-end throughput to 2,772 records/s. A subsequent
+  env-gated phase profile attributed 1.919 s to rebuilding the persisted
+  fallback segment quantizer and 1.847 s to the separate global delta build;
+  segment build/write was 1.001 s and the initial manifest publication was
+  0.692 s.
+- The next one-factor r19 invalidated the stale fallback quantizer
+  in the segment publication and deferred its optional rebuild to maintenance.
+  It preserved recall@10 1.0, 57.560 ms write p95, 99.021 ms active-tail read
+  p95, and 3.952 ms post-drain read p95. Drain fell to 3.857 s and end-to-end
+  throughput rose to 3,893 records/s. This is material but remains below the
+  10,000 records/s gate; segment publication and global-delta construction
+  remain synchronous duplicate passes. The full gate then exposed and fixed a
+  latent metadata-only publication defect: root coverage versions advanced
+  without advancing the nested delta certificate, which could hide delta hits
+  after the certified routing-walk optimization. All base/delta append,
+  promotion, and stale-generation regressions now preserve the nested coverage
+  invariant.
