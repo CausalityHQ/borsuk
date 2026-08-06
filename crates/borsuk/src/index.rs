@@ -11975,27 +11975,27 @@ impl BorsukIndex {
                 max_segments: Some(value),
                 ..
             } => {
+                let delta_budget = value.saturating_sub(delta_summaries.len());
                 let delta_probes = global_ref.delta.as_ref().map_or(0, |delta| {
-                    value
-                        .saturating_sub(delta_summaries.len())
-                        .saturating_sub(1)
-                        .div_ceil(4)
-                        .max(1)
-                        .min(delta.probes)
+                    if delta_budget == 0 {
+                        0
+                    } else {
+                        delta_budget
+                            .saturating_sub(1)
+                            .div_ceil(4)
+                            .max(1)
+                            .min(delta.probes)
+                    }
                 });
-                value
-                    .checked_sub(delta_summaries.len().saturating_add(delta_probes))
-                    .filter(|value| *value > 0)
-                    .ok_or_else(|| {
-                    BorsukError::InvalidSearchOptions(format!(
-                        "max_segments {value} leaves no stable-base probe after reserving {} exact-fringe segments and {delta_probes} delta probes",
-                        delta_summaries.len(),
-                    ))
-                })?
+                // Exact-fringe segments are correctness overlays and must be
+                // searched even when their count consumes the whole caller
+                // budget. In that case the stable base contributes no probes;
+                // the materialized-delta merge below still returns those rows.
+                value.saturating_sub(delta_summaries.len().saturating_add(delta_probes))
             }
             _ => global_ref.probes,
         };
-        let probe_count = requested_probes.max(1).min(index.cell_count());
+        let probe_count = requested_probes.min(index.cell_count());
         let selected_cells = index.nearest_cells(&pq_query, probe_count)?;
         let selected_chunks = index.chunks_for_cells(&selected_cells);
         let planned_records = selected_chunks
@@ -12434,12 +12434,16 @@ impl BorsukIndex {
             } = &mut delta_options.mode
             {
                 let available = max_segments.saturating_sub(delta_summaries.len());
-                let probes = available
-                    .saturating_sub(1)
-                    .div_ceil(4)
-                    .max(1)
-                    .min(reference.probes);
-                *max_segments = probes.saturating_add(delta_summaries.len());
+                let probes = if available == 0 {
+                    0
+                } else {
+                    available
+                        .saturating_sub(1)
+                        .div_ceil(4)
+                        .max(1)
+                        .min(reference.probes)
+                };
+                *max_segments = probes.saturating_add(delta_summaries.len()).max(1);
             }
         } else {
             // Before the first delta artifact exists, fresh materialized records
