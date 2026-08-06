@@ -378,6 +378,16 @@ impl GlobalPqRef {
         }
         if let Some(delta) = &self.delta {
             delta.validate_layout()?;
+            let base = self
+                .segments
+                .iter()
+                .collect::<std::collections::HashSet<_>>();
+            if delta.segments.iter().any(|segment| base.contains(segment)) {
+                return Err(BorsukError::InvalidStorage(
+                    "global PQ base and delta segment coverage overlaps; rebuild the unreleased index"
+                        .to_string(),
+                ));
+            }
         }
         Ok(())
     }

@@ -1520,17 +1520,9 @@ type LogicalCellQuantizerCache = Arc<Mutex<Option<(u64, Arc<CentroidHnsw>)>>>;
 type PersistedQuantizerCache =
     Arc<Mutex<Option<(String, Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>)>>>;
 
-type ResidentGlobalPqCache = Arc<
-    Mutex<
-        Option<(
-            u64,
-            String,
-            Arc<ResidentGlobalPq>,
-            Arc<Vec<SegmentSummary>>,
-            Arc<Vec<SegmentSummary>>,
-        )>,
-    >,
->;
+/// Loaded descriptor/codebook state keyed by content checksum. Base and delta
+/// layers share this cache; active summary resolution remains snapshot-local.
+type ResidentGlobalPqCache = Arc<Mutex<HashMap<String, Arc<ResidentGlobalPq>>>>;
 /// Resident immutable base plus the materialized segments not covered by it.
 type LoadedResidentGlobalPq = (
     Arc<ResidentGlobalPq>,
@@ -2755,7 +2747,7 @@ impl BorsukIndex {
             coarse_quantizer: Arc::new(Mutex::new(None)),
             logical_cell_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
-            resident_global_pq: Arc::new(Mutex::new(None)),
+            resident_global_pq: Arc::new(Mutex::new(HashMap::new())),
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: read_runtime.admission.clone(),
             decode_admission: read_runtime.decode_admission.clone(),
@@ -3050,7 +3042,7 @@ impl BorsukIndex {
             coarse_quantizer: Arc::new(Mutex::new(None)),
             logical_cell_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
-            resident_global_pq: Arc::new(Mutex::new(None)),
+            resident_global_pq: Arc::new(Mutex::new(HashMap::new())),
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: read_runtime.admission.clone(),
             decode_admission: read_runtime.decode_admission.clone(),
@@ -11527,23 +11519,6 @@ impl BorsukIndex {
         let Some(global_ref) = self.manifest.global_pq_ref.clone() else {
             return Ok(None);
         };
-        {
-            let cache = self
-                .resident_global_pq
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            if let Some((version, checksum, index, summaries, delta_summaries)) = cache.as_ref()
-                && *version == self.manifest.version
-                && *checksum == global_ref.checksum
-            {
-                return Ok(Some((
-                    Arc::clone(index),
-                    Arc::clone(summaries),
-                    Arc::clone(delta_summaries),
-                )));
-            }
-        }
-
         let active_summaries = self.active_segment_summaries()?;
         let active_by_checksum = active_summaries
             .iter()
@@ -11559,44 +11534,53 @@ impl BorsukIndex {
             };
             base_summaries.push((*summary).clone());
         }
-        let covered = global_ref.segments.iter().collect::<HashSet<_>>();
+        let mut covered = global_ref.segments.iter().collect::<HashSet<_>>();
+        if let Some(delta) = &global_ref.delta {
+            covered.extend(delta.segments.iter());
+        }
         let delta_summaries = active_summaries
             .into_iter()
             .filter(|summary| !covered.contains(&summary.checksum))
             .collect::<Vec<_>>();
         let summaries = Arc::new(base_summaries);
         let delta_summaries = Arc::new(delta_summaries);
-        let read = self
-            .storage
-            .read_bytes_with_cache_status_and_checksum(&global_ref.path, &global_ref.checksum)?;
-        let descriptor = GlobalPqDescriptor::decode(&read.bytes)?;
-        if descriptor.vectors() != global_ref.vectors
-            || descriptor.subspaces() != global_ref.subspaces
-            || descriptor.vector_element_type() != self.manifest.build_config.vector_element_type
-        {
-            return Err(BorsukError::InvalidStorage(
-                "resident global PQ reference does not match its descriptor".to_string(),
-            ));
-        }
-        let index = Arc::new(ResidentGlobalPq::load(descriptor)?);
-        if index.len() != global_ref.vectors
-            || index.code_bytes_per_vector() != global_ref.subspaces
-        {
-            return Err(BorsukError::InvalidStorage(
-                "resident global PQ reference does not match its artifact".to_string(),
-            ));
-        }
-        let mut cache = self
+        let cached = self
             .resident_global_pq
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        *cache = Some((
-            self.manifest.version,
-            global_ref.checksum,
-            Arc::clone(&index),
-            Arc::clone(&summaries),
-            Arc::clone(&delta_summaries),
-        ));
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&global_ref.checksum)
+            .cloned();
+        let index = if let Some(index) = cached {
+            index
+        } else {
+            let read = self.storage.read_bytes_with_cache_status_and_checksum(
+                &global_ref.path,
+                &global_ref.checksum,
+            )?;
+            let descriptor = GlobalPqDescriptor::decode(&read.bytes)?;
+            if descriptor.vectors() != global_ref.vectors
+                || descriptor.subspaces() != global_ref.subspaces
+                || descriptor.vector_element_type()
+                    != self.manifest.build_config.vector_element_type
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "resident global PQ reference does not match its descriptor".to_string(),
+                ));
+            }
+            let index = Arc::new(ResidentGlobalPq::load(descriptor)?);
+            if index.len() != global_ref.vectors
+                || index.code_bytes_per_vector() != global_ref.subspaces
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "resident global PQ reference does not match its artifact".to_string(),
+                ));
+            }
+            self.resident_global_pq
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(global_ref.checksum.clone(), Arc::clone(&index));
+            index
+        };
         Ok(Some((index, summaries, delta_summaries)))
     }
 
@@ -11697,14 +11681,25 @@ impl BorsukIndex {
             SearchMode::Approx {
                 max_segments: Some(value),
                 ..
-            } => value.checked_sub(delta_summaries.len()).filter(|value| *value > 0).ok_or_else(
-                || {
+            } => {
+                let delta_probes = global_ref.delta.as_ref().map_or(0, |delta| {
+                    value
+                        .saturating_sub(delta_summaries.len())
+                        .saturating_sub(1)
+                        .div_ceil(4)
+                        .max(1)
+                        .min(delta.probes)
+                });
+                value
+                    .checked_sub(delta_summaries.len().saturating_add(delta_probes))
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| {
                     BorsukError::InvalidSearchOptions(format!(
-                        "max_segments {value} leaves no stable-base probe after reserving {} materialized-delta segments",
-                        delta_summaries.len()
+                        "max_segments {value} leaves no stable-base probe after reserving {} exact-fringe segments and {delta_probes} delta probes",
+                        delta_summaries.len(),
                     ))
-                },
-            )?,
+                })?
+            }
             _ => global_ref.probes,
         };
         let probe_count = requested_probes.max(1).min(index.cell_count());
@@ -12033,20 +12028,42 @@ impl BorsukIndex {
         requests_before: &RequestCounts,
         execution: &mut SearchExecution,
     ) -> Result<()> {
-        if delta_summaries.is_empty() {
+        if delta_summaries.is_empty()
+            && self
+                .manifest
+                .global_pq_ref
+                .as_ref()
+                .is_none_or(|reference| reference.delta.is_none())
+        {
             return Ok(());
         }
 
-        // Build a query-local view over only the manifest-selected delta
-        // segments. It shares immutable object caches, decode gates, and the
+        // Build a query-local view over the delta ANN plus exact fringe. It
+        // shares immutable object caches, decode gates, and the
         // caller's storage read scope with the base handle, but must not
         // recursively enter the global artifact or acquire the query admission
         // permit a second time.
         let mut delta = self.clone();
         delta.named.clear();
-        delta.manifest.global_pq_ref = None;
+        let delta_reference = self
+            .manifest
+            .global_pq_ref
+            .as_ref()
+            .and_then(|reference| reference.delta.as_deref())
+            .cloned();
+        let delta_covered = delta_reference
+            .as_ref()
+            .map(|reference| reference.segments.iter().collect::<HashSet<_>>())
+            .unwrap_or_default();
+        let mut delta_segments = self
+            .active_segment_summaries()?
+            .into_iter()
+            .filter(|summary| delta_covered.contains(&summary.checksum))
+            .collect::<Vec<_>>();
+        delta_segments.extend_from_slice(delta_summaries);
+        delta.manifest.global_pq_ref = delta_reference.clone();
         delta.manifest.quantizer_ref = None;
-        delta.manifest.segments = delta_summaries.to_vec();
+        delta.manifest.segments = delta_segments.clone();
         delta.manifest.rebuild_pivots();
         // The caller already decoded and will merge the live WAL exactly once
         // after base-plus-delta search. A recursive delta view must therefore
@@ -12059,19 +12076,34 @@ impl BorsukIndex {
         delta.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
         delta.resident_routing_summaries = Arc::new(Mutex::new(Some((
             delta.manifest.version,
-            Arc::new(delta_summaries.to_vec()),
+            Arc::new(delta_segments),
         ))));
         delta.coarse_quantizer = Arc::new(Mutex::new(None));
         delta.persisted_quantizer = Arc::new(Mutex::new(None));
-        delta.resident_global_pq = Arc::new(Mutex::new(None));
+        delta.resident_global_pq = Arc::clone(&self.resident_global_pq);
         delta.admission = None;
 
         let mut delta_options = options.clone();
-        // Fresh materialized records are a correctness overlay, not another
-        // approximate corpus. Search every delta segment soundly; the resident
-        // base already reserved their count from the whole-query segment cap.
-        delta_options.mode = SearchMode::Exact;
-        delta_options.disable_coarse_quantizer = true;
+        if let Some(reference) = delta_reference {
+            if let SearchMode::Approx {
+                max_segments: Some(max_segments),
+                ..
+            } = &mut delta_options.mode
+            {
+                let available = max_segments.saturating_sub(delta_summaries.len());
+                let probes = available
+                    .saturating_sub(1)
+                    .div_ceil(4)
+                    .max(1)
+                    .min(reference.probes);
+                *max_segments = probes.saturating_add(delta_summaries.len());
+            }
+        } else {
+            // Before the first delta artifact exists, fresh materialized records
+            // remain an exact correctness overlay.
+            delta_options.mode = SearchMode::Exact;
+            delta_options.disable_coarse_quantizer = true;
+        }
         let delta_execution = delta.search_execution_with_routing_cache(
             query,
             delta_options,
@@ -12704,7 +12736,7 @@ impl BorsukIndex {
             .resident_global_pq
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        *cache = None;
+        cache.clear();
         Ok(())
     }
 
@@ -23133,6 +23165,101 @@ mod tests {
         assert!(
             report.segments_searched <= 4,
             "base and materialized delta must share one segment budget: {report:?}"
+        );
+    }
+
+    #[test]
+    fn resident_global_search_uses_base_and_delta_artifacts_with_one_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(format!("base-{row}"), vec![row as f32 / 128.0; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        for ordinal in 0..2 {
+            index
+                .add(
+                    (0..16)
+                        .map(|row| {
+                            VectorRecord::new(
+                                format!("delta-{ordinal}-{row}"),
+                                vec![10.0 + ordinal as f32 + row as f32 / 100.0; 8],
+                            )
+                        })
+                        .collect(),
+                )
+                .unwrap();
+            index.flush().unwrap();
+        }
+        let base = index
+            .manifest
+            .global_pq_ref
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        let delta_summaries = index
+            .active_segment_summaries()
+            .unwrap()
+            .into_iter()
+            .filter(|summary| !base.contains(&summary.checksum))
+            .collect::<Vec<_>>();
+        let delta_reference = index
+            .persist_resident_global_pq(&delta_summaries)
+            .unwrap()
+            .unwrap();
+        let previous = index.manifest.clone();
+        let mut manifest = index.manifest.next_version();
+        manifest.global_pq_ref.as_mut().unwrap().delta = Some(Box::new(delta_reference));
+        index.manifest = index
+            .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))
+            .unwrap();
+
+        let reader = BorsukIndex::open(&uri).unwrap();
+        let report = reader
+            .search_with_report(
+                &[11.0; 8],
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+
+        assert!(report.hits[0].id.as_bytes().starts_with(b"delta-1-"));
+        assert!(
+            report.segments_searched <= 4,
+            "base and delta ANN layers must share one segment budget: {report:?}"
+        );
+        assert!(
+            report.global_scan_chunks_searched >= 2,
+            "both ANN layers must execute: {report:?}"
+        );
+        assert_eq!(
+            reader
+                .resident_global_pq
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .len(),
+            2,
+            "base and delta descriptors must both remain cached"
         );
     }
 

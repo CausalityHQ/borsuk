@@ -316,14 +316,18 @@
   carries required layout marker `1`, so unreleased single-layer JSON is
   rejected with a rebuild instruction instead of being guessed compatible.
   Artifact objects are written content-addressed before the manifest CAS and GC
-  traces both descriptors and all of their chunks/graphs. The rebuild trigger
-  is geometric: once the exact fringe reaches a small production floor or the
-  current delta's covered-segment count, whichever is larger, maintenance
-  rebuilds only delta-plus-fringe and publishes it atomically. This bounds the
-  exact fringe between completed maintenance passes and amortizes rebuild work
-  without touching the stable corpus. Query work must remain one stable ANN,
-  one delta ANN, one bounded exact fringe, and one WAL overlay under shared
-  segment/candidate/byte/deadline accounting. A bounded GPT-5.6 Sol review
+  traces both descriptors and all of their chunks/graphs. A subsequent
+  first-principles check rejected geometric full-delta rebuilds: a growing
+  trigger permits a growing exact fringe, while a fixed trigger repeatedly
+  rebuilds the growing delta and becomes quadratic. Instead, the delta trains
+  codebooks once after a bounded bootstrap fringe, then maintenance encodes
+  only new vectors into immutable chunks and publishes a new content-addressed
+  descriptor that reuses every old chunk. The packed location layout remains
+  valid while its declared segment/row bit capacity holds; crossing that remote
+  boundary requires a deliberate rebuild and new evidence. Query work remains
+  one stable ANN, one appendable delta ANN, one bounded bootstrap fringe, and
+  one WAL overlay under shared segment/candidate/byte/deadline accounting. A
+  bounded GPT-5.6 Sol review
   independently confirmed the existing linear exact-delta behavior and budget
   failure, but exhausted before issuing a final recommendation; the invariants
   above therefore remain subject to repository tests and measured qualification,
