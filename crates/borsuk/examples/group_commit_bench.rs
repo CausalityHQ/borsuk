@@ -14,8 +14,8 @@ use std::{
 
 use arrow_array::{Array, FixedSizeListArray, Float32Array, LargeListArray, ListArray};
 use borsuk::{
-    BorsukIndex, GroupCommitConfig, GroupCommitTicket, GroupCommitWriter, LeafMode, RequestCounts,
-    SearchOptions, VectorRecord,
+    BorsukIndex, GroupCommitConfig, GroupCommitLaneReceipt, GroupCommitTicket, GroupCommitWriter,
+    LeafMode, RequestCounts, SearchOptions, VectorRecord,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -33,6 +33,7 @@ struct Sample {
     committed_records: usize,
     acknowledgement_bytes: u64,
     group_requests: RequestCounts,
+    lane_receipts: Vec<GroupCommitLaneReceipt>,
 }
 
 struct ReadSample {
@@ -597,6 +598,7 @@ fn main() -> BenchResult<()> {
                         committed_records: receipt.committed_records,
                         acknowledgement_bytes: receipt.acknowledgement_bytes,
                         group_requests: receipt.requests,
+                        lane_receipts: receipt.lane_receipts,
                     });
                 }
                 while let Some(completed) = pending.pop_front() {
@@ -612,6 +614,7 @@ fn main() -> BenchResult<()> {
                         committed_records: receipt.committed_records,
                         acknowledgement_bytes: receipt.acknowledgement_bytes,
                         group_requests: receipt.requests,
+                        lane_receipts: receipt.lane_receipts,
                     });
                 }
                 samples.lock().unwrap().extend(local);
@@ -676,25 +679,18 @@ fn main() -> BenchResult<()> {
 
     let mut groups = BTreeMap::<(usize, u64), (usize, u64, RequestCounts)>::new();
     for sample in &samples {
-        match groups.insert(
-            (sample.commit_lane, sample.commit_sequence),
-            (
-                sample.committed_records,
-                sample.acknowledgement_bytes,
-                sample.group_requests,
-            ),
-        ) {
-            Some(previous)
-                if previous
-                    != (
-                        sample.committed_records,
-                        sample.acknowledgement_bytes,
-                        sample.group_requests,
-                    ) =>
-            {
-                return Err("callers disagree about shared group evidence".into());
+        for receipt in &sample.lane_receipts {
+            let evidence = (
+                receipt.committed_records,
+                receipt.acknowledgement_bytes,
+                receipt.requests,
+            );
+            match groups.insert((receipt.commit_lane, receipt.commit_sequence), evidence) {
+                Some(previous) if previous != evidence => {
+                    return Err("callers disagree about shared lane-group evidence".into());
+                }
+                _ => {}
             }
-            _ => {}
         }
     }
     let request_totals =
