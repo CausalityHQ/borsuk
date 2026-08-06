@@ -578,6 +578,12 @@
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
+  The source-identified r35 local terminal cell at `49fc20e` completed all five
+  phase markers with recall@10 1.0, 76.483 ms write p95, 118.712 ms active-tail
+  read p95, 29.026 ms post-drain read p95, and 43,696.802 drain-inclusive
+  records/s over 16,384 records. This is evidence for the overlap slice only;
+  five repetitions and the 100M-scale/AWS qualification remain outstanding.
+
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.
 
 ### Task 7: Production-read qualification and completion audit
