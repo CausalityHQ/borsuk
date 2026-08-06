@@ -88,9 +88,10 @@ pub(crate) fn collection_wal_now_ms() -> Result<u64> {
 
 // Qualified on S3 with both 128d and 960d exact-vector candidate reads. Nearby
 // rows are joined to amortize GET latency, while the physical span cap prevents
-// a scattered query from turning into an almost whole-sidecar transfer.
+// a scattered query from turning into an almost whole-sidecar transfer. The
+// wider cap keeps four-segment k=10 reranks below one GET per sidecar bundle.
 const SIDECAR_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
-const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 4 * 1024 * 1024;
+const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 16 * 1024 * 1024;
 const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
@@ -5038,20 +5039,20 @@ mod tests {
     }
 
     #[test]
-    fn range_reads_enforce_the_four_mib_physical_span_cap() {
+    fn range_reads_enforce_the_sixteen_mib_physical_span_cap() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
-        let object = vec![7_u8; 5 * 1024 * 1024];
+        let object = vec![7_u8; 17 * 1024 * 1024];
         storage.write_bytes("vectors/capped.bin", &object).unwrap();
 
         // Every adjacent requested row is within the 1 MiB gap. Without a
-        // physical span cap this would become one 4 MiB+4-byte GET.
+        // physical span cap this would become one 16 MiB+4-byte GET.
         let ranges = [
             0..4,
             1024 * 1024..1024 * 1024 + 4,
             2 * 1024 * 1024..2 * 1024 * 1024 + 4,
             3 * 1024 * 1024..3 * 1024 * 1024 + 4,
-            4 * 1024 * 1024..4 * 1024 * 1024 + 4,
+            16 * 1024 * 1024..16 * 1024 * 1024 + 4,
         ];
         let before = storage.request_counts();
         let read = storage.read_ranges("vectors/capped.bin", &ranges).unwrap();
@@ -5063,7 +5064,7 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_range_plan_merges_one_mib_gaps_but_caps_physical_gets_at_four_mib() {
+    fn sidecar_range_plan_merges_one_mib_gaps_but_caps_physical_gets_at_sixteen_mib() {
         let ranges = [
             0..4,
             512 * 1024..512 * 1024 + 4,
@@ -5084,7 +5085,7 @@ mod tests {
         assert!(
             plan.physical
                 .iter()
-                .all(|range| range.end - range.start <= 4 * 1024 * 1024)
+                .all(|range| range.end - range.start <= 16 * 1024 * 1024)
         );
         assert_eq!(plan.slices.len(), ranges.len());
     }
