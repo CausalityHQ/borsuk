@@ -371,6 +371,30 @@
   formatting at checkpoint `29a8711` plus its mechanical lint cleanup.
   Realistic latency and recall qualification remains open.
 
+  A terminal local Cohere Medium 1M/768D qualification at checkpoint
+  `2041b34` isolated the resident-global scan amplification. The scan-only
+  control used 256-byte SRHT-PQ codes. At candidates 320, nprobe 8/16/32
+  produced recall@10 0.906/0.978/0.997 and disk-cached p95
+  158.686/237.433/307.617 ms while reading 35.52/62.46/108.54 MB per query.
+  Bytes tracked selected physical chunks, and source arithmetic accounts for
+  approximately 1.42 MB of product codes per full 5,461-row chunk before
+  identity and exact-vector reranking.
+
+  The existing per-cell graph path was then rebuilt as a one-factor arm with
+  degree 32, construction ef 128, and a declared 512 MiB decoded graph cache.
+  The fresh index added 400,665,664 graph bytes and took 678.381 seconds for
+  final ANN construction after 151.222 seconds of ingest. The terminal
+  100-query artifact passed the repository structural validator. Its
+  disk-cached graph coverage was exactly 1.0 at every point, so fallback scans
+  cannot explain the result. At nprobe 8/16/32 it produced recall@10
+  0.874/0.939/0.956, p95 156.227/245.966/412.460 ms, and
+  20.79/35.33/64.34 MB per query. The first recall-qualified point therefore
+  missed the latency gate by more than 2x. Per-cell graphs are rejected as the
+  production default for this format; their per-chunk traversal and identity
+  reads do not remove enough work. The next causal factor is reducing the
+  oversized 256-byte scan code while keeping the same coarse routing and exact
+  rerank contract.
+
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
   Freeze defaults only after write latency/throughput and realistic read recall/latency gates pass in the architecture qualification.
