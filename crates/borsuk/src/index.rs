@@ -8685,6 +8685,16 @@ impl BorsukIndex {
         Ok(self.live_wal_snapshot()?.records.as_ref().clone())
     }
 
+    fn dense_live_wal_records(
+        &self,
+        selected_cells: Option<&BTreeSet<LogicalCellId>>,
+    ) -> Result<Arc<Vec<VectorRecord>>> {
+        match selected_cells {
+            None => Ok(Arc::clone(&self.live_wal_snapshot()?.records)),
+            Some(cells) => Ok(Arc::new(self.live_wal_tail_records_for_cells(Some(cells))?)),
+        }
+    }
+
     fn live_wal_snapshot_key(&self) -> (u64, Vec<[u8; 32]>, Vec<String>) {
         (
             self.manifest.version,
@@ -14209,9 +14219,9 @@ impl BorsukIndex {
         let started = Instant::now();
         let wal_query_cells = self.wal_query_cells(query, &options)?;
         let live_wal_tail = if options.k == 0 {
-            Vec::new()
+            Arc::new(Vec::new())
         } else {
-            self.live_wal_tail_records_for_cells(wal_query_cells.as_ref())?
+            self.dense_live_wal_records(wal_query_cells.as_ref())?
         };
         let zero_distance_wal_eligible = matches!(options.mode, SearchMode::Approx { .. })
             && self.manifest.config.metric.supports_centroid_lower_bound();
@@ -22078,11 +22088,16 @@ mod tests {
         let pinned = index.clone();
 
         let first = pinned.live_wal_snapshot().unwrap();
+        let first_dense = pinned.dense_live_wal_records(None).unwrap();
         for _ in 0..128 {
             assert_eq!(pinned.get_vector("row").unwrap(), Some(vec![1.0, 2.0]));
         }
         let reused = pinned.live_wal_snapshot().unwrap();
         assert!(Arc::ptr_eq(&first, &reused));
+        assert!(Arc::ptr_eq(
+            &first_dense,
+            &pinned.dense_live_wal_records(None).unwrap()
+        ));
 
         index
             .put(vec![VectorRecord::new("row", vec![3.0, 4.0])])
