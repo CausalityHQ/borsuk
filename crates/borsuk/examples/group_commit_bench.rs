@@ -259,7 +259,7 @@ fn measure_reads(
         let record_id = &sample.record_ids[0];
         let read_started = Instant::now();
         if config.refresh_before_each {
-            index.refresh()?;
+            index.refresh_wal_tail()?;
         }
         let report = index.search_with_report(
             &input_vectors[ordinal],

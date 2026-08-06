@@ -120,3 +120,14 @@ the validator reconciles those per-lane records before reading any production
 campaign measurements. The corrected local 64-cell, one-writer, 16-record
 structural smoke completed all phase markers and passed fail-closed validation;
 it remains claim-ineligible.
+
+## WAL-tail refresh hardening after v33
+
+The v33 AWS failure showed that active-tail probes were paying for a full
+collection snapshot and immutable-manifest reload before checking whether a
+lane head had advanced. The reader now exposes `refresh_wal_tail()`, which
+polls only authoritative lane heads and decodes changed extents; full
+`refresh()` remains the required path for published manifest or collection
+changes. The production harness uses the explicit tail path for its
+refresh-plus-search probes. The new regression and all 30 group-commit
+integration tests passed, as did all 498 library tests (six ignored).

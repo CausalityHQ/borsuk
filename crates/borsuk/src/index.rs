@@ -3827,6 +3827,24 @@ impl BorsukIndex {
         Ok(true)
     }
 
+    /// Refresh only the append-only lane-log tail without reloading the
+    /// collection snapshot or immutable manifest. This is the low-latency
+    /// polling path for readers that already hold a pinned immutable base and
+    /// need to observe newly acknowledged WAL extents between queries.
+    ///
+    /// A later full [`Self::refresh`] remains required to observe published
+    /// manifest or collection changes. The method returns `true` when a lane
+    /// head advanced and the decoded tail was replaced.
+    pub fn refresh_wal_tail(&mut self) -> Result<bool> {
+        let Some(latest) = self.read_lane_log_snapshot_if_changed()? else {
+            return Ok(false);
+        };
+        self.lane_log_snapshot = latest.record_blocks;
+        self.lane_log_committed_sequences = latest.committed_sequences;
+        self.lane_log_head_checksums = latest.head_checksums;
+        Ok(true)
+    }
+
     /// Return active index statistics without scanning segment or graph payloads.
     #[must_use]
     pub fn stats(&self) -> IndexStats {

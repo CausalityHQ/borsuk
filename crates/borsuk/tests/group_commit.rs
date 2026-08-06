@@ -1215,6 +1215,25 @@ fn unchanged_refresh_cost_does_not_scale_with_committed_lane_blocks() {
 }
 
 #[test]
+fn wal_tail_refresh_observes_acknowledged_records_without_manifest_reload() {
+    let directory = tempfile::tempdir().unwrap();
+    let uri = directory.path().to_string_lossy().into_owned();
+    let index = BorsukIndex::create(config(&uri)).unwrap();
+    let mut reader = BorsukIndex::open(&uri).unwrap();
+    let writer = GroupCommitWriter::new(index, GroupCommitConfig::default()).unwrap();
+    writer
+        .append(vec![VectorRecord::new("tail-fast", vec![1.0, 0.0])])
+        .unwrap();
+    drop(writer);
+
+    assert!(reader.refresh_wal_tail().unwrap());
+    assert_eq!(
+        reader.get_vector("tail-fast").unwrap(),
+        Some(vec![1.0, 0.0])
+    );
+}
+
+#[test]
 fn future_segment_size_can_change_without_rebuilding_logical_cell_topology() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
