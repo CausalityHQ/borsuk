@@ -301,7 +301,12 @@
   regression previously measured six searched segments under a limit of four
   and now remains within four while returning the fresh nearest record. Shared
   byte budgeting and a hard materialized-delta bound remain open architecture
-  gates.
+  gates. The resident-global base now honors its own best-effort `max_bytes`
+  boundary between code-read waves: it always permits one useful chunk, stops
+  before scheduling the next wave after exhaustion, reranks that useful work,
+  and reports `MaxBytes` with the actual overshoot. A one-byte regression used
+  to scan the full eight-chunk probe set and now scans exactly one. Delta/WAL
+  byte charging and resident-global latency-budget enforcement remain open.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 

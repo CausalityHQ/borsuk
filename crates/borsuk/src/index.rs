@@ -11707,11 +11707,15 @@ impl BorsukIndex {
         let probe_count = requested_probes.max(1).min(index.cell_count());
         let selected_cells = index.nearest_cells(&pq_query, probe_count)?;
         let selected_chunks = index.chunks_for_cells(&selected_cells);
-        let records_considered = selected_chunks
+        let planned_records = selected_chunks
             .iter()
             .map(|chunk| chunk.rows)
             .sum::<usize>();
-        let candidate_limit = requested_candidates.max(options.k).min(records_considered);
+        let candidate_limit = requested_candidates.max(options.k).min(planned_records);
+        let max_bytes = match &options.mode {
+            SearchMode::Approx { max_bytes, .. } => *max_bytes,
+            SearchMode::Exact => None,
+        };
         let mut candidate_pages =
             Vec::with_capacity(selected_chunks.len().div_ceil(DEFAULT_GLOBAL_PQ_CODE_READS));
         let mut bytes_read = 0_u64;
@@ -11724,11 +11728,18 @@ impl BorsukIndex {
         let use_cached_graphs =
             !matches!(options.cache_execution, crate::CacheExecutionPolicy::Scan);
         while wave_start < selected_chunks.len() {
+            if wave_start > 0 && max_bytes.is_some_and(|limit| bytes_read >= limit) {
+                break;
+            }
+            let wave_byte_budget = max_bytes
+                .map(|limit| limit.saturating_sub(bytes_read).max(1) as usize)
+                .unwrap_or(DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES)
+                .min(DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES);
             let wave_end = global_pq_code_read_wave_end(
                 &selected_chunks,
                 wave_start,
                 DEFAULT_GLOBAL_PQ_CODE_READS,
-                DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES,
+                wave_byte_budget,
             );
             let page = &selected_chunks[wave_start..wave_end];
             let mut scan_page = Vec::with_capacity(page.len());
@@ -11831,8 +11842,13 @@ impl BorsukIndex {
             )?);
             wave_start = wave_end;
         }
+        let searched_chunks = &selected_chunks[..wave_start];
+        let records_considered = searched_chunks
+            .iter()
+            .map(|chunk| chunk.rows)
+            .sum::<usize>();
         let nodes = crate::global_pq_sidecar::merge_candidates(candidate_pages, candidate_limit);
-        let chunks_by_start = selected_chunks
+        let chunks_by_start = searched_chunks
             .iter()
             .map(|chunk| (chunk.row_start, chunk))
             .collect::<HashMap<_, _>>();
@@ -11931,7 +11947,12 @@ impl BorsukIndex {
             Vec::new()
         };
         let segments_total = summaries.len();
-        let segments_searched = selected_chunks.len();
+        let segments_searched = searched_chunks.len();
+        let termination_reason = if max_bytes.is_some_and(|limit| bytes_read >= limit) {
+            SearchTerminationReason::MaxBytes
+        } else {
+            SearchTerminationReason::Complete
+        };
         let execution_engine = match (graph_chunks_used, scan_chunks_used) {
             (0, _) => expected_leaf_mode.to_string(),
             (_, 0) => "global-cell-graph".to_string(),
@@ -11941,7 +11962,7 @@ impl BorsukIndex {
             report: SearchReport {
                 hits,
                 leaf_mode: execution_engine,
-                termination_reason: SearchTerminationReason::Complete,
+                termination_reason,
                 recall_guarantee: RecallGuarantee::Degraded,
                 segments_total,
                 segments_searched,
@@ -22850,6 +22871,25 @@ mod tests {
         assert!(limited.records_considered >= 7);
         assert!(limited.records_considered < vectors.len());
         assert_eq!(limited.records_scored, 7);
+
+        let byte_limited = index
+            .search_with_report(
+                &query,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(7)
+                    .with_max_bytes(1),
+            )
+            .unwrap();
+        assert!(!byte_limited.hits.is_empty());
+        assert_eq!(
+            byte_limited.termination_reason,
+            SearchTerminationReason::MaxBytes
+        );
+        assert_eq!(
+            byte_limited.global_scan_chunks_searched, 1,
+            "a tiny best-effort byte budget may overshoot one useful global chunk, not the full probe set"
+        );
     }
 
     #[test]
