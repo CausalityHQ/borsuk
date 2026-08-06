@@ -1946,7 +1946,11 @@ impl BorsukIndex {
     }
 
     pub(crate) fn materialize_lane_log_tail(&mut self) -> Result<Vec<u64>> {
-        self.refresh()?;
+        // Background group-commit maintenance only needs the newest lane
+        // extents. Avoid reloading the collection snapshot and immutable
+        // manifest on the acknowledgement-critical path; the manifest is
+        // republished below with the same CAS fencing as a full refresh.
+        self.refresh_wal_tail()?;
         let committed_sequences = self.lane_log_committed_sequences.clone();
         if self.lane_log_snapshot.is_empty() {
             return Ok(committed_sequences);

@@ -131,3 +131,8 @@ polls only authoritative lane heads and decodes changed extents; full
 changes. The production harness uses the explicit tail path for its
 refresh-plus-search probes. The new regression and all 30 group-commit
 integration tests passed, as did all 498 library tests (six ignored).
+
+Background materialization now uses the same WAL-only refresh before building
+its immutable delta. This removes a redundant collection/manifest reload from
+the acknowledgement-critical maintenance pass while retaining the existing
+manifest compare-and-swap publication fence.
