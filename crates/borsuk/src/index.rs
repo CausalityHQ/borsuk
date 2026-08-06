@@ -2005,7 +2005,7 @@ impl BorsukIndex {
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.refresh_persisted_quantizer()?;
-        let _ = self.refresh_resident_global_delta();
+        let _ = self.refresh_resident_global_delta(false);
         Ok(committed_sequences)
     }
 
@@ -8563,7 +8563,7 @@ impl BorsukIndex {
         // The flush materialized the WAL tail into cells; refresh the persisted
         // cold quantizer so a cold/paged query routes over the current cell set.
         self.refresh_persisted_quantizer()?;
-        let _ = self.refresh_resident_global_delta();
+        let _ = self.refresh_resident_global_delta(false);
         Ok(())
     }
 
@@ -10473,7 +10473,7 @@ impl BorsukIndex {
         if options.max_segments.is_none() {
             self.refresh_resident_global_pq()?;
         } else {
-            self.refresh_resident_global_delta()?;
+            self.refresh_resident_global_delta(true)?;
         }
 
         Ok(CompactionReport {
@@ -12881,8 +12881,10 @@ impl BorsukIndex {
     /// Publish the currently uncovered materialized segments into the bounded
     /// delta ANN. The first pass trains only on the fringe; later passes reuse
     /// the persisted quantizers and every old immutable chunk, encoding only
-    /// newly uncovered segments.
-    fn refresh_resident_global_delta(&mut self) -> Result<bool> {
+    /// newly uncovered segments. Ordinary foreground flushes pass `false` so
+    /// they never turn a bounded WAL drain into a corpus-wide base rebuild;
+    /// explicit maintenance such as compaction may pass `true`.
+    fn refresh_resident_global_delta(&mut self, allow_base_promotion: bool) -> Result<bool> {
         let Some(base_reference) = self.manifest.global_pq_ref.clone() else {
             return Ok(false);
         };
@@ -12928,17 +12930,19 @@ impl BorsukIndex {
             }
         }
 
-        // Keep the two-layer read amplification and resident footprint hard
-        // bounded. Promotion grows the stable base by at least 50%, so a
-        // streaming workload cannot repeatedly rebuild at a fixed delta size.
-        // This method runs after the durable WAL acknowledgement boundary.
+        // An explicit maintenance caller may bound the two-layer footprint by
+        // promoting once the delta reaches half the stable base. Foreground
+        // WAL drains only append immutable delta chunks; they must not inherit
+        // this corpus-wide re-encode merely because acknowledgement preceded
+        // this method.
         let pending_delta_vectors = base_reference
             .delta
             .as_ref()
             .map_or(0, |delta| delta.vectors)
             .saturating_add(fringe_vectors);
         let promotion_vectors = base_reference.vectors.saturating_add(1) / 2;
-        let promote = !stale_delta && pending_delta_vectors >= promotion_vectors;
+        let promote =
+            allow_base_promotion && !stale_delta && pending_delta_vectors >= promotion_vectors;
         let desired = if promote {
             self.persist_resident_global_pq(&active)?.ok_or_else(|| {
                 BorsukError::InvalidStorage(
@@ -24280,7 +24284,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_delta_promotes_at_half_the_stable_base() {
+    fn foreground_delta_refresh_never_promotes_the_stable_base() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -24339,14 +24343,18 @@ mod tests {
             .unwrap();
         index.flush().unwrap();
 
-        let promoted = index.manifest.global_pq_ref.as_ref().unwrap();
-        assert_ne!(promoted.checksum, stable_base_checksum);
-        assert_eq!(promoted.vectors, 192);
-        assert!(
-            promoted.delta.is_none(),
-            "promotion must reset the bounded delta: {promoted:?}"
+        let stable = index.manifest.global_pq_ref.as_ref().unwrap();
+        assert_eq!(
+            stable.checksum, stable_base_checksum,
+            "ordinary foreground refresh must never rebuild the stable base"
         );
-        assert_eq!(promoted.segments.len(), 12);
+        assert_eq!(stable.vectors, 128);
+        let delta = stable
+            .delta
+            .as_ref()
+            .expect("foreground refresh must keep new vectors in the delta");
+        assert_eq!(delta.vectors, 64);
+        assert_eq!(delta.segments.len(), 4);
 
         let report = BorsukIndex::open(&index.manifest.config.uri)
             .unwrap()
