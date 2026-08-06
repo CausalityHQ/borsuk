@@ -611,10 +611,9 @@ fn run_worker(
             .map(|writer| by_lane.remove(&writer.lane()))
             .collect::<Vec<_>>();
         for orphaned in by_lane.into_values().flatten() {
-            let _ = orphaned.response.send(Err(format!(
-                "worker does not own lane {}",
-                orphaned.lane
-            )));
+            let _ = orphaned
+                .response
+                .send(Err(format!("worker does not own lane {}", orphaned.lane)));
         }
         lane_writers
             .par_iter_mut()
