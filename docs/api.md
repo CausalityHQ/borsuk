@@ -317,18 +317,14 @@ materialized delta.
 For concurrent Rust ingest into object storage, consume an index handle with
 `GroupCommitWriter::new(index, config)` and clone the writer across producers.
 The default waits at most 2 ms or 1,024 records, then combines pending records
-into one durable claim-free last-write-wins transaction. Each caller returns
-only after that shared transaction is visible. The group uploads immutable WAL
-payloads and modality descriptors, then creates one schema-epoch pending commit
-with `If-None-Match: *`. That immutable create is the durability and visibility
-acknowledgement; it performs no frontier-head rewrite, catalog publication,
-segment build, flush, or prune before returning. Open and refresh bracket a
-complete pending-prefix LIST with `CURRENT` reads and retry if the catalog
-changes, so a reopened handle sees every acknowledged group. A retryable PUT
-outcome is resolved by reading the immutable path and accepting only the same
-logical commit. This removes shared-object CAS storms without weakening the
-acknowledgement contract. Public `add`, `put`, and `upsert` retain their ordinary
-per-transaction frontier admission protocol during the v3 cutover.
+by stable ownership lane. Each lane acknowledges one fenced conditional HEAD
+containing the complete new block; bounded post-acknowledgement spill replaces
+inline blocks with checksum-addressed immutable objects. A call spanning lanes
+is intentionally per-lane atomic rather than pretending to provide a distributed
+transaction. If any lane fails, `BorsukError::PartialGroupCommit` reports both
+the lanes already durably visible and the lanes that failed, so callers can
+reconcile and retry deterministically. Open and refresh read the fixed lane HEAD
+set without LIST and fail closed if an authoritative HEAD is missing.
 
 ## Updates and deletes
 

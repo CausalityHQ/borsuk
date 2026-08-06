@@ -77,6 +77,15 @@ pub struct GroupCommitLaneReceipt {
     pub requests: RequestCounts,
 }
 
+/// One ownership lane that did not acknowledge a multi-lane append.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupCommitLaneFailure {
+    /// Persisted ownership-lane ordinal.
+    pub commit_lane: usize,
+    /// Exact worker or storage failure for this lane.
+    pub message: String,
+}
+
 /// Receipt returned after all of the caller's records are durably visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupCommitReceipt {
@@ -101,7 +110,10 @@ pub struct GroupCommitReceipt {
 /// One asynchronously submitted append awaiting its durable group receipt.
 pub struct GroupCommitTicket {
     records: usize,
-    results: Vec<Receiver<std::result::Result<GroupCommitLaneReceipt, String>>>,
+    results: Vec<(
+        usize,
+        Receiver<std::result::Result<GroupCommitLaneReceipt, String>>,
+    )>,
     maintenance: Option<GroupCommitWriter>,
 }
 
@@ -109,15 +121,31 @@ impl GroupCommitTicket {
     /// Wait until the shared WAL transaction containing this append is durable.
     pub fn wait(self) -> Result<GroupCommitReceipt> {
         let mut lane_receipts = Vec::with_capacity(self.results.len());
-        for result in self.results {
-            let receipt = result.recv().map_err(|_| {
-                BorsukError::InvalidStorage(
-                    "group commit worker stopped before acknowledging append".to_string(),
-                )
-            })?;
-            lane_receipts.push(receipt.map_err(BorsukError::InvalidStorage)?);
+        let mut failed_lanes = Vec::new();
+        for (commit_lane, result) in self.results {
+            match result.recv() {
+                Ok(Ok(receipt)) => lane_receipts.push(receipt),
+                Ok(Err(message)) => failed_lanes.push(GroupCommitLaneFailure {
+                    commit_lane,
+                    message,
+                }),
+                Err(_) => failed_lanes.push(GroupCommitLaneFailure {
+                    commit_lane,
+                    message: "group commit worker stopped before acknowledging append".to_string(),
+                }),
+            }
         }
         lane_receipts.sort_by_key(|receipt| receipt.commit_lane);
+        failed_lanes.sort_by_key(|failure| failure.commit_lane);
+        if !failed_lanes.is_empty() {
+            if let Some(maintenance) = self.maintenance {
+                maintenance.trigger_background_materialization(&lane_receipts);
+            }
+            return Err(BorsukError::PartialGroupCommit {
+                committed_lane_receipts: lane_receipts,
+                failed_lanes,
+            });
+        }
         let committed_records = lane_receipts
             .iter()
             .map(|receipt| receipt.committed_records)
@@ -312,7 +340,7 @@ impl GroupCommitWriter {
                 .map_err(|_| {
                     BorsukError::InvalidStorage("group commit worker stopped".to_string())
                 })?;
-            results.push(result);
+            results.push((lane, result));
         }
         Ok(GroupCommitTicket {
             records: record_count,
@@ -599,5 +627,54 @@ fn run_worker(
                 spill_errors.insert(lane, error.to_string());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_lane_failure_preserves_every_committed_receipt() {
+        let (first_sender, first_receiver) = mpsc::channel();
+        let (second_sender, second_receiver) = mpsc::channel();
+        first_sender
+            .send(Ok(GroupCommitLaneReceipt {
+                records: 1,
+                committed_records: 2,
+                commit_sequence: 7,
+                lease_epoch: 3,
+                commit_lane: 1,
+                acknowledgement_bytes: 4096,
+                requests: RequestCounts {
+                    puts: 1,
+                    ..RequestCounts::default()
+                },
+            }))
+            .unwrap();
+        second_sender
+            .send(Err("injected lane failure".into()))
+            .unwrap();
+
+        let error = GroupCommitTicket {
+            records: 2,
+            results: vec![(1, first_receiver), (6, second_receiver)],
+            maintenance: None,
+        }
+        .wait()
+        .unwrap_err();
+
+        let BorsukError::PartialGroupCommit {
+            committed_lane_receipts,
+            failed_lanes,
+        } = error
+        else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(committed_lane_receipts.len(), 1);
+        assert_eq!(committed_lane_receipts[0].commit_lane, 1);
+        assert_eq!(failed_lanes.len(), 1);
+        assert_eq!(failed_lanes[0].commit_lane, 6);
+        assert_eq!(failed_lanes[0].message, "injected lane failure");
     }
 }

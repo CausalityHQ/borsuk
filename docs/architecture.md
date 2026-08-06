@@ -618,12 +618,12 @@ vector need not live in its strictly nearest partition for correctness.
 ## Write-ahead log (ingest)
 
 Rust producers sharing a process can place a `GroupCommitWriter` in front of
-the WAL. Its single owning index handle gathers concurrent requests for a
-bounded time/record window, concatenates them, and executes one durable
-last-write-wins put. Callers wait for the same root visibility boundary, while
-immutable runs and collection-root CAS work are amortized across the whole group
-instead of repeated by contending handles. Strict `add` remains available when
-duplicate rejection is required.
+the WAL. Stable ID hashing assigns each record to one fenced ownership lane;
+workers coalesce requests per lane and acknowledge one conditional lane-HEAD
+update. Multi-lane calls expose one receipt per committed lane. A partial failure
+returns structured committed and failed lane sets because no cross-lane atomic
+visibility claim is made. Strict `add` remains available when duplicate
+rejection is required.
 
 The write path is fronted by a **default-on cell-sharded write-ahead log**. A
 small `add`/`upsert`/delete batch is routed to stable logical cells and prepared
