@@ -1301,13 +1301,24 @@ impl GlobalPqDescriptor {
 
     /// Start a disjoint artifact with the same frozen scan/coarse codebooks and
     /// packed location layout, but no rows or immutable chunks.
-    pub(crate) fn empty_reusing_quantizers(&self) -> Result<Self> {
+    pub(crate) fn empty_reusing_quantizers_for_layout(
+        &self,
+        segment_count: usize,
+        max_rows_per_segment: usize,
+    ) -> Result<Self> {
+        self.empty_reusing_quantizers_with_location(LocationEncoding::for_layout(
+            segment_count,
+            max_rows_per_segment,
+        )?)
+    }
+
+    fn empty_reusing_quantizers_with_location(&self, location: LocationEncoding) -> Result<Self> {
         Self::new(
             self.quantizer.clone(),
             self.coarse_quantizer.clone(),
             0,
             self.vector_element_type,
-            self.location,
+            location,
             Vec::new(),
         )
     }
@@ -2567,7 +2578,9 @@ mod tests {
         assert_eq!(code, quantizer.encode(&fit[17]).unwrap());
         assert!(descriptor.append_spool(4_096, 64, 4, 65).is_err());
 
-        let empty = descriptor.empty_reusing_quantizers().unwrap();
+        let empty = descriptor
+            .empty_reusing_quantizers_for_layout(4, 64)
+            .unwrap();
         assert_eq!(empty.vectors(), 0);
         assert!(empty.chunks().is_empty());
         let empty_spool = empty.append_spool(4_096, 64, 4, 64).unwrap();

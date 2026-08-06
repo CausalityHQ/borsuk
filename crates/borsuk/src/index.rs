@@ -13016,7 +13016,13 @@ impl BorsukIndex {
             .storage
             .read_bytes_with_cache_status_and_checksum(&base.path, &base.checksum)?;
         let descriptor = GlobalPqDescriptor::decode(&read.bytes)?;
-        let empty = descriptor.empty_reusing_quantizers()?;
+        let max_rows = fringe
+            .iter()
+            .map(|summary| summary.object_count)
+            .chain(std::iter::once(self.manifest.config.segment_max_vectors))
+            .max()
+            .unwrap_or(1);
+        let empty = descriptor.empty_reusing_quantizers_for_layout(fringe.len(), max_rows)?;
         let bytes = empty.encode()?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = format!(
