@@ -39,8 +39,10 @@ source_uri="s3://${BUCKET}/${source_key}"
 session="${SESSION}"
 result_uri="${RESULT_URI}"
 index_uri="${INDEX_URI}"
-if sudo -iu ec2-user tmux list-sessions -F '#S' 2>/dev/null | grep -E '^borsuk-' >/dev/null; then
-  echo 'another BORSUK tmux session is active; refusing contention' >&2
+active_panes="$(sudo -iu ec2-user tmux list-panes -a -F '#{pane_dead}|#{pane_current_command}' 2>/dev/null | awk -F'|' '$1 == 0 && $2 != "bash" { print }')"
+if [[ -n "$active_panes" ]]; then
+  echo 'another BORSUK tmux workload is active; refusing contention' >&2
+  printf '%s\n' "$active_panes" >&2
   exit 4
 fi
 if pgrep -af 'bench_group_commit_scalability|group_commit_bench|logical_cell_routing_bench' >/dev/null; then
