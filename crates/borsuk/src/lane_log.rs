@@ -18,6 +18,8 @@ use rayon::prelude::*;
 
 const BLOCK_MAGIC: &[u8; 8] = b"BRSLBL25";
 const HEAD_MAGIC: &[u8; 8] = b"BRSLHD26";
+const EPOCH_HEAD_MAGIC: &[u8; 8] = b"BRSLHD27";
+const EXTENT_MAGIC: &[u8; 8] = b"BRSLXT27";
 const CHECKSUM_BYTES: usize = 32;
 const INLINE_SPILL_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024;
 const MAX_UNMATERIALIZED_BLOCKS: usize = 128;
@@ -311,6 +313,54 @@ struct LaneLogHead {
     blocks: Vec<LaneLogBlockRef>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LaneEpochSeal {
+    lease_epoch: u64,
+    durable_sequence: u64,
+    generation_end: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LaneEpochHead {
+    lane: u16,
+    lease_epoch: u64,
+    lease_owner: [u8; 16],
+    lease_expires_at_ms: u64,
+    durable_sequence: u64,
+    materialized_sequence: u64,
+    generation_base: u64,
+    sealed_epoch: Option<LaneEpochSeal>,
+}
+
+impl LaneEpochHead {
+    fn validate(&self, expected_lane: u16) -> Result<()> {
+        if self.lane != expected_lane || self.materialized_sequence > self.durable_sequence {
+            return Err(BorsukError::InvalidStorage(
+                "invalid epoch lane-log HEAD identity or frontier".to_string(),
+            ));
+        }
+        if self
+            .sealed_epoch
+            .is_some_and(|seal| seal.lease_epoch >= self.lease_epoch)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "epoch lane-log HEAD seal must precede its owning epoch".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LaneExtent {
+    lane: u16,
+    lease_epoch: u64,
+    sequence: u64,
+    first_generation: u64,
+    records: u64,
+    payload: Vec<u8>,
+}
+
 impl LaneLogHead {
     fn empty(lane: u16, lease_epoch: u64) -> Self {
         Self {
@@ -428,6 +478,186 @@ fn fenced_body<'a>(bytes: &'a [u8], magic: &[u8; 8], label: &str) -> Result<&'a 
         )));
     }
     Ok(body)
+}
+
+fn epoch_head_bytes(head: &LaneEpochHead) -> Result<Vec<u8>> {
+    head.validate(head.lane)?;
+    let mut body = Vec::with_capacity(96);
+    body.push(27);
+    body.extend_from_slice(&head.lane.to_le_bytes());
+    body.extend_from_slice(&head.lease_epoch.to_le_bytes());
+    body.extend_from_slice(&head.lease_owner);
+    body.extend_from_slice(&head.lease_expires_at_ms.to_le_bytes());
+    body.extend_from_slice(&head.durable_sequence.to_le_bytes());
+    body.extend_from_slice(&head.materialized_sequence.to_le_bytes());
+    body.extend_from_slice(&head.generation_base.to_le_bytes());
+    let seal = head.sealed_epoch.unwrap_or(LaneEpochSeal {
+        lease_epoch: 0,
+        durable_sequence: 0,
+        generation_end: 0,
+    });
+    body.push(u8::from(head.sealed_epoch.is_some()));
+    body.extend_from_slice(&seal.lease_epoch.to_le_bytes());
+    body.extend_from_slice(&seal.durable_sequence.to_le_bytes());
+    body.extend_from_slice(&seal.generation_end.to_le_bytes());
+    Ok(fenced_bytes(EPOCH_HEAD_MAGIC, &body))
+}
+
+fn epoch_head_from_bytes(bytes: &[u8], expected_lane: u16) -> Result<LaneEpochHead> {
+    let body = fenced_body(bytes, EPOCH_HEAD_MAGIC, "epoch HEAD")?;
+    let mut cursor = 0;
+    if take_u8(body, &mut cursor)? != 27 {
+        return Err(BorsukError::InvalidStorage(
+            "unsupported epoch lane-log HEAD version".to_string(),
+        ));
+    }
+    let lane = take_u16(body, &mut cursor)?;
+    let lease_epoch = take_u64(body, &mut cursor)?;
+    let lease_owner = take_array(body, &mut cursor)?;
+    let lease_expires_at_ms = take_u64(body, &mut cursor)?;
+    let durable_sequence = take_u64(body, &mut cursor)?;
+    let materialized_sequence = take_u64(body, &mut cursor)?;
+    let generation_base = take_u64(body, &mut cursor)?;
+    let seal_present = take_u8(body, &mut cursor)?;
+    let seal = LaneEpochSeal {
+        lease_epoch: take_u64(body, &mut cursor)?,
+        durable_sequence: take_u64(body, &mut cursor)?,
+        generation_end: take_u64(body, &mut cursor)?,
+    };
+    if cursor != body.len() || seal_present > 1 {
+        return Err(BorsukError::InvalidStorage(
+            "epoch lane-log HEAD has trailing bytes or an invalid seal tag".to_string(),
+        ));
+    }
+    if seal_present == 0
+        && seal
+            != (LaneEpochSeal {
+                lease_epoch: 0,
+                durable_sequence: 0,
+                generation_end: 0,
+            })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "epoch lane-log HEAD absent seal must use canonical zeros".to_string(),
+        ));
+    }
+    let head = LaneEpochHead {
+        lane,
+        lease_epoch,
+        lease_owner,
+        lease_expires_at_ms,
+        durable_sequence,
+        materialized_sequence,
+        generation_base,
+        sealed_epoch: (seal_present == 1).then_some(seal),
+    };
+    head.validate(expected_lane)?;
+    Ok(head)
+}
+
+fn extent_bytes(extent: &LaneExtent) -> Result<Vec<u8>> {
+    if extent.sequence == 0 || extent.records == 0 || extent.payload.is_empty() {
+        return Err(BorsukError::InvalidRecordInput(
+            "epoch lane-log extents require positive sequence, records, and payload".to_string(),
+        ));
+    }
+    let payload_len = u64::try_from(extent.payload.len()).map_err(|_| {
+        BorsukError::InvalidRecordInput("epoch lane-log extent payload exceeds u64".to_string())
+    })?;
+    let mut body = Vec::with_capacity(43_usize.saturating_add(extent.payload.len()));
+    body.push(27);
+    body.extend_from_slice(&extent.lane.to_le_bytes());
+    body.extend_from_slice(&extent.lease_epoch.to_le_bytes());
+    body.extend_from_slice(&extent.sequence.to_le_bytes());
+    body.extend_from_slice(&extent.first_generation.to_le_bytes());
+    body.extend_from_slice(&extent.records.to_le_bytes());
+    body.extend_from_slice(&payload_len.to_le_bytes());
+    body.extend_from_slice(&extent.payload);
+    Ok(fenced_bytes(EXTENT_MAGIC, &body))
+}
+
+fn extent_path(lane: u16, lease_epoch: u64, sequence: u64, checksum: &str) -> Result<String> {
+    if checksum.len() != 64
+        || !checksum
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(BorsukError::InvalidStorage(
+            "epoch lane-log extent checksum must be lowercase blake3 hex".to_string(),
+        ));
+    }
+    Ok(format!(
+        "lane-log/lanes/{lane:04}/epochs/{lease_epoch:016x}/extents/{sequence:016x}-{checksum}.wal"
+    ))
+}
+
+fn extent_from_bytes(
+    path: &str,
+    bytes: &[u8],
+    expected_lane: u16,
+    expected_epoch: u64,
+    expected_sequence: u64,
+    expected_checksum: &str,
+) -> Result<LaneExtent> {
+    let actual_checksum = blake3::hash(bytes).to_hex().to_string();
+    if actual_checksum != expected_checksum
+        || path
+            != extent_path(
+                expected_lane,
+                expected_epoch,
+                expected_sequence,
+                expected_checksum,
+            )?
+    {
+        return Err(BorsukError::InvalidStorage(
+            "epoch lane-log extent path or checksum identity mismatch".to_string(),
+        ));
+    }
+    let body = fenced_body(bytes, EXTENT_MAGIC, "extent")?;
+    let mut cursor = 0;
+    if take_u8(body, &mut cursor)? != 27 {
+        return Err(BorsukError::InvalidStorage(
+            "unsupported epoch lane-log extent version".to_string(),
+        ));
+    }
+    let lane = take_u16(body, &mut cursor)?;
+    let lease_epoch = take_u64(body, &mut cursor)?;
+    let sequence = take_u64(body, &mut cursor)?;
+    let first_generation = take_u64(body, &mut cursor)?;
+    let records = take_u64(body, &mut cursor)?;
+    let payload_len = usize::try_from(take_u64(body, &mut cursor)?).map_err(|_| {
+        BorsukError::InvalidStorage("epoch lane-log extent payload exceeds usize".to_string())
+    })?;
+    let payload_end = cursor.checked_add(payload_len).ok_or_else(|| {
+        BorsukError::InvalidStorage("epoch lane-log extent payload length overflow".to_string())
+    })?;
+    let payload = body
+        .get(cursor..payload_end)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("epoch lane-log extent payload is truncated".to_string())
+        })?
+        .to_vec();
+    cursor = payload_end;
+    if cursor != body.len()
+        || lane != expected_lane
+        || lease_epoch != expected_epoch
+        || sequence != expected_sequence
+        || sequence == 0
+        || records == 0
+        || payload.is_empty()
+    {
+        return Err(BorsukError::InvalidStorage(
+            "epoch lane-log extent identity or bounds mismatch".to_string(),
+        ));
+    }
+    Ok(LaneExtent {
+        lane,
+        lease_epoch,
+        sequence,
+        first_generation,
+        records,
+        payload,
+    })
 }
 
 fn block_bytes(payload: &[u8]) -> Vec<u8> {
@@ -1733,6 +1963,77 @@ mod tests {
 
     fn writer(uri: &str) -> LaneLogWriter {
         LaneLogWriter::new_empty(Arc::new(InMemory::new()), uri, 3, 7).unwrap()
+    }
+
+    #[test]
+    fn v27_head_size_is_constant_across_extent_counts() {
+        let head = |durable_sequence| LaneEpochHead {
+            lane: 3,
+            lease_epoch: 7,
+            lease_owner: [9; 16],
+            lease_expires_at_ms: 123_456,
+            durable_sequence,
+            materialized_sequence: durable_sequence.saturating_sub(1),
+            generation_base: 42,
+            sealed_epoch: Some(LaneEpochSeal {
+                lease_epoch: 6,
+                durable_sequence: 91,
+                generation_end: 132,
+            }),
+        };
+
+        let first = epoch_head_bytes(&head(1)).unwrap();
+        let millionth = epoch_head_bytes(&head(1_000_000)).unwrap();
+
+        assert_eq!(first.len(), millionth.len());
+        assert_eq!(
+            epoch_head_from_bytes(&millionth, 3).unwrap(),
+            head(1_000_000)
+        );
+    }
+
+    #[test]
+    fn v27_extent_round_trips_identity_and_records() {
+        let extent = LaneExtent {
+            lane: 3,
+            lease_epoch: 7,
+            sequence: 11,
+            first_generation: 101,
+            records: 2,
+            payload: b"two durable records".to_vec(),
+        };
+        let bytes = extent_bytes(&extent).unwrap();
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = extent_path(3, 7, 11, &checksum).unwrap();
+
+        assert_eq!(
+            extent_from_bytes(&path, &bytes, 3, 7, 11, &checksum).unwrap(),
+            extent
+        );
+    }
+
+    #[test]
+    fn v27_extent_rejects_path_or_checksum_identity_mismatch() {
+        let extent = LaneExtent {
+            lane: 3,
+            lease_epoch: 7,
+            sequence: 11,
+            first_generation: 101,
+            records: 2,
+            payload: b"two durable records".to_vec(),
+        };
+        let bytes = extent_bytes(&extent).unwrap();
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = extent_path(3, 7, 11, &checksum).unwrap();
+
+        for (lane, epoch, sequence) in [(4, 7, 11), (3, 8, 11), (3, 7, 12)] {
+            assert!(extent_from_bytes(&path, &bytes, lane, epoch, sequence, &checksum).is_err());
+        }
+        assert!(extent_from_bytes(&path, &bytes, 3, 7, 11, &"0".repeat(64)).is_err());
+        assert!(extent_from_bytes(&path, &bytes[..bytes.len() - 1], 3, 7, 11, &checksum).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(extent_from_bytes(&path, &trailing, 3, 7, 11, &checksum).is_err());
     }
 
     #[test]
