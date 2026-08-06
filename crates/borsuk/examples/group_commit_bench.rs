@@ -268,7 +268,10 @@ fn measure_reads(
             } else {
                 SearchOptions::approx(10, LeafMode::SrhtPqScan)
                     .with_max_segments(config.max_read_segments)
-                    .with_max_candidates_per_segment(64)
+                    // The production gate is k=10; a 16-candidate rerank
+                    // budget preserves headroom while avoiding needless
+                    // object-store vector fetches on the post-drain path.
+                    .with_max_candidates_per_segment(16)
             },
         )?;
         let latency_ms = read_started.elapsed().as_secs_f64() * 1_000.0;
