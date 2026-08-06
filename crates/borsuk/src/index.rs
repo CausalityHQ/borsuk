@@ -7894,6 +7894,19 @@ impl BorsukIndex {
             .sum()
     }
 
+    fn live_wal_record_bytes_for_cells(
+        &self,
+        selected_cells: Option<&BTreeSet<LogicalCellId>>,
+    ) -> u64 {
+        self.cell_wal_record_bytes_for_cells(selected_cells)
+            .saturating_add(
+                self.lane_log_snapshot
+                    .iter()
+                    .map(|block| block.bytes)
+                    .fold(0_u64, u64::saturating_add),
+            )
+    }
+
     fn cell_wal_id_directory_entries<'a, I>(
         &self,
         ids: I,
@@ -8549,11 +8562,27 @@ impl BorsukIndex {
             .iter()
             .map(|run| (run.cell.routing_epoch, run.cell.cell_ordinal, run.lane))
             .collect::<BTreeSet<_>>();
+        let lane_log_lanes = self
+            .lane_log_snapshot
+            .iter()
+            .map(|block| block.lane)
+            .collect::<BTreeSet<_>>();
         (
             cells.len(),
-            lanes.len(),
-            record_runs.len(),
-            record_runs.iter().map(|run| run.record_count).sum(),
+            lanes.len().saturating_add(lane_log_lanes.len()),
+            record_runs
+                .len()
+                .saturating_add(self.lane_log_snapshot.len()),
+            record_runs
+                .iter()
+                .map(|run| run.record_count)
+                .fold(0_usize, usize::saturating_add)
+                .saturating_add(
+                    self.lane_log_snapshot
+                        .iter()
+                        .map(|block| block.records.len())
+                        .fold(0_usize, usize::saturating_add),
+                ),
             self.cell_wal_snapshot_retries.load(AtomicOrdering::Relaxed),
         )
     }
@@ -14124,9 +14153,38 @@ impl BorsukIndex {
         } else {
             self.live_wal_tail_records_for_cells(wal_query_cells.as_ref())?
         };
-        if matches!(options.mode, SearchMode::Approx { .. })
-            && self.manifest.config.metric.supports_centroid_lower_bound()
-            && let Some(execution) = self.search_zero_distance_live_wal(
+        let zero_distance_wal_eligible = matches!(options.mode, SearchMode::Approx { .. })
+            && self.manifest.config.metric.supports_centroid_lower_bound();
+        let global_eligible = options.mode.leaf_mode()
+            == self.manifest.build_config.global_scan_codec.leaf_mode()
+            && matches!(options.mode, SearchMode::Approx { .. })
+            && !options.guaranteed_recall
+            && !options.disable_coarse_quantizer
+            && options.filter.is_none()
+            && !options.include_metadata
+            && self.manifest.global_pq_ref.is_some();
+        let global_active_segments = if global_eligible {
+            Some(self.active_segment_summaries()?)
+        } else {
+            None
+        };
+        let global_available = global_active_segments.as_ref().is_some_and(|active| {
+            let active_checksums = active
+                .iter()
+                .map(|summary| summary.checksum.as_str())
+                .collect::<HashSet<_>>();
+            self.manifest
+                .global_pq_ref
+                .as_ref()
+                .is_some_and(|reference| {
+                    reference
+                        .segments
+                        .iter()
+                        .all(|checksum| active_checksums.contains(checksum.as_str()))
+                })
+        });
+        let mut wal_execution = if zero_distance_wal_eligible || global_available {
+            self.search_live_wal_execution(
                 query,
                 &options,
                 include_vectors,
@@ -14135,32 +14193,79 @@ impl BorsukIndex {
                 started,
                 &requests_before,
             )?
+        } else {
+            None
+        };
+        if zero_distance_wal_eligible
+            && wal_execution
+                .as_ref()
+                .is_some_and(|execution| wal_execution_is_exact_top_k(execution, options.k))
         {
-            observability::record_search_report(&span, &execution.report);
-            return Ok(execution);
-        }
-        if options.k > 0
-            && let Some(mut execution) = self.search_resident_global_pq(
-                query,
-                &options,
-                include_vectors,
-                started,
-                &requests_before,
-            )?
-        {
-            self.merge_wal_tail_into_execution(
-                query,
-                &options,
-                include_vectors,
-                &live_wal_tail,
-                wal_query_cells.as_ref(),
-                started,
-                &requests_before,
+            let mut execution = wal_execution.take().expect("WAL execution checked above");
+            self.finish_wal_only_execution(
                 &mut execution,
-            )?;
+                SearchTerminationReason::ExactPruned,
+                RecallGuarantee::Exact,
+                global_active_segments
+                    .as_ref()
+                    .map_or(self.active_segment_summaries()?.len(), Vec::len),
+                started,
+                &requests_before,
+            );
             observability::record_search_report(&span, &execution.report);
             return Ok(execution);
         }
+        if let Some(execution) = wal_execution.as_ref()
+            && let Some(reason) = restrict_to_remaining_search_budget(
+                &mut options,
+                execution.report.bytes_read,
+                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            )
+        {
+            let mut execution = wal_execution.take().expect("WAL execution checked above");
+            self.finish_wal_only_execution(
+                &mut execution,
+                reason,
+                RecallGuarantee::Degraded,
+                global_active_segments
+                    .as_ref()
+                    .map_or(self.active_segment_summaries()?.len(), Vec::len),
+                started,
+                &requests_before,
+            );
+            observability::record_search_report(&span, &execution.report);
+            return Ok(execution);
+        }
+        if options.k > 0 {
+            if global_available
+                && let Some(mut execution) = self.search_resident_global_pq(
+                    query,
+                    &options,
+                    include_vectors,
+                    started,
+                    &requests_before,
+                )?
+            {
+                if let Some(wal_execution) = wal_execution.take() {
+                    merge_search_execution_hits(
+                        &mut execution,
+                        wal_execution,
+                        options.k,
+                        include_vectors,
+                    );
+                    self.apply_wal_search_observation(
+                        &mut execution.report,
+                        wal_query_cells.as_ref(),
+                    );
+                    execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
+                    execution.report.requests =
+                        self.storage.request_counts().delta(&requests_before);
+                }
+                observability::record_search_report(&span, &execution.report);
+                return Ok(execution);
+            }
+        }
+        let prescored_wal_execution = wal_execution.take();
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
         let segments_total = self.routing_segments_total(&page_index_read.page_refs);
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
@@ -14362,9 +14467,9 @@ impl BorsukIndex {
         let candidates_total = candidates.len();
         let mut segments_skipped = segments_total.saturating_sub(candidates_total);
         let mut bytes_read = routing_read.bytes_read + filter_index_bytes_read;
-        if !live_wal_tail.is_empty() {
+        if prescored_wal_execution.is_none() && !live_wal_tail.is_empty() {
             bytes_read = bytes_read
-                .saturating_add(self.cell_wal_record_bytes_for_cells(wal_query_cells.as_ref()));
+                .saturating_add(self.live_wal_record_bytes_for_cells(wal_query_cells.as_ref()));
         }
         let mut graph_bytes_read = 0_u64;
         let mut decoded_cache_hits = 0_usize;
@@ -14825,7 +14930,11 @@ impl BorsukIndex {
         // and a later upsert/delete supersedes it. Read-your-writes and
         // snapshot isolation both hold: the tail is exactly this handle's
         // published frontier.
-        for record in &live_wal_tail {
+        for record in prescored_wal_execution
+            .is_none()
+            .then_some(live_wal_tail.as_slice())
+            .unwrap_or_default()
+        {
             records_considered += 1;
             if let Some(filter) = &options.filter {
                 rows_evaluated += 1;
@@ -14910,13 +15019,18 @@ impl BorsukIndex {
             },
             vectors,
         };
+        if let Some(wal_execution) = prescored_wal_execution {
+            merge_search_execution_hits(&mut execution, wal_execution, options.k, include_vectors);
+            execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
+            execution.report.requests = self.storage.request_counts().delta(&requests_before);
+        }
         self.apply_wal_search_observation(&mut execution.report, wal_query_cells.as_ref());
         observability::record_search_report(&span, &execution.report);
         Ok(execution)
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn search_zero_distance_live_wal(
+    fn search_live_wal_execution(
         &self,
         query: &[f32],
         options: &SearchOptions,
@@ -14926,7 +15040,11 @@ impl BorsukIndex {
         started: Instant,
         requests_before: &RequestCounts,
     ) -> Result<Option<SearchExecution>> {
-        if live_wal_tail.is_empty() || options.k == 0 {
+        if options.k == 0 {
+            return Ok(None);
+        }
+        let wal_bytes = self.live_wal_record_bytes_for_cells(wal_query_cells);
+        if live_wal_tail.is_empty() && wal_bytes == 0 {
             return Ok(None);
         }
         let mut ranked = Vec::with_capacity(options.k);
@@ -14958,20 +15076,6 @@ impl BorsukIndex {
                 options.k,
             );
         }
-        if ranked.len() < options.k
-            || ranked
-                .last()
-                .is_none_or(|entry| entry.hit.distance > f32::EPSILON)
-        {
-            return Ok(None);
-        }
-        let segments_total = self
-            .manifest
-            .global_pq_ref
-            .as_ref()
-            .map_or(self.manifest.segments.len(), |reference| {
-                reference.segments.len()
-            });
         let vectors = ranked
             .iter()
             .filter_map(|entry| entry.vector.clone())
@@ -14981,14 +15085,14 @@ impl BorsukIndex {
             report: SearchReport {
                 hits,
                 leaf_mode: options.mode.leaf_mode().to_string(),
-                termination_reason: SearchTerminationReason::ExactPruned,
-                recall_guarantee: RecallGuarantee::Exact,
-                segments_total,
+                termination_reason: SearchTerminationReason::Complete,
+                recall_guarantee: RecallGuarantee::Degraded,
+                segments_total: 0,
                 segments_searched: 0,
-                segments_skipped: segments_total,
+                segments_skipped: 0,
                 routing_page_indexes_read: 0,
                 routing_pages_read: 0,
-                bytes_read: self.cell_wal_record_bytes_for_cells(wal_query_cells),
+                bytes_read: wal_bytes,
                 prefetched_bytes_unused: 0,
                 graph_bytes_read: 0,
                 decoded_cache_hits: 0,
@@ -15030,73 +15134,21 @@ impl BorsukIndex {
         Ok(Some(execution))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn merge_wal_tail_into_execution(
+    fn finish_wal_only_execution(
         &self,
-        query: &[f32],
-        options: &SearchOptions,
-        include_vectors: bool,
-        live_wal_tail: &[VectorRecord],
-        wal_query_cells: Option<&BTreeSet<LogicalCellId>>,
+        execution: &mut SearchExecution,
+        termination_reason: SearchTerminationReason,
+        recall_guarantee: RecallGuarantee,
+        segments_total: usize,
         started: Instant,
         requests_before: &RequestCounts,
-        execution: &mut SearchExecution,
-    ) -> Result<()> {
-        self.apply_wal_search_observation(&mut execution.report, wal_query_cells);
-        if live_wal_tail.is_empty() {
-            return Ok(());
-        }
-        let existing_vectors = std::mem::take(&mut execution.vectors);
-        let mut ranked = std::mem::take(&mut execution.report.hits)
-            .into_iter()
-            .enumerate()
-            .map(|(index, hit)| SearchHitWithVector {
-                hit,
-                vector: include_vectors
-                    .then(|| existing_vectors.get(index).cloned())
-                    .flatten(),
-            })
-            .collect::<Vec<_>>();
-        for record in live_wal_tail {
-            execution.report.records_considered =
-                execution.report.records_considered.saturating_add(1);
-            if let Some(filter) = &options.filter {
-                execution.report.rows_evaluated = execution.report.rows_evaluated.saturating_add(1);
-                if !filter.matches(&record.metadata) {
-                    continue;
-                }
-                execution.report.rows_passed_filter =
-                    execution.report.rows_passed_filter.saturating_add(1);
-            }
-            let distance = self
-                .manifest
-                .config
-                .metric
-                .distance_unchecked(query, &record.vector)?;
-            execution.report.records_scored = execution.report.records_scored.saturating_add(1);
-            push_hit_with_vector(
-                &mut ranked,
-                SearchHit {
-                    id: record.id.clone(),
-                    distance,
-                    metadata: options.include_metadata.then(|| record.metadata.clone()),
-                },
-                include_vectors.then(|| record.vector.clone()),
-                options.k,
-            );
-        }
-        execution.report.hits = ranked.iter().map(|entry| entry.hit.clone()).collect();
-        execution.vectors = ranked
-            .iter()
-            .filter_map(|entry| entry.vector.clone())
-            .collect();
-        execution.report.bytes_read = execution
-            .report
-            .bytes_read
-            .saturating_add(self.cell_wal_record_bytes_for_cells(wal_query_cells));
+    ) {
+        execution.report.termination_reason = termination_reason;
+        execution.report.recall_guarantee = recall_guarantee;
+        execution.report.segments_total = segments_total;
+        execution.report.segments_skipped = segments_total;
         execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
         execution.report.requests = self.storage.request_counts().delta(requests_before);
-        Ok(())
     }
 
     fn resolve_cache_execution(&self, options: &mut SearchOptions) -> Result<()> {
@@ -21152,6 +21204,15 @@ fn merge_search_execution_hits(
         .saturating_add(delta_report.segments_pruned_by_filter);
 }
 
+fn wal_execution_is_exact_top_k(execution: &SearchExecution, k: usize) -> bool {
+    execution.report.hits.len() >= k
+        && execution
+            .report
+            .hits
+            .last()
+            .is_some_and(|hit| hit.distance <= f32::EPSILON)
+}
+
 fn merged_search_termination_reason(
     base: SearchTerminationReason,
     delta: SearchTerminationReason,
@@ -21543,7 +21604,6 @@ fn restrict_to_remaining_search_budget(
         if elapsed_ms >= limit {
             return Some(SearchTerminationReason::MaxLatency);
         }
-        *max_latency_ms = Some(limit - elapsed_ms);
     }
     None
 }
@@ -21610,7 +21670,11 @@ mod tests {
             panic!("approximate options changed mode");
         };
         assert_eq!(max_bytes, Some(60));
-        assert_eq!(max_latency_ms, Some(30));
+        assert_eq!(
+            max_latency_ms,
+            Some(50),
+            "recursive layers share the original absolute deadline"
+        );
 
         let mut byte_exhausted = SearchOptions::approx(10, LeafMode::SrhtPqScan)
             .with_max_bytes(100)
@@ -23561,6 +23625,25 @@ mod tests {
             "the WAL overlay must not disable the immutable global PQ base: {report:?}"
         );
 
+        let wal_limited = reader
+            .search_with_report(
+                &[9.9; 8],
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64)
+                    .with_max_bytes(1),
+            )
+            .unwrap();
+        assert_eq!(wal_limited.hits[0].id, RecordId::from("wal-tail"));
+        assert_eq!(
+            wal_limited.termination_reason,
+            SearchTerminationReason::MaxBytes
+        );
+        assert_eq!(
+            wal_limited.global_scan_chunks_searched, 0,
+            "WAL accounting exhausted the request before immutable search: {wal_limited:?}"
+        );
+
         drop(reader);
         writer.flush().unwrap();
         assert!(writer.manifest.wal_frontier_is_empty());
@@ -23685,6 +23768,50 @@ mod tests {
     }
 
     #[test]
+    fn suppressed_wal_rows_still_charge_the_request_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        writer
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        writer.finish_bulk_load().unwrap();
+        writer
+            .add(vec![VectorRecord::new("suppressed-tail", vec![1_000.0; 8])])
+            .unwrap();
+        writer.delete(["suppressed-tail"]).unwrap();
+
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &[1_000.0; 8],
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_max_candidates_per_segment(64)
+                    .with_max_bytes(1),
+            )
+            .unwrap();
+        assert!(report.hits.is_empty());
+        assert_eq!(report.termination_reason, SearchTerminationReason::MaxBytes);
+        assert_eq!(report.global_scan_chunks_searched, 0);
+        assert!(report.bytes_read > 0);
+        assert!(report.wal_runs_examined > 0);
+    }
+
+    #[test]
     fn resident_global_search_charges_materialized_delta_to_one_segment_budget() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
@@ -23799,7 +23926,6 @@ mod tests {
         index.manifest = index
             .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))
             .unwrap();
-
         let reader = BorsukIndex::open(&uri).unwrap();
         let report = reader
             .search_with_report(
@@ -23862,6 +23988,28 @@ mod tests {
             SearchTerminationReason::MaxBytes,
             "the merged report must retain delta budget exhaustion: {delta_exhausted:?}"
         );
+
+        drop(reader);
+        index
+            .add(vec![VectorRecord::new("wal-after-delta", vec![1_000.0; 8])])
+            .unwrap();
+        let reader = BorsukIndex::open(&uri).unwrap();
+        let wal_only = reader
+            .search_with_report(
+                &[999.9; 8],
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64)
+                    .with_max_bytes(1),
+            )
+            .unwrap();
+        assert_eq!(wal_only.hits[0].id, RecordId::from("wal-after-delta"));
+        assert_eq!(wal_only.global_scan_chunks_searched, 0);
+        assert_eq!(
+            wal_only.segments_total, 10,
+            "WAL-only telemetry must include stable base and materialized delta segments"
+        );
+        assert_eq!(wal_only.segments_skipped, 10);
     }
 
     #[test]

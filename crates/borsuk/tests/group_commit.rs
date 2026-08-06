@@ -89,6 +89,22 @@ fn drain_keeps_global_base_and_searches_materialized_delta_without_rebuild() {
     writer
         .append(vec![VectorRecord::new("delta", delta.clone())])
         .unwrap();
+    let tail_report = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri)
+        .unwrap()
+        .search_with_report(
+            &[9.9; 8],
+            SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                .with_max_segments(4)
+                .with_max_candidates_per_segment(8)
+                .with_max_bytes(1),
+        )
+        .unwrap();
+    assert_eq!(tail_report.hits[0].id.as_str(), "delta");
+    assert!(tail_report.bytes_read > 0);
+    assert_eq!(
+        tail_report.global_scan_chunks_searched, 0,
+        "lane-log bytes must consume the shared request budget before immutable search: {tail_report:?}"
+    );
     writer.drain().unwrap();
 
     assert_eq!(

@@ -46,6 +46,8 @@ pub(crate) struct LaneLogSnapshot {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LaneLogRecordBlock {
     key: String,
+    pub(crate) lane: u16,
+    pub(crate) bytes: u64,
     pub(crate) records: Arc<Vec<VectorRecord>>,
 }
 
@@ -857,6 +859,8 @@ impl LaneLogReader {
                     if let Some(records) = current_blocks.get(key.as_str()) {
                         return Ok(LaneLogRecordBlock {
                             key,
+                            lane: *lane,
+                            bytes: block.bytes,
                             records: Arc::clone(records),
                         });
                     }
@@ -892,6 +896,8 @@ impl LaneLogReader {
                     };
                     Ok(LaneLogRecordBlock {
                         key,
+                        lane: *lane,
+                        bytes: block.bytes,
                         records: decoded,
                     })
                 })
