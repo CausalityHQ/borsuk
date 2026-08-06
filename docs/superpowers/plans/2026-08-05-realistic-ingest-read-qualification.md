@@ -285,8 +285,11 @@
   the owning append worker and a corpus-wide global-PQ rebuild during drain.
   The next revision removes the tiny-block trigger and the drain rebuild. It
   does not claim the still-open whole-query base/delta/WAL budget, bounded
-  delta-compaction, sticky maintenance-demand, or fully asynchronous spill
-  gates identified by the subsequent GPT-5.6 Sol review.
+  delta-compaction, or fully asynchronous spill gates identified by the
+  subsequent GPT-5.6 Sol review. Background materialization demand is now
+  sticky: a threshold crossed during an active pass schedules another pass
+  before the sole worker relinquishes ownership, with deterministic state-race
+  tests covering both arrival-during-pass and arrival-after-exit orderings.
 
 - [ ] **Step 6: Run five repetitions at the selected revision**
 
