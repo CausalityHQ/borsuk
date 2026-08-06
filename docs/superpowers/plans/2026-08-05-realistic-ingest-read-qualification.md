@@ -49,6 +49,13 @@
   local result only to 3.353 s and 4,436 records/s. Next remove or overlap the
   duplicate segment/global exact-vector encoding and writes; do not spend more
   cycles on routing discovery for this drain bottleneck.
+- The current implementation factor reuses caller-owned SRHT/PQ scratch and
+  exact fixed-width row storage during global-PQ materialization. Focused
+  encoder and global-PQ tests prove byte equivalence and pass clippy/format
+  checks. The attempted follow-up used a non-pristine previously materialized
+  local index and failed the post-reopen exact-recall gate before producing a
+  valid performance cell; its partial CSVs remain uninspected. Do not compare
+  it with r21--r26. A fresh-base terminal run is still required.
 
 ## Global Constraints
 

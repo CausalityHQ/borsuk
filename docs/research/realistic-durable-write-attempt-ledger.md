@@ -76,3 +76,15 @@ logical cells, and 20 read queries per phase.
   end-to-end records/s, with recall 1.0 and 62.484/97.532/3.122 ms
   write/active-read/post-read p95. The remaining gap is duplicate segment and
   global-bundle encoding/writes, not routing discovery or local rereads.
+
+## Post-r26 implementation checkpoint
+
+The next local implementation factor adds caller-owned scratch buffers to the
+SRHT/product-quantizer encoder and reuses the exact fixed-width row buffer in
+the global-PQ spool. Focused byte-equivalence tests cover both reusable paths,
+and the global-PQ test suite passes. A subsequent attempted r27 local rerun
+was terminally rejected at post-reopen exact recall because it used a
+previously materialized diagnostic index rather than a pristine base; its
+partial measurement files were not inspected and it provides no numeric
+performance evidence. A fresh-base terminal run is required before attributing
+any throughput change to this factor.

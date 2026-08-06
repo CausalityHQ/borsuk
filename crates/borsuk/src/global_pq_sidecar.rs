@@ -156,11 +156,31 @@ impl GlobalScanQuantizer {
         }
     }
 
+    #[cfg(test)]
     fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
         match self {
             Self::Pq(quantizer) => quantizer.encode(vector),
             Self::FastTurboQuantMse(quantizer) => quantizer.encode(vector),
             Self::FastTurboQuantProd(quantizer) => quantizer.encode(vector),
+        }
+    }
+
+    fn encode_with_scratch(
+        &self,
+        vector: &[f32],
+        rotated: &mut Vec<f32>,
+        code: &mut Vec<u8>,
+    ) -> Result<()> {
+        match self {
+            Self::Pq(quantizer) => quantizer.encode_into(vector, rotated, code),
+            Self::FastTurboQuantMse(quantizer) => {
+                *code = quantizer.encode(vector)?;
+                Ok(())
+            }
+            Self::FastTurboQuantProd(quantizer) => {
+                *code = quantizer.encode(vector)?;
+                Ok(())
+            }
         }
     }
 
@@ -512,10 +532,32 @@ impl GlobalCoarseQuantizer {
         matches!(self, Self::Hierarchical(_))
     }
 
+    #[cfg(test)]
     fn encode_cell(&self, vector: &[f32]) -> Result<u16> {
         match self {
             Self::Product(quantizer) => {
                 let code = quantizer.encode(vector)?;
+                if !(1..=2).contains(&code.len()) {
+                    return invalid("coarse cell codes must contain one or two bytes");
+                }
+                Ok(u16::from_le_bytes([
+                    code[0],
+                    code.get(1).copied().unwrap_or(0),
+                ]))
+            }
+            Self::Hierarchical(quantizer) => quantizer.encode_cell(vector),
+        }
+    }
+
+    fn encode_cell_with_scratch(
+        &self,
+        vector: &[f32],
+        rotated: &mut Vec<f32>,
+        code: &mut Vec<u8>,
+    ) -> Result<u16> {
+        match self {
+            Self::Product(quantizer) => {
+                quantizer.encode_into(vector, rotated, code)?;
                 if !(1..=2).contains(&code.len()) {
                     return invalid("coarse cell codes must contain one or two bytes");
                 }
@@ -809,6 +851,7 @@ pub(crate) struct GlobalPqCellSpool {
     max_exact_chunk_bytes: usize,
     dimensions: usize,
     vector_element_type: VectorElementType,
+    exact_row_buffer: Vec<u8>,
     rows: usize,
 }
 
@@ -872,6 +915,7 @@ impl GlobalPqCellSpool {
     ) -> Result<Self> {
         let quantizer = quantizer.into();
         let coarse_quantizer = coarse_quantizer.into();
+        let exact_row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
         let row_bytes = quantizer.code_bytes_per_vector() + usize::from(location.width);
         if max_chunk_bytes < row_bytes {
             return invalid("chunk byte cap cannot hold one row");
@@ -904,6 +948,7 @@ impl GlobalPqCellSpool {
             max_exact_chunk_bytes: DEFAULT_GLOBAL_EXACT_CHUNK_BYTES,
             dimensions,
             vector_element_type,
+            exact_row_buffer: Vec::with_capacity(exact_row_bytes),
             rows: 0,
         })
     }
@@ -921,11 +966,25 @@ impl GlobalPqCellSpool {
         self.push_encoded(cell, &code, row, exact_vector, id, generation)
     }
 
+    #[cfg(test)]
     pub(crate) fn encode_vector(&self, vector: &[f32]) -> Result<(u16, Vec<u8>)> {
         Ok((
             self.coarse_quantizer.encode_cell(vector)?,
             self.quantizer.encode(vector)?,
         ))
+    }
+
+    pub(crate) fn encode_vector_with_scratch(
+        &self,
+        vector: &[f32],
+        rotated: &mut Vec<f32>,
+        code: &mut Vec<u8>,
+    ) -> Result<(u16, Vec<u8>)> {
+        let cell = self
+            .coarse_quantizer
+            .encode_cell_with_scratch(vector, rotated, code)?;
+        self.quantizer.encode_with_scratch(vector, rotated, code)?;
+        Ok((cell, code.to_vec()))
     }
 
     pub(crate) fn push_encoded(
@@ -969,8 +1028,10 @@ impl GlobalPqCellSpool {
                 .map_err(|source| io_error(&self.primary_paths[primary], source))?,
             _ => return invalid("location width is unsupported"),
         }
+        self.vector_element_type
+            .encode_canonical_fixed_width_into(exact_vector, &mut self.exact_row_buffer)?;
         writer
-            .write_all(&self.vector_element_type.encode_fixed_width(exact_vector)?)
+            .write_all(&self.exact_row_buffer)
             .map_err(|source| io_error(&self.primary_paths[primary], source))?;
         writer
             .write_all(&generation.to_le_bytes())

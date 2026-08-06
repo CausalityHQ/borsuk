@@ -252,6 +252,16 @@ impl StructuredRotation {
     pub(crate) fn rotate(&self, vector: &[f32]) -> Vec<f32> {
         debug_assert_eq!(vector.len(), self.dimensions);
         let mut work = vec![0.0_f32; self.padded];
+        self.rotate_into(vector, &mut work);
+        work
+    }
+
+    /// Rotate into caller-owned scratch storage. The length and contents are
+    /// fully overwritten, allowing batch builders to avoid one allocation per
+    /// vector while retaining the exact `rotate` representation.
+    pub(crate) fn rotate_into(&self, vector: &[f32], work: &mut Vec<f32>) {
+        debug_assert_eq!(vector.len(), self.dimensions);
+        work.resize(self.padded, 0.0);
         let chunks = vector.len() / 8;
         for chunk in 0..chunks {
             let base = chunk * 8;
@@ -270,8 +280,7 @@ impl StructuredRotation {
         }
         // Signs past `dimensions` multiply zero padding, so they are irrelevant
         // there; the loop above stops at `vector.len()` and leaves the tail zero.
-        fwht_in_place(&mut work);
-        work
+        fwht_in_place(work);
     }
 }
 

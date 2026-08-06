@@ -12822,7 +12822,12 @@ impl BorsukIndex {
                 let encoded = crate::parallel::install(|| {
                     active
                         .par_iter()
-                        .map(|(_, vector)| spool.encode_vector(vector))
+                        .map_init(
+                            || (Vec::<f32>::new(), Vec::<u8>::new()),
+                            |(rotated, code), (_, vector)| {
+                                spool.encode_vector_with_scratch(vector, rotated, code)
+                            },
+                        )
                         .collect::<Result<Vec<_>>>()
                 })?;
                 for ((row_index, _vector), (cell, code)) in active.into_iter().zip(encoded) {
@@ -13227,7 +13232,12 @@ impl BorsukIndex {
             let encoded = crate::parallel::install(|| {
                 active
                     .par_iter()
-                    .map(|(_, vector)| spool.encode_vector(vector))
+                    .map_init(
+                        || (Vec::<f32>::new(), Vec::<u8>::new()),
+                        |(rotated, code), (_, vector)| {
+                            spool.encode_vector_with_scratch(vector, rotated, code)
+                        },
+                    )
                     .collect::<Result<Vec<_>>>()
             })?;
             for ((row_index, _), (cell, code)) in active.into_iter().zip(encoded) {
