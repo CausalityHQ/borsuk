@@ -502,6 +502,7 @@ const DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_GLOBAL_PQ_BUNDLE_CODE_BYTES: usize = 1024 * 1024;
 const DEFAULT_GLOBAL_PQ_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_SIDECAR_INDEX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
+const DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Options used when opening an existing BORSUK index.
 ///
@@ -840,6 +841,7 @@ struct CollectionReadRuntime {
     decode_admission: Option<Arc<AdmissionGate>>,
     global_pq_rerank_admission: Arc<AdmissionGate>,
     inflight_segment_reads: Arc<InFlightSegmentReads>,
+    projected_segment_cache: Arc<DecodedObjectCache<Segment>>,
     inflight_graph_reads: Arc<InFlightGraphReads>,
     inflight_lexical_reads: Arc<InFlightReads<LexicalRunRead>>,
     decoded_lexical_reads: Arc<DecodedObjectCache<LexicalRunRead>>,
@@ -1828,6 +1830,10 @@ impl CollectionReadRuntime {
                 DEFAULT_GLOBAL_PQ_RERANK_READS,
             )),
             inflight_segment_reads: Arc::new(InFlightSegmentReads::default()),
+            projected_segment_cache: decoded_cache_with_pool(
+                DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES,
+                &retained_pool,
+            ),
             inflight_graph_reads: Arc::new(InFlightGraphReads::default()),
             inflight_lexical_reads: Arc::new(InFlightReads::default()),
             decoded_lexical_reads: decoded_cache_with_pool(
@@ -17707,9 +17713,23 @@ impl BorsukIndex {
             .as_ref()
             .filter(|_| admit_memory)
             .map(|gate| gate.acquire_owned(estimated_segment_decode_bytes(summary)));
-        let (segment, segment_bytes, _shared_inflight) = self
-            .inflight_segment_reads
-            .load(&summary.checksum, || self.read_segment_lean_ranged(summary))?;
+        let (segment, segment_bytes) = if let Some(segment) = self
+            .read_runtime
+            .projected_segment_cache
+            .get(&summary.checksum)
+        {
+            (segment, 0)
+        } else {
+            let (segment, segment_bytes, _shared_inflight) = self
+                .inflight_segment_reads
+                .load(&summary.checksum, || self.read_segment_lean_ranged(summary))?;
+            self.read_runtime.projected_segment_cache.insert(
+                summary.checksum.clone(),
+                Arc::clone(&segment),
+                decoded_segment_bytes(&segment),
+            );
+            (segment, segment_bytes)
+        };
         let records_considered = segment.records.len();
         let mut candidates = candidate_record_indices(
             &segment,
@@ -26322,6 +26342,54 @@ mod tests {
         );
         assert_eq!(requests.gets, 1);
         assert_eq!(requests.heads, 0);
+    }
+
+    #[test]
+    fn projected_segment_metadata_is_reused_across_queries() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 128,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let mut state = 0xA076_1D64_78BD_642F_u64;
+        let records = (0..512)
+            .map(|row| {
+                let vector = (0..128)
+                    .map(|_| (splitmix_next(&mut state) >> 32) as f32 / u32::MAX as f32)
+                    .collect();
+                VectorRecord::new(format!("row-{row:04}"), vector)
+            })
+            .collect();
+        let segment = Segment::from_records(
+            "projected-cache".to_string(),
+            1,
+            VectorMetric::Euclidean,
+            128,
+            records,
+        )
+        .unwrap();
+        let summary = index.write_segment(segment).unwrap();
+        let mode = SearchOptions::approx(2, LeafMode::PqScan)
+            .with_max_candidates_per_segment(4)
+            .mode;
+        let query = vec![0.25_f32; 128];
+        let first = index
+            .read_projected_segment(&summary, &query, &mode, 2, false)
+            .unwrap();
+        let second = index
+            .read_projected_segment(&summary, &query, &mode, 2, false)
+            .unwrap();
+
+        assert!(first.bytes_read > second.bytes_read);
+        assert_eq!(first.records_considered, second.records_considered);
+        assert_eq!(first.candidates.indices, second.candidates.indices);
     }
 
     #[test]
