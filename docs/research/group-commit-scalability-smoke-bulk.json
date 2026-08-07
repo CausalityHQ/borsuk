@@ -7,6 +7,7 @@
   "cell_counts": [64],
   "writers": [2],
   "writer_instance_policy": "one-per-writer",
+  "writer_process_policy": "one-process-per-writer",
   "repetitions": 1,
   "operations_per_writer": 2,
   "records_per_operation": 16,

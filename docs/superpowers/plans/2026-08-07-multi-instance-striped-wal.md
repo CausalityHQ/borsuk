@@ -103,6 +103,9 @@ gates also pass locally.
 - [ ] Qualify 1, 8, and 32 independent processes against one S3 prefix. Preserve
   raw artifacts, exact per-process receipts, resource telemetry, and terminal
   markers.
+- [x] Replace the thread-only qualification driver with a coordinator that
+  launches one OS process per writer, records and validates distinct PIDs,
+  preserves per-process receipts/logs, and uses a shared start barrier.
 - [ ] Reject any design whose point visibility, refresh GETs, or recovery work
   grows with historical writers or vector count.
 
@@ -118,3 +121,10 @@ gates also pass locally.
 - [ ] Promote defaults only when acknowledged and drain-inclusive throughput,
   read p95, recall, resource bounds, crash recovery, and horizontal writer
   correctness all pass.
+
+The 2026-08-07 terminal structural smoke used two distinct writer processes,
+preserved their raw receipt files and logs, and passed the fail-closed campaign
+validator with four of four records visible and inserted-ID recall 1.0. Its
+local timings are not production evidence. The next authorized measurement is
+the still-preregistered 2K/16K by 1/8/32 AWS matrix from the exact pushed
+revision after all repository gates pass.

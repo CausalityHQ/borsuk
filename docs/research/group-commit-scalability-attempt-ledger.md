@@ -959,3 +959,41 @@ all-target/all-feature crate Clippy. This changes table format 28 to 29 and
 rejects old experimental artifacts. An abandoned expired stripe remains active
 until takeover/release; a standalone expiry sweep and true multi-process runner
 qualification remain open. No AWS measurement was launched or claimed.
+
+## True multi-process qualification runner (2026-08-07)
+
+The architecture-qualification and structural-smoke manifests now require
+`one-process-per-writer`. The benchmark coordinator starts one child OS process
+per logical writer, each child opens exactly one `GroupCommitWriter`, decodes
+only its assigned Parquet row range, waits at a shared file barrier, and writes
+PID-bearing raw receipts plus stdout/stderr and terminal markers. The parent
+aggregates only completed child receipts, measures active-tail reads, and uses a
+separate maintenance writer for the final drain. Descendant resource telemetry
+continues to cover the complete process tree. The fail-closed validator rejects
+missing, changing, or shared process identities.
+
+The first terminal smoke failed only in artifact aggregation: the recursive
+cell glob found child files named `samples.csv` and correctly rejected their
+non-cell paths. No performance claim was made. Renaming those preserved child
+receipts to `writer-samples.csv` removed the schema collision. The repaired
+terminal smoke at `/tmp/tmp.BGU1p2yxis/group-commit-scalability-smoke` passed the
+fail-closed validator with distinct PIDs 2064429 and 2064430, four of four
+records visible, and inserted-ID recall 1.0. Write p95 2.346 ms, active-tail
+read p95 1.216 ms, and post-drain read p95 0.298 ms are local structural-smoke
+observations only and are ineligible for production or competitor claims.
+
+No AWS measurement was launched. The 2K/16K by 1/8/32, five-repetition matrix
+remains preregistered and must run only from the exact clean pushed revision
+after the repository assurance gate passes.
+
+Checkpoint verification passes strict all-target/all-feature workspace Clippy,
+all seven benchmark-example tests, all 51 runner/validator tests, repository
+policy, shell syntax, and the terminal smoke. The single workspace test gate
+again reached `local_index` with 150 passes and the same seven routing/cache
+accounting failures recorded by the prior checkpoint: deep paged traversal,
+byte budget, untouched-page reuse, recall-guarantee labeling, request-scoped
+page-cache accounting, prefetch report equivalence, and empty-routing-table
+byte accounting. No assertion was weakened and no second full gate was
+launched. This independently verified runner checkpoint is safe to deliver,
+but it does not authorize AWS measurement; those core read-path failures remain
+the next production-hardening slice.

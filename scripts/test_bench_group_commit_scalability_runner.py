@@ -25,7 +25,12 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
     def test_writer_cells_use_separately_opened_library_instances(self) -> None:
         manifest = json.loads(REALISTIC_MANIFEST.read_text())
         self.assertEqual(manifest["writer_instance_policy"], "one-per-writer")
+        self.assertEqual(manifest["writer_process_policy"], "one-process-per-writer")
         self.assertIn('BORSUK_GROUP_COMMIT_WRITER_INSTANCES="$writers"', RUNNER)
+        self.assertIn('BORSUK_GROUP_COMMIT_EXECUTION="processes"', RUNNER)
+        self.assertIn('BORSUK_GROUP_COMMIT_ROLE", "writer-process"', BENCH)
+        self.assertIn('process_id', BENCH)
+        self.assertIn('writer-samples.csv', BENCH)
         self.assertIn("open_benchmark_index(&uri)?", BENCH)
         self.assertIn("writer_instance", BENCH)
 

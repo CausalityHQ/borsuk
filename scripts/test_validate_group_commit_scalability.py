@@ -9,7 +9,12 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from validate_group_commit_scalability import ValidationError, lane_receipt_evidence, validate
+from validate_group_commit_scalability import (
+    ValidationError,
+    lane_receipt_evidence,
+    validate,
+    validate_process_identity,
+)
 
 
 class ValidatorTests(unittest.TestCase):
@@ -25,6 +30,7 @@ class ValidatorTests(unittest.TestCase):
             "cell_counts": [64],
             "writers": [1],
             "writer_instance_policy": "one-per-writer",
+            "writer_process_policy": "one-process-per-writer",
             "repetitions": 1,
             "operations_per_writer": 2,
             "dimensions": 8,
@@ -104,12 +110,12 @@ class ValidatorTests(unittest.TestCase):
         }
         self._write_csv(cell / "summary.csv", summary_fields, [summary])
         sample_fields = [
-            "writer", "writer_instance", "operation", "record_id", "latency_ms", "commit_lane", "commit_sequence",
+            "writer", "writer_instance", "process_id", "operation", "record_id", "latency_ms", "commit_lane", "commit_sequence",
             "committed_records", "acknowledgement_bytes", "group_requests", "group_gets",
             "group_puts", "group_heads",
         ]
         samples = [
-            {"writer": "0", "writer_instance": "0", "operation": str(operation), "record_id": f"id-{operation}",
+            {"writer": "0", "writer_instance": "0", "process_id": "1234", "operation": str(operation), "record_id": f"id-{operation}",
              "latency_ms": str(5 + operation), "commit_lane": "0", "commit_sequence": "1",
              "committed_records": "2", "acknowledgement_bytes": "2048",
              "group_requests": "5", "group_gets": "1",
@@ -214,6 +220,26 @@ class ValidatorTests(unittest.TestCase):
         self._write_csv(cell, list(records[0]), records)
         with self.assertRaisesRegex(ValidationError, "writer instance drift"):
             validate(self.root, self.manifest_path)
+
+    def test_one_process_per_writer_policy_requires_process_identity(self) -> None:
+        sample_path = self.root / "cells/c64/r01/l1/w1/samples.csv"
+        with sample_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            samples = list(reader)
+        for sample in samples:
+            sample.pop("process_id")
+        fields = [field for field in samples[0] if field != "process_id"]
+        self._write_csv(sample_path, fields, samples)
+        with self.assertRaisesRegex(ValidationError, "process identity"):
+            validate(self.root, self.manifest_path)
+
+    def test_one_process_per_writer_policy_rejects_shared_process_identity(self) -> None:
+        samples = [
+            {"writer": "0", "process_id": "1234"},
+            {"writer": "1", "process_id": "1234"},
+        ]
+        with self.assertRaisesRegex(ValidationError, "process identity"):
+            validate_process_identity(samples, writers=2, cell=Path("cell"))
 
     def test_bulk_samples_preserve_every_lane_receipt(self) -> None:
         evidence = lane_receipt_evidence(

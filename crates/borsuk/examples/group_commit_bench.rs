@@ -7,6 +7,7 @@ use std::{
     fs::{self, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{Arc, Barrier, Mutex},
     thread,
     time::{Duration, Instant},
@@ -24,6 +25,7 @@ type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 #[derive(Clone)]
 struct Sample {
+    process_id: u32,
     writer: usize,
     writer_instance: usize,
     operation: usize,
@@ -183,8 +185,19 @@ fn read_parquet_vectors(
     rows: usize,
     dimensions: usize,
 ) -> BenchResult<Vec<Vec<f32>>> {
+    read_parquet_vector_range(dataset, 0, rows, dimensions)
+}
+
+fn read_parquet_vector_range(
+    dataset: &Path,
+    offset: usize,
+    rows: usize,
+    dimensions: usize,
+) -> BenchResult<Vec<Vec<f32>>> {
     let path = dataset.join("train.parquet");
     let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(&path)?)?
+        .with_offset(offset)
+        .with_limit(rows)
         .with_batch_size(rows.clamp(1, 1024))
         .build()?;
     let mut vectors = Vec::with_capacity(rows);
@@ -211,6 +224,104 @@ fn read_parquet_vectors(
         .into());
     }
     Ok(vectors)
+}
+
+fn write_samples(path: &Path, samples: &[Sample]) -> BenchResult<()> {
+    let mut raw = BufWriter::new(File::create(path)?);
+    writeln!(
+        raw,
+        "writer,writer_instance,process_id,operation,batch_records,first_record_id,record_ids,latency_ms,commit_lane,commit_sequence,committed_records,acknowledgement_bytes,group_requests,group_gets,group_puts,group_heads,lane_receipts"
+    )?;
+    for sample in samples {
+        writeln!(
+            raw,
+            "{},{},{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{}",
+            sample.writer,
+            sample.writer_instance,
+            sample.process_id,
+            sample.operation,
+            sample.batch_records,
+            sample.record_ids[0],
+            sample.record_ids.join("|"),
+            sample.latency_ms,
+            sample.commit_lane,
+            sample.commit_sequence,
+            sample.committed_records,
+            sample.acknowledgement_bytes,
+            sample.group_requests.total(),
+            sample.group_requests.gets,
+            sample.group_requests.puts,
+            sample.group_requests.heads,
+            lane_receipts_field(&sample.lane_receipts),
+        )?;
+    }
+    raw.flush()?;
+    Ok(())
+}
+
+fn parse_lane_receipts(encoded: &str) -> BenchResult<Vec<GroupCommitLaneReceipt>> {
+    encoded
+        .split(';')
+        .map(|entry| {
+            let fields = entry
+                .split(':')
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()?;
+            if fields.len() != 11 {
+                return Err("invalid child lane receipt evidence".into());
+            }
+            Ok(GroupCommitLaneReceipt {
+                commit_lane: usize::try_from(fields[0])?,
+                commit_sequence: fields[1],
+                lease_epoch: fields[2],
+                records: usize::try_from(fields[3])?,
+                committed_records: usize::try_from(fields[3])?,
+                acknowledgement_bytes: fields[4],
+                requests: RequestCounts {
+                    gets: fields[6],
+                    puts: fields[7],
+                    deletes: fields[8],
+                    heads: fields[9],
+                    lists: fields[10],
+                },
+            })
+        })
+        .collect()
+}
+
+fn read_samples(path: &Path) -> BenchResult<Vec<Sample>> {
+    let contents = fs::read_to_string(path)?;
+    contents
+        .lines()
+        .skip(1)
+        .map(|line| -> BenchResult<Sample> {
+            let fields = line.split(',').collect::<Vec<_>>();
+            if fields.len() != 17 {
+                return Err(format!("invalid child sample row in {}", path.display()).into());
+            }
+            let lane_receipts = parse_lane_receipts(fields[16])?;
+            Ok(Sample {
+                writer: fields[0].parse()?,
+                writer_instance: fields[1].parse()?,
+                process_id: fields[2].parse()?,
+                operation: fields[3].parse()?,
+                batch_records: fields[4].parse()?,
+                record_ids: fields[6].split('|').map(str::to_owned).collect(),
+                latency_ms: fields[7].parse()?,
+                commit_lane: fields[8].parse()?,
+                commit_sequence: fields[9].parse()?,
+                committed_records: fields[10].parse()?,
+                acknowledgement_bytes: fields[11].parse()?,
+                group_requests: RequestCounts {
+                    gets: fields[13].parse()?,
+                    puts: fields[14].parse()?,
+                    heads: fields[15].parse()?,
+                    ..RequestCounts::default()
+                },
+                lane_receipts,
+            })
+        })
+        .collect()
 }
 
 fn cohort_seed(diagnostic_protocol: bool, writers: usize, repetition: usize) -> u64 {
@@ -442,6 +553,186 @@ fn production_performance_gate_failures(
     failures
 }
 
+#[allow(clippy::too_many_arguments)]
+fn run_process_worker(
+    uri: &str,
+    protocol: &str,
+    operations: usize,
+    dimensions: usize,
+    max_delay_ms: u64,
+    max_records: usize,
+    worker_lanes: usize,
+    pipeline_depth: usize,
+    records_per_operation: usize,
+    vector_seed: u64,
+) -> BenchResult<()> {
+    let writer_ordinal: usize = number("BORSUK_GROUP_COMMIT_WRITER_ORDINAL")?;
+    let process_dir = PathBuf::from(required("BORSUK_GROUP_COMMIT_PROCESS_OUTPUT")?);
+    let start_marker = PathBuf::from(required("BORSUK_GROUP_COMMIT_START_MARKER")?);
+    fs::create_dir_all(&process_dir)?;
+    let vector_count = operations * records_per_operation;
+    let input_vectors = if matches!(protocol, "scalability" | "local") {
+        let dataset = PathBuf::from(required("BORSUK_GROUP_COMMIT_DATASET")?);
+        read_parquet_vector_range(
+            &dataset,
+            writer_ordinal * vector_count,
+            vector_count,
+            dimensions,
+        )?
+    } else {
+        let first = writer_ordinal * vector_count;
+        (0..vector_count)
+            .map(|local| vector(vector_seed, (first + local) as u64, dimensions))
+            .collect()
+    };
+    let writer = GroupCommitWriter::new(
+        open_benchmark_index(uri)?,
+        GroupCommitConfig {
+            max_delay: Duration::from_millis(max_delay_ms),
+            max_records,
+            worker_lanes,
+        },
+    )?;
+    fs::write(process_dir.join("READY"), b"ready\n")?;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !start_marker.is_file() {
+        if Instant::now() >= deadline {
+            return Err("timed out waiting for the multi-process start barrier".into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let mut samples = Vec::with_capacity(operations);
+    let mut pending = VecDeque::<PendingAppend>::with_capacity(pipeline_depth);
+    for operation in 0..operations {
+        let global_first = (writer_ordinal * operations + operation) * records_per_operation;
+        let local_first = operation * records_per_operation;
+        let record_ids = (0..records_per_operation)
+            .map(|batch| {
+                if protocol == "diagnostic" {
+                    format!("group-w{writer_ordinal:02}-o{operation:03}-b{batch:03}")
+                } else {
+                    production_record_id(global_first + batch)
+                }
+            })
+            .collect::<Vec<_>>();
+        let records = record_ids
+            .iter()
+            .enumerate()
+            .map(|(batch, id)| {
+                VectorRecord::new(id.clone(), input_vectors[local_first + batch].clone())
+            })
+            .collect();
+        let started = Instant::now();
+        let ticket = writer.append_async(records)?;
+        pending.push_back(PendingAppend {
+            operation,
+            record_ids,
+            started,
+            ticket,
+        });
+        if pending.len() < pipeline_depth {
+            continue;
+        }
+        let completed = pending.pop_front().expect("non-empty pipeline");
+        samples.push(finish_sample(writer_ordinal, completed)?);
+    }
+    while let Some(completed) = pending.pop_front() {
+        samples.push(finish_sample(writer_ordinal, completed)?);
+    }
+    samples.sort_by_key(|sample| sample.operation);
+    write_samples(&process_dir.join("writer-samples.csv.tmp"), &samples)?;
+    fs::rename(
+        process_dir.join("writer-samples.csv.tmp"),
+        process_dir.join("writer-samples.csv"),
+    )?;
+    fs::write(process_dir.join("COMPLETE"), b"complete\n")?;
+    Ok(())
+}
+
+fn finish_sample(writer_ordinal: usize, completed: PendingAppend) -> BenchResult<Sample> {
+    let PendingAppend {
+        operation,
+        record_ids,
+        started,
+        ticket,
+    } = completed;
+    let receipt = ticket.wait()?;
+    Ok(Sample {
+        process_id: std::process::id(),
+        writer: writer_ordinal,
+        writer_instance: writer_ordinal,
+        operation,
+        batch_records: record_ids.len(),
+        record_ids,
+        latency_ms: started.elapsed().as_secs_f64() * 1_000.0,
+        commit_lane: receipt.commit_lane,
+        commit_sequence: receipt.commit_sequence,
+        committed_records: receipt.committed_records,
+        acknowledgement_bytes: receipt.acknowledgement_bytes,
+        group_requests: receipt.requests,
+        lane_receipts: receipt.lane_receipts,
+    })
+}
+
+fn run_process_coordinator(output: &Path, writers: usize) -> BenchResult<(Vec<Sample>, f64)> {
+    let process_root = output.join("processes");
+    fs::create_dir_all(&process_root)?;
+    let start_marker = process_root.join("START");
+    let executable = env::current_exe()?;
+    let mut children = Vec::with_capacity(writers);
+    for writer in 0..writers {
+        let process_dir = process_root.join(format!("w{writer:02}"));
+        fs::create_dir_all(&process_dir)?;
+        let stdout = File::create(process_dir.join("stdout.log"))?;
+        let stderr = File::create(process_dir.join("stderr.log"))?;
+        let child = Command::new(&executable)
+            .env("BORSUK_GROUP_COMMIT_ROLE", "writer-process")
+            .env("BORSUK_GROUP_COMMIT_WRITER_ORDINAL", writer.to_string())
+            .env("BORSUK_GROUP_COMMIT_PROCESS_OUTPUT", &process_dir)
+            .env("BORSUK_GROUP_COMMIT_START_MARKER", &start_marker)
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()?;
+        children.push((writer, process_dir, child));
+    }
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let mut ready = 0;
+        for (writer, process_dir, child) in &mut children {
+            if process_dir.join("READY").is_file() {
+                ready += 1;
+            } else if let Some(status) = child.try_wait()? {
+                return Err(
+                    format!("writer process {writer} exited before ready: {status}").into(),
+                );
+            }
+        }
+        if ready == writers {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("only {ready}/{writers} writer processes reached ready").into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let started = Instant::now();
+    fs::write(&start_marker, b"start\n")?;
+    for (writer, process_dir, mut child) in children {
+        let status = child.wait()?;
+        if !status.success() || !process_dir.join("COMPLETE").is_file() {
+            return Err(format!("writer process {writer} failed: {status}").into());
+        }
+    }
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    let mut samples = Vec::new();
+    for writer in 0..writers {
+        samples.extend(read_samples(
+            &process_root.join(format!("w{writer:02}/writer-samples.csv")),
+        )?);
+    }
+    Ok((samples, elapsed_ms))
+}
+
 fn main() -> BenchResult<()> {
     let protocol =
         env::var("BORSUK_GROUP_COMMIT_PROTOCOL").unwrap_or_else(|_| "diagnostic".to_string());
@@ -590,13 +881,27 @@ fn main() -> BenchResult<()> {
         }
         _ => return Err(format!("unknown group-commit protocol {protocol:?}").into()),
     };
+    let diagnostic_protocol = protocol == "diagnostic";
+    let vector_seed = cohort_seed(diagnostic_protocol, writers, repetition);
+    if env::var("BORSUK_GROUP_COMMIT_ROLE").as_deref() == Ok("writer-process") {
+        return run_process_worker(
+            &uri,
+            &protocol,
+            operations,
+            dimensions,
+            max_delay_ms,
+            max_records,
+            worker_lanes,
+            pipeline_depth,
+            records_per_operation,
+            vector_seed,
+        );
+    }
     if output.exists() {
         return Err(format!("refusing to replace output {}", output.display()).into());
     }
     fs::create_dir_all(&output)?;
 
-    let diagnostic_protocol = protocol == "diagnostic";
-    let vector_seed = cohort_seed(diagnostic_protocol, writers, repetition);
     let dataset_sha = if realistic_protocol {
         required("BORSUK_GROUP_COMMIT_DATASET_SHA256")?
     } else {
@@ -623,118 +928,100 @@ fn main() -> BenchResult<()> {
     // Production invariant: dataset vectors must be decoded before durable timing.
     let input_vectors = Arc::new(input_vectors);
 
-    let writer_instances = (0..writer_instance_count)
-        .map(|_| {
-            GroupCommitWriter::new(
-                open_benchmark_index(&uri)?,
-                GroupCommitConfig {
-                    max_delay: Duration::from_millis(max_delay_ms),
-                    max_records,
-                    worker_lanes,
-                },
-            )
-        })
-        .collect::<borsuk::Result<Vec<_>>>()?;
-    let barrier = Arc::new(Barrier::new(writers));
-    let samples = Arc::new(Mutex::new(Vec::with_capacity(writers * operations)));
-    let started = Instant::now();
-    let handles = (0..writers)
-        .map(|writer_ordinal| {
-            let writer_instance = writer_ordinal % writer_instances.len();
-            let writer = writer_instances[writer_instance].clone();
-            let barrier = Arc::clone(&barrier);
-            let samples = Arc::clone(&samples);
-            let input_vectors = Arc::clone(&input_vectors);
-            thread::spawn(move || -> BenchResult<()> {
-                barrier.wait();
-                let mut local = Vec::with_capacity(operations);
-                let mut pending = VecDeque::<PendingAppend>::with_capacity(pipeline_depth);
-                for operation in 0..operations {
-                    let first_ordinal =
-                        (writer_ordinal * operations + operation) * records_per_operation;
-                    let record_ids = (0..records_per_operation)
-                        .map(|batch_ordinal| {
-                            let ordinal = first_ordinal + batch_ordinal;
-                            if diagnostic_protocol {
-                                format!(
-                                    "group-w{writer_ordinal:02}-o{operation:03}-b{batch_ordinal:03}"
-                                )
-                            } else {
-                                production_record_id(ordinal)
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    let records = record_ids
-                        .iter()
-                        .enumerate()
-                        .map(|(batch_ordinal, record_id)| {
-                            VectorRecord::new(
-                                record_id.clone(),
-                                input_vectors[first_ordinal + batch_ordinal].clone(),
-                            )
-                        })
-                        .collect();
-                    let append_started = Instant::now();
-                    let ticket = writer.append_async(records)?;
-                    pending.push_back(PendingAppend {
-                        operation,
-                        record_ids,
-                        started: append_started,
-                        ticket,
-                    });
-                    if pending.len() < pipeline_depth {
-                        continue;
-                    }
-                    let completed = pending.pop_front().expect("non-empty pipeline");
-                    let receipt = completed.ticket.wait()?;
-                    local.push(Sample {
-                        writer: writer_ordinal,
-                        writer_instance,
-                        operation: completed.operation,
-                        batch_records: completed.record_ids.len(),
-                        record_ids: completed.record_ids,
-                        latency_ms: completed.started.elapsed().as_secs_f64() * 1_000.0,
-                        commit_lane: receipt.commit_lane,
-                        commit_sequence: receipt.commit_sequence,
-                        committed_records: receipt.committed_records,
-                        acknowledgement_bytes: receipt.acknowledgement_bytes,
-                        group_requests: receipt.requests,
-                        lane_receipts: receipt.lane_receipts,
-                    });
-                }
-                while let Some(completed) = pending.pop_front() {
-                    let receipt = completed.ticket.wait()?;
-                    local.push(Sample {
-                        writer: writer_ordinal,
-                        writer_instance,
-                        operation: completed.operation,
-                        batch_records: completed.record_ids.len(),
-                        record_ids: completed.record_ids,
-                        latency_ms: completed.started.elapsed().as_secs_f64() * 1_000.0,
-                        commit_lane: receipt.commit_lane,
-                        commit_sequence: receipt.commit_sequence,
-                        committed_records: receipt.committed_records,
-                        acknowledgement_bytes: receipt.acknowledgement_bytes,
-                        group_requests: receipt.requests,
-                        lane_receipts: receipt.lane_receipts,
-                    });
-                }
-                samples.lock().unwrap().extend(local);
-                Ok(())
+    let process_execution = env::var("BORSUK_GROUP_COMMIT_EXECUTION").as_deref() == Ok("processes");
+    let (writer_instances, mut samples, elapsed_ms) = if process_execution {
+        let (samples, elapsed_ms) = run_process_coordinator(&output, writers)?;
+        (Vec::new(), samples, elapsed_ms)
+    } else {
+        let writer_instances = (0..writer_instance_count)
+            .map(|_| {
+                GroupCommitWriter::new(
+                    open_benchmark_index(&uri)?,
+                    GroupCommitConfig {
+                        max_delay: Duration::from_millis(max_delay_ms),
+                        max_records,
+                        worker_lanes,
+                    },
+                )
             })
-        })
-        .collect::<Vec<_>>();
-    for handle in handles {
-        handle
-            .join()
-            .map_err(|_| "group commit writer panicked")??;
-    }
-    let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            .collect::<borsuk::Result<Vec<_>>>()?;
+        let barrier = Arc::new(Barrier::new(writers));
+        let samples = Arc::new(Mutex::new(Vec::with_capacity(writers * operations)));
+        let started = Instant::now();
+        let handles = (0..writers)
+            .map(|writer_ordinal| {
+                let writer_instance = writer_ordinal % writer_instances.len();
+                let writer = writer_instances[writer_instance].clone();
+                let barrier = Arc::clone(&barrier);
+                let samples = Arc::clone(&samples);
+                let input_vectors = Arc::clone(&input_vectors);
+                thread::spawn(move || -> BenchResult<()> {
+                    barrier.wait();
+                    let mut local = Vec::with_capacity(operations);
+                    let mut pending = VecDeque::<PendingAppend>::with_capacity(pipeline_depth);
+                    for operation in 0..operations {
+                        let first_ordinal =
+                            (writer_ordinal * operations + operation) * records_per_operation;
+                        let record_ids = (0..records_per_operation)
+                            .map(|batch| {
+                                let ordinal = first_ordinal + batch;
+                                if diagnostic_protocol {
+                                    format!(
+                                        "group-w{writer_ordinal:02}-o{operation:03}-b{batch:03}"
+                                    )
+                                } else {
+                                    production_record_id(ordinal)
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        let records = record_ids
+                            .iter()
+                            .enumerate()
+                            .map(|(batch, id)| {
+                                VectorRecord::new(
+                                    id.clone(),
+                                    input_vectors[first_ordinal + batch].clone(),
+                                )
+                            })
+                            .collect();
+                        let started = Instant::now();
+                        let ticket = writer.append_async(records)?;
+                        pending.push_back(PendingAppend {
+                            operation,
+                            record_ids,
+                            started,
+                            ticket,
+                        });
+                        if pending.len() >= pipeline_depth {
+                            let completed = pending.pop_front().expect("non-empty pipeline");
+                            let mut sample = finish_sample(writer_ordinal, completed)?;
+                            sample.writer_instance = writer_instance;
+                            local.push(sample);
+                        }
+                    }
+                    while let Some(completed) = pending.pop_front() {
+                        let mut sample = finish_sample(writer_ordinal, completed)?;
+                        sample.writer_instance = writer_instance;
+                        local.push(sample);
+                    }
+                    samples.lock().unwrap().extend(local);
+                    Ok(())
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| "group commit writer panicked")??;
+        }
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        let samples = Arc::try_unwrap(samples)
+            .map_err(|_| "sample owners remain")?
+            .into_inner()
+            .unwrap();
+        (writer_instances, samples, elapsed_ms)
+    };
     fs::write(output.join("INGEST_COMPLETE"), b"complete\n")?;
-    let mut samples = Arc::try_unwrap(samples)
-        .map_err(|_| "sample owners remain")?
-        .into_inner()
-        .unwrap();
     samples.sort_by_key(|sample| (sample.writer, sample.operation));
     let max_read_segments = if diagnostic_protocol { 0 } else { 4 };
     let recall_queries = if diagnostic_protocol {
@@ -771,8 +1058,20 @@ fn main() -> BenchResult<()> {
         b"complete\n",
     )?;
     let drain_started = Instant::now();
-    for writer in &writer_instances {
-        writer.drain()?;
+    if writer_instances.is_empty() {
+        let maintenance = GroupCommitWriter::new(
+            open_benchmark_index(&uri)?,
+            GroupCommitConfig {
+                max_delay: Duration::from_millis(max_delay_ms),
+                max_records,
+                worker_lanes,
+            },
+        )?;
+        maintenance.drain()?;
+    } else {
+        for writer in &writer_instances {
+            writer.drain()?;
+        }
     }
     let drain_ms = drain_started.elapsed().as_secs_f64() * 1_000.0;
     let total_record_count = writers * operations * records_per_operation;
@@ -901,36 +1200,9 @@ fn main() -> BenchResult<()> {
         reads.bytes,
         reads.segments_searched,
     )?;
-    let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
-    writeln!(
-        raw,
-        "writer,writer_instance,operation,batch_records,first_record_id,record_ids,latency_ms,commit_lane,commit_sequence,committed_records,acknowledgement_bytes,group_requests,group_gets,group_puts,group_heads,lane_receipts"
-    )?;
-    for sample in samples {
-        writeln!(
-            raw,
-            "{},{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{}",
-            sample.writer,
-            sample.writer_instance,
-            sample.operation,
-            sample.batch_records,
-            sample.record_ids[0],
-            sample.record_ids.join("|"),
-            sample.latency_ms,
-            sample.commit_lane,
-            sample.commit_sequence,
-            sample.committed_records,
-            sample.acknowledgement_bytes,
-            sample.group_requests.total(),
-            sample.group_requests.gets,
-            sample.group_requests.puts,
-            sample.group_requests.heads,
-            lane_receipts_field(&sample.lane_receipts),
-        )?;
-    }
+    write_samples(&output.join("samples.csv"), &samples)?;
     write_read_samples(&output.join("reads.csv"), &reads.samples)?;
     summary.flush()?;
-    raw.flush()?;
     if let Some(thresholds) = performance_gate {
         let failures = production_performance_gate_failures(
             PerformanceObservation {
