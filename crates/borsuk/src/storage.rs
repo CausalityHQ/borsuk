@@ -94,7 +94,7 @@ pub(crate) fn collection_wal_now_ms() -> Result<u64> {
 // Sidecar candidate ranges are already bounded Arrow record batches.  Merging
 // across larger gaps turns sparse reranks into near-full-object reads on a
 // cold handle, so only coalesce adjacent batches with a small IPC boundary.
-const SIDECAR_RANGE_COALESCE_BYTES: u64 = 8 * 1024;
+const SIDECAR_RANGE_COALESCE_BYTES: u64 = 64 * 1024;
 const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 4 * 1024 * 1024;
 const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
