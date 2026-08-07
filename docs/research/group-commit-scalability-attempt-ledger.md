@@ -809,3 +809,40 @@ and
 routing still covers all 256 cells with a maximum of 1,871 rows. Do not widen
 the bundle cap again. The next read factor must change request staging or
 physical shortlist locality, not container size or cache state.
+
+## Multi-instance writer striping implemented locally (2026-08-07)
+
+The prior AWS writer factors used threads sharing one `GroupCommitWriter` and
+did not qualify independent application instances. A RED integration test
+proved the production blocker: a second live writer failed at
+`lane-log/lanes/0000/HEAD` because every writer leased every deterministic
+record-ownership lane for one hour.
+
+Format v30 now treats the fixed physical lanes as writer stripes. Each local
+commit worker claims one free stripe, independent writers claim different
+stripes, and record hashes select only among stripes owned by the current
+writer. Readers retain the same fixed stripe fanout. An adversarial test then
+exposed equal per-stripe generations returning the wrong value in one of the
+two cross-writer acknowledgement orders. The final local design reserves one
+globally ordered generation range per durable group and then creates one
+immutable extent; the range CAS is the cross-process linearization point and
+is amortized over every record in the group. Ordinary upsert and delete use the
+same allocator. Table format v27 rejects older incomparable generation layouts.
+
+Local evidence only: both stripe orders preserve sequential cross-instance
+last-write-wins; two live writers append, one drains, and the other continues
+without losing either distinct IDs or the latest shared ID; stripe exhaustion
+fails explicitly; 36 group-commit, 38 cell-WAL, 12 fault-injection, six crash,
+four consistency, 114 format, and 517 runnable library tests pass (six library
+tests remain explicitly ignored). Strict workspace Clippy and scalar plus
+16-record fail-closed structural smokes pass. The acknowledgement now honestly
+contains one counter GET, one conditional counter PUT, and one extent PUT per
+group; it is no longer a one-PUT claim.
+
+This is not yet horizontal production qualification. The current persisted
+pool supports at most eight simultaneous process workers, the distributed AWS
+harness does not yet launch independent processes, modality materialization is
+still fail-closed, and the global counter's contention/throughput curve has not
+been measured. Do not reuse the pre-v27 immutable bases or any earlier AWS
+result. The next benchmark must rebuild a pristine base and distinguish
+processes from threads in raw receipts and resource telemetry.

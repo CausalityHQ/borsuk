@@ -460,7 +460,7 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
 }
 
 #[test]
-fn lane_log_ack_is_one_put_and_visible_after_reopen() {
+fn lane_log_ack_is_one_generation_cas_plus_one_extent_and_visible_after_reopen() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///group-lane-log-cutover";
     let writer = GroupCommitWriter::new(
@@ -479,8 +479,8 @@ fn lane_log_ack_is_one_put_and_visible_after_reopen() {
 
     assert_eq!(receipt.lane_receipts.len(), 1);
     assert!(receipt.lane_receipts[0].lease_epoch > 0);
-    assert_eq!(receipt.requests.puts, 1);
-    assert_eq!(receipt.requests.gets, 0);
+    assert_eq!(receipt.requests.puts, 2);
+    assert_eq!(receipt.requests.gets, 1);
     assert_eq!(receipt.requests.heads, 0);
     assert_eq!(receipt.requests.lists, 0);
     drop(writer);
@@ -591,6 +591,165 @@ fn independent_commit_lanes_publish_every_concurrent_append() {
 }
 
 #[test]
+fn independent_group_writers_can_share_one_collection() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///independent-group-writers";
+    let first_index =
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap();
+    let writer_config = GroupCommitConfig {
+        max_delay: std::time::Duration::ZERO,
+        max_records: 1,
+        worker_lanes: 1,
+    };
+    let first = GroupCommitWriter::new(first_index, writer_config).unwrap();
+    let second = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
+        writer_config,
+    )
+    .unwrap();
+    let ids = ids_in_ownership_lane(0, 2);
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = [
+        (first, ids[0].clone(), vec![1.0, 0.0]),
+        (second, ids[1].clone(), vec![2.0, 0.0]),
+    ]
+    .into_iter()
+    .map(|(writer, id, vector)| {
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            writer.append(vec![VectorRecord::new(id, vector)]).unwrap();
+        })
+    })
+    .collect::<Vec<_>>();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(reopened.get_vector(&ids[0]).unwrap(), Some(vec![1.0, 0.0]));
+    assert_eq!(reopened.get_vector(&ids[1]).unwrap(), Some(vec![2.0, 0.0]));
+}
+
+#[test]
+fn one_writer_can_drain_while_another_writer_remains_live() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///independent-group-writer-drain";
+    let writer_config = GroupCommitConfig {
+        max_delay: std::time::Duration::ZERO,
+        max_records: 1,
+        worker_lanes: 1,
+    };
+    let first = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        writer_config,
+    )
+    .unwrap();
+    let second = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
+        writer_config,
+    )
+    .unwrap();
+
+    first
+        .append(vec![VectorRecord::new("shared", vec![1.0, 0.0])])
+        .unwrap();
+    second
+        .append(vec![VectorRecord::new("second-only", vec![2.0, 0.0])])
+        .unwrap();
+    first.drain().unwrap();
+    second
+        .append(vec![VectorRecord::new("shared", vec![3.0, 0.0])])
+        .unwrap();
+
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(reopened.get_vector("shared").unwrap(), Some(vec![3.0, 0.0]));
+    assert_eq!(
+        reopened.get_vector("second-only").unwrap(),
+        Some(vec![2.0, 0.0])
+    );
+}
+
+#[test]
+fn independent_writer_acknowledgement_order_defines_last_write_wins() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///independent-group-writer-order";
+    let writer_config = GroupCommitConfig {
+        max_delay: std::time::Duration::ZERO,
+        max_records: 1,
+        worker_lanes: 1,
+    };
+    let first = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        writer_config,
+    )
+    .unwrap();
+    let second = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
+        writer_config,
+    )
+    .unwrap();
+
+    second
+        .append(vec![VectorRecord::new("shared", vec![2.0, 0.0])])
+        .unwrap();
+    first
+        .append(vec![VectorRecord::new("shared", vec![3.0, 0.0])])
+        .unwrap();
+    first
+        .append(vec![VectorRecord::new("reverse", vec![4.0, 0.0])])
+        .unwrap();
+    second
+        .append(vec![VectorRecord::new("reverse", vec![5.0, 0.0])])
+        .unwrap();
+
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(
+        reopened.get_vector("shared").unwrap(),
+        Some(vec![3.0, 0.0]),
+        "the later acknowledged cross-process write must win regardless of stripe ordinal"
+    );
+    assert_eq!(
+        reopened.get_vector("reverse").unwrap(),
+        Some(vec![5.0, 0.0]),
+        "the later acknowledged cross-process write must also win in the opposite stripe order"
+    );
+}
+
+#[test]
+fn group_writer_startup_fails_when_every_persisted_stripe_is_leased() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///group-writer-stripe-exhaustion";
+    let first = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 8,
+        },
+    )
+    .unwrap();
+    let result = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(inner, uri).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    );
+    let error = match result {
+        Ok(_) => panic!("a ninth live worker stripe must not steal an active lease"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("persisted stripes are available")
+    );
+    drop(first);
+}
+
+#[test]
 fn producer_clones_route_the_same_id_to_one_ownership_lane() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
@@ -686,7 +845,7 @@ fn one_append_fans_records_out_to_their_ownership_lanes() {
 }
 
 #[test]
-fn one_worker_uploads_grouped_ownership_lane_extents_concurrently() {
+fn one_worker_coalesces_cross_ownership_records_into_one_stripe_extent() {
     const LANES: usize = 4;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (instrumented, concurrency) = common::FaultInjectingObjectStore::new(inner)
@@ -713,11 +872,12 @@ fn one_worker_uploads_grouped_ownership_lane_extents_concurrently() {
 
     let receipt = writer.append(records).unwrap();
 
-    assert_eq!(receipt.lane_receipts.len(), LANES);
-    assert!(
-        concurrency.peak() > 1,
-        "one dispatch group must overlap independent lane extent PUTs; peak={}",
-        concurrency.peak()
+    assert_eq!(receipt.lane_receipts.len(), 1);
+    assert_eq!(receipt.requests.puts, 2);
+    assert_eq!(
+        concurrency.peak(),
+        1,
+        "one local worker stripe must persist one grouped extent"
     );
 }
 
@@ -760,17 +920,17 @@ fn independent_commit_lanes_report_lane_local_requests() {
         .iter()
         .map(|receipt| (receipt.commit_lane, receipt.requests.total()))
         .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(by_lane.len(), 8);
+    assert_eq!(by_lane.len(), LANES);
     let minimum = *by_lane.values().min().unwrap();
     let maximum = *by_lane.values().max().unwrap();
     assert!(
         maximum - minimum == 0,
-        "every fixed ownership lane must report the same one-write acknowledgement cost: {by_lane:?}"
+        "every locally owned writer stripe must report the same one-write acknowledgement cost: {by_lane:?}"
     );
 }
 
 #[test]
-fn repeated_groups_have_zero_read_one_write_acknowledgements() {
+fn repeated_groups_use_one_generation_cas_and_one_extent() {
     const GROUPS: usize = 12;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
@@ -800,14 +960,14 @@ fn repeated_groups_have_zero_read_one_write_acknowledgements() {
         );
     }
 
-    assert!(receipts.iter().all(|receipt| receipt.requests.puts == 1));
-    assert!(receipts.iter().all(|receipt| receipt.requests.gets == 0));
+    assert!(receipts.iter().all(|receipt| receipt.requests.puts == 2));
+    assert!(receipts.iter().all(|receipt| receipt.requests.gets == 1));
     assert!(receipts.iter().all(|receipt| receipt.requests.heads == 0));
     assert!(receipts.iter().all(|receipt| receipt.requests.lists == 0));
 
     assert_eq!(
         operations.count_matching(|operation, _| operation == common::StoreOperation::Get),
-        0
+        GROUPS
     );
     assert_eq!(
         operations.count_matching(|operation, _| operation == common::StoreOperation::Head),
@@ -819,8 +979,8 @@ fn repeated_groups_have_zero_read_one_write_acknowledgements() {
     );
     assert!(
         operations.count_matching(|operation, _| operation == common::StoreOperation::Put)
-            >= GROUPS,
-        "post-ACK spill may add maintenance PUTs"
+            >= GROUPS * 2,
+        "each group reserves one generation range and creates one extent"
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
@@ -874,7 +1034,10 @@ fn small_groups_publish_only_immutable_extents_before_release() {
         let receipt = writer
             .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
             .unwrap();
-        assert_eq!(receipt.requests.puts, 1, "spill must stay outside ACK");
+        assert_eq!(
+            receipt.requests.puts, 2,
+            "the generation CAS and extent are the only foreground PUTs"
+        );
     }
 
     assert_eq!(
@@ -891,7 +1054,7 @@ fn small_groups_publish_only_immutable_extents_before_release() {
                 && path.ends_with(".wal")
         }),
         5,
-        "each small group must issue only its immutable extent acknowledgement"
+        "each small group must create exactly one immutable extent"
     );
     assert_eq!(
         operations.count_matching(|operation, path| {

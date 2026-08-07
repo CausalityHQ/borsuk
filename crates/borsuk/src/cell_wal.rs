@@ -22,7 +22,6 @@ const CELL_WAL_STATE_MAGIC: &[u8; 4] = b"BWS1";
 const CELL_WAL_CLAIM_MAGIC: &[u8; 4] = b"BCL1";
 /// Routing-independent explicit-ID coordination shards.
 pub(crate) const CELL_WAL_CLAIM_SHARDS: u16 = 4_096;
-pub(crate) const CELL_WAL_GENERATION_SHARDS: u8 = 16;
 const CELL_WAL_CLAIM_PAGE_SLOTS: u16 = 192;
 const CELL_WAL_TRANSACTION_TTL_MS: u64 = 5 * 60 * 1_000;
 
@@ -1588,10 +1587,6 @@ fn claim_page_path(page: u8) -> String {
 pub(crate) fn id_claim_shard(id: &[u8]) -> u16 {
     let digest = blake3::hash(id);
     u16::from_le_bytes([digest.as_bytes()[0], digest.as_bytes()[1]]) % CELL_WAL_CLAIM_SHARDS
-}
-
-pub(crate) fn id_generation_shard(id: &[u8]) -> u8 {
-    blake3::hash(id).as_bytes()[0] % CELL_WAL_GENERATION_SHARDS
 }
 
 fn ensure_prepared_transaction(storage: &Storage, transaction_id: &str) -> Result<()> {

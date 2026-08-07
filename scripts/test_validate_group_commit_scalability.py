@@ -213,6 +213,9 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(len(evidence), 2)
         self.assertEqual(evidence[0][:5], (0, 7, 3, 2, 100))
         self.assertEqual(evidence[1][5:], (4, 1, 1, 0, 2, 0))
+        normalized = evidence[0][3:]
+        self.assertEqual(normalized[5], 0, "delete requests occupy normalized slot five")
+        self.assertEqual(normalized[6], 2, "HEAD requests occupy normalized slot six")
 
     def test_incomplete_campaign_fails_before_csv_use(self) -> None:
         (self.root / "GROUP_COMMIT_SCALABILITY_COMPLETE").unlink()

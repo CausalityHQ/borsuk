@@ -297,8 +297,11 @@ index-root/ or s3://bucket/prefix/
       HEAD                                # checked packed bounded active collection commits
   id-directory/
     claim-shards/<00..15>/LOCK            # fixed batch insert claims
-    generation-shards/<00..15>/NEXT       # checked packed MVCC range allocator
+    last-write-wins/NEXT                   # global group-amortized MVCC allocator
     generated/NEXT                       # checked packed generated-id counter
+  lane-log/
+    lanes/<writer-stripe>/HEAD             # v30 checked lease/watermark
+    lanes/<writer-stripe>/epochs/<epoch>/extents/<sequence>.wal
   objects/
 ```
 
@@ -617,13 +620,23 @@ vector need not live in its strictly nearest partition for correctness.
 
 ## Write-ahead log (ingest)
 
-Rust producers sharing a process can place a `GroupCommitWriter` in front of
-the WAL. Stable ID hashing assigns each record to one fenced ownership lane;
-workers coalesce requests per lane and acknowledge one conditional lane-HEAD
-update. Multi-lane calls expose one receipt per committed lane. A partial failure
-returns structured committed and failed lane sets because no cross-lane atomic
-visibility claim is made. Strict `add` remains available when duplicate
-rejection is required.
+Rust producers can place a `GroupCommitWriter` in front of the WAL. Each local
+commit worker claims one free persisted writer stripe; independent processes or
+hosts claim different stripes in the same collection. Stable ID hashing assigns
+records among only the stripes owned by that writer, preserving local same-ID
+ordering without requiring one process to lease the entire WAL. Acknowledgement
+reserves one global generation range through a conditional counter, then
+creates one checksum-verified immutable extent. The counter CAS is the
+cross-process last-write-wins linearization point. Readers collect the
+fixed stripe set and resolve writes from different hosts by durable global
+generation, so stripe identity never defines last-write-wins order. Multi-stripe
+calls expose one receipt per committed stripe. A partial failure returns
+structured committed and failed stripe sets because no cross-stripe atomic
+visibility claim is made. The current format has eight persisted stripes; a
+ninth simultaneous process worker fails explicitly instead of stealing a live
+lease. The active-stripe directory required to exceed that bound without
+increasing refresh fanout remains a production gate. Strict `add` remains
+available when duplicate rejection is required.
 
 The write path is fronted by a **default-on cell-sharded write-ahead log**. A
 small `add`/`upsert`/delete batch is routed to stable logical cells and prepared
