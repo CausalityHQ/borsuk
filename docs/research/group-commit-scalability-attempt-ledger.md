@@ -312,3 +312,10 @@ Launcher preflight confirmed the dedicated c7g.8xlarge worker was running and
 idle, with unique source, result, and index paths. A persistent watcher polls
 only terminal markers and EC2 health every 15 minutes; no measurement CSV is
 being inspected while the campaign is incomplete.
+
+Run `20260807T053500Z-sidecar-cache` terminalized with
+`GROUP_COMMIT_SCALABILITY_FAILED` at `c2000/r01/l1/w1`. The cell emitted
+`PRODUCTION_READ_P95_FAILED`, `PRODUCTION_PERFORMANCE_GATE_FAILED`, and
+`CELL_FAILED` with process exit 1. The terminal diagnostic reports a
+production performance-gate failure; no measurement CSV was inspected and the
+run is claim-ineligible.
