@@ -1998,14 +1998,10 @@ impl BorsukIndex {
         let tombstone = self.write_tombstone(overlay)?;
 
         let active_summaries = self.active_segment_summaries()?;
-        let mut previous = self.manifest.clone();
-        if previous.segments.is_empty() {
-            // Paged manifests keep the authoritative segment summaries in
-            // leaf pages. Reuse the already-resolved summaries for the
-            // publication diff instead of making the storage layer reread
-            // every page merely to discover the unchanged prefix.
-            previous.segments = active_summaries.clone();
-        }
+        let previous = self.manifest.clone();
+        let paged_manifest = previous.segments.is_empty()
+            && previous.routing_max_level > 0
+            && !self.manifest.config.text;
         let mut manifest = self.manifest.next_version();
         manifest.segments = active_summaries;
         // The persisted fallback quantizer embeds the previous segment set.
@@ -2065,13 +2061,29 @@ impl BorsukIndex {
             new_summaries.extend(index_ref.write_segment_batch(&mut segments_to_write)?);
             new_summaries
         };
-        manifest
-            .segments
-            .extend(new_segment_summaries.iter().cloned());
-        manifest.rebuild_pivots();
+        let mut routing_summaries = manifest.segments.clone();
+        routing_summaries.extend(new_segment_summaries.iter().cloned());
+        if paged_manifest {
+            // Paged indexes keep segment summaries and routing pivots in
+            // immutable pages. Keep the new manifest metadata-only; the page
+            // builder receives the resolved summaries separately, avoiding a
+            // corpus-sized manifest/routing/pivot rewrite on every drain.
+            manifest.segments.clear();
+            manifest.pivots.clear();
+        } else {
+            manifest.segments = routing_summaries.clone();
+            manifest.rebuild_pivots();
+        }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.manifest =
-            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.manifest = if paged_manifest {
+            self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
+                manifest,
+                Some(&previous),
+                &routing_summaries,
+            )?
+        } else {
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
+        };
         Ok(committed_sequences)
     }
 
@@ -8503,12 +8515,10 @@ impl BorsukIndex {
         // built from only the newly-flushed segments and silently drop every
         // pre-existing segment.
         let active_summaries = self.active_segment_summaries()?;
-        let mut previous = self.manifest.clone();
-        if previous.segments.is_empty() {
-            // The active summaries were resolved above for the new manifest;
-            // use the same snapshot to avoid rewriting every old leaf page.
-            previous.segments = active_summaries.clone();
-        }
+        let previous = self.manifest.clone();
+        let paged_manifest = previous.segments.is_empty()
+            && previous.routing_max_level > 0
+            && !self.manifest.config.text;
         let lexical_roots_will_rebuild = cell_runs
             .iter()
             .any(|run| run.kind == CellWalRunKind::Records);
@@ -8637,15 +8647,28 @@ impl BorsukIndex {
         manifest.cell_wal_visible_runs = cell_wal_run_count(&remaining_transactions);
         manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&remaining_transactions);
-        manifest.rebuild_pivots();
+        let routing_summaries = manifest.segments.clone();
+        if paged_manifest {
+            manifest.segments.clear();
+            manifest.pivots.clear();
+        } else {
+            manifest.rebuild_pivots();
+        }
         // Flushing is an online durability boundary, not a corpus-wide training
         // boundary. Existing cells and their row ordinals are unchanged, so
         // retain the immutable global base and expose the appended cells as a
         // bounded materialized delta. Search merges both layers; delta-only
         // compaction must never rewrite a base-covered segment.
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        let published =
-            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        let published = if paged_manifest {
+            self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
+                manifest,
+                Some(&previous),
+                &routing_summaries,
+            )?
+        } else {
+            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
+        };
         self.manifest = published;
         self.prune_consumed_cell_wal()?;
         let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
@@ -8903,7 +8926,24 @@ impl BorsukIndex {
         previous: Option<&Manifest>,
     ) -> Result<Manifest> {
         Ok(self
-            .publish_manifest_reusing_routing_pages_with_recovery_report(manifest, previous)?
+            .publish_manifest_reusing_routing_pages_with_summaries_with_recovery_report(
+                manifest, previous, None,
+            )?
+            .0)
+    }
+
+    fn publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
+        &mut self,
+        manifest: Manifest,
+        previous: Option<&Manifest>,
+        routing_summaries: &[SegmentSummary],
+    ) -> Result<Manifest> {
+        Ok(self
+            .publish_manifest_reusing_routing_pages_with_summaries_with_recovery_report(
+                manifest,
+                previous,
+                Some(routing_summaries),
+            )?
             .0)
     }
 
@@ -8942,19 +8982,33 @@ impl BorsukIndex {
 
     fn publish_manifest_reusing_routing_pages_with_recovery_report(
         &mut self,
+        manifest: Manifest,
+        previous: Option<&Manifest>,
+    ) -> Result<(Manifest, StorageWriteReport)> {
+        self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery_report(
+            manifest, previous, None,
+        )
+    }
+
+    fn publish_manifest_reusing_routing_pages_with_summaries_with_recovery_report(
+        &mut self,
         mut manifest: Manifest,
         previous: Option<&Manifest>,
+        routing_summaries: Option<&[SegmentSummary]>,
     ) -> Result<(Manifest, StorageWriteReport)> {
         if !manifest.segments.is_empty() {
             self.rebuild_lexical_roots(&mut manifest)?;
         }
         let base_version = self.manifest.version;
         loop {
-            match self.storage.stage_manifest_with_report(
-                &self.manifest_reference.modality,
-                &manifest,
-                previous,
-            ) {
+            match self
+                .storage
+                .stage_manifest_with_report_and_routing_summaries(
+                    &self.manifest_reference.modality,
+                    &manifest,
+                    previous,
+                    routing_summaries,
+                ) {
                 Ok((staged, mut report)) => {
                     match self.publish_staged_collection_manifest(staged, &mut report) {
                         Ok(published) => return Ok((published, report)),
@@ -23183,15 +23237,22 @@ mod tests {
 
         let mut manifest = previous.next_version();
         manifest.segments = index.active_segment_summaries().unwrap();
-        manifest.rebuild_pivots();
         manifest
             .segments
             .push(fake_segment_summary("appended", 0, 2_000));
+        let routing_summaries = manifest.segments.clone();
+        manifest.segments.clear();
+        manifest.pivots.clear();
         let mut previous_for_publish = previous.clone();
-        previous_for_publish.segments = manifest.segments[..2_000].to_vec();
+        previous_for_publish.segments = routing_summaries[..2_000].to_vec();
         let (_, report) = index
             .storage
-            .stage_manifest_with_report(PRIMARY_MODALITY, &manifest, Some(&previous_for_publish))
+            .stage_manifest_with_report_and_routing_summaries(
+                PRIMARY_MODALITY,
+                &manifest,
+                Some(&previous_for_publish),
+                Some(&routing_summaries),
+            )
             .unwrap();
 
         assert!(
