@@ -6411,7 +6411,8 @@ impl BorsukIndex {
             // The lean segment projection carries ids, generations, and text
             // terms but not dense sidecars, so reconciliation cost scales with
             // tombstone-matching cells rather than vector dimensions.
-            let (segment, _) = self.read_segment_lean_ranged(summary)?;
+            let (segment, _) =
+                self.read_segment_lean_ranged(summary, crate::format::LEAN_SEGMENT_ROW_COLUMNS)?;
             for record in &segment.records {
                 if overlay
                     .get(record.id.as_bytes())
@@ -6503,7 +6504,8 @@ impl BorsukIndex {
             if !targets.keys().any(|id| summary.might_contain_record_id(id)) {
                 continue;
             }
-            let (segment, _) = self.read_segment_lean_ranged(&summary)?;
+            let (segment, _) =
+                self.read_segment_lean_ranged(&summary, crate::format::LEAN_SEGMENT_ROW_COLUMNS)?;
             for record in &segment.records {
                 let Some(threshold) = targets.get(record.id.as_bytes()) else {
                     continue;
@@ -6994,7 +6996,8 @@ impl BorsukIndex {
                 .transient_admission
                 .as_ref()
                 .map(|gate| gate.acquire_owned(estimated_segment_decode_bytes(&summary)));
-            let (segment, _) = self.read_segment_lean_ranged(&summary)?;
+            let (segment, _) =
+                self.read_segment_lean_ranged(&summary, crate::format::LEAN_SEGMENT_ROW_COLUMNS)?;
             let rows = segment
                 .records
                 .iter()
@@ -17844,7 +17847,11 @@ impl BorsukIndex {
     /// vector column (vectors live in the Arrow sidecar). Parquet currently
     /// fetches its compact table in one known-size GET; Vortex supplies its own
     /// projection/range plan through `StorageVortexReadAt`.
-    fn read_segment_lean_ranged(&self, summary: &SegmentSummary) -> Result<(Segment, u64)> {
+    fn read_segment_lean_ranged(
+        &self,
+        summary: &SegmentSummary,
+        row_columns: &[&str],
+    ) -> Result<(Segment, u64)> {
         let decode_started = Instant::now();
         summary
             .layout
@@ -17860,7 +17867,7 @@ impl BorsukIndex {
                 let rows = self.storage.read_parquet_columns_ranged(
                     &summary.path,
                     summary.size_bytes,
-                    RangedColumns::Keep(crate::format::LEAN_SEGMENT_ROW_COLUMNS),
+                    RangedColumns::Keep(row_columns),
                     None,
                 )?;
                 let header_batch = header.batches.first().ok_or_else(|| {
@@ -17949,9 +17956,13 @@ impl BorsukIndex {
         {
             (segment, 0)
         } else {
-            let (segment, segment_bytes, _shared_inflight) = self
-                .inflight_segment_reads
-                .load(&summary.checksum, || self.read_segment_lean_ranged(summary))?;
+            let (segment, segment_bytes, _shared_inflight) =
+                self.inflight_segment_reads.load(&summary.checksum, || {
+                    self.read_segment_lean_ranged(
+                        summary,
+                        crate::format::LEAN_SEGMENT_SCORING_COLUMNS,
+                    )
+                })?;
             self.read_runtime.projected_segment_cache.insert(
                 summary.checksum.clone(),
                 Arc::clone(&segment),
