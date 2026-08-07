@@ -1481,8 +1481,10 @@ impl LaneEpochWriter {
                 path: format!("{path}/LEASE_EXPIRED"),
             });
         }
-        self.head.durable_sequence = sequence;
-        self.head.generation_base = first_generation;
+        let mut next = self.head.clone();
+        next.durable_sequence = sequence;
+        next.generation_base = first_generation;
+        self.publish_head(next)?;
         Ok(LaneLogReceipt {
             lane: self.head.lane,
             lease_epoch: self.head.lease_epoch,
@@ -1593,10 +1595,13 @@ impl LaneEpochWriter {
         let records = u64::try_from(records.len()).map_err(|_| {
             BorsukError::InvalidRecordInput("epoch lane-log record count exceeds u64".to_string())
         })?;
-        self.head.durable_sequence = sequence;
-        self.head.generation_base = first_generation.checked_add(records - 1).ok_or_else(|| {
+        let generation_end = first_generation.checked_add(records - 1).ok_or_else(|| {
             BorsukError::InvalidStorage("epoch lane-log generation range exceeds u64".to_string())
         })?;
+        let mut next = self.head.clone();
+        next.durable_sequence = sequence;
+        next.generation_base = generation_end;
+        self.publish_head(next)?;
         if let (Some(authority), Some((ids, resident_bytes))) =
             (self.id_authority.as_mut(), prepared)
         {
@@ -1761,15 +1766,11 @@ impl LaneEpochWriter {
     }
 
     pub(crate) fn publish_durable_watermark_if_due(&mut self) -> Result<()> {
-        if self
-            .head
-            .durable_sequence
-            .saturating_sub(self.published_durable_sequence)
-            < MAX_LINEARIZABLE_PROBE_EXTENTS / 2
-        {
-            return Ok(());
-        }
-        self.publish_head(self.head.clone())
+        debug_assert_eq!(
+            self.head.durable_sequence, self.published_durable_sequence,
+            "every acknowledged extent must already be published"
+        );
+        Ok(())
     }
 
     fn publish_head(&mut self, next: LaneEpochHead) -> Result<()> {
@@ -1788,10 +1789,22 @@ impl LaneEpochWriter {
                     self.head_version = Some(version);
                     return Ok(());
                 }
-                Err(error @ BorsukError::ConcurrentModification { .. }) => {
+                Err(
+                    error @ (BorsukError::ConcurrentModification { .. }
+                    | BorsukError::ObjectStoreRetryable { .. }),
+                ) => {
                     let Some(stored) = self.storage.read_coordination_object(&path)? else {
                         return Err(error);
                     };
+                    if stored.bytes == bytes {
+                        self.head = next;
+                        self.published_durable_sequence = self.head.durable_sequence;
+                        self.head_version = Some(stored.version);
+                        return Ok(());
+                    }
+                    if matches!(error, BorsukError::ObjectStoreRetryable { .. }) {
+                        return Err(error);
+                    }
                     let observed = epoch_head_from_bytes(&stored.bytes, self.head.lane)?;
                     if observed.lease_epoch != self.head.lease_epoch
                         || observed.lease_owner != self.head.lease_owner
@@ -1930,7 +1943,7 @@ impl LaneEpochReader {
     fn read_lane_state(
         &self,
         lane: u16,
-        consistency: LaneReadConsistency,
+        _consistency: LaneReadConsistency,
     ) -> Result<LaneEpochState> {
         if lane >= self.lane_count {
             return Err(BorsukError::InvalidStorage(format!(
@@ -1981,25 +1994,6 @@ impl LaneEpochReader {
                     })?,
             );
         }
-        if consistency == LaneReadConsistency::Linearizable {
-            let first_probe = head.durable_sequence.saturating_add(1);
-            for offset in 0..MAX_LINEARIZABLE_PROBE_EXTENTS {
-                let sequence = first_probe.checked_add(offset).ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "epoch lane-log probe sequence exceeds u64".to_string(),
-                    )
-                })?;
-                let Some(extent) = self.read_sequence(lane, head.lease_epoch, sequence)? else {
-                    break;
-                };
-                extents.push(extent);
-                if offset + 1 == MAX_LINEARIZABLE_PROBE_EXTENTS {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "epoch lane {lane} exceeds the {MAX_LINEARIZABLE_PROBE_EXTENTS}-extent linearizable probe bound"
-                    )));
-                }
-            }
-        }
         let current_sequence = extents
             .iter()
             .filter(|extent| extent.lease_epoch == head.lease_epoch)
@@ -2021,7 +2015,7 @@ impl LaneEpochReader {
     fn read_lane_identity(
         &self,
         lane: u16,
-        known_current: Option<(u64, u64)>,
+        _known_current: Option<(u64, u64)>,
     ) -> Result<LaneEpochIdentityState> {
         let path = head_path(lane);
         let stored = self
@@ -2031,27 +2025,11 @@ impl LaneEpochReader {
                 BorsukError::InvalidStorage(format!("epoch lane-log HEAD `{path}` is missing"))
             })?;
         let head = epoch_head_from_bytes(&stored.bytes, lane)?;
-        let known_sequence = known_current
-            .filter(|(epoch, _)| *epoch == head.lease_epoch)
-            .map_or(head.durable_sequence, |(_, sequence)| sequence)
-            .max(head.durable_sequence);
-        let next_sequence = known_sequence.checked_add(1).ok_or_else(|| {
-            BorsukError::InvalidStorage("epoch lane-log sequence exceeds u64".to_string())
-        })?;
-        let current_sequence = if self
-            .storage
-            .read_object_fresh(&extent_path(lane, head.lease_epoch, next_sequence)?)?
-            .is_some()
-        {
-            next_sequence
-        } else {
-            known_sequence
-        };
         Ok(LaneEpochIdentityState {
             head_checksum: epoch_state_checksum(
                 &stored.bytes,
                 head.sealed_epoch.map_or(0, |seal| seal.durable_sequence),
-                current_sequence,
+                head.durable_sequence,
             ),
         })
     }
@@ -3594,10 +3572,7 @@ mod tests {
         let requests = reader.request_counts().delta(&before);
 
         assert!(snapshot.record_blocks.is_empty());
-        assert_eq!(
-            requests.gets, 3,
-            "read ACTIVE, stripe 41 HEAD, and its bounded next-extent probe"
-        );
+        assert_eq!(requests.gets, 2, "read ACTIVE and stripe 41 HEAD");
     }
 
     #[test]
@@ -3716,15 +3691,11 @@ mod tests {
     }
 
     #[test]
-    fn v30_extent_put_is_the_acknowledgement_boundary() {
-        let mut writer = LaneEpochWriter::new_empty(
-            Arc::new(InMemory::new()),
-            "memory:///epoch-extent-ack",
-            3,
-            7,
-            100,
-        )
-        .unwrap();
+    fn v30_extent_plus_conditional_head_are_the_acknowledgement_boundary() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let mut writer =
+            LaneEpochWriter::new_empty(Arc::clone(&store), "memory:///epoch-extent-ack", 3, 7, 100)
+                .unwrap();
 
         let receipt = writer.append_extent_at(b"durable", 1, 99).unwrap();
 
@@ -3732,7 +3703,7 @@ mod tests {
         assert_eq!(receipt.lease_epoch, 7);
         assert_eq!(receipt.sequence, 1);
         assert_eq!(receipt.records, 1);
-        assert_eq!(receipt.requests.puts, 1);
+        assert_eq!(receipt.requests.puts, 2);
         assert_eq!(receipt.requests.gets, 0);
         assert_eq!(writer.head.durable_sequence, 1);
         assert_eq!(
@@ -3742,6 +3713,16 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+        assert_eq!(
+            LaneEpochReader::new(store, "memory:///epoch-extent-ack", 8)
+                .unwrap()
+                .read_lane(3, LaneReadConsistency::Committed)
+                .unwrap()
+                .into_iter()
+                .map(|extent| extent.payload)
+                .collect::<Vec<_>>(),
+            vec![b"durable".to_vec()]
         );
     }
 
@@ -3771,7 +3752,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_linearizable_reader_recovers_extents_beyond_a_stale_watermark() {
+    fn v30_published_head_makes_committed_and_linearizable_reads_identical() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-stale-watermark";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3779,17 +3760,14 @@ mod tests {
         writer.append_extent_at(b"second", 1, 11).unwrap();
         let reader = LaneEpochReader::new(Arc::clone(&store), uri, 8).unwrap();
 
-        assert!(
-            reader
-                .read_lane(3, LaneReadConsistency::Committed)
-                .unwrap()
-                .is_empty(),
-            "the deliberately stale durable watermark remains zero"
-        );
+        let committed = reader.read_lane(3, LaneReadConsistency::Committed).unwrap();
+        let linearizable = reader
+            .read_lane(3, LaneReadConsistency::Linearizable)
+            .unwrap();
+
+        assert_eq!(committed, linearizable);
         assert_eq!(
-            reader
-                .read_lane(3, LaneReadConsistency::Linearizable)
-                .unwrap()
+            committed
                 .into_iter()
                 .map(|extent| extent.payload)
                 .collect::<Vec<_>>(),
@@ -3826,7 +3804,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_linearizable_reader_probes_sequences_without_prefix_listing() {
+    fn v30_linearizable_reader_trusts_the_conditionally_published_head() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-direct-probe";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3843,14 +3821,11 @@ mod tests {
         assert_eq!(extents.len(), 2);
         assert_eq!(requests.lists, 0);
         assert_eq!(requests.heads, 0, "whole-object probes use GET metadata");
-        assert_eq!(
-            requests.gets, 4,
-            "read the lane HEAD, two extents, and end probe"
-        );
+        assert_eq!(requests.gets, 3, "read the lane HEAD and two extents");
     }
 
     #[test]
-    fn v30_periodic_watermark_keeps_direct_probe_window_bounded() {
+    fn v30_every_append_publishes_its_exact_durable_sequence() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-bounded-probe";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 10_000).unwrap();
@@ -3858,8 +3833,7 @@ mod tests {
             let receipt = writer
                 .append_extent_at(b"durable", 1, sequence + 1)
                 .unwrap();
-            assert_eq!(receipt.requests.puts, 1);
-            writer.publish_durable_watermark_if_due().unwrap();
+            assert_eq!(receipt.requests.puts, 2);
         }
         let persisted = writer
             .storage
@@ -3870,7 +3844,7 @@ mod tests {
             epoch_head_from_bytes(&persisted.bytes, 3)
                 .unwrap()
                 .durable_sequence,
-            128
+            129
         );
         let reader = LaneEpochReader::new(store, uri, 8).unwrap();
 
@@ -3916,7 +3890,23 @@ mod tests {
         let uri = "memory:///epoch-zombie-seal";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
         writer.append_extent_at(b"acknowledged", 1, 10).unwrap();
-        writer.append_extent_at(b"late-zombie", 1, 11).unwrap();
+        let orphan = LaneExtent {
+            lane: 3,
+            lease_epoch: 7,
+            sequence: 2,
+            first_generation: 2,
+            records: 1,
+            payload: b"late-zombie".to_vec(),
+        };
+        let orphan_bytes = extent_bytes(&orphan).unwrap();
+        writer
+            .storage
+            .create_bytes_verified(
+                &extent_path(3, 7, 2).unwrap(),
+                &orphan_bytes,
+                blake3::hash(&orphan_bytes).to_hex().as_str(),
+            )
+            .unwrap();
         let stored = writer
             .storage
             .read_coordination_object(&head_path(3))
@@ -3958,6 +3948,107 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![b"acknowledged".to_vec()]
         );
+    }
+
+    #[test]
+    fn v30_takeover_fences_an_owner_paused_after_extent_creation() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///epoch-paused-owner";
+        let mut paused = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
+        let extent = LaneExtent {
+            lane: 3,
+            lease_epoch: 7,
+            sequence: 1,
+            first_generation: 1,
+            records: 1,
+            payload: b"unpublished".to_vec(),
+        };
+        let extent_bytes = extent_bytes(&extent).unwrap();
+        paused
+            .storage
+            .create_bytes_verified(
+                &extent_path(3, 7, 1).unwrap(),
+                &extent_bytes,
+                blake3::hash(&extent_bytes).to_hex().as_str(),
+            )
+            .unwrap();
+
+        let stored = paused
+            .storage
+            .read_coordination_object(&head_path(3))
+            .unwrap()
+            .unwrap();
+        let successor = LaneEpochHead {
+            lane: 3,
+            lease_epoch: 8,
+            lease_owner: [8; 16],
+            lease_expires_at_ms: 200,
+            durable_sequence: 0,
+            materialized_sequence: 0,
+            materialized_manifest_version: 0,
+            generation_base: 0,
+            sealed_epoch: Some(LaneEpochSeal {
+                lease_epoch: 7,
+                durable_sequence: 0,
+                materialized_sequence: 0,
+                materialized_manifest_version: 0,
+                generation_end: 0,
+            }),
+        };
+        paused
+            .storage
+            .write_coordination_object(
+                &head_path(3),
+                &epoch_head_bytes(&successor).unwrap(),
+                Some(stored.version),
+            )
+            .unwrap();
+
+        let mut intended = paused.head.clone();
+        intended.durable_sequence = 1;
+        intended.generation_base = 1;
+        let error = paused.publish_head(intended).unwrap_err();
+
+        assert!(matches!(error, BorsukError::ConcurrentModification { .. }));
+        assert!(
+            LaneEpochReader::new(store, uri, 8)
+                .unwrap()
+                .read_lane(3, LaneReadConsistency::Linearizable)
+                .unwrap()
+                .is_empty(),
+            "the orphan extent is not discoverable through the successor head"
+        );
+    }
+
+    #[test]
+    fn v30_exact_observed_head_successor_reconciles_without_a_second_write() {
+        let mut writer = LaneEpochWriter::new_empty(
+            Arc::new(InMemory::new()),
+            "memory:///epoch-lost-head-response",
+            3,
+            7,
+            100,
+        )
+        .unwrap();
+        let mut intended = writer.head.clone();
+        intended.durable_sequence = 1;
+        intended.generation_base = 1;
+        writer
+            .storage
+            .write_coordination_object(
+                &head_path(3),
+                &epoch_head_bytes(&intended).unwrap(),
+                writer.head_version.clone(),
+            )
+            .unwrap();
+        let before = writer.storage.request_counts();
+
+        writer.publish_head(intended).unwrap();
+
+        let requests = writer.storage.request_counts().delta(&before);
+        assert_eq!(requests.puts, 1, "one rejected CAS attempt");
+        assert_eq!(requests.gets, 1, "read the exact observed successor");
+        assert_eq!(writer.head.durable_sequence, 1);
     }
 
     #[test]
