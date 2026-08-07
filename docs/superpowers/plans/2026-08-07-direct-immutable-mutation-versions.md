@@ -124,10 +124,10 @@
 
 **Interfaces:**
 - Produces: `MutationStamp { version: MutationVersion, digest: [u8; 32] }` and `CanonicalMutation::{Put, Delete}`.
-- Produces: artifact-local writer dictionaries plus `mutation_hlc`, `mutation_writer`, and `mutation_digest` fields.
+- Produces: stock-readable `mutation_hlc`, `mutation_writer`, and `mutation_digest` logical fields; native Arrow/Parquet implementations may apply standard dictionary encoding.
 - Changes: table `CURRENT_VERSION` from 29 to 30 and rejects v29.
 
-- [ ] **Step 1: Write RED canonical-envelope tests**
+- [x] **Step 1: Write RED canonical-envelope tests**
 
   Construct logically equal records with different map insertion order and require equal canonical digests. Change every field—primary vector, named vector, sparse values, text terms, late-interaction tokens, metadata, storage declaration, and operation tag—and require a different digest. Require `Put` and `Delete` for one ID/version to conflict.
 
@@ -170,9 +170,18 @@
 
   Callers cannot mutate the stamp. Equal version plus unequal digest returns `BorsukError::InvalidStorage` at every merge boundary.
 
+  The clock and canonical envelope foundations were delivered in `b7246e7`
+  and `f737363`. The large put payload is stored beside a compact operation tag
+  rather than boxed solely to equalize enum variant sizes.
+
 - [ ] **Step 5: Implement v30 standard columnar layouts**
 
   Store `mutation_hlc: UInt64`, `mutation_writer: FixedSizeBinary(16)`, and `mutation_digest: FixedSizeBinary(32)` as logical Arrow/Parquet columns. Use Arrow IPC for foreground mutation extents to minimize encoding and footer overhead; use Parquet after materialization when compression and scans amortize its cost. Native writers may dictionary-encode columns. Persist the maximum semantic version in documented schema metadata and standard statistics. Replace packed global PQ rows with Arrow IPC typed arrays and binary lexical controls with Parquet/JSON. Reject old schemas instead of defaulting a missing version column to zero.
+
+  The terminal local qualification at `cc518dd` selected uncompressed Arrow IPC
+  streams for foreground extents. See
+  `docs/research/mutation-extent-standard-format-qualification.md`; this is a
+  codec decision only, not an end-to-end latency claim.
 
 - [ ] **Step 6: Replace tombstone and ID-directory generations**
 
