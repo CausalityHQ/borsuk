@@ -656,3 +656,25 @@ dedicated worker passed the launcher's account, instance, pinned-dataset, and
 idle/no-contention checks. Until root terminalization and process exit, inspect
 only markers, process state, and infrastructure health; do not open measurement
 CSVs.
+
+The run terminalized at `c2000/r01/l1/w8` with root failure, an exited pane,
+no benchmark process, and healthy instance/system checks. The fail-closed
+validator rejected the partial matrix as `campaign is incomplete` before the
+terminal cell CSVs were inspected. Widening the code-read wave did not qualify:
+eight-writer post-drain read p95 was 234.213 ms versus 232.256 ms in the
+predecessor, with exact inserted-ID recall still 1.0. Delta approximate p95
+improved modestly from 141.812 to 123.081 ms, but delta exact-rerank p95 was
+111.562 ms and the completed base waited 171.997 ms p95 for the delta. The
+cell issued the same 308 post-drain GETs and fetched the same 10,707,428 bytes,
+so the extra concurrency is rejected as insufficient rather than promoted.
+
+Write behavior was likewise unchanged within run noise: acknowledged
+throughput was 10,056.115 records/s at 79.176 ms p95, drain took 39.560 s, and
+drain-inclusive throughput was 2,447.957 records/s. Maximum process RSS was
+3,680.9 MiB and maximum sampled CPU was 2,016.0%; the host remained healthy.
+Source inspection after this result found that a coalesced code-range GET can
+already contain identity and exact-vector bytes between selected cell code
+slices, but the query copies only the codes and later fetches those covered
+rerank ranges again. The next causal read factor should reuse only bytes already
+transferred in the same query, with a strict transient-memory bound; it must not
+introduce a persistent cache or relax recall/candidate gates.
