@@ -506,6 +506,10 @@ const DEFAULT_GLOBAL_PQ_BUNDLE_CODE_BYTES: usize = 1024 * 1024;
 const DEFAULT_GLOBAL_PQ_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
 const DEFAULT_SIDECAR_INDEX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
 const DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+/// Bounded decoded exact-vector sidecar retention for repeated reranks. This
+/// is deliberately separate from the metadata cache: a hot segment may retain
+/// its decoded vectors without making the corpus-sized exact payload resident.
+const DEFAULT_DECODED_VECTOR_SIDECAR_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Options used when opening an existing BORSUK index.
 ///
@@ -881,6 +885,8 @@ struct CollectionReadRuntime {
     inflight_bm25_stats_pages: Arc<InFlightReads<Bm25StatsPage>>,
     decoded_bm25_stats_pages: Arc<DecodedObjectCache<Bm25StatsPage>>,
     vector_sidecar_indexes: Arc<Mutex<SidecarIndexCache>>,
+    decoded_vector_sidecars: Arc<DecodedObjectCache<Vec<Vec<f32>>>>,
+    inflight_vector_sidecars: Arc<InFlightReads<Vec<Vec<f32>>>>,
     late_interaction_sidecar_indexes: Arc<Mutex<LateInteractionSidecarIndexCache>>,
     inflight_late_interaction_batches: Arc<InFlightReads<LateInteractionBatch>>,
     decoded_late_interaction_batches: Arc<DecodedObjectCache<LateInteractionBatch>>,
@@ -950,6 +956,12 @@ fn decoded_wal_records_bytes(records: &[VectorRecord]) -> u64 {
         );
     }
     u64::try_from(bytes).unwrap_or(u64::MAX)
+}
+
+fn decoded_vector_sidecar_bytes(vectors: &[Vec<f32>], dimensions: usize) -> u64 {
+    (vectors.len() as u64)
+        .saturating_mul(dimensions as u64)
+        .saturating_mul(std::mem::size_of::<f32>() as u64)
 }
 
 #[derive(Clone, Copy)]
@@ -1888,6 +1900,11 @@ impl CollectionReadRuntime {
                 &retained_pool,
             ),
             vector_sidecar_indexes,
+            decoded_vector_sidecars: decoded_cache_with_pool(
+                DEFAULT_DECODED_VECTOR_SIDECAR_CACHE_BYTES,
+                &retained_pool,
+            ),
+            inflight_vector_sidecars: Arc::new(InFlightReads::default()),
             late_interaction_sidecar_indexes,
             inflight_late_interaction_batches: Arc::new(InFlightReads::default()),
             decoded_late_interaction_batches: decoded_cache_with_pool(
@@ -17904,26 +17921,49 @@ impl BorsukIndex {
             // the footer is transferred twice. Select the full immutable object
             // before issuing any range read, then retain only requested rows.
             let path = vector_sidecar_relative_path(&summary.checksum);
-            let read = self.storage.read_bytes_with_cache_status(&path)?;
-            let bytes = if read.cache_hit {
-                0
-            } else {
-                read.bytes.len() as u64
-            };
             let requested_rows = unique_rows.len();
-            let decode_started = Instant::now();
-            let vectors = crate::arrow_vector_sidecar::decode_all(&read.bytes, summary.dimensions)?;
-            self.storage
-                .record_access_event(StorageAccessEvent::decode(
-                    &path,
-                    physical_format_for_path(&path),
-                    summary.vector_size_bytes,
-                    "vector",
-                    format!("rows:{}", join_rows(&unique_rows)),
-                    requested_rows as u64,
-                    vectors.len() as u64,
-                    elapsed_ns(decode_started),
-                ))?;
+            let (vectors, bytes) = if let Some(vectors) = self
+                .read_runtime
+                .decoded_vector_sidecars
+                .get(&summary.checksum)
+            {
+                (vectors, 0)
+            } else {
+                let (vectors, bytes, _) =
+                    self.read_runtime
+                        .inflight_vector_sidecars
+                        .load(&summary.checksum, || {
+                            let read = self.storage.read_bytes_with_cache_status(&path)?;
+                            let bytes = if read.cache_hit {
+                                0
+                            } else {
+                                read.bytes.len() as u64
+                            };
+                            let decode_started = Instant::now();
+                            let vectors = crate::arrow_vector_sidecar::decode_all(
+                                &read.bytes,
+                                summary.dimensions,
+                            )?;
+                            self.storage
+                                .record_access_event(StorageAccessEvent::decode(
+                                    &path,
+                                    physical_format_for_path(&path),
+                                    summary.vector_size_bytes,
+                                    "vector",
+                                    format!("rows:{}", join_rows(&unique_rows)),
+                                    requested_rows as u64,
+                                    vectors.len() as u64,
+                                    elapsed_ns(decode_started),
+                                ))?;
+                            Ok((vectors, bytes))
+                        })?;
+                self.read_runtime.decoded_vector_sidecars.insert(
+                    summary.checksum.clone(),
+                    Arc::clone(&vectors),
+                    decoded_vector_sidecar_bytes(&vectors, summary.dimensions),
+                );
+                (vectors, bytes)
+            };
             let selected = unique_rows
                 .into_iter()
                 .map(|row| {
@@ -26526,6 +26566,50 @@ mod tests {
         assert!(first.bytes_read > second.bytes_read);
         assert_eq!(first.records_considered, second.records_considered);
         assert_eq!(first.candidates.indices, second.candidates.indices);
+    }
+
+    #[test]
+    fn full_sidecar_decode_is_reused_across_rerank_queries() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 128,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let records = (0..512)
+            .map(|row| VectorRecord::new(format!("row-{row:04}"), vec![row as f32; 128]))
+            .collect();
+        let segment = Segment::from_records(
+            "full-sidecar-cache".to_string(),
+            1,
+            VectorMetric::Euclidean,
+            128,
+            records,
+        )
+        .unwrap();
+        let summary = index.write_segment(segment).unwrap();
+        let rows = (0..summary.object_count).collect::<Vec<_>>();
+        let first = index
+            .segment_vectors_for_rows_ranged(&summary, &rows)
+            .unwrap();
+        let second = index
+            .segment_vectors_for_rows_ranged(&summary, &rows)
+            .unwrap();
+        assert!(
+            index
+                .read_runtime
+                .decoded_vector_sidecars
+                .get(&summary.checksum)
+                .is_some()
+        );
+        assert!(first.1 > 0);
+        assert_eq!(second.1, 0);
+        assert_eq!(first.0, second.0);
     }
 
     #[test]
