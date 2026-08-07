@@ -97,14 +97,40 @@ rewrite versions. Repeated IDs in one group retain the greatest assigned
 version and must pass the equal-version digest check. Reads and refreshes
 advance the handle's observed HLC floor but never rewrite an allocated version.
 
-The canonical wire value is 24 bytes. Columnar and fixed-width artifacts avoid
-repeating the 16-byte identity per row: each immutable artifact carries a
-checked writer-identity dictionary and rows store the 64-bit HLC prefix plus a
-minimal dictionary ordinal. Materialization and compaction union dictionaries
-and rewrite ordinals while preserving the canonical version. WAL extents
-normally contain one writer identity and one contiguous HLC range. Manifest
+There is no BORSUK-specific mutation-version wire format. In-memory comparison
+uses the 24-byte big-endian value, while durable Parquet and Arrow schemas store
+the logical fields directly as `mutation_hlc: UInt64`,
+`mutation_writer: FixedSizeBinary(16)`, and
+`mutation_digest: FixedSizeBinary(32)`. Parquet and Arrow implementations may
+apply their standard dictionary and compression encodings; a stock reader must
+still recover the typed logical columns without a BORSUK framing decoder.
+Materialization and compaction preserve these logical values exactly. Manifest
 and catalog generation counters are unrelated and remain their existing
 integer type.
+
+### Standard durable formats
+
+Every production object is independently readable as one of these portable
+formats:
+
+- Arrow IPC stores foreground mutation extents and fixed-width candidate,
+  quantizer-code, exact-vector, graph-adjacency, and late-interaction sidecars
+  where low encode cost or zero-copy typed arrays are operationally useful;
+- Parquet stores materialized segments, tombstones, ID deltas, and
+  scan-oriented dense, sparse, lexical, and metadata tables;
+- versioned UTF-8 JSON stores small mutable or conditional control records,
+  including heads, directories, manifests, leases, fences, and checkpoints.
+
+Schema versions and BORSUK semantics may use ordinary Parquet/Arrow schema
+metadata or JSON fields. This does not permit a custom outer frame, magic
+prefix, packed row file, opaque graph blob, or hand-written binary control
+record. PQ codes use Arrow fixed-size lists of `UInt8`; graph adjacency uses
+Arrow list arrays with typed integer neighbours. Artifact maximum versions are
+typed columns/statistics plus documented schema metadata, so refresh can read
+standard file metadata without decoding vector payloads. Arrow mutation
+extents deliberately avoid Parquet's per-file encoding/footer overhead on the
+foreground acknowledgement path. Old experimental custom layouts are rejected
+rather than retained behind dual readers.
 
 ### Canonical mutation envelope
 
@@ -255,8 +281,10 @@ Implementation proceeds in independently delivered slices and must prove:
    guarantee. Callers cannot supply internal mutation versions.
 3. WAL, segment, tombstone, ID-delta, compaction, reopen, sparse, text, named
    dense, typed dense, and late-interaction paths preserve the full version,
-   canonical digest, writer dictionary, and maximum-version metadata. Old
-   experimental formats are rejected clearly with no dual reader.
+   canonical digest, typed standard-format columns, and maximum-version
+   metadata. Stock Parquet, Arrow IPC, and JSON readers validate every durable
+   object role. Old experimental formats are rejected clearly with no dual
+   reader.
 4. A normal group uses exactly one immutable extent PUT per touched writer
    stripe and zero global generation-counter requests. Ordinary upsert/delete
    use no `id-directory/last-write-wins/NEXT` object.
