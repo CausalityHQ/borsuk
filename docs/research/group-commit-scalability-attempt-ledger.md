@@ -678,3 +678,25 @@ slices, but the query copies only the codes and later fetches those covered
 rerank ranges again. The next causal read factor should reuse only bytes already
 transferred in the same query, with a strict transient-memory bound; it must not
 introduce a persistent cache or relax recall/candidate gates.
+
+## Query-local covered-range reuse qualification launched (2026-08-07)
+
+Run `20260807T130414Z-query-range-reuse` launched from commit `1f34b65` with
+source archive SHA-256
+`62b1182153716669e6eeb5ca093f03c4ff6e5f9fee66ba06106485b48149d77e`
+and unchanged manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+This arm retains at most 8 MiB of already-transferred code-range payload per
+ANN layer until that same query's exact rerank. Only fully covered identity or
+exact-vector ranges are sliced from it; every uncovered byte follows the normal
+S3 range path. It adds no persistent or cross-query cache, changes no routing,
+candidate, exact-scoring, or recall rule, and bounds the default four-query
+base-plus-delta transient addition to 64 MiB.
+
+The TDD range-coverage regression, real base-plus-delta search regression, 515
+runnable library tests (six ignored), all 32 group-commit integration tests,
+strict all-target/all-feature workspace Clippy, formatting, repository policy,
+and diff checks passed before launch. The worker passed the account, instance,
+pinned 768D Cohere dataset, and idle/no-contention preflights. Until root
+terminalization and process exit, inspect only markers, process state, and
+infrastructure health; do not open measurement CSVs.
