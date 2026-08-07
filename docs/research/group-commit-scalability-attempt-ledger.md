@@ -763,3 +763,24 @@ cross-run tail variation does not invalidate the deterministic drain gain, but
 it confirms that training parallelism is not a read fix. The next read factor
 must reduce the number of sequential object-store fanout stages or physical
 requests while preserving the exact shortlist and recall contract.
+
+## Sub-multipart 48 MiB ANN bundle qualification launched (2026-08-07)
+
+Run `20260807T135734Z-bundle48` launched from commit `4281d51` with source
+archive SHA-256
+`2f351277b00b05cf06d94732e1806e758499361b411ea4dea3f99e8154f50394`
+and unchanged manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+This one-factor arm raises flat ANN bundle packing from 1 to 2 MiB of codes and
+from 32 to 48 MiB total. The latter remains below the storage layer's 64 MiB
+multipart threshold and bounds simultaneous pending, Arrow-array, and encoded
+representations to roughly 144 MiB. Vectors, quantizers, routing, cells,
+candidates, probes, exact scoring, and recall rules are unchanged.
+
+The packing TDD regression, shifted-tail routing regression, all 517 runnable
+library tests (six ignored), 32 group-commit integration tests, strict
+all-target/all-feature workspace Clippy, formatting, repository policy, and
+diff checks passed. The dedicated worker passed the account, instance, pinned
+768D Cohere dataset, and idle/no-contention preflights. Until root
+terminalization and process exit, inspect only markers, process state, and
+infrastructure health; do not open measurement CSVs.
