@@ -784,3 +784,28 @@ diff checks passed. The dedicated worker passed the account, instance, pinned
 768D Cohere dataset, and idle/no-contention preflights. Until root
 terminalization and process exit, inspect only markers, process state, and
 infrastructure health; do not open measurement CSVs.
+
+The run terminalized at `c2000/r01/l1/w8` with root failure, an exited pane,
+no benchmark process, and healthy instance/system checks. The fail-closed
+validator rejected the partial matrix as `campaign is incomplete` before the
+terminal cell CSVs were inspected. The wider layout is rejected: the
+128,000-row delta used nine physical bundle paths instead of the predecessor's
+15, but post-drain reads still issued exactly 306 GETs and fetched exactly
+10,642,468 bytes. Read p95 regressed from 263.558 to 317.284 ms. Delta
+approximate, exact-rerank, and base-wait p95 were 188.265, 101.171, and
+261.601 ms. Fewer containing objects therefore did not remove the query's
+range-request stages or its tail latency.
+
+The run also failed the bulk ingest target: acknowledged throughput was
+9,423.809 records/s at 86.924 ms p95, drain took 34.200 s, and drain-inclusive
+throughput was 2,678.817 records/s. Exact inserted-ID recall remained 1.0;
+this remains a visibility check rather than corpus ANN-recall evidence.
+Maximum process RSS was 3,826.2 MiB and maximum sampled CPU was 2,024.7%.
+Descriptor reproduction confirms byte-identical scan and coarse quantizers
+with SHA-256 values
+`0089b3e243e9a14d49629be95e032545625691b72fd89c03d56bbc68b931f1e8`
+and
+`c0c73108a513ccf0b66771630b369bd2148da54cb7bb39fbca207b455b9c2980`;
+routing still covers all 256 cells with a maximum of 1,871 rows. Do not widen
+the bundle cap again. The next read factor must change request staging or
+physical shortlist locality, not container size or cache state.
