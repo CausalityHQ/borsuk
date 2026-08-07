@@ -150,6 +150,17 @@
   unselected spans made wider coalescing a net loss. Restore the 64 KiB gap,
   retain the proven 32-request wave, and diagnose the remaining cold path from
   physical layout and phase telemetry rather than cache or wider range tuning.
+- The next source slice adds per-query stable-base approximate/rerank,
+  immutable-delta approximate/rerank, and post-base delta-wait microseconds to
+  the Rust, Python, TypeScript, tracing, and raw group-commit CSV contracts.
+  The fail-closed campaign validator accepts historical CSVs without these
+  columns but requires the complete nonnegative set when any column is
+  present. A real delayed-store regression proves all four independently
+  executed phase intervals are populated. These are overlapping work
+  intervals, not additive wall-time components. Use terminal uncached evidence
+  from this exact source revision to choose between global request scheduling,
+  packed exact-row locality, and immutable-delta work; do not infer a speedup
+  from instrumentation alone.
 
 ## Global Constraints
 

@@ -1468,6 +1468,11 @@ test("searchWithReport exposes query counters", async () => {
   assert.ok(report.objectCacheMisses > 0);
   assert.ok(report.residentBytesEstimate > 0);
   assert.ok(report.elapsedMs >= 0);
+  assert.equal(report.globalBaseApproximateUs, 0);
+  assert.equal(report.globalBaseExactRerankUs, 0);
+  assert.equal(report.globalDeltaApproximateUs, 0);
+  assert.equal(report.globalDeltaExactRerankUs, 0);
+  assert.equal(report.globalDeltaWaitUs, 0);
 });
 
 test("searchWithReportBuffer accepts contiguous Float32Array query", async () => {

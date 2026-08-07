@@ -433,6 +433,29 @@ class ValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "raw inserted-ID recall failure"):
             validate(self.root, self.manifest_path)
 
+    def test_negative_global_phase_telemetry_fails(self) -> None:
+        reads_path = self.root / "cells/c64/r01/l1/w1/reads.csv"
+        with reads_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = list(reader.fieldnames or [])
+            records = list(reader)
+        fields.extend(
+            (
+                "global_base_approximate_us",
+                "global_base_exact_rerank_us",
+                "global_delta_approximate_us",
+                "global_delta_exact_rerank_us",
+                "global_delta_wait_us",
+            )
+        )
+        for record in records:
+            for field in fields[-5:]:
+                record[field] = "0"
+        records[0]["global_delta_exact_rerank_us"] = "-1"
+        self._write_csv(reads_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "negative global phase telemetry"):
+            validate(self.root, self.manifest_path)
+
 
 if __name__ == "__main__":
     unittest.main()
