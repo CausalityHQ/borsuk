@@ -2123,13 +2123,9 @@ impl BorsukIndex {
             .chunks(segment_max_vectors)
             .map(|chunk| (Uuid::new_v4().to_string(), chunk.len()))
             .collect::<Vec<_>>();
-        // Foreground lane materialization deliberately does not rebuild or
-        // extend the resident global-PQ artifact. That optimization is a
-        // corpus-scale rewrite and would multiply physical write bytes for
-        // every drain. The new manifest version makes the old global coverage
-        // ineligible; readers fall back to the authoritative routing tree and
-        // exact WAL/materialized segments until explicit maintenance rebuilds
-        // the global artifact.
+        // Publish materialized segments before extending global-PQ coverage.
+        // The bounded delta refresh below reuses the stable base and never
+        // promotes it on this foreground path.
         let index_ref: &BorsukIndex = &*self;
         let new_segment_summaries = {
             let mut segments_to_write = Vec::with_capacity(write_batch_size);
@@ -2174,6 +2170,7 @@ impl BorsukIndex {
         } else {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
         };
+        let _ = self.refresh_resident_global_delta(false)?;
         Ok(committed_sequences)
     }
 
@@ -18155,8 +18152,7 @@ impl BorsukIndex {
             summary.dimensions,
             self.manifest.build_config.vector_element_type,
         )?;
-        let batch_count = summary.object_count.div_ceil(batch_rows);
-        if !unique_rows.is_empty() && unique_rows.len() >= batch_count {
+        if sorted_sidecar_rows_touch_every_batch(&unique_rows, summary.object_count, batch_rows) {
             // At this candidate density a ranged `take` can touch every Arrow
             // record batch. Fetching the footer plus all batch ranges would be
             // no smaller than the complete sidecar and can be larger because
@@ -21987,6 +21983,34 @@ fn parallel_projected_segment_budget(mode: &SearchMode, available: usize) -> usi
     }
 }
 
+fn sorted_sidecar_rows_touch_every_batch(
+    rows: &[usize],
+    row_count: usize,
+    batch_rows: usize,
+) -> bool {
+    if rows.is_empty() || row_count == 0 || batch_rows == 0 {
+        return false;
+    }
+    let batch_count = row_count.div_ceil(batch_rows);
+    if rows.len() < batch_count {
+        return false;
+    }
+    let mut touched = 0_usize;
+    let mut previous = None;
+    for batch in rows
+        .iter()
+        .copied()
+        .take_while(|row| *row < row_count)
+        .map(|row| row / batch_rows)
+    {
+        if previous != Some(batch) {
+            touched += 1;
+            previous = Some(batch);
+        }
+    }
+    touched == batch_count
+}
+
 fn routing_page_overfetch(mode: &SearchMode) -> usize {
     match mode {
         SearchMode::Exact => ROUTING_SEARCH_PAGE_OVERFETCH,
@@ -22994,6 +23018,18 @@ mod tests {
 
     use super::*;
     use std::sync::{Barrier, Mutex};
+
+    #[test]
+    fn sparse_sidecar_rows_do_not_become_a_full_read_by_candidate_count() {
+        let rows = (0..16).collect::<Vec<_>>();
+
+        assert!(!sorted_sidecar_rows_touch_every_batch(&rows, 1_200, 256));
+        assert!(sorted_sidecar_rows_touch_every_batch(
+            &[0, 256, 512, 768, 1_024],
+            1_200,
+            256,
+        ));
+    }
 
     #[test]
     fn routing_page_cache_key_is_checksum_scoped() {
