@@ -183,3 +183,16 @@ CSV was read; only terminal markers, process exit, and the storage-trace
 failure marker were inspected. The run is not publication-eligible. The
 runner now preserves per-cell stdout/stderr logs so an early process failure
 cannot be reduced to an unexplained missing trace.
+
+## v63 diagnostic qualification launched (2026-08-07)
+
+Run `20260807T043006Z` launched from source commit `7575eda` with source
+archive SHA-256
+`358d48b7727d552c89604120a7157cee27ae8837444d509fd5e7b78fc6298517`, frozen
+manifest SHA-256
+`e05d6718eafd72723ef4b72990132abc5ec35b30d08f3e261f728cc02c15158f`, and
+fresh result/index prefixes under
+`s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260807T043006Z/`.
+The c7g.8xlarge worker was running and the launcher found no competing BORSUK
+benchmark process. A detached health/terminal-marker watcher polls every 15
+minutes. Until a root terminal marker appears, no measurement CSV is opened.
