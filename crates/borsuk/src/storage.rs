@@ -87,13 +87,12 @@ pub(crate) fn collection_wal_now_ms() -> Result<u64> {
     })
 }
 
-// Qualified on S3 with both 128d and 960d exact-vector candidate reads. Nearby
-// rows are joined to amortize GET latency, while the physical span cap prevents
-// a scattered query from turning into an almost whole-sidecar transfer. The
-// The wider cap keeps four-segment k=10 reranks below one GET per sidecar
-// bundle, whose code, exact-vector, and identity regions share one object.
-const SIDECAR_RANGE_COALESCE_BYTES: u64 = 64 * 1024 * 1024;
-const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 64 * 1024 * 1024;
+// Keep nearby exact-vector rows together, but never let a scattered candidate
+// set turn into a whole-sidecar transfer. A four-megabyte physical cap keeps
+// reranks bounded for 768d/1536d vectors while still amortizing adjacent rows;
+// larger spans are split into independently parallel range GETs.
+const SIDECAR_RANGE_COALESCE_BYTES: u64 = 256 * 1024;
+const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 4 * 1024 * 1024;
 const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
@@ -5148,7 +5147,7 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_range_plan_merges_gaps_but_caps_physical_gets_at_sixty_four_mib() {
+    fn sidecar_range_plan_does_not_merge_scattered_rows_into_large_gets() {
         let ranges = [
             0..4,
             512 * 1024..512 * 1024 + 4,
@@ -5162,11 +5161,19 @@ mod tests {
             SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
         );
 
-        assert_eq!(plan.physical, vec![0..5 * 1024 * 1024 + 4,]);
+        assert_eq!(
+            plan.physical,
+            vec![
+                0..4,
+                512 * 1024..512 * 1024 + 4,
+                1536 * 1024..1536 * 1024 + 4,
+                5 * 1024 * 1024..5 * 1024 * 1024 + 4,
+            ]
+        );
         assert!(
             plan.physical
                 .iter()
-                .all(|range| range.end - range.start <= 64 * 1024 * 1024)
+                .all(|range| range.end - range.start <= SIDECAR_MAX_PHYSICAL_RANGE_BYTES)
         );
         assert_eq!(plan.slices.len(), ranges.len());
     }
@@ -5185,10 +5192,17 @@ mod tests {
             SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
         );
 
-        assert_eq!(plan.physical, vec![0..4 * 1024 * 1024 + 4,]);
-        assert_eq!(plan.slices[0].physical_index, 0);
+        assert_eq!(
+            plan.physical,
+            vec![
+                0..4,
+                3 * 1024 * 1024..3 * 1024 * 1024 + 4,
+                4 * 1024 * 1024..4 * 1024 * 1024 + 4,
+            ]
+        );
+        assert_eq!(plan.slices[0].physical_index, 2);
         assert_eq!(plan.slices[1].physical_index, 0);
-        assert_eq!(plan.slices[2].physical_index, 0);
+        assert_eq!(plan.slices[2].physical_index, 1);
     }
 
     #[test]
