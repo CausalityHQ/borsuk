@@ -789,41 +789,46 @@ pub(crate) const COSINE_MAX_DISTANCE: f32 = 2.0;
 /// `[0, 1]`. A zero-norm operand is scored at this maximum (ranks last).
 pub(crate) const ANGULAR_MAX_DISTANCE: f32 = 1.0;
 
-/// Cosine similarity, returning `None` when either operand has zero L2 norm.
-///
-/// A zero vector has no direction, so cosine similarity is genuinely undefined
-/// for it. Rather than erroring (which would abort a whole search if the corpus
-/// contains a zero vector), callers translate `None` into the metric's MAXIMUM
-/// distance so the zero operand simply ranks last.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
-    let dot = dot_product(a, b);
-    // Route the norms through the same SIMD dot kernel so every reduction in a
-    // cosine/angular computation uses the identical lane+tail order.
-    let norm_a = dot_product(a, a).sqrt();
-    let norm_b = dot_product(b, b).sqrt();
-
-    if norm_a <= f32::EPSILON || norm_b <= f32::EPSILON {
-        return None;
-    }
-
-    Some((dot / (norm_a * norm_b)).clamp(-1.0, 1.0))
-}
-
 fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
-    match cosine_similarity(a, b) {
-        Some(similarity) => 1.0 - similarity,
-        // A zero-norm operand has no direction: score it at the maximum cosine
-        // distance so it ranks last instead of aborting the search.
-        None => COSINE_MAX_DISTANCE,
-    }
+    cosine_distance_with_query_norm(a, dot_product(a, a).sqrt(), b)
 }
 
 fn angular_distance(a: &[f32], b: &[f32]) -> f32 {
-    match cosine_similarity(a, b) {
-        Some(similarity) => similarity.acos() / std::f32::consts::PI,
-        // A zero-norm operand has no direction: score it at the maximum angular
-        // distance so it ranks last instead of aborting the search.
-        None => ANGULAR_MAX_DISTANCE,
+    angular_distance_with_query_norm(a, dot_product(a, a).sqrt(), b)
+}
+
+/// Cosine distance with a query norm supplied by the caller.
+///
+/// WAL-tail searches score many stored vectors against one query. Computing
+/// the query norm once avoids one full SIMD reduction per stored record while
+/// preserving the exact zero-norm and clamping semantics of `cosine_distance`.
+pub(crate) fn cosine_distance_with_query_norm(
+    query: &[f32],
+    query_norm: f32,
+    stored: &[f32],
+) -> f32 {
+    let stored_norm = dot_product(stored, stored).sqrt();
+    if query_norm <= f32::EPSILON || stored_norm <= f32::EPSILON {
+        COSINE_MAX_DISTANCE
+    } else {
+        1.0 - (dot_product(query, stored) / (query_norm * stored_norm)).clamp(-1.0, 1.0)
+    }
+}
+
+/// Angular distance with a query norm supplied by the caller.
+pub(crate) fn angular_distance_with_query_norm(
+    query: &[f32],
+    query_norm: f32,
+    stored: &[f32],
+) -> f32 {
+    let stored_norm = dot_product(stored, stored).sqrt();
+    if query_norm <= f32::EPSILON || stored_norm <= f32::EPSILON {
+        ANGULAR_MAX_DISTANCE
+    } else {
+        (dot_product(query, stored) / (query_norm * stored_norm))
+            .clamp(-1.0, 1.0)
+            .acos()
+            / std::f32::consts::PI
     }
 }
 
@@ -1441,9 +1446,9 @@ fn ensure_non_negative(values: &[f32], metric: &str) -> Result<()> {
 mod tests {
     use super::{
         ANGULAR_MAX_DISTANCE, COSINE_MAX_DISTANCE, VectorMetric, absolute_difference_max_simd,
-        absolute_difference_sum_simd, absolute_pair_sum_simd, binary_counts, dot_product,
-        dot_product_scalar, squared_euclidean_scalar, squared_euclidean_simd,
-        squared_u8_euclidean_simd,
+        absolute_difference_sum_simd, absolute_pair_sum_simd, angular_distance_with_query_norm,
+        binary_counts, cosine_distance_with_query_norm, dot_product, dot_product_scalar,
+        squared_euclidean_scalar, squared_euclidean_simd, squared_u8_euclidean_simd,
     };
 
     /// A zero-norm operand no longer aborts cosine/angular scoring: it scores the
@@ -1482,6 +1487,36 @@ mod tests {
                 "{metric} identical-vector distance {real} must rank ahead of the zero max {max}"
             );
         }
+    }
+
+    #[test]
+    fn query_norm_reuse_matches_regular_cosine_and_angular_distance() {
+        let query = [0.25_f32, -0.5, 0.75, 1.0, -1.25, 0.125, 0.625, -0.875, 0.3];
+        let stored = [-0.2_f32, 0.4, 0.6, -0.8, 1.1, 0.7, -0.3, 0.2, 0.9];
+        let query_norm = dot_product(&query, &query).sqrt();
+
+        assert_eq!(
+            cosine_distance_with_query_norm(&query, query_norm, &stored),
+            VectorMetric::Cosine
+                .distance_unchecked(&query, &stored)
+                .unwrap()
+        );
+        assert_eq!(
+            angular_distance_with_query_norm(&query, query_norm, &stored),
+            VectorMetric::Angular
+                .distance_unchecked(&query, &stored)
+                .unwrap()
+        );
+
+        let zero = [0.0_f32; 9];
+        assert_eq!(
+            cosine_distance_with_query_norm(&query, query_norm, &zero),
+            COSINE_MAX_DISTANCE
+        );
+        assert_eq!(
+            angular_distance_with_query_norm(&zero, 0.0, &stored),
+            ANGULAR_MAX_DISTANCE
+        );
     }
 
     /// The SIMD squared-Euclidean kernel that k-means and the coarse-quantizer

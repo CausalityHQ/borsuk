@@ -62,7 +62,7 @@ use crate::{
         SegmentLexicalShardRef, SegmentSummary, TombstonePageRef, TombstoneSummary, WalConfig,
         segment_id_bloom, segment_vector_signature_bloom,
     },
-    metric::VectorMetric,
+    metric::{VectorMetric, angular_distance_with_query_norm, cosine_distance_with_query_norm},
     observability,
     quantizer_sidecar::{PersistedQuantizer, is_quantizer_path, quantizer_relative_path},
     record::{
@@ -21788,6 +21788,8 @@ fn rank_live_wal_chunk(
     record_offset: usize,
     records: &[VectorRecord],
 ) -> Result<LiveWalChunkRanking> {
+    let query_norm = matches!(metric, VectorMetric::Cosine | VectorMetric::Angular)
+        .then(|| crate::metric::dot_product(query, query).sqrt());
     let mut ranked = Vec::<(usize, f32)>::with_capacity(options.k);
     let mut rows_evaluated = 0_usize;
     let mut rows_passed_filter = 0_usize;
@@ -21800,7 +21802,15 @@ fn rank_live_wal_chunk(
             }
             rows_passed_filter += 1;
         }
-        let distance = metric.distance_unchecked(query, &record.vector)?;
+        let distance = match (metric, query_norm) {
+            (VectorMetric::Cosine, Some(norm)) => {
+                cosine_distance_with_query_norm(query, norm, &record.vector)
+            }
+            (VectorMetric::Angular, Some(norm)) => {
+                angular_distance_with_query_norm(query, norm, &record.vector)
+            }
+            _ => metric.distance_unchecked(query, &record.vector)?,
+        };
         records_scored += 1;
         ranked.push((record_offset + local_ordinal, distance));
         ranked.sort_by(
