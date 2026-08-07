@@ -187,9 +187,10 @@
   through WAL Parquet, materialized-segment Parquet, exact-vector Arrow IPC,
   late-interaction Arrow IPC, and sparse/BM25 lexical-row Parquet; rejects mixed
   stamped/unstamped batches; and makes grouped writers allocate canonical
-  stamps before deduplication. Global PQ, the live BM25/WAL visibility state,
-  tombstones, and lean ranged-read propagation remain open, so this step is
-  deliberately not checked complete.
+  stamps before deduplication. Live WAL-tail, sparse, and BM25 duplicate
+  resolution now compare the complete version and fail on digest conflicts.
+  Global PQ, tombstones, and lean ranged-read propagation remain open, so this
+  step is deliberately not checked complete.
 
 - [ ] **Step 6: Replace tombstone and ID-directory generations**
 
