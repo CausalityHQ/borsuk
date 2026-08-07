@@ -590,3 +590,27 @@ on the 2,000-vector stable base, so a distributionally broader tail inherited
 bad physical routing. The next isolated factor is bounded tail-specific scan
 and coarse training at delta bootstrap; cache changes and reduced recall or
 candidate gates are explicitly excluded.
+
+## Tail-trained delta routing qualification launched (2026-08-07)
+
+Run `20260807T121141Z-tail-routing` launched from commit `a64814e` with source
+archive SHA-256
+`0ad840cc3c6a98583f9b9f81ce578c7a7c74510ddac72b3e58866ca9ce7cd4ff`
+and unchanged manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+The isolated factor trains a new immutable delta's scan and coarse quantizers
+from its own deterministic, dimension-aware reservoir bounded to 64 MiB,
+using records already owned by the drain when available. Later appends reuse
+that delta codebook; stable-base promotion is unchanged. The same slice also
+corrects the fixed-budget parallel segment reader so it cannot schedule more
+physical segment payloads than `max_segments`.
+
+The 513-test library gate, 32 group-commit integration tests, the exact
+segment-budget regression, strict all-target/all-feature workspace Clippy,
+validator tests, repository policy, formatting, and a structurally validated
+bulk runner smoke passed. A broader all-target integration invocation exposed
+seven pre-existing routing/cache-accounting assertions unrelated to this diff;
+they remain explicit production-hardening work and are not counted as passing
+evidence. The dedicated AWS worker passed the launcher's idle/no-contention
+preflight. Until root terminalization and process exit, inspect only markers,
+process state, and infrastructure health; do not open measurement CSVs.
