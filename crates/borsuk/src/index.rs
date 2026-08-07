@@ -12208,6 +12208,13 @@ impl BorsukIndex {
             && options.mode.leaf_mode() == expected_leaf_mode
             && !options.guaranteed_recall
             && !options.disable_coarse_quantizer
+            && !matches!(
+                options.mode,
+                SearchMode::Approx {
+                    projected_reads: Some(true),
+                    ..
+                }
+            )
             && options.filter.is_none()
             && !options.include_metadata;
         if !eligible {
