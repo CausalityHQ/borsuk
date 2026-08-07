@@ -280,3 +280,15 @@ The root `GROUP_COMMIT_SCALABILITY_FAILED` marker is present. The first cell
 the terminal diagnostic reports only a production performance-gate failure,
 and no measurement CSV was opened. The remaining matrix was not treated as
 evidence. The marker watcher was stopped after terminalization.
+
+## cache-reuse qualification launched (2026-08-07)
+
+Run `20260807T061500Z-cache-reuse` launched from the verified `abc83c0`
+revision with source archive SHA-256
+`6e1b9b1531b9111c1dbc7d24c1976d967e049bb6c984d9227e333b0f29f04625` and
+manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+Launcher preflight confirmed the c7g.8xlarge worker was running, idle, and had
+unique source/result paths. The detached watcher polls only terminal markers
+and EC2 health every 15 minutes; no measurement CSV is being inspected while
+the campaign is incomplete.
