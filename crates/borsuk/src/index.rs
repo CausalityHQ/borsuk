@@ -62,7 +62,10 @@ use crate::{
         SegmentLexicalShardRef, SegmentSummary, TombstonePageRef, TombstoneSummary, WalConfig,
         segment_id_bloom, segment_vector_signature_bloom,
     },
-    metric::{VectorMetric, angular_distance_with_query_norm, cosine_distance_with_query_norm},
+    metric::{
+        VectorMetric, angular_distance_with_norms, angular_distance_with_query_norm,
+        cosine_distance_with_norms, cosine_distance_with_query_norm,
+    },
     observability,
     quantizer_sidecar::{PersistedQuantizer, is_quantizer_path, quantizer_relative_path},
     record::{
@@ -765,6 +768,7 @@ type LiveWalSnapshotCache =
 struct LiveWalSnapshot {
     records: Arc<Vec<VectorRecord>>,
     by_id: HashMap<Vec<u8>, usize>,
+    stored_norms: Option<Arc<Vec<f32>>>,
 }
 
 type ResidentLexicalRoots = Arc<Mutex<Option<(u64, BTreeMap<(String, String), Arc<LexicalRoot>>)>>>;
@@ -8850,7 +8854,23 @@ impl BorsukIndex {
             .enumerate()
             .map(|(ordinal, record)| (record.id.as_bytes().to_vec(), ordinal))
             .collect();
-        let snapshot = Arc::new(LiveWalSnapshot { records, by_id });
+        let stored_norms = matches!(
+            &self.manifest.config.metric,
+            VectorMetric::Cosine | VectorMetric::Angular
+        )
+        .then(|| {
+            Arc::new(
+                records
+                    .iter()
+                    .map(|record| crate::metric::dot_product(&record.vector, &record.vector).sqrt())
+                    .collect(),
+            )
+        });
+        let snapshot = Arc::new(LiveWalSnapshot {
+            records,
+            by_id,
+            stored_norms,
+        });
         *cache = Some((key, Arc::clone(&snapshot)));
         Ok(snapshot)
     }
@@ -14781,6 +14801,11 @@ impl BorsukIndex {
         } else {
             self.dense_live_wal_records(wal_query_cells.as_ref())?
         };
+        let live_wal_norms = if options.k == 0 || wal_query_cells.is_some() {
+            None
+        } else {
+            self.live_wal_snapshot()?.stored_norms.clone()
+        };
         let zero_distance_wal_eligible = matches!(options.mode, SearchMode::Approx { .. })
             && self.manifest.config.metric.supports_centroid_lower_bound();
         let global_eligible = options.mode.leaf_mode()
@@ -14840,6 +14865,7 @@ impl BorsukIndex {
                 &options,
                 include_vectors,
                 &live_wal_tail,
+                live_wal_norms.as_ref().map(|norms| norms.as_slice()),
                 wal_query_cells.as_ref(),
                 started,
                 &requests_before,
@@ -15692,6 +15718,7 @@ impl BorsukIndex {
         options: &SearchOptions,
         include_vectors: bool,
         live_wal_tail: &[VectorRecord],
+        live_wal_norms: Option<&[f32]>,
         wal_query_cells: Option<&BTreeSet<LogicalCellId>>,
         started: Instant,
         requests_before: &RequestCounts,
@@ -15709,6 +15736,7 @@ impl BorsukIndex {
             options,
             include_vectors,
             live_wal_tail,
+            live_wal_norms,
         )?;
         let LiveWalRanking {
             ranked,
@@ -21807,6 +21835,7 @@ fn rank_live_wal_chunk(
     options: &SearchOptions,
     record_offset: usize,
     records: &[VectorRecord],
+    stored_norms: Option<&[f32]>,
 ) -> Result<LiveWalChunkRanking> {
     let query_norm = matches!(metric, VectorMetric::Cosine | VectorMetric::Angular)
         .then(|| crate::metric::dot_product(query, query).sqrt());
@@ -21822,11 +21851,18 @@ fn rank_live_wal_chunk(
             }
             rows_passed_filter += 1;
         }
-        let distance = match (metric, query_norm) {
-            (VectorMetric::Cosine, Some(norm)) => {
+        let stored_norm = stored_norms.and_then(|norms| norms.get(local_ordinal).copied());
+        let distance = match (metric, query_norm, stored_norm) {
+            (VectorMetric::Cosine, Some(query_norm), Some(stored_norm)) => {
+                cosine_distance_with_norms(query, query_norm, &record.vector, stored_norm)
+            }
+            (VectorMetric::Angular, Some(query_norm), Some(stored_norm)) => {
+                angular_distance_with_norms(query, query_norm, &record.vector, stored_norm)
+            }
+            (VectorMetric::Cosine, Some(norm), None) => {
                 cosine_distance_with_query_norm(query, norm, &record.vector)
             }
-            (VectorMetric::Angular, Some(norm)) => {
+            (VectorMetric::Angular, Some(norm), None) => {
                 angular_distance_with_query_norm(query, norm, &record.vector)
             }
             _ => metric.distance_unchecked(query, &record.vector)?,
@@ -21861,23 +21897,27 @@ fn rank_live_wal_exact(
     options: &SearchOptions,
     include_vectors: bool,
     records: &[VectorRecord],
+    stored_norms: Option<&[f32]>,
 ) -> Result<LiveWalRanking> {
     const PARALLEL_WAL_RECORDS: usize = 1_024;
     const WAL_SCORE_CHUNK_RECORDS: usize = 256;
     let chunks = if records.len() < PARALLEL_WAL_RECORDS {
-        vec![rank_live_wal_chunk(metric, query, options, 0, records)?]
+        vec![rank_live_wal_chunk(
+            metric,
+            query,
+            options,
+            0,
+            records,
+            stored_norms,
+        )?]
     } else {
         records
             .par_chunks(WAL_SCORE_CHUNK_RECORDS)
             .enumerate()
             .map(|(chunk, rows)| {
-                rank_live_wal_chunk(
-                    metric,
-                    query,
-                    options,
-                    chunk * WAL_SCORE_CHUNK_RECORDS,
-                    rows,
-                )
+                let offset = chunk * WAL_SCORE_CHUNK_RECORDS;
+                let chunk_norms = stored_norms.map(|norms| &norms[offset..offset + rows.len()]);
+                rank_live_wal_chunk(metric, query, options, offset, rows, chunk_norms)
             })
             .collect::<Result<Vec<_>>>()?
     };
@@ -25643,6 +25683,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let options = SearchOptions::exact(7);
+        let norms = records
+            .iter()
+            .map(|record| crate::metric::dot_product(&record.vector, &record.vector).sqrt())
+            .collect::<Vec<_>>();
 
         let ranking = rank_live_wal_exact(
             &VectorMetric::Euclidean,
@@ -25650,6 +25694,7 @@ mod tests {
             &options,
             false,
             &records,
+            Some(&norms),
         )
         .unwrap();
 
@@ -25671,6 +25716,37 @@ mod tests {
                 "tail-2050",
                 "tail-2044",
             ]
+        );
+
+        let cosine_baseline = rank_live_wal_exact(
+            &VectorMetric::Cosine,
+            &[2_047.5, 2_047.5],
+            &options,
+            false,
+            &records,
+            None,
+        )
+        .unwrap();
+        let cosine_cached = rank_live_wal_exact(
+            &VectorMetric::Cosine,
+            &[2_047.5, 2_047.5],
+            &options,
+            false,
+            &records,
+            Some(&norms),
+        )
+        .unwrap();
+        assert_eq!(
+            cosine_cached
+                .ranked
+                .iter()
+                .map(|entry| entry.hit.id.clone())
+                .collect::<Vec<_>>(),
+            cosine_baseline
+                .ranked
+                .iter()
+                .map(|entry| entry.hit.id.clone())
+                .collect::<Vec<_>>()
         );
     }
 
