@@ -505,3 +505,20 @@ round trips for this scattered shortlist. The source therefore restores the
 64 KiB gap while retaining the independently useful 32-request wave. A real
 range regression requires a 512 KiB unselected gap to remain two four-byte
 physical reads.
+
+## Global base/delta phase telemetry qualification launched (2026-08-07)
+
+Run `20260807T103224Z-phase-telemetry` launched from commit `0da625d` with
+source archive SHA-256
+`56624bc5f4c88a1f0ff5f954c5a5221b1d0003e83366fe0b1be65240c9d1049c`
+and the unchanged frozen manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+Preflight found no competing benchmark process on the dedicated
+`c7g.8xlarge` worker; instance checks, memory, disk, and load were healthy.
+The only source change relative to the rejected coalescing arm restores the
+64 KiB rerank merge gap and adds stable-base approximate/rerank,
+immutable-delta approximate/rerank, and post-base delta-wait telemetry. It
+does not change candidate count, cache policy, recall requirements, or the
+frozen workload. Until the root terminal marker appears and the benchmark
+process exits, inspect markers and infrastructure/process health only; do not
+open measurement CSVs.
