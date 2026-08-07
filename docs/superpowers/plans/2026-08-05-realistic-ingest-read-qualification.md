@@ -118,6 +118,15 @@
   drain. Resolve these baseline gate blockers on their production semantics
   before launching the next AWS qualification arm; do not merely suppress or
   relax them.
+- Those five baseline blockers are now resolved against production semantics.
+  Compaction assertions require the selected parent/leaf reads while corrupted
+  sibling branches remain unread; the range fixture now proves the actual
+  4 MiB physical cap with 64 KiB-adjacent ranges; and threshold lane drain now
+  requires current delta coverage and approximate recall instead of forbidding
+  the new delta publication. If that optional ANN maintenance encounters a
+  corrupt descriptor after segment publication, drain preserves its durable
+  success and emits the existing post-commit maintenance warning. A fresh full
+  library gate passes 510 tests with 6 explicitly ignored.
 
 ## Global Constraints
 

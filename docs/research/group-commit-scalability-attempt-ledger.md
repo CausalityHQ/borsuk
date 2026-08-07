@@ -411,3 +411,12 @@ publication and delta paths afterward, preserves the exact delta hit, and
 requires simultaneous GETs across those two path sets.  It failed on the
 serial implementation and passes with overlap.  This is local structural
 evidence only; no AWS latency result is assigned yet.
+
+Before requalification, the full library gate's five baseline blockers were
+resolved without suppressions.  Routing tests now assert the two selected
+parent/leaf reads and retain corrupt-sibling sentinels; the range test exercises
+the current 4 MiB cap with merge-eligible 64 KiB gaps; and lane-drain coverage
+requires a current searchable delta.  Optional ANN maintenance failure after
+durable segment publication is reported through the post-commit maintenance
+warning rather than converting a completed drain into a retry-unsafe error.
+The resulting full library gate passes 510 tests with 6 explicitly ignored.

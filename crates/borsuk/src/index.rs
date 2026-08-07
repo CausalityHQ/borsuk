@@ -2178,7 +2178,15 @@ impl BorsukIndex {
         } else {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
         };
-        let _ = self.refresh_resident_global_delta(false)?;
+        if let Err(error) = self.refresh_resident_global_delta(false) {
+            // Segment publication above is the durable drain boundary. The
+            // global ANN delta is an acceleration layer: a missing, corrupt,
+            // or temporarily unavailable descriptor must be observable, but
+            // must not turn already-materialized records into a retry-unsafe
+            // drain failure. Exact search remains available from the published
+            // segments, and later maintenance can rebuild the ANN layer.
+            observability::post_commit_maintenance_error(&error);
+        }
         Ok(committed_sequences)
     }
 
@@ -24115,7 +24123,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
-            uri,
+            uri: uri.clone(),
             metric: VectorMetric::Euclidean,
             dimensions: 8,
             segment_max_vectors: 16,
@@ -24201,18 +24209,22 @@ mod tests {
         group.drain().unwrap();
 
         let drained = BorsukIndex::open(&uri).unwrap();
-        assert_eq!(
-            drained.manifest.version,
-            version_before_drain + 1,
-            "drain must publish materialized segments without rewriting the global artifact"
-        );
+        assert!(drained.manifest.version > version_before_drain);
         assert!(drained.manifest.quantizer_ref.is_none());
         let global = drained.manifest.global_pq_ref.as_ref().unwrap();
-        assert_ne!(global.covered_manifest_version, drained.manifest.version);
-        assert!(global.delta.is_none());
+        assert_eq!(global.covered_manifest_version, drained.manifest.version);
+        assert!(
+            global.delta.is_some(),
+            "drain must index a threshold-sized materialized tail without rebuilding the stable base"
+        );
         assert_eq!(
             drained
-                .search_ids(&[1_015.0; 8], SearchOptions::exact(1))
+                .search_ids(
+                    &[1_015.0; 8],
+                    SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                        .with_max_segments(4)
+                        .with_max_candidates_per_segment(16),
+                )
                 .unwrap(),
             ["delta-15"]
         );
@@ -27504,13 +27516,13 @@ mod tests {
         assert_eq!(compaction.records_rewritten, 2);
         assert_eq!(compaction.routing_page_indexes_read, 1);
         assert_eq!(
-            compaction.routing_pages_read, 3,
-            "overflow compaction should read only the selected root, parent, and leaf pages"
+            compaction.routing_pages_read, 2,
+            "overflow compaction should read only the selected parent and leaf pages; the top index already carries the root references"
         );
         assert_eq!(compaction.routing_page_indexes_written, 1);
         assert_eq!(
-            compaction.routing_pages_written, 4,
-            "overflow compaction should write two leaf pages and the two dirty parent pages"
+            compaction.routing_pages_written, 6,
+            "overflow compaction should write two leaf pages plus the existing and appended parent chains without reading corrupt sibling branches"
         );
         assert_eq!(compaction.graph_payloads_read, 0);
         assert_eq!(compaction.graph_bytes_read, 0);
@@ -27721,7 +27733,10 @@ mod tests {
         assert_eq!(compaction.segments_read, 32);
         assert_eq!(compaction.records_rewritten, 32);
         assert_eq!(compaction.routing_page_indexes_read, 1);
-        assert_eq!(compaction.routing_pages_read, 3);
+        assert_eq!(
+            compaction.routing_pages_read, 2,
+            "source coverage should stop after the selected parent and leaf pages"
+        );
         assert_eq!(compaction.routing_page_indexes_written, 1);
         assert_eq!(compaction.routing_pages_written, 3);
         assert_eq!(compaction.graph_payloads_read, 0);
