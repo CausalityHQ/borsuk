@@ -18435,21 +18435,41 @@ impl BorsukIndex {
             return Ok(0);
         }
         let path = vector_sidecar_relative_path(&summary.checksum);
-        let sidecar = self.storage.read_bytes_with_cache_status(&path)?.bytes;
-        let sidecar_bytes = sidecar.len() as u64;
-        let decode_started = Instant::now();
-        let vectors = crate::arrow_vector_sidecar::decode_all(&sidecar, dim)?;
-        self.storage
-            .record_access_event(StorageAccessEvent::decode(
-                &path,
-                physical_format_for_path(&path),
-                sidecar.len() as u64,
-                "vector",
-                "all",
-                segment.records.len() as u64,
-                vectors.len() as u64,
-                elapsed_ns(decode_started),
-            ))?;
+        let (vectors, sidecar_bytes) = if let Some(vectors) = self
+            .read_runtime
+            .decoded_vector_sidecars
+            .get(&summary.checksum)
+        {
+            (vectors, 0)
+        } else {
+            let (vectors, sidecar_bytes, _) =
+                self.read_runtime
+                    .inflight_vector_sidecars
+                    .load(&summary.checksum, || {
+                        let sidecar = self.storage.read_bytes_with_cache_status(&path)?.bytes;
+                        let sidecar_bytes = sidecar.len() as u64;
+                        let decode_started = Instant::now();
+                        let vectors = crate::arrow_vector_sidecar::decode_all(&sidecar, dim)?;
+                        self.storage
+                            .record_access_event(StorageAccessEvent::decode(
+                                &path,
+                                physical_format_for_path(&path),
+                                sidecar.len() as u64,
+                                "vector",
+                                "all",
+                                segment.records.len() as u64,
+                                vectors.len() as u64,
+                                elapsed_ns(decode_started),
+                            ))?;
+                        Ok((vectors, sidecar_bytes))
+                    })?;
+            self.read_runtime.decoded_vector_sidecars.insert(
+                summary.checksum.clone(),
+                Arc::clone(&vectors),
+                decoded_vector_sidecar_bytes(&vectors, dim),
+            );
+            (vectors, sidecar_bytes)
+        };
         if vectors.len() != segment.records.len() {
             return Err(BorsukError::InvalidStorage(format!(
                 "vector sidecar `{path}` holds {} rows but the segment has {} records",
@@ -18457,8 +18477,8 @@ impl BorsukIndex {
                 segment.records.len()
             )));
         }
-        for (record, vector) in segment.records.iter_mut().zip(vectors) {
-            record.vector = vector;
+        for (record, vector) in segment.records.iter_mut().zip(vectors.iter()) {
+            record.vector = vector.clone();
         }
         Ok(sidecar_bytes)
     }
@@ -26784,6 +26804,44 @@ mod tests {
         assert!(first.1 > 0);
         assert_eq!(second.1, 0);
         assert_eq!(first.0, second.0);
+    }
+
+    #[test]
+    fn full_segment_decode_populates_shared_vector_sidecar_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 128,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let records = (0..512)
+            .map(|row| VectorRecord::new(format!("row-{row:04}"), vec![row as f32; 128]))
+            .collect();
+        let segment = Segment::from_records(
+            "full-segment-sidecar-cache".to_string(),
+            1,
+            VectorMetric::Euclidean,
+            128,
+            records,
+        )
+        .unwrap();
+        let summary = index.write_segment(segment).unwrap();
+
+        index.read_segment(&summary).unwrap();
+
+        assert!(
+            index
+                .read_runtime
+                .decoded_vector_sidecars
+                .get(&summary.checksum)
+                .is_some(),
+            "full segment decode should share its sidecar decode with projected reads"
+        );
     }
 
     #[test]
