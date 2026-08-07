@@ -17391,18 +17391,27 @@ impl BorsukIndex {
                     .records
                     .iter()
                     .filter_map(|record| {
-                        record_text_terms(record)
-                            .map(|terms| (record.id.as_bytes().to_vec(), record.generation, terms))
+                        record_text_terms(record).map(|terms| {
+                            (
+                                record.id.as_bytes().to_vec(),
+                                record.generation,
+                                record.mutation_stamp(),
+                                terms,
+                            )
+                        })
                     })
                     .collect::<Vec<_>>();
                 let lexical_rows = text_rows
                     .iter()
-                    .map(|(record_id, generation, terms)| LexicalInputRow {
-                        record_id: record_id.clone(),
-                        generation: *generation,
-                        terms: terms.iter().map(|(term, tf)| (*term, *tf as f32)).collect(),
-                        document_length: terms.iter().map(|(_, tf)| *tf).sum(),
-                    })
+                    .map(
+                        |(record_id, generation, mutation_stamp, terms)| LexicalInputRow {
+                            record_id: record_id.clone(),
+                            generation: *generation,
+                            mutation_stamp: *mutation_stamp,
+                            terms: terms.iter().map(|(term, tf)| (*term, *tf as f32)).collect(),
+                            document_length: terms.iter().map(|(_, tf)| *tf).sum(),
+                        },
+                    )
                     .collect::<Vec<_>>();
                 let lexical_build = build_lexical_segment(
                     LexicalKind::Bm25,
@@ -17445,6 +17454,7 @@ impl BorsukIndex {
                         (
                             record.id.as_bytes().to_vec(),
                             record.generation,
+                            record.mutation_stamp(),
                             vector.clone(),
                         )
                     })
@@ -17452,17 +17462,20 @@ impl BorsukIndex {
                 .collect::<Vec<_>>();
             let lexical_rows = rows
                 .iter()
-                .map(|(record_id, generation, vector)| LexicalInputRow {
-                    record_id: record_id.clone(),
-                    generation: *generation,
-                    terms: vector
-                        .indices()
-                        .iter()
-                        .copied()
-                        .zip(vector.values().iter().copied())
-                        .collect(),
-                    document_length: 0,
-                })
+                .map(
+                    |(record_id, generation, mutation_stamp, vector)| LexicalInputRow {
+                        record_id: record_id.clone(),
+                        generation: *generation,
+                        mutation_stamp: *mutation_stamp,
+                        terms: vector
+                            .indices()
+                            .iter()
+                            .copied()
+                            .zip(vector.values().iter().copied())
+                            .collect(),
+                        document_length: 0,
+                    },
+                )
                 .collect::<Vec<_>>();
             let lexical_build = build_lexical_segment(
                 LexicalKind::Sparse,
@@ -18215,7 +18228,15 @@ impl BorsukIndex {
                 self.storage.read_parquet_row_groups_ranged(
                     &plan.run.metadata_path,
                     plan.run.metadata_bytes,
-                    RangedColumns::Keep(&["row", "record_id", "generation", "document_length"]),
+                    RangedColumns::Keep(&[
+                        "row",
+                        "record_id",
+                        "generation",
+                        "mutation_hlc",
+                        "mutation_writer",
+                        "mutation_digest",
+                        "document_length",
+                    ]),
                     &[metadata_group],
                 )
             },

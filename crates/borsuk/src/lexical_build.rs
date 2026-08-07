@@ -25,6 +25,7 @@ pub(crate) const DEFAULT_LEXICAL_BLOCK_BYTES: usize = 1024 * 1024;
 pub(crate) struct LexicalInputRow {
     pub record_id: Vec<u8>,
     pub generation: u64,
+    pub mutation_stamp: Option<crate::mutation::MutationStamp>,
     /// Sorted unique `(term, value)` pairs. BM25 values are integral TFs.
     pub terms: Vec<(u32, f32)>,
     /// Positive for BM25, zero for sparse.
@@ -120,6 +121,7 @@ pub(crate) fn build_lexical_segment(
                 row: u32::try_from(local_row).expect("block row count checked"),
                 record_id: row.record_id.clone(),
                 generation: row.generation,
+                mutation_stamp: row.mutation_stamp,
                 document_length: row.document_length,
             })
             .collect::<Vec<_>>();
@@ -304,6 +306,7 @@ fn estimated_row_bytes(row: &LexicalInputRow) -> usize {
     row.record_id
         .len()
         .saturating_add(24)
+        .saturating_add(if row.mutation_stamp.is_some() { 56 } else { 0 })
         .saturating_add(row.terms.len().saturating_mul(12))
 }
 
@@ -357,6 +360,7 @@ mod tests {
             .map(|row| LexicalInputRow {
                 record_id: format!("document-{row}").into_bytes(),
                 generation: row,
+                mutation_stamp: None,
                 terms: vec![(1, 1.0), (3, 2.0)],
                 document_length: 3,
             })

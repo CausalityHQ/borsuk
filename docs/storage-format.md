@@ -387,8 +387,10 @@ Ingest creates bounded per-segment Parquet shards. Publication merges their
 compact routing/stat rows into global term pages without copying postings.
 Compaction creates new immutable shards and rebuilds roots from the active
 segment set; old objects remain unreachable until garbage collection. Record id
-and generation in the row-metadata groups give sparse and BM25 the same MVCC
-visibility as dense search.
+plus typed mutation HLC, writer identity, and canonical digest in the
+row-metadata groups preserve the same convergent mutation identity used by
+dense search. The temporary generation column remains during the v30 cutover;
+it is not the final cross-writer visibility key.
 
 ## Native FFI Rules
 
@@ -424,7 +426,7 @@ quantizer/xx/<checksum>.parquet persisted IVF coarse quantizer (centroid HNSW), 
 lexical/roots/.../*.parquet       resident field root with bounded term-page references
 lexical/terms/.../*.parquet       bounded term-range routing pages
 lexical/postings/.../*.parquet    immutable posting blocks, one addressable row group per run
-lexical/rows/.../*.parquet        immutable id/generation/document-length blocks
+lexical/rows/.../*.parquet        immutable id/mutation-stamp/document-length blocks
 lexical/shards/.../*.parquet      per-segment build summaries used to rebuild roots
 ```
 

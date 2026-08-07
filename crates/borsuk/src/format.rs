@@ -4432,32 +4432,66 @@ pub(crate) fn lexical_row_metadata_blocks_to_parquet(
     kind: LexicalKind,
     blocks: &[Vec<LexicalRowMetadata>],
 ) -> Result<Vec<u8>> {
-    if blocks.is_empty() {
+    if blocks.is_empty() || blocks.iter().any(Vec::is_empty) {
         return Err(BorsukError::InvalidStorage(
-            "lexical metadata Parquet pack must contain a row group".to_string(),
+            "lexical metadata Parquet pack must contain non-empty row groups".to_string(),
         ));
     }
-    let schema = lexical_row_metadata_schema();
+    let stamped = blocks
+        .iter()
+        .flatten()
+        .filter(|row| row.mutation_stamp.is_some())
+        .count();
+    let row_count = blocks.iter().map(Vec::len).sum::<usize>();
+    if stamped != 0 && stamped != row_count {
+        return Err(BorsukError::InvalidStorage(
+            "lexical metadata cannot mix stamped and unstamped mutations".to_string(),
+        ));
+    }
+    let schema = lexical_row_metadata_schema(stamped != 0);
     let mut batches = Vec::with_capacity(blocks.len());
     for rows in blocks {
         validate_lexical_rows(kind, rows)?;
-        batches.push(RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                array(UInt32Array::from_iter_values(
-                    rows.iter().map(|row| row.row),
-                )),
-                array(BinaryArray::from_iter_values(
-                    rows.iter().map(|row| row.record_id.as_slice()),
-                )),
-                array(UInt64Array::from_iter_values(
-                    rows.iter().map(|row| row.generation),
-                )),
-                array(UInt32Array::from_iter_values(
-                    rows.iter().map(|row| row.document_length),
-                )),
-            ],
-        )?);
+        let mut columns = vec![
+            array(UInt32Array::from_iter_values(
+                rows.iter().map(|row| row.row),
+            )),
+            array(BinaryArray::from_iter_values(
+                rows.iter().map(|row| row.record_id.as_slice()),
+            )),
+            array(UInt64Array::from_iter_values(
+                rows.iter().map(|row| row.generation),
+            )),
+        ];
+        if stamped != 0 {
+            columns.extend([
+                array(UInt64Array::from_iter_values(rows.iter().map(|row| {
+                    row.mutation_stamp
+                        .expect("all lexical stamps checked before encoding")
+                        .version()
+                        .hlc()
+                }))),
+                array(FixedSizeBinaryArray::try_from_iter(rows.iter().map(
+                    |row| {
+                        row.mutation_stamp
+                            .expect("all lexical stamps checked before encoding")
+                            .version()
+                            .writer()
+                    },
+                ))?),
+                array(FixedSizeBinaryArray::try_from_iter(rows.iter().map(
+                    |row| {
+                        row.mutation_stamp
+                            .expect("all lexical stamps checked before encoding")
+                            .digest()
+                    },
+                ))?),
+            ]);
+        }
+        columns.push(array(UInt32Array::from_iter_values(
+            rows.iter().map(|row| row.document_length),
+        )));
+        batches.push(RecordBatch::try_new(Arc::clone(&schema), columns)?);
     }
     write_batches_as_row_groups(Arc::clone(&schema), &batches)
 }
@@ -4476,11 +4510,13 @@ pub(crate) fn lexical_row_metadata_from_batches(
 ) -> Result<Vec<LexicalRowMetadata>> {
     let mut rows = Vec::new();
     for batch in batches {
+        let mutation_stamp_columns = mutation_stamp_columns(&batch.schema())?;
         for row in 0..batch.num_rows() {
             rows.push(LexicalRowMetadata {
                 row: primitive_value_by_name::<UInt32Type>(batch, row, "row")?,
                 record_id: binary_value_by_name(batch, row, "record_id")?.to_vec(),
                 generation: primitive_value_by_name::<UInt64Type>(batch, row, "generation")?,
+                mutation_stamp: mutation_stamp_value(batch, mutation_stamp_columns, row)?,
                 document_length: primitive_value_by_name::<UInt32Type>(
                     batch,
                     row,
@@ -5149,13 +5185,17 @@ fn sparse_postings_schema(element_type: VectorElementType) -> Result<Arc<Schema>
     ])))
 }
 
-fn lexical_row_metadata_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
+fn lexical_row_metadata_schema(include_mutation_stamp: bool) -> Arc<Schema> {
+    let mut fields = vec![
         Field::new("row", DataType::UInt32, false),
         Field::new("record_id", DataType::Binary, false),
         Field::new("generation", DataType::UInt64, false),
-        Field::new("document_length", DataType::UInt32, false),
-    ]))
+    ];
+    if include_mutation_stamp {
+        fields.extend(mutation_stamp_fields());
+    }
+    fields.push(Field::new("document_length", DataType::UInt32, false));
+    Arc::new(Schema::new(fields))
 }
 
 fn fixed_f32_field(name: &str, dimensions: usize) -> Field {
@@ -6430,13 +6470,67 @@ mod tests {
                 row,
                 record_id: format!("doc-{row}").into_bytes(),
                 generation: u64::from(row),
+                mutation_stamp: Some(MutationStamp::new(
+                    MutationVersion::from_parts(7_000, [row as u8; 16]),
+                    [0x80 + row as u8; 32],
+                )),
                 document_length: row + 1,
             })
             .collect::<Vec<_>>();
         let bytes = lexical_row_metadata_to_parquet(LexicalKind::Bm25, &rows).unwrap();
+        let batches = read_batches(&bytes).unwrap();
+        let schema = batches[0].schema();
+        assert_eq!(
+            schema.field_with_name("mutation_hlc").unwrap().data_type(),
+            &DataType::UInt64
+        );
+        assert_eq!(
+            schema
+                .field_with_name("mutation_writer")
+                .unwrap()
+                .data_type(),
+            &DataType::FixedSizeBinary(16)
+        );
+        assert_eq!(
+            schema
+                .field_with_name("mutation_digest")
+                .unwrap()
+                .data_type(),
+            &DataType::FixedSizeBinary(32)
+        );
         assert_eq!(
             lexical_row_metadata_from_parquet(LexicalKind::Bm25, &bytes).unwrap(),
             rows
+        );
+    }
+
+    #[test]
+    fn lexical_rows_reject_mixed_mutation_stamps() {
+        let rows = vec![
+            LexicalRowMetadata {
+                row: 0,
+                record_id: b"stamped".to_vec(),
+                generation: 1,
+                mutation_stamp: Some(MutationStamp::new(
+                    MutationVersion::from_parts(11, [1; 16]),
+                    [2; 32],
+                )),
+                document_length: 1,
+            },
+            LexicalRowMetadata {
+                row: 1,
+                record_id: b"unstamped".to_vec(),
+                generation: 2,
+                mutation_stamp: None,
+                document_length: 1,
+            },
+        ];
+
+        let error = lexical_row_metadata_to_parquet(LexicalKind::Bm25, &rows).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot mix stamped and unstamped mutations")
         );
     }
 
