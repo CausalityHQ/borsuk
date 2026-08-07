@@ -764,6 +764,30 @@ pub struct BorsukIndex {
 type LiveWalSnapshotCache =
     Arc<Mutex<Option<((u64, Vec<[u8; 32]>, Vec<String>), Arc<LiveWalSnapshot>)>>>;
 
+fn cached_snapshot<K, V, F>(cache: &Mutex<Option<(K, Arc<V>)>>, key: K, build: F) -> Result<Arc<V>>
+where
+    K: Eq,
+    F: FnOnce() -> Result<Arc<V>>,
+{
+    {
+        let guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some((cached_key, value)) = guard.as_ref()
+            && cached_key == &key
+        {
+            return Ok(Arc::clone(value));
+        }
+    }
+    let built = build()?;
+    let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some((cached_key, value)) = guard.as_ref()
+        && cached_key == &key
+    {
+        return Ok(Arc::clone(value));
+    }
+    *guard = Some((key, Arc::clone(&built)));
+    Ok(built)
+}
+
 #[derive(Debug)]
 struct LiveWalSnapshot {
     records: Arc<Vec<VectorRecord>>,
@@ -8839,40 +8863,33 @@ impl BorsukIndex {
 
     fn live_wal_snapshot(&self) -> Result<Arc<LiveWalSnapshot>> {
         let key = self.live_wal_snapshot_key();
-        let mut cache = self
-            .live_wal_snapshot_cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if let Some((cached_key, snapshot)) = cache.as_ref()
-            && cached_key == &key
-        {
-            return Ok(Arc::clone(snapshot));
-        }
-        let records = Arc::new(self.live_wal_tail_records_for_cells(None)?);
-        let by_id = records
-            .iter()
-            .enumerate()
-            .map(|(ordinal, record)| (record.id.as_bytes().to_vec(), ordinal))
-            .collect();
-        let stored_norms = matches!(
-            &self.manifest.config.metric,
-            VectorMetric::Cosine | VectorMetric::Angular
-        )
-        .then(|| {
-            Arc::new(
-                records
-                    .iter()
-                    .map(|record| crate::metric::dot_product(&record.vector, &record.vector).sqrt())
-                    .collect(),
+        cached_snapshot(&self.live_wal_snapshot_cache, key, || {
+            let records = Arc::new(self.live_wal_tail_records_for_cells(None)?);
+            let by_id = records
+                .iter()
+                .enumerate()
+                .map(|(ordinal, record)| (record.id.as_bytes().to_vec(), ordinal))
+                .collect();
+            let stored_norms = matches!(
+                &self.manifest.config.metric,
+                VectorMetric::Cosine | VectorMetric::Angular
             )
-        });
-        let snapshot = Arc::new(LiveWalSnapshot {
-            records,
-            by_id,
-            stored_norms,
-        });
-        *cache = Some((key, Arc::clone(&snapshot)));
-        Ok(snapshot)
+            .then(|| {
+                Arc::new(
+                    records
+                        .iter()
+                        .map(|record| {
+                            crate::metric::dot_product(&record.vector, &record.vector).sqrt()
+                        })
+                        .collect(),
+                )
+            });
+            Ok(Arc::new(LiveWalSnapshot {
+                records,
+                by_id,
+                stored_norms,
+            }))
+        })
     }
 
     fn live_wal_tail_records_for_cells(
@@ -22567,6 +22584,49 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
+    use std::sync::{Barrier, Mutex};
+
+    #[test]
+    fn snapshot_cache_build_does_not_hold_mutex_during_build() {
+        let cache: Mutex<Option<(u64, Arc<u64>)>> = Mutex::new(None);
+        let start = Arc::new(Barrier::new(3));
+        let both_builders = Arc::new(Barrier::new(2));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let first_start = Arc::clone(&start);
+        let first_both_builders = Arc::clone(&both_builders);
+        let first_builds = Arc::clone(&builds);
+        let first_cache = &cache;
+        let first = thread::scope(|scope| {
+            scope.spawn(move || {
+                cached_snapshot(first_cache, 7, || {
+                    first_builds.fetch_add(1, AtomicOrdering::Relaxed);
+                    first_start.wait();
+                    first_both_builders.wait();
+                    Ok(Arc::new(11_u64))
+                })
+                .unwrap()
+            });
+            let second_start = Arc::clone(&start);
+            let second_both_builders = Arc::clone(&both_builders);
+            let second_builds = Arc::clone(&builds);
+            let second_cache = &cache;
+            scope.spawn(move || {
+                cached_snapshot(second_cache, 7, || {
+                    second_builds.fetch_add(1, AtomicOrdering::Relaxed);
+                    second_start.wait();
+                    second_both_builders.wait();
+                    Ok(Arc::new(11_u64))
+                })
+                .unwrap()
+            });
+            // Both builders must enter before either can publish. A cache
+            // mutex held during build would deadlock the second lookup.
+            start.wait();
+            Arc::new(11_u64)
+        });
+        assert_eq!(*first, 11);
+        assert_eq!(builds.load(AtomicOrdering::Relaxed), 2);
+    }
     use crate::collection_control::collection_wal_frontier_shard;
 
     #[test]
