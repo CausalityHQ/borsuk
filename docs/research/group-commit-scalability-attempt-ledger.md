@@ -175,8 +175,11 @@ frozen campaign manifest SHA-256
 The root `GROUP_COMMIT_SCALABILITY_FAILED` marker is present. The c2000/r01/l1
 w1 and w8 cells reached `CELL_COMPLETE`; c2000/r01/l1/w32 reached
 `CELL_FAILED`, exited with status 1, and emitted `STORAGE_TRACE_MISSING`.
-The repository validator was run against the completed cell downloads and
-failed closed because the uploaded cell artifacts omit the required copied
-`manifest.json` (no performance claim is made). No incomplete measurement CSV
-was read; only terminal markers, process exit, and the storage-trace failure
-marker were inspected. The run is not publication-eligible.
+The repository validator passed for the completed w1 and w8 cells when invoked
+against a reconstructed run root; the incomplete w32 cell was rejected
+fail-closed. The cell prefixes intentionally contain no standalone
+`manifest.json`; validation must use the run root. No incomplete measurement
+CSV was read; only terminal markers, process exit, and the storage-trace
+failure marker were inspected. The run is not publication-eligible. The
+runner now preserves per-cell stdout/stderr logs so an early process failure
+cannot be reduced to an unexplained missing trace.

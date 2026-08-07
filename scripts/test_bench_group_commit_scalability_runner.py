@@ -148,6 +148,11 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn('STORAGE_TRACE_MISSING', RUNNER)
         self.assertIn('printf \'%s\\n\' "$status" > "$cell_output/process_exit.txt"', RUNNER)
 
+    def test_failed_cell_preserves_benchmark_diagnostics(self) -> None:
+        self.assertIn('benchmark_stdout="$cell_output/benchmark.stdout.log"', RUNNER)
+        self.assertIn('benchmark_stderr="$cell_output/benchmark.stderr.log"', RUNNER)
+        self.assertIn('>"$benchmark_stdout" 2>"$benchmark_stderr"', RUNNER)
+
     def test_lane_treatments_use_identical_record_ids(self) -> None:
         self.assertIn("production_record_id(ordinal)", BENCH)
         self.assertNotIn("group-c{cell_count}-r{repetition", BENCH)
