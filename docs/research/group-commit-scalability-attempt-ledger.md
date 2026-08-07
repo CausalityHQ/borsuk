@@ -215,3 +215,10 @@ same frozen manifest SHA-256
 fresh S3 result/index prefixes and the launcher verified the c7g.8xlarge worker
 had no competing BORSUK workload. The watcher is polling terminal markers and
 EC2 health every 15 minutes; no incomplete measurement CSV is being inspected.
+
+Run `20260807T043548Z` terminalized immediately at c2000/r01/l1/w1 with
+process exit 1. Its preserved stderr again reported `refusing to replace
+output /home/ec2-user/borsuk-group-commit-results/20260807T043548Z/cells/...`;
+the benchmark did not execute and produced no performance evidence. This is a
+claim-ineligible harness collision, not a library result; no measurement CSV
+was opened.
