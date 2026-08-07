@@ -97,6 +97,10 @@ pub(crate) fn collection_wal_now_ms() -> Result<u64> {
 const SIDECAR_RANGE_COALESCE_BYTES: u64 = 64 * 1024;
 const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 4 * 1024 * 1024;
 const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
+// Global exact reranks commonly need 12-24 tiny, scattered rows from one
+// immutable bundle. Keep their bytes/range policy unchanged, but issue the
+// complete bounded shortlist in one S3 wave instead of serializing after ten.
+const GLOBAL_RERANK_RANGE_MAX_PARALLEL: usize = 32;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -190,6 +194,7 @@ async fn coalesce_bounded_ranges<F, E, Fut>(
     mut fetch: F,
     max_gap: u64,
     max_physical_range: u64,
+    max_parallel: usize,
 ) -> std::result::Result<Vec<Bytes>, E>
 where
     F: Send + FnMut(Range<u64>) -> Fut,
@@ -199,7 +204,7 @@ where
     let plan = plan_bounded_ranges(ranges, max_gap, max_physical_range);
     let fetched = futures_util::stream::iter(plan.physical.iter().cloned())
         .map(&mut fetch)
-        .buffered(SIDECAR_RANGE_MAX_PARALLEL)
+        .buffered(max_parallel.max(1))
         .try_collect::<Vec<_>>()
         .await?;
 
@@ -3214,6 +3219,26 @@ impl Storage {
     /// merged physical spans (including bytes between requested rows), and the
     /// request counter observes each physical GET.
     pub(crate) fn read_ranges(&self, relative: &str, ranges: &[Range<u64>]) -> Result<ReadRanges> {
+        self.read_ranges_with_parallel(relative, ranges, SIDECAR_RANGE_MAX_PARALLEL)
+    }
+
+    /// Fetch global exact-rerank rows with the same byte-bounded range plan as
+    /// ordinary sidecars, but admit the complete production shortlist in one
+    /// remote wave. The 4 MiB span cap remains authoritative per request.
+    pub(crate) fn read_global_rerank_ranges(
+        &self,
+        relative: &str,
+        ranges: &[Range<u64>],
+    ) -> Result<ReadRanges> {
+        self.read_ranges_with_parallel(relative, ranges, GLOBAL_RERANK_RANGE_MAX_PARALLEL)
+    }
+
+    fn read_ranges_with_parallel(
+        &self,
+        relative: &str,
+        ranges: &[Range<u64>],
+        max_parallel: usize,
+    ) -> Result<ReadRanges> {
         let cacheable = !is_mutable_lane_head(relative);
         if cacheable && let Some(bytes) = self.read_cache_file(relative)? {
             let mut out = Vec::with_capacity(ranges.len());
@@ -3295,6 +3320,7 @@ impl Storage {
                     },
                     SIDECAR_RANGE_COALESCE_BYTES,
                     SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+                    max_parallel,
                 )
                 .await
             })
@@ -4310,16 +4336,16 @@ mod tests {
         path::Path,
         sync::{
             Arc,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             mpsc,
         },
         time::{Duration, SystemTime},
     };
 
     use super::{
-        CacheReadCounts, CreateOutcome, PrefetchedRead, RangedColumns, ReadBytes,
-        SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
-        plan_bounded_ranges,
+        CacheReadCounts, CreateOutcome, GLOBAL_RERANK_RANGE_MAX_PARALLEL, PrefetchedRead,
+        RangedColumns, ReadBytes, SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES,
+        Storage, coalesce_bounded_ranges, plan_bounded_ranges,
     };
     use crate::{
         collection_control::{
@@ -4338,6 +4364,48 @@ mod tests {
     use url::Url;
 
     struct DropFlag(Arc<AtomicBool>);
+
+    #[test]
+    fn global_rerank_range_wave_does_not_serialize_twenty_small_gets() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let ranges = (0_u64..20)
+            .map(|index| {
+                let start = index * 128 * 1024;
+                start..start + 4
+            })
+            .collect::<Vec<_>>();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let fetched = runtime
+            .block_on(coalesce_bounded_ranges(
+                &ranges,
+                |range: std::ops::Range<u64>| {
+                    let active = Arc::clone(&active);
+                    let peak = Arc::clone(&peak);
+                    async move {
+                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok::<_, ()>(bytes::Bytes::from(vec![
+                            7_u8;
+                            (range.end - range.start) as usize
+                        ]))
+                    }
+                },
+                0,
+                SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+                GLOBAL_RERANK_RANGE_MAX_PARALLEL,
+            ))
+            .unwrap();
+
+        assert_eq!(fetched, vec![bytes::Bytes::from_static(&[7_u8; 4]); 20]);
+        assert_eq!(peak.load(Ordering::SeqCst), 20);
+    }
 
     impl Drop for DropFlag {
         fn drop(&mut self) {
