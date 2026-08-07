@@ -20,9 +20,9 @@ active stripe but advances only checkpoints
 owned by its caller; cooperative foreign-stripe checkpointing is a separate
 CAS-safe maintenance step and must not silently steal a live lease.
 
-The striped extent protocol is lane-log format v30. The required active-stripe
-directory is v31 and table format v28 rejects indexes created without it. Old
-experimental readers are not retained.
+The striped extent protocol is lane-log format v30. Manifest-fenced epoch HEADs
+and the checked active-stripe directory are v32; table format v29 rejects
+indexes created without them. Old experimental readers are not retained.
 
 ## Production invariants
 
@@ -74,7 +74,7 @@ experimental readers are not retained.
   durable frontier, sealed epoch, and any concurrently published watermark.
 - [x] Teach live writers to reconcile a checkpoint-only HEAD version change
   before renewal/watermark publication.
-- [ ] Prove crash takeover, late-zombie exclusion, bounded probes, and GC remain
+- [x] Prove crash takeover, late-zombie exclusion, bounded probes, and GC remain
   correct under foreign materialization.
 
 The 2026-08-07 two-instance structural runner exposed and now covers sequential
@@ -82,8 +82,9 @@ drains: the first client publishes the collection-wide materialization, then
 conditionally checkpoints every captured stripe without changing its owner,
 lease, or epoch. A live owner merges that checkpoint-only HEAD update on its
 next watermark, renewal, or release. Focused fencing coverage and the full
-lane-log/group-commit suites pass; the remaining unchecked item requires the
-complete crash/fault/GC assurance gate before this task is closed.
+lane-log/group-commit suites pass. Crash recovery, late-zombie exclusion,
+bounded probes, fault injection, consistency, and targeted WAL-GC retention
+gates also pass locally.
 
 ## Task 3: Remove the eight-instance ceiling without fixed-pool read amplification
 
@@ -95,9 +96,10 @@ complete crash/fault/GC assurance gate before this task is closed.
 - [x] Order claim candidates from one checked directory read, inactive slots
   first with a per-instance randomized rotation, so fresh N-writer startup does
   not scan 1+2+...+N authoritative HEADs or herd on stripe zero.
-- [ ] Retire quiescent stripes only behind a manifest-version fence that first
-  forces readers pinned before the retirement boundary to refresh. Renewal,
-  release, expiry, and takeover must preserve that invariant.
+- [x] Retire quiescent stripes only behind a manifest-version fence: readers
+  pinned before the boundary continue including the retired stripe, while
+  readers at the publishing manifest may omit it. Renewal, release, expiry, and
+  takeover preserve that invariant.
 - [ ] Qualify 1, 8, and 32 independent processes against one S3 prefix. Preserve
   raw artifacts, exact per-process receipts, resource telemetry, and terminal
   markers.

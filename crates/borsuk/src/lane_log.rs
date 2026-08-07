@@ -18,9 +18,9 @@ use rayon::prelude::*;
 
 const BLOCK_MAGIC: &[u8; 8] = b"BRSLBL25";
 const HEAD_MAGIC: &[u8; 8] = b"BRSLHD26";
-const EPOCH_HEAD_MAGIC: &[u8; 8] = b"BRSLHD28";
+const EPOCH_HEAD_MAGIC: &[u8; 8] = b"BRSLHD32";
 const EXTENT_MAGIC: &[u8; 8] = b"BRSLXT28";
-const ACTIVE_STRIPE_MAGIC: &[u8; 8] = b"BRSLAD31";
+const ACTIVE_STRIPE_MAGIC: &[u8; 8] = b"BRSLAD32";
 const ACTIVE_STRIPE_PATH: &str = "lane-log/ACTIVE";
 const MAX_LINEARIZABLE_PROBE_EXTENTS: u64 = 128;
 const MAX_HEAD_UPDATE_ATTEMPTS: usize = 16;
@@ -327,6 +327,8 @@ struct LaneLogHead {
 struct LaneEpochSeal {
     lease_epoch: u64,
     durable_sequence: u64,
+    materialized_sequence: u64,
+    materialized_manifest_version: u64,
     generation_end: u64,
 }
 
@@ -338,6 +340,7 @@ struct LaneEpochHead {
     lease_expires_at_ms: u64,
     durable_sequence: u64,
     materialized_sequence: u64,
+    materialized_manifest_version: u64,
     generation_base: u64,
     sealed_epoch: Option<LaneEpochSeal>,
 }
@@ -346,7 +349,8 @@ struct LaneEpochHead {
 struct ActiveStripeDirectory {
     generation: u64,
     active_bits: u64,
-    retired_manifest_version: u64,
+    activation_epochs: [u64; 64],
+    retirement_manifest_versions: [u64; 64],
 }
 
 type ActiveLaneEpochStates = (ActiveStripeDirectory, [u8; 32], Vec<(u16, LaneEpochState)>);
@@ -357,19 +361,33 @@ impl ActiveStripeDirectory {
             .filter(|lane| self.active_bits & (1_u64 << u32::from(*lane)) != 0)
             .collect()
     }
+
+    fn active_stripes_for_manifest(self, lane_count: u16, manifest_version: u64) -> Vec<u16> {
+        (0..lane_count)
+            .filter(|lane| {
+                let bit = 1_u64 << u32::from(*lane);
+                self.active_bits & bit != 0
+                    || self.retirement_manifest_versions[usize::from(*lane)] > manifest_version
+            })
+            .collect()
+    }
 }
 
 impl LaneEpochHead {
     fn validate(&self, expected_lane: u16) -> Result<()> {
-        if self.lane != expected_lane || self.materialized_sequence > self.durable_sequence {
+        if self.lane != expected_lane
+            || self.materialized_sequence > self.durable_sequence
+            || (self.materialized_sequence > 0 && self.materialized_manifest_version == 0)
+        {
             return Err(BorsukError::InvalidStorage(
                 "invalid epoch lane-log HEAD identity or frontier".to_string(),
             ));
         }
-        if self
-            .sealed_epoch
-            .is_some_and(|seal| seal.lease_epoch >= self.lease_epoch)
-        {
+        if self.sealed_epoch.is_some_and(|seal| {
+            seal.lease_epoch >= self.lease_epoch
+                || seal.materialized_sequence > seal.durable_sequence
+                || (seal.materialized_sequence > 0 && seal.materialized_manifest_version == 0)
+        }) {
             return Err(BorsukError::InvalidStorage(
                 "epoch lane-log HEAD seal must precede its owning epoch".to_string(),
             ));
@@ -580,48 +598,69 @@ fn fenced_body<'a>(bytes: &'a [u8], magic: &[u8; 8], label: &str) -> Result<&'a 
 
 fn epoch_head_bytes(head: &LaneEpochHead) -> Result<Vec<u8>> {
     head.validate(head.lane)?;
-    let mut body = Vec::with_capacity(96);
-    body.push(30);
+    let mut body = Vec::with_capacity(128);
+    body.push(32);
     body.extend_from_slice(&head.lane.to_le_bytes());
     body.extend_from_slice(&head.lease_epoch.to_le_bytes());
     body.extend_from_slice(&head.lease_owner);
     body.extend_from_slice(&head.lease_expires_at_ms.to_le_bytes());
     body.extend_from_slice(&head.durable_sequence.to_le_bytes());
     body.extend_from_slice(&head.materialized_sequence.to_le_bytes());
+    body.extend_from_slice(&head.materialized_manifest_version.to_le_bytes());
     body.extend_from_slice(&head.generation_base.to_le_bytes());
     let seal = head.sealed_epoch.unwrap_or(LaneEpochSeal {
         lease_epoch: 0,
         durable_sequence: 0,
+        materialized_sequence: 0,
+        materialized_manifest_version: 0,
         generation_end: 0,
     });
     body.push(u8::from(head.sealed_epoch.is_some()));
     body.extend_from_slice(&seal.lease_epoch.to_le_bytes());
     body.extend_from_slice(&seal.durable_sequence.to_le_bytes());
+    body.extend_from_slice(&seal.materialized_sequence.to_le_bytes());
+    body.extend_from_slice(&seal.materialized_manifest_version.to_le_bytes());
     body.extend_from_slice(&seal.generation_end.to_le_bytes());
     Ok(fenced_bytes(EPOCH_HEAD_MAGIC, &body))
 }
 
 fn active_stripe_directory_bytes(directory: &ActiveStripeDirectory) -> Result<Vec<u8>> {
-    let mut body = Vec::with_capacity(25);
-    body.push(31);
+    let mut body = Vec::with_capacity(1 + 8 + 8 + 64 * 8 * 2);
+    body.push(32);
     body.extend_from_slice(&directory.generation.to_le_bytes());
     body.extend_from_slice(&directory.active_bits.to_le_bytes());
-    body.extend_from_slice(&directory.retired_manifest_version.to_le_bytes());
+    for epoch in directory.activation_epochs {
+        body.extend_from_slice(&epoch.to_le_bytes());
+    }
+    for version in directory.retirement_manifest_versions {
+        body.extend_from_slice(&version.to_le_bytes());
+    }
     Ok(fenced_bytes(ACTIVE_STRIPE_MAGIC, &body))
 }
 
 fn active_stripe_directory_from_bytes(bytes: &[u8]) -> Result<ActiveStripeDirectory> {
     let body = fenced_body(bytes, ACTIVE_STRIPE_MAGIC, "active stripe directory")?;
     let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 31 {
+    if take_u8(body, &mut cursor)? != 32 {
         return Err(BorsukError::InvalidStorage(
             "unsupported active stripe directory version".to_string(),
         ));
     }
+    let generation = take_u64(body, &mut cursor)?;
+    let active_bits = take_u64(body, &mut cursor)?;
+    let mut activation_epochs = [0; 64];
+    for epoch in &mut activation_epochs {
+        *epoch = take_u64(body, &mut cursor)?;
+    }
+    let mut retirement_manifest_versions = [0; 64];
+    for version in &mut retirement_manifest_versions {
+        *version = take_u64(body, &mut cursor)?;
+    }
     let directory = ActiveStripeDirectory {
-        generation: take_u64(body, &mut cursor)?,
-        active_bits: take_u64(body, &mut cursor)?,
-        retired_manifest_version: take_u64(body, &mut cursor)?,
+        generation,
+        active_bits,
+        activation_epochs,
+        retirement_manifest_versions,
     };
     if cursor != body.len() {
         return Err(BorsukError::InvalidStorage(
@@ -634,7 +673,7 @@ fn active_stripe_directory_from_bytes(bytes: &[u8]) -> Result<ActiveStripeDirect
 fn epoch_head_from_bytes(bytes: &[u8], expected_lane: u16) -> Result<LaneEpochHead> {
     let body = fenced_body(bytes, EPOCH_HEAD_MAGIC, "epoch HEAD")?;
     let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 30 {
+    if take_u8(body, &mut cursor)? != 32 {
         return Err(BorsukError::InvalidStorage(
             "unsupported epoch lane-log HEAD version".to_string(),
         ));
@@ -645,11 +684,14 @@ fn epoch_head_from_bytes(bytes: &[u8], expected_lane: u16) -> Result<LaneEpochHe
     let lease_expires_at_ms = take_u64(body, &mut cursor)?;
     let durable_sequence = take_u64(body, &mut cursor)?;
     let materialized_sequence = take_u64(body, &mut cursor)?;
+    let materialized_manifest_version = take_u64(body, &mut cursor)?;
     let generation_base = take_u64(body, &mut cursor)?;
     let seal_present = take_u8(body, &mut cursor)?;
     let seal = LaneEpochSeal {
         lease_epoch: take_u64(body, &mut cursor)?,
         durable_sequence: take_u64(body, &mut cursor)?,
+        materialized_sequence: take_u64(body, &mut cursor)?,
+        materialized_manifest_version: take_u64(body, &mut cursor)?,
         generation_end: take_u64(body, &mut cursor)?,
     };
     if cursor != body.len() || seal_present > 1 {
@@ -662,6 +704,8 @@ fn epoch_head_from_bytes(bytes: &[u8], expected_lane: u16) -> Result<LaneEpochHe
             != (LaneEpochSeal {
                 lease_epoch: 0,
                 durable_sequence: 0,
+                materialized_sequence: 0,
+                materialized_manifest_version: 0,
                 generation_end: 0,
             })
     {
@@ -676,6 +720,7 @@ fn epoch_head_from_bytes(bytes: &[u8], expected_lane: u16) -> Result<LaneEpochHe
         lease_expires_at_ms,
         durable_sequence,
         materialized_sequence,
+        materialized_manifest_version,
         generation_base,
         sealed_epoch: (seal_present == 1).then_some(seal),
     };
@@ -1044,6 +1089,7 @@ pub(crate) fn initialize_empty_lane_heads(storage: &Storage, lane_count: u16) ->
             lease_expires_at_ms: 0,
             durable_sequence: 0,
             materialized_sequence: 0,
+            materialized_manifest_version: 0,
             generation_base: 0,
             sealed_epoch: None,
         };
@@ -1069,7 +1115,8 @@ pub(crate) fn initialize_empty_lane_heads(storage: &Storage, lane_count: u16) ->
     let directory = ActiveStripeDirectory {
         generation: 1,
         active_bits: 0,
-        retired_manifest_version: 0,
+        activation_epochs: [0; 64],
+        retirement_manifest_versions: [0; 64],
     };
     let bytes = active_stripe_directory_bytes(&directory)?;
     match storage.write_coordination_object(ACTIVE_STRIPE_PATH, &bytes, None) {
@@ -1095,8 +1142,22 @@ pub(crate) fn initialize_empty_lane_heads(storage: &Storage, lane_count: u16) ->
     Ok(())
 }
 
-pub(crate) fn activate_stripe(storage: &Storage, lane: u16, lane_count: u16) -> Result<()> {
-    if lane >= lane_count || lane_count > GROUP_COMMIT_STRIPE_COUNT {
+fn read_active_stripe_directory(storage: &Storage) -> Result<ActiveStripeDirectory> {
+    let stored = storage
+        .read_coordination_object(ACTIVE_STRIPE_PATH)?
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("lane-log active stripe directory is missing".to_string())
+        })?;
+    active_stripe_directory_from_bytes(&stored.bytes)
+}
+
+pub(crate) fn activate_stripe(
+    storage: &Storage,
+    lane: u16,
+    lane_count: u16,
+    lease_epoch: u64,
+) -> Result<()> {
+    if lane >= lane_count || lane_count > GROUP_COMMIT_STRIPE_COUNT || lease_epoch == 0 {
         return Err(BorsukError::InvalidStorage(format!(
             "group-commit stripe {lane} exceeds persisted stripe count {lane_count}"
         )));
@@ -1111,10 +1172,12 @@ pub(crate) fn activate_stripe(storage: &Storage, lane: u16, lane_count: u16) -> 
                 )
             })?;
         let mut directory = active_stripe_directory_from_bytes(&stored.bytes)?;
-        if directory.active_bits & bit != 0 {
+        let slot = usize::from(lane);
+        if directory.active_bits & bit != 0 && directory.activation_epochs[slot] == lease_epoch {
             return Ok(());
         }
         directory.active_bits |= bit;
+        directory.activation_epochs[slot] = lease_epoch;
         directory.generation = directory.generation.checked_add(1).ok_or_else(|| {
             BorsukError::InvalidStorage(
                 "active stripe directory generation exceeds u64".to_string(),
@@ -1123,6 +1186,56 @@ pub(crate) fn activate_stripe(storage: &Storage, lane: u16, lane_count: u16) -> 
         let bytes = active_stripe_directory_bytes(&directory)?;
         match storage.write_coordination_object(ACTIVE_STRIPE_PATH, &bytes, Some(stored.version)) {
             Ok(_) => return Ok(()),
+            Err(BorsukError::ConcurrentModification { .. }) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(BorsukError::ConcurrentModification {
+        path: ACTIVE_STRIPE_PATH.to_string(),
+    })
+}
+
+fn retire_stripe(
+    storage: &Storage,
+    lane: u16,
+    lane_count: u16,
+    lease_epoch: u64,
+    manifest_version: u64,
+) -> Result<bool> {
+    if lane >= lane_count
+        || lane_count > GROUP_COMMIT_STRIPE_COUNT
+        || lease_epoch == 0
+        || manifest_version == 0
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "invalid group-commit stripe retirement: lane {lane}, count {lane_count}, epoch {lease_epoch}, manifest {manifest_version}"
+        )));
+    }
+    let bit = 1_u64 << u32::from(lane);
+    let slot = usize::from(lane);
+    for _ in 0..MAX_HEAD_UPDATE_ATTEMPTS {
+        let stored = storage
+            .read_coordination_object(ACTIVE_STRIPE_PATH)?
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "lane-log active stripe directory is missing".to_string(),
+                )
+            })?;
+        let mut directory = active_stripe_directory_from_bytes(&stored.bytes)?;
+        if directory.active_bits & bit == 0 || directory.activation_epochs[slot] != lease_epoch {
+            return Ok(false);
+        }
+        directory.active_bits &= !bit;
+        directory.retirement_manifest_versions[slot] =
+            directory.retirement_manifest_versions[slot].max(manifest_version);
+        directory.generation = directory.generation.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "active stripe directory generation exceeds u64".to_string(),
+            )
+        })?;
+        let bytes = active_stripe_directory_bytes(&directory)?;
+        match storage.write_coordination_object(ACTIVE_STRIPE_PATH, &bytes, Some(stored.version)) {
+            Ok(_) => return Ok(true),
             Err(BorsukError::ConcurrentModification { .. }) => continue,
             Err(error) => return Err(error),
         }
@@ -1178,6 +1291,7 @@ pub(crate) struct LaneEpochWriter {
     head_version: Option<UpdateVersion>,
     id_authority: Option<LaneIdAuthority>,
     published_durable_sequence: u64,
+    directory_active: bool,
 }
 
 impl LaneEpochWriter {
@@ -1197,6 +1311,7 @@ impl LaneEpochWriter {
             lease_expires_at_ms,
             durable_sequence: 0,
             materialized_sequence: 0,
+            materialized_manifest_version: 0,
             generation_base: 0,
             sealed_epoch: None,
         };
@@ -1208,6 +1323,7 @@ impl LaneEpochWriter {
             head_version: Some(head_version),
             id_authority: None,
             published_durable_sequence: 0,
+            directory_active: false,
         })
     }
 
@@ -1245,6 +1361,7 @@ impl LaneEpochWriter {
                 lease_expires_at_ms,
                 durable_sequence: 0,
                 materialized_sequence: 0,
+                materialized_manifest_version: 0,
                 generation_base: minimum_generation,
                 sealed_epoch: None,
             },
@@ -1298,6 +1415,7 @@ impl LaneEpochWriter {
                         lease_expires_at_ms,
                         durable_sequence: 0,
                         materialized_sequence: 0,
+                        materialized_manifest_version: 0,
                         generation_base: generation_end,
                         sealed_epoch: (current_head.lease_epoch > 0).then(|| LaneEpochSeal {
                             lease_epoch: current_head.lease_epoch,
@@ -1306,6 +1424,9 @@ impl LaneEpochWriter {
                                 .map(|extent| extent.sequence)
                                 .max()
                                 .unwrap_or(0),
+                            materialized_sequence: current_head.materialized_sequence,
+                            materialized_manifest_version: current_head
+                                .materialized_manifest_version,
                             generation_end,
                         }),
                     }
@@ -1338,6 +1459,7 @@ impl LaneEpochWriter {
         Ok(Self {
             storage,
             published_durable_sequence: head.durable_sequence,
+            directory_active: false,
             head,
             head_version: Some(head_version),
             id_authority: Some(authority),
@@ -1510,6 +1632,64 @@ impl LaneEpochWriter {
         self.head.lane
     }
 
+    pub(crate) fn activate_directory(&mut self, lane_count: u16) -> Result<()> {
+        activate_stripe(
+            &self.storage,
+            self.head.lane,
+            lane_count,
+            self.head.lease_epoch,
+        )?;
+        self.directory_active = true;
+        Ok(())
+    }
+
+    pub(crate) fn retire_directory_if_materialized(
+        &mut self,
+        lane_count: u16,
+        manifest_version: u64,
+    ) -> Result<bool> {
+        let path = head_path(self.head.lane);
+        let stored = self
+            .storage
+            .read_coordination_object(&path)?
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(format!("epoch lane-log HEAD `{path}` is missing"))
+            })?;
+        let observed = epoch_head_from_bytes(&stored.bytes, self.head.lane)?;
+        if observed.lease_epoch != self.head.lease_epoch
+            || observed.lease_owner != self.head.lease_owner
+        {
+            return Err(BorsukError::ConcurrentModification { path });
+        }
+        self.head.materialized_sequence = self
+            .head
+            .materialized_sequence
+            .max(observed.materialized_sequence);
+        self.head.materialized_manifest_version = self
+            .head
+            .materialized_manifest_version
+            .max(observed.materialized_manifest_version);
+        self.head.sealed_epoch = observed.sealed_epoch;
+        self.head_version = Some(stored.version);
+        if self.head.materialized_sequence < self.head.durable_sequence
+            || self.head.materialized_manifest_version < manifest_version
+            || self.head.sealed_epoch.is_some()
+        {
+            return Ok(false);
+        }
+        let retired = retire_stripe(
+            &self.storage,
+            self.head.lane,
+            lane_count,
+            self.head.lease_epoch,
+            manifest_version,
+        )?;
+        if retired {
+            self.directory_active = false;
+        }
+        Ok(retired)
+    }
+
     pub(crate) fn append_upsert_records_with_renewal_at(
         &mut self,
         records: &[VectorRecord],
@@ -1540,6 +1720,9 @@ impl LaneEpochWriter {
         now_ms: u64,
         ttl_ms: u64,
     ) -> Result<LaneLogReceipt> {
+        if !self.directory_active {
+            self.activate_directory(GROUP_COMMIT_STRIPE_COUNT)?;
+        }
         if now_ms >= self.head.lease_expires_at_ms {
             return Err(BorsukError::ConcurrentModification {
                 path: format!("{}/LEASE_EXPIRED", head_path(self.head.lane)),
@@ -1555,8 +1738,20 @@ impl LaneEpochWriter {
         self.append_upsert_records_with_generation_at(records, dimensions, first_generation, now_ms)
     }
 
-    pub(crate) fn mark_materialized_through(&mut self, sequence: u64) -> Result<()> {
-        if sequence <= self.head.materialized_sequence && self.head.sealed_epoch.is_none() {
+    pub(crate) fn mark_materialized_through(
+        &mut self,
+        sequence: u64,
+        manifest_version: u64,
+    ) -> Result<()> {
+        if manifest_version == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "epoch lane materialization requires a nonzero manifest version".to_string(),
+            ));
+        }
+        if sequence <= self.head.materialized_sequence
+            && manifest_version <= self.head.materialized_manifest_version
+            && self.head.sealed_epoch.is_none()
+        {
             return Ok(());
         }
         if sequence > self.head.durable_sequence {
@@ -1567,6 +1762,8 @@ impl LaneEpochWriter {
         }
         let mut next = self.head.clone();
         next.materialized_sequence = next.materialized_sequence.max(sequence);
+        next.materialized_manifest_version =
+            next.materialized_manifest_version.max(manifest_version);
         next.sealed_epoch = None;
         self.publish_head(next)
     }
@@ -1622,6 +1819,9 @@ impl LaneEpochWriter {
                     next.materialized_sequence = next
                         .materialized_sequence
                         .max(observed.materialized_sequence);
+                    next.materialized_manifest_version = next
+                        .materialized_manifest_version
+                        .max(observed.materialized_manifest_version);
                     next.generation_base = next.generation_base.max(observed.generation_base);
                     if observed.sealed_epoch.is_none() {
                         next.sealed_epoch = None;
@@ -1643,7 +1843,22 @@ impl Drop for LaneEpochWriter {
         let mut released = self.head.clone();
         released.lease_owner = [0; 16];
         released.lease_expires_at_ms = 0;
-        let _ = self.publish_head(released);
+        if self.publish_head(released).is_ok()
+            && self.directory_active
+            && self.head.materialized_sequence >= self.head.durable_sequence
+            && self.head.materialized_manifest_version > 0
+            && self.head.sealed_epoch.is_none()
+            && retire_stripe(
+                &self.storage,
+                self.head.lane,
+                GROUP_COMMIT_STRIPE_COUNT,
+                self.head.lease_epoch,
+                self.head.materialized_manifest_version,
+            )
+            .is_ok_and(|retired| retired)
+        {
+            self.directory_active = false;
+        }
     }
 }
 
@@ -1656,6 +1871,7 @@ enum LaneReadConsistency {
 struct LaneEpochReader {
     storage: Storage,
     lane_count: u16,
+    manifest_version: u64,
 }
 
 struct LaneEpochState {
@@ -1696,6 +1912,7 @@ impl LaneEpochReader {
         Ok(Self {
             storage: Storage::from_object_store(uri.into(), store)?,
             lane_count,
+            manifest_version: u64::MAX,
         })
     }
 
@@ -1708,7 +1925,18 @@ impl LaneEpochReader {
         Ok(Self {
             storage,
             lane_count,
+            manifest_version: u64::MAX,
         })
+    }
+
+    fn from_storage_at_manifest(
+        storage: Storage,
+        lane_count: u16,
+        manifest_version: u64,
+    ) -> Result<Self> {
+        let mut reader = Self::from_storage(storage, lane_count)?;
+        reader.manifest_version = manifest_version;
+        Ok(reader)
     }
 
     fn read_lane(&self, lane: u16, consistency: LaneReadConsistency) -> Result<Vec<LaneExtent>> {
@@ -1736,7 +1964,12 @@ impl LaneEpochReader {
         let head = epoch_head_from_bytes(&stored.bytes, lane)?;
         let mut extents = Vec::new();
         if let Some(seal) = head.sealed_epoch {
-            for sequence in 1..=seal.durable_sequence {
+            let first_sealed = if self.manifest_version >= seal.materialized_manifest_version {
+                seal.materialized_sequence.saturating_add(1)
+            } else {
+                1
+            };
+            for sequence in first_sealed..=seal.durable_sequence {
                 extents.push(
                     self.read_sequence(lane, seal.lease_epoch, sequence)?
                         .ok_or_else(|| {
@@ -1748,7 +1981,11 @@ impl LaneEpochReader {
                 );
             }
         }
-        let first_current = head.materialized_sequence.saturating_add(1);
+        let first_current = if self.manifest_version >= head.materialized_manifest_version {
+            head.materialized_sequence.saturating_add(1)
+        } else {
+            1
+        };
         for sequence in first_current..=head.durable_sequence {
             extents.push(
                 self.read_sequence(lane, head.lease_epoch, sequence)?
@@ -1848,12 +2085,22 @@ impl LaneEpochReader {
             .transpose()
     }
 
-    fn mark_materialized_through(&self, lane: u16, sequence: u64) -> Result<()> {
+    fn mark_materialized_through(
+        &self,
+        lane: u16,
+        sequence: u64,
+        manifest_version: u64,
+    ) -> Result<()> {
         if lane >= self.lane_count {
             return Err(BorsukError::InvalidStorage(format!(
                 "epoch lane-log lane {lane} exceeds configured lane count {}",
                 self.lane_count
             )));
+        }
+        if manifest_version == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "epoch lane materialization requires a nonzero manifest version".to_string(),
+            ));
         }
         let path = head_path(lane);
         for _ in 0..MAX_HEAD_UPDATE_ATTEMPTS {
@@ -1864,7 +2111,10 @@ impl LaneEpochReader {
                     BorsukError::InvalidStorage(format!("epoch lane-log HEAD `{path}` is missing"))
                 })?;
             let mut next = epoch_head_from_bytes(&stored.bytes, lane)?;
-            if sequence <= next.materialized_sequence && next.sealed_epoch.is_none() {
+            if sequence <= next.materialized_sequence
+                && manifest_version <= next.materialized_manifest_version
+                && next.sealed_epoch.is_none()
+            {
                 return Ok(());
             }
             if sequence > next.durable_sequence {
@@ -1882,6 +2132,8 @@ impl LaneEpochReader {
                 next.durable_sequence = sequence;
             }
             next.materialized_sequence = next.materialized_sequence.max(sequence);
+            next.materialized_manifest_version =
+                next.materialized_manifest_version.max(manifest_version);
             next.sealed_epoch = None;
             let bytes = epoch_head_bytes(&next)?;
             match self
@@ -2030,6 +2282,7 @@ impl Drop for LaneLogWriter {
 pub(crate) struct LaneLogReader {
     storage: Storage,
     lane_count: u16,
+    manifest_version: u64,
 }
 
 struct LaneLogHeads {
@@ -2047,6 +2300,7 @@ impl LaneLogReader {
         Ok(Self {
             storage: Storage::from_object_store(uri.into(), store)?,
             lane_count,
+            manifest_version: u64::MAX,
         })
     }
 
@@ -2059,7 +2313,18 @@ impl LaneLogReader {
         Ok(Self {
             storage,
             lane_count,
+            manifest_version: u64::MAX,
         })
+    }
+
+    pub(crate) fn from_storage_at_manifest(
+        storage: Storage,
+        lane_count: u16,
+        manifest_version: u64,
+    ) -> Result<Self> {
+        let mut reader = Self::from_storage(storage, lane_count)?;
+        reader.manifest_version = manifest_version;
+        Ok(reader)
     }
 
     fn request_counts(&self) -> RequestCounts {
@@ -2079,7 +2344,11 @@ impl LaneLogReader {
         Ok((directory, *blake3::hash(&stored.bytes).as_bytes()))
     }
 
-    pub(crate) fn mark_materialized_through(&self, sequences: &[u64]) -> Result<()> {
+    pub(crate) fn mark_materialized_through(
+        &self,
+        sequences: &[u64],
+        manifest_version: u64,
+    ) -> Result<()> {
         if sequences.len() != usize::from(self.lane_count) {
             return Err(BorsukError::InvalidStorage(format!(
                 "lane materializer supplied {} frontiers for {} lanes",
@@ -2088,10 +2357,14 @@ impl LaneLogReader {
             )));
         }
         let (directory, _) = self.active_directory()?;
-        let reader = LaneEpochReader::from_storage(self.storage.clone(), self.lane_count)?;
+        let reader = LaneEpochReader::from_storage_at_manifest(
+            self.storage.clone(),
+            self.lane_count,
+            self.manifest_version,
+        )?;
         for lane in directory.active_stripes(self.lane_count) {
             let sequence = sequences[usize::from(lane)];
-            reader.mark_materialized_through(lane, sequence)?;
+            reader.mark_materialized_through(lane, sequence, manifest_version)?;
         }
         Ok(())
     }
@@ -2103,13 +2376,17 @@ impl LaneLogReader {
 
     fn read_epoch_states(&self) -> Result<ActiveLaneEpochStates> {
         let (directory, directory_checksum) = self.active_directory()?;
-        let reader = LaneEpochReader::from_storage(self.storage.clone(), self.lane_count)?;
-        let states =
-            read_selected_lane_fanout(&directory.active_stripes(self.lane_count), |lane| {
-                reader
-                    .read_lane_state(lane, LaneReadConsistency::Linearizable)
-                    .map(|state| (lane, state))
-            })?;
+        let reader = LaneEpochReader::from_storage_at_manifest(
+            self.storage.clone(),
+            self.lane_count,
+            self.manifest_version,
+        )?;
+        let stripes = directory.active_stripes_for_manifest(self.lane_count, self.manifest_version);
+        let states = read_selected_lane_fanout(&stripes, |lane| {
+            reader
+                .read_lane_state(lane, LaneReadConsistency::Linearizable)
+                .map(|state| (lane, state))
+        })?;
         Ok((directory, directory_checksum, states))
     }
 
@@ -2118,7 +2395,11 @@ impl LaneLogReader {
         current_blocks: &[LaneLogRecordBlock],
     ) -> Result<Vec<[u8; 32]>> {
         let (directory, directory_checksum) = self.active_directory()?;
-        let reader = LaneEpochReader::from_storage(self.storage.clone(), self.lane_count)?;
+        let reader = LaneEpochReader::from_storage_at_manifest(
+            self.storage.clone(),
+            self.lane_count,
+            self.manifest_version,
+        )?;
         let mut known = vec![None; usize::from(self.lane_count)];
         for block in current_blocks {
             let mut fields = block.key.split(':');
@@ -2144,12 +2425,12 @@ impl LaneLogReader {
                 known[lane] = Some((epoch, sequence));
             }
         }
-        let identities =
-            read_selected_lane_fanout(&directory.active_stripes(self.lane_count), |lane| {
-                reader
-                    .read_lane_identity(lane, known[usize::from(lane)])
-                    .map(|identity| (lane, identity))
-            })?;
+        let stripes = directory.active_stripes_for_manifest(self.lane_count, self.manifest_version);
+        let identities = read_selected_lane_fanout(&stripes, |lane| {
+            reader
+                .read_lane_identity(lane, known[usize::from(lane)])
+                .map(|identity| (lane, identity))
+        })?;
         let mut checksums = vec![[0; 32]; usize::from(self.lane_count) + 1];
         checksums[usize::from(self.lane_count)] = directory_checksum;
         for (lane, identity) in identities {
@@ -3216,10 +3497,13 @@ mod tests {
             lease_expires_at_ms: 123_456,
             durable_sequence,
             materialized_sequence: durable_sequence.saturating_sub(1),
+            materialized_manifest_version: 17,
             generation_base: 42,
             sealed_epoch: Some(LaneEpochSeal {
                 lease_epoch: 6,
                 durable_sequence: 91,
+                materialized_sequence: 90,
+                materialized_manifest_version: 17,
                 generation_end: 132,
             }),
         };
@@ -3255,7 +3539,8 @@ mod tests {
         let directory = ActiveStripeDirectory {
             generation: 7,
             active_bits: (1_u64 << 2) | (1_u64 << 41),
-            retired_manifest_version: 11,
+            activation_epochs: [0; 64],
+            retirement_manifest_versions: [0; 64],
         };
         let bytes = active_stripe_directory_bytes(&directory).unwrap();
 
@@ -3290,7 +3575,7 @@ mod tests {
         let uri = "memory:///active-stripe-one-read";
         let storage = Storage::from_object_store(uri.to_string(), Arc::clone(&store)).unwrap();
         initialize_empty_lane_heads(&storage, GROUP_COMMIT_STRIPE_COUNT).unwrap();
-        activate_stripe(&storage, 41, GROUP_COMMIT_STRIPE_COUNT).unwrap();
+        activate_stripe(&storage, 41, GROUP_COMMIT_STRIPE_COUNT, 1).unwrap();
         let reader = LaneLogReader::new(store, uri, GROUP_COMMIT_STRIPE_COUNT).unwrap();
         let before = reader.request_counts();
 
@@ -3301,6 +3586,53 @@ mod tests {
         assert_eq!(
             requests.gets, 3,
             "read ACTIVE, stripe 41 HEAD, and its bounded next-extent probe"
+        );
+    }
+
+    #[test]
+    fn newer_activation_epoch_fences_stale_stripe_retirement() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let storage = Storage::from_object_store(
+            "memory:///lane-activation-epoch-fence".to_string(),
+            Arc::clone(&store),
+        )
+        .unwrap();
+        initialize_empty_lane_heads(&storage, GROUP_COMMIT_STRIPE_COUNT).unwrap();
+        activate_stripe(&storage, 7, GROUP_COMMIT_STRIPE_COUNT, 11).unwrap();
+        activate_stripe(&storage, 7, GROUP_COMMIT_STRIPE_COUNT, 12).unwrap();
+
+        assert!(!retire_stripe(&storage, 7, GROUP_COMMIT_STRIPE_COUNT, 11, 29,).unwrap());
+        assert_eq!(
+            read_active_stripe_directory(&storage)
+                .unwrap()
+                .active_stripes_for_manifest(GROUP_COMMIT_STRIPE_COUNT, 29),
+            vec![7]
+        );
+    }
+
+    #[test]
+    fn retired_stripe_remains_visible_to_reader_pinned_before_manifest() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let storage = Storage::from_object_store(
+            "memory:///lane-retirement-manifest-fence".to_string(),
+            Arc::clone(&store),
+        )
+        .unwrap();
+        initialize_empty_lane_heads(&storage, GROUP_COMMIT_STRIPE_COUNT).unwrap();
+        activate_stripe(&storage, 9, GROUP_COMMIT_STRIPE_COUNT, 4).unwrap();
+
+        assert!(retire_stripe(&storage, 9, GROUP_COMMIT_STRIPE_COUNT, 4, 31).unwrap());
+        let directory = read_active_stripe_directory(&storage).unwrap();
+        assert_eq!(
+            directory.active_stripes_for_manifest(GROUP_COMMIT_STRIPE_COUNT, 30),
+            vec![9],
+            "a reader pinned before the materializing manifest must retain the retired WAL stripe"
+        );
+        assert!(
+            directory
+                .active_stripes_for_manifest(GROUP_COMMIT_STRIPE_COUNT, 31)
+                .is_empty(),
+            "a reader at the materializing manifest may omit the retired WAL stripe"
         );
     }
 
@@ -3463,7 +3795,7 @@ mod tests {
         writer.append_extent_at(b"second", 1, 11).unwrap();
         let reader = LaneEpochReader::new(Arc::clone(&store), uri, 8).unwrap();
 
-        reader.mark_materialized_through(3, 2).unwrap();
+        reader.mark_materialized_through(3, 2, 9).unwrap();
         for sequence in 3..=64 {
             writer.append_extent_at(b"later", 1, sequence + 10).unwrap();
             writer.publish_durable_watermark_if_due().unwrap();
@@ -3586,10 +3918,13 @@ mod tests {
             lease_expires_at_ms: 200,
             durable_sequence: 0,
             materialized_sequence: 0,
+            materialized_manifest_version: 0,
             generation_base: 1,
             sealed_epoch: Some(LaneEpochSeal {
                 lease_epoch: 7,
                 durable_sequence: 1,
+                materialized_sequence: 0,
+                materialized_manifest_version: 0,
                 generation_end: 1,
             }),
         };
@@ -3636,6 +3971,8 @@ mod tests {
             Some(LaneEpochSeal {
                 lease_epoch: 1,
                 durable_sequence: 1,
+                materialized_sequence: 0,
+                materialized_manifest_version: 0,
                 generation_end: 1,
             })
         );
@@ -3718,7 +4055,7 @@ mod tests {
         )
         .unwrap();
         initialize_empty_lane_heads(&storage, LANES).unwrap();
-        activate_stripe(&storage, 2, LANES).unwrap();
+        activate_stripe(&storage, 2, LANES, 1).unwrap();
         storage.delete_object(&head_path(2)).unwrap();
 
         let error = LaneLogReader::new(store, "memory:///lane-required-heads", LANES)

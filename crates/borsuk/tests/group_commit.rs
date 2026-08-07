@@ -743,6 +743,76 @@ fn one_writer_can_drain_while_another_writer_remains_live() {
 }
 
 #[test]
+fn drain_retires_owned_stripe_without_hiding_it_from_a_stale_reader() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(traced);
+    let uri = "memory:///drain-retired-stripe-manifest-fence";
+    let index = BorsukIndex::create_with_object_store(Arc::clone(&store), config(uri)).unwrap();
+    let mut stale = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    writer
+        .append(vec![VectorRecord::new("retired", vec![1.0, 0.0])])
+        .unwrap();
+    writer.drain().unwrap();
+
+    assert!(stale.refresh_wal_tail().unwrap());
+    assert_eq!(stale.get_vector("retired").unwrap(), Some(vec![1.0, 0.0]));
+
+    operations.clear();
+    let current = BorsukIndex::open_with_object_store(store, uri).unwrap();
+    assert_eq!(current.get_vector("retired").unwrap(), Some(vec![1.0, 0.0]));
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get
+                && path.starts_with("lane-log/lanes/")
+                && path.ends_with("/HEAD")
+        }),
+        0,
+        "a reader at the materializing manifest must omit the retired stripe HEAD"
+    );
+}
+
+#[test]
+fn append_after_drain_reactivates_the_retired_stripe_before_acknowledgement() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///append-after-retired-stripe";
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    writer
+        .append(vec![VectorRecord::new("before-drain", vec![1.0, 0.0])])
+        .unwrap();
+    writer.drain().unwrap();
+
+    writer
+        .append(vec![VectorRecord::new("after-drain", vec![2.0, 0.0])])
+        .unwrap();
+
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(
+        reopened.get_vector("after-drain").unwrap(),
+        Some(vec![2.0, 0.0]),
+        "an acknowledgement after retirement requires prior directory reactivation"
+    );
+}
+
+#[test]
 fn every_independent_group_writer_can_drain_after_a_peer_publishes() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///independent-group-writer-sequential-drains";
@@ -773,6 +843,54 @@ fn every_independent_group_writer_can_drain_after_a_peer_publishes() {
 
     let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
     assert_eq!(reopened.list_records(0, 10).unwrap().len(), 2);
+}
+
+#[test]
+fn released_peer_retires_a_tail_materialized_by_another_writer() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(traced);
+    let uri = "memory:///released-peer-retirement";
+    let writer_config = GroupCommitConfig {
+        max_delay: std::time::Duration::ZERO,
+        max_records: 1,
+        worker_lanes: 1,
+    };
+    let first = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&store), config(uri)).unwrap(),
+        writer_config,
+    )
+    .unwrap();
+    let second = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap(),
+        writer_config,
+    )
+    .unwrap();
+    let first_lane = first
+        .append(vec![VectorRecord::new("first", vec![1.0, 0.0])])
+        .unwrap()
+        .commit_lane;
+    let second_lane = second
+        .append(vec![VectorRecord::new("second", vec![2.0, 0.0])])
+        .unwrap()
+        .commit_lane;
+    first.drain().unwrap();
+    drop(second);
+
+    operations.clear();
+    let reopened = BorsukIndex::open_with_object_store(store, uri).unwrap();
+    assert_eq!(reopened.list_records(0, 10).unwrap().len(), 2);
+    let lane_head_reads = operations.matching_paths(|operation, path| {
+        operation == common::StoreOperation::Get
+            && path.starts_with("lane-log/lanes/")
+            && path.ends_with("/HEAD")
+    });
+    assert_eq!(
+        lane_head_reads.len(),
+        0,
+        "normal release must retire a peer stripe already covered by the published manifest; first={first_lane} second={second_lane} reads={lane_head_reads:?}"
+    );
 }
 
 #[test]
@@ -1171,7 +1289,7 @@ fn small_groups_publish_only_immutable_extents_before_release() {
             operation == common::StoreOperation::Put && path.contains("/blocks/")
         }),
         0,
-        "v28 must never publish legacy mutable blocks"
+        "v29 must never publish legacy mutable blocks"
     );
     assert_eq!(
         operations.count_matching(|operation, path| {

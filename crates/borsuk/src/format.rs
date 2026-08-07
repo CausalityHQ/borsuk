@@ -116,7 +116,10 @@ use crate::{
 // directory and a 64-slot pool independent of the per-cell WAL lane count.
 // Opening v27 without the directory could either miss acknowledged extents or
 // restore the old fixed eight-HEAD read fanout semantics.
-const CURRENT_VERSION: u16 = 28;
+// Bumped 28 -> 29 when lane materialization and directory retirement became
+// manifest-version fenced. A v28 reader could hide a materialized WAL extent
+// from a reader still pinned to the manifest that preceded its drain.
+const CURRENT_VERSION: u16 = 29;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

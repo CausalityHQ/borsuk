@@ -252,9 +252,13 @@ while coalescing concurrent Rust callers into one WAL transaction. Separate
 pool. Readers first fetch a checked active-stripe directory and do not read all
 64 HEADs. Local coverage proves 32 simultaneously open independent library
 instances can write and reopen one collection, but this has not yet been
-qualified as a horizontally scaled service. Active bits are not yet retired,
-so refresh fanout can grow with historical writer churn until manifest-fenced
-retirement is implemented.
+qualified as a horizontally scaled service. A successful drain records its
+publishing manifest version in each materialized epoch frontier and retires
+owned quiescent stripes from the directory. Readers pinned before that version
+continue reading the retired WAL; current readers omit it. Normal writer release
+is synchronous and retires a peer tail already materialized by another writer.
+An abandoned expired stripe remains active until takeover/release; a standalone
+expired-stripe maintenance sweep is still pending.
 Fresh writer startup also reads the directory and tries inactive slots before
 leased/takeover candidates, with a randomized rotation between instances. The
 32-instance local request trace therefore performs 32 stripe-HEAD reads instead
@@ -272,8 +276,8 @@ active-tail visibility, sequential collection-wide drains, reopen visibility,
 raw-sample reconciliation, resource telemetry, storage tracing, and the
 fail-closed validator. This is same-process structural evidence only. The
 preregistered 1/8/32 AWS matrix still cannot launch honestly until the runner
-launches separate processes or hosts and the active-directory retirement and
-crash/fault gates pass.
+launches separate processes or hosts. The retirement, crash, fault,
+consistency, and targeted WAL-GC gates now pass locally.
 The ignored large-scale test publishes `large-scale.csv` with million-vector
 tie-aware recall, strict id recall, termination reason, routing overfetch,
 latency, segment, byte, graph-byte, RSS before/peak/after, RSS peak-delta,

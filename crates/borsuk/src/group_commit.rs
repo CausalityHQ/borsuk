@@ -25,6 +25,23 @@ struct MaintenanceState {
     requested: bool,
 }
 
+#[derive(Default)]
+struct WorkerThreads {
+    handles: Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+
+impl Drop for WorkerThreads {
+    fn drop(&mut self) {
+        let handles = self
+            .handles
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner());
+        for handle in handles.drain(..) {
+            let _ = handle.join();
+        }
+    }
+}
+
 impl MaintenanceState {
     fn request_pass(&mut self) -> bool {
         self.requested = true;
@@ -231,9 +248,14 @@ struct AppendRequest {
 enum WorkerRequest {
     Append(AppendRequest),
     Barrier(Sender<()>),
-    Materialize(Sender<std::result::Result<Vec<u64>, String>>),
+    Materialize(Sender<std::result::Result<(Vec<u64>, u64), String>>),
     CheckpointAll {
         sequences: Vec<u64>,
+        manifest_version: u64,
+        response: Sender<std::result::Result<(), String>>,
+    },
+    RetireMaterialized {
+        manifest_version: u64,
         response: Sender<std::result::Result<(), String>>,
     },
 }
@@ -256,6 +278,7 @@ pub struct GroupCommitWriter {
     drain_lock: Arc<Mutex<()>>,
     maintenance_state: Arc<Mutex<MaintenanceState>>,
     maintenance_error: Arc<Mutex<Option<String>>>,
+    workers: Arc<WorkerThreads>,
 }
 
 impl Clone for GroupCommitWriter {
@@ -267,6 +290,7 @@ impl Clone for GroupCommitWriter {
             drain_lock: Arc::clone(&self.drain_lock),
             maintenance_state: Arc::clone(&self.maintenance_state),
             maintenance_error: Arc::clone(&self.maintenance_error),
+            workers: Arc::clone(&self.workers),
         }
     }
 }
@@ -294,6 +318,7 @@ impl GroupCommitWriter {
         }
         drop(index);
         let mut requests = Vec::with_capacity(config.worker_lanes);
+        let mut worker_handles = Vec::with_capacity(config.worker_lanes);
         let mut worker_stripes = Vec::with_capacity(config.worker_lanes);
         let mut claimed_stripes = std::collections::HashSet::with_capacity(config.worker_lanes);
         let claim_start = (Uuid::new_v4().as_u128() % u128::from(lane_count)) as u16;
@@ -331,7 +356,7 @@ impl GroupCommitWriter {
             worker_stripes.push(stripe);
             let dimensions = index.primary_dimensions();
             let (sender, receiver) = mpsc::channel();
-            std::thread::Builder::new()
+            let handle = std::thread::Builder::new()
                 .name(format!("borsuk-group-commit-{worker}"))
                 .spawn(move || run_worker(index, vec![lane_writer], dimensions, config, receiver))
                 .map_err(|error| {
@@ -339,6 +364,7 @@ impl GroupCommitWriter {
                         "failed to start group commit worker {worker}: {error}"
                     ))
                 })?;
+            worker_handles.push(handle);
             requests.push(sender);
         }
         Ok(Self {
@@ -348,6 +374,9 @@ impl GroupCommitWriter {
             drain_lock: Arc::new(Mutex::new(())),
             maintenance_state: Arc::new(Mutex::new(MaintenanceState::default())),
             maintenance_error: Arc::new(Mutex::new(None)),
+            workers: Arc::new(WorkerThreads {
+                handles: Mutex::new(worker_handles),
+            }),
         })
     }
 
@@ -495,7 +524,7 @@ impl GroupCommitWriter {
         self.requests[0]
             .send(WorkerRequest::Materialize(done))
             .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
-        let committed_sequences = wait
+        let (committed_sequences, manifest_version) = wait
             .recv()
             .map_err(|_| {
                 BorsukError::InvalidStorage(
@@ -514,6 +543,7 @@ impl GroupCommitWriter {
         self.requests[0]
             .send(WorkerRequest::CheckpointAll {
                 sequences: committed_sequences,
+                manifest_version,
                 response,
             })
             .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
@@ -524,6 +554,30 @@ impl GroupCommitWriter {
                 )
             })?
             .map_err(BorsukError::InvalidStorage)?;
+        let mut retirements = Vec::with_capacity(self.requests.len());
+        for requests in self.requests.iter() {
+            let (response, wait) = mpsc::channel();
+            requests
+                .send(WorkerRequest::RetireMaterialized {
+                    manifest_version,
+                    response,
+                })
+                .map_err(|_| {
+                    BorsukError::InvalidStorage("group commit worker stopped".to_string())
+                })?;
+            retirements.push(wait);
+        }
+        for retirement in retirements {
+            retirement
+                .recv()
+                .map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "group commit worker stopped before stripe retirement completed"
+                            .to_string(),
+                    )
+                })?
+                .map_err(BorsukError::InvalidStorage)?;
+        }
         Ok(())
     }
 }
@@ -593,10 +647,29 @@ fn run_worker(
             }
             WorkerRequest::CheckpointAll {
                 sequences,
+                manifest_version,
                 response,
             } => {
                 let result = index
-                    .checkpoint_lane_log_materialized_through(&sequences)
+                    .checkpoint_lane_log_materialized_through(&sequences, manifest_version)
+                    .map_err(|error| error.to_string());
+                let _ = response.send(result);
+                continue;
+            }
+            WorkerRequest::RetireMaterialized {
+                manifest_version,
+                response,
+            } => {
+                let result = lane_writers
+                    .iter_mut()
+                    .try_for_each(|writer| {
+                        writer
+                            .retire_directory_if_materialized(
+                                crate::GROUP_COMMIT_STRIPE_COUNT,
+                                manifest_version,
+                            )
+                            .map(|_| ())
+                    })
                     .map_err(|error| error.to_string());
                 let _ = response.send(result);
                 continue;
