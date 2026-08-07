@@ -566,3 +566,27 @@ tests, strict all-target/all-feature Clippy, and the structurally validated
 bulk runner smoke passed before launch. The dedicated-worker no-contention
 preflight passed. Until root terminalization and process exit, inspect only
 markers and infrastructure/process health; do not open measurement CSVs.
+
+The run terminalized at `c2000/r01/l1/w8` with root
+`GROUP_COMMIT_SCALABILITY_FAILED`, an exited pane, and no benchmark process;
+the worker remained healthy and idle. The fail-closed validator rejected the
+partial matrix as `campaign is incomplete`. Terminal artifact inspection shows
+that the fused publication removed half of the redundant materialization I/O
+in the eight-writer cell: exact-vector reads fell from 216 requests / 740.0 MB
+to 108 / 370.0 MB, normal-segment reads from 271 / 218.8 MB to 121 / 109.4 MB,
+and catalog writes from six / 23.9 MB to three / 12.0 MB. Drain time improved
+from 31.560 s to 29.996 s and drain-inclusive throughput from 2,914.856 to
+3,029.758 records/s. This is a causal improvement, but it is only 3.9% and is
+not production parity.
+
+Recall remained 1.0 and acknowledged throughput was 10,447.260 records/s at
+71.669 ms p95, but post-drain read p50/p95 were 128.448/291.102 ms. The delta
+remained the critical path: approximate, exact-rerank, and base-wait p95 were
+216.807, 135.400, and 259.356 ms while the stable base phases were 34.596 and
+33.476 ms. The terminal descriptor contained 128,000 delta vectors but only
+103 of 256 occupied cells; the hottest cell held 16,053 rows and 49.3 MB of
+lossless vectors. The implementation reused scan and coarse codebooks trained
+on the 2,000-vector stable base, so a distributionally broader tail inherited
+bad physical routing. The next isolated factor is bounded tail-specific scan
+and coarse training at delta bootstrap; cache changes and reduced recall or
+candidate gates are explicitly excluded.
