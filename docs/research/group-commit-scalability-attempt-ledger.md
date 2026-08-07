@@ -420,3 +420,16 @@ requires a current searchable delta.  Optional ANN maintenance failure after
 durable segment publication is reported through the post-commit maintenance
 warning rather than converting a completed drain into a retry-unsafe error.
 The resulting full library gate passes 510 tests with 6 explicitly ignored.
+
+## parallel base/delta qualification launched (2026-08-07)
+
+Run `20260807T090031Z-parallel-base-delta` launched from commit `c51f8d5` with
+source archive SHA-256
+`19b54a72691d36e8ce9806d87fd20b9b5c30783adc326920920948e70a948e32` and
+the unchanged frozen manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+Preflight verified Causality account `453182569524`, the dedicated
+`c7g.8xlarge` worker was online with 158 GiB free, and no competing BORSUK
+benchmark process was active.  Until a root terminal marker appears, observe
+only markers, process/tmux state, instance health, and resource telemetry; do
+not inspect measurement CSVs.
