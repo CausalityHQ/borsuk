@@ -5,7 +5,8 @@
   "architecture": "local",
   "instance_type": "local",
   "cell_counts": [64],
-  "writers": [1],
+  "writers": [2],
+  "writer_instance_policy": "one-per-writer",
   "repetitions": 1,
   "operations_per_writer": 2,
   "pipeline_depth_per_writer": 1,
@@ -31,6 +32,7 @@
   "terminal_failure_marker": "GROUP_COMMIT_SCALABILITY_FAILED",
   "correctness_gates": [
     "grouped_durable_ack",
+    "independent_writer_instances",
     "extent_idempotency",
     "post_completion_lease_fencing",
     "stale_watermark_reopen",

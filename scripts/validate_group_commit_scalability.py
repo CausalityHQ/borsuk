@@ -156,6 +156,10 @@ def validate(
         throughput_gate_writers <= {int(writers) for writers in manifest["writers"]},
         "throughput gate writers are outside the frozen matrix",
     )
+    require(
+        manifest.get("writer_instance_policy") == "one-per-writer",
+        "campaign must require one independent writer instance per writer",
+    )
 
     frozen_cells = {
         (int(cell_count), repetition, int(lanes), int(writers))
@@ -185,6 +189,10 @@ def validate(
             require(summary["dataset_sha256"] == dataset_sha, f"dataset identity drift in {cell}")
         require(summary["manifest_sha256"] == manifest_sha, f"manifest identity drift in {cell}")
         require(integer(summary["writers"], "writers") == writers, f"writer drift in {cell}")
+        require(
+            integer(summary["writer_instances"], "writer instances") == writers,
+            f"writer instance drift in {cell}",
+        )
         operations = int(manifest["operations_per_writer"])
         records_per_operation = int(manifest.get("records_per_operation", 1))
         expected_operations = writers * operations
@@ -327,8 +335,13 @@ def validate(
         write_latencies: list[float] = []
         for sample in samples:
             writer = integer(sample["writer"], "sample writer")
+            writer_instance = integer(sample["writer_instance"], "sample writer instance")
             operation = integer(sample["operation"], "sample operation")
             require(0 <= writer < writers and 0 <= operation < operations, f"sample coordinate out of range in {cell}")
+            require(
+                writer_instance == writer,
+                f"sample writer instance drift in {cell}",
+            )
             require((writer, operation) not in writer_operations, f"duplicate sample coordinate in {cell}")
             writer_operations.add((writer, operation))
             if "batch_records" in sample:

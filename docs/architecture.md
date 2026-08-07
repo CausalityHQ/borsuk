@@ -318,6 +318,15 @@ read-through cache can mirror fetched objects under a cache directory while
 keeping RAM usage bounded to the active query. `CURRENT` is always read from the
 backing store.
 
+Group-commit drains materialize a collection-wide snapshot, then conditionally
+advance every captured writer-stripe checkpoint. This checkpoint changes only
+the monotonic durable/materialized frontier and sealed-epoch coverage; it
+preserves the live owner, lease epoch, and lease expiry. A live stripe writer
+reconciles that checkpoint-only HEAD version change into its next watermark,
+renewal, or release, so one client can retire work already published for a peer
+without stealing the peer's lease or forcing the peer to rebuild the same
+routing layer.
+
 BORSUK supports concurrent durable mutations through transaction bundles.
 Records, tombstones, and ID-directory changes are staged as immutable
 content-addressed bundles plus one checked descriptor. Before staging, the

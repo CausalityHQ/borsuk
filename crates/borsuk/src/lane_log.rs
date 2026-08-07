@@ -21,6 +21,7 @@ const HEAD_MAGIC: &[u8; 8] = b"BRSLHD26";
 const EPOCH_HEAD_MAGIC: &[u8; 8] = b"BRSLHD28";
 const EXTENT_MAGIC: &[u8; 8] = b"BRSLXT28";
 const MAX_LINEARIZABLE_PROBE_EXTENTS: u64 = 128;
+const MAX_HEAD_UPDATE_ATTEMPTS: usize = 16;
 const CHECKSUM_BYTES: usize = 32;
 const INLINE_SPILL_BYTE_THRESHOLD: u64 = 8 * 1024 * 1024;
 const MAX_UNMATERIALIZED_BLOCKS: usize = 128;
@@ -1453,14 +1454,45 @@ impl LaneEpochWriter {
 
     fn publish_head(&mut self, next: LaneEpochHead) -> Result<()> {
         let path = head_path(self.head.lane);
-        let bytes = epoch_head_bytes(&next)?;
-        let version =
-            self.storage
-                .write_coordination_object(&path, &bytes, self.head_version.clone())?;
-        self.head = next;
-        self.published_durable_sequence = self.head.durable_sequence;
-        self.head_version = Some(version);
-        Ok(())
+        let mut next = next;
+        let mut expected = self.head_version.clone();
+        for _ in 0..MAX_HEAD_UPDATE_ATTEMPTS {
+            let bytes = epoch_head_bytes(&next)?;
+            match self
+                .storage
+                .write_coordination_object(&path, &bytes, expected.clone())
+            {
+                Ok(version) => {
+                    self.head = next;
+                    self.published_durable_sequence = self.head.durable_sequence;
+                    self.head_version = Some(version);
+                    return Ok(());
+                }
+                Err(error @ BorsukError::ConcurrentModification { .. }) => {
+                    let Some(stored) = self.storage.read_coordination_object(&path)? else {
+                        return Err(error);
+                    };
+                    let observed = epoch_head_from_bytes(&stored.bytes, self.head.lane)?;
+                    if observed.lease_epoch != self.head.lease_epoch
+                        || observed.lease_owner != self.head.lease_owner
+                        || observed.lease_expires_at_ms != self.head.lease_expires_at_ms
+                    {
+                        return Err(error);
+                    }
+                    next.durable_sequence = next.durable_sequence.max(observed.durable_sequence);
+                    next.materialized_sequence = next
+                        .materialized_sequence
+                        .max(observed.materialized_sequence);
+                    next.generation_base = next.generation_base.max(observed.generation_base);
+                    if observed.sealed_epoch.is_none() {
+                        next.sealed_epoch = None;
+                    }
+                    expected = Some(stored.version);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification { path })
     }
 }
 
@@ -1677,6 +1709,54 @@ impl LaneEpochReader {
             .transpose()
     }
 
+    fn mark_materialized_through(&self, lane: u16, sequence: u64) -> Result<()> {
+        if lane >= self.lane_count {
+            return Err(BorsukError::InvalidStorage(format!(
+                "epoch lane-log lane {lane} exceeds configured lane count {}",
+                self.lane_count
+            )));
+        }
+        let path = head_path(lane);
+        for _ in 0..MAX_HEAD_UPDATE_ATTEMPTS {
+            let stored = self
+                .storage
+                .read_coordination_object(&path)?
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!("epoch lane-log HEAD `{path}` is missing"))
+                })?;
+            let mut next = epoch_head_from_bytes(&stored.bytes, lane)?;
+            if sequence <= next.materialized_sequence && next.sealed_epoch.is_none() {
+                return Ok(());
+            }
+            if sequence > next.durable_sequence {
+                for extent_sequence in next.durable_sequence.saturating_add(1)..=sequence {
+                    let extent = self
+                        .read_sequence(lane, next.lease_epoch, extent_sequence)?
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(format!(
+                                "cannot checkpoint missing epoch lane {lane} sequence {extent_sequence}"
+                            ))
+                        })?;
+                    next.generation_base =
+                        next.generation_base.max(extent_generation_end(&extent)?);
+                }
+                next.durable_sequence = sequence;
+            }
+            next.materialized_sequence = next.materialized_sequence.max(sequence);
+            next.sealed_epoch = None;
+            let bytes = epoch_head_bytes(&next)?;
+            match self
+                .storage
+                .write_coordination_object(&path, &bytes, Some(stored.version))
+            {
+                Ok(_) => return Ok(()),
+                Err(BorsukError::ConcurrentModification { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification { path })
+    }
+
     fn read_lane_records(
         &self,
         lane: u16,
@@ -1845,6 +1925,24 @@ impl LaneLogReader {
 
     fn request_counts(&self) -> RequestCounts {
         self.storage.request_counts()
+    }
+
+    pub(crate) fn mark_materialized_through(&self, sequences: &[u64]) -> Result<()> {
+        if sequences.len() != usize::from(self.lane_count) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "lane materializer supplied {} frontiers for {} lanes",
+                sequences.len(),
+                self.lane_count
+            )));
+        }
+        let reader = LaneEpochReader::from_storage(self.storage.clone(), self.lane_count)?;
+        for (lane, sequence) in sequences.iter().copied().enumerate() {
+            reader.mark_materialized_through(
+                u16::try_from(lane).expect("validated lane count fits u16"),
+                sequence,
+            )?;
+        }
+        Ok(())
     }
 
     fn ensure_epoch_format(&self) -> Result<()> {
@@ -3138,6 +3236,34 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![b"first".to_vec(), b"second".to_vec()]
         );
+    }
+
+    #[test]
+    fn v30_foreign_checkpoint_preserves_owner_and_live_writer_progress() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///epoch-foreign-checkpoint";
+        let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 10_000).unwrap();
+        writer.append_extent_at(b"first", 1, 10).unwrap();
+        writer.append_extent_at(b"second", 1, 11).unwrap();
+        let reader = LaneEpochReader::new(Arc::clone(&store), uri, 8).unwrap();
+
+        reader.mark_materialized_through(3, 2).unwrap();
+        for sequence in 3..=64 {
+            writer.append_extent_at(b"later", 1, sequence + 10).unwrap();
+            writer.publish_durable_watermark_if_due().unwrap();
+        }
+
+        let persisted = reader
+            .storage
+            .read_coordination_object(&head_path(3))
+            .unwrap()
+            .unwrap();
+        let head = epoch_head_from_bytes(&persisted.bytes, 3).unwrap();
+        assert_eq!(head.lease_epoch, 7);
+        assert_eq!(head.lease_owner, [1; 16]);
+        assert_eq!(head.lease_expires_at_ms, 10_000);
+        assert_eq!(head.materialized_sequence, 2);
+        assert_eq!(head.durable_sequence, 64);
     }
 
     #[test]

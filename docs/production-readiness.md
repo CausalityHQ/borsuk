@@ -256,6 +256,15 @@ only threads sharing one writer—and reports caller p50/p95, records/s, request
 per record, batch fill, conflicts, post-reopen visibility, and unchanged search
 recall. Local multi-instance coverage is correctness evidence, not a performance
 or unbounded-scalability claim.
+The benchmark contract now records producer writers and independently opened
+writer instances separately and rejects evidence unless each writer maps to a
+distinct instance. A two-instance terminal local smoke passes ingest,
+active-tail visibility, sequential collection-wide drains, reopen visibility,
+raw-sample reconciliation, resource telemetry, storage tracing, and the
+fail-closed validator. This is same-process structural evidence only. The
+preregistered 1/8/32 AWS matrix cannot launch honestly until the active-stripe
+directory removes the current eight-instance ceiling and the runner launches
+separate processes or hosts.
 The ignored large-scale test publishes `large-scale.csv` with million-vector
 tie-aware recall, strict id recall, termination reason, routing overfetch,
 latency, segment, byte, graph-byte, RSS before/peak/after, RSS peak-delta,

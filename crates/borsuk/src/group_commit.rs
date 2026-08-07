@@ -231,9 +231,8 @@ enum WorkerRequest {
     Append(AppendRequest),
     Barrier(Sender<()>),
     Materialize(Sender<std::result::Result<Vec<u64>, String>>),
-    Checkpoint {
-        lane: u16,
-        sequence: u64,
+    CheckpointAll {
+        sequences: Vec<u64>,
         response: Sender<std::result::Result<(), String>>,
     },
 }
@@ -508,31 +507,20 @@ impl GroupCommitWriter {
                 self.lane_count
             )));
         }
-        let mut checkpoints = Vec::with_capacity(self.worker_stripes.len());
-        for (worker, lane) in self.worker_stripes.iter().copied().enumerate() {
-            let sequence = committed_sequences[usize::from(lane)];
-            let (response, wait) = mpsc::channel();
-            self.requests[worker]
-                .send(WorkerRequest::Checkpoint {
-                    lane,
-                    sequence,
-                    response,
-                })
-                .map_err(|_| {
-                    BorsukError::InvalidStorage("group commit worker stopped".to_string())
-                })?;
-            checkpoints.push(wait);
-        }
-        for checkpoint in checkpoints {
-            checkpoint
-                .recv()
-                .map_err(|_| {
-                    BorsukError::InvalidStorage(
-                        "group commit worker stopped before checkpoint completed".to_string(),
-                    )
-                })?
-                .map_err(BorsukError::InvalidStorage)?;
-        }
+        let (response, wait) = mpsc::channel();
+        self.requests[0]
+            .send(WorkerRequest::CheckpointAll {
+                sequences: committed_sequences,
+                response,
+            })
+            .map_err(|_| BorsukError::InvalidStorage("group commit worker stopped".to_string()))?;
+        wait.recv()
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "group commit worker stopped before checkpoint completed".to_string(),
+                )
+            })?
+            .map_err(BorsukError::InvalidStorage)?;
         Ok(())
     }
 }
@@ -600,18 +588,12 @@ fn run_worker(
                 let _ = done.send(result);
                 continue;
             }
-            WorkerRequest::Checkpoint {
-                lane,
-                sequence,
+            WorkerRequest::CheckpointAll {
+                sequences,
                 response,
             } => {
-                let result = lane_writers
-                    .iter_mut()
-                    .find(|writer| writer.lane() == lane)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!("worker does not own lane {lane}"))
-                    })
-                    .and_then(|writer| writer.mark_materialized_through(sequence))
+                let result = index
+                    .checkpoint_lane_log_materialized_through(&sequences)
                     .map_err(|error| error.to_string());
                 let _ = response.send(result);
                 continue;
