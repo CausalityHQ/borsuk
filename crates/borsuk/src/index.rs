@@ -1997,9 +1997,17 @@ impl BorsukIndex {
         }
         let tombstone = self.write_tombstone(overlay)?;
 
-        let previous = self.manifest.clone();
+        let active_summaries = self.active_segment_summaries()?;
+        let mut previous = self.manifest.clone();
+        if previous.segments.is_empty() {
+            // Paged manifests keep the authoritative segment summaries in
+            // leaf pages. Reuse the already-resolved summaries for the
+            // publication diff instead of making the storage layer reread
+            // every page merely to discover the unchanged prefix.
+            previous.segments = active_summaries.clone();
+        }
         let mut manifest = self.manifest.next_version();
-        manifest.segments = self.active_segment_summaries()?;
+        manifest.segments = active_summaries;
         // The persisted fallback quantizer embeds the previous segment set.
         // Invalidate it in the same publication that adds materialized lane
         // segments so no reader can route on stale centroids. Global ANN search
@@ -8495,7 +8503,12 @@ impl BorsukIndex {
         // built from only the newly-flushed segments and silently drop every
         // pre-existing segment.
         let active_summaries = self.active_segment_summaries()?;
-        let previous = self.manifest.clone();
+        let mut previous = self.manifest.clone();
+        if previous.segments.is_empty() {
+            // The active summaries were resolved above for the new manifest;
+            // use the same snapshot to avoid rewriting every old leaf page.
+            previous.segments = active_summaries.clone();
+        }
         let lexical_roots_will_rebuild = cell_runs
             .iter()
             .any(|run| run.kind == CellWalRunKind::Records);
@@ -23132,6 +23145,60 @@ mod tests {
         assert_eq!(segment.pq_min, scalar.pq_min);
         assert_eq!(segment.pq_max, scalar.pq_max);
         assert_eq!(segment.pq_codes, scalar.pq_codes);
+    }
+
+    #[test]
+    fn paged_manifest_publication_reuses_unchanged_leaf_pages() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..2_000)
+                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32, 0.0]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let inline = index.manifest.clone();
+        let mut paged = inline.next_version();
+        paged.segments.clear();
+        index.manifest = index
+            .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(paged, &inline)
+            .unwrap();
+        let previous = index.manifest.clone();
+        assert!(
+            previous.segments.is_empty(),
+            "fixture must use paged routing"
+        );
+
+        let mut manifest = previous.next_version();
+        manifest.segments = index.active_segment_summaries().unwrap();
+        manifest.rebuild_pivots();
+        manifest
+            .segments
+            .push(fake_segment_summary("appended", 0, 2_000));
+        let mut previous_for_publish = previous.clone();
+        previous_for_publish.segments = manifest.segments[..2_000].to_vec();
+        let (_, report) = index
+            .storage
+            .stage_manifest_with_report(PRIMARY_MODALITY, &manifest, Some(&previous_for_publish))
+            .unwrap();
+
+        assert!(
+            report.routing_pages_written < 10,
+            "drain publication rewrote the paged base: {} pages",
+            report.routing_pages_written
+        );
     }
 
     #[test]
