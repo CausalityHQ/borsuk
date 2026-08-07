@@ -112,7 +112,11 @@ use crate::{
 // on one group-amortized global generation range allocator. Opening an older
 // manifest could otherwise mix incomparable per-shard/per-lane generations and
 // return the wrong last-write-wins value across processes.
-const CURRENT_VERSION: u16 = 27;
+// Bumped 27 -> 28 when group commit gained a required checked active-stripe
+// directory and a 64-slot pool independent of the per-cell WAL lane count.
+// Opening v27 without the directory could either miss acknowledged extents or
+// restore the old fixed eight-HEAD read fanout semantics.
+const CURRENT_VERSION: u16 = 28;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

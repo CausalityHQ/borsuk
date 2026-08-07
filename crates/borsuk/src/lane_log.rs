@@ -20,6 +20,8 @@ const BLOCK_MAGIC: &[u8; 8] = b"BRSLBL25";
 const HEAD_MAGIC: &[u8; 8] = b"BRSLHD26";
 const EPOCH_HEAD_MAGIC: &[u8; 8] = b"BRSLHD28";
 const EXTENT_MAGIC: &[u8; 8] = b"BRSLXT28";
+const ACTIVE_STRIPE_MAGIC: &[u8; 8] = b"BRSLAD31";
+const ACTIVE_STRIPE_PATH: &str = "lane-log/ACTIVE";
 const MAX_LINEARIZABLE_PROBE_EXTENTS: u64 = 128;
 const MAX_HEAD_UPDATE_ATTEMPTS: usize = 16;
 const CHECKSUM_BYTES: usize = 32;
@@ -28,6 +30,10 @@ const MAX_UNMATERIALIZED_BLOCKS: usize = 128;
 const MAX_UNMATERIALIZED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_UNMATERIALIZED_RECORDS: u64 = 65_536;
 const ID_AUTHORITY_ENTRY_OVERHEAD_BYTES: u64 = 80;
+
+/// Fixed group-commit writer-stripe pool. Readers use the active directory and
+/// do not fan out across every persisted slot.
+pub const GROUP_COMMIT_STRIPE_COUNT: u16 = 64;
 
 /// Durable identity and foreground object-store cost of one lane append.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -336,6 +342,23 @@ struct LaneEpochHead {
     sealed_epoch: Option<LaneEpochSeal>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActiveStripeDirectory {
+    generation: u64,
+    active_bits: u64,
+    retired_manifest_version: u64,
+}
+
+type ActiveLaneEpochStates = (ActiveStripeDirectory, [u8; 32], Vec<(u16, LaneEpochState)>);
+
+impl ActiveStripeDirectory {
+    fn active_stripes(self, lane_count: u16) -> Vec<u16> {
+        (0..lane_count)
+            .filter(|lane| self.active_bits & (1_u64 << u32::from(*lane)) != 0)
+            .collect()
+    }
+}
+
 impl LaneEpochHead {
     fn validate(&self, expected_lane: u16) -> Result<()> {
         if self.lane != expected_lane || self.materialized_sequence > self.durable_sequence {
@@ -576,6 +599,36 @@ fn epoch_head_bytes(head: &LaneEpochHead) -> Result<Vec<u8>> {
     body.extend_from_slice(&seal.durable_sequence.to_le_bytes());
     body.extend_from_slice(&seal.generation_end.to_le_bytes());
     Ok(fenced_bytes(EPOCH_HEAD_MAGIC, &body))
+}
+
+fn active_stripe_directory_bytes(directory: &ActiveStripeDirectory) -> Result<Vec<u8>> {
+    let mut body = Vec::with_capacity(25);
+    body.push(31);
+    body.extend_from_slice(&directory.generation.to_le_bytes());
+    body.extend_from_slice(&directory.active_bits.to_le_bytes());
+    body.extend_from_slice(&directory.retired_manifest_version.to_le_bytes());
+    Ok(fenced_bytes(ACTIVE_STRIPE_MAGIC, &body))
+}
+
+fn active_stripe_directory_from_bytes(bytes: &[u8]) -> Result<ActiveStripeDirectory> {
+    let body = fenced_body(bytes, ACTIVE_STRIPE_MAGIC, "active stripe directory")?;
+    let mut cursor = 0;
+    if take_u8(body, &mut cursor)? != 31 {
+        return Err(BorsukError::InvalidStorage(
+            "unsupported active stripe directory version".to_string(),
+        ));
+    }
+    let directory = ActiveStripeDirectory {
+        generation: take_u64(body, &mut cursor)?,
+        active_bits: take_u64(body, &mut cursor)?,
+        retired_manifest_version: take_u64(body, &mut cursor)?,
+    };
+    if cursor != body.len() {
+        return Err(BorsukError::InvalidStorage(
+            "active stripe directory has trailing bytes".to_string(),
+        ));
+    }
+    Ok(directory)
 }
 
 fn epoch_head_from_bytes(bytes: &[u8], expected_lane: u16) -> Result<LaneEpochHead> {
@@ -1013,7 +1066,70 @@ pub(crate) fn initialize_empty_lane_heads(storage: &Storage, lane_count: u16) ->
             Err(error) => return Err(error),
         }
     }
+    let directory = ActiveStripeDirectory {
+        generation: 1,
+        active_bits: 0,
+        retired_manifest_version: 0,
+    };
+    let bytes = active_stripe_directory_bytes(&directory)?;
+    match storage.write_coordination_object(ACTIVE_STRIPE_PATH, &bytes, None) {
+        Ok(_) => {}
+        Err(BorsukError::ConcurrentModification { .. }) => {
+            let observed = storage
+                .read_coordination_object(ACTIVE_STRIPE_PATH)?
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "lane-log active stripe directory disappeared during initialization"
+                            .to_string(),
+                    )
+                })?;
+            if observed.bytes != bytes {
+                return Err(BorsukError::InvalidStorage(
+                    "lane-log active stripe directory conflicts with index initialization"
+                        .to_string(),
+                ));
+            }
+        }
+        Err(error) => return Err(error),
+    }
     Ok(())
+}
+
+pub(crate) fn activate_stripe(storage: &Storage, lane: u16, lane_count: u16) -> Result<()> {
+    if lane >= lane_count || lane_count > GROUP_COMMIT_STRIPE_COUNT {
+        return Err(BorsukError::InvalidStorage(format!(
+            "group-commit stripe {lane} exceeds persisted stripe count {lane_count}"
+        )));
+    }
+    let bit = 1_u64 << u32::from(lane);
+    for _ in 0..MAX_HEAD_UPDATE_ATTEMPTS {
+        let stored = storage
+            .read_coordination_object(ACTIVE_STRIPE_PATH)?
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "lane-log active stripe directory is missing".to_string(),
+                )
+            })?;
+        let mut directory = active_stripe_directory_from_bytes(&stored.bytes)?;
+        if directory.active_bits & bit != 0 {
+            return Ok(());
+        }
+        directory.active_bits |= bit;
+        directory.generation = directory.generation.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "active stripe directory generation exceeds u64".to_string(),
+            )
+        })?;
+        let bytes = active_stripe_directory_bytes(&directory)?;
+        match storage.write_coordination_object(ACTIVE_STRIPE_PATH, &bytes, Some(stored.version)) {
+            Ok(_) => return Ok(()),
+            Err(BorsukError::ConcurrentModification { .. }) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(BorsukError::ConcurrentModification {
+        path: ACTIVE_STRIPE_PATH.to_string(),
+    })
 }
 
 fn block_path(lane: u16, lease_epoch: u64, sequence: u64, checksum: &[u8; 32]) -> String {
@@ -1927,6 +2043,19 @@ impl LaneLogReader {
         self.storage.request_counts()
     }
 
+    fn active_directory(&self) -> Result<(ActiveStripeDirectory, [u8; 32])> {
+        let stored = self
+            .storage
+            .read_coordination_object(ACTIVE_STRIPE_PATH)?
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "lane-log active stripe directory is missing".to_string(),
+                )
+            })?;
+        let directory = active_stripe_directory_from_bytes(&stored.bytes)?;
+        Ok((directory, *blake3::hash(&stored.bytes).as_bytes()))
+    }
+
     pub(crate) fn mark_materialized_through(&self, sequences: &[u64]) -> Result<()> {
         if sequences.len() != usize::from(self.lane_count) {
             return Err(BorsukError::InvalidStorage(format!(
@@ -1935,43 +2064,37 @@ impl LaneLogReader {
                 self.lane_count
             )));
         }
+        let (directory, _) = self.active_directory()?;
         let reader = LaneEpochReader::from_storage(self.storage.clone(), self.lane_count)?;
-        for (lane, sequence) in sequences.iter().copied().enumerate() {
-            reader.mark_materialized_through(
-                u16::try_from(lane).expect("validated lane count fits u16"),
-                sequence,
-            )?;
+        for lane in directory.active_stripes(self.lane_count) {
+            let sequence = sequences[usize::from(lane)];
+            reader.mark_materialized_through(lane, sequence)?;
         }
         Ok(())
     }
 
     fn ensure_epoch_format(&self) -> Result<()> {
-        let path = head_path(0);
-        let stored = self
-            .storage
-            .read_coordination_object(&path)?
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(format!("lane-log HEAD `{path}` is missing"))
-            })?;
-        if !stored.bytes.starts_with(EPOCH_HEAD_MAGIC) {
-            return Err(BorsukError::InvalidStorage(
-                "unsupported pre-v28 lane-log HEAD".to_string(),
-            ));
-        }
+        self.active_directory()?;
         Ok(())
     }
 
-    fn read_epoch_states(&self) -> Result<Vec<LaneEpochState>> {
+    fn read_epoch_states(&self) -> Result<ActiveLaneEpochStates> {
+        let (directory, directory_checksum) = self.active_directory()?;
         let reader = LaneEpochReader::from_storage(self.storage.clone(), self.lane_count)?;
-        read_lane_fanout(self.lane_count, |lane| {
-            reader.read_lane_state(lane, LaneReadConsistency::Linearizable)
-        })
+        let states =
+            read_selected_lane_fanout(&directory.active_stripes(self.lane_count), |lane| {
+                reader
+                    .read_lane_state(lane, LaneReadConsistency::Linearizable)
+                    .map(|state| (lane, state))
+            })?;
+        Ok((directory, directory_checksum, states))
     }
 
     fn read_epoch_identities(
         &self,
         current_blocks: &[LaneLogRecordBlock],
-    ) -> Result<Vec<LaneEpochIdentityState>> {
+    ) -> Result<Vec<[u8; 32]>> {
+        let (directory, directory_checksum) = self.active_directory()?;
         let reader = LaneEpochReader::from_storage(self.storage.clone(), self.lane_count)?;
         let mut known = vec![None; usize::from(self.lane_count)];
         for block in current_blocks {
@@ -1998,34 +2121,41 @@ impl LaneLogReader {
                 known[lane] = Some((epoch, sequence));
             }
         }
-        read_lane_fanout(self.lane_count, |lane| {
-            reader.read_lane_identity(lane, known[usize::from(lane)])
-        })
+        let identities =
+            read_selected_lane_fanout(&directory.active_stripes(self.lane_count), |lane| {
+                reader
+                    .read_lane_identity(lane, known[usize::from(lane)])
+                    .map(|identity| (lane, identity))
+            })?;
+        let mut checksums = vec![[0; 32]; usize::from(self.lane_count) + 1];
+        checksums[usize::from(self.lane_count)] = directory_checksum;
+        for (lane, identity) in identities {
+            checksums[usize::from(lane)] = identity.head_checksum;
+        }
+        Ok(checksums)
     }
 
     fn decode_epoch_snapshot(
         &self,
-        states: Vec<LaneEpochState>,
+        states: ActiveLaneEpochStates,
         current_blocks: &[LaneLogRecordBlock],
         runtime: Option<&crate::index::WalTailRuntime>,
     ) -> Result<LaneLogSnapshot> {
-        let committed_sequences = states
-            .iter()
-            .map(|state| {
-                state
-                    .extents
-                    .iter()
-                    .filter(|extent| extent.lease_epoch == state.head.lease_epoch)
-                    .map(|extent| extent.sequence)
-                    .max()
-                    .unwrap_or(state.head.durable_sequence)
-                    .max(state.head.durable_sequence)
-            })
-            .collect::<Vec<_>>();
-        let head_checksums = states
-            .iter()
-            .map(|state| state.head_checksum)
-            .collect::<Vec<_>>();
+        let (_, directory_checksum, states) = states;
+        let mut committed_sequences = vec![0; usize::from(self.lane_count)];
+        let mut head_checksums = vec![[0; 32]; usize::from(self.lane_count) + 1];
+        head_checksums[usize::from(self.lane_count)] = directory_checksum;
+        for (lane, state) in &states {
+            committed_sequences[usize::from(*lane)] = state
+                .extents
+                .iter()
+                .filter(|extent| extent.lease_epoch == state.head.lease_epoch)
+                .map(|extent| extent.sequence)
+                .max()
+                .unwrap_or(state.head.durable_sequence)
+                .max(state.head.durable_sequence);
+            head_checksums[usize::from(*lane)] = state.head_checksum;
+        }
         let current_blocks = current_blocks
             .iter()
             .map(|block| {
@@ -2040,7 +2170,7 @@ impl LaneLogReader {
             .collect::<HashMap<_, _>>();
         let extents = states
             .into_iter()
-            .flat_map(|state| state.extents)
+            .flat_map(|(_, state)| state.extents)
             .collect::<Vec<_>>();
         let record_blocks = crate::parallel::install_io(|| {
             extents
@@ -2221,11 +2351,7 @@ impl LaneLogReader {
         // HEAD read on every WAL-tail poll; active-tail readers already pay the
         // fixed fan-out needed to detect newly created immutable extents.
         let identities = self.read_epoch_identities(current_blocks)?;
-        if identities
-            .iter()
-            .map(|state| state.head_checksum)
-            .eq(current_head_checksums.iter().copied())
-        {
+        if identities == current_head_checksums {
             return Ok(None);
         }
         let states = self.read_epoch_states()?;
@@ -2234,7 +2360,6 @@ impl LaneLogReader {
     }
 
     pub(crate) fn read_snapshot(&self) -> Result<LaneLogSnapshot> {
-        self.ensure_epoch_format()?;
         let states = self.read_epoch_states()?;
         self.decode_epoch_snapshot(states, &[], None)
     }
@@ -2262,6 +2387,20 @@ where
     crate::parallel::install_io(|| {
         (0..lane_count)
             .into_par_iter()
+            .map(read)
+            .collect::<Result<Vec<_>>>()
+    })
+}
+
+fn read_selected_lane_fanout<T, F>(lanes: &[u16], read: F) -> Result<Vec<T>>
+where
+    T: Send,
+    F: Fn(u16) -> Result<T> + Send + Sync,
+{
+    crate::parallel::install_io(|| {
+        lanes
+            .par_iter()
+            .copied()
             .map(read)
             .collect::<Result<Vec<_>>>()
     })
@@ -3089,6 +3228,60 @@ mod tests {
     }
 
     #[test]
+    fn v31_active_stripe_directory_round_trips_and_rejects_corruption() {
+        let directory = ActiveStripeDirectory {
+            generation: 7,
+            active_bits: (1_u64 << 2) | (1_u64 << 41),
+            retired_manifest_version: 11,
+        };
+        let bytes = active_stripe_directory_bytes(&directory).unwrap();
+
+        assert_eq!(
+            active_stripe_directory_from_bytes(&bytes).unwrap(),
+            directory
+        );
+        assert_eq!(directory.active_stripes(64), vec![2, 41]);
+        assert!(active_stripe_directory_from_bytes(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn empty_active_directory_avoids_fixed_pool_head_reads() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///active-stripe-empty-read";
+        let storage = Storage::from_object_store(uri.to_string(), Arc::clone(&store)).unwrap();
+        initialize_empty_lane_heads(&storage, GROUP_COMMIT_STRIPE_COUNT).unwrap();
+        let reader = LaneLogReader::new(store, uri, GROUP_COMMIT_STRIPE_COUNT).unwrap();
+        let before = reader.request_counts();
+
+        let snapshot = reader.read_snapshot().unwrap();
+        let requests = reader.request_counts().delta(&before);
+
+        assert!(snapshot.record_blocks.is_empty());
+        assert_eq!(snapshot.committed_sequences.len(), 64);
+        assert_eq!(requests.gets, 1, "an empty tail reads only lane-log/ACTIVE");
+    }
+
+    #[test]
+    fn activating_one_stripe_bounds_snapshot_fanout_to_directory_plus_one_head() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///active-stripe-one-read";
+        let storage = Storage::from_object_store(uri.to_string(), Arc::clone(&store)).unwrap();
+        initialize_empty_lane_heads(&storage, GROUP_COMMIT_STRIPE_COUNT).unwrap();
+        activate_stripe(&storage, 41, GROUP_COMMIT_STRIPE_COUNT).unwrap();
+        let reader = LaneLogReader::new(store, uri, GROUP_COMMIT_STRIPE_COUNT).unwrap();
+        let before = reader.request_counts();
+
+        let snapshot = reader.read_snapshot().unwrap();
+        let requests = reader.request_counts().delta(&before);
+
+        assert!(snapshot.record_blocks.is_empty());
+        assert_eq!(
+            requests.gets, 3,
+            "read ACTIVE, stripe 41 HEAD, and its bounded next-extent probe"
+        );
+    }
+
+    #[test]
     fn v30_extent_round_trips_wal_records_id_deltas_and_generation_order() {
         let records = vec![
             VectorRecord::new("first", vec![1.0, 2.0]),
@@ -3493,7 +3686,7 @@ mod tests {
     }
 
     #[test]
-    fn initialized_lane_set_fails_closed_when_one_authoritative_head_is_missing() {
+    fn active_lane_set_fails_closed_when_one_authoritative_head_is_missing() {
         const LANES: u16 = 4;
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let storage = Storage::from_object_store(
@@ -3502,6 +3695,7 @@ mod tests {
         )
         .unwrap();
         initialize_empty_lane_heads(&storage, LANES).unwrap();
+        activate_stripe(&storage, 2, LANES).unwrap();
         storage.delete_object(&head_path(2)).unwrap();
 
         let error = LaneLogReader::new(store, "memory:///lane-required-heads", LANES)

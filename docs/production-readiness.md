@@ -248,9 +248,13 @@ reads.
 Object-store production ingest must be qualified in records per durable group,
 not only one-record calls. `GroupCommitWriter` retains synchronous durability
 while coalescing concurrent Rust callers into one WAL transaction. Separate
-`GroupCommitWriter` instances claim distinct persisted writer stripes, but the
-current eight-stripe format has not yet been qualified as a horizontally scaled
-service and cannot support more than eight simultaneous process workers.
+`GroupCommitWriter` instances claim distinct slots from a 64-stripe persisted
+pool. Readers first fetch a checked active-stripe directory and do not read all
+64 HEADs. Local coverage proves 32 simultaneously open independent library
+instances can write and reopen one collection, but this has not yet been
+qualified as a horizontally scaled service. Active bits are not yet retired,
+so refresh fanout can grow with historical writer churn until manifest-fenced
+retirement is implemented.
 Promotion requires AWS evidence that uses independent processes/instances—not
 only threads sharing one writer—and reports caller p50/p95, records/s, requests
 per record, batch fill, conflicts, post-reopen visibility, and unchanged search
@@ -262,9 +266,9 @@ distinct instance. A two-instance terminal local smoke passes ingest,
 active-tail visibility, sequential collection-wide drains, reopen visibility,
 raw-sample reconciliation, resource telemetry, storage tracing, and the
 fail-closed validator. This is same-process structural evidence only. The
-preregistered 1/8/32 AWS matrix cannot launch honestly until the active-stripe
-directory removes the current eight-instance ceiling and the runner launches
-separate processes or hosts.
+preregistered 1/8/32 AWS matrix still cannot launch honestly until the runner
+launches separate processes or hosts and the active-directory retirement and
+crash/fault gates pass.
 The ignored large-scale test publishes `large-scale.csv` with million-vector
 tie-aware recall, strict id recall, termination reason, routing overfetch,
 latency, segment, byte, graph-byte, RSS before/peak/after, RSS peak-delta,
