@@ -5125,28 +5125,28 @@ mod tests {
     }
 
     #[test]
-    fn range_reads_enforce_the_sixty_four_mib_physical_span_cap() {
+    fn range_reads_enforce_the_four_mib_physical_span_cap() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
-        let object = vec![7_u8; 65 * 1024 * 1024];
+        let object = vec![7_u8; 4 * 1024 * 1024 + 4];
         storage.write_bytes("vectors/capped.bin", &object).unwrap();
 
-        // Every adjacent requested row is within the 1 MiB gap. Without a
-        // physical span cap this would become one 64 MiB+4-byte GET.
-        let ranges = [
-            0..4,
-            1024 * 1024..1024 * 1024 + 4,
-            2 * 1024 * 1024..2 * 1024 * 1024 + 4,
-            3 * 1024 * 1024..3 * 1024 * 1024 + 4,
-            64 * 1024 * 1024..64 * 1024 * 1024 + 4,
-        ];
+        // Every adjacent requested row is exactly within the 64 KiB merge
+        // gap. Without the independent physical-span cap all 65 rows would
+        // become one 4 MiB+4-byte GET.
+        let ranges = (0_u64..=64)
+            .map(|index| {
+                let start = index * 64 * 1024;
+                start..start + 4
+            })
+            .collect::<Vec<_>>();
         let before = storage.request_counts();
         let read = storage.read_ranges("vectors/capped.bin", &ranges).unwrap();
         let requests = storage.request_counts().delta(&before);
 
-        assert_eq!(read.chunks, vec![vec![7_u8; 4]; 5]);
+        assert_eq!(read.chunks, vec![vec![7_u8; 4]; 65]);
         assert_eq!(requests.gets, 2);
-        assert_eq!(read.bytes_fetched, 3 * 1024 * 1024 + 8);
+        assert_eq!(read.bytes_fetched, 63 * 64 * 1024 + 8);
     }
 
     #[test]
