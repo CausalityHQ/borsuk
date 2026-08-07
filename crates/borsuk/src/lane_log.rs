@@ -1132,6 +1132,29 @@ pub(crate) fn activate_stripe(storage: &Storage, lane: u16, lane_count: u16) -> 
     })
 }
 
+pub(crate) fn stripe_claim_candidates(
+    storage: &Storage,
+    lane_count: u16,
+    start: u16,
+) -> Result<Vec<u16>> {
+    if lane_count == 0 || lane_count > GROUP_COMMIT_STRIPE_COUNT || start >= lane_count {
+        return Err(BorsukError::InvalidStorage(format!(
+            "invalid group-commit stripe candidate range: count {lane_count}, start {start}"
+        )));
+    }
+    let stored = storage
+        .read_coordination_object(ACTIVE_STRIPE_PATH)?
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("lane-log active stripe directory is missing".to_string())
+        })?;
+    let active_bits = active_stripe_directory_from_bytes(&stored.bytes)?.active_bits;
+    let mut candidates = (0..lane_count)
+        .map(|offset| (start + offset) % lane_count)
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|lane| active_bits & (1_u64 << u32::from(*lane)) != 0);
+    Ok(candidates)
+}
+
 fn block_path(lane: u16, lease_epoch: u64, sequence: u64, checksum: &[u8; 32]) -> String {
     let checksum = blake3::Hash::from_bytes(*checksum).to_hex();
     format!(

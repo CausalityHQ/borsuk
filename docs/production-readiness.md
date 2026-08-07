@@ -255,6 +255,11 @@ instances can write and reopen one collection, but this has not yet been
 qualified as a horizontally scaled service. Active bits are not yet retired,
 so refresh fanout can grow with historical writer churn until manifest-fenced
 retirement is implemented.
+Fresh writer startup also reads the directory and tries inactive slots before
+leased/takeover candidates, with a randomized rotation between instances. The
+32-instance local request trace therefore performs 32 stripe-HEAD reads instead
+of the former 528; this is request-structure evidence, not an AWS latency or
+throughput result.
 Promotion requires AWS evidence that uses independent processes/instances—not
 only threads sharing one writer—and reports caller p50/p95, records/s, requests
 per record, batch fill, conflicts, post-reopen visibility, and unchanged search

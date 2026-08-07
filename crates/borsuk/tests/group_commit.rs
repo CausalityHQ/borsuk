@@ -9,8 +9,8 @@ use std::{
 };
 
 use borsuk::{
-    BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, LeafMode, SearchOptions,
-    VectorMetric, VectorRecord,
+    BorsukIndex, GROUP_COMMIT_STRIPE_COUNT, GroupCommitConfig, GroupCommitWriter, IndexConfig,
+    LeafMode, SearchOptions, VectorMetric, VectorRecord,
 };
 use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory};
@@ -668,6 +668,42 @@ fn thirty_two_independent_group_writers_share_one_collection() {
 }
 
 #[test]
+fn thirty_two_writer_startup_reads_one_candidate_head_per_instance() {
+    const WRITERS: usize = 32;
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(traced);
+    let uri = "memory:///thirty-two-writer-startup-cost";
+    let mut indexes =
+        vec![BorsukIndex::create_with_object_store(Arc::clone(&store), config(uri)).unwrap()];
+    for _ in 1..WRITERS {
+        indexes.push(BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap());
+    }
+    operations.clear();
+
+    let writer_config = GroupCommitConfig {
+        max_delay: std::time::Duration::ZERO,
+        max_records: 1,
+        worker_lanes: 1,
+    };
+    let writers = indexes
+        .into_iter()
+        .map(|index| GroupCommitWriter::new(index, writer_config).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(writers.len(), WRITERS);
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get
+                && path.starts_with("lane-log/lanes/")
+                && path.ends_with("/HEAD")
+        }),
+        WRITERS,
+        "fresh independent writers must consult one inactive stripe HEAD each"
+    );
+}
+
+#[test]
 fn one_writer_can_drain_while_another_writer_remains_live() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///independent-group-writer-drain";
@@ -905,11 +941,10 @@ fn one_append_fans_records_out_to_their_ownership_lanes() {
             .lane_receipts
             .iter()
             .map(|lane| lane.commit_lane)
-            .collect::<std::collections::BTreeSet<_>>(),
-        selected
-            .iter()
-            .map(|(lane, _)| *lane)
             .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2,
+        "records assigned to distinct local workers must use distinct claimed stripes"
     );
 }
 
@@ -1341,7 +1376,7 @@ fn preregistered_worker_lane_factors_preserve_ack_reopen_last_write_and_drain() 
             .unwrap();
         assert_eq!(receipt.records, 1);
         assert!(
-            receipt.commit_lane < 8,
+            receipt.commit_lane < usize::from(GROUP_COMMIT_STRIPE_COUNT),
             "receipt identifies a persisted lane"
         );
         assert_eq!(

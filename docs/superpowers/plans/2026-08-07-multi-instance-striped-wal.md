@@ -92,6 +92,9 @@ complete crash/fault/GC assurance gate before this task is closed.
   fanout.
 - [x] Activate a successfully claimed stripe before returning its writer, so no
   acknowledged extent can exist outside directory visibility.
+- [x] Order claim candidates from one checked directory read, inactive slots
+  first with a per-instance randomized rotation, so fresh N-writer startup does
+  not scan 1+2+...+N authoritative HEADs or herd on stripe zero.
 - [ ] Retire quiescent stripes only behind a manifest-version fence that first
   forces readers pinned before the retirement boundary to refresh. Renewal,
   release, expiry, and takeover must preserve that invariant.
