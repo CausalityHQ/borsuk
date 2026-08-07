@@ -1,7 +1,6 @@
 # Direct Immutable Mutation Versions and Bounded Delta Ingest
 
-**Status:** Architecture selected by the user on 2026-08-07. Written-spec
-review is pending before implementation.
+**Status:** Approved by the user on 2026-08-07.
 
 ## Objective
 
@@ -53,48 +52,93 @@ publication.
 
 ### Mutation version
 
-Replace record `generation: u64` with a checked, lexicographically ordered
-128-bit `MutationVersion`:
+Replace caller-visible record `generation: u64` with an internal, checked,
+lexicographically ordered 192-bit `MutationVersion`:
 
 ```text
-bits 127..80  physical Unix milliseconds (48 bits)
-bits  79..64  logical counter             (16 bits)
-bits  63..0   writer token                (64 bits)
+bits 191..144  physical Unix milliseconds (48 bits)
+bits 143..128  logical counter             (16 bits)
+bits 127..0    writer identity             (128 bits)
 ```
 
 The library generates a cryptographically random 128-bit writer identity for
-each independent mutation clock and derives the version's 64-bit token with
-BLAKE3 domain separation. Neither value is caller-controlled. Every extent
-persists the full writer identity alongside its token; observing two different
-identities with one token is hard corruption rather than an ambiguous tie. A
-process-local atomic hybrid logical clock generates versions without object
-store I/O:
+each independent mutation clock. It is never caller-controlled. Retaining the
+complete identity avoids a 64-bit birthday-collision contract. A process-local
+atomic hybrid logical clock generates versions without object-store I/O. Its
+atomic state is the complete 64-bit
+`(physical_milliseconds, logical_counter)` prefix, not merely the physical
+millisecond:
 
-1. choose the greater of the current physical millisecond, the prior local
-   physical millisecond, and any physical millisecond observed by this handle;
-2. increment the logical component when physical time does not advance;
-3. if the 16-bit logical component overflows, advance the synthetic physical
+1. atomically raise the local HLC floor to the complete HLC prefix of every
+   version observed by this handle;
+2. if the current physical millisecond exceeds the floor's physical component,
+   allocate from `(now, 0)`; otherwise allocate the next logical value after
+   the complete observed floor;
+3. reserve a group as one contiguous HLC-prefix range with compare-and-swap;
+4. if the 16-bit logical component overflows, advance the synthetic physical
    component by one millisecond and reset the logical component;
-4. append the stable writer token and compare the complete 128-bit value as
+5. append the stable writer identity and compare the complete 192-bit value as
    unsigned big-endian bytes.
 
-One `GroupCommitWriter` shares one atomic mutation clock across all of its
-worker stripes. It assigns versions before lane fan-out, preserving caller
-order without a storage round trip. Ordinary index handles own independent
-clocks. Reads and refreshes advance a handle's observed HLC floor but never
-rewrite an already allocated version.
+Advancing past the complete observed prefix is essential: copying only an
+observed physical millisecond and resetting its logical counter could allocate
+a version below the value just observed.
 
-The format stores the 16-byte value directly in WAL extents, segments,
-tombstone runs, ID deltas, exact metadata, and every checksum-covered
-descriptor that currently persists a record generation. Manifest/catalog
-generation counters are unrelated and remain their existing integer type.
+Times before the Unix epoch and physical values beyond `2^48 - 1` are rejected.
+Every checksum-covered extent, segment, tombstone/ID delta, sidecar root, and
+aggregate descriptor persists its maximum mutation version so `refresh()` can
+advance the clock without decoding vector payloads.
+
+`BorsukIndex` owns an `Arc<MutationClock>`. Rust clones of one logical handle
+share it; a separate `open()` creates a new clock. `GroupCommitWriter::new`
+transfers the consumed handle's clock to its front end and assigns versions
+before ID deduplication and lane fan-out. Worker stripes never allocate or
+rewrite versions. Repeated IDs in one group retain the greatest assigned
+version and must pass the equal-version digest check. Reads and refreshes
+advance the handle's observed HLC floor but never rewrite an allocated version.
+
+The canonical wire value is 24 bytes. Columnar and fixed-width artifacts avoid
+repeating the 16-byte identity per row: each immutable artifact carries a
+checked writer-identity dictionary and rows store the 64-bit HLC prefix plus a
+minimal dictionary ordinal. Materialization and compaction union dictionaries
+and rewrite ordinals while preserving the canonical version. WAL extents
+normally contain one writer identity and one contiguous HLC range. Manifest
+and catalog generation counters are unrelated and remain their existing
+integer type.
+
+### Canonical mutation envelope
+
+Versioning applies to a logical entity mutation, not only its dense vector:
+
+```text
+Mutation {
+    id,
+    version,
+    operation: Put(CanonicalRecord) | Delete,
+    canonical_digest,
+}
+```
+
+`CanonicalRecord` contains primary and named dense vectors, sparse vectors,
+text terms, late-interaction matrices, metadata, and storage type declarations.
+The digest is computed once over that logical representation and survives
+physical transformation into WAL, PQ, exact, lexical, sparse, and
+late-interaction artifacts. Derived token rows never allocate their own
+versions. Equal `(id, version)` values with unequal operation or digest are
+corruption even when their physical encodings differ.
+
+Foreground delete appends a new versioned tombstone even when the caller's
+pinned snapshot already appears deleted, because an unseen independent upsert
+may exist. Delete reporting therefore counts accepted durable mutations;
+exact changed-ID and live-tombstone counts are observed/materialized
+statistics, not linearizable foreground facts.
 
 ### Conflict semantics
 
 All readers, materializers, compactions, reopen paths, and modalities select
 the greatest `MutationVersion` for one record ID. Equal versions with unequal
-payloads are corruption and fail closed. Consequently every replica and
-reader converges on exactly one value or tombstone.
+operation/digest are corruption and fail closed. Consequently every replica
+and reader converges on exactly one value or tombstone.
 
 The production contract is:
 
@@ -102,7 +146,7 @@ The production contract is:
 - a write allocated after that handle observes a remote version dominates the
   observed version;
 - unobserved writes from independent hosts are ordered deterministically by
-  HLC and writer token;
+  HLC and writer identity;
 - concurrent or clock-skewed cross-host writes do **not** promise that wall
   clock invocation or acknowledgement order determines the winner.
 
@@ -111,21 +155,33 @@ later acknowledged write can lose when it was allocated from an unobserved
 clock sufficiently behind the earlier writer. The API and documentation call
 this deterministic convergent last-write-wins, not linearizable ordering.
 
+One entity envelope is atomic across all of its modalities. A public batch
+that spans multiple writer stripes retains the existing partial-durable-success
+contract and returns exact per-stripe extent identities; it is not advertised
+as an all-or-none multi-entity transaction.
+
 ### Bounded active tail
 
 Removing the sequencer increases ingest capacity and therefore makes bounded
 materialization mandatory. Replace the per-stripe sequence-modulus trigger
 with collection-wide work accounting and one fenced materializer:
 
-- writer stripes publish bounded progress metadata containing durable and
-  materialized record/byte frontiers; vector payload never enters a mutable
-  head;
+- every one of the fixed 64 writer stripes enforces its own durable-minus-
+  materialized record, byte, and extent quotas before creating an extent. The
+  initial hard quota is 512 records, 2 MiB, or eight extents per stripe,
+  proving a collection-wide maximum of 32,768 raw records, 128 MiB, and 512
+  extent GETs even when all stripes are live and the materializer is
+  unavailable;
+- writer stripes publish bounded progress metadata containing cumulative
+  durable and materialized record/byte frontiers; vector payload never enters
+  a mutable head. Lease takeover reconstructs exact counters from immutable
+  extents before admitting another write;
 - a process requests maintenance when its local unmaterialized contribution,
   the observed collection total, or the oldest durable extent crosses the
   soft bound;
-- contenders acquire a short S3 materializer lease; only the winner builds and
-  publishes a delta, while losers continue direct acknowledgements below the
-  hard bound;
+- contenders acquire a monotonically fenced S3 materializer epoch. Only the
+  current holder builds a candidate, while losers continue direct
+  acknowledgements below their stripe hard bounds;
 - the winner refreshes the active-stripe directory, captures a stable frontier,
   and builds immutable indexed L0 delta segments incrementally;
 - every dense/PQ, exact, sparse, text, and late-interaction sidecar required by
@@ -133,35 +189,50 @@ with collection-wide work accounting and one fenced materializer:
   visible;
 - manifest-version-fenced checkpointing and retirement preserve old-reader and
   crash safety;
-- writers return typed retryable backpressure before accepting work that would
-  exceed the hard collection tail bound.
+- a root publication names the materializer fencing epoch, exact predecessor,
+  and captured `(stripe, lease_epoch, sequence)` prefixes. The lease is only an
+  efficiency hint: collection-root CAS plus those fences prevent a paused old
+  holder from publishing or retiring through a successor;
+- writers return typed retryable backpressure before an extent would exceed
+  that stripe's fixed quota. No stale collection-wide observation is used to
+  claim a strict hard bound.
 
-The first defaults are qualification inputs, not frozen product claims: a
-soft bound of 8,192 records or 32 MiB, a hard bound of 32,768 records or
-128 MiB, and a maximum unmaterialized age of 250 ms. Local structural tests
-must prove the bounds; AWS evidence may lower them. Raising a bound to make a
-test pass is not a performance fix.
+The first collection-level maintenance defaults are qualification inputs, not
+frozen product claims: a soft bound of 8,192 records or 32 MiB and a maximum
+unmaterialized age of 250 ms. The per-stripe quotas above are the hard safety
+bound and do not depend on the freshness of a directory or aggregate counter.
+The age is a maintenance trigger/SLO, not a structural guarantee after every
+writer exits. L0 compaction starts at eight segments or 256 MiB; observed debt
+at 32 segments or 1 GiB applies write backpressure. Local tests additionally
+bound raw and L0 GET fanout. AWS evidence may lower these inputs. Raising a
+bound to make a test pass is not a performance fix.
 
 Queries search only the bounded raw tail plus immutable indexed deltas and the
 base hierarchy. Uncached queries must pass the latency gate from object-store
 reads and SIMD/PQ execution. Decoded caches, prefetch, and single-flight reuse
 remain optional accelerators and are reported separately.
 
+Delta construction uses the persisted production router, quantizer, and
+sidecar policy; it must not silently fall back to scalar bounds. Publication
+occurs only after every modality artifact is checksum-verified, then one
+collection-root commit makes all modality manifests visible together.
+
 ## Failure and lifecycle behavior
 
 - A clock allocation followed by a failed extent PUT is an unused version gap.
-- An accepted-but-response-lost extent PUT is reconciled by exact key and
-  checksum; unequal bytes at the same key are a fencing failure.
+- Versions and canonical bytes are allocated once for the stable
+  `(stripe, lease_epoch, extent_sequence)` key. An accepted-but-response-lost
+  PUT blocks later work on that stripe until the exact key is read and its
+  checksum reconciled; unequal bytes are a fencing failure. Receipts expose the
+  complete extent identity.
 - A process crash after extent creation leaves an authoritative immutable
   write discoverable by the existing epoch recovery protocol.
 - Clock rollback cannot make one live clock regress because its HLC is
   monotonic. Cross-process rollback is covered by the documented convergent,
   non-linearizable conflict contract.
-- A writer-token collision detected in one snapshot or extent set is hard
-  corruption. The persisted writer identity and extent identity allow the
-  reader to distinguish a true duplicate from unequal payload reuse.
 - Materializer lease loss prevents publication but does not revoke durable
-  writer extents. A successor rebuilds from the stable captured frontier.
+  writer extents. The stale holder's fencing epoch cannot win collection-root
+  CAS after takeover; a successor rebuilds from the stable captured frontier.
 - Publication succeeds before any covered extent is retired. Failed or losing
   builds remain immutable GC candidates behind the existing grace and
   reachability rules.
@@ -175,23 +246,29 @@ Implementation proceeds in independently delivered slices and must prove:
 
 1. The mutation clock is monotonic under equal milliseconds, physical-clock
    rollback, logical overflow, concurrent allocation, and observed remote HLC
-   advancement. Big-endian encoding round-trips and byte order equals semantic
-   order.
-2. Two unequal payloads with one identical version fail closed. Same-writer and
-   observed-version ordering pass; an injected clock-skew case permanently
-   documents that later acknowledgement is not a linearizability guarantee.
+   advancement, including an observed version at the same physical millisecond
+   with a much larger logical counter. Big-endian encoding round-trips and byte
+   order equals semantic order.
+2. Two unequal operations/digests with one identical version fail closed.
+   Same-writer and observed-version ordering pass; an injected clock-skew case
+   permanently documents that later acknowledgement is not a linearizability
+   guarantee. Callers cannot supply internal mutation versions.
 3. WAL, segment, tombstone, ID-delta, compaction, reopen, sparse, text, named
-   dense, typed dense, and late-interaction paths preserve the full version.
-   Old experimental formats are rejected clearly with no dual reader.
+   dense, typed dense, and late-interaction paths preserve the full version,
+   canonical digest, writer dictionary, and maximum-version metadata. Old
+   experimental formats are rejected clearly with no dual reader.
 4. A normal group uses exactly one immutable extent PUT per touched writer
    stripe and zero global generation-counter requests. Ordinary upsert/delete
    use no `id-directory/last-write-wins/NEXT` object.
 5. Independent writers with disjoint and conflicting IDs converge after
    reopen, drain, compaction, crash takeover, and reversed stripe assignment.
    Every acknowledged non-conflicting record remains visible exactly once.
+   Ambiguous PUT reconciliation reuses identical bytes and extent identity.
 6. Aggregate tail pressure elects one materializer, publishes only complete
-   indexed L0 deltas, bounds raw records/bytes/age, and applies backpressure
-   before the hard limit. Concurrent materializers cannot duplicate visible
+   indexed L0 deltas, bounds raw records/bytes/extents and L0 fanout, and
+   applies backpressure before each stripe's hard limit. Age is tested as an
+   active-maintenance SLO. A paused stale materializer cannot publish or retire
+   after a fenced successor. Concurrent materializers cannot duplicate visible
    values or turn a publication conflict into an acknowledgement failure.
 7. Local 768D structural qualification reconciles raw artifacts, request roles,
    visibility, deterministic conflict results, cold reads, and resource bounds.
