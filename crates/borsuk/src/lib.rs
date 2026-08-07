@@ -30,6 +30,11 @@ mod maintenance;
 mod manifest;
 mod metadata;
 mod metric;
+#[expect(
+    dead_code,
+    reason = "mutation clock foundation is wired into persistence in the next planned slice"
+)]
+mod mutation;
 mod observability;
 mod parallel;
 mod physical_layout;
