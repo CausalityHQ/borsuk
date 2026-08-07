@@ -15303,8 +15303,13 @@ impl BorsukIndex {
         // decode work, and latency for a small shortlist. An explicitly warmed
         // complete working set still takes the zero-I/O decoded-cache path.
         // Graph and flat modes always take the full-segment/cache path below.
+        // An explicit projected-read request is authoritative: a resident
+        // decoded cache must not silently turn the cold-path qualification into
+        // a full-vector scan. The cache may still accelerate a separate query,
+        // but it is never the correctness or latency mechanism for this path.
+        let force_projected_reads = projected_reads_override == Some(true);
         let query_projectable = projected_reads_enabled
-            && !decoded_working_set_is_resident
+            && (force_projected_reads || !decoded_working_set_is_resident)
             && matches!(
                 candidate_mode,
                 SearchMode::Approx {
