@@ -118,6 +118,14 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("extracted source differs from its preserved source archive", RUNNER)
         self.assertIn("refusing to reuse non-empty index prefix", RUNNER)
         self.assertIn("refusing to reuse non-empty result prefix", RUNNER)
+
+    def test_launcher_refuses_stale_remote_result_directory(self) -> None:
+        launcher = (ROOT / "scripts/launch_aws_group_commit_scalability.sh").read_text()
+        self.assertIn(
+            'remote_output="/home/ec2-user/borsuk-group-commit-results/${RUN_ID}"',
+            launcher,
+        )
+        self.assertIn("source result directory already exists", launcher)
         self.assertIn("index and result prefixes must be disjoint", RUNNER)
 
     def test_bulk_throughput_gate_is_not_applied_to_latency_cells(self) -> None:
