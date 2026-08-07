@@ -807,7 +807,20 @@ pub(crate) fn cosine_distance_with_query_norm(
     query_norm: f32,
     stored: &[f32],
 ) -> f32 {
-    let stored_norm = dot_product(stored, stored).sqrt();
+    cosine_distance_with_norms(
+        query,
+        query_norm,
+        stored,
+        dot_product(stored, stored).sqrt(),
+    )
+}
+
+pub(crate) fn cosine_distance_with_norms(
+    query: &[f32],
+    query_norm: f32,
+    stored: &[f32],
+    stored_norm: f32,
+) -> f32 {
     if query_norm <= f32::EPSILON || stored_norm <= f32::EPSILON {
         COSINE_MAX_DISTANCE
     } else {
@@ -821,7 +834,20 @@ pub(crate) fn angular_distance_with_query_norm(
     query_norm: f32,
     stored: &[f32],
 ) -> f32 {
-    let stored_norm = dot_product(stored, stored).sqrt();
+    angular_distance_with_norms(
+        query,
+        query_norm,
+        stored,
+        dot_product(stored, stored).sqrt(),
+    )
+}
+
+pub(crate) fn angular_distance_with_norms(
+    query: &[f32],
+    query_norm: f32,
+    stored: &[f32],
+    stored_norm: f32,
+) -> f32 {
     if query_norm <= f32::EPSILON || stored_norm <= f32::EPSILON {
         ANGULAR_MAX_DISTANCE
     } else {
