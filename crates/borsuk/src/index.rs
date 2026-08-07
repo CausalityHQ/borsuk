@@ -15328,6 +15328,20 @@ impl BorsukIndex {
                     Some(prepared.vectors),
                     prepared._memory_permit,
                 )
+            } else if use_projection {
+                let prepared =
+                    self.read_projected_segment(summary, query, &candidate_mode, options.k, true)?;
+                (
+                    prepared.segment,
+                    prepared.bytes_read,
+                    false,
+                    false,
+                    false,
+                    prepared.records_considered,
+                    Some(prepared.candidates),
+                    Some(prepared.vectors),
+                    prepared._memory_permit,
+                )
             } else if self.segment_cache.get().is_some() {
                 let memory_permit = self
                     .segment_cache
@@ -15348,20 +15362,6 @@ impl BorsukIndex {
                     None,
                     None,
                     (!decoded_cache_hit).then_some(memory_permit).flatten(),
-                )
-            } else if use_projection {
-                let prepared =
-                    self.read_projected_segment(summary, query, &candidate_mode, options.k, true)?;
-                (
-                    prepared.segment,
-                    prepared.bytes_read,
-                    false,
-                    false,
-                    false,
-                    prepared.records_considered,
-                    Some(prepared.candidates),
-                    Some(prepared.vectors),
-                    prepared._memory_permit,
                 )
             } else if prefetch_depth > 1 {
                 let prefetch = segment_prefetches.pop_front().ok_or_else(|| {
