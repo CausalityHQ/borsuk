@@ -1,4 +1,5 @@
 use crate::simd_control::f32x8;
+use rayon::prelude::*;
 
 use crate::{
     error::{BorsukError, Result},
@@ -74,24 +75,30 @@ impl RotatedProductQuantizer {
             config.sample_limit.min(fit_vectors.len()),
             config.seed,
         );
-        let rotated_sample: Vec<Vec<f32>> = sample_indices
-            .iter()
-            .map(|&index| transform_vector(rotation.as_ref(), &fit_vectors[index]))
-            .collect();
-        let mut codebooks = Vec::with_capacity(config.subspaces);
-        for subspace in 0..config.subspaces {
-            let start = subspace_offsets[subspace];
-            let end = subspace_offsets[subspace + 1];
-            let codebook = train_codebook(
-                &rotated_sample,
-                start,
-                end,
-                config.centroids,
-                config.iterations,
-                config.seed ^ (subspace as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
-            );
-            codebooks.push(reorder_flat_centroids_by_locality(codebook, end - start));
-        }
+        let rotated_sample: Vec<Vec<f32>> = crate::parallel::install(|| {
+            sample_indices
+                .par_iter()
+                .map(|&index| transform_vector(rotation.as_ref(), &fit_vectors[index]))
+                .collect()
+        });
+        let codebooks = crate::parallel::install(|| {
+            (0..config.subspaces)
+                .into_par_iter()
+                .map(|subspace| {
+                    let start = subspace_offsets[subspace];
+                    let end = subspace_offsets[subspace + 1];
+                    let codebook = train_codebook(
+                        &rotated_sample,
+                        start,
+                        end,
+                        config.centroids,
+                        config.iterations,
+                        config.seed ^ (subspace as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                    );
+                    reorder_flat_centroids_by_locality(codebook, end - start)
+                })
+                .collect()
+        });
         Ok(Self {
             rotation_kind: config.rotation,
             seed: config.seed,
@@ -480,12 +487,13 @@ fn train_codebook(
     let mut nearest_distance = vec![f32::INFINITY; rotated_sample.len()];
     while codebook.len() / width < centroid_count {
         let latest = &codebook[codebook.len() - width..];
-        for (point, nearest) in rotated_sample.iter().zip(nearest_distance.iter_mut()) {
-            *nearest = nearest.min(crate::metric::squared_euclidean_simd(
-                &point[start..end],
-                latest,
-            ));
-        }
+        update_nearest_distances_parallel(
+            rotated_sample,
+            start,
+            end,
+            latest,
+            &mut nearest_distance,
+        );
         let farthest = nearest_distance
             .iter()
             .enumerate()
@@ -501,12 +509,14 @@ fn train_codebook(
     let mut assignments = vec![0usize; rotated_sample.len()];
     for _ in 0..iterations {
         let mut distances = vec![0.0_f32; rotated_sample.len()];
-        for (index, point) in rotated_sample.iter().enumerate() {
-            let (centroid, distance) =
-                nearest_flat_centroid_with_distance(&point[start..end], &codebook, width);
-            assignments[index] = centroid;
-            distances[index] = distance;
-        }
+        assign_nearest_centroids_parallel(
+            rotated_sample,
+            start,
+            end,
+            &codebook,
+            &mut assignments,
+            &mut distances,
+        );
 
         let mut sums = vec![0.0_f32; centroid_count * width];
         let mut counts = vec![0usize; centroid_count];
@@ -564,6 +574,50 @@ fn train_codebook(
         }
     }
     codebook
+}
+
+fn update_nearest_distances_parallel(
+    sample: &[Vec<f32>],
+    start: usize,
+    end: usize,
+    centroid: &[f32],
+    nearest: &mut [f32],
+) {
+    debug_assert_eq!(sample.len(), nearest.len());
+    crate::parallel::install(|| {
+        sample
+            .par_iter()
+            .zip(nearest.par_iter_mut())
+            .for_each(|(point, nearest)| {
+                *nearest = nearest.min(crate::metric::squared_euclidean_simd(
+                    &point[start..end],
+                    centroid,
+                ));
+            });
+    });
+}
+
+fn assign_nearest_centroids_parallel(
+    sample: &[Vec<f32>],
+    start: usize,
+    end: usize,
+    codebook: &[f32],
+    assignments: &mut [usize],
+    distances: &mut [f32],
+) {
+    debug_assert_eq!(sample.len(), assignments.len());
+    debug_assert_eq!(sample.len(), distances.len());
+    let width = end - start;
+    crate::parallel::install(|| {
+        sample
+            .par_iter()
+            .zip(assignments.par_iter_mut())
+            .zip(distances.par_iter_mut())
+            .for_each(|((point, assignment), distance)| {
+                (*assignment, *distance) =
+                    nearest_flat_centroid_with_distance(&point[start..end], codebook, width);
+            });
+    });
 }
 
 fn nearest_flat_centroid(vector: &[f32], codebook: &[f32], width: usize) -> usize {
@@ -665,6 +719,44 @@ mod tests {
         assert_eq!(pq.encode(&fit[0]).unwrap().len(), 4);
         assert_eq!(pq.code_bytes_per_vector(), 4);
         assert_eq!(pq.codebook_bytes(), 4 * 8 * 4 * size_of::<f32>());
+    }
+
+    #[test]
+    fn parallel_training_distance_passes_match_serial_order_exactly() {
+        let fit = fixture_vectors(257, 16);
+        let codebook = fit[..8]
+            .iter()
+            .flat_map(|vector| vector.iter().copied())
+            .collect::<Vec<_>>();
+        let latest = &codebook[7 * 16..8 * 16];
+
+        let mut expected_nearest = vec![f32::INFINITY; fit.len()];
+        for (point, nearest) in fit.iter().zip(&mut expected_nearest) {
+            *nearest = nearest.min(crate::metric::squared_euclidean_simd(point, latest));
+        }
+        let mut actual_nearest = vec![f32::INFINITY; fit.len()];
+        update_nearest_distances_parallel(&fit, 0, 16, latest, &mut actual_nearest);
+        assert_eq!(actual_nearest, expected_nearest);
+
+        let mut expected_assignments = vec![0; fit.len()];
+        let mut expected_distances = vec![0.0; fit.len()];
+        for (index, point) in fit.iter().enumerate() {
+            let (centroid, distance) = nearest_flat_centroid_with_distance(point, &codebook, 16);
+            expected_assignments[index] = centroid;
+            expected_distances[index] = distance;
+        }
+        let mut actual_assignments = vec![0; fit.len()];
+        let mut actual_distances = vec![0.0; fit.len()];
+        assign_nearest_centroids_parallel(
+            &fit,
+            0,
+            16,
+            &codebook,
+            &mut actual_assignments,
+            &mut actual_distances,
+        );
+        assert_eq!(actual_assignments, expected_assignments);
+        assert_eq!(actual_distances, expected_distances);
     }
 
     #[test]
