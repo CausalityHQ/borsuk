@@ -15367,6 +15367,35 @@ impl BorsukIndex {
             },
         )
         .into_iter();
+        // Full immutable segment reads are independent too.  When the query
+        // has a fixed segment budget and no dynamic stop, decode the wave in
+        // parallel instead of serially materializing four vector sidecars.
+        // This is a core cold-path optimization; it does not rely on a decoded
+        // cache and is disabled whenever a dynamic budget could over-read.
+        let parallel_full_budget = if !query_projectable
+            && self.segment_cache.get().is_none()
+            && options.filter.is_none()
+            && matches!(
+                candidate_mode,
+                SearchMode::Approx {
+                    max_segments: Some(_),
+                    max_bytes: None,
+                    max_latency_ms: None,
+                    adaptive_stop: None,
+                    ..
+                }
+            ) {
+            candidates_total
+        } else {
+            0
+        };
+        let mut parallel_full_reads = bounded_io_map_with_gate(
+            &candidates[..parallel_full_budget],
+            options.prefetch_depth,
+            self.decode_admission.as_deref(),
+            |(summary, _, _, _)| self.read_segment(summary),
+        )
+        .into_iter();
         let mut segment_prefetches = VecDeque::<SegmentPrefetch>::new();
         let mut next_prefetch_candidate = 0_usize;
         let mut prefetch_reserved_bytes = bytes_read;
@@ -15416,7 +15445,7 @@ impl BorsukIndex {
                 break;
             }
 
-            if prefetch_depth > 1 {
+            if prefetch_depth > 1 && parallel_full_budget == 0 {
                 while next_prefetch_candidate < candidates_total
                     && segment_prefetches.len() < prefetch_depth
                     && !search_prefetch_byte_budget_exhausted(
@@ -15462,6 +15491,13 @@ impl BorsukIndex {
             } else {
                 None
             };
+            let prepared_full = if candidate_index < parallel_full_budget {
+                Some(parallel_full_reads.next().ok_or_else(|| {
+                    BorsukError::InvalidStorage("parallel full read result was missing".to_string())
+                })??)
+            } else {
+                None
+            };
             let (
                 segment,
                 segment_bytes_read,
@@ -15472,7 +15508,22 @@ impl BorsukIndex {
                 prepared_candidates,
                 prepared_vectors,
                 _memory_permit,
-            ): SearchSegmentRead = if let Some(prepared) = prepared_projection {
+            ): SearchSegmentRead = if let Some((segment, bytes, cache_hit, repaired)) =
+                prepared_full
+            {
+                let records = segment.records.len();
+                (
+                    Arc::new(segment),
+                    bytes,
+                    cache_hit,
+                    repaired,
+                    false,
+                    records,
+                    None,
+                    None,
+                    None,
+                )
+            } else if let Some(prepared) = prepared_projection {
                 (
                     prepared.segment,
                     prepared.bytes_read,
