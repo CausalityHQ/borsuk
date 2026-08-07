@@ -49,6 +49,10 @@ impl MutationVersion {
     pub(crate) const fn logical(self) -> u16 {
         self.hlc as u16
     }
+
+    pub(crate) const fn writer(self) -> [u8; WRITER_ID_BYTES] {
+        self.writer
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -233,6 +237,18 @@ impl CanonicalMutation {
 
     pub(crate) const fn stamp(&self) -> MutationStamp {
         self.stamp
+    }
+
+    pub(crate) fn id(&self) -> &crate::RecordId {
+        &self.id
+    }
+
+    pub(crate) const fn operation(&self) -> MutationOperation {
+        self.operation
+    }
+
+    pub(crate) fn record(&self) -> Option<&crate::VectorRecord> {
+        self.record.as_ref()
     }
 }
 

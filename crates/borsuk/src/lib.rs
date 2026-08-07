@@ -30,11 +30,22 @@ mod maintenance;
 mod manifest;
 mod metadata;
 mod metric;
-#[expect(
-    dead_code,
-    reason = "mutation clock foundation is wired into persistence in the next planned slice"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "mutation clock foundation is wired into persistence in the next planned slice"
+    )
 )]
 mod mutation;
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "standard mutation extent is connected to the lane writer in the next planned slice"
+    )
+)]
+mod mutation_extent;
 mod observability;
 mod parallel;
 mod physical_layout;
