@@ -254,3 +254,13 @@ output path. This was a runner bug, not library evidence. The runner now
 captures stdout/stderr beside the cell and moves them into the cell only after
 process exit. Scalar and 16-record bulk local structural smokes both pass the
 fail-closed validator after the correction; no AWS measurement CSV was opened.
+
+Run `20260807T044600Z-r4` terminalized with `GROUP_COMMIT_SCALABILITY_FAILED`.
+The first two cells (c2000/r01/l1/w1 and w8) completed their terminal gates, but
+c2000/r01/l1/w32 failed before executing the workload. Its preserved stderr
+reported that 128 outstanding records could not express the preregistered
+10,000 records/s at the 200 ms p95 gate; this is the mathematically invalid
+one-record workload default, not a library performance result. No incomplete
+measurement CSV was inspected. The campaign manifest now explicitly pins
+`records_per_operation=16`, yielding 2,048 outstanding records for the 32
+writer gate; its changed manifest requires a fresh unique-prefix qualification.

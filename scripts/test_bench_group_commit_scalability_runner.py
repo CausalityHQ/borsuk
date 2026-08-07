@@ -48,6 +48,7 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertEqual(manifest["operations_per_writer"], 1_000)
         self.assertEqual(manifest["repetitions"], 5)
         self.assertEqual(manifest["pipeline_depth_per_writer"], 4)
+        self.assertEqual(manifest["records_per_operation"], 16)
         self.assertEqual(manifest["throughput_gate_writers"], [32])
         self.assertEqual(manifest["min_end_to_end_records_per_second"], 10_000.0)
         self.assertEqual(manifest["max_acknowledgement_bytes"], 2_097_152)
