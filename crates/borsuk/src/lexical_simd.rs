@@ -231,6 +231,7 @@ mod tests {
                 row,
                 record_id: row.to_le_bytes().to_vec(),
                 generation: 1,
+                mutation_stamp: None,
                 document_length: 3 + (row * 17) % 211,
             })
             .collect::<Vec<_>>();

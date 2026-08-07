@@ -127,6 +127,7 @@ pub(crate) struct LexicalRowMetadata {
     pub row: u32,
     pub record_id: Vec<u8>,
     pub generation: u64,
+    pub mutation_stamp: Option<crate::mutation::MutationStamp>,
     /// Zero for sparse rows; positive for BM25 rows.
     pub document_length: u32,
 }
@@ -161,6 +162,17 @@ pub(crate) fn row_metadata_checksum(rows: &[LexicalRowMetadata]) -> String {
         hasher.update(&(row.record_id.len() as u64).to_le_bytes());
         hasher.update(&row.record_id);
         hasher.update(&row.generation.to_le_bytes());
+        match row.mutation_stamp {
+            Some(stamp) => {
+                hasher.update(&[1]);
+                hasher.update(&stamp.version().hlc().to_le_bytes());
+                hasher.update(&stamp.version().writer());
+                hasher.update(&stamp.digest());
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
         hasher.update(&row.document_length.to_le_bytes());
     }
     hasher.finalize().to_hex().to_string()
