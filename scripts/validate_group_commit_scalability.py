@@ -460,7 +460,7 @@ def validate(
         for summary_field, evidence_index in (
             ("storage_gets", 3),
             ("storage_puts", 4),
-            ("storage_heads", 5),
+            ("storage_heads", 6),
         ):
             require(
                 integer(summary[summary_field], summary_field)

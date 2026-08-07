@@ -20,9 +20,8 @@ use uuid::Uuid;
 
 use crate::{
     cell_wal::{
-        CELL_WAL_GENERATION_SHARDS, CellWalClaimCheckpoint, CellWalRunInput, CellWalRunKind,
-        CellWalStore, CommittedCellWalTransaction, LogicalCellId, PreparedCellWalRun,
-        id_generation_shard,
+        CellWalClaimCheckpoint, CellWalRunInput, CellWalRunKind, CellWalStore,
+        CommittedCellWalTransaction, LogicalCellId, PreparedCellWalRun,
     },
     centroid_hnsw::CentroidHnsw,
     collection_control::{
@@ -2027,19 +2026,31 @@ impl BorsukIndex {
     }
 
     pub(crate) fn lane_log_generation_floor(&self) -> Result<u64> {
-        crate::parallel::install_io(|| {
-            (0..CELL_WAL_GENERATION_SHARDS)
-                .into_par_iter()
-                .map(|shard| {
-                    let path = Self::record_generation_shard_path(shard);
-                    self.storage
-                        .read_coordination_object(&path)?
-                        .map_or(Ok(0), |stored| {
-                            coordination_counter_from_slice(&stored.bytes, &path)
-                        })
-                })
-                .try_reduce(|| 0, |left, right| Ok(left.max(right)))
-        })
+        let path = "id-directory/last-write-wins/NEXT";
+        self.storage
+            .read_coordination_object(path)?
+            .map_or(Ok(0), |stored| {
+                coordination_counter_from_slice(&stored.bytes, path)
+                    .map(|next| next.saturating_sub(1))
+            })
+    }
+
+    pub(crate) fn reserve_lane_log_generation_range(
+        &self,
+        count: usize,
+    ) -> Result<(u64, RequestCounts)> {
+        let count = u64::try_from(count).map_err(|_| {
+            BorsukError::InvalidStorage("lane-log generation count exceeds u64".to_string())
+        })?;
+        if count == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "lane-log generation range must be nonempty".to_string(),
+            ));
+        }
+        let before = self.storage.request_counts();
+        let first =
+            self.reserve_coordination_counter("id-directory/last-write-wins/NEXT", 1, count)?;
+        Ok((first, self.storage.request_counts().delta(&before)))
     }
 
     pub(crate) fn primary_dimensions(&self) -> usize {
@@ -7884,40 +7895,19 @@ impl BorsukIndex {
         if requests.is_empty() {
             return Ok(Vec::new());
         }
-        let mut by_shard = BTreeMap::<u8, Vec<(usize, u64)>>::new();
-        for (index, (id, minimum)) in requests.iter().enumerate() {
-            by_shard
-                .entry(id_generation_shard(id))
-                .or_default()
-                .push((index, *minimum));
-        }
-        let reservations = crate::parallel::install_io(|| {
-            by_shard
-                .into_par_iter()
-                .map(|(shard, entries)| {
-                    let minimum = entries
-                        .iter()
-                        .map(|(_, minimum)| *minimum)
-                        .max()
-                        .unwrap_or(0);
-                    let count = u64::try_from(entries.len()).map_err(|_| {
-                        BorsukError::InvalidStorage(
-                            "generation reservation count exceeds u64".to_string(),
-                        )
-                    })?;
-                    let start = self.reserve_coordination_counter(
-                        &Self::record_generation_shard_path(shard),
-                        minimum,
-                        count,
-                    )?;
-                    Ok((entries, start))
-                })
-                .collect::<Result<Vec<_>>>()
+        let minimum = requests
+            .iter()
+            .map(|(_, minimum)| *minimum)
+            .max()
+            .unwrap_or(1);
+        let count = u64::try_from(requests.len()).map_err(|_| {
+            BorsukError::InvalidStorage("generation reservation count exceeds u64".to_string())
         })?;
-        let mut generations = vec![0; requests.len()];
-        for (entries, start) in reservations {
-            for (offset, (index, _)) in entries.into_iter().enumerate() {
-                generations[index] = start
+        let start =
+            self.reserve_coordination_counter("id-directory/last-write-wins/NEXT", minimum, count)?;
+        (0..requests.len())
+            .map(|offset| {
+                start
                     .checked_add(u64::try_from(offset).map_err(|_| {
                         BorsukError::InvalidStorage(
                             "generation reservation offset exceeds u64".to_string(),
@@ -7927,15 +7917,9 @@ impl BorsukIndex {
                         BorsukError::InvalidStorage(
                             "record generation reservation exceeds u64".to_string(),
                         )
-                    })?;
-            }
-        }
-        Ok(generations)
-    }
-
-    fn record_generation_shard_path(shard: u8) -> String {
-        debug_assert!(shard < CELL_WAL_GENERATION_SHARDS);
-        format!("id-directory/generation-shards/{shard:02}/NEXT")
+                    })
+            })
+            .collect()
     }
 
     fn cell_wal_metadata(

@@ -105,19 +105,20 @@ pub struct GroupCommitLaneReceipt {
     pub commit_sequence: u64,
     /// Fencing epoch that owns this durable sequence.
     pub lease_epoch: u64,
-    /// Persisted ownership-lane ordinal; paired with `commit_sequence`, this
+    /// Persisted writer-stripe ordinal; paired with `commit_sequence`, this
     /// uniquely identifies the durable group.
     pub commit_lane: usize,
-    /// Bytes in the authoritative lane HEAD PUT acknowledged by this receipt.
+    /// Bytes in the immutable extent created by this receipt. Generation-counter
+    /// coordination bytes remain visible in request/storage telemetry.
     pub acknowledgement_bytes: u64,
     /// Physical requests issued by the whole shared commit.
     pub requests: RequestCounts,
 }
 
-/// One ownership lane that did not acknowledge a multi-lane append.
+/// One writer stripe that did not acknowledge a multi-stripe append.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupCommitLaneFailure {
-    /// Persisted ownership-lane ordinal.
+    /// Persisted writer-stripe ordinal.
     pub commit_lane: usize,
     /// Exact worker or storage failure for this lane.
     pub message: String,
@@ -126,7 +127,7 @@ pub struct GroupCommitLaneFailure {
 /// Receipt returned after all of the caller's records are durably visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupCommitReceipt {
-    /// Records supplied by this caller across all ownership lanes.
+    /// Records supplied by this caller across all writer stripes.
     pub records: usize,
     /// Total records sharing the durable lane commits that contain this call.
     pub committed_records: usize,
@@ -136,11 +137,11 @@ pub struct GroupCommitReceipt {
     /// Ordinal of the first lane receipt. Meaningful as a commit identity only
     /// when [`GroupCommitReceipt::lane_receipts`] contains one entry.
     pub commit_lane: usize,
-    /// Aggregate authoritative lane HEAD bytes across this call's lane commits.
+    /// Aggregate immutable extent bytes across this call's stripe commits.
     pub acknowledgement_bytes: u64,
     /// Aggregate physical requests issued by this call's lane commits.
     pub requests: RequestCounts,
-    /// One durable receipt for every ownership lane touched by this call.
+    /// One durable receipt for every writer stripe touched by this call.
     pub lane_receipts: Vec<GroupCommitLaneReceipt>,
 }
 
@@ -239,16 +240,18 @@ enum WorkerRequest {
 
 /// Cloneable high-throughput writer that group-commits concurrent appends.
 ///
-/// The writer owns one independent [`BorsukIndex`] handle per background lane.
-/// Calls remain synchronous and return only after the selected lane publishes
-/// its shared WAL transaction, so grouping and parallelism change neither
-/// durability nor read visibility. Groups use claim-free last-write-wins
-/// generations; strict duplicate-rejecting insertion remains available through
-/// [`BorsukIndex::add`]. A short bounded delay replaces cross-writer S3 CAS
-/// storms with larger immutable transactions, while lanes avoid process-local
-/// head-of-line blocking between those transactions.
+/// The writer owns one independent [`BorsukIndex`] handle per background
+/// worker stripe. Calls remain synchronous and return only after a globally
+/// ordered generation range is reserved and the selected stripe creates its
+/// immutable WAL extent, so grouping and parallelism change neither durability
+/// nor read visibility. The generation reservation is one conditional update
+/// per group, not per record. Strict duplicate-rejecting insertion remains
+/// available through [`BorsukIndex::add`]. A short bounded delay amortizes
+/// cross-writer ordering over larger immutable transactions, while stripes
+/// avoid process-local head-of-line blocking between those transactions.
 pub struct GroupCommitWriter {
     requests: Arc<[Sender<WorkerRequest>]>,
+    worker_stripes: Arc<[u16]>,
     lane_count: u16,
     drain_lock: Arc<Mutex<()>>,
     maintenance_state: Arc<Mutex<MaintenanceState>>,
@@ -259,6 +262,7 @@ impl Clone for GroupCommitWriter {
     fn clone(&self) -> Self {
         Self {
             requests: Arc::clone(&self.requests),
+            worker_stripes: Arc::clone(&self.worker_stripes),
             lane_count: self.lane_count,
             drain_lock: Arc::clone(&self.drain_lock),
             maintenance_state: Arc::clone(&self.maintenance_state),
@@ -290,21 +294,44 @@ impl GroupCommitWriter {
         }
         drop(index);
         let mut requests = Vec::with_capacity(config.worker_lanes);
+        let mut worker_stripes = Vec::with_capacity(config.worker_lanes);
+        let mut claimed_stripes = std::collections::HashSet::with_capacity(config.worker_lanes);
         for (worker, index) in indexes.into_iter().enumerate() {
-            let mut lane_writers = Vec::new();
-            for lane in (worker..usize::from(lane_count)).step_by(config.worker_lanes) {
-                lane_writers.push(index.acquire_lane_log_upsert_writer(
-                    u16::try_from(lane).expect("persisted lane fits u16"),
+            let mut claimed = None;
+            for offset in 0..usize::from(lane_count) {
+                let lane = u16::try_from((worker + offset) % usize::from(lane_count))
+                    .expect("persisted lane fits u16");
+                if claimed_stripes.contains(&lane) {
+                    continue;
+                }
+                match index.acquire_lane_log_upsert_writer(
+                    lane,
                     current_time_ms()?,
                     LANE_LEASE_TTL_MS,
                     minimum_generation,
-                )?);
+                ) {
+                    Ok(writer) => {
+                        claimed = Some(writer);
+                        break;
+                    }
+                    Err(BorsukError::ConcurrentModification { .. }) => continue,
+                    Err(error) => return Err(error),
+                }
             }
+            let lane_writer = claimed.ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "group commit cannot claim {0} writer stripes: only {worker} of {lane_count} persisted stripes are available",
+                    config.worker_lanes
+                ))
+            })?;
+            let stripe = lane_writer.lane();
+            claimed_stripes.insert(stripe);
+            worker_stripes.push(stripe);
             let dimensions = index.primary_dimensions();
             let (sender, receiver) = mpsc::channel();
             std::thread::Builder::new()
                 .name(format!("borsuk-group-commit-{worker}"))
-                .spawn(move || run_worker(index, lane_writers, dimensions, config, receiver))
+                .spawn(move || run_worker(index, vec![lane_writer], dimensions, config, receiver))
                 .map_err(|error| {
                     BorsukError::InvalidStorage(format!(
                         "failed to start group commit worker {worker}: {error}"
@@ -314,6 +341,7 @@ impl GroupCommitWriter {
         }
         Ok(Self {
             requests: requests.into(),
+            worker_stripes: worker_stripes.into(),
             lane_count,
             drain_lock: Arc::new(Mutex::new(())),
             maintenance_state: Arc::new(Mutex::new(MaintenanceState::default())),
@@ -353,33 +381,32 @@ impl GroupCommitWriter {
                 maintenance: None,
             });
         }
-        // Most scalar appends touch one or a handful of ownership lanes. Keep
-        // the dispatch map sparse so each acknowledgement does not allocate an
-        // empty bucket for every persisted lane (the common 256-lane index
-        // otherwise pays that cost even for a single record).
-        let mut by_lane = std::collections::HashMap::<usize, Vec<VectorRecord>>::with_capacity(
-            record_count.min(usize::from(self.lane_count)),
+        // Most scalar appends touch one local worker stripe. Keep the dispatch
+        // map sparse so each acknowledgement does not allocate an empty bucket
+        // for every worker owned by this process.
+        let mut by_worker = std::collections::HashMap::<usize, Vec<VectorRecord>>::with_capacity(
+            record_count.min(self.requests.len()),
         );
         for record in records {
-            let lane = lane_for_id(record.id.as_bytes(), usize::from(self.lane_count));
-            by_lane.entry(lane).or_default().push(record);
+            let worker = lane_for_id(record.id.as_bytes(), self.requests.len());
+            by_worker.entry(worker).or_default().push(record);
         }
         let mut results = Vec::new();
-        let mut lanes = by_lane.into_iter().collect::<Vec<_>>();
-        lanes.sort_unstable_by_key(|(lane, _)| *lane);
-        for (lane, records) in lanes {
+        let mut workers = by_worker.into_iter().collect::<Vec<_>>();
+        workers.sort_unstable_by_key(|(worker, _)| *worker);
+        for (worker, records) in workers {
+            let lane = self.worker_stripes[worker];
             let (response, result) = mpsc::channel();
-            let worker = lane % self.requests.len();
             self.requests[worker]
                 .send(WorkerRequest::Append(AppendRequest {
-                    lane: u16::try_from(lane).expect("persisted lane fits u16"),
+                    lane,
                     records,
                     response,
                 }))
                 .map_err(|_| {
                     BorsukError::InvalidStorage("group commit worker stopped".to_string())
                 })?;
-            results.push((lane, result));
+            results.push((usize::from(lane), result));
         }
         Ok(GroupCommitTicket {
             records: record_count,
@@ -481,12 +508,13 @@ impl GroupCommitWriter {
                 self.lane_count
             )));
         }
-        let mut checkpoints = Vec::with_capacity(usize::from(self.lane_count));
-        for (lane, sequence) in committed_sequences.into_iter().enumerate() {
+        let mut checkpoints = Vec::with_capacity(self.worker_stripes.len());
+        for (worker, lane) in self.worker_stripes.iter().copied().enumerate() {
+            let sequence = committed_sequences[usize::from(lane)];
             let (response, wait) = mpsc::channel();
-            self.requests[lane % self.requests.len()]
+            self.requests[worker]
                 .send(WorkerRequest::Checkpoint {
-                    lane: u16::try_from(lane).expect("persisted lane fits u16"),
+                    lane,
                     sequence,
                     response,
                 })
@@ -651,14 +679,40 @@ fn run_worker(
                     }
                 }
                 let committed_records = deduplicated.len();
-                let committed = current_time_ms()
-                    .and_then(|now_ms| {
-                        writer.append_upsert_records_with_renewal_at(
-                            &deduplicated,
-                            dimensions,
-                            now_ms,
-                            LANE_LEASE_TTL_MS,
-                        )
+                let committed = index
+                    .reserve_lane_log_generation_range(deduplicated.len())
+                    .and_then(|(first_generation, coordination_requests)| {
+                        current_time_ms().and_then(|now_ms| {
+                            let mut receipt = writer
+                                .append_upsert_records_with_reserved_generation_at(
+                                    &deduplicated,
+                                    dimensions,
+                                    first_generation,
+                                    now_ms,
+                                    LANE_LEASE_TTL_MS,
+                                )?;
+                            receipt.requests.gets = receipt
+                                .requests
+                                .gets
+                                .saturating_add(coordination_requests.gets);
+                            receipt.requests.puts = receipt
+                                .requests
+                                .puts
+                                .saturating_add(coordination_requests.puts);
+                            receipt.requests.deletes = receipt
+                                .requests
+                                .deletes
+                                .saturating_add(coordination_requests.deletes);
+                            receipt.requests.heads = receipt
+                                .requests
+                                .heads
+                                .saturating_add(coordination_requests.heads);
+                            receipt.requests.lists = receipt
+                                .requests
+                                .lists
+                                .saturating_add(coordination_requests.lists);
+                            Ok(receipt)
+                        })
                     })
                     .map_err(|error| error.to_string());
                 for (request, caller_records) in same_lane.into_iter().zip(caller_sizes) {

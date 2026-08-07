@@ -107,7 +107,12 @@ use crate::{
 // Bumped 25 -> 26 when stable tombstone-page references gained required
 // resident ID blooms. Without them, every ANN candidate whose hash bucket had
 // any historical mutation fetched a separate object before reranking.
-const CURRENT_VERSION: u16 = 26;
+// Bumped 26 -> 27 when group commit replaced deterministic ID-ownership lanes
+// with independently leased writer stripes and every mutation path converged
+// on one group-amortized global generation range allocator. Opening an older
+// manifest could otherwise mix incomparable per-shard/per-lane generations and
+// return the wrong last-write-wins value across processes.
+const CURRENT_VERSION: u16 = 27;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

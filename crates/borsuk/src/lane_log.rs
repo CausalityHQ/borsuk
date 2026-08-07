@@ -557,7 +557,7 @@ fn fenced_body<'a>(bytes: &'a [u8], magic: &[u8; 8], label: &str) -> Result<&'a 
 fn epoch_head_bytes(head: &LaneEpochHead) -> Result<Vec<u8>> {
     head.validate(head.lane)?;
     let mut body = Vec::with_capacity(96);
-    body.push(29);
+    body.push(30);
     body.extend_from_slice(&head.lane.to_le_bytes());
     body.extend_from_slice(&head.lease_epoch.to_le_bytes());
     body.extend_from_slice(&head.lease_owner);
@@ -580,7 +580,7 @@ fn epoch_head_bytes(head: &LaneEpochHead) -> Result<Vec<u8>> {
 fn epoch_head_from_bytes(bytes: &[u8], expected_lane: u16) -> Result<LaneEpochHead> {
     let body = fenced_body(bytes, EPOCH_HEAD_MAGIC, "epoch HEAD")?;
     let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 29 {
+    if take_u8(body, &mut cursor)? != 30 {
         return Err(BorsukError::InvalidStorage(
             "unsupported epoch lane-log HEAD version".to_string(),
         ));
@@ -639,7 +639,7 @@ fn extent_bytes(extent: &LaneExtent) -> Result<Vec<u8>> {
         BorsukError::InvalidRecordInput("epoch lane-log extent payload exceeds u64".to_string())
     })?;
     let mut body = Vec::with_capacity(43_usize.saturating_add(extent.payload.len()));
-    body.push(29);
+    body.push(30);
     body.extend_from_slice(&extent.lane.to_le_bytes());
     body.extend_from_slice(&extent.lease_epoch.to_le_bytes());
     body.extend_from_slice(&extent.sequence.to_le_bytes());
@@ -675,7 +675,7 @@ fn extent_from_bytes(
     }
     let body = fenced_body(bytes, EXTENT_MAGIC, "extent")?;
     let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 29 {
+    if take_u8(body, &mut cursor)? != 30 {
         return Err(BorsukError::InvalidStorage(
             "unsupported epoch lane-log extent version".to_string(),
         ));
@@ -1253,6 +1253,24 @@ impl LaneEpochWriter {
         dimensions: usize,
         completed_at_ms: u64,
     ) -> Result<LaneLogReceipt> {
+        let first_generation = self.head.generation_base.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("epoch lane-log generation exceeds u64".to_string())
+        })?;
+        self.append_upsert_records_with_generation_at(
+            records,
+            dimensions,
+            first_generation,
+            completed_at_ms,
+        )
+    }
+
+    fn append_upsert_records_with_generation_at(
+        &mut self,
+        records: &[VectorRecord],
+        dimensions: usize,
+        first_generation: u64,
+        completed_at_ms: u64,
+    ) -> Result<LaneLogReceipt> {
         if records.is_empty() {
             return Err(BorsukError::InvalidRecordInput(
                 "epoch lane-log upsert requires at least one record".to_string(),
@@ -1270,9 +1288,12 @@ impl LaneEpochWriter {
         let sequence = self.head.durable_sequence.checked_add(1).ok_or_else(|| {
             BorsukError::InvalidStorage("epoch lane-log sequence exceeds u64".to_string())
         })?;
-        let first_generation = self.head.generation_base.checked_add(1).ok_or_else(|| {
-            BorsukError::InvalidStorage("epoch lane-log generation exceeds u64".to_string())
-        })?;
+        if first_generation <= self.head.generation_base {
+            return Err(BorsukError::InvalidStorage(format!(
+                "epoch lane-log generation range starts at {first_generation} but stripe {} has already reached {}",
+                self.head.lane, self.head.generation_base
+            )));
+        }
         let payload = crate::format::wal_records_to_table(
             records,
             dimensions,
@@ -1369,6 +1390,29 @@ impl LaneEpochWriter {
             self.publish_head(renewed)?;
         }
         self.append_upsert_records_at(records, dimensions, now_ms)
+    }
+
+    pub(crate) fn append_upsert_records_with_reserved_generation_at(
+        &mut self,
+        records: &[VectorRecord],
+        dimensions: usize,
+        first_generation: u64,
+        now_ms: u64,
+        ttl_ms: u64,
+    ) -> Result<LaneLogReceipt> {
+        if now_ms >= self.head.lease_expires_at_ms {
+            return Err(BorsukError::ConcurrentModification {
+                path: format!("{}/LEASE_EXPIRED", head_path(self.head.lane)),
+            });
+        }
+        if self.head.lease_expires_at_ms.saturating_sub(now_ms) <= ttl_ms / 2 {
+            let mut renewed = self.head.clone();
+            renewed.lease_expires_at_ms = now_ms.checked_add(ttl_ms).ok_or_else(|| {
+                BorsukError::InvalidRecordInput("epoch lane lease expiry exceeds u64".to_string())
+            })?;
+            self.publish_head(renewed)?;
+        }
+        self.append_upsert_records_with_generation_at(records, dimensions, first_generation, now_ms)
     }
 
     pub(crate) fn mark_materialized_through(&mut self, sequence: u64) -> Result<()> {
@@ -2075,7 +2119,7 @@ impl LaneLogReader {
         runtime: &crate::index::WalTailRuntime,
     ) -> Result<Option<LaneLogSnapshot>> {
         // `read_epoch_identities` decodes every authoritative HEAD below, so
-        // it also validates the epoch-v29 format. Avoid a separate lane-zero
+        // it also validates the epoch-v30 format. Avoid a separate lane-zero
         // HEAD read on every WAL-tail poll; active-tail readers already pay the
         // fixed fan-out needed to detect newly created immutable extents.
         let identities = self.read_epoch_identities(current_blocks)?;
@@ -2904,7 +2948,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_head_size_is_constant_across_extent_counts() {
+    fn v30_head_size_is_constant_across_extent_counts() {
         let head = |durable_sequence| LaneEpochHead {
             lane: 3,
             lease_epoch: 7,
@@ -2931,7 +2975,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_extent_round_trips_identity_and_records() {
+    fn v30_extent_round_trips_identity_and_records() {
         let extent = LaneExtent {
             lane: 3,
             lease_epoch: 7,
@@ -2947,7 +2991,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_extent_round_trips_wal_records_id_deltas_and_generation_order() {
+    fn v30_extent_round_trips_wal_records_id_deltas_and_generation_order() {
         let records = vec![
             VectorRecord::new("first", vec![1.0, 2.0]),
             VectorRecord::new("second", vec![3.0, 4.0]),
@@ -2993,7 +3037,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_extent_rejects_path_or_checksum_identity_mismatch() {
+    fn v30_extent_rejects_path_or_checksum_identity_mismatch() {
         let extent = LaneExtent {
             lane: 3,
             lease_epoch: 7,
@@ -3015,7 +3059,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_extent_put_is_the_acknowledgement_boundary() {
+    fn v30_extent_put_is_the_acknowledgement_boundary() {
         let mut writer = LaneEpochWriter::new_empty(
             Arc::new(InMemory::new()),
             "memory:///epoch-extent-ack",
@@ -3045,7 +3089,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_extent_completing_after_lease_guard_is_not_acknowledged() {
+    fn v30_extent_completing_after_lease_guard_is_not_acknowledged() {
         let mut writer = LaneEpochWriter::new_empty(
             Arc::new(InMemory::new()),
             "memory:///epoch-expired-extent",
@@ -3070,7 +3114,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_linearizable_reader_recovers_extents_beyond_a_stale_watermark() {
+    fn v30_linearizable_reader_recovers_extents_beyond_a_stale_watermark() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-stale-watermark";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3097,7 +3141,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_linearizable_reader_probes_sequences_without_prefix_listing() {
+    fn v30_linearizable_reader_probes_sequences_without_prefix_listing() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-direct-probe";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3121,7 +3165,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_periodic_watermark_keeps_direct_probe_window_bounded() {
+    fn v30_periodic_watermark_keeps_direct_probe_window_bounded() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-bounded-probe";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 10_000).unwrap();
@@ -3155,7 +3199,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_writer_and_reader_round_trip_production_wal_records() {
+    fn v30_writer_and_reader_round_trip_production_wal_records() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-production-wal";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3182,7 +3226,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_sealed_epoch_excludes_a_late_zombie_extent() {
+    fn v30_sealed_epoch_excludes_a_late_zombie_extent() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-zombie-seal";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
@@ -3229,7 +3273,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_expired_takeover_seals_prior_epoch_and_recovers_id_authority() {
+    fn v30_expired_takeover_seals_prior_epoch_and_recovers_id_authority() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-takeover";
         let storage = Storage::from_object_store(uri.to_string(), Arc::clone(&store)).unwrap();
@@ -3264,7 +3308,7 @@ mod tests {
     }
 
     #[test]
-    fn v29_released_owner_reopens_in_a_new_epoch_without_generation_reuse() {
+    fn v30_released_owner_reopens_in_a_new_epoch_without_generation_reuse() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-owner-reopen";
         let storage = Storage::from_object_store(uri.to_string(), store).unwrap();

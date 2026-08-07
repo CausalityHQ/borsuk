@@ -247,10 +247,15 @@ bytes read/written, routing page/index read/write counts, and old graph payload
 reads.
 Object-store production ingest must be qualified in records per durable group,
 not only one-record calls. `GroupCommitWriter` retains synchronous durability
-while coalescing concurrent Rust callers into one WAL transaction. Promotion
-requires AWS evidence for caller p50/p95, records/s, requests per record, batch
-fill, post-reopen visibility, and unchanged search recall; the local concurrency
-test alone is correctness evidence, not a performance claim.
+while coalescing concurrent Rust callers into one WAL transaction. Separate
+`GroupCommitWriter` instances claim distinct persisted writer stripes, but the
+current eight-stripe format has not yet been qualified as a horizontally scaled
+service and cannot support more than eight simultaneous process workers.
+Promotion requires AWS evidence that uses independent processes/instances—not
+only threads sharing one writer—and reports caller p50/p95, records/s, requests
+per record, batch fill, conflicts, post-reopen visibility, and unchanged search
+recall. Local multi-instance coverage is correctness evidence, not a performance
+or unbounded-scalability claim.
 The ignored large-scale test publishes `large-scale.csv` with million-vector
 tie-aware recall, strict id recall, termination reason, routing overfetch,
 latency, segment, byte, graph-byte, RSS before/peak/after, RSS peak-delta,

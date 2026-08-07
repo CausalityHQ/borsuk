@@ -481,12 +481,12 @@ Until the first release, every incompatible storage change increments the
 relevant pointer/table/artifact marker and requires a fresh build from canonical
 Parquet/Arrow source. No benchmark result may cross such a format change.
 
-The current table format is v18. It rejects v17 indexes because lane
-preparation now requires an expiring reservation in the root-authorized,
-bounded 64-way collection frontier. The final root CAS replaces that
-reservation with the active collection commit, fencing crash cleanup against a
-delayed publisher. Silently opening a pre-reservation index would make orphan
-reclamation unsafe.
+The current table format is v27. It rejects v26 indexes because group commit
+now leases independent writer stripes and all last-write-wins mutation paths
+reserve ranges from one global group-amortized counter. Silently opening an
+older index could mix incomparable per-lane or sharded generations and return
+the wrong value across processes. Pre-release indexes are rebuilt from their
+canonical source rather than migrated.
 
 - **Pointer-format version** changes whenever the fixed binary `CURRENT`
   layout, checksum coverage, or publication semantics become incompatible.
@@ -514,8 +514,15 @@ after an orphaned namespace relies on conditional `CURRENT` updates for strict
 cross-version arbitration; S3, Azure, and GCS provide this through object
 ETag/version support. Foreground cell-WAL transactions use create-only commit
 markers and conditional lane heads, so different cells and lanes progress
-independently. Local filesystem storage is best used from one process because
-its conditional-update fallback is process-local.
+independently. Epoch lane-log format v30 interprets its fixed lane set as leased
+writer stripes: each live group-commit worker owns one stripe, reserves a
+globally ordered generation range through one conditional counter, and creates
+one checksum-verified immutable extent without publishing a mutable stripe HEAD
+on the critical path. Independent processes claim different stripes through
+conditional HEAD updates; readers inspect the fixed stripe set and merge by
+global generation. V29 is rejected rather than migrated. Local filesystem
+storage is best used from one process because its conditional-update fallback
+is process-local.
 
 BORSUK does not add a second retry policy around cloud clients. S3, Azure, and
 GCS retries are delegated to `object_store`'s built-in defaults. After those

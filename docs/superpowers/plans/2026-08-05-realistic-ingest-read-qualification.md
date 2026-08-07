@@ -10,6 +10,16 @@
 
 ## Current checkpoint (2026-08-06)
 
+- Local format-v30/v27 writer striping removes the exclusive-all-lanes startup
+  failure: independent live `GroupCommitWriter` instances claim distinct
+  physical stripes and share one group-amortized global generation allocator.
+  Adversarial tests cover both cross-stripe acknowledgement orders and a drain
+  while another writer remains live. This invalidates every pre-v27 base and
+  all prior AWS arms for forward comparison. It remains local evidence only:
+  eight simultaneous process workers is the current hard bound, distributed
+  AWS process orchestration is missing, and the counter contention curve is
+  unmeasured.
+
 - The immutable base plus materialized-delta query path is the selected serving
   architecture. Revision `771e29b` added a versioned coverage certificate and
   removed one full routing-tree validation walk.

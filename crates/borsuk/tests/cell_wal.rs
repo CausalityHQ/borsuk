@@ -916,7 +916,7 @@ fn concurrent_same_id_upserts_reserve_distinct_generations() {
 }
 
 #[test]
-fn large_upsert_batches_use_fixed_generation_shards() {
+fn large_upsert_batches_use_one_group_amortized_generation_range() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(index_config(uri)).unwrap();
@@ -941,15 +941,19 @@ fn large_upsert_batches_use_fixed_generation_shards() {
         !directory.path().join("id-directory/generations").exists(),
         "a batch upsert must not create one persistent generation counter per record"
     );
-    let generation_shards = directory.path().join("id-directory/generation-shards");
-    let shard_count = std::fs::read_dir(generation_shards)
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().join("NEXT").is_file())
-        .count();
     assert!(
-        (1..=16).contains(&shard_count),
-        "generation allocation must touch at most the fixed shard count, got {shard_count}"
+        directory
+            .path()
+            .join("id-directory/last-write-wins/NEXT")
+            .is_file(),
+        "one global range must order the complete batch"
+    );
+    assert!(
+        !directory
+            .path()
+            .join("id-directory/generation-shards")
+            .exists(),
+        "v30 must not retain the superseded sharded generation protocol"
     );
 }
 
@@ -985,12 +989,12 @@ fn large_delete_batches_bound_generation_coordination_requests() {
     assert_eq!(report.deleted, rows);
     assert!(
         report.requests.puts < 100,
-        "one delete batch must reserve generation ranges per fixed shard, not per row: {:?}",
+        "one delete batch must reserve one generation range, not one counter per row: {:?}",
         report.requests
     );
     assert!(
         report.requests.gets < 100 && report.requests.heads < 100,
-        "fixed generation shards must bound the complete coordination round trip: {:?}",
+        "one generation range must bound the complete coordination round trip: {:?}",
         report.requests
     );
 }
