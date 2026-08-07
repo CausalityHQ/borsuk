@@ -56,6 +56,16 @@ impl OperationLog {
             .count()
     }
 
+    pub fn matching_paths(&self, predicate: impl Fn(StoreOperation, &str) -> bool) -> Vec<String> {
+        self.entries
+            .lock()
+            .expect("operation log poisoned")
+            .iter()
+            .filter(|(operation, path)| predicate(*operation, path))
+            .map(|(_, path)| path.clone())
+            .collect()
+    }
+
     fn record(&self, operation: StoreOperation, location: &ObjectPath) {
         self.entries
             .lock()

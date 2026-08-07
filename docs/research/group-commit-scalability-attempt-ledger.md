@@ -926,3 +926,36 @@ operation-level test observed 528 HEAD reads; the GREEN test observes exactly
 32. All 39 group-commit integration tests, all 48 lane-log tests, and strict
 all-target/all-feature crate Clippy pass. No acknowledgement or materialization
 path changed, and no AWS performance claim is made from this local evidence.
+
+## Manifest-fenced stripe retirement and stale-reader correction (2026-08-07)
+
+The first retirement integration RED exposed a correctness defect that preceded
+directory cleanup: a drain advanced the global `materialized_sequence`, so a
+reader pinned to the prior manifest stopped reading the WAL before its immutable
+base contained that record. Lane epoch HEADs and seals now persist the manifest
+version that materialized their prefix. A pinned reader applies the frontier
+only at or after that version; earlier readers retain the required extents.
+
+The v32 active directory stores one activation epoch and retirement manifest
+version per stripe. Retirement clears a bit only when its activation epoch still
+matches, preventing a stale releaser from hiding a takeover. Current readers
+omit retired stripes, stale readers include only retirements newer than their
+pinned manifest, and the first append after drain reactivates before its extent
+can acknowledge. Drain refreshes the winning collection manifest before
+selecting maintenance work, preventing an independently pinned writer from
+rematerializing a peer's already published tail.
+
+Normal shutdown now retains and joins worker handles after sender disconnect.
+That makes lease release deterministic; if another writer already materialized
+the peer's tail, release conditionally retires it. The RED stale-reader test
+lost the drained record before the versioned frontier and the RED lifecycle
+test still read the released peer HEAD before deterministic joining. Both now
+pass, as does the mutation-checked append-after-drain reactivation test.
+
+Local verification passes 50 lane-log tests, 42 group-commit integration tests,
+114 format tests, six crash-recovery tests, 12 fault-injection tests, four
+consistency tests, two targeted WAL-GC retention tests, and strict
+all-target/all-feature crate Clippy. This changes table format 28 to 29 and
+rejects old experimental artifacts. An abandoned expired stripe remains active
+until takeover/release; a standalone expiry sweep and true multi-process runner
+qualification remain open. No AWS measurement was launched or claimed.

@@ -2013,7 +2013,7 @@ impl BorsukIndex {
             .effective_ram_budget_bytes()
             .unwrap_or(DEFAULT_RAM_BUDGET_BYTES);
         let lane_budget = total_budget / u64::from(lane_count);
-        let writer = crate::lane_log::LaneEpochWriter::acquire_with_storage(
+        let mut writer = crate::lane_log::LaneEpochWriter::acquire_with_storage(
             self.collection_storage
                 .clone_with_independent_request_counters(),
             lane,
@@ -2023,7 +2023,7 @@ impl BorsukIndex {
             lane_budget,
             minimum_generation,
         )?;
-        crate::lane_log::activate_stripe(&self.collection_storage, lane, lane_count)?;
+        writer.activate_directory(lane_count)?;
         Ok(writer)
     }
 
@@ -2071,15 +2071,16 @@ impl BorsukIndex {
         )
     }
 
-    pub(crate) fn materialize_lane_log_tail(&mut self) -> Result<Vec<u64>> {
-        // Background group-commit maintenance only needs the newest lane
-        // extents. Avoid reloading the collection snapshot and immutable
-        // manifest on the acknowledgement-critical path; the manifest is
-        // republished below with the same CAS fencing as a full refresh.
-        self.refresh_wal_tail()?;
+    pub(crate) fn materialize_lane_log_tail(&mut self) -> Result<(Vec<u64>, u64)> {
+        // Drain is a maintenance boundary, not the acknowledgement path. Load
+        // the winning collection manifest before selecting WAL work: a reader
+        // pinned before a peer's materialization must retain that peer's WAL
+        // for queries, but must not rematerialize it into the same routing
+        // generation during a later independent drain.
+        self.refresh()?;
         let committed_sequences = self.lane_log_committed_sequences.clone();
         if self.lane_log_snapshot.is_empty() {
-            return Ok(committed_sequences);
+            return Ok((committed_sequences, self.manifest.version));
         }
 
         let generation_fence_ids = self
@@ -2241,23 +2242,29 @@ impl BorsukIndex {
                 .unwrap_or_else(|error| error.into_inner())
                 .clear();
         }
-        Ok(committed_sequences)
+        Ok((committed_sequences, self.manifest.version))
     }
 
-    pub(crate) fn checkpoint_lane_log_materialized_through(&self, sequences: &[u64]) -> Result<()> {
+    pub(crate) fn checkpoint_lane_log_materialized_through(
+        &self,
+        sequences: &[u64],
+        manifest_version: u64,
+    ) -> Result<()> {
         crate::lane_log::LaneLogReader::from_storage(
             self.collection_storage.clone(),
             crate::lane_log::GROUP_COMMIT_STRIPE_COUNT,
         )?
-        .mark_materialized_through(sequences)
+        .mark_materialized_through(sequences, manifest_version)
     }
 
     fn read_lane_log_snapshot_if_changed(
         &self,
+        manifest_version: u64,
     ) -> Result<Option<crate::lane_log::LaneLogSnapshot>> {
-        crate::lane_log::LaneLogReader::from_storage(
+        crate::lane_log::LaneLogReader::from_storage_at_manifest(
             self.collection_storage.clone(),
             crate::lane_log::GROUP_COMMIT_STRIPE_COUNT,
+            manifest_version,
         )?
         .read_snapshot_if_changed(
             &self.lane_log_head_checksums,
@@ -3352,11 +3359,13 @@ impl BorsukIndex {
             &collection_snapshot,
             &collection_wal_snapshot.commits,
         )?;
-        let lane_log_snapshot = index.read_lane_log_snapshot_if_changed()?.ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "new index handle did not receive an initial lane-log snapshot".to_string(),
-            )
-        })?;
+        let lane_log_snapshot = index
+            .read_lane_log_snapshot_if_changed(index.manifest.version)?
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "new index handle did not receive an initial lane-log snapshot".to_string(),
+                )
+            })?;
         index.lane_log_snapshot = lane_log_snapshot.record_blocks;
         index.lane_log_committed_sequences = lane_log_snapshot.committed_sequences;
         index.lane_log_head_checksums = lane_log_snapshot.head_checksums;
@@ -3856,7 +3865,7 @@ impl BorsukIndex {
             &latest_collection,
             &collection_wal_transaction_ids,
         )?;
-        let latest_lane_log_snapshot = self.read_lane_log_snapshot_if_changed()?;
+        let latest_lane_log_snapshot = self.read_lane_log_snapshot_if_changed(latest.version)?;
         self.prepare_manifest_mutation_frontier(&latest)?;
         self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
         latest.cell_wal_visible_runs = cell_wal_run_count(&latest_cell_wal_snapshot);
@@ -3955,7 +3964,7 @@ impl BorsukIndex {
     /// manifest or collection changes. The method returns `true` when a lane
     /// head advanced and the decoded tail was replaced.
     pub fn refresh_wal_tail(&mut self) -> Result<bool> {
-        let Some(latest) = self.read_lane_log_snapshot_if_changed()? else {
+        let Some(latest) = self.read_lane_log_snapshot_if_changed(self.manifest.version)? else {
             return Ok(false);
         };
         self.lane_log_snapshot = latest.record_blocks;
