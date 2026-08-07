@@ -550,3 +550,19 @@ cell, while `materialize_lane_log_tail` wrote decoded records and then invoked
 the segment-reading delta refresh. The next drain slice must encode the delta
 from those owned records and atomically publish segment plus delta coverage in
 one manifest. It needs causal AWS measurement before any throughput claim.
+
+## Fused lane-drain delta publication qualification launched (2026-08-07)
+
+Run `20260807T110628Z-fused-drain` launched from commit `1f92d6b` with source
+archive SHA-256
+`324a8538dbb3def16fe2c6d3da24fb8c0d19d77afb478cc87c55de55a913e04c`
+and unchanged manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+The matched source removes only the drain's redundant segment reread and
+second manifest publication: an exact operation-log regression requires zero
+GETs of newly written segments and one atomic segment-plus-delta manifest PUT.
+The complete 512-test library gate, 32 group-commit tests, 12 fault-injection
+tests, strict all-target/all-feature Clippy, and the structurally validated
+bulk runner smoke passed before launch. The dedicated-worker no-contention
+preflight passed. Until root terminalization and process exit, inspect only
+markers and infrastructure/process health; do not open measurement CSVs.
