@@ -22,6 +22,8 @@ pub enum PhysicalObjectRole {
     WalRun,
     /// Conditional pointer for one logical cell WAL lane.
     LaneHead,
+    /// Checked directory of active persisted writer stripes.
+    WriterDirectory,
     /// Atomic visibility marker for a prepared transaction.
     CommitMarker,
     /// Hierarchical vector-routing metadata page.
@@ -59,6 +61,8 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         || path.starts_with("pivots/")
     {
         PhysicalObjectRole::Catalog
+    } else if path == "lane-log/ACTIVE" {
+        PhysicalObjectRole::WriterDirectory
     } else if (path.starts_with("cells/") || path.starts_with("lane-log/lanes/"))
         && path.ends_with("/HEAD")
     {
@@ -121,6 +125,7 @@ impl PhysicalObjectRole {
             Self::Catalog => "catalog",
             Self::WalRun => "wal_run",
             Self::LaneHead => "lane_head",
+            Self::WriterDirectory => "writer_directory",
             Self::CommitMarker => "commit_marker",
             Self::RoutingPage => "routing_page",
             Self::GraphIndex => "graph_index",

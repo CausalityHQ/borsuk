@@ -1179,6 +1179,7 @@ fn approximate_search_drills_through_deep_paged_routing_tree() {
         &uri,
         OpenOptions {
             resident_routing: false,
+            routing_page_cache_max_bytes: 0,
             ..OpenOptions::default()
         },
     )
@@ -1367,6 +1368,16 @@ fn deep_routing_compaction_reuses_untouched_parent_pages() {
         .unwrap()
         .len();
     let untouched_parent_path = before_l1_parent_paths[1].clone();
+
+    drop(index);
+    let mut index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            routing_page_cache_max_bytes: 0,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
 
     let second_compaction = index
         .compact(CompactionOptions {
@@ -2459,7 +2470,11 @@ fn recall_guarantee_degrades_when_routing_preselection_skips_segments() {
         )
         .unwrap();
 
-    assert_eq!(report.termination_reason, SearchTerminationReason::Complete);
+    assert_eq!(
+        report.termination_reason,
+        SearchTerminationReason::Complete,
+        "routing preselection should not masquerade as a hard query-budget stop: {report:?}"
+    );
     assert_eq!(report.segments_skipped, 2);
     assert_eq!(report.recall_guarantee, RecallGuarantee::Degraded);
 }
@@ -4137,7 +4152,7 @@ fn approximate_search_obeys_byte_budget() {
     let uri = dir.path().to_string_lossy().into_owned();
 
     let mut index = create_graph_enabled(IndexConfig {
-        uri,
+        uri: uri.clone(),
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 1,
@@ -4155,6 +4170,16 @@ fn approximate_search_obeys_byte_budget() {
         ])
         .unwrap();
     index.flush().unwrap();
+    let first_segment_payload_bytes = index.manifest().segments[0].size_bytes;
+    drop(index);
+    let index = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            routing_page_cache_max_bytes: 0,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
 
     let routing_only_report = index
         .search_with_report(
@@ -4192,8 +4217,7 @@ fn approximate_search_obeys_byte_budget() {
         SearchTerminationReason::MaxBytes
     );
 
-    let first_segment_budget =
-        routing_only_report.bytes_read + index.manifest().segments[0].size_bytes;
+    let first_segment_budget = routing_only_report.bytes_read + first_segment_payload_bytes;
     let report = index
         .search_with_report(
             &[0.0, 0.0],
@@ -4258,17 +4282,27 @@ fn search_prefetch_depth_preserves_serial_report_semantics() {
 
     index.add(prefetch_test_records(16)).unwrap();
     index.flush().unwrap();
-    let reader =
-        BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///prefetch-equality")
-            .unwrap();
+    let open_cold = || {
+        BorsukIndex::open_with_object_store_and_options(
+            Arc::clone(&inner),
+            "memory:///prefetch-equality",
+            OpenOptions {
+                routing_page_cache_max_bytes: 0,
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap()
+    };
+    let serial_reader = open_cold();
 
-    let serial = reader
+    let serial = serial_reader
         .search_with_report(
             &[7.25, 0.0],
             SearchOptions::exact(16).with_prefetch_depth(1),
         )
         .unwrap();
-    let pipelined = reader
+    let pipelined_reader = open_cold();
+    let pipelined = pipelined_reader
         .search_with_report(
             &[7.25, 0.0],
             SearchOptions::exact(16).with_prefetch_depth(8),
@@ -4282,10 +4316,11 @@ fn search_prefetch_depth_preserves_serial_report_semantics() {
     let _reported_separately = pipelined.prefetched_bytes_unused;
 
     assert!(
-        reader.stats().segments > 1,
+        serial_reader.stats().segments > 1,
         "prefetch fixture must contain multiple segments"
     );
-    let single_segment = reader
+    let single_reader = open_cold();
+    let single_segment = single_reader
         .search_with_report(
             &[7.25, 0.0],
             SearchOptions::approx(1, LeafMode::PqScan)
@@ -4293,7 +4328,8 @@ fn search_prefetch_depth_preserves_serial_report_semantics() {
                 .with_prefetch_depth(1),
         )
         .unwrap();
-    let prefetched_single_segment = reader
+    let prefetched_reader = open_cold();
+    let prefetched_single_segment = prefetched_reader
         .search_with_report(
             &[7.25, 0.0],
             SearchOptions::approx(1, LeafMode::PqScan)
@@ -4440,8 +4476,15 @@ fn search_batch_reuses_request_scoped_routing_page_cache() {
     let (counting_store, operation_log) =
         common::FaultInjectingObjectStore::new(inner).with_operation_log();
     let store: Arc<dyn ObjectStore> = Arc::new(counting_store);
-    let reader =
-        BorsukIndex::open_with_object_store(store, "memory:///batch-routing-cache").unwrap();
+    let reader = BorsukIndex::open_with_object_store_and_options(
+        store,
+        "memory:///batch-routing-cache",
+        OpenOptions {
+            routing_page_cache_max_bytes: 0,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
     let options = SearchOptions::approx(1, LeafMode::PqScan)
         .with_max_segments(1)
         .with_routing_page_overfetch(1)

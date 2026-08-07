@@ -446,7 +446,7 @@ fn batched_delete_of_upserts_reads_each_matching_segment_once() {
 
     assert_eq!(report.deleted, 16);
     assert!(
-        report.requests.gets <= 40,
+        report.requests.gets <= 24,
         "batched delete re-read matching segments per id: {:?}",
         report.requests
     );

@@ -529,7 +529,8 @@ const DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 /// its decoded vectors without making the corpus-sized exact payload resident.
 const DEFAULT_DECODED_VECTOR_SIDECAR_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_GLOBAL_IDENTITY_RANGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
-const DEFAULT_ROUTING_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
+/// Default total budget for retained raw and decoded routing pages.
+pub const DEFAULT_ROUTING_PAGE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Options used when opening an existing BORSUK index.
 ///
@@ -556,6 +557,11 @@ pub struct OpenOptions {
     /// its own copy, so peak memory tracks this budget rather than the number
     /// of concurrent readers. `None` disables the cache (decode per query).
     pub segment_cache_max_bytes: Option<u64>,
+    /// Total byte cap for immutable routing-page bytes and decoded page
+    /// children/summaries retained across operations. Zero disables retention,
+    /// which is useful for honest cold-path qualification; request-local
+    /// coalescing still avoids duplicate reads inside one batch.
+    pub routing_page_cache_max_bytes: u64,
     /// Byte cap for shared decoded global-cell graphs. Graph objects must also
     /// be present in `cache_dir`; this cap controls only their read-only RAM
     /// representation. Zero disables retention while single-flight still
@@ -629,6 +635,7 @@ impl Default for OpenOptions {
             ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
             resident_routing: false,
             segment_cache_max_bytes: None,
+            routing_page_cache_max_bytes: DEFAULT_ROUTING_PAGE_CACHE_BYTES,
             global_cell_graph_cache_max_bytes: DEFAULT_GLOBAL_CELL_GRAPH_CACHE_BYTES,
             tombstone_page_cache_max_bytes: DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES,
             bm25_stats_page_cache_max_bytes: DEFAULT_BM25_STATS_PAGE_CACHE_BYTES,
@@ -695,6 +702,10 @@ pub struct BorsukIndex {
     tokenizer: Arc<dyn Tokenizer>,
     runtime_ram_budget_bytes: Option<u64>,
     flat_logical_cell_routing: bool,
+    /// Whether the caller explicitly opted into retaining every routing
+    /// summary. Paged mode must not silently become resident merely because a
+    /// small fixture or current corpus happens to fit the RAM budget.
+    retain_routing_summaries: bool,
     /// Owns the collection-shared cache and admission state. The following
     /// fields are pointer-identical bindings retained to keep hot-path access
     /// direct while the runtime migration remains a breaking pre-release
@@ -1941,15 +1952,15 @@ impl CollectionReadRuntime {
                 &retained_pool,
             ),
             routing_page_cache: decoded_cache_with_pool(
-                DEFAULT_ROUTING_PAGE_CACHE_BYTES,
+                options.routing_page_cache_max_bytes / 2,
                 &retained_pool,
             ),
             decoded_routing_page_children: decoded_cache_with_pool(
-                DEFAULT_ROUTING_PAGE_CACHE_BYTES / 2,
+                options.routing_page_cache_max_bytes / 4,
                 &retained_pool,
             ),
             decoded_routing_page_summaries: decoded_cache_with_pool(
-                DEFAULT_ROUTING_PAGE_CACHE_BYTES / 2,
+                options.routing_page_cache_max_bytes / 4,
                 &retained_pool,
             ),
             inflight_vector_sidecars: Arc::new(InFlightReads::default()),
@@ -3018,6 +3029,7 @@ impl BorsukIndex {
             tokenizer,
             runtime_ram_budget_bytes: None,
             flat_logical_cell_routing: create_options.flat_logical_cell_routing,
+            retain_routing_summaries: create_options.resident_routing,
             read_runtime: Arc::clone(&read_runtime),
             lexical_admission: read_runtime.lexical_admission.clone(),
             segment_cache: Arc::clone(&read_runtime.segment_cache),
@@ -3125,6 +3137,7 @@ impl BorsukIndex {
                 ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
                 resident_routing: false,
                 segment_cache_max_bytes: None,
+                routing_page_cache_max_bytes: DEFAULT_ROUTING_PAGE_CACHE_BYTES,
                 global_cell_graph_cache_max_bytes: DEFAULT_GLOBAL_CELL_GRAPH_CACHE_BYTES,
                 tombstone_page_cache_max_bytes: DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES,
                 bm25_stats_page_cache_max_bytes: DEFAULT_BM25_STATS_PAGE_CACHE_BYTES,
@@ -3158,8 +3171,19 @@ impl BorsukIndex {
     #[doc(hidden)]
     pub fn open_with_object_store(store: Arc<dyn ObjectStore>, uri: &str) -> Result<Self> {
         // Test seam: integration tests can share or wrap an ObjectStore without URI parsing.
+        Self::open_with_object_store_and_options(store, uri, OpenOptions::default())
+    }
+
+    #[doc(hidden)]
+    pub fn open_with_object_store_and_options(
+        store: Arc<dyn ObjectStore>,
+        uri: &str,
+        options: OpenOptions,
+    ) -> Result<Self> {
+        // Test seam: qualification can explicitly disable retained caches while
+        // sharing an instrumented ObjectStore.
         let storage = Storage::from_object_store(uri.to_string(), store)?;
-        Self::open_with_storage(storage, OpenOptions::default())
+        Self::open_with_storage(storage, options)
     }
 
     fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
@@ -3313,6 +3337,7 @@ impl BorsukIndex {
             tokenizer: default_tokenizer(),
             runtime_ram_budget_bytes: options.ram_budget_bytes,
             flat_logical_cell_routing: options.flat_logical_cell_routing,
+            retain_routing_summaries: options.resident_routing,
             read_runtime: Arc::clone(&read_runtime),
             lexical_admission: read_runtime.lexical_admission.clone(),
             segment_cache: Arc::clone(&read_runtime.segment_cache),
@@ -5303,12 +5328,7 @@ impl BorsukIndex {
             .into_iter()
             .map(|id| id.into().as_bytes().to_vec())
             .collect::<Vec<_>>();
-        let mut minimums = BTreeMap::new();
-        for key in &ids {
-            if !minimums.contains_key(key) {
-                minimums.insert(key.clone(), self.min_visible_generation(key)?);
-            }
-        }
+        let minimums = self.min_visible_generations(ids.iter().map(Vec::as_slice))?;
         let live_targets = minimums
             .iter()
             .filter(|(_, minimum)| self.manifest.config.text || minimum.is_some())
@@ -6495,8 +6515,7 @@ impl BorsukIndex {
             // The lean segment projection carries ids, generations, and text
             // terms but not dense sidecars, so reconciliation cost scales with
             // tombstone-matching cells rather than vector dimensions.
-            let (segment, _) =
-                self.read_segment_lean_ranged(summary, crate::format::LEAN_SEGMENT_ROW_COLUMNS)?;
+            let (segment, _) = self.read_segment_lean(summary)?;
             for record in &segment.records {
                 if overlay
                     .get(record.id.as_bytes())
@@ -6552,6 +6571,75 @@ impl BorsukIndex {
         Ok(minimum)
     }
 
+    /// Resolve tombstone generations for a request batch while loading every
+    /// matching immutable tombstone object at most once. The retained cache is
+    /// deliberately not required for this bound: cold production handles and
+    /// cache-disabled qualification runs still share I/O within the request.
+    fn min_visible_generations<'a, I>(&self, ids: I) -> Result<BTreeMap<Vec<u8>, Option<u64>>>
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        let mut minimums = ids
+            .into_iter()
+            .map(|id| (id.to_vec(), None))
+            .collect::<BTreeMap<_, _>>();
+        if minimums.is_empty() {
+            return Ok(minimums);
+        }
+
+        let mut page_indexes = BTreeSet::new();
+        for id in minimums.keys() {
+            let bucket = tombstone_bucket(id);
+            if let Ok(index) = self
+                .manifest
+                .tombstone_pages
+                .binary_search_by_key(&bucket, |page| page.bucket)
+                && self.manifest.tombstone_pages[index].might_contain_record_id(id)
+            {
+                page_indexes.insert(index);
+            }
+        }
+        for index in page_indexes {
+            let page = &self.manifest.tombstone_pages[index];
+            let overlay = self.load_tombstone_page(page)?;
+            for (id, minimum) in &mut minimums {
+                if tombstone_bucket(id) == page.bucket
+                    && page.might_contain_record_id(id)
+                    && let Some(generation) = overlay.get(id).copied()
+                {
+                    *minimum =
+                        Some(minimum.map_or(generation, |current: u64| current.max(generation)));
+                }
+            }
+        }
+
+        let cell_tombstones = self.cell_wal_tombstone_summaries()?;
+        for tombstone in self
+            .manifest
+            .tombstone
+            .iter()
+            .chain(&self.manifest.tombstone_frontier)
+            .chain(&cell_tombstones)
+        {
+            if !minimums
+                .keys()
+                .any(|id| tombstone.might_contain_record_id(id))
+            {
+                continue;
+            }
+            let overlay = self.load_tombstone_run(tombstone)?;
+            for (id, minimum) in &mut minimums {
+                if tombstone.might_contain_record_id(id)
+                    && let Some(generation) = overlay.get(id).copied()
+                {
+                    *minimum =
+                        Some(minimum.map_or(generation, |current: u64| current.max(generation)));
+                }
+            }
+        }
+        Ok(minimums)
+    }
+
     /// Whether `id` carries any tombstone entry (deleted or superseded by a
     /// newer upsert). Used where the caller only has an id, not a record.
     fn id_is_tombstoned(&self, id: &[u8]) -> Result<bool> {
@@ -6588,8 +6676,7 @@ impl BorsukIndex {
             if !targets.keys().any(|id| summary.might_contain_record_id(id)) {
                 continue;
             }
-            let (segment, _) =
-                self.read_segment_lean_ranged(&summary, crate::format::LEAN_SEGMENT_ROW_COLUMNS)?;
+            let (segment, _) = self.read_segment_lean(&summary)?;
             for record in &segment.records {
                 let Some(threshold) = targets.get(record.id.as_bytes()) else {
                     continue;
@@ -7080,8 +7167,7 @@ impl BorsukIndex {
                 .transient_admission
                 .as_ref()
                 .map(|gate| gate.acquire_owned(estimated_segment_decode_bytes(&summary)));
-            let (segment, _) =
-                self.read_segment_lean_ranged(&summary, crate::format::LEAN_SEGMENT_ROW_COLUMNS)?;
+            let (segment, _) = self.read_segment_lean(&summary)?;
             let rows = segment
                 .records
                 .iter()
@@ -7118,15 +7204,20 @@ impl BorsukIndex {
         &self,
         ids: &[RecordId],
     ) -> Result<BTreeMap<String, Vec<RecordId>>> {
-        let candidates = ids
-            .iter()
-            .map(|id| {
-                Ok((
-                    id.as_bytes().to_vec(),
-                    self.min_visible_generation(id.as_bytes())?.unwrap_or(0),
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>>>()?;
+        if !self
+            .manifest
+            .config
+            .named_vectors
+            .values()
+            .any(|spec| spec.kind == VectorKind::LateInteraction)
+        {
+            return Ok(BTreeMap::new());
+        }
+        let candidates = self
+            .min_visible_generations(ids.iter().map(|id| id.as_bytes()))?
+            .into_iter()
+            .map(|(id, minimum)| (id, minimum.unwrap_or(0)))
+            .collect::<BTreeMap<_, _>>();
         let mut token_ids = BTreeMap::new();
         for (name, spec) in &self.manifest.config.named_vectors {
             if spec.kind != VectorKind::LateInteraction {
@@ -11991,11 +12082,7 @@ impl BorsukIndex {
             return Ok(Arc::new(self.manifest.segments.clone()));
         }
 
-        let estimated = self.manifest_reference.resident_routing_bytes_estimate;
-        if self
-            .effective_ram_budget_bytes()
-            .is_some_and(|budget| estimated > budget)
-        {
+        if !self.retain_routing_summaries {
             return Ok(Arc::new(self.active_segment_summaries()?));
         }
 
@@ -15398,7 +15485,7 @@ impl BorsukIndex {
         // Resolve it once when the declared resident-routing estimate fits the
         // configured RAM budget; the shared slot is invalidated by manifest
         // version changes and does not affect the WAL tail's visibility.
-        if self.manifest.segments.is_empty() {
+        if self.manifest.segments.is_empty() && self.retain_routing_summaries {
             let _ = self.active_segment_summaries_for_search()?;
         }
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
@@ -18252,41 +18339,34 @@ impl BorsukIndex {
     /// vector column (vectors live in the Arrow sidecar). Parquet currently
     /// fetches its compact table in one known-size GET; Vortex supplies its own
     /// projection/range plan through `StorageVortexReadAt`.
-    fn read_segment_lean_ranged(
-        &self,
-        summary: &SegmentSummary,
-        row_columns: &[&str],
-    ) -> Result<(Segment, u64)> {
+    fn read_segment_lean(&self, summary: &SegmentSummary) -> Result<(Segment, u64)> {
         let decode_started = Instant::now();
         summary
             .layout
             .validate_for(crate::PhysicalObjectRole::NormalSegment)?;
         let (segment, bytes_fetched) = match summary.layout.physical_format {
             crate::PhysicalFormat::Parquet => {
-                let header = self.storage.read_parquet_columns_ranged(
-                    &summary.path,
-                    summary.size_bytes,
-                    RangedColumns::Keep(crate::format::LEAN_SEGMENT_HEADER_COLUMNS),
-                    Some(&[0]),
-                )?;
-                let rows = self.storage.read_parquet_columns_ranged(
-                    &summary.path,
-                    summary.size_bytes,
-                    RangedColumns::Keep(row_columns),
-                    None,
-                )?;
-                let header_batch = header.batches.first().ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "ranged parquet segment `{}` returned no header row",
-                        summary.path
-                    ))
-                })?;
+                // This compact table deliberately excludes dense vectors,
+                // which live in exact-vector sidecars. Mutation and maintenance
+                // scans need most row fields, so one checksum-verified object
+                // GET has lower cold S3 latency than a footer plus one request
+                // per projected Parquet column. ANN scoring and exact rerank
+                // retain their narrow ranged paths.
+                let read = self
+                    .storage
+                    .read_known_size_with_cache_status_and_checksum(
+                        &summary.path,
+                        summary.size_bytes,
+                        &summary.checksum,
+                    )?;
+                let bytes_fetched = if read.cache_hit {
+                    0
+                } else {
+                    read.bytes.len() as u64
+                };
                 (
-                    crate::format::lean_segment_from_header_and_batches(
-                        header_batch,
-                        rows.batches,
-                    )?,
-                    header.bytes_fetched.saturating_add(rows.bytes_fetched),
+                    lean_segment_from_table(read.bytes, crate::DurableTableFormat::Parquet)?,
+                    bytes_fetched,
                 )
             }
             crate::PhysicalFormat::Vortex => {
@@ -18340,6 +18420,65 @@ impl BorsukIndex {
         Ok((segment, bytes_fetched))
     }
 
+    /// Narrow ANN-scoring read. Unlike mutation scans, scoring uses only IDs,
+    /// generations, routing codes, and PQ codes before exact sidecar rerank, so
+    /// the lower transfer volume justifies projected range GETs.
+    fn read_segment_scoring_ranged(&self, summary: &SegmentSummary) -> Result<(Segment, u64)> {
+        let decode_started = Instant::now();
+        summary
+            .layout
+            .validate_for(crate::PhysicalObjectRole::NormalSegment)?;
+        let (segment, bytes_fetched) = match summary.layout.physical_format {
+            crate::PhysicalFormat::Parquet => {
+                let header = self.storage.read_parquet_columns_ranged(
+                    &summary.path,
+                    summary.size_bytes,
+                    RangedColumns::Keep(crate::format::LEAN_SEGMENT_HEADER_COLUMNS),
+                    Some(&[0]),
+                )?;
+                let rows = self.storage.read_parquet_columns_ranged(
+                    &summary.path,
+                    summary.size_bytes,
+                    RangedColumns::Keep(crate::format::LEAN_SEGMENT_SCORING_COLUMNS),
+                    None,
+                )?;
+                let header_batch = header.batches.first().ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "ranged parquet segment `{}` returned no header row",
+                        summary.path
+                    ))
+                })?;
+                (
+                    crate::format::lean_segment_from_header_and_batches(
+                        header_batch,
+                        rows.batches,
+                    )?,
+                    header.bytes_fetched.saturating_add(rows.bytes_fetched),
+                )
+            }
+            // Vortex already applies its format-native lean projection.
+            crate::PhysicalFormat::Vortex => return self.read_segment_lean(summary),
+            other => {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "normal segment cannot use physical format `{other}`"
+                )));
+            }
+        };
+        validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
+        self.storage
+            .record_access_event(StorageAccessEvent::decode(
+                &summary.path,
+                physical_format_for_path(&summary.path),
+                summary.size_bytes,
+                "record_id|generation|routing_codes|pq_codes",
+                "all",
+                summary.object_count as u64,
+                segment.records.len() as u64,
+                elapsed_ns(decode_started),
+            ))?;
+        Ok((segment, bytes_fetched))
+    }
+
     fn read_projected_segment(
         &self,
         summary: &SegmentSummary,
@@ -18363,10 +18502,7 @@ impl BorsukIndex {
         } else {
             let (segment, segment_bytes, _shared_inflight) =
                 self.inflight_segment_reads.load(&summary.checksum, || {
-                    self.read_segment_lean_ranged(
-                        summary,
-                        crate::format::LEAN_SEGMENT_SCORING_COLUMNS,
-                    )
+                    self.read_segment_scoring_ranged(summary)
                 })?;
             self.read_runtime.projected_segment_cache.insert(
                 summary.checksum.clone(),
@@ -24414,7 +24550,7 @@ mod tests {
     }
 
     #[test]
-    fn search_resolves_paged_routing_summaries_once_per_manifest() {
+    fn paged_routing_residency_requires_explicit_opt_in() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -24447,8 +24583,21 @@ mod tests {
         let first = reader.active_segment_summaries_for_search().unwrap();
         let second = reader.active_segment_summaries_for_search().unwrap();
         assert_eq!(first.len(), 8);
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(reader.resident_routing_summaries().is_none());
+
+        let resident = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                resident_routing: true,
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+        let first = resident.active_segment_summaries_for_search().unwrap();
+        let second = resident.active_segment_summaries_for_search().unwrap();
         assert!(Arc::ptr_eq(&first, &second));
-        assert!(reader.resident_routing_summaries().is_some());
+        assert!(resident.resident_routing_summaries().is_some());
     }
 
     #[test]
