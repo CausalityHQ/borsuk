@@ -285,8 +285,16 @@ for cells in "${CELL_COUNTS[@]}"; do
       status=$?
       set -e
       mkdir -p "$cell_output"
-      mv "$resource_output" "$cell_output/resources.csv"
-      mv "$storage_trace_output" "$cell_output/storage-access.csv"
+      if [[ -f "$resource_output" ]]; then
+        mv "$resource_output" "$cell_output/resources.csv"
+      else
+        printf 'missing resource telemetry\n' > "$cell_output/RESOURCE_TELEMETRY_MISSING"
+      fi
+      if [[ -f "$storage_trace_output" ]]; then
+        mv "$storage_trace_output" "$cell_output/storage-access.csv"
+      else
+        printf 'missing storage trace\n' > "$cell_output/STORAGE_TRACE_MISSING"
+      fi
       printf '%s\n' "$status" > "$cell_output/process_exit.txt"
       if (( status != 0 )); then
         exit "$status"
