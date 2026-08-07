@@ -17,6 +17,7 @@ fn persisted_paths_have_stable_physical_object_roles() {
         ("wal/0001.parquet", PhysicalObjectRole::WalRun),
         ("cells/1/42/wal/3/HEAD", PhysicalObjectRole::LaneHead),
         ("lane-log/lanes/0003/HEAD", PhysicalObjectRole::LaneHead),
+        ("lane-log/ACTIVE", PhysicalObjectRole::WriterDirectory),
         (
             "lane-log/lanes/0003/blocks/0001-deadbeef.blk",
             PhysicalObjectRole::WalRun,

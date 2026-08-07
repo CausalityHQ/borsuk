@@ -512,11 +512,12 @@ fn validate_implemented_role_format(
     use PhysicalObjectRole::{
         Catalog, CommitMarker, ExactVectors, FilterIndex, GraphIndex, IdDirectory, LaneHead,
         LateInteraction, LexicalBlock, NormalSegment, ProductCodes, RoutingPage, Tombstone, WalRun,
+        WriterDirectory,
     };
     let supported = match role {
         Catalog | RoutingPage | GraphIndex | LexicalBlock | Tombstone => format == Parquet,
         WalRun => matches!(format, Parquet | Vortex),
-        LaneHead | CommitMarker | FilterIndex | IdDirectory => format == Packed,
+        LaneHead | WriterDirectory | CommitMarker | FilterIndex | IdDirectory => format == Packed,
         ExactVectors | ProductCodes | LateInteraction => format == ArrowIpc,
         NormalSegment => matches!(format, Parquet | Vortex),
         PhysicalObjectRole::Unknown => false,

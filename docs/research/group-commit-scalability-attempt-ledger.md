@@ -997,3 +997,43 @@ byte accounting. No assertion was weakened and no second full gate was
 launched. This independently verified runner checkpoint is safe to deliver,
 but it does not authorize AWS measurement; those core read-path failures remain
 the next production-hardening slice.
+
+## Explicit paged routing and honest cold-path control (2026-08-07)
+
+Root-cause analysis of the seven `local_index` failures found that commit
+`4b3921d` had made `resident_routing: false` opportunistically retain the full
+routing summary table whenever the current corpus fit the RAM budget. That
+contradicted the public paged-routing contract, made cold telemetry dependent on
+prior operations, and used cache residency to hide core routing work. Paged mode
+now remains paged regardless of corpus size. Full summary residency is retained
+only after explicit `resident_routing: true` opt-in.
+
+`OpenOptions::routing_page_cache_max_bytes` now separately bounds immutable raw
+and decoded routing-page retention; zero disables cross-operation retention
+while preserving request-local batch coalescing. Cold byte-budget, prefetch,
+compaction, and routing-page tests use fresh zero-cap handles, while the existing
+warm-cache tests continue to prove bounded reuse. All 157 `local_index` tests
+pass, including the prior seven failures. This is correctness and measurement
+integrity evidence; AWS remains unauthorized until the final workspace gate is
+green.
+
+The next workspace gate exposed a separate cold mutation regression in
+`batched_delete_of_upserts_reads_each_matching_segment_once`: a delete of 16
+upserted IDs spent 80 GETs. A completed local storage-access trace showed eight
+matching compact normal-segment objects fetched 9--11 times each. The projected
+Parquet mutation path was paying separate footer, header, and column-chunk GETs
+even though dense vectors already live outside the normal segment. Mutation and
+maintenance scans now use one checksum-verified GET per compact Parquet segment;
+ANN scoring and exact-vector rerank retain their narrow range-read paths.
+Request-scoped tombstone generation lookup also loads each matching tombstone
+object once per batch, and collections without late-interaction fields skip
+late-interaction delete preparation entirely. The focused scenario now records
+eight normal-segment GETs across its complete lifecycle, its operation gate was
+tightened from 40 to 24 total GETs, and all 23 WAL integration tests pass.
+
+Final local release evidence for this slice is terminal and green:
+`cargo fmt --all -- --check`, repository policy, documentation tests, strict
+all-feature/all-target Clippy, and `cargo test --locked --workspace
+--all-targets` all exited zero. The workspace test gate reported 1,105 passed
+and 25 ignored across 69 suites in 389.71 seconds. No AWS workload was launched
+during diagnosis or qualification.

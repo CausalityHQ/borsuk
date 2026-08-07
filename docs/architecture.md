@@ -828,9 +828,12 @@ R1/R2/R3 routing page indexes   compact binary centroids/sketches/blooms
 CURRENT                         points at one consistent manifest/routing set
 ```
 
-Layer count should be computed from leaf count and routing fanout. RAM budget
-affects whether routing is resident or paged, but it should not force larger
-leaf vector blobs. Single-level routing is only the small-index degenerate case
+Layer count should be computed from leaf count and routing fanout. Routing is
+paged unless the caller explicitly enables `resident_routing`; the RAM budget
+validates that opt-in but never silently changes execution mode. The bounded
+routing-page cache is separately configurable, and a zero-byte cap provides a
+true uncached qualification path. Neither setting should force larger leaf
+vector blobs. Single-level routing is only the small-index degenerate case
 when the computed leaf count fits one routing level; large-scale indexes need
 multiple routing levels so S3 reads can be pruned before leaf blobs are touched.
 Higher layers are routing pages; they do not make leaf vector blobs grow without
@@ -841,8 +844,9 @@ exact while preserving the segment-read budget.
 This is the implemented hierarchical blob-oriented model. The remaining production-readiness gate is evidence, not architecture: release-candidate artifacts still have to prove recall, write throughput, read latency, and RAM profile at target scale.
 
 The resident summary table is still useful for small and medium indexes and for
-compatibility tooling. Large readers should open with paged routing so routing
-rows are materialized only from selected page objects.
+compatibility tooling, but requires explicit opt-in. Paged readers materialize
+only selected page objects; a small current corpus is not automatically promoted
+to a full resident routing table.
 
 Old segment objects are deliberately left in place during compaction. They are
 no longer active once the new manifest is current, but deletion happens only via
