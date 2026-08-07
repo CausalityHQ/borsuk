@@ -15375,6 +15375,7 @@ impl BorsukIndex {
         let parallel_full_budget = if !query_projectable
             && self.segment_cache.get().is_none()
             && options.filter.is_none()
+            && live_wal_tail.is_empty()
             && matches!(
                 candidate_mode,
                 SearchMode::Approx {
