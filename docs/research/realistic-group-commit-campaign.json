@@ -12,6 +12,7 @@
   "cell_counts": [2000, 16000],
   "writers": [1, 8, 32],
   "writer_instance_policy": "one-per-writer",
+  "writer_process_policy": "one-process-per-writer",
   "worker_lanes": [1],
   "repetitions": 5,
   "operations_per_writer": 1000,

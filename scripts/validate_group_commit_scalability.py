@@ -54,6 +54,30 @@ def integer(value: str, label: str) -> int:
         raise ValidationError(f"invalid {label}: {value!r}") from error
 
 
+def validate_process_identity(
+    samples: list[dict[str, str]], writers: int, cell: Path
+) -> None:
+    """Require one stable, distinct operating-system process per writer."""
+    writer_processes: dict[int, set[int]] = {}
+    process_writers: dict[int, set[int]] = {}
+    for sample in samples:
+        try:
+            writer = integer(sample["writer"], "sample writer")
+            process_id = integer(sample["process_id"], "sample process identity")
+        except KeyError as error:
+            raise ValidationError(f"missing process identity evidence in {cell}") from error
+        require(process_id > 0, f"invalid process identity in {cell}")
+        writer_processes.setdefault(writer, set()).add(process_id)
+        process_writers.setdefault(process_id, set()).add(writer)
+    require(
+        set(writer_processes) == set(range(writers))
+        and all(len(processes) == 1 for processes in writer_processes.values())
+        and len(process_writers) == writers
+        and all(len(owners) == 1 for owners in process_writers.values()),
+        f"one-process-per-writer process identity violation in {cell}",
+    )
+
+
 def percentile(values: list[float], quantile: float) -> float:
     require(bool(values), "cannot compute a percentile from no samples")
     ordered = sorted(values)
@@ -159,6 +183,10 @@ def validate(
     require(
         manifest.get("writer_instance_policy") == "one-per-writer",
         "campaign must require one independent writer instance per writer",
+    )
+    require(
+        manifest.get("writer_process_policy") == "one-process-per-writer",
+        "campaign must require one-process-per-writer process identity evidence",
     )
 
     frozen_cells = {
@@ -329,6 +357,7 @@ def validate(
 
         samples = rows(cell / "samples.csv")
         require(len(samples) == expected_operations, f"raw sample count mismatch in {cell}")
+        validate_process_identity(samples, writers, cell)
         ids: set[str] = set()
         groups: dict[tuple[int, int], tuple[int, int, int, int, int]] = {}
         writer_operations: set[tuple[int, int]] = set()
