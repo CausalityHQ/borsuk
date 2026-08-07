@@ -67,7 +67,9 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         && path.ends_with("/HEAD")
     {
         PhysicalObjectRole::LaneHead
-    } else if path.starts_with("lane-log/lanes/") && path.contains("/blocks/") {
+    } else if path.starts_with("lane-log/lanes/")
+        && (path.contains("/blocks/") || path.contains("/extents/"))
+    {
         PhysicalObjectRole::WalRun
     } else if path.starts_with("cells/")
         && path.contains("/wal/")

@@ -23,6 +23,10 @@ fn persisted_paths_have_stable_physical_object_roles() {
             PhysicalObjectRole::WalRun,
         ),
         (
+            "lane-log/lanes/0003/epochs/0000000000000001/extents/0000000000000001.wal",
+            PhysicalObjectRole::WalRun,
+        ),
+        (
             "cells/1/42/wal/3/frontier/abc.bin",
             PhysicalObjectRole::LaneHead,
         ),
