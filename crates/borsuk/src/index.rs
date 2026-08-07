@@ -516,12 +516,13 @@ const DEFAULT_GLOBAL_PQ_CODE_REQUEST_WEIGHT_BYTES: usize = 1024 * 1024;
 /// single content-addressed chunk may be as large as this limit and is the
 /// irreducible allocation.
 const DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES: usize = 32 * 1024 * 1024;
-/// Packed object limits. Keeping the code portion at 1 MiB means a query wave
-/// cannot over-read more than its 32 MiB code budget even when each selected
-/// slice comes from a different bundle. The total limit bounds build assembly
-/// and the accompanying fixed-width exact pages.
-const DEFAULT_GLOBAL_PQ_BUNDLE_CODE_BYTES: usize = 1024 * 1024;
-const DEFAULT_GLOBAL_PQ_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
+/// Packed object limits. A 2 MiB code cap reduces exact-rerank object fanout
+/// without changing the independently bounded 32 MiB selected-code wave. The
+/// 48 MiB total cap stays below storage's 64 MiB multipart threshold, bounds
+/// the pending/Arrow/encoded build assembly to roughly 144 MiB, and lets a
+/// normal single PUT carry the accompanying fixed-width exact pages.
+const DEFAULT_GLOBAL_PQ_BUNDLE_CODE_BYTES: usize = 2 * 1024 * 1024;
+const DEFAULT_GLOBAL_PQ_BUNDLE_BYTES: usize = 48 * 1024 * 1024;
 const DEFAULT_SIDECAR_INDEX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
 const DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 /// Bounded decoded exact-vector sidecar retention for repeated reranks. This
@@ -25658,6 +25659,31 @@ mod tests {
             false,
             1,
             1,
+        ));
+    }
+
+    #[test]
+    fn flat_global_pq_bundles_fill_one_sub_multipart_object() {
+        assert!(!should_flush_global_pq_bundle(
+            Some(7),
+            8,
+            false,
+            2 * 1024 * 1024,
+            48 * 1024 * 1024,
+        ));
+        assert!(should_flush_global_pq_bundle(
+            Some(7),
+            8,
+            false,
+            2 * 1024 * 1024 + 1,
+            48 * 1024 * 1024,
+        ));
+        assert!(should_flush_global_pq_bundle(
+            Some(7),
+            8,
+            false,
+            2 * 1024 * 1024,
+            48 * 1024 * 1024 + 1,
         ));
     }
 
