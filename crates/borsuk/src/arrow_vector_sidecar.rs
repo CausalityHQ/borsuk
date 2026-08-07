@@ -218,6 +218,56 @@ impl SidecarIndex {
             })
             .collect()
     }
+
+    fn decode_vector_batch(&self, first_row: usize, stored: &[u8]) -> Result<Vec<Vec<f32>>> {
+        let expected_range = self.row_range(first_row)?;
+        let expected_len =
+            usize::try_from(expected_range.end - expected_range.start).map_err(|_| {
+                BorsukError::InvalidStorage("Arrow vector sidecar block exceeds usize".to_string())
+            })?;
+        if stored.len() != expected_len {
+            return Err(BorsukError::InvalidStorage(format!(
+                "Arrow vector sidecar block for row {first_row} has {} bytes, expected {expected_len}",
+                stored.len()
+            )));
+        }
+        let block_index = first_row / self.batch_rows;
+        let block = self.blocks.get(block_index).ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "Arrow vector sidecar has no record batch for row {first_row}"
+            ))
+        })?;
+        validate_record_batch_block(
+            block,
+            stored,
+            self.batch_rows_for(first_row)?.len(),
+            self.dimensions,
+        )?;
+        let decoder = FileDecoder::new(Arc::clone(&self.schema), self.version);
+        let decoded = catch_unwind(AssertUnwindSafe(|| {
+            decoder.read_record_batch(block, &Buffer::from(stored.to_vec()))
+        }))
+        .map_err(|_| {
+            BorsukError::InvalidStorage(
+                "Arrow vector sidecar record batch has invalid buffer ranges".to_string(),
+            )
+        })?;
+        let batch = decoded?.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "Arrow vector sidecar record block decoded no batch".to_string(),
+            )
+        })?;
+        (0..batch.num_rows())
+            .map(|row| {
+                decode_vector(
+                    batch.column(2).as_ref(),
+                    row,
+                    self.dimensions,
+                    self.element_type,
+                )
+            })
+            .collect()
+    }
 }
 
 fn validate_record_batch_block(
@@ -401,7 +451,6 @@ pub(crate) fn decode_all(bytes: &[u8], expected_dimensions: usize) -> Result<Vec
     let mut first_row = 0;
     while first_row < index.row_count {
         let end_row = (first_row + index.batch_rows).min(index.row_count);
-        let rows = (first_row..end_row).collect::<Vec<_>>();
         let range = index.row_range(first_row)?;
         let stored = bytes
             .get(range.start as usize..range.end as usize)
@@ -410,12 +459,7 @@ pub(crate) fn decode_all(bytes: &[u8], expected_dimensions: usize) -> Result<Vec
                     "Arrow vector sidecar record batch is outside the object".to_string(),
                 )
             })?;
-        vectors.extend(
-            index
-                .decode_records(&rows, stored)?
-                .into_iter()
-                .map(|(_, record)| record.vector),
-        );
+        vectors.extend(index.decode_vector_batch(first_row, stored)?);
         first_row = end_row;
     }
     Ok(vectors)
