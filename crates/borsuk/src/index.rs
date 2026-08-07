@@ -18091,6 +18091,57 @@ impl BorsukIndex {
         let dimensions = self.manifest.config.dimensions;
         let vector_element_type = self.manifest.build_config.vector_element_type;
         let row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
+        let batch_rows =
+            crate::arrow_vector_sidecar::recommended_batch_rows(dimensions, vector_element_type)?;
+        let use_full_vector_cache = chunks.len() >= 3
+            && chunks
+                .iter()
+                .all(|(chunk, entries)| entries.len() >= chunk.rows.div_ceil(batch_rows));
+        let mut full_vectors = None;
+        let mut bytes_fetched = 0_u64;
+        if use_full_vector_cache {
+            let cached = self.read_runtime.decoded_vector_sidecars.get(path);
+            let full_result = if let Some(vectors) = cached {
+                Ok((vectors, 0, false))
+            } else {
+                self.read_runtime.inflight_vector_sidecars.load(path, || {
+                    let read = self.storage.read_bytes_with_cache_status(path)?;
+                    let bytes = if read.cache_hit {
+                        0
+                    } else {
+                        read.bytes.len() as u64
+                    };
+                    let decode_started = Instant::now();
+                    let vectors = crate::arrow_vector_sidecar::decode_all(&read.bytes, dimensions)?;
+                    self.storage
+                        .record_access_event(StorageAccessEvent::decode(
+                            path,
+                            physical_format_for_path(path),
+                            read.bytes.len() as u64,
+                            "vector",
+                            "all",
+                            vectors.len() as u64,
+                            vectors.len() as u64,
+                            elapsed_ns(decode_started),
+                        ))?;
+                    Ok((vectors, bytes))
+                })
+            };
+            match full_result {
+                Ok((vectors, bytes, _)) => {
+                    self.read_runtime.decoded_vector_sidecars.insert(
+                        path.to_string(),
+                        Arc::clone(&vectors),
+                        decoded_vector_sidecar_bytes(&vectors, dimensions),
+                    );
+                    full_vectors = Some(vectors);
+                    bytes_fetched = bytes_fetched.saturating_add(bytes);
+                }
+                Err(BorsukError::InvalidStorage(message))
+                    if message.contains("schema is missing `borsuk.vector.row_count`") => {}
+                Err(error) => return Err(error),
+            }
+        }
         let mut requested = Vec::<(Range<u64>, RequestedRow)>::new();
         for (chunk, entries) in chunks {
             if chunk.path != path {
@@ -18104,21 +18155,27 @@ impl BorsukIndex {
                         "global exact-vector row exceeds its chunk".to_string(),
                     ));
                 }
-                let local_start = row.checked_mul(row_bytes).ok_or_else(|| {
-                    BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
-                })?;
-                let start = chunk
-                    .exact_offset_bytes
-                    .checked_add(local_start)
-                    .ok_or_else(|| {
+                if full_vectors.is_none() {
+                    let local_start = row.checked_mul(row_bytes).ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "global exact-vector bundle offset overflows".to_string(),
+                            "global exact-vector range overflows".to_string(),
                         )
                     })?;
-                let end = start.checked_add(row_bytes).ok_or_else(|| {
-                    BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
-                })?;
-                requested.push((start as u64..end as u64, RequestedRow::Exact { node }));
+                    let start = chunk
+                        .exact_offset_bytes
+                        .checked_add(local_start)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global exact-vector bundle offset overflows".to_string(),
+                            )
+                        })?;
+                    let end = start.checked_add(row_bytes).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global exact-vector range overflows".to_string(),
+                        )
+                    })?;
+                    requested.push((start as u64..end as u64, RequestedRow::Exact { node }));
+                }
             }
             let (offsets_range, values_range) = chunk.identity_ranges()?;
             requested.push((
@@ -18143,7 +18200,19 @@ impl BorsukIndex {
         let mut vectors = HashMap::new();
         let mut identity_offsets = HashMap::<usize, Vec<u8>>::new();
         let mut identity_values = HashMap::<usize, Vec<u8>>::new();
-        let bytes_fetched = fetched.bytes_fetched;
+        bytes_fetched = bytes_fetched.saturating_add(fetched.bytes_fetched);
+        if let Some(full_vectors) = full_vectors.as_ref() {
+            for (_chunk, entries) in chunks {
+                for &(node, row) in entries {
+                    let vector = full_vectors.get(row).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global cached exact-vector row is missing".to_string(),
+                        )
+                    })?;
+                    vectors.insert(node, vector.clone());
+                }
+            }
+        }
         for ((_, kind), bytes) in requested.into_iter().zip(&fetched.chunks) {
             match kind {
                 RequestedRow::Exact { node } => {
