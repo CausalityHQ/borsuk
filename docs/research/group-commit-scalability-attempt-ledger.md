@@ -700,3 +700,20 @@ and diff checks passed before launch. The worker passed the account, instance,
 pinned 768D Cohere dataset, and idle/no-contention preflights. Until root
 terminalization and process exit, inspect only markers, process state, and
 infrastructure health; do not open measurement CSVs.
+
+The run terminalized at `c2000/r01/l1/w8` with root failure, an exited pane,
+no benchmark process, and healthy instance/system checks. The fail-closed
+validator rejected the partial matrix before terminal CSV inspection. The
+query-local reuse factor is rejected as immaterial: eight-writer post-drain
+GETs fell only from 308 to 306 and bytes from 10,707,428 to 10,642,468, while
+read p95 worsened from 234.213 to 240.431 ms. Delta approximate, exact-rerank,
+and base-wait p95 were 140.303, 96.284, and 187.230 ms. Exact inserted-ID
+recall remained 1.0; this visibility check is not corpus ANN-recall evidence.
+
+Acknowledged throughput reached 10,724.387 records/s at 69.688 ms p95, but
+drain still took 39.686 s and drain-inclusive throughput was only 2,479.597
+records/s. Maximum process RSS was 3,684.4 MiB and maximum sampled CPU was
+1,844.0%; the host remained healthy. The result rules out duplicate reuse as
+the dominant core issue. Production work must now reduce delta training/drain
+CPU and the two-stage approximate-plus-exact object work itself; persistent
+cache warming remains excluded as a substitute for those fixes.
