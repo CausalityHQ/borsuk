@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt, str::FromStr, time::Duration};
 
-use crate::{BorsukError, Result, VectorMetric};
+use crate::{BorsukError, Result, VectorMetric, mutation::MutationStamp};
 
 /// Default maximum number of immutable cell/object reads one query may overlap.
 /// The handle-wide 24-read gate remains the aggregate limit across callers.
@@ -550,14 +550,15 @@ pub struct VectorRecord {
     /// Optional typed metadata carried with the record (empty map = none).
     #[serde(default)]
     pub metadata: crate::Metadata,
-    /// MVCC generation for versioned upserts. A record is a live version of its
-    /// id only when its generation is at least the id's live generation in the
-    /// tombstone overlay; older generations are suppressed by reads and dropped
-    /// by compaction. Plain `add` uses generation `0`; each `upsert` of an id
-    /// stamps a strictly higher generation. Never persisted for all-zero
-    /// segments, so dense/plain data round-trips byte-for-byte.
-    #[serde(default)]
-    pub generation: u64,
+    /// Temporary internal generation retained only while persisted record
+    /// artifacts move atomically to [`MutationStamp`]. It is neither caller
+    /// writable nor part of public serde.
+    #[serde(skip)]
+    pub(crate) generation: u64,
+    /// Internal convergent mutation identity. Public constructors deliberately
+    /// leave this unset; the owning index clock stamps canonical mutations.
+    #[serde(skip)]
+    pub(crate) mutation_stamp: Option<MutationStamp>,
 }
 
 impl VectorRecord {
@@ -575,6 +576,7 @@ impl VectorRecord {
             text_term_freqs: Vec::new(),
             metadata: crate::Metadata::new(),
             generation: 0,
+            mutation_stamp: None,
         }
     }
 
@@ -592,6 +594,7 @@ impl VectorRecord {
             text_term_freqs: Vec::new(),
             metadata: crate::Metadata::new(),
             generation: 0,
+            mutation_stamp: None,
         }
     }
 
@@ -674,6 +677,14 @@ impl VectorRecord {
     pub fn with_text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
         self
+    }
+
+    pub(crate) const fn mutation_stamp(&self) -> Option<MutationStamp> {
+        self.mutation_stamp
+    }
+
+    pub(crate) fn set_mutation_stamp(&mut self, stamp: MutationStamp) {
+        self.mutation_stamp = Some(stamp);
     }
 }
 

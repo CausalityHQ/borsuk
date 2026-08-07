@@ -1714,6 +1714,7 @@ pub fn vector_records_from_parquet(
                 text_term_freqs: Vec::new(),
                 metadata,
                 generation: 0,
+                mutation_stamp: None,
             });
         }
     }
@@ -2921,6 +2922,7 @@ fn wal_records_from_batches(batches: Vec<RecordBatch>) -> Result<Vec<VectorRecor
                 text_term_freqs,
                 metadata,
                 generation,
+                mutation_stamp: None,
             });
         }
     }
@@ -3828,6 +3830,7 @@ fn segment_from_batches_with_header(
                 text_term_freqs,
                 metadata,
                 generation,
+                mutation_stamp: None,
             });
             routing_codes.push(routing_code);
         }
@@ -7748,6 +7751,7 @@ mod tests {
             text_term_freqs: Vec::new(),
             metadata: crate::Metadata::new(),
             generation: 0,
+            mutation_stamp: None,
         });
         segment.routing_codes.push(1.0);
         segment.pq_codes.push(vec![255, 128]);
@@ -8488,6 +8492,7 @@ mod tests {
                 text_term_freqs: Vec::new(),
                 metadata: crate::Metadata::new(),
                 generation: 0,
+                mutation_stamp: None,
             }],
             routing_codes: vec![0.0],
             pq_codes: vec![vec![128, 128]],
