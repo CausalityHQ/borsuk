@@ -142,6 +142,14 @@
   still issue 19 GETs for as little as 49 KiB. The next TDD factor coalesces up
   to a 1 MiB gap under the unchanged 4 MiB per-request cap; cache and candidate
   count remain unchanged.
+- Terminal arm `20260807T094639Z-rerank-coalesce1m` rejects that factor.
+  Eight-writer recall@10 remained 1.0, acknowledged throughput was 10,249.414
+  records/s, write p95 was 78.701 ms, and active-tail p95 was 114.108 ms, but
+  post-drain p95 regressed to 346.277 ms. Although GETs fell from 355 to 189,
+  post-drain bytes rose from 21,109,924 to 84,919,460. The packed bundle's
+  unselected spans made wider coalescing a net loss. Restore the 64 KiB gap,
+  retain the proven 32-request wave, and diagnose the remaining cold path from
+  physical layout and phase telemetry rather than cache or wider range tuning.
 
 ## Global Constraints
 
