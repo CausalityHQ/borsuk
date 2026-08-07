@@ -510,6 +510,7 @@ const DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 /// is deliberately separate from the metadata cache: a hot segment may retain
 /// its decoded vectors without making the corpus-sized exact payload resident.
 const DEFAULT_DECODED_VECTOR_SIDECAR_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+const DEFAULT_GLOBAL_IDENTITY_RANGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Options used when opening an existing BORSUK index.
 ///
@@ -892,6 +893,7 @@ struct CollectionReadRuntime {
     vector_sidecar_indexes: Arc<Mutex<SidecarIndexCache>>,
     decoded_vector_sidecars: Arc<DecodedObjectCache<Vec<Vec<f32>>>>,
     inflight_vector_sidecars: Arc<InFlightReads<Vec<Vec<f32>>>>,
+    decoded_global_identity_ranges: Arc<DecodedObjectCache<GlobalIdentityRanges>>,
     inflight_live_wal_snapshots: Arc<InFlightReads<LiveWalSnapshot>>,
     late_interaction_sidecar_indexes: Arc<Mutex<LateInteractionSidecarIndexCache>>,
     inflight_late_interaction_batches: Arc<InFlightReads<LateInteractionBatch>>,
@@ -1101,6 +1103,12 @@ type TombstoneOverlay = HashMap<Vec<u8>, u64>;
 /// lookups load only bloom-matching runs; full overlay materialization is
 /// reserved for explicit maintenance.
 type TombstoneCache = Arc<DecodedObjectCache<TombstoneOverlay>>;
+
+#[derive(Debug)]
+struct GlobalIdentityRanges {
+    offsets: Vec<u8>,
+    values: Vec<u8>,
+}
 type Bm25StatsPage = Vec<(u32, i64)>;
 type TextTermFrequencies = Vec<(u32, u32)>;
 
@@ -1911,6 +1919,10 @@ impl CollectionReadRuntime {
                 &retained_pool,
             ),
             inflight_vector_sidecars: Arc::new(InFlightReads::default()),
+            decoded_global_identity_ranges: decoded_cache_with_pool(
+                DEFAULT_GLOBAL_IDENTITY_RANGE_CACHE_BYTES,
+                &retained_pool,
+            ),
             inflight_live_wal_snapshots: Arc::new(InFlightReads::default()),
             late_interaction_sidecar_indexes,
             inflight_late_interaction_batches: Arc::new(InFlightReads::default()),
@@ -18143,6 +18155,9 @@ impl BorsukIndex {
             }
         }
         let mut requested = Vec::<(Range<u64>, RequestedRow)>::new();
+        let mut identity_cache_keys = HashMap::<usize, String>::new();
+        let mut identity_offsets = HashMap::<usize, Vec<u8>>::new();
+        let mut identity_values = HashMap::<usize, Vec<u8>>::new();
         for (chunk, entries) in chunks {
             if chunk.path != path {
                 return Err(BorsukError::InvalidStorage(
@@ -18178,18 +18193,36 @@ impl BorsukIndex {
                 }
             }
             let (offsets_range, values_range) = chunk.identity_ranges()?;
-            requested.push((
-                offsets_range.start as u64..offsets_range.end as u64,
-                RequestedRow::IdentityOffsets {
-                    row_start: chunk.row_start,
-                },
-            ));
-            requested.push((
-                values_range.start as u64..values_range.end as u64,
-                RequestedRow::IdentityValues {
-                    row_start: chunk.row_start,
-                },
-            ));
+            let identity_key = format!(
+                "{path}#{}:{}-{}:{}-{}",
+                chunk.row_start,
+                offsets_range.start,
+                offsets_range.end,
+                values_range.start,
+                values_range.end
+            );
+            if let Some(identity) = self
+                .read_runtime
+                .decoded_global_identity_ranges
+                .get(&identity_key)
+            {
+                identity_offsets.insert(chunk.row_start, identity.offsets.clone());
+                identity_values.insert(chunk.row_start, identity.values.clone());
+            } else {
+                identity_cache_keys.insert(chunk.row_start, identity_key);
+                requested.push((
+                    offsets_range.start as u64..offsets_range.end as u64,
+                    RequestedRow::IdentityOffsets {
+                        row_start: chunk.row_start,
+                    },
+                ));
+                requested.push((
+                    values_range.start as u64..values_range.end as u64,
+                    RequestedRow::IdentityValues {
+                        row_start: chunk.row_start,
+                    },
+                ));
+            }
         }
         requested.sort_unstable_by_key(|entry| entry.0.start);
         let ranges = requested
@@ -18198,8 +18231,6 @@ impl BorsukIndex {
             .collect::<Vec<_>>();
         let fetched = self.storage.read_ranges(path, &ranges)?;
         let mut vectors = HashMap::new();
-        let mut identity_offsets = HashMap::<usize, Vec<u8>>::new();
-        let mut identity_values = HashMap::<usize, Vec<u8>>::new();
         bytes_fetched = bytes_fetched.saturating_add(fetched.bytes_fetched);
         if let Some(full_vectors) = full_vectors.as_ref() {
             for (_chunk, entries) in chunks {
@@ -18233,6 +18264,22 @@ impl BorsukIndex {
                     identity_values.insert(row_start, bytes.clone());
                 }
             }
+        }
+        for (row_start, cache_key) in identity_cache_keys {
+            let (Some(offsets), Some(values)) = (
+                identity_offsets.get(&row_start),
+                identity_values.get(&row_start),
+            ) else {
+                continue;
+            };
+            self.read_runtime.decoded_global_identity_ranges.insert(
+                cache_key,
+                Arc::new(GlobalIdentityRanges {
+                    offsets: offsets.clone(),
+                    values: values.clone(),
+                }),
+                (offsets.len() as u64).saturating_add(values.len() as u64),
+            );
         }
         let mut rows = Vec::new();
         for (chunk, entries) in chunks {
@@ -25437,6 +25484,14 @@ mod tests {
                 .len(),
             2,
             "base and delta descriptors must both remain cached"
+        );
+        assert!(
+            reader
+                .read_runtime
+                .decoded_global_identity_ranges
+                .resident_bytes()
+                > 0,
+            "global rerank identity ranges should be retained for repeated queries"
         );
 
         let byte_limited = reader
