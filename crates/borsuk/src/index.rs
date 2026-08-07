@@ -65,6 +65,7 @@ use crate::{
         VectorMetric, angular_distance_with_norms, angular_distance_with_query_norm,
         cosine_distance_with_norms, cosine_distance_with_query_norm,
     },
+    mutation::MutationStamp,
     observability,
     quantizer_sidecar::{PersistedQuantizer, is_quantizer_path, quantizer_relative_path},
     record::{
@@ -833,6 +834,31 @@ struct LiveWalSnapshot {
     records: Arc<Vec<VectorRecord>>,
     by_id: HashMap<Vec<u8>, usize>,
     stored_norms: Option<Arc<Vec<f32>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MutationOrderKey {
+    stamp: Option<MutationStamp>,
+    generation: u64,
+}
+
+impl MutationOrderKey {
+    const fn new(stamp: Option<MutationStamp>, generation: u64) -> Self {
+        Self { stamp, generation }
+    }
+
+    fn compare(self, other: Self) -> Result<Ordering> {
+        match (self.stamp, other.stamp) {
+            (Some(left), Some(right)) => {
+                left.greatest(right)?;
+                Ok(left.version().cmp(&right.version()))
+            }
+            (None, None) => Ok(self.generation.cmp(&other.generation)),
+            _ => Err(BorsukError::InvalidStorage(
+                "lexical search mixes stamped and legacy mutation order".to_string(),
+            )),
+        }
+    }
 }
 
 type ResidentLexicalRoots = Arc<Mutex<Option<(u64, BTreeMap<(String, String), Arc<LexicalRoot>>)>>>;
@@ -7453,7 +7479,7 @@ impl BorsukIndex {
         let mut records_scored = 0_usize;
         let mut shared_decodes = 0_usize;
         let mut shared_decoded_bytes = 0_u64;
-        let mut best_by_id = HashMap::<Vec<u8>, (u64, f32)>::new();
+        let mut best_by_id = HashMap::<Vec<u8>, (MutationOrderKey, f32)>::new();
         let mut next_plan = 0;
         while next_plan < plans.len() {
             if kth_largest_score(best_by_id.values().map(|(_, score)| f64::from(*score)), k)
@@ -7499,12 +7525,13 @@ impl BorsukIndex {
                     {
                         continue;
                     }
+                    let mutation =
+                        MutationOrderKey::new(metadata.mutation_stamp, metadata.generation);
                     match best_by_id.get_mut(&metadata.record_id) {
-                        Some(existing) if existing.0 >= metadata.generation => {}
-                        Some(existing) => *existing = (metadata.generation, score),
+                        Some(existing) if !mutation.compare(existing.0)?.is_gt() => {}
+                        Some(existing) => *existing = (mutation, score),
                         None => {
-                            best_by_id
-                                .insert(metadata.record_id.clone(), (metadata.generation, score));
+                            best_by_id.insert(metadata.record_id.clone(), (mutation, score));
                         }
                     }
                 }
@@ -7524,11 +7551,12 @@ impl BorsukIndex {
             }
             records_scored = records_scored.saturating_add(1);
             let key = record.id.as_bytes().to_vec();
+            let mutation = MutationOrderKey::new(record.mutation_stamp(), record.generation);
             match best_by_id.get_mut(&key) {
-                Some(existing) if existing.0 >= record.generation => {}
-                Some(existing) => *existing = (record.generation, score),
+                Some(existing) if !mutation.compare(existing.0)?.is_gt() => {}
+                Some(existing) => *existing = (mutation, score),
                 None => {
-                    best_by_id.insert(key, (record.generation, score));
+                    best_by_id.insert(key, (mutation, score));
                 }
             }
         }
@@ -9134,8 +9162,9 @@ impl BorsukIndex {
         if tail.is_empty() {
             return Ok(Vec::new());
         }
-        // Cell lanes have independent publication order, so generation—not a
-        // collection-wide frontier position—selects the newest version.
+        // Cell lanes have independent publication order, so the complete
+        // mutation version—not a collection-wide frontier position or HLC
+        // alone—selects the newest version.
         let mut newest: HashMap<Vec<u8>, VectorRecord> = HashMap::new();
         for record in &tail {
             let key = record.id.as_bytes().to_vec();
@@ -9143,12 +9172,11 @@ impl BorsukIndex {
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     entry.insert(record.clone());
                 }
-                std::collections::hash_map::Entry::Occupied(mut entry)
-                    if record.generation > entry.get().generation =>
-                {
-                    entry.insert(record.clone());
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if record.compare_mutation(entry.get())?.is_gt() {
+                        entry.insert(record.clone());
+                    }
                 }
-                std::collections::hash_map::Entry::Occupied(_) => {}
             }
         }
         let mut live = Vec::with_capacity(newest.len());
@@ -9175,8 +9203,12 @@ impl BorsukIndex {
             .live_wal_tail_records()?
             .into_iter()
             .filter_map(|record| {
-                record_text_terms(&record)
-                    .map(|terms| (record.id.as_bytes().to_vec(), record.generation, terms))
+                record_text_terms(&record).map(|terms| crate::bm25::TextRow {
+                    record_id: record.id.as_bytes().to_vec(),
+                    generation: record.generation,
+                    mutation_stamp: record.mutation_stamp(),
+                    terms,
+                })
             })
             .collect::<Vec<_>>();
         Ok(crate::bm25::Bm25IndexSidecar::from_text_rows(&rows))
@@ -15045,15 +15077,11 @@ impl BorsukIndex {
             }
         }
 
-        // Generation-aware MVCC visibility, matching the dense leg: the sidecar
-        // stores each row's generation, so a row is visible unless its generation
-        // is below the id's minimum visible generation (a plain delete maps above
-        // every generation; an upsert maps to the new generation, hiding older
-        // copies but keeping the fresh one). A re-upserted document is therefore
-        // searchable in the lexical leg immediately, not only after compaction.
-        // When a still-live id appears in more than one segment we keep its
-        // highest-generation copy so each id contributes a single hit.
-        let mut best_by_id = HashMap::<Vec<u8>, (u64, f64)>::new();
+        // The temporary tombstone overlay still supplies the scalar visibility
+        // floor, but duplicate live puts are resolved by their complete mutation
+        // version. This preserves writer tie-breaking and digest conflicts while
+        // the tombstone cutover is completed.
+        let mut best_by_id = HashMap::<Vec<u8>, (MutationOrderKey, f64)>::new();
         let mut searched_segment_keys = HashSet::new();
         let mut shared_decodes = 0_usize;
         let mut shared_decoded_bytes = 0_u64;
@@ -15103,12 +15131,13 @@ impl BorsukIndex {
                     {
                         continue;
                     }
+                    let mutation =
+                        MutationOrderKey::new(metadata.mutation_stamp, metadata.generation);
                     match best_by_id.get_mut(&metadata.record_id) {
-                        Some(existing) if existing.0 >= metadata.generation => {}
-                        Some(existing) => *existing = (metadata.generation, score),
+                        Some(existing) if !mutation.compare(existing.0)?.is_gt() => {}
+                        Some(existing) => *existing = (mutation, score),
                         None => {
-                            best_by_id
-                                .insert(metadata.record_id.clone(), (metadata.generation, score));
+                            best_by_id.insert(metadata.record_id.clone(), (mutation, score));
                         }
                     }
                 }
@@ -15209,7 +15238,7 @@ impl BorsukIndex {
         dfs: &BTreeMap<u32, u64>,
         total_docs: u64,
         avgdl: f64,
-        best_by_id: &mut HashMap<Vec<u8>, (u64, f64)>,
+        best_by_id: &mut HashMap<Vec<u8>, (MutationOrderKey, f64)>,
     ) -> Result<()> {
         let mut scores = vec![0.0_f64; sidecar.doc_count() as usize];
         let mut touched = vec![false; scores.len()];
@@ -15254,11 +15283,12 @@ impl BorsukIndex {
             {
                 continue;
             }
+            let mutation = MutationOrderKey::new(sidecar.row_mutation_stamp(row), generation);
             match best_by_id.get_mut(id_bytes) {
-                Some(existing) if existing.0 >= generation => {}
-                Some(existing) => *existing = (generation, score),
+                Some(existing) if !mutation.compare(existing.0)?.is_gt() => {}
+                Some(existing) => *existing = (mutation, score),
                 None => {
-                    best_by_id.insert(id_bytes.to_vec(), (generation, score));
+                    best_by_id.insert(id_bytes.to_vec(), (mutation, score));
                 }
             }
         }

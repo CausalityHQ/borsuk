@@ -1,7 +1,14 @@
-/// One text-bearing row: record-id bytes, MVCC generation, and `(term_id, tf)`
-/// pairs. Persisted lexical data uses typed Parquet; this compact structure is
-/// retained only for unflushed WAL rows.
-pub(crate) type TextRow = (Vec<u8>, u64, Vec<(u32, u32)>);
+use crate::mutation::MutationStamp;
+
+/// One text-bearing unflushed WAL row. Persisted lexical data uses typed
+/// Parquet; this compact structure is retained only while building the live
+/// in-memory tail index.
+pub(crate) struct TextRow {
+    pub(crate) record_id: Vec<u8>,
+    pub(crate) generation: u64,
+    pub(crate) mutation_stamp: Option<MutationStamp>,
+    pub(crate) terms: Vec<(u32, u32)>,
+}
 
 /// Compact in-memory BM25 inverted index for unflushed WAL rows.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -13,29 +20,32 @@ pub(crate) struct Bm25IndexSidecar {
     row_id_offsets: Vec<u32>,
     row_id_bytes: Vec<u8>,
     generations: Vec<u64>,
+    mutation_stamps: Vec<Option<MutationStamp>>,
 }
 
 impl Bm25IndexSidecar {
     /// Build an inverted index from text-bearing rows in row order.
     #[must_use]
     pub(crate) fn from_text_rows(rows: &[TextRow]) -> Self {
-        let posting_count = rows.iter().map(|(_, _, terms)| terms.len()).sum::<usize>();
+        let posting_count = rows.iter().map(|row| row.terms.len()).sum::<usize>();
         let mut entries = Vec::<(u32, u32, u32)>::with_capacity(posting_count);
         let mut doc_lengths = Vec::with_capacity(rows.len());
-        let id_bytes = rows.iter().map(|(id, _, _)| id.len()).sum::<usize>();
+        let id_bytes = rows.iter().map(|row| row.record_id.len()).sum::<usize>();
         let mut row_id_offsets = Vec::with_capacity(rows.len().saturating_add(1));
         let mut row_id_bytes = Vec::with_capacity(id_bytes);
         let mut generations = Vec::with_capacity(rows.len());
+        let mut mutation_stamps = Vec::with_capacity(rows.len());
         row_id_offsets.push(0);
 
-        for (row, (id, generation, term_tfs)) in rows.iter().enumerate() {
+        for (row, input) in rows.iter().enumerate() {
             let row = u32::try_from(row).expect("bm25 row index exceeds u32");
-            row_id_bytes.extend_from_slice(id);
+            row_id_bytes.extend_from_slice(&input.record_id);
             row_id_offsets
                 .push(u32::try_from(row_id_bytes.len()).expect("bm25 row-id bytes exceed u32"));
-            generations.push(*generation);
+            generations.push(input.generation);
+            mutation_stamps.push(input.mutation_stamp);
             let mut doc_length = 0_u32;
-            for &(term, tf) in term_tfs {
+            for &(term, tf) in &input.terms {
                 doc_length = doc_length
                     .checked_add(tf)
                     .expect("bm25 document length exceeds u32");
@@ -69,6 +79,7 @@ impl Bm25IndexSidecar {
             row_id_offsets,
             row_id_bytes,
             generations,
+            mutation_stamps,
         }
     }
 
@@ -121,6 +132,11 @@ impl Bm25IndexSidecar {
     pub(crate) fn row_generation(&self, row: u32) -> Option<u64> {
         self.generations.get(row as usize).copied()
     }
+
+    #[must_use]
+    pub(crate) fn row_mutation_stamp(&self, row: u32) -> Option<MutationStamp> {
+        self.mutation_stamps.get(row as usize).copied().flatten()
+    }
 }
 
 #[cfg(test)]
@@ -128,10 +144,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wal_index_builds_postings_lengths_ids_and_generations() {
+    fn wal_index_builds_postings_lengths_ids_and_mutation_stamps() {
+        let first_stamp = crate::mutation::MutationStamp::new(
+            crate::mutation::MutationVersion::from_parts(77, [1; 16]),
+            [3; 32],
+        );
+        let second_stamp = crate::mutation::MutationStamp::new(
+            crate::mutation::MutationVersion::from_parts(77, [2; 16]),
+            [4; 32],
+        );
         let rows = vec![
-            (b"a".to_vec(), 1, vec![(10, 2), (30, 1)]),
-            (b"b".to_vec(), 7, vec![(10, 1), (20, 4)]),
+            TextRow {
+                record_id: b"a".to_vec(),
+                generation: 1,
+                mutation_stamp: Some(first_stamp),
+                terms: vec![(10, 2), (30, 1)],
+            },
+            TextRow {
+                record_id: b"b".to_vec(),
+                generation: 7,
+                mutation_stamp: Some(second_stamp),
+                terms: vec![(10, 1), (20, 4)],
+            },
         ];
 
         let index = Bm25IndexSidecar::from_text_rows(&rows);
@@ -148,5 +182,7 @@ mod tests {
         assert_eq!(index.row_id(1), Some(b"b".as_slice()));
         assert_eq!(index.row_generation(0), Some(1));
         assert_eq!(index.row_generation(1), Some(7));
+        assert_eq!(index.row_mutation_stamp(0), Some(first_stamp));
+        assert_eq!(index.row_mutation_stamp(1), Some(second_stamp));
     }
 }
