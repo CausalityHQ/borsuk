@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     error::Error,
     fmt,
     future::Future,
@@ -81,6 +82,7 @@ pub struct FaultInjectingObjectStore {
     operation_log: Option<Arc<OperationLog>>,
     put_barrier: Option<Arc<PutBarrier>>,
     put_concurrency: Option<Arc<PutConcurrencyProbe>>,
+    get_group_concurrency: Option<Arc<GetGroupConcurrencyProbe>>,
     fail_after_put: bool,
 }
 
@@ -94,6 +96,83 @@ struct PutBarrier {
 pub struct PutConcurrencyProbe {
     active: AtomicUsize,
     peak: AtomicUsize,
+}
+
+#[derive(Debug)]
+pub struct GetGroupConcurrencyProbe {
+    first_paths: HashSet<String>,
+    second_paths: HashSet<String>,
+    first_active: AtomicUsize,
+    second_active: AtomicUsize,
+    overlapped: AtomicBool,
+}
+
+impl GetGroupConcurrencyProbe {
+    fn new(first_paths: HashSet<String>, second_paths: HashSet<String>) -> Self {
+        Self {
+            first_paths,
+            second_paths,
+            first_active: AtomicUsize::new(0),
+            second_active: AtomicUsize::new(0),
+            overlapped: AtomicBool::new(false),
+        }
+    }
+
+    fn enter(&self, location: &ObjectPath) -> ActiveGroupedGet<'_> {
+        let path = location.to_string();
+        let group = if self.first_paths.contains(&path) {
+            Some(GetGroup::First)
+        } else if self.second_paths.contains(&path) {
+            Some(GetGroup::Second)
+        } else {
+            None
+        };
+        match group {
+            Some(GetGroup::First) => {
+                self.first_active.fetch_add(1, Ordering::SeqCst);
+                if self.second_active.load(Ordering::SeqCst) > 0 {
+                    self.overlapped.store(true, Ordering::SeqCst);
+                }
+            }
+            Some(GetGroup::Second) => {
+                self.second_active.fetch_add(1, Ordering::SeqCst);
+                if self.first_active.load(Ordering::SeqCst) > 0 {
+                    self.overlapped.store(true, Ordering::SeqCst);
+                }
+            }
+            None => {}
+        }
+        ActiveGroupedGet { probe: self, group }
+    }
+
+    pub fn overlapped(&self) -> bool {
+        self.overlapped.load(Ordering::SeqCst)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GetGroup {
+    First,
+    Second,
+}
+
+struct ActiveGroupedGet<'a> {
+    probe: &'a GetGroupConcurrencyProbe,
+    group: Option<GetGroup>,
+}
+
+impl Drop for ActiveGroupedGet<'_> {
+    fn drop(&mut self) {
+        match self.group {
+            Some(GetGroup::First) => {
+                self.probe.first_active.fetch_sub(1, Ordering::SeqCst);
+            }
+            Some(GetGroup::Second) => {
+                self.probe.second_active.fetch_sub(1, Ordering::SeqCst);
+            }
+            None => {}
+        }
+    }
 }
 
 impl PutConcurrencyProbe {
@@ -141,6 +220,7 @@ impl FaultInjectingObjectStore {
             operation_log: None,
             put_barrier: None,
             put_concurrency: None,
+            get_group_concurrency: None,
             fail_after_put: false,
         }
     }
@@ -187,6 +267,7 @@ impl FaultInjectingObjectStore {
             operation_log: None,
             put_barrier: None,
             put_concurrency: None,
+            get_group_concurrency: None,
             fail_after_put: false,
         }
     }
@@ -245,6 +326,16 @@ impl FaultInjectingObjectStore {
     pub fn with_put_concurrency_probe(mut self) -> (Self, Arc<PutConcurrencyProbe>) {
         let probe = Arc::new(PutConcurrencyProbe::default());
         self.put_concurrency = Some(Arc::clone(&probe));
+        (self, probe)
+    }
+
+    pub fn with_get_group_concurrency_probe(
+        mut self,
+        first_paths: HashSet<String>,
+        second_paths: HashSet<String>,
+    ) -> (Self, Arc<GetGroupConcurrencyProbe>) {
+        let probe = Arc::new(GetGroupConcurrencyProbe::new(first_paths, second_paths));
+        self.get_group_concurrency = Some(Arc::clone(&probe));
         (self, probe)
     }
 
@@ -366,6 +457,10 @@ impl ObjectStore for FaultInjectingObjectStore {
         Self: Sync + 'async_trait,
     {
         Box::pin(async move {
+            let _active_group_get = self
+                .get_group_concurrency
+                .as_deref()
+                .map(|probe| probe.enter(location));
             let operation = if options.head {
                 StoreOperation::Head
             } else {
@@ -390,6 +485,10 @@ impl ObjectStore for FaultInjectingObjectStore {
         Self: Sync + 'async_trait,
     {
         Box::pin(async move {
+            let _active_group_get = self
+                .get_group_concurrency
+                .as_deref()
+                .map(|probe| probe.enter(location));
             self.maybe_sleep().await;
             self.maybe_fail(StoreOperation::Get, location)?;
             self.record_operation(StoreOperation::Get, location);

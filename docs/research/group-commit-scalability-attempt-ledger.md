@@ -380,3 +380,34 @@ Launcher preflight verified the dedicated `c7g.8xlarge` worker was running,
 the source/result/index paths were unique, and no competing BORSUK workload
 was active. Until a root terminal marker appears, monitoring is limited to
 markers and infrastructure/process health; measurement CSVs remain unopened.
+
+The root later terminalized with `CAMPAIGN_FAILED` after the eight-writer cell;
+the worker process exited and no benchmark workload remained.  The repository
+root validator then failed closed with `campaign is incomplete`, as required
+for a stopped matrix.  Terminal cell artifacts show the one-writer cell passed
+with recall@10 1.0, 1,498.282 acknowledged records/s, 67.003 ms write p95,
+147.720 ms active-tail read p95, and 72.099 ms post-drain read p95.  The
+eight-writer cell preserved recall@10 1.0, 10,483.263 acknowledged records/s,
+73.742 ms write p95, and 127.649 ms active-tail read p95, but failed only the
+post-drain read gate at 375.449 ms p95.
+
+The prior 479.4 MB/query exact-fringe failure fell to 1.02 MB/query and the
+6,666.159 ms p95 fell to 375.449 ms, validating the global-delta and sparse
+range fixes without qualifying the matrix.  The terminal eight-writer samples
+average 17.7 GETs and 4.4 searched segments per query.  Source tracing confirms
+that bounded range GETs are already parallel; the remaining cold path executes
+the stable base's code/rerank phases and the independent immutable delta's
+code/rerank phases serially.  The next causal factor must overlap those two ANN
+layers while preserving exact merged ranking, recall, and shared explicit
+budgets.  Cache warming is not an acceptable substitute for this core-path
+change.
+
+The next local causal slice now starts the independent immutable-delta ANN
+search on the bounded process-wide I/O pool while the stable-base ANN search is
+in flight.  It applies only when the caller has no explicit byte or latency
+budget; budgeted searches retain serial remaining-budget accounting.  A real
+delayed object-store regression captures base object paths before delta
+publication and delta paths afterward, preserves the exact delta hit, and
+requires simultaneous GETs across those two path sets.  It failed on the
+serial implementation and passes with overlap.  This is local structural
+evidence only; no AWS latency result is assigned yet.

@@ -3,7 +3,10 @@
 #[allow(dead_code)]
 mod common;
 
-use std::sync::{Arc, Barrier};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Barrier},
+};
 
 use borsuk::{
     BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, LeafMode, SearchOptions,
@@ -198,6 +201,92 @@ fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_bas
         )
         .unwrap();
     assert_eq!(report.hits[0].id.as_str(), "delta-17");
+}
+
+#[test]
+fn cold_search_overlaps_independent_global_base_and_delta_reads() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///parallel-global-base-delta-search";
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    index
+        .add(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32 / 128.0; 8]))
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let base_paths = runtime
+        .block_on(
+            inner
+                .list(Some(&"global-pq".into()))
+                .try_collect::<Vec<_>>(),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|meta| meta.location.to_string())
+        .collect::<HashSet<_>>();
+    index
+        .add(
+            (0..32)
+                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![10.0 + row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    index.flush().unwrap();
+    drop(index);
+
+    let all_paths = runtime
+        .block_on(
+            inner
+                .list(Some(&"global-pq".into()))
+                .try_collect::<Vec<_>>(),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|meta| meta.location.to_string())
+        .collect::<HashSet<_>>();
+    let delta_paths = all_paths
+        .difference(&base_paths)
+        .cloned()
+        .collect::<HashSet<_>>();
+    assert!(!base_paths.is_empty());
+    assert!(!delta_paths.is_empty());
+
+    let delayed = common::FaultInjectingObjectStore::new(inner)
+        .with_latency(std::time::Duration::from_millis(25));
+    let (delayed, gets) = delayed.with_get_group_concurrency_probe(base_paths, delta_paths);
+    let reader = BorsukIndex::open_with_object_store(Arc::new(delayed), uri).unwrap();
+    let report = reader
+        .search_with_report(
+            &[27.0; 8],
+            SearchOptions::approx(3, LeafMode::SrhtPqScan)
+                .with_max_segments(4)
+                .with_max_candidates_per_segment(32),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits[0].id.as_str(), "delta-17");
+    assert!(
+        gets.overlapped(),
+        "cold base and immutable-delta reads remained serial: {report:?}"
+    );
 }
 
 #[test]
