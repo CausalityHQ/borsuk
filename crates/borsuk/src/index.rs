@@ -12429,7 +12429,7 @@ impl BorsukIndex {
             )?;
             let code_reads = bounded_io_map_with_gate(
                 &code_groups,
-                DEFAULT_GLOBAL_PQ_CODE_READS.min(options.prefetch_depth.max(1)),
+                global_pq_code_read_parallelism(code_groups.len()),
                 self.decode_admission.as_deref(),
                 |(path, chunks)| {
                     let start = chunks
@@ -20238,6 +20238,10 @@ fn global_pq_code_read_groups(
     Ok(groups)
 }
 
+fn global_pq_code_read_parallelism(read_groups: usize) -> usize {
+    read_groups.clamp(1, DEFAULT_GLOBAL_PQ_CODE_READS)
+}
+
 fn resident_global_pq_subspaces(
     dimensions: usize,
     vectors: usize,
@@ -25294,6 +25298,13 @@ mod tests {
         // wait for a later wave instead of multiplying the oversize allocation.
         let oversized = vec![chunk(80), chunk(10)];
         assert_eq!(global_pq_code_read_wave_end(&oversized, 0, 32, 55), 1);
+    }
+
+    #[test]
+    fn global_pq_code_ranges_use_their_own_bounded_io_width() {
+        assert_eq!(global_pq_code_read_parallelism(1), 1);
+        assert_eq!(global_pq_code_read_parallelism(28), 28);
+        assert_eq!(global_pq_code_read_parallelism(100), 32);
     }
 
     #[test]
