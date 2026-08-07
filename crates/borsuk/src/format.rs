@@ -125,6 +125,8 @@ pub(crate) const LEAN_SEGMENT_ROW_COLUMNS: &[&str] = &[
     "text_term_freqs",
     "generation",
 ];
+pub(crate) const LEAN_SEGMENT_SCORING_COLUMNS: &[&str] =
+    &["routing_code", "pq_code", "record_id", "generation"];
 pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     validate_manifest_config(
         manifest.config.dimensions,
