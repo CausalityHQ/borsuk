@@ -165,3 +165,18 @@ Background materialization now uses the same WAL-only refresh before building
 its immutable delta. This removes a redundant collection/manifest reload from
 the acknowledgement-critical maintenance pass while retaining the existing
 manifest compare-and-swap publication fence.
+
+## v62 global identity-range cache qualification (2026-08-07)
+
+Run `20260807T040700Z` used source commit `738d52b` (archive SHA-256
+`7a3dccf2c93e4f78c44e9de370b442cc3f8783c24a66dc7b25b176a773b9149f`) and the
+frozen campaign manifest SHA-256
+`e05d6718eafd72723ef4b72990132abc5ec35b30d08f3e261f728cc02c15158f`.
+The root `GROUP_COMMIT_SCALABILITY_FAILED` marker is present. The c2000/r01/l1
+w1 and w8 cells reached `CELL_COMPLETE`; c2000/r01/l1/w32 reached
+`CELL_FAILED`, exited with status 1, and emitted `STORAGE_TRACE_MISSING`.
+The repository validator was run against the completed cell downloads and
+failed closed because the uploaded cell artifacts omit the required copied
+`manifest.json` (no performance claim is made). No incomplete measurement CSV
+was read; only terminal markers, process exit, and the storage-trace failure
+marker were inspected. The run is not publication-eligible.
