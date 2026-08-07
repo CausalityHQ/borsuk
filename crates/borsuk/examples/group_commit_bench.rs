@@ -286,8 +286,7 @@ fn measure_reads(
                     // The production gate is k=10; a 16-candidate rerank
                     // budget preserves headroom while avoiding needless
                     // object-store vector fetches on the post-drain path.
-                    .with_max_candidates_per_segment(128)
-                    .with_projected_reads(true)
+                    .with_max_candidates_per_segment(16)
             },
         )?;
         let latency_ms = read_started.elapsed().as_secs_f64() * 1_000.0;
