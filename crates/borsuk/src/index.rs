@@ -9554,6 +9554,10 @@ impl BorsukIndex {
         }
 
         if self.manifest.segments.is_empty() {
+            if let Some(summaries) = self.resident_routing_summaries() {
+                self.resolve_point_read_batch(&summaries, &mut unresolved, &mut results)?;
+                return Ok(results);
+            }
             let page_index_read = self.routing_layer_page_index_read_for_search()?;
             let page_refs =
                 self.routing_leaf_page_refs_for_filter(&page_index_read.page_refs, |page_ref| {
@@ -9667,6 +9671,20 @@ impl BorsukIndex {
         }
 
         if self.manifest.segments.is_empty() {
+            if let Some(summaries) = self.resident_routing_summaries() {
+                for summary in summaries.iter().rev() {
+                    if !summary.might_contain_record_id(id_bytes) {
+                        continue;
+                    }
+                    let (segment, _, _, _) = self.read_segment(summary)?;
+                    for record in segment.records.iter().rev() {
+                        if record.id.as_bytes() == id_bytes && !self.is_suppressed(record)? {
+                            return Ok(Some((record.vector.clone(), record.metadata.clone())));
+                        }
+                    }
+                }
+                return Ok(None);
+            }
             return self.get_record_from_routing_pages(id_bytes);
         }
 
@@ -9700,6 +9718,20 @@ impl BorsukIndex {
         }
 
         if self.manifest.segments.is_empty() {
+            if let Some(summaries) = self.resident_routing_summaries() {
+                for summary in summaries.iter().rev() {
+                    if !summary.might_contain_record_id(id_bytes) {
+                        continue;
+                    }
+                    let (segment, _, _, _) = self.read_segment(summary)?;
+                    for record in segment.records.iter().rev() {
+                        if record.id.as_bytes() == id_bytes && !self.is_suppressed(record)? {
+                            return Ok(record_text_terms(record));
+                        }
+                    }
+                }
+                return Ok(None);
+            }
             return self.get_text_terms_from_routing_pages(id_bytes);
         }
 
@@ -9938,6 +9970,30 @@ impl BorsukIndex {
     }
 
     fn validate_record_ids_against_routing_pages(&self, records: &[VectorRecord]) -> Result<()> {
+        if let Some(summaries) = self.resident_routing_summaries() {
+            for summary in summaries.iter() {
+                if !records
+                    .iter()
+                    .any(|record| summary.might_contain_record_id(&record.id))
+                {
+                    continue;
+                }
+                let (segment, _, _, _) = self.read_segment(summary)?;
+                for record in records {
+                    if segment
+                        .records
+                        .iter()
+                        .any(|existing| existing.id == record.id)
+                    {
+                        return Err(BorsukError::InvalidRecordInput(format!(
+                            "duplicate record id `{}` already exists",
+                            record.id
+                        )));
+                    }
+                }
+            }
+            return Ok(());
+        }
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
         let page_refs =
             self.routing_leaf_page_refs_for_filter(&page_index_read.page_refs, |page_ref| {
@@ -11718,6 +11774,45 @@ impl BorsukIndex {
         }
 
         self.routing_summaries_from_page_refs(&page_refs)
+    }
+
+    /// Resolve paged routing metadata once for a search handle and retain it
+    /// while the manifest version remains pinned. Search handles are cloned for
+    /// isolated request accounting, but the resident slot is shared, so the
+    /// first query amortizes the routing walk across subsequent queries. This
+    /// is deliberately search-only: writers and maintenance keep using the
+    /// uncached resolver so a corpus-sized summary table is never retained by
+    /// an idle mutation handle.
+    fn active_segment_summaries_for_search(&self) -> Result<Arc<Vec<SegmentSummary>>> {
+        if let Some(summaries) = self.resident_routing_summaries() {
+            return Ok(summaries);
+        }
+        if !self.manifest.segments.is_empty() {
+            return Ok(Arc::new(self.manifest.segments.clone()));
+        }
+
+        let estimated = self.manifest_reference.resident_routing_bytes_estimate;
+        if self
+            .effective_ram_budget_bytes()
+            .is_some_and(|budget| estimated > budget)
+        {
+            return Ok(Arc::new(self.active_segment_summaries()?));
+        }
+
+        let summaries = Arc::new(self.active_segment_summaries()?);
+        let mut resident = self
+            .resident_routing_summaries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if resident
+            .as_ref()
+            .is_none_or(|(version, _)| *version != self.manifest.version)
+        {
+            *resident = Some((self.manifest.version, Arc::clone(&summaries)));
+        }
+        Ok(resident
+            .as_ref()
+            .map_or(summaries, |(_, value)| Arc::clone(value)))
     }
 
     /// The routing centroids (in the metric's routing geometry) for a set of
@@ -14699,7 +14794,7 @@ impl BorsukIndex {
                     reference.covered_manifest_version == self.manifest.version
                 });
         let global_active_segments = if global_eligible && !global_coverage_is_current {
-            Some(self.active_segment_summaries()?)
+            Some(self.active_segment_summaries_for_search()?.as_ref().clone())
         } else if global_eligible {
             Some(Vec::new())
         } else {
@@ -14813,6 +14908,13 @@ impl BorsukIndex {
             return Ok(execution);
         }
         let prescored_wal_execution = wal_execution.take();
+        // A paged manifest otherwise walks its routing tree for every query.
+        // Resolve it once when the declared resident-routing estimate fits the
+        // configured RAM budget; the shared slot is invalidated by manifest
+        // version changes and does not affect the WAL tail's visibility.
+        if self.manifest.segments.is_empty() {
+            let _ = self.active_segment_summaries_for_search()?;
+        }
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
         let segments_total = self.routing_segments_total(&page_index_read.page_refs);
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
@@ -23260,6 +23362,44 @@ mod tests {
             "drain publication rewrote the paged base: {} pages",
             report.routing_pages_written
         );
+    }
+
+    #[test]
+    fn search_resolves_paged_routing_summaries_once_per_manifest() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..8)
+                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32, 0.0]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let inline = index.manifest.clone();
+        let mut paged = inline.next_version();
+        paged.segments.clear();
+        index.manifest = index
+            .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(paged, &inline)
+            .unwrap();
+
+        let reader = BorsukIndex::open(&uri).unwrap();
+        assert!(reader.resident_routing_summaries().is_none());
+        let first = reader.active_segment_summaries_for_search().unwrap();
+        let second = reader.active_segment_summaries_for_search().unwrap();
+        assert_eq!(first.len(), 8);
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(reader.resident_routing_summaries().is_some());
     }
 
     #[test]
