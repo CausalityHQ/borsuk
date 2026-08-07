@@ -18544,7 +18544,7 @@ impl BorsukIndex {
             .iter()
             .map(|(range, _)| range.clone())
             .collect::<Vec<_>>();
-        let fetched = self.storage.read_ranges(path, &ranges)?;
+        let fetched = self.storage.read_global_rerank_ranges(path, &ranges)?;
         let mut vectors = HashMap::new();
         bytes_fetched = bytes_fetched.saturating_add(fetched.bytes_fetched);
         if let Some(full_vectors) = full_vectors.as_ref() {

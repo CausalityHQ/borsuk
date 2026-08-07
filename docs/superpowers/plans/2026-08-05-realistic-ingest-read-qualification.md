@@ -127,6 +127,14 @@
   corrupt descriptor after segment publication, drain preserves its durable
   success and emits the existing post-commit maintenance warning. A fresh full
   library gate passes 510 tests with 6 explicitly ignored.
+- Terminal AWS arm `20260807T090031Z-parallel-base-delta` shows base/delta
+  overlap was not the dominant remaining factor: eight-writer post-drain p95
+  moved only from 375.449 ms to 363.535 ms. Recall@10 remained 1.0, write p95
+  was 77.373 ms, active-tail p95 was 119.741 ms, and acknowledged throughput
+  was 9,885.707 records/s. The terminal trace found global exact-rerank calls
+  issuing up to 19 GETs for 49-107 KiB but serializing after ten. The next TDD
+  factor retains all byte caps and lets the bounded global shortlist use one
+  32-request wave; it requires fresh AWS evidence.
 
 ## Global Constraints
 

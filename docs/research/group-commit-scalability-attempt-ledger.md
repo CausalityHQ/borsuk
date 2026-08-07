@@ -433,3 +433,22 @@ Preflight verified Causality account `453182569524`, the dedicated
 benchmark process was active.  Until a root terminal marker appears, observe
 only markers, process/tmux state, instance health, and resource telemetry; do
 not inspect measurement CSVs.
+
+The run terminalized at the eight-writer cell with root
+`GROUP_COMMIT_SCALABILITY_FAILED`; the pane exited 1 and no benchmark process
+remained.  The root validator failed closed with `campaign is incomplete`, as
+required for the stopped matrix.  Terminal one-writer artifacts passed with
+recall@10 1.0, 1,490.580 acknowledged records/s, 68.013 ms write p95,
+164.003 ms active-tail read p95, and 64.044 ms post-drain read p95.  The
+eight-writer artifacts preserved recall@10 1.0, 9,885.707 acknowledged
+records/s, 77.373 ms write p95, and 119.741 ms active-tail read p95, but failed
+only post-drain latency at 363.535 ms p95.  The overlap factor is therefore a
+small improvement from 375.449 ms, not a closed gate.
+
+The terminal trace accounts for 355 post-drain GETs and 21,112,548 bytes over
+20 queries.  Individual global exact-rerank calls issued as many as 19 physical
+GETs for only 49-107 KiB, while the generic range reader admitted ten requests
+per wave.  The next causal factor keeps the 64 KiB merge gap and 4 MiB physical
+span cap unchanged, but gives global exact reranks a bounded 32-request wave so
+the production shortlist does not serialize internally.  No result is assigned
+until a fresh terminal arm measures that revision.
