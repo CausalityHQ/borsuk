@@ -9715,7 +9715,7 @@ impl BorsukIndex {
             let reads = crate::parallel::install_io(|| {
                 window
                     .par_iter()
-                    .map(|summary| self.read_segment(summary))
+                    .map(|summary| self.read_segment_for_point_lookup(summary))
                     .collect::<Result<Vec<_>>>()
             })?;
             for (_, (segment, _, _, _)) in window.into_iter().zip(reads) {
@@ -9731,6 +9731,23 @@ impl BorsukIndex {
             }
         }
         Ok(())
+    }
+
+    /// Point reads and subsequent vector searches commonly share the same
+    /// immutable segment working set. Reuse the decoded segment cache when it
+    /// is configured instead of decoding the same segment twice; preserve the
+    /// uncached path for small/default handles.
+    fn read_segment_for_point_lookup(
+        &self,
+        summary: &SegmentSummary,
+    ) -> Result<(Arc<Segment>, u64, bool, bool)> {
+        if self.segment_cache.get().is_some() {
+            let (segment, bytes, cache_hit, repaired, _) =
+                self.read_segment_through_cache(summary, false)?;
+            return Ok((segment, bytes, cache_hit, repaired));
+        }
+        let (segment, bytes, cache_hit, repaired) = self.read_segment(summary)?;
+        Ok((Arc::new(segment), bytes, cache_hit, repaired))
     }
 
     /// Load a stored vector together with its metadata by byte identifier.

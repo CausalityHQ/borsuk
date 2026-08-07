@@ -9483,6 +9483,46 @@ fn segment_cache_shares_decoded_segments_across_searches() {
 }
 
 #[test]
+fn batched_point_reads_reuse_decoded_segments_for_following_searches() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+
+    let mut index = create_graph_enabled(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 3,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: Default::default(),
+    })
+    .unwrap();
+    let vectors = (0..12)
+        .map(|i| vec![i as f32, (i % 3) as f32])
+        .collect::<Vec<_>>();
+    let ids = index.add_vectors(vectors.clone()).unwrap();
+    index.flush().unwrap();
+
+    let reopened = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            segment_cache_max_bytes: Some(64 * 1024 * 1024),
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap();
+    reopened.get_records(&ids).unwrap();
+
+    let report = reopened
+        .search_with_report(&[4.0, 1.0], SearchOptions::exact(3))
+        .unwrap();
+    assert!(
+        report.decoded_cache_hits > 0,
+        "batched point reads should warm the decoded segment cache"
+    );
+}
+
+#[test]
 fn admission_gate_serializes_concurrent_searches_correctly() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
