@@ -55,9 +55,12 @@ pub(crate) fn encode_mutation_extent(
     for mutation in mutations {
         match (mutation.operation(), mutation.record()) {
             (MutationOperation::Put, Some(record)) => {
-                if record.id != *mutation.id() || record.vector.len() != dimensions {
+                if record.id != *mutation.id()
+                    || record.vector.len() != dimensions
+                    || record.mutation_stamp() != Some(mutation.stamp())
+                {
                     return Err(BorsukError::InvalidRecordInput(format!(
-                        "mutation extent record `{}` has inconsistent ID or dimensions",
+                        "mutation extent record `{}` has inconsistent ID, dimensions, or stamp",
                         mutation.id()
                     )));
                 }

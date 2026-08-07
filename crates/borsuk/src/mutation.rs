@@ -215,11 +215,13 @@ pub(crate) struct CanonicalMutation {
 }
 
 impl CanonicalMutation {
-    pub(crate) fn put(version: MutationVersion, record: crate::VectorRecord) -> Result<Self> {
+    pub(crate) fn put(version: MutationVersion, mut record: crate::VectorRecord) -> Result<Self> {
         let digest = put_digest(&record)?;
+        let stamp = MutationStamp::new(version, digest);
+        record.set_mutation_stamp(stamp);
         Ok(Self {
             id: record.id.clone(),
-            stamp: MutationStamp::new(version, digest),
+            stamp,
             operation: MutationOperation::Put,
             record: Some(record),
         })
@@ -579,5 +581,24 @@ mod tests {
 
         assert_eq!(left.greatest(left).unwrap(), left);
         assert!(left.greatest(right).is_err());
+    }
+
+    #[test]
+    fn caller_serde_cannot_supply_or_observe_internal_mutation_state() {
+        let decoded: VectorRecord = serde_json::from_value(serde_json::json!({
+            "id": "entity",
+            "vector": [0.25, -0.5],
+            "generation": 999,
+            "mutation_hlc": 1234,
+            "mutation_writer": "caller-controlled"
+        }))
+        .unwrap();
+
+        assert_eq!(decoded.generation, 0);
+        assert!(decoded.mutation_stamp().is_none());
+        let encoded = serde_json::to_value(decoded).unwrap();
+        assert!(encoded.get("generation").is_none());
+        assert!(encoded.get("mutation_hlc").is_none());
+        assert!(encoded.get("mutation_writer").is_none());
     }
 }
