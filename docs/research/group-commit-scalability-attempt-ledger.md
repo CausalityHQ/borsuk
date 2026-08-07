@@ -292,3 +292,11 @@ Launcher preflight confirmed the c7g.8xlarge worker was running, idle, and had
 unique source/result paths. The detached watcher polls only terminal markers
 and EC2 health every 15 minutes; no measurement CSV is being inspected while
 the campaign is incomplete.
+
+Run `20260807T061500Z-cache-reuse` terminalized with
+`GROUP_COMMIT_SCALABILITY_FAILED`. The `c2000/r01/l1/w1` cell completed, while
+`c2000/r01/l1/w8` emitted `PRODUCTION_READ_P95_FAILED`,
+`PRODUCTION_PERFORMANCE_GATE_FAILED`, and `CELL_FAILED` with process exit 1.
+The terminal diagnostic reports a production performance-gate failure; the
+decoded-segment cache reuse change did not clear the eight-writer read gate.
+The run is claim-ineligible and no measurement CSV was inspected.
