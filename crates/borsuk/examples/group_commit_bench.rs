@@ -287,6 +287,7 @@ fn measure_reads(
                     // budget preserves headroom while avoiding needless
                     // object-store vector fetches on the post-drain path.
                     .with_max_candidates_per_segment(16)
+                    .with_projected_reads(true)
             },
         )?;
         let latency_ms = read_started.elapsed().as_secs_f64() * 1_000.0;
