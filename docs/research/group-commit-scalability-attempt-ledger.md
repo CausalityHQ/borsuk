@@ -222,3 +222,15 @@ output /home/ec2-user/borsuk-group-commit-results/20260807T043548Z/cells/...`;
 the benchmark did not execute and produced no performance evidence. This is a
 claim-ineligible harness collision, not a library result; no measurement CSV
 was opened.
+
+## v65 unique-prefix qualification launched (2026-08-07)
+
+Run `20260807T044500Z-r3` launched from source commit `bf54837`, archive
+SHA-256
+`30fd30358e2389b7c03396d42374e402f50ee78c6f556b26aadaf9cb03237bbb`, and
+manifest SHA-256
+`e05d6718eafd72723ef4b72990132abc5ec35b30d08f3e261f728cc02c15158f`. A
+read-only SSM preflight confirmed the unique EC2-local result directory was
+absent and no competing benchmark process was running. The watcher polls only
+terminal markers and instance health every 15 minutes; no incomplete
+measurement CSV is being inspected.
