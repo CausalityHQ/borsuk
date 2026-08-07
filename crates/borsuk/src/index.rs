@@ -18243,12 +18243,15 @@ impl BorsukIndex {
         let dimensions = self.manifest.config.dimensions;
         let vector_element_type = self.manifest.build_config.vector_element_type;
         let row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
-        let batch_rows =
-            crate::arrow_vector_sidecar::recommended_batch_rows(dimensions, vector_element_type)?;
-        let use_full_vector_cache = chunks.len() >= 3
-            && chunks
-                .iter()
-                .all(|(chunk, entries)| entries.len() >= chunk.rows.div_ceil(batch_rows));
+        // A few candidates can span several physical chunks, but that is still
+        // sparse relative to the immutable sidecars.  Treating one candidate
+        // per Arrow batch as a full-cache opportunity turned cold global-PQ
+        // reranks into full-object decodes.  Only use the full-vector path when
+        // every row in every selected chunk is requested; otherwise the indexed
+        // range path bounds bytes and decode work to the actual candidates.
+        let use_full_vector_cache = chunks
+            .iter()
+            .all(|(chunk, entries)| entries.len() >= chunk.rows);
         let mut full_vectors = None;
         let mut bytes_fetched = 0_u64;
         if use_full_vector_cache {
