@@ -98,9 +98,13 @@ const SIDECAR_RANGE_COALESCE_BYTES: u64 = 64 * 1024;
 const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 4 * 1024 * 1024;
 const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
 // Global exact reranks commonly need 12-24 tiny, scattered rows from one
-// immutable bundle. Keep their bytes/range policy unchanged, but issue the
-// complete bounded shortlist in one S3 wave instead of serializing after ten.
+// immutable bundle. Issue the complete bounded shortlist in one S3 wave
+// instead of serializing after ten.
 const GLOBAL_RERANK_RANGE_MAX_PARALLEL: usize = 32;
+// One same-region S3 request costs more latency than transferring a bounded
+// parent-local gap. The independent 4 MiB physical cap prevents this policy
+// from turning a scattered shortlist into a whole-bundle read.
+const GLOBAL_RERANK_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -3219,7 +3223,12 @@ impl Storage {
     /// merged physical spans (including bytes between requested rows), and the
     /// request counter observes each physical GET.
     pub(crate) fn read_ranges(&self, relative: &str, ranges: &[Range<u64>]) -> Result<ReadRanges> {
-        self.read_ranges_with_parallel(relative, ranges, SIDECAR_RANGE_MAX_PARALLEL)
+        self.read_ranges_with_policy(
+            relative,
+            ranges,
+            SIDECAR_RANGE_COALESCE_BYTES,
+            SIDECAR_RANGE_MAX_PARALLEL,
+        )
     }
 
     /// Fetch global exact-rerank rows with the same byte-bounded range plan as
@@ -3230,13 +3239,19 @@ impl Storage {
         relative: &str,
         ranges: &[Range<u64>],
     ) -> Result<ReadRanges> {
-        self.read_ranges_with_parallel(relative, ranges, GLOBAL_RERANK_RANGE_MAX_PARALLEL)
+        self.read_ranges_with_policy(
+            relative,
+            ranges,
+            GLOBAL_RERANK_RANGE_COALESCE_BYTES,
+            GLOBAL_RERANK_RANGE_MAX_PARALLEL,
+        )
     }
 
-    fn read_ranges_with_parallel(
+    fn read_ranges_with_policy(
         &self,
         relative: &str,
         ranges: &[Range<u64>],
+        max_gap: u64,
         max_parallel: usize,
     ) -> Result<ReadRanges> {
         let cacheable = !is_mutable_lane_head(relative);
@@ -3318,7 +3333,7 @@ impl Storage {
                             Ok(bytes)
                         }
                     },
-                    SIDECAR_RANGE_COALESCE_BYTES,
+                    max_gap,
                     SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
                     max_parallel,
                 )
@@ -5190,6 +5205,27 @@ mod tests {
         assert_eq!(read.chunks, vec![vec![7_u8; 4], vec![7_u8; 4]]);
         assert_eq!(requests.gets, 1);
         assert_eq!(read.bytes_fetched, 32 * 1024 + 4);
+    }
+
+    #[test]
+    fn global_rerank_ranges_trade_a_bounded_one_mib_gap_for_one_get() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        let object = vec![7_u8; 512 * 1024 + 4];
+        storage
+            .write_bytes("global-pq/bundles/rerank.arrow", &object)
+            .unwrap();
+        let ranges = [0..4, 512 * 1024..512 * 1024 + 4];
+        let before = storage.request_counts();
+
+        let read = storage
+            .read_global_rerank_ranges("global-pq/bundles/rerank.arrow", &ranges)
+            .unwrap();
+        let requests = storage.request_counts().delta(&before);
+
+        assert_eq!(read.chunks, vec![vec![7_u8; 4]; 2]);
+        assert_eq!(requests.gets, 1);
+        assert_eq!(read.bytes_fetched, 512 * 1024 + 4);
     }
 
     #[test]

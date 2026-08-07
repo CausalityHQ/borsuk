@@ -462,3 +462,18 @@ the unchanged frozen manifest SHA-256
 `2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
 The launcher again passed its dedicated-worker and no-contention preflight.
 Until terminalization, inspect markers and infrastructure/process health only.
+
+The run terminalized at eight writers with root failure and an exited pane.
+The root validator correctly rejected the incomplete matrix.  One writer
+passed with recall@10 1.0, 1,518.347 records/s, 71.798 ms write p95,
+118.284 ms active-tail p95, and 59.767 ms post-drain p95. Eight writers kept
+recall@10 1.0, reached 10,320.644 acknowledged records/s, 77.767 ms write p95,
+and 151.455 ms active-tail p95, but post-drain p95 was 245.432 ms. The
+32-request wave materially improved p50/p95 from 181.328/363.535 ms to
+135.663/245.432 ms, but did not pass.
+
+The remaining trace still contains 19-GET exact-rerank calls for only 49 KiB.
+The next factor prices one remote request against up to a 1 MiB parent-local
+gap while retaining the 4 MiB physical-range cap and 32-request wave. This is a
+request-count/latency trade, not caching or reduced recall, and needs a fresh
+terminal arm before any claim.
