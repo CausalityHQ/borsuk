@@ -319,3 +319,21 @@ Run `20260807T053500Z-sidecar-cache` terminalized with
 `CELL_FAILED` with process exit 1. The terminal diagnostic reports a
 production performance-gate failure; no measurement CSV was inspected and the
 run is claim-ineligible.
+
+## routing-cache qualification launched (2026-08-07)
+
+Run `20260807T083000Z-routing-cache` launched from commit `caa21f4` with source
+archive SHA-256
+`7e928af51f9ef204de4039f5955c43f3c2a3b6682d333ef720ec7b55c5f9b32b` and
+manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+Launcher preflight confirmed the dedicated c7g.8xlarge worker was healthy,
+idle, and had unique source/result/index paths. During execution, monitoring
+used only phase/terminal markers, process liveness, and instance health.
+
+The run terminalized with `GROUP_COMMIT_SCALABILITY_FAILED` at
+`c2000/r01/l1/w1`. The cell emitted `READ_QUALIFICATION_COMPLETE`, then
+`PRODUCTION_READ_P95_FAILED`, `PRODUCTION_PERFORMANCE_GATE_FAILED`, and
+`CELL_FAILED`; the terminal stderr contains only `production performance gate
+failed`. The process-shared routing-page cache did not clear the one-writer
+read gate. The run is claim-ineligible; no measurement CSV was inspected.
