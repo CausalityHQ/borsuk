@@ -477,3 +477,31 @@ The next factor prices one remote request against up to a 1 MiB parent-local
 gap while retaining the 4 MiB physical-range cap and 32-request wave. This is a
 request-count/latency trade, not caching or reduced recall, and needs a fresh
 terminal arm before any claim.
+
+## 1 MiB global rerank coalescing qualification (2026-08-07)
+
+Run `20260807T094639Z-rerank-coalesce1m` used commit `2ebd3f4`, source archive
+SHA-256
+`66533fc46681a3e46959b94e9d4a010dee825bf4feff408faf17b990e9253533`, and
+the unchanged frozen manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+Preflight found no competing workload. Monitoring used one observed 15-minute
+sleep and inspected only markers and host/process health until the root failure
+marker appeared and the benchmark pane had exited.
+
+The repository validator then failed closed with `campaign is incomplete`, as
+required for a matrix stopped at the eight-writer gate. Terminal one-writer
+artifacts passed with recall@10 1.0, 1,594.968 acknowledged records/s,
+62.448 ms write p95, 121.419 ms active-tail p95, and 64.419 ms post-drain p95.
+Eight writers retained recall@10 1.0, 10,249.414 acknowledged records/s,
+78.701 ms write p95, and 114.108 ms active-tail p95, but post-drain p50/p95
+were 138.972/346.277 ms. Drain-inclusive throughput was 2,759.083 records/s.
+
+The one-megabyte merge gap is rejected. It reduced the 20 post-drain queries
+from 355 to 189 GETs relative to the 32-request-wave arm, but increased bytes
+from 21,109,924 to 84,919,460 and worsened p95 from 245.432 to 346.277 ms.
+The packed bundle's unselected gaps cost more than the avoided same-region S3
+round trips for this scattered shortlist. The source therefore restores the
+64 KiB gap while retaining the independently useful 32-request wave. A real
+range regression requires a 512 KiB unselected gap to remain two four-byte
+physical reads.

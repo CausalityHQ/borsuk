@@ -101,10 +101,11 @@ const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
 // immutable bundle. Issue the complete bounded shortlist in one S3 wave
 // instead of serializing after ten.
 const GLOBAL_RERANK_RANGE_MAX_PARALLEL: usize = 32;
-// One same-region S3 request costs more latency than transferring a bounded
-// parent-local gap. The independent 4 MiB physical cap prevents this policy
-// from turning a scattered shortlist into a whole-bundle read.
-const GLOBAL_RERANK_RANGE_COALESCE_BYTES: u64 = 1024 * 1024;
+// Global reranks retain the generic sidecar's small coalescing gap. A wider
+// one-megabyte policy reduced request count but multiplied uncached AWS bytes
+// and worsened tail latency for scattered exact rows. The separate 32-request
+// wave overlaps those sparse reads without turning them into bulk transfer.
+const GLOBAL_RERANK_RANGE_COALESCE_BYTES: u64 = SIDECAR_RANGE_COALESCE_BYTES;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -5208,7 +5209,7 @@ mod tests {
     }
 
     #[test]
-    fn global_rerank_ranges_trade_a_bounded_one_mib_gap_for_one_get() {
+    fn global_rerank_ranges_do_not_fetch_a_half_mib_unselected_gap() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
         let object = vec![7_u8; 512 * 1024 + 4];
@@ -5224,8 +5225,8 @@ mod tests {
         let requests = storage.request_counts().delta(&before);
 
         assert_eq!(read.chunks, vec![vec![7_u8; 4]; 2]);
-        assert_eq!(requests.gets, 1);
-        assert_eq!(read.bytes_fetched, 512 * 1024 + 4);
+        assert_eq!(requests.gets, 2);
+        assert_eq!(read.bytes_fetched, 8);
     }
 
     #[test]
