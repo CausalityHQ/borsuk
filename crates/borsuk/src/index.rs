@@ -321,6 +321,10 @@ struct RoutingPageReadCache {
     reads: HashMap<String, ReadBytes>,
 }
 
+fn routing_page_cache_key(path: &str, checksum: &str) -> String {
+    format!("{path}:{checksum}")
+}
+
 #[derive(Debug)]
 struct RoutingPageRead {
     read: ReadBytes,
@@ -511,6 +515,7 @@ const DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 /// its decoded vectors without making the corpus-sized exact payload resident.
 const DEFAULT_DECODED_VECTOR_SIDECAR_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_GLOBAL_IDENTITY_RANGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
+const DEFAULT_ROUTING_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Options used when opening an existing BORSUK index.
 ///
@@ -892,6 +897,7 @@ struct CollectionReadRuntime {
     decoded_bm25_stats_pages: Arc<DecodedObjectCache<Bm25StatsPage>>,
     vector_sidecar_indexes: Arc<Mutex<SidecarIndexCache>>,
     decoded_vector_sidecars: Arc<DecodedObjectCache<Vec<Vec<f32>>>>,
+    routing_page_cache: Arc<DecodedObjectCache<ReadBytes>>,
     inflight_vector_sidecars: Arc<InFlightReads<Vec<Vec<f32>>>>,
     decoded_global_identity_ranges: Arc<DecodedObjectCache<GlobalIdentityRanges>>,
     inflight_live_wal_snapshots: Arc<InFlightReads<LiveWalSnapshot>>,
@@ -1916,6 +1922,10 @@ impl CollectionReadRuntime {
             vector_sidecar_indexes,
             decoded_vector_sidecars: decoded_cache_with_pool(
                 DEFAULT_DECODED_VECTOR_SIDECAR_CACHE_BYTES,
+                &retained_pool,
+            ),
+            routing_page_cache: decoded_cache_with_pool(
+                DEFAULT_ROUTING_PAGE_CACHE_BYTES,
                 &retained_pool,
             ),
             inflight_vector_sidecars: Arc::new(InFlightReads::default()),
@@ -16502,10 +16512,22 @@ impl BorsukIndex {
         checksum: &str,
         routing_page_cache: Option<&mut RoutingPageReadCache>,
     ) -> Result<RoutingPageRead> {
+        let shared_key = routing_page_cache_key(path, checksum);
         let Some(routing_page_cache) = routing_page_cache else {
+            if let Some(read) = self.read_runtime.routing_page_cache.get(&shared_key) {
+                return Ok(RoutingPageRead {
+                    read: (*read).clone(),
+                    request_cache_hit: true,
+                });
+            }
             let read = self
                 .storage
                 .read_bytes_with_cache_status_and_checksum(path, checksum)?;
+            self.read_runtime.routing_page_cache.insert(
+                shared_key,
+                Arc::new(read.clone()),
+                read.bytes.len() as u64,
+            );
             return Ok(RoutingPageRead {
                 read,
                 request_cache_hit: false,
@@ -16519,9 +16541,21 @@ impl BorsukIndex {
             });
         }
 
+        if let Some(read) = self.read_runtime.routing_page_cache.get(&shared_key) {
+            return Ok(RoutingPageRead {
+                read: (*read).clone(),
+                request_cache_hit: true,
+            });
+        }
+
         let read = self
             .storage
             .read_bytes_with_cache_status_and_checksum(path, checksum)?;
+        self.read_runtime.routing_page_cache.insert(
+            shared_key,
+            Arc::new(read.clone()),
+            read.bytes.len() as u64,
+        );
         routing_page_cache
             .reads
             .insert(path.to_string(), read.clone());
@@ -22804,6 +22838,28 @@ mod tests {
 
     use super::*;
     use std::sync::{Barrier, Mutex};
+
+    #[test]
+    fn routing_page_cache_key_is_checksum_scoped() {
+        let first = routing_page_cache_key("routing/page", "checksum-a");
+        let second = routing_page_cache_key("routing/page", "checksum-b");
+        assert_ne!(first, second);
+        assert_eq!(first, "routing/page:checksum-a");
+    }
+
+    #[test]
+    fn routing_page_cache_reuses_immutable_read_bytes() {
+        let cache = DecodedObjectCache::new(1024);
+        let key = routing_page_cache_key("routing/page", "checksum-a");
+        let read = Arc::new(ReadBytes {
+            bytes: vec![1, 2, 3],
+            cache_hit: false,
+            cache_repaired: false,
+        });
+        cache.insert(key.clone(), Arc::clone(&read), read.bytes.len() as u64);
+        let reused = cache.get(&key).expect("routing page should be retained");
+        assert!(Arc::ptr_eq(&read, &reused));
+    }
 
     #[test]
     fn snapshot_cache_build_is_single_flight_without_holding_mutex() {
