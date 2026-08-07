@@ -135,6 +135,13 @@
   issuing up to 19 GETs for 49-107 KiB but serializing after ten. The next TDD
   factor retains all byte caps and lets the bounded global shortlist use one
   32-request wave; it requires fresh AWS evidence.
+- Terminal arm `20260807T092504Z-rerank-wave32` confirms that factor is useful
+  but insufficient: eight-writer post-drain p50/p95 fell to
+  135.663/245.432 ms, recall@10 stayed 1.0, write p95 was 77.767 ms, and
+  acknowledged throughput reached 10,320.644 records/s. Remaining rerank calls
+  still issue 19 GETs for as little as 49 KiB. The next TDD factor coalesces up
+  to a 1 MiB gap under the unchanged 4 MiB per-request cap; cache and candidate
+  count remain unchanged.
 
 ## Global Constraints
 
