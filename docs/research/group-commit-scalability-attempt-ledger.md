@@ -740,3 +740,26 @@ diff checks passed. The dedicated worker passed the account, instance, pinned
 768D Cohere dataset, and idle/no-contention preflights. Until root
 terminalization and process exit, inspect only markers, process state, and
 infrastructure health; do not open measurement CSVs.
+
+The run terminalized at `c2000/r01/l1/w8` with root failure, an exited pane,
+no benchmark process, and healthy instance/system checks. The fail-closed
+validator rejected the partial matrix before terminal CSV inspection. Parallel
+training is a valid write-path improvement: eight-writer drain time fell from
+39.686 to 33.166 seconds (16.4%) and drain-inclusive throughput rose from
+2,479.597 to 2,848.693 records/s (14.9%). Acknowledged throughput was
+10,877.733 records/s at 68.413 ms p95, and inserted-ID recall remained 1.0.
+
+Independent descriptor reproduction confirms that the scan-quantizer and
+coarse-quantizer canonical SHA-256 values are byte-identical to the serial
+predecessor. Both route 128,000 rows into all 256 cells with median 482.5,
+p95 1,106, and maximum 1,871 rows. Thus the gain changes execution scheduling,
+not routing or quality. Maximum process RSS was 3,808.3 MiB and maximum sampled
+CPU was 1,870.8%.
+
+The read gate remains open: the same 306 post-drain GETs and 10,642,468 bytes
+produced 263.558 ms p95 in this repetition, with delta approximate,
+exact-rerank, and base-wait p95 of 137.992, 125.257, and 212.972 ms. This
+cross-run tail variation does not invalidate the deterministic drain gain, but
+it confirms that training parallelism is not a read fix. The next read factor
+must reduce the number of sequential object-store fanout stages or physical
+requests while preserving the exact shortlist and recall contract.
