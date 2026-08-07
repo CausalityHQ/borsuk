@@ -222,6 +222,16 @@ export interface SearchReport {
   graphCandidatesAdded: number;
   globalGraphChunksSearched: number;
   globalScanChunksSearched: number;
+  /** Global base routing/PQ candidate work. */
+  globalBaseApproximateUs: number;
+  /** Global base exact-fetch/rerank work. */
+  globalBaseExactRerankUs: number;
+  /** Immutable global delta routing/PQ candidate work. */
+  globalDeltaApproximateUs: number;
+  /** Immutable global delta exact-fetch/rerank work. */
+  globalDeltaExactRerankUs: number;
+  /** Time the completed base path waited for its overlapped delta. */
+  globalDeltaWaitUs: number;
   residentBytesEstimate: number;
   collectionResidentBytes: number;
   retainedBytes: number;

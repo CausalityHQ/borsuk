@@ -476,6 +476,19 @@ def validate(
             len(read_samples) == int(manifest["read_queries_per_cell"]),
             f"raw read sample count mismatch in {cell}",
         )
+        global_phase_fields = (
+            "global_base_approximate_us",
+            "global_base_exact_rerank_us",
+            "global_delta_approximate_us",
+            "global_delta_exact_rerank_us",
+            "global_delta_wait_us",
+        )
+        emits_global_phases = any(field in read_samples[0] for field in global_phase_fields)
+        require(
+            not emits_global_phases
+            or all(field in read_samples[0] for field in global_phase_fields),
+            f"incomplete global phase telemetry in {cell}",
+        )
         observed_read_requests = 0
         observed_read_bytes = 0
         observed_read_segments = 0
@@ -498,6 +511,14 @@ def validate(
             observed_read_requests += request_total
             observed_read_bytes += integer(read["bytes_read"], "raw read bytes")
             observed_read_segments += integer(read["segments_searched"], "raw read segments")
+            if emits_global_phases:
+                require(
+                    all(
+                        integer(read[field], field) >= 0
+                        for field in global_phase_fields
+                    ),
+                    f"negative global phase telemetry in {cell}",
+                )
         require(observed_read_requests == read_request_total, f"read request total drift in {cell}")
         require(observed_read_bytes == read_bytes, f"read byte total drift in {cell}")
         require(observed_read_segments == read_segments, f"read segment total drift in {cell}")

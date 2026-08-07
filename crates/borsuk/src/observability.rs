@@ -213,7 +213,12 @@ pub(crate) fn search_span(
         cache_repairs = tracing::field::Empty,
         records_considered = tracing::field::Empty,
         records_scored = tracing::field::Empty,
-        graph_candidates_added = tracing::field::Empty
+        graph_candidates_added = tracing::field::Empty,
+        global_base_approximate_us = tracing::field::Empty,
+        global_base_exact_rerank_us = tracing::field::Empty,
+        global_delta_approximate_us = tracing::field::Empty,
+        global_delta_exact_rerank_us = tracing::field::Empty,
+        global_delta_wait_us = tracing::field::Empty
     )
 }
 
@@ -257,6 +262,27 @@ pub(crate) fn record_search_report(span: &Span, report: &SearchReport) {
         "graph_candidates_added",
         report.graph_candidates_added,
     );
+    record_u64(
+        span,
+        "global_base_approximate_us",
+        report.global_base_approximate_us,
+    );
+    record_u64(
+        span,
+        "global_base_exact_rerank_us",
+        report.global_base_exact_rerank_us,
+    );
+    record_u64(
+        span,
+        "global_delta_approximate_us",
+        report.global_delta_approximate_us,
+    );
+    record_u64(
+        span,
+        "global_delta_exact_rerank_us",
+        report.global_delta_exact_rerank_us,
+    );
+    record_u64(span, "global_delta_wait_us", report.global_delta_wait_us);
 }
 
 #[cfg(not(feature = "tracing"))]

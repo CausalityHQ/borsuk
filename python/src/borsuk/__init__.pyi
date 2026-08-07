@@ -285,6 +285,11 @@ class SearchReport:
     graph_candidates_added: int
     global_graph_chunks_searched: int
     global_scan_chunks_searched: int
+    global_base_approximate_us: int
+    global_base_exact_rerank_us: int
+    global_delta_approximate_us: int
+    global_delta_exact_rerank_us: int
+    global_delta_wait_us: int
     resident_bytes_estimate: int
     collection_resident_bytes: int
     retained_bytes: int

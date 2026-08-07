@@ -1053,6 +1053,11 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual([hit.id for hit in report.hits], ["a-tie"])
             self.assertEqual(report.segments_searched, 2)
             self.assertEqual(report.segments_skipped, 0)
+            self.assertEqual(report.global_base_approximate_us, 0)
+            self.assertEqual(report.global_base_exact_rerank_us, 0)
+            self.assertEqual(report.global_delta_approximate_us, 0)
+            self.assertEqual(report.global_delta_exact_rerank_us, 0)
+            self.assertEqual(report.global_delta_wait_us, 0)
 
     def test_open_with_cache_reads_fresh_current_after_external_publish(self) -> None:
         with (

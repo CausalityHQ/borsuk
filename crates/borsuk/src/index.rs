@@ -7422,6 +7422,11 @@ impl BorsukIndex {
             graph_candidates_added: 0,
             global_graph_chunks_searched: 0,
             global_scan_chunks_searched: 0,
+            global_base_approximate_us: 0,
+            global_base_exact_rerank_us: 0,
+            global_delta_approximate_us: 0,
+            global_delta_exact_rerank_us: 0,
+            global_delta_wait_us: 0,
             resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
             collection_resident_bytes: 0,
             retained_bytes: 0,
@@ -12246,6 +12251,7 @@ impl BorsukIndex {
             include_vectors,
             Arc::clone(&delta_summaries),
         );
+        let global_approximate_started = Instant::now();
 
         // The cell-local candidate knob becomes the whole-index rerank budget
         // on the resident global path, where there is no per-cell scan. Leaving
@@ -12492,6 +12498,9 @@ impl BorsukIndex {
                 .push(((*chunk).clone(), entries));
         }
         let groups = bundled_groups.into_iter().collect::<Vec<_>>();
+        let global_approximate_us =
+            u64::try_from(global_approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let global_exact_rerank_started = Instant::now();
         let fetched = bounded_io_map_with_gate(
             &groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
@@ -12581,6 +12590,8 @@ impl BorsukIndex {
         } else {
             Vec::new()
         };
+        let global_exact_rerank_us =
+            u64::try_from(global_exact_rerank_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let segments_total = base_segment_count;
         let segments_searched = searched_chunks.len();
         let termination_reason = if max_bytes.is_some_and(|limit| bytes_read >= limit) {
@@ -12624,6 +12635,11 @@ impl BorsukIndex {
                 graph_candidates_added,
                 global_graph_chunks_searched: graph_chunks_used,
                 global_scan_chunks_searched: scan_chunks_used,
+                global_base_approximate_us: global_approximate_us,
+                global_base_exact_rerank_us: global_exact_rerank_us,
+                global_delta_approximate_us: 0,
+                global_delta_exact_rerank_us: 0,
+                global_delta_wait_us: 0,
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
@@ -12671,13 +12687,18 @@ impl BorsukIndex {
         execution: &mut SearchExecution,
     ) -> Result<()> {
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut global_delta_wait_us = 0;
         let delta_result = if let Some(receiver) = parallel_delta {
-            receiver.recv().map_err(|_| {
+            let wait_started = Instant::now();
+            let result = receiver.recv().map_err(|_| {
                 BorsukError::InvalidStorage(
                     "parallel materialized-delta search stopped before reporting a result"
                         .to_string(),
                 )
-            })??
+            })??;
+            global_delta_wait_us =
+                u64::try_from(wait_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            result
         } else {
             self.materialized_global_delta_execution(
                 query,
@@ -12695,7 +12716,18 @@ impl BorsukIndex {
                 execution.report.termination_reason = reason;
                 return Ok(());
             }
-            MaterializedDeltaExecution::Search(delta_execution) => {
+            MaterializedDeltaExecution::Search(mut delta_execution) => {
+                delta_execution.report.global_delta_approximate_us = delta_execution
+                    .report
+                    .global_delta_approximate_us
+                    .saturating_add(delta_execution.report.global_base_approximate_us);
+                delta_execution.report.global_delta_exact_rerank_us = delta_execution
+                    .report
+                    .global_delta_exact_rerank_us
+                    .saturating_add(delta_execution.report.global_base_exact_rerank_us);
+                delta_execution.report.global_base_approximate_us = 0;
+                delta_execution.report.global_base_exact_rerank_us = 0;
+                delta_execution.report.global_delta_wait_us = global_delta_wait_us;
                 merge_search_execution_hits(
                     execution,
                     *delta_execution,
@@ -14526,6 +14558,26 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_scan_chunks_searched)
                 .sum(),
+            global_base_approximate_us: reports
+                .iter()
+                .map(|(_, report)| report.global_base_approximate_us)
+                .sum(),
+            global_base_exact_rerank_us: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_rerank_us)
+                .sum(),
+            global_delta_approximate_us: reports
+                .iter()
+                .map(|(_, report)| report.global_delta_approximate_us)
+                .sum(),
+            global_delta_exact_rerank_us: reports
+                .iter()
+                .map(|(_, report)| report.global_delta_exact_rerank_us)
+                .sum(),
+            global_delta_wait_us: reports
+                .iter()
+                .map(|(_, report)| report.global_delta_wait_us)
+                .sum(),
             resident_bytes_estimate: self.collection_resident_bytes_estimate(),
             collection_resident_bytes: self.collection_resident_bytes_estimate(),
             retained_bytes: 0,
@@ -14666,6 +14718,11 @@ impl BorsukIndex {
                 graph_candidates_added: 0,
                 global_graph_chunks_searched: 0,
                 global_scan_chunks_searched: 0,
+                global_base_approximate_us: 0,
+                global_base_exact_rerank_us: 0,
+                global_delta_approximate_us: 0,
+                global_delta_exact_rerank_us: 0,
+                global_delta_wait_us: 0,
                 resident_bytes_estimate,
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
@@ -14866,6 +14923,11 @@ impl BorsukIndex {
             graph_candidates_added: 0,
             global_graph_chunks_searched: 0,
             global_scan_chunks_searched: 0,
+            global_base_approximate_us: 0,
+            global_base_exact_rerank_us: 0,
+            global_delta_approximate_us: 0,
+            global_delta_exact_rerank_us: 0,
+            global_delta_wait_us: 0,
             resident_bytes_estimate,
             collection_resident_bytes: 0,
             retained_bytes: 0,
@@ -15213,6 +15275,11 @@ impl BorsukIndex {
                     graph_candidates_added: 0,
                     global_graph_chunks_searched: 0,
                     global_scan_chunks_searched: 0,
+                    global_base_approximate_us: 0,
+                    global_base_exact_rerank_us: 0,
+                    global_delta_approximate_us: 0,
+                    global_delta_exact_rerank_us: 0,
+                    global_delta_wait_us: 0,
                     resident_bytes_estimate,
                     collection_resident_bytes: 0,
                     retained_bytes: 0,
@@ -15965,6 +16032,11 @@ impl BorsukIndex {
                 graph_candidates_added,
                 global_graph_chunks_searched: 0,
                 global_scan_chunks_searched: 0,
+                global_base_approximate_us: 0,
+                global_base_exact_rerank_us: 0,
+                global_delta_approximate_us: 0,
+                global_delta_exact_rerank_us: 0,
+                global_delta_wait_us: 0,
                 resident_bytes_estimate,
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
@@ -16062,6 +16134,11 @@ impl BorsukIndex {
                 graph_candidates_added: 0,
                 global_graph_chunks_searched: 0,
                 global_scan_chunks_searched: 0,
+                global_base_approximate_us: 0,
+                global_base_exact_rerank_us: 0,
+                global_delta_approximate_us: 0,
+                global_delta_exact_rerank_us: 0,
+                global_delta_wait_us: 0,
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
@@ -22665,6 +22742,26 @@ fn merge_search_execution_hits(
         .report
         .global_scan_chunks_searched
         .saturating_add(delta_report.global_scan_chunks_searched);
+    base.report.global_base_approximate_us = base
+        .report
+        .global_base_approximate_us
+        .saturating_add(delta_report.global_base_approximate_us);
+    base.report.global_base_exact_rerank_us = base
+        .report
+        .global_base_exact_rerank_us
+        .saturating_add(delta_report.global_base_exact_rerank_us);
+    base.report.global_delta_approximate_us = base
+        .report
+        .global_delta_approximate_us
+        .saturating_add(delta_report.global_delta_approximate_us);
+    base.report.global_delta_exact_rerank_us = base
+        .report
+        .global_delta_exact_rerank_us
+        .saturating_add(delta_report.global_delta_exact_rerank_us);
+    base.report.global_delta_wait_us = base
+        .report
+        .global_delta_wait_us
+        .saturating_add(delta_report.global_delta_wait_us);
     base.report.resident_bytes_estimate = base
         .report
         .resident_bytes_estimate

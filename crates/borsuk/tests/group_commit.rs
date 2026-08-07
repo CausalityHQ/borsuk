@@ -284,6 +284,22 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
 
     assert_eq!(report.hits[0].id.as_str(), "delta-17");
     assert!(
+        report.global_base_approximate_us > 0,
+        "cold base+delta search must report base routing/code-scan work: {report:?}"
+    );
+    assert!(
+        report.global_base_exact_rerank_us > 0,
+        "cold base+delta search must report base exact-rerank work: {report:?}"
+    );
+    assert!(
+        report.global_delta_approximate_us > 0,
+        "cold base+delta search must report delta routing/code-scan work: {report:?}"
+    );
+    assert!(
+        report.global_delta_exact_rerank_us > 0,
+        "cold base+delta search must report delta exact-rerank work: {report:?}"
+    );
+    assert!(
         gets.overlapped(),
         "cold base and immutable-delta reads remained serial: {report:?}"
     );

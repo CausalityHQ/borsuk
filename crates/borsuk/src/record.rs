@@ -1014,6 +1014,26 @@ pub struct SearchReport {
     /// Selected global cell chunks searched through the configured storage codec.
     #[serde(default)]
     pub global_scan_chunks_searched: usize,
+    /// Microseconds spent routing and producing approximate candidates in the
+    /// stable global ANN base. Base and delta work may overlap.
+    #[serde(default)]
+    pub global_base_approximate_us: u64,
+    /// Microseconds spent fetching and exact-scoring the stable base's global
+    /// shortlist. Base and delta work may overlap.
+    #[serde(default)]
+    pub global_base_exact_rerank_us: u64,
+    /// Microseconds spent routing and producing approximate candidates in the
+    /// immutable global delta layer.
+    #[serde(default)]
+    pub global_delta_approximate_us: u64,
+    /// Microseconds spent fetching and exact-scoring the global delta's
+    /// shortlist.
+    #[serde(default)]
+    pub global_delta_exact_rerank_us: u64,
+    /// Microseconds the base layer's caller waited after completing base work
+    /// for an overlapped immutable-delta search to finish.
+    #[serde(default)]
+    pub global_delta_wait_us: u64,
     /// Collection-wide resident manifest/config/routing/pivot bytes.
     pub resident_bytes_estimate: u64,
     /// Collection-wide resident manifest bytes (explicit telemetry alias).
