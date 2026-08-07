@@ -368,3 +368,15 @@ row count with batch count instead of testing actual batch coverage, turning a
 sparse rerank into a full-sidecar decode. The next qualification must measure
 the drain-to-delta hook and corrected sparse range decision from one frozen
 revision; neither improvement is claimed from this failed run.
+
+## global-delta plus ranged-sidecar qualification launched (2026-08-07)
+
+Run `20260807T081436Z-global-delta-ranged` launched from commit `30d5110` with
+source archive SHA-256
+`0bb9f73617e2bf5d8fdf26386e7572a8a1682169a319061aad645a805a389ac1` and the
+same frozen manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+Launcher preflight verified the dedicated `c7g.8xlarge` worker was running,
+the source/result/index paths were unique, and no competing BORSUK workload
+was active. Until a root terminal marker appears, monitoring is limited to
+markers and infrastructure/process health; measurement CSVs remain unopened.
