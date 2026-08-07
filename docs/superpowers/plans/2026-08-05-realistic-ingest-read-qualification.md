@@ -161,6 +161,17 @@
   from this exact source revision to choose between global request scheduling,
   packed exact-row locality, and immutable-delta work; do not infer a speedup
   from instrumentation alone.
+- Terminal run `20260807T103224Z-phase-telemetry` preserved recall@10 1.0 and
+  10,361.668 acknowledged records/s at eight writers, but failed post-drain
+  p95 at 268.989 ms and reached only 2,914.856 drain-inclusive records/s. The
+  stable base's approximate/rerank p95 intervals were 30.386/31.985 ms; the
+  immutable delta's were 195.575/108.566 ms, leaving 216.891 ms p95 delta wait
+  after base completion. This rules out more base/delta overlap as the next
+  factor and identifies delta scan/locality plus exact fetch as the read gap.
+  Separately, source and terminal storage telemetry confirm drain rereads
+  newly persisted exact-vector and segment data despite already owning decoded
+  records. Remove that duplicate I/O and the second manifest publication
+  first, then measure; do not trade away recall or hide the delta with cache.
 
 ## Global Constraints
 

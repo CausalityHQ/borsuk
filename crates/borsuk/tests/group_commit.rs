@@ -185,6 +185,20 @@ fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_bas
     writer.append(delta).unwrap();
     writer.drain().unwrap();
 
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get && path.starts_with("segments/")
+        }),
+        0,
+        "drain already owns the materialized records and must not reread its newly written segments to build the global delta"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("manifests/")
+        }),
+        1,
+        "segment coverage and the derived global delta must publish atomically in one manifest"
+    );
     assert!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put && path.starts_with("global-pq/")

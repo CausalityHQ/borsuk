@@ -2131,9 +2131,9 @@ impl BorsukIndex {
             .chunks(segment_max_vectors)
             .map(|chunk| (Uuid::new_v4().to_string(), chunk.len()))
             .collect::<Vec<_>>();
-        // Publish materialized segments before extending global-PQ coverage.
-        // The bounded delta refresh below reuses the stable base and never
-        // promotes it on this foreground path.
+        // Persist materialized segments before deriving global-PQ coverage.
+        // Both references are published atomically below. The bounded delta
+        // build reuses the stable base and never promotes it on this path.
         let index_ref: &BorsukIndex = &*self;
         let new_segment_summaries = {
             let mut segments_to_write = Vec::with_capacity(write_batch_size);
@@ -2168,6 +2168,35 @@ impl BorsukIndex {
             manifest.segments = routing_summaries.clone();
             manifest.rebuild_pivots();
         }
+        let mut global_delta_updated = false;
+        if let Some(base_reference) = previous.global_pq_ref.as_ref() {
+            match self.build_resident_global_delta(
+                base_reference,
+                &routing_summaries,
+                false,
+                Some((&new_segment_summaries, &records)),
+            ) {
+                Ok(Some((desired, promote))) => {
+                    let mut candidate = manifest.clone();
+                    let update = Self::apply_resident_global_delta_reference(
+                        &mut candidate,
+                        base_reference,
+                        desired,
+                        promote,
+                    )
+                    .and_then(|()| enforce_ram_budget(&candidate, self.runtime_ram_budget_bytes));
+                    match update {
+                        Ok(()) => {
+                            manifest = candidate;
+                            global_delta_updated = true;
+                        }
+                        Err(error) => observability::post_commit_maintenance_error(&error),
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => observability::post_commit_maintenance_error(&error),
+            }
+        }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.manifest = if paged_manifest {
             self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
@@ -2178,14 +2207,11 @@ impl BorsukIndex {
         } else {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
         };
-        if let Err(error) = self.refresh_resident_global_delta(false) {
-            // Segment publication above is the durable drain boundary. The
-            // global ANN delta is an acceleration layer: a missing, corrupt,
-            // or temporarily unavailable descriptor must be observable, but
-            // must not turn already-materialized records into a retry-unsafe
-            // drain failure. Exact search remains available from the published
-            // segments, and later maintenance can rebuild the ANN layer.
-            observability::post_commit_maintenance_error(&error);
+        if global_delta_updated {
+            self.resident_global_pq
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clear();
         }
         Ok(committed_sequences)
     }
@@ -13517,7 +13543,7 @@ impl BorsukIndex {
         base_reference: &crate::manifest::GlobalPqRef,
         active: &[SegmentSummary],
         allow_base_promotion: bool,
-        fringe_records: Option<&[VectorRecord]>,
+        fringe_records: Option<(&[SegmentSummary], &[VectorRecord])>,
     ) -> Result<Option<(crate::manifest::GlobalPqRef, bool)>> {
         let active_checksums = active
             .iter()
@@ -13556,6 +13582,15 @@ impl BorsukIndex {
         }
         let fringe_vectors = fringe.iter().fold(0_usize, |total, summary| {
             total.saturating_add(summary.object_count)
+        });
+        let direct_records = fringe_records.and_then(|(expected_fringe, records)| {
+            let exact_coverage = expected_fringe.len() == fringe.len()
+                && expected_fringe
+                    .iter()
+                    .zip(&fringe)
+                    .all(|(expected, actual)| expected.checksum == actual.checksum)
+                && fringe_vectors == records.len();
+            exact_coverage.then_some(records)
         });
         if base_reference.delta.is_none() {
             const DELTA_BOOTSTRAP_MAX_VECTORS: usize = 1_024;
@@ -13599,13 +13634,13 @@ impl BorsukIndex {
                 )
             })?
         } else if let Some(previous_delta) = base_reference.delta.as_deref() {
-            if let Some(records) = fringe_records {
+            if let Some(records) = direct_records {
                 self.append_resident_global_delta_from_records(previous_delta, &fringe, records)?
             } else {
                 self.append_resident_global_delta(previous_delta, &fringe)?
             }
         } else {
-            if let Some(records) = fringe_records {
+            if let Some(records) = direct_records {
                 self.bootstrap_resident_global_delta_from_records(base_reference, &fringe, records)?
             } else {
                 self.bootstrap_resident_global_delta(base_reference, &fringe)?
@@ -13615,17 +13650,56 @@ impl BorsukIndex {
     }
 
     fn refresh_resident_global_delta(&mut self, allow_base_promotion: bool) -> Result<bool> {
+        if self.manifest.global_pq_ref.is_none() {
+            return Ok(false);
+        }
+        let active = self.active_segment_summaries()?;
+        self.refresh_resident_global_delta_with_records(&active, allow_base_promotion, None)
+    }
+
+    fn refresh_resident_global_delta_with_records(
+        &mut self,
+        active: &[SegmentSummary],
+        allow_base_promotion: bool,
+        fringe_records: Option<(&[SegmentSummary], &[VectorRecord])>,
+    ) -> Result<bool> {
         let Some(base_reference) = self.manifest.global_pq_ref.clone() else {
             return Ok(false);
         };
-        let active = self.active_segment_summaries()?;
-        let Some((desired, promote)) =
-            self.build_resident_global_delta(&base_reference, &active, allow_base_promotion, None)?
+        let Some((desired, promote)) = self.build_resident_global_delta(
+            &base_reference,
+            active,
+            allow_base_promotion,
+            fringe_records,
+        )?
         else {
             return Ok(false);
         };
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
+        Self::apply_resident_global_delta_reference(
+            &mut manifest,
+            &base_reference,
+            desired,
+            promote,
+        )?;
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+            manifest, &previous,
+        )?;
+        self.resident_global_pq
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        Ok(true)
+    }
+
+    fn apply_resident_global_delta_reference(
+        manifest: &mut Manifest,
+        base_reference: &crate::manifest::GlobalPqRef,
+        desired: crate::manifest::GlobalPqRef,
+        promote: bool,
+    ) -> Result<()> {
         if promote
             || desired.checksum == base_reference.checksum
             || desired.segments == base_reference.segments
@@ -13646,15 +13720,7 @@ impl BorsukIndex {
             reference.covered_manifest_version = manifest.version;
         }
         manifest.global_pq_ref.as_ref().unwrap().validate_layout()?;
-        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
-            manifest, &previous,
-        )?;
-        self.resident_global_pq
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clear();
-        Ok(true)
+        Ok(())
     }
 
     /// Publish a bounded exact-fringe certificate when a flush adds too few

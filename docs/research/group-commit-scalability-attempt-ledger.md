@@ -522,3 +522,31 @@ does not change candidate count, cache policy, recall requirements, or the
 frozen workload. Until the root terminal marker appears and the benchmark
 process exits, inspect markers and infrastructure/process health only; do not
 open measurement CSVs.
+
+The run terminalized at `c2000/r01/l1/w8` with root
+`GROUP_COMMIT_SCALABILITY_FAILED`, an exited pane, and no benchmark process.
+The repository validator failed closed with `campaign is incomplete`. The
+one-writer cell passed at recall@10 1.0, 1,523.113 acknowledged records/s,
+73.377 ms write p95, 175.292 ms active-tail p95, and 65.634 ms post-drain
+p95. Eight writers preserved recall@10 1.0, 10,361.668 acknowledged records/s,
+71.290 ms write p95, and 115.823 ms active-tail p95, but post-drain p50/p95
+were 157.994/268.989 ms. Drain-inclusive throughput remained only
+2,914.856 records/s.
+
+The new terminal phase evidence identifies the immutable delta as the read
+critical path. At eight writers the stable base's approximate and exact-rerank
+p95 intervals were 30.386 and 31.985 ms. The delta's corresponding p95
+intervals were 195.575 and 108.566 ms, and the completed base then waited as
+long as 216.891 ms at p95 for the overlapped delta. The 20 queries issued 353
+GETs and fetched 19,902,948 physical bytes while retaining exact inserted-ID
+recall. Wider base/delta overlap is therefore rejected as the next factor:
+delta code scanning/locality and exact-row fetch work must shrink without
+reducing the candidate or recall contract.
+
+The same terminal storage trace and source audit expose an independent drain
+defect: the eight-writer cell read 740,039,296 exact-vector bytes in 216
+requests and 218,803,438 normal-segment bytes in 271 requests over the full
+cell, while `materialize_lane_log_tail` wrote decoded records and then invoked
+the segment-reading delta refresh. The next drain slice must encode the delta
+from those owned records and atomically publish segment plus delta coverage in
+one manifest. It needs causal AWS measurement before any throughput claim.
