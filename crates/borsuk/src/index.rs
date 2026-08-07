@@ -316,6 +316,14 @@ struct SearchExecution {
     vectors: Vec<Vec<f32>>,
 }
 
+enum MaterializedDeltaExecution {
+    None,
+    BudgetExhausted(SearchTerminationReason),
+    Search(Box<SearchExecution>),
+}
+
+type MaterializedDeltaReceiver = std::sync::mpsc::Receiver<Result<MaterializedDeltaExecution>>;
+
 #[derive(Debug, Default)]
 struct RoutingPageReadCache {
     reads: HashMap<String, ReadBytes>,
@@ -12224,6 +12232,12 @@ impl BorsukIndex {
         else {
             return Ok(None);
         };
+        let parallel_delta = self.start_parallel_materialized_global_delta(
+            query,
+            options,
+            include_vectors,
+            Arc::clone(&delta_summaries),
+        );
 
         // The cell-local candidate knob becomes the whole-index rerank budget
         // on the resident global path, where there is no per-cell scan. Leaving
@@ -12630,6 +12644,7 @@ impl BorsukIndex {
             &delta_summaries,
             started,
             requests_before,
+            parallel_delta,
             &mut execution,
         )?;
         Ok(Some(execution))
@@ -12644,8 +12659,104 @@ impl BorsukIndex {
         delta_summaries: &[SegmentSummary],
         started: Instant,
         requests_before: &RequestCounts,
+        parallel_delta: Option<MaterializedDeltaReceiver>,
         execution: &mut SearchExecution,
     ) -> Result<()> {
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let delta_result = if let Some(receiver) = parallel_delta {
+            receiver.recv().map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "parallel materialized-delta search stopped before reporting a result"
+                        .to_string(),
+                )
+            })??
+        } else {
+            self.materialized_global_delta_execution(
+                query,
+                options,
+                include_vectors,
+                delta_summaries,
+                execution.report.bytes_read,
+                elapsed_ms,
+            )?
+        };
+
+        match delta_result {
+            MaterializedDeltaExecution::None => return Ok(()),
+            MaterializedDeltaExecution::BudgetExhausted(reason) => {
+                execution.report.termination_reason = reason;
+                return Ok(());
+            }
+            MaterializedDeltaExecution::Search(delta_execution) => {
+                merge_search_execution_hits(
+                    execution,
+                    *delta_execution,
+                    options.k,
+                    include_vectors,
+                );
+            }
+        }
+
+        execution.report.leaf_mode = format!("{}+materialized-delta", execution.report.leaf_mode);
+        execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
+        execution.report.requests = self.storage.request_counts().delta(requests_before);
+        Ok(())
+    }
+
+    fn start_parallel_materialized_global_delta(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        include_vectors: bool,
+        delta_summaries: Arc<Vec<SegmentSummary>>,
+    ) -> Option<MaterializedDeltaReceiver> {
+        let has_delta = !delta_summaries.is_empty()
+            || self
+                .manifest
+                .global_pq_ref
+                .as_ref()
+                .is_some_and(|reference| reference.delta.is_some());
+        let has_fixed_budget = matches!(
+            options.mode,
+            SearchMode::Approx {
+                max_bytes: Some(_),
+                ..
+            } | SearchMode::Approx {
+                max_latency_ms: Some(_),
+                ..
+            }
+        );
+        if !has_delta || has_fixed_budget {
+            return None;
+        }
+
+        let index = self.clone();
+        let query = query.to_vec();
+        let options = options.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        crate::parallel::spawn_io(move || {
+            let result = index.materialized_global_delta_execution(
+                &query,
+                &options,
+                include_vectors,
+                &delta_summaries,
+                0,
+                0,
+            );
+            let _ = sender.send(result);
+        });
+        Some(receiver)
+    }
+
+    fn materialized_global_delta_execution(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        include_vectors: bool,
+        delta_summaries: &[SegmentSummary],
+        base_bytes_read: u64,
+        elapsed_ms: u64,
+    ) -> Result<MaterializedDeltaExecution> {
         if delta_summaries.is_empty()
             && self
                 .manifest
@@ -12653,18 +12764,14 @@ impl BorsukIndex {
                 .as_ref()
                 .is_none_or(|reference| reference.delta.is_none())
         {
-            return Ok(());
+            return Ok(MaterializedDeltaExecution::None);
         }
 
         let mut delta_options = options.clone();
-        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        if let Some(reason) = restrict_to_remaining_search_budget(
-            &mut delta_options,
-            execution.report.bytes_read,
-            elapsed_ms,
-        ) {
-            execution.report.termination_reason = reason;
-            return Ok(());
+        if let Some(reason) =
+            restrict_to_remaining_search_budget(&mut delta_options, base_bytes_read, elapsed_ms)
+        {
+            return Ok(MaterializedDeltaExecution::BudgetExhausted(reason));
         }
 
         // Build a query-local view over the delta ANN plus exact fringe. It
@@ -12754,12 +12861,9 @@ impl BorsukIndex {
             include_vectors,
             None,
         )?;
-        merge_search_execution_hits(execution, delta_execution, options.k, include_vectors);
-
-        execution.report.leaf_mode = format!("{}+materialized-delta", execution.report.leaf_mode);
-        execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
-        execution.report.requests = self.storage.request_counts().delta(requests_before);
-        Ok(())
+        Ok(MaterializedDeltaExecution::Search(Box::new(
+            delta_execution,
+        )))
     }
 
     /// Build and persist the coarse quantizer over `summaries` as a
@@ -25748,10 +25852,13 @@ mod tests {
             report.hits[0].id.as_bytes().starts_with(b"delta-1-"),
             "delta artifact must win exact rerank: {report:?}"
         );
+        assert_eq!(report.routing_page_indexes_read, 0);
+        assert_eq!(report.routing_pages_read, 0);
+        assert!(report.requests.heads <= 1, "{report:?}");
         assert!(
-            report.requests.gets <= 7 && report.requests.heads <= 1,
-            "current base+delta coverage must not reread routing pages: {:?}",
-            report.requests
+            report.requests.gets
+                <= 2 + (report.global_scan_chunks_searched as u64).saturating_mul(2),
+            "base+delta reads must scale with searched chunks, not exact candidates: {report:?}"
         );
         assert!(
             report.segments_searched <= 4,

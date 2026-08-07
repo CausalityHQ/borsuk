@@ -94,6 +94,30 @@
   selected a full sidecar by comparing candidate count with batch count. TDD
   regressions now cover both causes. These fixes are locally verified only;
   they require a fresh source-identified AWS arm before any performance claim.
+- Terminal AWS arm `20260807T081436Z-global-delta-ranged` validates those two
+  causes: at eight writers, recall@10 remained 1.0, acknowledged throughput was
+  10,483.263 records/s, write p95 was 73.742 ms, and active-tail read p95 was
+  127.649 ms. Post-drain p95 improved from 6,666.159 ms to 375.449 ms and bytes
+  fell from 479.4 MB/query to 1.02 MB/query, but the cell and root campaign
+  correctly failed the 200 ms read gate. It averaged 17.7 GETs/query. Range
+  fetches are already bounded and parallel; stable-base and immutable-delta
+  code/rerank phase chains remain serial. The next factor is core-path overlap
+  of those independent ANN layers, with merged exact ranking and explicit
+  shared budgets preserved. Do not use cache warming to claim this gap closed.
+- The local follow-up overlaps unbudgeted stable-base and immutable-delta ANN
+  execution on the existing bounded I/O pool. Its RED/GREEN test observes real
+  simultaneous GETs to path sets captured before and after delta publication,
+  while exact merged ranking and all resident-global budget tests pass.
+  Explicit byte/latency budgets remain serial so remaining-budget semantics do
+  not over-read. This factor has no AWS performance claim yet.
+- The full library gate also exposes five failures that reproduce unchanged at
+  baseline `9f2e4e7`: two routing-page counts expect three reads after the code
+  reduced them to two, the 4 MiB range planner test still describes/expects a
+  64 MiB policy, one drain version-count assertion predates delta publication,
+  and the corrupted global-delta descriptor fixture now fails closed during
+  drain. Resolve these baseline gate blockers on their production semantics
+  before launching the next AWS qualification arm; do not merely suppress or
+  relax them.
 
 ## Global Constraints
 
