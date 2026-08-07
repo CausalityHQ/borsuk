@@ -164,11 +164,220 @@ impl MutationClock {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MutationStamp {
+    version: MutationVersion,
+    digest: [u8; 32],
+}
+
+impl MutationStamp {
+    pub(crate) const fn new(version: MutationVersion, digest: [u8; 32]) -> Self {
+        Self { version, digest }
+    }
+
+    pub(crate) const fn version(self) -> MutationVersion {
+        self.version
+    }
+
+    pub(crate) const fn digest(self) -> [u8; 32] {
+        self.digest
+    }
+
+    pub(crate) fn greatest(self, other: Self) -> Result<Self> {
+        match self.version.cmp(&other.version) {
+            std::cmp::Ordering::Less => Ok(other),
+            std::cmp::Ordering::Greater => Ok(self),
+            std::cmp::Ordering::Equal if self.digest == other.digest => Ok(self),
+            std::cmp::Ordering::Equal => Err(BorsukError::InvalidStorage(format!(
+                "mutation version {:?} has conflicting canonical digests",
+                self.version.to_bytes()
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MutationOperation {
+    Put,
+    Delete,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CanonicalMutation {
+    id: crate::RecordId,
+    stamp: MutationStamp,
+    operation: MutationOperation,
+    record: Option<crate::VectorRecord>,
+}
+
+impl CanonicalMutation {
+    pub(crate) fn put(version: MutationVersion, record: crate::VectorRecord) -> Result<Self> {
+        let digest = put_digest(&record)?;
+        Ok(Self {
+            id: record.id.clone(),
+            stamp: MutationStamp::new(version, digest),
+            operation: MutationOperation::Put,
+            record: Some(record),
+        })
+    }
+
+    pub(crate) fn delete(version: MutationVersion, id: crate::RecordId) -> Self {
+        let digest = delete_digest(&id);
+        Self {
+            id,
+            stamp: MutationStamp::new(version, digest),
+            operation: MutationOperation::Delete,
+            record: None,
+        }
+    }
+
+    pub(crate) const fn stamp(&self) -> MutationStamp {
+        self.stamp
+    }
+}
+
+fn put_digest(record: &crate::VectorRecord) -> Result<[u8; 32]> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"borsuk.logical-mutation.v1\0put\0");
+    hash_bytes(&mut hasher, record.id.as_bytes())?;
+    hash_f32_slice(&mut hasher, &record.vector)?;
+
+    hash_len(&mut hasher, record.extra_vectors.len())?;
+    for (name, vector) in &record.extra_vectors {
+        hash_bytes(&mut hasher, name.as_bytes())?;
+        hash_f32_slice(&mut hasher, vector)?;
+    }
+
+    hash_len(&mut hasher, record.extra_sparse.len())?;
+    for (name, vector) in &record.extra_sparse {
+        hash_bytes(&mut hasher, name.as_bytes())?;
+        hash_u32_slice(&mut hasher, vector.indices())?;
+        hash_f32_slice(&mut hasher, vector.values())?;
+    }
+
+    hash_len(&mut hasher, record.extra_multi_vectors.len())?;
+    for (name, vector) in &record.extra_multi_vectors {
+        hash_bytes(&mut hasher, name.as_bytes())?;
+        hash_len(&mut hasher, vector.dimensions())?;
+        hash_len(&mut hasher, vector.token_count())?;
+        hash_bytes(&mut hasher, vector.element_type().as_str().as_bytes())?;
+        for token in vector.tokens() {
+            hash_f32_slice(&mut hasher, token)?;
+        }
+    }
+
+    let storage = match record.storage {
+        crate::StorageEncoding::Auto => b"auto".as_slice(),
+        crate::StorageEncoding::Dense => b"dense".as_slice(),
+        crate::StorageEncoding::Sparse => b"sparse".as_slice(),
+    };
+    hash_bytes(&mut hasher, storage)?;
+    match record.text.as_deref() {
+        Some(text) => {
+            hasher.update(&[1]);
+            hash_bytes(&mut hasher, text.as_bytes())?;
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    hash_u32_slice(&mut hasher, &record.text_term_ids)?;
+    hash_u32_slice(&mut hasher, &record.text_term_freqs)?;
+    hash_metadata(&mut hasher, &record.metadata)?;
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn delete_digest(id: &crate::RecordId) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"borsuk.logical-mutation.v1\0delete\0");
+    hasher.update(&(id.as_bytes().len() as u64).to_be_bytes());
+    hasher.update(id.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+fn hash_len(hasher: &mut blake3::Hasher, len: usize) -> Result<()> {
+    let len = u64::try_from(len).map_err(|_| {
+        BorsukError::InvalidRecordInput("canonical mutation field exceeds u64".to_owned())
+    })?;
+    hasher.update(&len.to_be_bytes());
+    Ok(())
+}
+
+fn hash_bytes(hasher: &mut blake3::Hasher, values: &[u8]) -> Result<()> {
+    hash_len(hasher, values.len())?;
+    hasher.update(values);
+    Ok(())
+}
+
+fn hash_u32_slice(hasher: &mut blake3::Hasher, values: &[u32]) -> Result<()> {
+    hash_len(hasher, values.len())?;
+    for value in values {
+        hasher.update(&value.to_be_bytes());
+    }
+    Ok(())
+}
+
+fn hash_f32_slice(hasher: &mut blake3::Hasher, values: &[f32]) -> Result<()> {
+    hash_len(hasher, values.len())?;
+    for value in values {
+        hasher.update(&value.to_bits().to_be_bytes());
+    }
+    Ok(())
+}
+
+fn hash_metadata(hasher: &mut blake3::Hasher, metadata: &crate::Metadata) -> Result<()> {
+    hash_len(hasher, metadata.len())?;
+    for (key, value) in metadata {
+        hash_bytes(hasher, key.as_bytes())?;
+        hash_metadata_value(hasher, value)?;
+    }
+    Ok(())
+}
+
+fn hash_metadata_value(hasher: &mut blake3::Hasher, value: &crate::MetaValue) -> Result<()> {
+    match value {
+        crate::MetaValue::Null => hasher.update(&[0]),
+        crate::MetaValue::Bool(value) => hasher.update(&[1, u8::from(*value)]),
+        crate::MetaValue::Int(value) => {
+            hasher.update(&[2]);
+            hasher.update(&value.to_be_bytes())
+        }
+        crate::MetaValue::Float(value) => {
+            hasher.update(&[3]);
+            hasher.update(&value.to_bits().to_be_bytes())
+        }
+        crate::MetaValue::Str(value) => {
+            hasher.update(&[4]);
+            hash_bytes(hasher, value.as_bytes())?;
+            return Ok(());
+        }
+        crate::MetaValue::Timestamp(value) => {
+            hasher.update(&[5]);
+            hasher.update(&value.to_be_bytes())
+        }
+        crate::MetaValue::List(values) => {
+            hasher.update(&[6]);
+            hash_len(hasher, values.len())?;
+            for value in values {
+                hash_metadata_value(hasher, value)?;
+            }
+            return Ok(());
+        }
+        crate::MetaValue::Map(metadata) => {
+            hasher.update(&[7]);
+            hash_metadata(hasher, metadata)?;
+            return Ok(());
+        }
+    };
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{cmp::Ordering, collections::BTreeSet, sync::Arc, thread};
 
-    use super::{MutationClock, MutationVersion};
+    use super::{CanonicalMutation, MutationClock, MutationStamp, MutationVersion};
+    use crate::{MetaValue, SparseVector, StorageEncoding, VectorElementType, VectorRecord};
 
     #[test]
     fn versions_round_trip_and_byte_order_matches_semantic_order() {
@@ -248,5 +457,111 @@ mod tests {
         }
 
         assert_eq!(versions.len(), 32 * 257);
+    }
+
+    fn multimodal_record() -> VectorRecord {
+        let mut record = VectorRecord::new("entity", vec![0.25, -0.5]);
+        record
+            .extra_vectors
+            .insert("dense".to_owned(), vec![1.0, 2.0]);
+        record.extra_sparse.insert(
+            "sparse".to_owned(),
+            SparseVector::new(vec![2, 9], vec![0.5, 1.5]).unwrap(),
+        );
+        record.extra_multi_vectors.insert(
+            "late".to_owned(),
+            crate::LateInteractionVector::new(
+                vec![vec![0.1, 0.2], vec![0.3, 0.4]],
+                VectorElementType::Float32,
+            )
+            .unwrap(),
+        );
+        record.storage = StorageEncoding::Dense;
+        record.text = Some("hello world".to_owned());
+        record.text_term_ids = vec![1, 7];
+        record.text_term_freqs = vec![2, 1];
+        record
+            .metadata
+            .insert("tenant".to_owned(), MetaValue::Str("a".to_owned()));
+        record
+    }
+
+    #[test]
+    fn canonical_digest_is_stable_and_covers_every_logical_field() {
+        let version = MutationVersion::from_parts(42, [8; 16]);
+        let original = multimodal_record();
+        let expected = CanonicalMutation::put(version, original.clone())
+            .unwrap()
+            .stamp()
+            .digest();
+
+        let mut mutations: Vec<VectorRecord> = Vec::new();
+        let mut changed = original.clone();
+        changed.vector[0] = 0.75;
+        mutations.push(changed);
+        let mut changed = original.clone();
+        changed.id = crate::RecordId::from("other-entity");
+        mutations.push(changed);
+        let mut changed = original.clone();
+        changed.extra_vectors.get_mut("dense").unwrap()[0] = 3.0;
+        mutations.push(changed);
+        let mut changed = original.clone();
+        let dense = changed.extra_vectors.remove("dense").unwrap();
+        changed.extra_vectors.insert("renamed".to_owned(), dense);
+        mutations.push(changed);
+        let mut changed = original.clone();
+        changed.extra_sparse.insert(
+            "sparse".to_owned(),
+            SparseVector::new(vec![2, 9], vec![0.5, 1.75]).unwrap(),
+        );
+        mutations.push(changed);
+        let mut changed = original.clone();
+        changed.extra_multi_vectors.insert(
+            "late".to_owned(),
+            crate::LateInteractionVector::new(
+                vec![vec![0.1, 0.2], vec![0.3, 0.5]],
+                VectorElementType::Float32,
+            )
+            .unwrap(),
+        );
+        mutations.push(changed);
+        let mut changed = original.clone();
+        changed.storage = StorageEncoding::Sparse;
+        mutations.push(changed);
+        let mut changed = original.clone();
+        changed.text = Some("different".to_owned());
+        mutations.push(changed);
+        let mut changed = original.clone();
+        changed.text_term_ids[0] = 2;
+        mutations.push(changed);
+        let mut changed = original.clone();
+        changed.text_term_freqs[0] = 3;
+        mutations.push(changed);
+        let mut changed = original.clone();
+        changed
+            .metadata
+            .insert("tenant".to_owned(), MetaValue::Str("b".to_owned()));
+        mutations.push(changed);
+
+        for changed in mutations {
+            let actual = CanonicalMutation::put(version, changed)
+                .unwrap()
+                .stamp()
+                .digest();
+            assert_ne!(actual, expected);
+        }
+
+        let delete = CanonicalMutation::delete(version, original.id.clone());
+        assert_ne!(delete.stamp().digest(), expected);
+    }
+
+    #[test]
+    fn equal_version_with_unequal_digest_fails_closed() {
+        let version = MutationVersion::from_parts(99, [4; 16]);
+        let left = MutationStamp::new(version, [1; 32]);
+        let right = MutationStamp::new(version, [2; 32]);
+
+        assert_eq!(left.greatest(left).unwrap(), left);
+        assert!(left.greatest(right).is_err());
     }
 }
