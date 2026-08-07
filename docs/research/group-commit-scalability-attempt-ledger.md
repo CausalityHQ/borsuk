@@ -264,3 +264,19 @@ one-record workload default, not a library performance result. No incomplete
 measurement CSV was inspected. The campaign manifest now explicitly pins
 `records_per_operation=16`, yielding 2,048 outstanding records for the 32
 writer gate; its changed manifest requires a fresh unique-prefix qualification.
+
+## v32 records-per-operation qualification launched (2026-08-07)
+
+Run `20260807T045700Z-v32` launched from source commit
+`4ec996ac9cfbac09eec45be483a590dab20b00c983fd087b0a9e4212f9583acc` with
+manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+Preflight found a unique result directory and no competing workload.
+
+The root `GROUP_COMMIT_SCALABILITY_FAILED` marker is present. The first cell
+(`c2000/r01/l1/w1`) completed, while `c2000/r01/l1/w8` emitted
+`PRODUCTION_READ_P95_FAILED`, `PRODUCTION_PERFORMANCE_GATE_FAILED`, and
+`CELL_FAILED` after its phase markers. The run is not publication-eligible;
+the terminal diagnostic reports only a production performance-gate failure,
+and no measurement CSV was opened. The remaining matrix was not treated as
+evidence. The marker watcher was stopped after terminalization.
