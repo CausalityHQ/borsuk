@@ -765,8 +765,7 @@ pub struct BorsukIndex {
     live_wal_snapshot_cache: LiveWalSnapshotCache,
 }
 
-type LiveWalSnapshotCache =
-    Arc<Mutex<Option<((u64, Vec<[u8; 32]>, Vec<String>), Arc<LiveWalSnapshot>)>>>;
+type LiveWalSnapshotCache = Arc<Mutex<Option<([u8; 32], Arc<LiveWalSnapshot>)>>>;
 
 fn cached_snapshot<K, V, F>(
     cache: &Mutex<Option<(K, Arc<V>)>>,
@@ -8874,29 +8873,28 @@ impl BorsukIndex {
         }
     }
 
-    fn live_wal_snapshot_key(&self) -> (u64, Vec<[u8; 32]>, Vec<String>) {
-        (
-            self.manifest.version,
-            self.lane_log_head_checksums.clone(),
-            self.cell_wal_snapshot
-                .iter()
-                .flat_map(|transaction| transaction.runs.iter())
-                .map(cell_wal_run_identity)
-                .collect(),
-        )
-    }
-
-    fn live_wal_snapshot_flight_key(key: &(u64, Vec<[u8; 32]>, Vec<String>)) -> String {
+    fn live_wal_snapshot_key(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&key.0.to_le_bytes());
-        for checksum in &key.1 {
+        hasher.update(&self.manifest.version.to_le_bytes());
+        for checksum in &self.lane_log_head_checksums {
             hasher.update(checksum);
         }
-        for run in &key.2 {
-            hasher.update(run.as_bytes());
+        for transaction in &self.cell_wal_snapshot {
+            for run in &transaction.runs {
+                hasher.update(run.transaction_id.as_bytes());
+                hasher.update(&run.cell.routing_epoch.to_le_bytes());
+                hasher.update(&run.cell.cell_ordinal.to_le_bytes());
+                hasher.update(&[run.lane]);
+                hasher.update(run.kind.as_str().as_bytes());
+                hasher.update(run.checksum.as_bytes());
+            }
             hasher.update(&[0]);
         }
-        hasher.finalize().to_hex().to_string()
+        *hasher.finalize().as_bytes()
+    }
+
+    fn live_wal_snapshot_flight_key(key: &[u8; 32]) -> String {
+        blake3::Hash::from_bytes(*key).to_hex().to_string()
     }
 
     fn live_wal_snapshot(&self) -> Result<Arc<LiveWalSnapshot>> {
@@ -22693,6 +22691,14 @@ mod tests {
         });
         assert_eq!(*first, 11);
         assert_eq!(builds.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn live_wal_snapshot_flight_key_is_content_distinct() {
+        let zero = BorsukIndex::live_wal_snapshot_flight_key(&[0; 32]);
+        let one = BorsukIndex::live_wal_snapshot_flight_key(&[1; 32]);
+        assert_eq!(zero.len(), 64);
+        assert_ne!(zero, one);
     }
     use crate::collection_control::collection_wal_frontier_shard;
 
