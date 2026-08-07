@@ -353,18 +353,21 @@ impl GroupCommitWriter {
                 maintenance: None,
             });
         }
-        let mut by_lane = (0..usize::from(self.lane_count))
-            .map(|_| Vec::new())
-            .collect::<Vec<Vec<VectorRecord>>>();
+        // Most scalar appends touch one or a handful of ownership lanes. Keep
+        // the dispatch map sparse so each acknowledgement does not allocate an
+        // empty bucket for every persisted lane (the common 256-lane index
+        // otherwise pays that cost even for a single record).
+        let mut by_lane = std::collections::HashMap::<usize, Vec<VectorRecord>>::with_capacity(
+            record_count.min(usize::from(self.lane_count)),
+        );
         for record in records {
             let lane = lane_for_id(record.id.as_bytes(), usize::from(self.lane_count));
-            by_lane[lane].push(record);
+            by_lane.entry(lane).or_default().push(record);
         }
         let mut results = Vec::new();
-        for (lane, records) in by_lane.into_iter().enumerate() {
-            if records.is_empty() {
-                continue;
-            }
+        let mut lanes = by_lane.into_iter().collect::<Vec<_>>();
+        lanes.sort_unstable_by_key(|(lane, _)| *lane);
+        for (lane, records) in lanes {
             let (response, result) = mpsc::channel();
             let worker = lane % self.requests.len();
             self.requests[worker]

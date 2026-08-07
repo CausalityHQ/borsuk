@@ -35,6 +35,7 @@ aws --profile "$PROFILE" --region "$REGION" s3 cp "$source_archive" "s3://${BUCK
 encoded_remote="$(cat <<EOF | base64 -w0
 set -euo pipefail
 workspace="/home/ec2-user/borsuk-group-commit-source-${source_sha}"
+remote_output="/home/ec2-user/borsuk-group-commit-results/${RUN_ID}"
 source_uri="s3://${BUCKET}/${source_key}"
 session="${SESSION}"
 result_uri="${RESULT_URI}"
@@ -48,6 +49,10 @@ fi
 if pgrep -af 'bench_group_commit_scalability|group_commit_bench|logical_cell_routing_bench' >/dev/null; then
   echo 'another BORSUK benchmark process is active; refusing contention' >&2
   exit 4
+fi
+if [[ -e "\$remote_output" ]]; then
+  echo "source result directory already exists: \$remote_output" >&2
+  exit 5
 fi
 if [[ -e "\$workspace" ]]; then
   echo "source workspace already exists: \$workspace" >&2

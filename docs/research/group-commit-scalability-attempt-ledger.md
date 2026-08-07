@@ -196,3 +196,12 @@ fresh result/index prefixes under
 The c7g.8xlarge worker was running and the launcher found no competing BORSUK
 benchmark process. A detached health/terminal-marker watcher polls every 15
 minutes. Until a root terminal marker appears, no measurement CSV is opened.
+
+The run terminalized immediately at c2000/r01/l1/w1 with process exit 1. Its
+preserved stderr reported `refusing to replace output` for the EC2-local result
+directory: a stale-directory collision, not a library performance measurement.
+The root failure is claim-ineligible and no measurement CSV was opened. The
+launcher now refuses an existing remote result directory before creating a
+tmux session. Group-commit dispatch also uses sparse lane buckets, avoiding an
+empty allocation for every persisted lane on scalar appends; the focused
+group-commit suite remains green.
