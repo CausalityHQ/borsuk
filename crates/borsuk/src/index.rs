@@ -17851,21 +17851,30 @@ impl BorsukIndex {
             .validate_for(crate::PhysicalObjectRole::NormalSegment)?;
         let (segment, bytes_fetched) = match summary.layout.physical_format {
             crate::PhysicalFormat::Parquet => {
-                let read = self
-                    .storage
-                    .read_known_size_with_cache_status_and_checksum(
-                        &summary.path,
-                        summary.size_bytes,
-                        &summary.checksum,
-                    )?;
-                let bytes_fetched = if read.cache_hit {
-                    0
-                } else {
-                    read.bytes.len() as u64
-                };
+                let header = self.storage.read_parquet_columns_ranged(
+                    &summary.path,
+                    summary.size_bytes,
+                    RangedColumns::Keep(crate::format::LEAN_SEGMENT_HEADER_COLUMNS),
+                    Some(&[0]),
+                )?;
+                let rows = self.storage.read_parquet_columns_ranged(
+                    &summary.path,
+                    summary.size_bytes,
+                    RangedColumns::Keep(crate::format::LEAN_SEGMENT_ROW_COLUMNS),
+                    None,
+                )?;
+                let header_batch = header.batches.first().ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "ranged parquet segment `{}` returned no header row",
+                        summary.path
+                    ))
+                })?;
                 (
-                    lean_segment_from_table(read.bytes, crate::DurableTableFormat::Parquet)?,
-                    bytes_fetched,
+                    crate::format::lean_segment_from_header_and_batches(
+                        header_batch,
+                        rows.batches,
+                    )?,
+                    header.bytes_fetched.saturating_add(rows.bytes_fetched),
                 )
             }
             crate::PhysicalFormat::Vortex => {

@@ -113,8 +113,8 @@ const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
 const BLAKE3_HEX_CHECKSUM_LEN: usize = 64;
 const VORTEX_RUNTIME_THREADS: usize = 1;
-const LEAN_SEGMENT_HEADER_COLUMNS: &[&str] = &["segment_header"];
-const LEAN_SEGMENT_ROW_COLUMNS: &[&str] = &[
+pub(crate) const LEAN_SEGMENT_HEADER_COLUMNS: &[&str] = &["segment_header"];
+pub(crate) const LEAN_SEGMENT_ROW_COLUMNS: &[&str] = &[
     "routing_code",
     "pq_code",
     "record_id",
@@ -3576,6 +3576,18 @@ fn validate_packed_segment_header(header: &LeanSegmentHeader) -> Result<()> {
 #[allow(dead_code)]
 pub(crate) fn lean_segment_from_batches(batches: Vec<RecordBatch>) -> Result<Segment> {
     segment_from_batches(batches, true)
+}
+
+/// Decode a lean segment from a separately ranged header row and projected
+/// record batches. Keeping the header out of the row projection lets object
+/// storage fetch only the compact routing/PQ columns needed for candidate
+/// selection.
+pub(crate) fn lean_segment_from_header_and_batches(
+    header: &RecordBatch,
+    batches: Vec<RecordBatch>,
+) -> Result<Segment> {
+    let header = lean_segment_header_from_batch(header)?;
+    segment_from_batches_with_header(batches, true, Some(header))
 }
 
 fn segment_from_batches(batches: Vec<RecordBatch>, lean: bool) -> Result<Segment> {
