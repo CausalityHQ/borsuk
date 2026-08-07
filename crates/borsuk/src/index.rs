@@ -492,6 +492,12 @@ pub const DEFAULT_RAM_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 const COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR: u64 = 4;
 const DEFAULT_GLOBAL_PQ_RERANK_READS: usize = 64;
 const DEFAULT_GLOBAL_PQ_CODE_READS: usize = 32;
+/// Maximum code-range payload retained until the same query's exact rerank.
+/// This is not a cross-query cache: it only prevents duplicate range GETs for
+/// bytes that S3 already returned between coalesced code slices. Base and delta
+/// can each retain at most this amount, keeping four admitted queries within
+/// 64 MiB of additional transient memory.
+const DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum unselected byte gap folded into one global-PQ code range GET.
 ///
 /// Selected code slices that are adjacent (or separated only by a small bundle
@@ -12350,6 +12356,8 @@ impl BorsukIndex {
         let mut graph_candidates_added = 0_usize;
         let mut decoded_cache_hits = 0_usize;
         let mut decoded_cache_bytes_read = 0_u64;
+        let mut query_local_ranges = Vec::new();
+        let mut query_local_range_bytes = 0_usize;
         let use_cached_graphs =
             !matches!(options.cache_execution, crate::CacheExecutionPolicy::Scan);
         while wave_start < selected_chunks.len() {
@@ -12472,14 +12480,27 @@ impl BorsukIndex {
                         }
                         loaded.push((chunk.clone(), bytes::Bytes::copy_from_slice(bytes)));
                     }
-                    Ok::<_, BorsukError>((loaded, bundled.len() as u64))
+                    Ok::<_, BorsukError>((
+                        loaded,
+                        bundled.len() as u64,
+                        QueryLocalRange {
+                            path: path.clone(),
+                            start: start as u64,
+                            bytes: bundled,
+                        },
+                    ))
                 },
             );
             let mut loaded = Vec::with_capacity(code_reads.len());
             for result in code_reads {
-                let (mut chunks, count) = result?;
+                let (mut chunks, count, prefetched) = result?;
                 loaded.append(&mut chunks);
                 bytes_read = bytes_read.saturating_add(count);
+                let retained = query_local_range_bytes.saturating_add(prefetched.bytes.len());
+                if retained <= DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES {
+                    query_local_range_bytes = retained;
+                    query_local_ranges.push(prefetched);
+                }
             }
             for (chunk, bytes) in &loaded {
                 index.cache_code(chunk.checksum.clone(), bytes.clone());
@@ -12531,7 +12552,7 @@ impl BorsukIndex {
             &groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
             Some(&self.global_pq_rerank_admission),
-            |(path, chunks)| self.global_exact_vectors_bundled(path, chunks),
+            |(path, chunks)| self.global_exact_vectors_bundled(path, chunks, &query_local_ranges),
         );
         let mut exact_by_node = HashMap::with_capacity(candidate_rows.len());
         for result in fetched {
@@ -18605,6 +18626,7 @@ impl BorsukIndex {
         &self,
         path: &str,
         chunks: &[(GlobalPqChunkRef, Vec<(usize, usize)>)],
+        query_local_ranges: &[QueryLocalRange],
     ) -> Result<(Vec<(usize, Vec<f32>, RecordId, u64)>, u64)> {
         enum RequestedRow {
             Exact { node: usize },
@@ -18743,9 +18765,34 @@ impl BorsukIndex {
             .iter()
             .map(|(range, _)| range.clone())
             .collect::<Vec<_>>();
-        let fetched = self.storage.read_global_rerank_ranges(path, &ranges)?;
+        let (mut fetched_chunks, missing) =
+            query_local_range_slices(path, &ranges, query_local_ranges);
+        let mut rerank_bytes_fetched = 0_u64;
+        if !missing.is_empty() {
+            let missing_ranges = missing
+                .iter()
+                .map(|(_, range)| range.clone())
+                .collect::<Vec<_>>();
+            let fetched = self
+                .storage
+                .read_global_rerank_ranges(path, &missing_ranges)?;
+            rerank_bytes_fetched = fetched.bytes_fetched;
+            for ((index, _), bytes) in missing.into_iter().zip(fetched.chunks) {
+                fetched_chunks[index] = Some(bytes);
+            }
+        }
+        let fetched_chunks = fetched_chunks
+            .into_iter()
+            .map(|bytes| {
+                bytes.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global rerank range was neither reused nor fetched".to_string(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut vectors = HashMap::new();
-        bytes_fetched = bytes_fetched.saturating_add(fetched.bytes_fetched);
+        bytes_fetched = bytes_fetched.saturating_add(rerank_bytes_fetched);
         if let Some(full_vectors) = full_vectors.as_ref() {
             for (_chunk, entries) in chunks {
                 for &(node, row) in entries {
@@ -18758,7 +18805,7 @@ impl BorsukIndex {
                 }
             }
         }
-        for ((_, kind), bytes) in requested.into_iter().zip(&fetched.chunks) {
+        for ((_, kind), bytes) in requested.into_iter().zip(&fetched_chunks) {
             match kind {
                 RequestedRow::Exact { node } => {
                     if bytes.len() != row_bytes {
@@ -20240,6 +20287,39 @@ fn global_pq_code_read_groups(
 
 fn global_pq_code_read_parallelism(read_groups: usize) -> usize {
     read_groups.clamp(1, DEFAULT_GLOBAL_PQ_CODE_READS)
+}
+
+#[derive(Debug)]
+struct QueryLocalRange {
+    path: String,
+    start: u64,
+    bytes: Vec<u8>,
+}
+
+type MissingQueryLocalRange = (usize, Range<u64>);
+
+fn query_local_range_slices(
+    path: &str,
+    ranges: &[Range<u64>],
+    prefetched: &[QueryLocalRange],
+) -> (Vec<Option<Vec<u8>>>, Vec<MissingQueryLocalRange>) {
+    let mut covered = Vec::with_capacity(ranges.len());
+    let mut missing = Vec::new();
+    for (index, range) in ranges.iter().enumerate() {
+        let bytes = prefetched.iter().find_map(|read| {
+            if read.path != path {
+                return None;
+            }
+            let start = usize::try_from(range.start.checked_sub(read.start)?).ok()?;
+            let end = usize::try_from(range.end.checked_sub(read.start)?).ok()?;
+            read.bytes.get(start..end).map(<[u8]>::to_vec)
+        });
+        if bytes.is_none() {
+            missing.push((index, range.clone()));
+        }
+        covered.push(bytes);
+    }
+    (covered, missing)
 }
 
 fn resident_global_pq_subspaces(
@@ -25305,6 +25385,23 @@ mod tests {
         assert_eq!(global_pq_code_read_parallelism(1), 1);
         assert_eq!(global_pq_code_read_parallelism(28), 28);
         assert_eq!(global_pq_code_read_parallelism(100), 32);
+    }
+
+    #[test]
+    fn query_local_ranges_reuse_only_fully_covered_bytes() {
+        let prefetched = vec![QueryLocalRange {
+            path: "bundle.arrow".to_string(),
+            start: 100,
+            bytes: (100_u8..200).collect(),
+        }];
+        let requested = vec![120..124, 90..94, 196..204];
+
+        let (covered, missing) = query_local_range_slices("bundle.arrow", &requested, &prefetched);
+
+        assert_eq!(covered[0].as_deref(), Some(&[120, 121, 122, 123][..]));
+        assert!(covered[1].is_none());
+        assert!(covered[2].is_none());
+        assert_eq!(missing, vec![(1, 90..94), (2, 196..204)]);
     }
 
     #[test]
