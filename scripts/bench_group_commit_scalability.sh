@@ -251,9 +251,11 @@ for cells in "${CELL_COUNTS[@]}"; do
       CURRENT_CELL="$cell_output"
       resource_output="${cell_output}.resources.csv"
       storage_trace_output="${cell_output}.storage-access.csv"
-      benchmark_stdout="$cell_output/benchmark.stdout.log"
-      benchmark_stderr="$cell_output/benchmark.stderr.log"
-      mkdir -p "$cell_output"
+      # The benchmark itself requires a nonexistent output path. Capture
+      # diagnostics beside the cell while it runs, then move them into the
+      # terminal cell after the process has created its result directory.
+      benchmark_stdout="${cell_output}.benchmark.stdout.log"
+      benchmark_stderr="${cell_output}.benchmark.stderr.log"
       set +e
       env \
         BORSUK_GROUP_COMMIT_PROTOCOL="$PROTOCOL" \
@@ -289,6 +291,12 @@ for cells in "${CELL_COUNTS[@]}"; do
       status=$?
       set -e
       mkdir -p "$cell_output"
+      if [[ -f "$benchmark_stdout" ]]; then
+        mv "$benchmark_stdout" "$cell_output/benchmark.stdout.log"
+      fi
+      if [[ -f "$benchmark_stderr" ]]; then
+        mv "$benchmark_stderr" "$cell_output/benchmark.stderr.log"
+      fi
       if [[ -f "$resource_output" ]]; then
         mv "$resource_output" "$cell_output/resources.csv"
       else

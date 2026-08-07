@@ -234,3 +234,11 @@ read-only SSM preflight confirmed the unique EC2-local result directory was
 absent and no competing benchmark process was running. The watcher polls only
 terminal markers and instance health every 15 minutes; no incomplete
 measurement CSV is being inspected.
+
+Run `20260807T044500Z-r3` terminalized at c2000/r01/l1/w1 before executing the
+benchmark. The newly added diagnostics initially created the cell directory
+before process start, and the benchmark correctly rejected that pre-existing
+output path. This was a runner bug, not library evidence. The runner now
+captures stdout/stderr beside the cell and moves them into the cell only after
+process exit. Scalar and 16-record bulk local structural smokes both pass the
+fail-closed validator after the correction; no AWS measurement CSV was opened.
