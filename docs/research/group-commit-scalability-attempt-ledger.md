@@ -636,3 +636,23 @@ waves before ADC. The next isolated read factor may decouple compact global-code
 range concurrency from full-segment prefetch depth, but must keep the existing
 32 MiB code-wave memory bound. Separately, training CPU must be reduced or
 amortized before the balanced router can be a production default.
+
+## Independent global-code read width qualification launched (2026-08-07)
+
+Run `20260807T123450Z-code-read-width` launched from commit `a47b01c` with
+source archive SHA-256
+`383d7bbd4e4db2d10361a49758dd4789db43e6bfee05e95e6aefb5b9b64ab8e1`
+and unchanged manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+This single-factor arm decouples compact global-PQ code-range read concurrency
+from the full-segment prefetch-depth setting. It permits one bounded wave for
+the 28 balanced delta code regions while retaining the existing maximum of 32
+concurrent reads and 32 MiB of code payload; exact reranking, candidate count,
+routing, cache policy, and recall contract are unchanged.
+
+The 513-test library gate, strict all-target/all-feature workspace Clippy,
+formatting, repository policy, and diff checks passed before launch. The
+dedicated worker passed the launcher's account, instance, pinned-dataset, and
+idle/no-contention checks. Until root terminalization and process exit, inspect
+only markers, process state, and infrastructure health; do not open measurement
+CSVs.
