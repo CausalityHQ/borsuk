@@ -143,6 +143,11 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("extent_idempotency", RUNNER)
         self.assertIn("post_completion_lease_fencing", RUNNER)
 
+    def test_failed_cell_preserves_exit_status_when_storage_trace_is_missing(self) -> None:
+        self.assertIn('if [[ -f "$storage_trace_output" ]]; then', RUNNER)
+        self.assertIn('STORAGE_TRACE_MISSING', RUNNER)
+        self.assertIn('printf \'%s\\n\' "$status" > "$cell_output/process_exit.txt"', RUNNER)
+
     def test_lane_treatments_use_identical_record_ids(self) -> None:
         self.assertIn("production_record_id(ordinal)", BENCH)
         self.assertNotIn("group-c{cell_count}-r{repetition", BENCH)
