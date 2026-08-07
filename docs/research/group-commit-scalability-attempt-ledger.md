@@ -614,3 +614,25 @@ they remain explicit production-hardening work and are not counted as passing
 evidence. The dedicated AWS worker passed the launcher's idle/no-contention
 preflight. Until root terminalization and process exit, inspect only markers,
 process state, and infrastructure health; do not open measurement CSVs.
+
+The run terminalized at `c2000/r01/l1/w8` with root failure, an exited process,
+and a healthy idle host. The fail-closed validator correctly rejected the
+partial matrix. Tail training fixed the intended physical skew: the 128,000-row
+delta occupied all 256 cells instead of 103; median rows/cell were 482.5, p95
+1,106 instead of 7,101, and the maximum fell from 16,053 to 1,871. Post-drain
+GETs fell from 353 to 308 and bytes from 20.51 MB to 10.71 MB. Delta approximate
+p95 improved from 216.807 to 141.812 ms, delta exact-rerank p95 from 135.400 to
+102.266 ms, and overall read p95 from 291.102 to 232.256 ms while recall stayed
+1.0. The factor is therefore directionally valid but still fails the 200 ms
+production gate.
+
+The cost is also material and disqualifies promotion as-is: eight-writer drain
+time rose from 29.996 to 40.453 s and drain-inclusive throughput fell from
+3,029.758 to 2,394.973 records/s. Acknowledged throughput remained 9,852.023
+records/s at 80.619 ms p95. The balanced delta selects 28 small code regions;
+the code path permits a 32-read wave but incorrectly caps actual concurrency by
+the general segment `prefetch_depth` of eight, producing two object-store RTT
+waves before ADC. The next isolated read factor may decouple compact global-code
+range concurrency from full-segment prefetch depth, but must keep the existing
+32 MiB code-wave memory bound. Separately, training CPU must be reduced or
+amortized before the balanced router can be a production default.
