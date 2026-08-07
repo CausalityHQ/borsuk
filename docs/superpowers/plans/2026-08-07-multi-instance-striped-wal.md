@@ -13,13 +13,16 @@ Each process-local commit worker claims one free persisted stripe and appends
 create-only immutable extents only to that stripe. Record hashes choose among
 the stripes owned by the current `GroupCommitWriter`, preserving per-process
 ordering without requiring the same record to use the same stripe on every
-host. Readers already collect every bounded stripe and merge by durable global
-generation, so records written through different hosts remain visible and
-last-write-wins. A drain captures every stripe but advances only checkpoints
+host. Readers load a checked active-stripe directory and collect only the named
+stripes, then merge by durable global generation, so records written through
+different hosts remain visible and last-write-wins. A drain captures every
+active stripe but advances only checkpoints
 owned by its caller; cooperative foreign-stripe checkpointing is a separate
 CAS-safe maintenance step and must not silently steal a live lease.
 
-This is format v30. A v29 reader is not retained.
+The striped extent protocol is lane-log format v30. The required active-stripe
+directory is v31 and table format v28 rejects indexes created without it. Old
+experimental readers are not retained.
 
 ## Production invariants
 
@@ -32,8 +35,9 @@ This is format v30. A v29 reader is not retained.
 - Sequential writes of one ID through one writer remain ordered. Writes through
   different processes resolve by the existing globally allocated generation,
   never wall-clock order or stripe number.
-- Open and refresh read a fixed persisted stripe count, independent of vector
-  count, client count, and extent history.
+- Open and refresh read one checked directory plus the currently active stripe
+  set, independent of vector count and extent history. Safe retirement is still
+  required before this remains bounded across historical client churn.
 - Drain must not checkpoint a foreign live stripe through an owner-only handle.
   Published manifest/delta coverage remains collection-wide and atomic.
 - Text, sparse, named dense, and late-interaction writes remain fail-closed until
@@ -81,13 +85,16 @@ next watermark, renewal, or release. Focused fencing coverage and the full
 lane-log/group-commit suites pass; the remaining unchecked item requires the
 complete crash/fault/GC assurance gate before this task is closed.
 
-## Task 3: Remove the eight-instance ceiling without read amplification
+## Task 3: Remove the eight-instance ceiling without fixed-pool read amplification
 
-- [ ] Add a versioned bounded active-stripe directory so the persisted pool may
+- [x] Add a versioned checked active-stripe directory so the persisted pool may
   exceed eight while refresh reads only active stripes plus a fixed control
   fanout.
-- [ ] Require claim, renewal, release, expiry, and takeover to update directory
-  membership without making an unacknowledged extent visible.
+- [x] Activate a successfully claimed stripe before returning its writer, so no
+  acknowledged extent can exist outside directory visibility.
+- [ ] Retire quiescent stripes only behind a manifest-version fence that first
+  forces readers pinned before the retirement boundary to refresh. Renewal,
+  release, expiry, and takeover must preserve that invariant.
 - [ ] Qualify 1, 8, and 32 independent processes against one S3 prefix. Preserve
   raw artifacts, exact per-process receipts, resource telemetry, and terminal
   markers.

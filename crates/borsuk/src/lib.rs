@@ -74,6 +74,7 @@ pub use index::{
     MAX_RECOMMENDED_SEGMENT_MAX_VECTORS, MIN_RECOMMENDED_SEGMENT_MAX_VECTORS, OpenOptions,
     WarmReport, parse_byte_size, parse_ram_budget, recommended_segment_max_vectors,
 };
+pub use lane_log::GROUP_COMMIT_STRIPE_COUNT;
 
 /// Maximum CPU worker threads used by default index-build phases. Query
 /// concurrency has separate admission controls; this cap prevents an offline

@@ -2003,7 +2003,7 @@ impl BorsukIndex {
         ttl_ms: u64,
         minimum_generation: u64,
     ) -> Result<crate::lane_log::LaneEpochWriter> {
-        let lane_count = u16::from(self.manifest.cell_wal_config.lane_count);
+        let lane_count = crate::lane_log::GROUP_COMMIT_STRIPE_COUNT;
         if lane >= lane_count {
             return Err(BorsukError::InvalidStorage(format!(
                 "lane-log worker {lane} exceeds persisted lane count {lane_count}"
@@ -2013,7 +2013,7 @@ impl BorsukIndex {
             .effective_ram_budget_bytes()
             .unwrap_or(DEFAULT_RAM_BUDGET_BYTES);
         let lane_budget = total_budget / u64::from(lane_count);
-        crate::lane_log::LaneEpochWriter::acquire_with_storage(
+        let writer = crate::lane_log::LaneEpochWriter::acquire_with_storage(
             self.collection_storage
                 .clone_with_independent_request_counters(),
             lane,
@@ -2022,7 +2022,9 @@ impl BorsukIndex {
             ttl_ms,
             lane_budget,
             minimum_generation,
-        )
+        )?;
+        crate::lane_log::activate_stripe(&self.collection_storage, lane, lane_count)?;
+        Ok(writer)
     }
 
     pub(crate) fn lane_log_generation_floor(&self) -> Result<u64> {
@@ -2058,7 +2060,7 @@ impl BorsukIndex {
     }
 
     pub(crate) fn lane_log_lane_count(&self) -> u16 {
-        u16::from(self.manifest.cell_wal_config.lane_count)
+        crate::lane_log::GROUP_COMMIT_STRIPE_COUNT
     }
 
     pub(crate) fn materialize_lane_log_tail(&mut self) -> Result<Vec<u64>> {
@@ -2237,7 +2239,7 @@ impl BorsukIndex {
     pub(crate) fn checkpoint_lane_log_materialized_through(&self, sequences: &[u64]) -> Result<()> {
         crate::lane_log::LaneLogReader::from_storage(
             self.collection_storage.clone(),
-            u16::from(self.manifest.cell_wal_config.lane_count),
+            crate::lane_log::GROUP_COMMIT_STRIPE_COUNT,
         )?
         .mark_materialized_through(sequences)
     }
@@ -2247,7 +2249,7 @@ impl BorsukIndex {
     ) -> Result<Option<crate::lane_log::LaneLogSnapshot>> {
         crate::lane_log::LaneLogReader::from_storage(
             self.collection_storage.clone(),
-            u16::from(self.manifest.cell_wal_config.lane_count),
+            crate::lane_log::GROUP_COMMIT_STRIPE_COUNT,
         )?
         .read_snapshot_if_changed(
             &self.lane_log_head_checksums,
@@ -2966,7 +2968,7 @@ impl BorsukIndex {
         if collection_root {
             crate::lane_log::initialize_empty_lane_heads(
                 &storage,
-                u16::from(manifest.cell_wal_config.lane_count),
+                crate::lane_log::GROUP_COMMIT_STRIPE_COUNT,
             )?;
         }
         let staged = storage.stage_manifest(modality, &manifest, None)?;

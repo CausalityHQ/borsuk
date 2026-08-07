@@ -632,6 +632,42 @@ fn independent_group_writers_can_share_one_collection() {
 }
 
 #[test]
+fn thirty_two_independent_group_writers_share_one_collection() {
+    const WRITERS: usize = 32;
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///thirty-two-independent-group-writers";
+    let writer_config = GroupCommitConfig {
+        max_delay: std::time::Duration::ZERO,
+        max_records: 1,
+        worker_lanes: 1,
+    };
+    let first_index =
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap();
+    let mut writers = vec![GroupCommitWriter::new(first_index, writer_config).unwrap()];
+    for _ in 1..WRITERS {
+        writers.push(
+            GroupCommitWriter::new(
+                BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
+                writer_config,
+            )
+            .unwrap(),
+        );
+    }
+
+    for (ordinal, writer) in writers.iter().enumerate() {
+        writer
+            .append(vec![VectorRecord::new(
+                format!("writer-{ordinal:02}"),
+                vec![ordinal as f32, 0.0],
+            )])
+            .unwrap();
+    }
+
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(reopened.list_records(0, WRITERS).unwrap().len(), WRITERS);
+}
+
+#[test]
 fn one_writer_can_drain_while_another_writer_remains_live() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///independent-group-writer-drain";
@@ -758,7 +794,7 @@ fn group_writer_startup_fails_when_every_persisted_stripe_is_leased() {
         GroupCommitConfig {
             max_delay: std::time::Duration::ZERO,
             max_records: 1,
-            worker_lanes: 8,
+            worker_lanes: 64,
         },
     )
     .unwrap();
@@ -771,7 +807,7 @@ fn group_writer_startup_fails_when_every_persisted_stripe_is_leased() {
         },
     );
     let error = match result {
-        Ok(_) => panic!("a ninth live worker stripe must not steal an active lease"),
+        Ok(_) => panic!("a sixty-fifth live worker stripe must not steal an active lease"),
         Err(error) => error,
     };
     assert!(
@@ -1100,7 +1136,7 @@ fn small_groups_publish_only_immutable_extents_before_release() {
             operation == common::StoreOperation::Put && path.contains("/blocks/")
         }),
         0,
-        "v27 must never publish legacy mutable blocks"
+        "v28 must never publish legacy mutable blocks"
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
@@ -1595,7 +1631,12 @@ fn sequential_groups_replace_the_same_id() {
 fn unchanged_refresh_cost_does_not_scale_with_committed_lane_blocks() {
     let empty_directory = tempfile::tempdir().unwrap();
     let empty_uri = empty_directory.path().to_string_lossy().into_owned();
-    drop(BorsukIndex::create(config(&empty_uri)).unwrap());
+    let empty_writer = GroupCommitWriter::new(
+        BorsukIndex::create(config(&empty_uri)).unwrap(),
+        GroupCommitConfig::default(),
+    )
+    .unwrap();
+    drop(empty_writer);
     let mut empty = BorsukIndex::open(&empty_uri).unwrap();
     let empty_before = empty.request_counts();
     assert!(!empty.refresh().unwrap());

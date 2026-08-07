@@ -884,3 +884,29 @@ their routing code are unchanged by this writer slice; expected backing reads
 of one becoming zero indicate a separate deterministic routing/cache gate gap.
 No second full gate was launched, and this checkpoint does not claim workspace
 full-gate readiness.
+
+## Checked active-stripe directory and 64-slot pool (2026-08-07)
+
+The next local architecture slice separates group-commit writer capacity from
+the eight Cell-WAL routing lanes. New table-format-v28 collections initialize
+64 writer-stripe HEAD slots plus a checksummed, conditionally updated v31
+`lane-log/ACTIVE` directory. Claim publishes the stripe bit before returning a
+usable writer. Open and unchanged refresh fetch the directory and fan out only
+to named stripes; inactive missing HEADs are not authoritative, while a missing
+active HEAD fails closed.
+
+Local TDD evidence passes all 48 lane-log tests, all 38 group-commit integration
+tests, and all seven benchmark-example tests. A 32-instance in-memory test opens
+one separately constructed `GroupCommitWriter` per instance, acknowledges one
+record from each, reopens the shared collection, and observes all 32 records.
+An empty directory costs one snapshot GET; a one-active-stripe snapshot costs
+three GETs (directory, HEAD, and the required linearizable next-extent probe).
+The unchanged-refresh regression compares equal one-active-stripe topologies,
+so its cost remains independent of committed extent history.
+
+This is correctness and request-structure evidence, not horizontal performance
+evidence. Bits are intentionally monotonic in this slice: safe removal requires
+a manifest-version retirement fence so old pinned readers cannot omit an
+unmaterialized tail. Therefore historical writer churn is not yet bounded and
+the AWS 1/8/32 campaign remains unlaunched. The runner must also use distinct
+processes or hosts before its results can qualify multi-instance scaling.

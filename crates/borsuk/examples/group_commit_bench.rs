@@ -14,7 +14,7 @@ use std::{
 
 use arrow_array::{Array, FixedSizeListArray, Float32Array, LargeListArray, ListArray};
 use borsuk::{
-    BorsukIndex, DEFAULT_CELL_WAL_LANES, GroupCommitConfig, GroupCommitLaneReceipt,
+    BorsukIndex, GROUP_COMMIT_STRIPE_COUNT, GroupCommitConfig, GroupCommitLaneReceipt,
     GroupCommitTicket, GroupCommitWriter, LeafMode, OpenOptions, RequestCounts, SearchOptions,
     VectorRecord,
 };
@@ -481,7 +481,7 @@ fn main() -> BenchResult<()> {
         writers,
         writer_instance_count,
         worker_lanes,
-        usize::from(DEFAULT_CELL_WAL_LANES),
+        usize::from(GROUP_COMMIT_STRIPE_COUNT),
     )?;
     let (_cell_count, repetition, performance_gate) = match protocol.as_str() {
         "diagnostic" => {
@@ -964,6 +964,7 @@ mod tests {
     fn writer_topology_rejects_thread_only_or_unrepresentable_assignments() {
         validate_writer_topology(8, 8, 1, 8).unwrap();
         validate_writer_topology(32, 8, 1, 8).unwrap();
+        validate_writer_topology(32, 32, 1, 64).unwrap();
 
         assert!(
             validate_writer_topology(8, 0, 1, 8)
@@ -984,10 +985,10 @@ mod tests {
                 .contains("must divide producer writers evenly")
         );
         assert!(
-            validate_writer_topology(8, 8, 2, 8)
+            validate_writer_topology(32, 32, 3, 64)
                 .unwrap_err()
                 .to_string()
-                .contains("requires 16 persisted writer stripes")
+                .contains("requires 96 persisted writer stripes")
         );
     }
 
