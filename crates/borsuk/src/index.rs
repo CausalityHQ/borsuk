@@ -13055,59 +13055,13 @@ impl BorsukIndex {
         Ok(())
     }
 
-    fn persist_resident_global_pq(
+    fn fit_resident_global_quantizers(
         &self,
-        summaries: &[SegmentSummary],
-    ) -> Result<Option<crate::manifest::GlobalPqRef>> {
-        if summaries.is_empty() {
-            return Ok(None);
-        }
+        training_sample: &[Vec<f32>],
+        vectors_seen: usize,
+    ) -> Result<(GlobalScanQuantizer, GlobalCoarseQuantizer)> {
         const PQ_TRAINING_SAMPLE_LIMIT: usize = 4_096;
-        const GLOBAL_PQ_BUILD_READS: usize = 8;
-        let training_sample_limit =
-            global_pq_training_sample_limit(self.manifest.config.dimensions);
-        let normalize = self
-            .manifest
-            .config
-            .metric
-            .uses_normalized_euclidean_geometry();
-        let mut training_sample = Vec::with_capacity(training_sample_limit);
-        let mut vectors_seen = 0_usize;
-        let mut reservoir_state = crate::DEFAULT_TURBOQUANT_SEED;
-
-        // First pass retains only a bounded, deterministic reservoir for fitting.
-        // In particular, a 1M x 960-d GIST build no longer holds ~3.8 GiB of
-        // dense vectors while constructing its compact serving artifact.
-        for_each_bounded_io_wave(
-            summaries,
-            GLOBAL_PQ_BUILD_READS,
-            |summary| self.read_segment(summary),
-            |_summary, (segment, _, _, _)| {
-                for record in &segment.records {
-                    if self.is_suppressed(record)? {
-                        continue;
-                    }
-                    let vector = if normalize {
-                        crate::metric::unit_l2_normalized(&record.vector)
-                    } else {
-                        record.vector.clone()
-                    };
-                    vectors_seen = vectors_seen.saturating_add(1);
-                    if training_sample.len() < training_sample_limit {
-                        training_sample.push(vector);
-                    } else {
-                        let replacement = splitmix_index(&mut reservoir_state, vectors_seen);
-                        if replacement < training_sample_limit {
-                            training_sample[replacement] = vector;
-                        }
-                    }
-                }
-                Ok(())
-            },
-        )?;
-        if vectors_seen == 0 {
-            return Ok(None);
-        }
+        debug_assert!(!training_sample.is_empty());
         let dimensions = self.manifest.config.dimensions;
         let subspaces = resident_global_pq_subspaces_for_metric(
             &self.manifest.config.metric,
@@ -13136,7 +13090,7 @@ impl BorsukIndex {
                         sample_limit: training_sample.len().min(PQ_TRAINING_SAMPLE_LIMIT),
                         iterations: 4,
                     },
-                    &training_sample,
+                    training_sample,
                 )?)
             }
             GlobalScanCodec::FastTurboQuantMse => {
@@ -13184,7 +13138,7 @@ impl BorsukIndex {
                 sample_limit: training_sample.len(),
                 iterations: 8,
             },
-            &training_sample,
+            training_sample,
         )?;
         let coarse_quantizer = match coarse_layout {
             ResolvedGlobalPqLayout::Product { .. } => GlobalCoarseQuantizer::Product(coarse_parent),
@@ -13192,11 +13146,67 @@ impl BorsukIndex {
                 children_per_parent,
             } => GlobalCoarseQuantizer::Hierarchical(HierarchicalCoarseQuantizer::fit(
                 coarse_parent,
-                &training_sample,
+                training_sample,
                 children_per_parent,
                 6,
             )?),
         };
+        Ok((quantizer, coarse_quantizer))
+    }
+
+    fn persist_resident_global_pq(
+        &self,
+        summaries: &[SegmentSummary],
+    ) -> Result<Option<crate::manifest::GlobalPqRef>> {
+        if summaries.is_empty() {
+            return Ok(None);
+        }
+        const GLOBAL_PQ_BUILD_READS: usize = 8;
+        let training_sample_limit =
+            global_pq_training_sample_limit(self.manifest.config.dimensions);
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let dimensions = self.manifest.config.dimensions;
+        let mut training_sample = Vec::with_capacity(training_sample_limit);
+        let mut vectors_seen = 0_usize;
+        let mut reservoir_state = crate::DEFAULT_TURBOQUANT_SEED;
+
+        // First pass retains only a bounded, deterministic reservoir for fitting.
+        // In particular, a 1M x 960-d GIST build no longer holds ~3.8 GiB of
+        // dense vectors while constructing its compact serving artifact.
+        for_each_bounded_io_wave(
+            summaries,
+            GLOBAL_PQ_BUILD_READS,
+            |summary| self.read_segment(summary),
+            |_summary, (segment, _, _, _)| {
+                for record in &segment.records {
+                    if self.is_suppressed(record)? {
+                        continue;
+                    }
+                    let vector = if normalize {
+                        crate::metric::unit_l2_normalized(&record.vector)
+                    } else {
+                        record.vector.clone()
+                    };
+                    retain_global_pq_training_vector(
+                        &mut training_sample,
+                        training_sample_limit,
+                        &mut vectors_seen,
+                        &mut reservoir_state,
+                        vector,
+                    );
+                }
+                Ok(())
+            },
+        )?;
+        if vectors_seen == 0 {
+            return Ok(None);
+        }
+        let (quantizer, coarse_quantizer) =
+            self.fit_resident_global_quantizers(&training_sample, vectors_seen)?;
         let coarse_quantizer_state = coarse_quantizer.state();
         let global_code_width = quantizer.code_bytes_per_vector();
         let quantizer_state = quantizer.state();
@@ -13797,17 +13807,68 @@ impl BorsukIndex {
         fringe: &[SegmentSummary],
         records: Option<&[VectorRecord]>,
     ) -> Result<crate::manifest::GlobalPqRef> {
-        let read = self
-            .storage
-            .read_bytes_with_cache_status_and_checksum(&base.path, &base.checksum)?;
-        let descriptor = GlobalPqDescriptor::decode(&read.bytes)?;
         let max_rows = fringe
             .iter()
             .map(|summary| summary.object_count)
             .chain(std::iter::once(self.manifest.config.segment_max_vectors))
             .max()
             .unwrap_or(1);
-        let empty = descriptor.empty_reusing_quantizers_for_layout(fringe.len(), max_rows)?;
+        let training_sample_limit =
+            global_pq_training_sample_limit(self.manifest.config.dimensions);
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let mut training_sample = Vec::with_capacity(training_sample_limit);
+        let mut vectors_seen = 0_usize;
+        let mut reservoir_state = crate::DEFAULT_TURBOQUANT_SEED;
+        let mut retain_records = |records: &[VectorRecord]| -> Result<()> {
+            for record in records {
+                if self.is_suppressed(record)? {
+                    continue;
+                }
+                let vector = if normalize {
+                    crate::metric::unit_l2_normalized(&record.vector)
+                } else {
+                    record.vector.clone()
+                };
+                retain_global_pq_training_vector(
+                    &mut training_sample,
+                    training_sample_limit,
+                    &mut vectors_seen,
+                    &mut reservoir_state,
+                    vector,
+                );
+            }
+            Ok(())
+        };
+        if let Some(records) = records {
+            retain_records(records)?;
+        } else {
+            const GLOBAL_PQ_BUILD_READS: usize = 8;
+            for_each_bounded_io_wave(
+                fringe,
+                GLOBAL_PQ_BUILD_READS,
+                |summary| self.read_segment(summary),
+                |_summary, (segment, _, _, _)| retain_records(&segment.records),
+            )?;
+        }
+        if training_sample.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "resident global delta contains no visible vectors".to_string(),
+            ));
+        }
+        let (quantizer, coarse_quantizer) =
+            self.fit_resident_global_quantizers(&training_sample, vectors_seen)?;
+        let empty = GlobalPqDescriptor::empty_with_quantizers_for_layout(
+            quantizer.state(),
+            coarse_quantizer.state(),
+            self.manifest.build_config.vector_element_type,
+            fringe.len(),
+            max_rows,
+        )?;
+        drop(training_sample);
         let bytes = empty.encode()?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = format!(
@@ -14159,7 +14220,11 @@ impl BorsukIndex {
                 appended.subspaces(),
                 appended.vectors(),
             ),
-            probes: previous.probes,
+            probes: resident_global_pq_probes(
+                &self.manifest.config.metric,
+                dimensions,
+                appended.occupied_cell_count(),
+            ),
             resident_bytes: u64::try_from(appended.resident_bytes()).map_err(|_| {
                 BorsukError::InvalidStorage("global PQ resident bytes exceed u64".to_string())
             })?,
@@ -15618,17 +15683,8 @@ impl BorsukIndex {
             && self.segment_cache.get().is_none()
             && options.filter.is_none()
             && live_wal_tail.is_empty()
-            && matches!(
-                candidate_mode,
-                SearchMode::Approx {
-                    max_segments: Some(_),
-                    max_bytes: None,
-                    max_latency_ms: None,
-                    adaptive_stop: None,
-                    ..
-                }
-            ) {
-            candidates_total
+        {
+            parallel_projected_segment_budget(&candidate_mode, candidates_total)
         } else {
             0
         };
@@ -20348,6 +20404,24 @@ fn global_pq_training_sample_limit(dimensions: usize) -> usize {
     const TARGET_BYTES: usize = 64 * 1024 * 1024;
     let bytes_per_vector = dimensions.max(1).saturating_mul(std::mem::size_of::<f32>());
     (TARGET_BYTES / bytes_per_vector).clamp(1, MAX_ROWS)
+}
+
+fn retain_global_pq_training_vector(
+    sample: &mut Vec<Vec<f32>>,
+    limit: usize,
+    vectors_seen: &mut usize,
+    reservoir_state: &mut u64,
+    vector: Vec<f32>,
+) {
+    *vectors_seen = (*vectors_seen).saturating_add(1);
+    if sample.len() < limit {
+        sample.push(vector);
+    } else {
+        let replacement = splitmix_index(reservoir_state, *vectors_seen);
+        if replacement < limit {
+            sample[replacement] = vector;
+        }
+    }
 }
 
 fn resident_global_pq_candidates(
@@ -26270,6 +26344,77 @@ mod tests {
                 .iter()
                 .any(|checksum| !refreshed.segments.contains(checksum)),
             "the test must replace at least one covered segment"
+        );
+    }
+
+    #[test]
+    fn resident_global_delta_bootstrap_trains_routing_on_the_owned_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let group = crate::GroupCommitWriter::new(
+            index,
+            crate::GroupCommitConfig {
+                max_delay: Duration::ZERO,
+                max_records: 4_096,
+                worker_lanes: 1,
+            },
+        )
+        .unwrap();
+        group
+            .append(
+                (0..4_096)
+                    .map(|row| {
+                        VectorRecord::new(format!("delta-{row}"), vec![1_000.0 + row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        group.drain().unwrap();
+
+        let drained = BorsukIndex::open(&uri).unwrap();
+        let delta = drained
+            .manifest
+            .global_pq_ref
+            .as_ref()
+            .and_then(|base| base.delta.as_deref())
+            .expect("threshold drain must publish a global delta");
+        let bytes = drained
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&delta.path, &delta.checksum)
+            .unwrap()
+            .bytes;
+        let descriptor = GlobalPqDescriptor::decode(&bytes).unwrap();
+        let mut rows_per_cell = HashMap::<u16, usize>::new();
+        for chunk in descriptor.chunks() {
+            *rows_per_cell.entry(chunk.cell_index).or_default() += chunk.rows;
+        }
+        assert!(
+            rows_per_cell.len() >= 128,
+            "shifted tail collapsed into {} occupied cells",
+            rows_per_cell.len()
+        );
+        assert!(
+            rows_per_cell.values().copied().max().unwrap() <= 64,
+            "shifted tail left an oversized cell: {rows_per_cell:?}"
         );
     }
 
