@@ -2234,6 +2234,14 @@ impl BorsukIndex {
         Ok(committed_sequences)
     }
 
+    pub(crate) fn checkpoint_lane_log_materialized_through(&self, sequences: &[u64]) -> Result<()> {
+        crate::lane_log::LaneLogReader::from_storage(
+            self.collection_storage.clone(),
+            u16::from(self.manifest.cell_wal_config.lane_count),
+        )?
+        .mark_materialized_through(sequences)
+    }
+
     fn read_lane_log_snapshot_if_changed(
         &self,
     ) -> Result<Option<crate::lane_log::LaneLogSnapshot>> {

@@ -14,8 +14,9 @@ use std::{
 
 use arrow_array::{Array, FixedSizeListArray, Float32Array, LargeListArray, ListArray};
 use borsuk::{
-    BorsukIndex, GroupCommitConfig, GroupCommitLaneReceipt, GroupCommitTicket, GroupCommitWriter,
-    LeafMode, OpenOptions, RequestCounts, SearchOptions, VectorRecord,
+    BorsukIndex, DEFAULT_CELL_WAL_LANES, GroupCommitConfig, GroupCommitLaneReceipt,
+    GroupCommitTicket, GroupCommitWriter, LeafMode, OpenOptions, RequestCounts, SearchOptions,
+    VectorRecord,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -24,6 +25,7 @@ type BenchResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 #[derive(Clone)]
 struct Sample {
     writer: usize,
+    writer_instance: usize,
     operation: usize,
     record_ids: Vec<String>,
     batch_records: usize,
@@ -255,6 +257,33 @@ fn validate_throughput_concurrency(
     .into())
 }
 
+fn validate_writer_topology(
+    writers: usize,
+    writer_instances: usize,
+    worker_lanes: usize,
+    persisted_stripes: usize,
+) -> BenchResult<()> {
+    if writer_instances == 0 {
+        return Err("group-commit writer instances must be positive".into());
+    }
+    if writer_instances > writers {
+        return Err("group-commit writer instances cannot exceed producer writers".into());
+    }
+    if !writers.is_multiple_of(writer_instances) {
+        return Err("group-commit writer instances must divide producer writers evenly".into());
+    }
+    let required_stripes = writer_instances
+        .checked_mul(worker_lanes)
+        .ok_or("group-commit writer topology exceeds usize")?;
+    if required_stripes > persisted_stripes {
+        return Err(format!(
+            "group-commit writer topology requires {required_stripes} persisted writer stripes but the index provides {persisted_stripes}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn production_record_id(ordinal: usize) -> String {
     format!("group-o{ordinal:08}")
 }
@@ -421,6 +450,7 @@ fn main() -> BenchResult<()> {
     let source_sha = required("BORSUK_SOURCE_SHA256")?;
     let manifest_sha = required("BORSUK_GROUP_COMMIT_MANIFEST_SHA256")?;
     let writers: usize = number("BORSUK_GROUP_COMMIT_WRITERS")?;
+    let writer_instance_count: usize = number("BORSUK_GROUP_COMMIT_WRITER_INSTANCES")?;
     let operations: usize = number("BORSUK_GROUP_COMMIT_OPERATIONS_PER_WRITER")?;
     let dimensions: usize = number("BORSUK_GROUP_COMMIT_DIMENSIONS")?;
     let max_delay_ms: u64 = number("BORSUK_GROUP_COMMIT_MAX_DELAY_MS")?;
@@ -447,9 +477,16 @@ fn main() -> BenchResult<()> {
     if records_per_operation == 0 {
         return Err("group-commit records per operation must be positive".into());
     }
+    validate_writer_topology(
+        writers,
+        writer_instance_count,
+        worker_lanes,
+        usize::from(DEFAULT_CELL_WAL_LANES),
+    )?;
     let (_cell_count, repetition, performance_gate) = match protocol.as_str() {
         "diagnostic" => {
             if writers != 8
+                || writer_instance_count != 1
                 || operations != 20
                 || dimensions != 96
                 || max_delay_ms != 5
@@ -465,6 +502,7 @@ fn main() -> BenchResult<()> {
             let repetition: usize = number("BORSUK_GROUP_COMMIT_REPETITION")?;
             if !matches!(cell_count, 2_000 | 16_000)
                 || !matches!(writers, 1 | 8 | 32)
+                || writer_instance_count != writers
                 || !(1..=5).contains(&repetition)
                 || operations != 1_000
                 || dimensions != 768
@@ -517,6 +555,7 @@ fn main() -> BenchResult<()> {
             let repetition: usize = number("BORSUK_GROUP_COMMIT_REPETITION")?;
             if cell_count != 2_000
                 || !matches!(writers, 1 | 8 | 32)
+                || writer_instance_count > writers
                 || repetition != 1
                 || operations != 32
                 || dimensions != 768
@@ -536,7 +575,8 @@ fn main() -> BenchResult<()> {
             let cell_count: usize = number("BORSUK_GROUP_COMMIT_CELL_COUNT")?;
             let repetition: usize = number("BORSUK_GROUP_COMMIT_REPETITION")?;
             if cell_count != 64
-                || writers != 1
+                || !matches!(writers, 1 | 2)
+                || writer_instance_count != writers
                 || repetition != 1
                 || operations != 2
                 || dimensions != 8
@@ -583,21 +623,25 @@ fn main() -> BenchResult<()> {
     // Production invariant: dataset vectors must be decoded before durable timing.
     let input_vectors = Arc::new(input_vectors);
 
-    let index = open_benchmark_index(&uri)?;
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: Duration::from_millis(max_delay_ms),
-            max_records,
-            worker_lanes,
-        },
-    )?;
+    let writer_instances = (0..writer_instance_count)
+        .map(|_| {
+            GroupCommitWriter::new(
+                open_benchmark_index(&uri)?,
+                GroupCommitConfig {
+                    max_delay: Duration::from_millis(max_delay_ms),
+                    max_records,
+                    worker_lanes,
+                },
+            )
+        })
+        .collect::<borsuk::Result<Vec<_>>>()?;
     let barrier = Arc::new(Barrier::new(writers));
     let samples = Arc::new(Mutex::new(Vec::with_capacity(writers * operations)));
     let started = Instant::now();
     let handles = (0..writers)
         .map(|writer_ordinal| {
-            let writer = writer.clone();
+            let writer_instance = writer_ordinal % writer_instances.len();
+            let writer = writer_instances[writer_instance].clone();
             let barrier = Arc::clone(&barrier);
             let samples = Arc::clone(&samples);
             let input_vectors = Arc::clone(&input_vectors);
@@ -645,6 +689,7 @@ fn main() -> BenchResult<()> {
                     let receipt = completed.ticket.wait()?;
                     local.push(Sample {
                         writer: writer_ordinal,
+                        writer_instance,
                         operation: completed.operation,
                         batch_records: completed.record_ids.len(),
                         record_ids: completed.record_ids,
@@ -661,6 +706,7 @@ fn main() -> BenchResult<()> {
                     let receipt = completed.ticket.wait()?;
                     local.push(Sample {
                         writer: writer_ordinal,
+                        writer_instance,
                         operation: completed.operation,
                         batch_records: completed.record_ids.len(),
                         record_ids: completed.record_ids,
@@ -725,13 +771,15 @@ fn main() -> BenchResult<()> {
         b"complete\n",
     )?;
     let drain_started = Instant::now();
-    writer.drain()?;
+    for writer in &writer_instances {
+        writer.drain()?;
+    }
     let drain_ms = drain_started.elapsed().as_secs_f64() * 1_000.0;
     let total_record_count = writers * operations * records_per_operation;
     let end_to_end_records_per_second =
         total_record_count as f64 / ((elapsed_ms + drain_ms) / 1_000.0);
     fs::write(output.join("DRAIN_COMPLETE"), b"complete\n")?;
-    drop(writer);
+    drop(writer_instances);
 
     let mut groups = BTreeMap::<(usize, u64), (usize, u64, RequestCounts)>::new();
     for sample in &samples {
@@ -825,11 +873,12 @@ fn main() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,dataset_sha256,manifest_sha256,writers,operations,records_per_operation,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,end_to_end_records_per_second,p50_ms,p95_ms,operations_per_second,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,total_acknowledgement_bytes,max_acknowledgement_bytes,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,active_tail_read_p50_ms,active_tail_read_p95_ms,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
+        "source_sha256,dataset_sha256,manifest_sha256,writers,writer_instances,operations,records_per_operation,pipeline_depth,worker_lanes,records,groups,mean_group_records,elapsed_ms,drain_ms,end_to_end_records_per_second,p50_ms,p95_ms,operations_per_second,records_per_second,vector_mib_per_second,storage_requests,storage_gets,storage_puts,storage_heads,requests_per_record,total_acknowledgement_bytes,max_acknowledgement_bytes,visible_records,recall_queries,max_read_segments,inserted_id_recall_at_10,active_tail_read_p50_ms,active_tail_read_p95_ms,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
     )?;
     writeln!(
         summary,
-        "{source_sha},{dataset_sha},{manifest_sha},{writers},{operations},{records_per_operation},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{end_to_end_records_per_second:.9},{:.9},{:.9},{operations_per_second:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{total_acknowledgement_bytes},{max_acknowledgement_bytes},{visible},{recall_queries},{max_read_segments},{:.9},{active_tail_read_p50_ms:.9},{active_tail_read_p95_ms:.9},{:.9},{:.9},{},{},{},{},{},{},{},{}",
+        "{source_sha},{dataset_sha},{manifest_sha},{writers},{},{operations},{records_per_operation},{pipeline_depth},{worker_lanes},{},{},{:.9},{elapsed_ms:.9},{drain_ms:.9},{end_to_end_records_per_second:.9},{:.9},{:.9},{operations_per_second:.9},{:.9},{vector_mib_per_second:.9},{total_requests},{},{},{},{:.9},{total_acknowledgement_bytes},{max_acknowledgement_bytes},{visible},{recall_queries},{max_read_segments},{:.9},{active_tail_read_p50_ms:.9},{active_tail_read_p95_ms:.9},{:.9},{:.9},{},{},{},{},{},{},{},{}",
+        writer_instance_count,
         total_record_count,
         groups.len(),
         total_record_count as f64 / groups.len() as f64,
@@ -855,13 +904,14 @@ fn main() -> BenchResult<()> {
     let mut raw = BufWriter::new(File::create(output.join("samples.csv"))?);
     writeln!(
         raw,
-        "writer,operation,batch_records,first_record_id,record_ids,latency_ms,commit_lane,commit_sequence,committed_records,acknowledgement_bytes,group_requests,group_gets,group_puts,group_heads,lane_receipts"
+        "writer,writer_instance,operation,batch_records,first_record_id,record_ids,latency_ms,commit_lane,commit_sequence,committed_records,acknowledgement_bytes,group_requests,group_gets,group_puts,group_heads,lane_receipts"
     )?;
     for sample in samples {
         writeln!(
             raw,
-            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{}",
             sample.writer,
+            sample.writer_instance,
             sample.operation,
             sample.batch_records,
             sample.record_ids[0],
@@ -909,6 +959,37 @@ fn main() -> BenchResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writer_topology_rejects_thread_only_or_unrepresentable_assignments() {
+        validate_writer_topology(8, 8, 1, 8).unwrap();
+        validate_writer_topology(32, 8, 1, 8).unwrap();
+
+        assert!(
+            validate_writer_topology(8, 0, 1, 8)
+                .unwrap_err()
+                .to_string()
+                .contains("writer instances must be positive")
+        );
+        assert!(
+            validate_writer_topology(8, 9, 1, 16)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot exceed producer writers")
+        );
+        assert!(
+            validate_writer_topology(8, 3, 1, 8)
+                .unwrap_err()
+                .to_string()
+                .contains("must divide producer writers evenly")
+        );
+        assert!(
+            validate_writer_topology(8, 8, 2, 8)
+                .unwrap_err()
+                .to_string()
+                .contains("requires 16 persisted writer stripes")
+        );
+    }
 
     #[test]
     fn percentile_is_deterministic() {

@@ -671,6 +671,39 @@ fn one_writer_can_drain_while_another_writer_remains_live() {
 }
 
 #[test]
+fn every_independent_group_writer_can_drain_after_a_peer_publishes() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///independent-group-writer-sequential-drains";
+    let writer_config = GroupCommitConfig {
+        max_delay: std::time::Duration::ZERO,
+        max_records: 1,
+        worker_lanes: 1,
+    };
+    let first = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        writer_config,
+    )
+    .unwrap();
+    let second = GroupCommitWriter::new(
+        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
+        writer_config,
+    )
+    .unwrap();
+
+    first
+        .append(vec![VectorRecord::new("first", vec![1.0, 0.0])])
+        .unwrap();
+    second
+        .append(vec![VectorRecord::new("second", vec![2.0, 0.0])])
+        .unwrap();
+    first.drain().unwrap();
+    second.drain().unwrap();
+
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(reopened.list_records(0, 10).unwrap().len(), 2);
+}
+
+#[test]
 fn independent_writer_acknowledgement_order_defines_last_write_wins() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///independent-group-writer-order";
@@ -886,9 +919,10 @@ fn independent_commit_lanes_report_lane_local_requests() {
     const LANES: usize = 4;
     const RECORDS: usize = 64;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
     let uri = "memory:///group-lane-local-request-counts";
     let writer = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap(),
         GroupCommitConfig {
             max_delay: std::time::Duration::ZERO,
             max_records: 1,
@@ -896,6 +930,7 @@ fn independent_commit_lanes_report_lane_local_requests() {
         },
     )
     .unwrap();
+    operations.clear();
     let barrier = Arc::new(Barrier::new(RECORDS));
     let handles = (0..RECORDS)
         .map(|ordinal| {
@@ -916,16 +951,36 @@ fn independent_commit_lanes_report_lane_local_requests() {
         .into_iter()
         .map(|handle| handle.join().unwrap())
         .collect::<Vec<_>>();
-    let by_lane = receipts
-        .iter()
-        .map(|receipt| (receipt.commit_lane, receipt.requests.total()))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(by_lane.len(), LANES);
-    let minimum = *by_lane.values().min().unwrap();
-    let maximum = *by_lane.values().max().unwrap();
-    assert!(
-        maximum - minimum == 0,
-        "every locally owned writer stripe must report the same one-write acknowledgement cost: {by_lane:?}"
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|receipt| receipt.commit_lane)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        LANES
+    );
+    assert!(receipts.iter().all(|receipt| {
+        receipt.requests.gets >= 1
+            && receipt.requests.puts >= 2
+            && receipt.requests.deletes == 0
+            && receipt.requests.heads == 0
+            && receipt.requests.lists == 0
+    }));
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|receipt| receipt.requests.gets)
+            .sum::<u64>(),
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Get) as u64,
+        "generation-counter retry GETs must remain attributed to their issuing stripe"
+    );
+    assert_eq!(
+        receipts
+            .iter()
+            .map(|receipt| receipt.requests.puts)
+            .sum::<u64>(),
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Put) as u64,
+        "counter CAS retries and extent PUTs must reconcile without cross-stripe double counting"
     );
 }
 

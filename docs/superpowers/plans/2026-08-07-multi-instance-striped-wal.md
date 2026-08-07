@@ -65,13 +65,21 @@ This is format v30. A v29 reader is not retained.
   exactly once with the latest same-ID generation.
 - [x] Capture collection-wide materialization frontiers, but checkpoint only
   caller-owned stripes in the synchronous drain path.
-- [ ] Add a storage-level conditional foreign checkpoint primitive that merges
+- [x] Add a storage-level conditional foreign checkpoint primitive that merges
   only a monotonic materialized frontier while preserving owner, expiry,
   durable frontier, sealed epoch, and any concurrently published watermark.
-- [ ] Teach live writers to reconcile a checkpoint-only HEAD version change
+- [x] Teach live writers to reconcile a checkpoint-only HEAD version change
   before renewal/watermark publication.
 - [ ] Prove crash takeover, late-zombie exclusion, bounded probes, and GC remain
   correct under foreign materialization.
+
+The 2026-08-07 two-instance structural runner exposed and now covers sequential
+drains: the first client publishes the collection-wide materialization, then
+conditionally checkpoints every captured stripe without changing its owner,
+lease, or epoch. A live owner merges that checkpoint-only HEAD update on its
+next watermark, renewal, or release. Focused fencing coverage and the full
+lane-log/group-commit suites pass; the remaining unchecked item requires the
+complete crash/fault/GC assurance gate before this task is closed.
 
 ## Task 3: Remove the eight-instance ceiling without read amplification
 

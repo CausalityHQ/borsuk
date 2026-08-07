@@ -846,3 +846,41 @@ still fail-closed, and the global counter's contention/throughput curve has not
 been measured. Do not reuse the pre-v27 immutable bases or any earlier AWS
 result. The next benchmark must rebuild a pristine base and distinguish
 processes from threads in raw receipts and resource telemetry.
+
+## Independent-instance harness and cooperative drain correction (2026-08-07)
+
+The unlaunched architecture-qualification contract now requires one separately
+opened `GroupCommitWriter` per producer writer and records `writer_instances`
+in both summary and raw samples. The old 1/2/4/8 local-lane cross-product was
+removed: the intended horizontal matrix is 1/8/32 independent clients with one
+stripe each. The validator rejects thread-only evidence. Because the persisted
+pool still has eight stripes, the 32-writer cell fails preflight and the AWS
+campaign remains intentionally unlaunched until the active-stripe directory is
+implemented.
+
+The first two-instance structural smoke terminally failed after ingest and
+active-tail qualification with `ConcurrentModification` on
+`routing/layers/00000000000000000007/L0/pages.parquet`. The terminal cell's
+stderr, resource timeline, and 169-row storage trace showed that client one had
+published the collection-wide drain while client two, pinned to the previous
+manifest, attempted to rebuild the same materialized tail. No performance
+claim was made from that failed smoke.
+
+A RED integration test reproduced the same conflict on sequential independent
+drains. The corrected drain conditionally checkpoints every captured stripe;
+foreign checkpoints preserve ownership and live writers reconcile the
+checkpoint-only HEAD change. The fresh terminal smoke at
+`/tmp/borsuk-multi-instance-smoke-fixed.CYXDUq/results` passed the fail-closed
+validator with two distinct instances, four visible records, exact inserted-ID
+visibility 1.0, and complete resource/storage telemetry. Its local timings are
+structural only and ineligible for performance claims.
+
+Checkpoint verification passed 37 group-commit integration tests, 45 focused
+lane-log tests, seven benchmark-example tests, and 49 runner/validator tests.
+The one workspace all-target/all-feature gate was not green: 150 `local_index`
+tests passed and seven routing/request-accounting assertions failed, then the
+same seven reproduced in the isolated `local_index` layer. Those tests and
+their routing code are unchanged by this writer slice; expected backing reads
+of one becoming zero indicate a separate deterministic routing/cache gate gap.
+No second full gate was launched, and this checkpoint does not claim workspace
+full-gate readiness.

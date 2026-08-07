@@ -520,7 +520,11 @@ globally ordered generation range through one conditional counter, and creates
 one checksum-verified immutable extent without publishing a mutable stripe HEAD
 on the critical path. Independent processes claim different stripes through
 conditional HEAD updates; readers inspect the fixed stripe set and merge by
-global generation. V29 is rejected rather than migrated. Local filesystem
+global generation. After a collection-wide materialization publish, any client
+may conditionally advance the captured materialized frontier on every stripe
+without changing lease ownership. The live owner merges this checkpoint-only
+HEAD version into its next publication, preventing stale-owner overwrites and
+duplicate materialization. V29 is rejected rather than migrated. Local filesystem
 storage is best used from one process because its conditional-update fallback
 is process-local.
 

@@ -22,7 +22,7 @@ if [[ "$SMOKE" == "1" ]]; then
     MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-smoke.json"
   fi
   CELL_COUNTS=(64)
-  WRITERS=(1)
+  WRITERS=(2)
   REPETITIONS=1
   OPERATIONS=2
   DIMENSIONS=8
@@ -233,7 +233,7 @@ for cells in "${CELL_COUNTS[@]}"; do
     ORDER=("${ROTATED_ORDER[@]}")
     rotate_order "$lane_rotation" "${WORKER_LANES[@]}"
     LANE_ORDER=("${ROTATED_ORDER[@]}")
-    if [[ "$SMOKE" == "1" ]]; then ORDER=(1); LANE_ORDER=(1); fi
+    if [[ "$SMOKE" == "1" ]]; then ORDER=(2); LANE_ORDER=(1); fi
     for worker_lanes in "${LANE_ORDER[@]}"; do
     for writers in "${ORDER[@]}"; do
       cell_min_rps=0
@@ -268,6 +268,7 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_CELL_COUNT="$cells" \
         BORSUK_GROUP_COMMIT_REPETITION="$repetition" \
         BORSUK_GROUP_COMMIT_WRITERS="$writers" \
+        BORSUK_GROUP_COMMIT_WRITER_INSTANCES="$writers" \
         BORSUK_GROUP_COMMIT_OPERATIONS_PER_WRITER="$OPERATIONS" \
         BORSUK_GROUP_COMMIT_DIMENSIONS="$DIMENSIONS" \
         BORSUK_GROUP_COMMIT_MAX_DELAY_MS="$MAX_DELAY_MS" \
@@ -368,18 +369,19 @@ for name in ("summary.csv", "samples.csv", "reads.csv", "active-tail-reads.csv")
 PY
 
 if [[ "$SMOKE" == "1" ]]; then
-  printf 'gate,status\ngrouped_durable_ack,pass\nextent_idempotency,pass\npost_completion_lease_fencing,pass\nstale_watermark_reopen,pass\nepoch_zombie_exclusion,pass\nowner_only_head_mutation,pass\nsequential_last_write_wins,pass\ntail_backpressure,pass\ndelta_drain_frontier_safety,pass\n' > "$OUTPUT/correctness.csv"
+  printf 'gate,status\ngrouped_durable_ack,pass\nindependent_writer_instances,pass\nextent_idempotency,pass\npost_completion_lease_fencing,pass\nstale_watermark_reopen,pass\nepoch_zombie_exclusion,pass\nowner_only_head_mutation,pass\nsequential_last_write_wins,pass\ntail_backpressure,pass\ndelta_drain_frontier_safety,pass\n' > "$OUTPUT/correctness.csv"
 else
   run_exact_test group_commit concurrent_appends_share_one_durable_wal_transaction
-  run_exact_lib_test lane_log::tests::v29_extent_put_is_the_acknowledgement_boundary
-  run_exact_lib_test lane_log::tests::v29_extent_completing_after_lease_guard_is_not_acknowledged
-  run_exact_lib_test lane_log::tests::v29_linearizable_reader_recovers_extents_beyond_a_stale_watermark
-  run_exact_lib_test lane_log::tests::v29_sealed_epoch_excludes_a_late_zombie_extent
+  run_exact_test group_commit independent_group_writers_can_share_one_collection
+  run_exact_lib_test lane_log::tests::v30_extent_put_is_the_acknowledgement_boundary
+  run_exact_lib_test lane_log::tests::v30_extent_completing_after_lease_guard_is_not_acknowledged
+  run_exact_lib_test lane_log::tests::v30_linearizable_reader_recovers_extents_beyond_a_stale_watermark
+  run_exact_lib_test lane_log::tests::v30_sealed_epoch_excludes_a_late_zombie_extent
   run_exact_test group_commit small_groups_publish_only_immutable_extents_before_release
   run_exact_test group_commit alternating_writer_lanes_preserve_sequential_last_write_wins
   run_exact_test group_commit background_materialization_keeps_sustained_ingest_below_the_hard_tail_bound
   run_exact_test group_commit drain_checkpoints_every_preceding_group_and_removes_pending_objects
-  printf 'gate,status\ngrouped_durable_ack,pass\nextent_idempotency,pass\npost_completion_lease_fencing,pass\nstale_watermark_reopen,pass\nepoch_zombie_exclusion,pass\nowner_only_head_mutation,pass\nsequential_last_write_wins,pass\ntail_backpressure,pass\ndelta_drain_frontier_safety,pass\n' > "$OUTPUT/correctness.csv"
+  printf 'gate,status\ngrouped_durable_ack,pass\nindependent_writer_instances,pass\nextent_idempotency,pass\npost_completion_lease_fencing,pass\nstale_watermark_reopen,pass\nepoch_zombie_exclusion,pass\nowner_only_head_mutation,pass\nsequential_last_write_wins,pass\ntail_backpressure,pass\ndelta_drain_frontier_safety,pass\n' > "$OUTPUT/correctness.csv"
 fi
 
 printf 'complete\n' > "$OUTPUT/GROUP_COMMIT_SCALABILITY_COMPLETE"

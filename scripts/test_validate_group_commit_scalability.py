@@ -24,6 +24,7 @@ class ValidatorTests(unittest.TestCase):
             "instance_type": "local",
             "cell_counts": [64],
             "writers": [1],
+            "writer_instance_policy": "one-per-writer",
             "repetitions": 1,
             "operations_per_writer": 2,
             "dimensions": 8,
@@ -42,6 +43,7 @@ class ValidatorTests(unittest.TestCase):
             "throughput_gate_writers": [],
             "correctness_gates": [
                 "same_id_last_write_wins",
+                "independent_writer_instances",
                 "prepare_failure",
                 "crash_recovery",
                 "preregistered_lane_factor_safety",
@@ -73,7 +75,7 @@ class ValidatorTests(unittest.TestCase):
         cell = self.root / "cells/c64/r01/l1/w1"
         cell.mkdir(parents=True)
         summary_fields = [
-            "source_sha256", "dataset_sha256", "manifest_sha256", "writers", "operations", "pipeline_depth", "worker_lanes",
+            "source_sha256", "dataset_sha256", "manifest_sha256", "writers", "writer_instances", "operations", "pipeline_depth", "worker_lanes",
             "records", "groups", "mean_group_records", "elapsed_ms", "drain_ms", "end_to_end_records_per_second", "p50_ms",
             "p95_ms", "records_per_second", "vector_mib_per_second", "storage_requests", "storage_gets",
             "storage_puts", "storage_heads", "requests_per_record",
@@ -86,7 +88,7 @@ class ValidatorTests(unittest.TestCase):
         ]
         summary = {
             "source_sha256": source_sha, "dataset_sha256": manifest["dataset_sha256"], "manifest_sha256": manifest_sha,
-            "writers": "1", "operations": "2", "pipeline_depth": "1", "worker_lanes": "1", "records": "2", "groups": "1",
+            "writers": "1", "writer_instances": "1", "operations": "2", "pipeline_depth": "1", "worker_lanes": "1", "records": "2", "groups": "1",
             "mean_group_records": "2", "elapsed_ms": "10", "drain_ms": "10", "end_to_end_records_per_second": "100", "p50_ms": "6",
             "p95_ms": "6", "records_per_second": "200", "vector_mib_per_second": "0.006103515625", "storage_requests": "5",
             "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",
@@ -102,12 +104,12 @@ class ValidatorTests(unittest.TestCase):
         }
         self._write_csv(cell / "summary.csv", summary_fields, [summary])
         sample_fields = [
-            "writer", "operation", "record_id", "latency_ms", "commit_lane", "commit_sequence",
+            "writer", "writer_instance", "operation", "record_id", "latency_ms", "commit_lane", "commit_sequence",
             "committed_records", "acknowledgement_bytes", "group_requests", "group_gets",
             "group_puts", "group_heads",
         ]
         samples = [
-            {"writer": "0", "operation": str(operation), "record_id": f"id-{operation}",
+            {"writer": "0", "writer_instance": "0", "operation": str(operation), "record_id": f"id-{operation}",
              "latency_ms": str(5 + operation), "commit_lane": "0", "commit_sequence": "1",
              "committed_records": "2", "acknowledgement_bytes": "2048",
              "group_requests": "5", "group_gets": "1",
@@ -203,6 +205,15 @@ class ValidatorTests(unittest.TestCase):
 
     def test_valid_terminal_campaign_passes(self) -> None:
         validate(self.root, self.manifest_path)
+
+    def test_thread_only_evidence_cannot_claim_independent_writers(self) -> None:
+        cell = self.root / "cells/c64/r01/l1/w1/summary.csv"
+        with cell.open(newline="", encoding="utf-8") as handle:
+            records = list(csv.DictReader(handle))
+        records[0]["writer_instances"] = "0"
+        self._write_csv(cell, list(records[0]), records)
+        with self.assertRaisesRegex(ValidationError, "writer instance drift"):
+            validate(self.root, self.manifest_path)
 
     def test_bulk_samples_preserve_every_lane_receipt(self) -> None:
         evidence = lane_receipt_evidence(

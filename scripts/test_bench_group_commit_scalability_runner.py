@@ -22,9 +22,17 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         )
         self.assertIn("max_records != 1_024", BENCH)
 
+    def test_writer_cells_use_separately_opened_library_instances(self) -> None:
+        manifest = json.loads(REALISTIC_MANIFEST.read_text())
+        self.assertEqual(manifest["writer_instance_policy"], "one-per-writer")
+        self.assertIn('BORSUK_GROUP_COMMIT_WRITER_INSTANCES="$writers"', RUNNER)
+        self.assertIn("open_benchmark_index(&uri)?", BENCH)
+        self.assertIn("writer_instance", BENCH)
+
     def test_smoke_retains_its_small_independent_bound(self) -> None:
         self.assertIn("MAX_RECORDS=8", RUNNER)
         self.assertIn("max_records != 8", BENCH)
+        self.assertIn("WRITERS=(2)", RUNNER)
 
     def test_point_visibility_uses_one_batched_routing_traversal(self) -> None:
         self.assertIn("let point_records = reopened.get_records(", BENCH)
@@ -44,7 +52,7 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertEqual(manifest["dataset_sha256"], "54c733e39adfcaa9ee10f3ed8bd8e66ada9f8f9a1a73e9753f5c5c2044b79254")
         self.assertEqual(manifest["dimensions"], 768)
         self.assertEqual(manifest["writers"], [1, 8, 32])
-        self.assertEqual(manifest["worker_lanes"], [1, 2, 4, 8])
+        self.assertEqual(manifest["worker_lanes"], [1])
         self.assertEqual(manifest["operations_per_writer"], 1_000)
         self.assertEqual(manifest["repetitions"], 5)
         self.assertEqual(manifest["pipeline_depth_per_writer"], 4)
@@ -58,6 +66,7 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
             manifest["correctness_gates"],
             [
                 "grouped_durable_ack",
+                "independent_writer_instances",
                 "extent_idempotency",
                 "post_completion_lease_fencing",
                 "stale_watermark_reopen",
@@ -112,6 +121,18 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("process_exit.txt", RUNNER)
         self.assertIn("CELL_VALIDATION_FAILED", RUNNER)
         self.assertIn("validation-error.txt", RUNNER)
+
+    def test_correctness_gate_uses_current_epoch_lane_format_tests(self) -> None:
+        self.assertIn("lane_log::tests::v30_extent_put_is_the_acknowledgement_boundary", RUNNER)
+        self.assertIn(
+            "lane_log::tests::v30_extent_completing_after_lease_guard_is_not_acknowledged",
+            RUNNER,
+        )
+        self.assertIn(
+            "lane_log::tests::v30_linearizable_reader_recovers_extents_beyond_a_stale_watermark",
+            RUNNER,
+        )
+        self.assertNotIn("lane_log::tests::v29_", RUNNER)
 
     def test_runner_refuses_identity_and_s3_prefix_reuse(self) -> None:
         self.assertIn("source SHA-256 differs from checked-out HEAD archive", RUNNER)
