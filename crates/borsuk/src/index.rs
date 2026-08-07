@@ -125,10 +125,6 @@ fn parallel_segment_write_batch_size(segment_max_vectors: usize) -> usize {
         .clamp(1, MAX_PARALLEL_SEGMENT_WRITES)
 }
 
-fn provisional_segment_checksum(id: &str) -> String {
-    format!("provisional-segment-{id}")
-}
-
 fn join_rows(rows: &[usize]) -> String {
     rows.iter()
         .map(usize::to_string)
@@ -2029,37 +2025,19 @@ impl BorsukIndex {
             .segment_max_vectors
             .max(LANE_LOG_MATERIALIZATION_SEGMENT_MAX_VECTORS);
         let write_batch_size = parallel_segment_write_batch_size(segment_max_vectors);
-        let previous_active_segments = manifest.segments.clone();
         let planned_segments = records
             .chunks(segment_max_vectors)
             .map(|chunk| (Uuid::new_v4().to_string(), chunk.len()))
             .collect::<Vec<_>>();
-        let provisional_template = previous_active_segments.first().cloned();
-        let provisional_active_segments = provisional_template.map(|template| {
-            let mut active = previous_active_segments.clone();
-            active.extend(planned_segments.iter().map(|(id, object_count)| {
-                let mut provisional = template.clone();
-                provisional.id = id.clone();
-                provisional.object_count = *object_count;
-                provisional.checksum = provisional_segment_checksum(id);
-                provisional
-            }));
-            active
-        });
+        // Foreground lane materialization deliberately does not rebuild or
+        // extend the resident global-PQ artifact. That optimization is a
+        // corpus-scale rewrite and would multiply physical write bytes for
+        // every drain. The new manifest version makes the old global coverage
+        // ineligible; readers fall back to the authoritative routing tree and
+        // exact WAL/materialized segments until explicit maintenance rebuilds
+        // the global artifact.
         let index_ref: &BorsukIndex = &*self;
-        let (new_segment_summaries, delta_update) = std::thread::scope(|scope| {
-            let delta_handle = match (
-                manifest.global_pq_ref.clone(),
-                provisional_active_segments.as_deref(),
-            ) {
-                (Some(base), Some(active)) if base.covered_manifest_version == previous.version => {
-                    let fringe_records = Some(records.as_slice());
-                    Some(scope.spawn(move || {
-                        index_ref.build_resident_global_delta(&base, active, false, fringe_records)
-                    }))
-                }
-                _ => None,
-            };
+        let new_segment_summaries = {
             let mut segments_to_write = Vec::with_capacity(write_batch_size);
             let mut new_summaries = Vec::with_capacity(planned_segments.len());
             for (chunk, (id, _)) in records.chunks(segment_max_vectors).zip(&planned_segments) {
@@ -2077,90 +2055,15 @@ impl BorsukIndex {
                 }
             }
             new_summaries.extend(index_ref.write_segment_batch(&mut segments_to_write)?);
-            let delta_update = delta_handle
-                .map(|handle| {
-                    handle.join().map_err(|_| {
-                        BorsukError::InvalidStorage(
-                            "resident global delta worker panicked".to_string(),
-                        )
-                    })?
-                })
-                .transpose()?
-                .flatten();
-            Ok::<_, BorsukError>((new_summaries, delta_update))
-        })?;
+            new_summaries
+        };
         manifest
             .segments
             .extend(new_segment_summaries.iter().cloned());
-        let delta_update = if delta_update.is_none() {
-            manifest
-                .global_pq_ref
-                .clone()
-                .map(|base| {
-                    self.build_resident_global_delta(&base, &manifest.segments, false, None)
-                })
-                .transpose()?
-                .flatten()
-        } else {
-            delta_update
-        };
-        let delta_update = delta_update.map(|(mut desired, promote)| {
-            let provisional_to_actual = planned_segments
-                .iter()
-                .zip(&new_segment_summaries)
-                .map(|((id, _), summary)| {
-                    (provisional_segment_checksum(id), summary.checksum.clone())
-                })
-                .collect::<HashMap<_, _>>();
-            for checksum in &mut desired.segments {
-                if let Some(actual) = provisional_to_actual.get(checksum) {
-                    *checksum = actual.clone();
-                }
-            }
-            let provisional_to_actual_summary = planned_segments
-                .iter()
-                .zip(&new_segment_summaries)
-                .map(|((id, _), summary)| (provisional_segment_checksum(id), summary.clone()))
-                .collect::<HashMap<_, _>>();
-            for summary in &mut desired.exact_fringe {
-                if let Some(actual) = provisional_to_actual_summary.get(&summary.checksum) {
-                    *summary = actual.clone();
-                }
-            }
-            (desired, promote)
-        });
-        let delta_updated = delta_update.is_some();
-        if let Some((desired, promote)) = delta_update {
-            debug_assert!(!promote, "foreground lane drain cannot promote the base");
-            let install_as_top_level = manifest.global_pq_ref.as_ref().is_some_and(|base| {
-                desired.checksum == base.checksum
-                    || desired.segments == base.segments
-                    || (desired.delta.is_none() && !desired.exact_fringe.is_empty())
-            });
-            if install_as_top_level {
-                manifest.global_pq_ref = Some(desired);
-            } else {
-                let reference = manifest.global_pq_ref.as_mut().ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "resident global base disappeared during lane drain".into(),
-                    )
-                })?;
-                reference.delta = Some(Box::new(desired));
-                reference.exact_fringe.clear();
-                reference.covered_manifest_version = manifest.version;
-                reference.validate_layout()?;
-            }
-        }
         manifest.rebuild_pivots();
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        if delta_updated {
-            self.resident_global_pq
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clear();
-        }
         Ok(committed_sequences)
     }
 
@@ -23232,7 +23135,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_log_drain_reports_delta_publication_failure() {
+    fn lane_log_drain_does_not_require_global_delta_descriptor() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -23270,7 +23173,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(group.drain().is_err());
+        group.drain().unwrap();
     }
 
     #[test]
@@ -23325,12 +23228,12 @@ mod tests {
         assert_eq!(
             drained.manifest.version,
             version_before_drain + 1,
-            "drain must publish materialized segments and their global delta atomically"
+            "drain must publish materialized segments without rewriting the global artifact"
         );
         assert!(drained.manifest.quantizer_ref.is_none());
         let global = drained.manifest.global_pq_ref.as_ref().unwrap();
-        assert_eq!(global.covered_manifest_version, drained.manifest.version);
-        assert!(global.delta.is_some());
+        assert_ne!(global.covered_manifest_version, drained.manifest.version);
+        assert!(global.delta.is_none());
         assert_eq!(
             drained
                 .search_ids(&[1_015.0; 8], SearchOptions::exact(1))
