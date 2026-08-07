@@ -455,7 +455,7 @@ fn adaptive_stop_reads_fewer_segments_and_keeps_the_top_hit() {
 }
 
 /// The type-safe `with_projected_reads(..)` toggle must be honored and deliver
-/// real object-store byte savings: on a cold `PqScan` read, projected scoring
+/// real object-store byte savings: on a cold production `SrhtPqScan` read, projected scoring
 /// range-reads only the `pq_code` columns plus the rerank rows' vectors, so it
 /// fetches strictly fewer bytes than forcing full-vector reads — while returning
 /// the identical, correct top-k. It supersedes the legacy
@@ -516,7 +516,7 @@ fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
     let query = records[750].vector.clone();
     // Budget < per-segment object count so the projected path can prune before
     // decoding full vectors.
-    let base = SearchOptions::approx(K, LeafMode::PqScan)
+    let base = SearchOptions::approx(K, LeafMode::SrhtPqScan)
         .with_max_segments(64)
         .with_max_candidates_per_segment(16);
     let projected = projected_index
@@ -536,34 +536,31 @@ fn projected_reads_toggle_saves_bytes_and_keeps_the_top_hit() {
         projected_ids, full_ids,
         "projected toggle changed the top-k result"
     );
-    // The planner must never make a dense candidate `take` more expensive than
-    // a full sidecar read. With 16 candidates and only four Arrow record
-    // batches per segment, the range plan deliberately falls back to the full
-    // immutable sidecar before fetching its footer. Sparser candidate tests in
-    // `projected_rerank_reads_only_the_bounded_sidecar_tail_for_its_index`
-    // cover the true range-read saving.
+    // Candidate count is not batch coverage. Even with more candidate rows
+    // than physical batches, the planner must keep a sparse `take` ranged when
+    // those rows do not touch every batch.
     assert!(
-        projected.bytes_read <= full.bytes_read,
-        "projected planner fetched {} bytes, exceeding the full-sidecar read {}",
+        projected.bytes_read < full.bytes_read,
+        "projected planner fetched {} bytes instead of beating the full-sidecar read {}",
         projected.bytes_read,
         full.bytes_read
     );
 
-    // An explicitly warmed handle is the opposite case: all decoded cells are
-    // already resident, so projected storage reads would throw away the stated
-    // memory-preloaded contract. A cache budget must not force full reads when
-    // empty, but a complete warm cache must still win once populated.
+    // The explicit projection toggle remains authoritative even after warming
+    // the decoded segment cache. It must not silently switch back to the full
+    // sidecar/cache path that this qualification is intended to bypass.
     projected_index.warm().unwrap();
     let memory_preloaded = projected_index
         .search_with_report(
             &query,
-            SearchOptions::approx(K, LeafMode::PqScan)
+            SearchOptions::approx(K, LeafMode::SrhtPqScan)
                 .with_max_segments(64)
                 .with_max_candidates_per_segment(16)
                 .with_projected_reads(true),
         )
         .unwrap();
-    assert_eq!(memory_preloaded.bytes_read, 0);
+    assert!(memory_preloaded.bytes_read > 0);
+    assert!(memory_preloaded.bytes_read < full.bytes_read);
     assert_eq!(memory_preloaded.hits[0].id, records[750].id);
 }
 

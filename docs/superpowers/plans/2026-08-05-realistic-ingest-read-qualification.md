@@ -84,6 +84,16 @@
   retain the sequential fallback. Full library, group-commit,
   fault-injection, Clippy, and formatting gates pass. A fresh terminal arm is
   required before assigning a throughput or scalability result.
+- Terminal AWS arm `20260807T160000Z-parallel-immutable` passed the complete
+  one-writer cell and preserved 10,516 records/s, 71.485 ms write p95,
+  137.010 ms active-tail read p95, and recall@10 1.0 at eight writers, but its
+  post-drain read p95 regressed to 6,666.159 ms. The terminal trace attributes
+  479,421,516 bytes and 24 immutable segments to each eight-writer query. Code
+  tracing found that lane-log materialization never invoked the existing
+  bounded global-PQ delta refresh and that sparse projected reranks incorrectly
+  selected a full sidecar by comparing candidate count with batch count. TDD
+  regressions now cover both causes. These fixes are locally verified only;
+  they require a fresh source-identified AWS arm before any performance claim.
 
 ## Global Constraints
 

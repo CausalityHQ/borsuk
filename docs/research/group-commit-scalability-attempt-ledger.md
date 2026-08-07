@@ -337,3 +337,34 @@ The run terminalized with `GROUP_COMMIT_SCALABILITY_FAILED` at
 `CELL_FAILED`; the terminal stderr contains only `production performance gate
 failed`. The process-shared routing-page cache did not clear the one-writer
 read gate. The run is claim-ineligible; no measurement CSV was inspected.
+
+## parallel immutable qualification (2026-08-07)
+
+Run `20260807T160000Z-parallel-immutable` used commit `d1f31e4`, source archive
+SHA-256 `2d9ec11b19e47174d2f5382429a824bd4d2d46113554e79e328dab7f0612d99d`,
+and frozen manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+The root `GROUP_COMMIT_SCALABILITY_FAILED` marker is present. Measurement CSVs
+were opened only after that terminal marker.
+
+The `c2000/r01/l1/w1` cell completed every phase and production gate: write
+p95 was 61.070 ms, acknowledgement throughput was 1,570.363 records/s,
+inserted-ID recall@10 was 1.0, active-tail read p95 was 173.119 ms, and
+post-drain read p95 was 198.564 ms. The throughput threshold is preregistered
+only for 32 writers.
+
+The `c2000/r01/l1/w8` cell preserved 1.0 inserted-ID recall, 10,516.000
+acknowledged records/s, 71.485 ms write p95, and 137.010 ms active-tail read
+p95, but failed the post-drain read gate at 6,666.159 ms p95. Each post-drain
+query searched 24 immutable segments and accounted for 479,421,516 bytes;
+the 20 probes accounted for 9,588,430,320 bytes. The cell exited 1 with
+`PRODUCTION_PERFORMANCE_GATE_FAILED`, and the remaining matrix did not run.
+
+Source tracing identified two independent causes rather than a cache miss:
+lane-log drain published materialized segments without invoking the existing
+bounded global-PQ delta refresh, leaving the complete 128,000-row append as an
+exact per-segment fringe; and the projected sidecar planner compared candidate
+row count with batch count instead of testing actual batch coverage, turning a
+sparse rerank into a full-sidecar decode. The next qualification must measure
+the drain-to-delta hook and corrected sparse range decision from one frozen
+revision; neither improvement is claimed from this failed run.

@@ -131,6 +131,76 @@ fn drain_keeps_global_base_and_searches_materialized_delta_without_rebuild() {
 }
 
 #[test]
+fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_base() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///group-drain-indexed-global-delta";
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::new(traced),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    index
+        .add(
+            (0..128)
+                .map(|row| {
+                    VectorRecord::new(
+                        format!("base-{row}"),
+                        (0..8)
+                            .map(|dimension| ((row * 17 + dimension * 11) % 101) as f32 / 101.0)
+                            .collect(),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    operations.clear();
+
+    let delta = (0..32)
+        .map(|row| VectorRecord::new(format!("delta-{row}"), vec![10.0 + row as f32; 8]))
+        .collect::<Vec<_>>();
+    let query = delta[17].vector.clone();
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 32,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    writer.append(delta).unwrap();
+    writer.drain().unwrap();
+
+    assert!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("global-pq/")
+        }) > 0,
+        "a threshold-sized drain must publish an incremental global-PQ delta"
+    );
+    let report = BorsukIndex::open_with_object_store(inner, uri)
+        .unwrap()
+        .search_with_report(
+            &query,
+            SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                .with_max_segments(4)
+                .with_max_candidates_per_segment(16),
+        )
+        .unwrap();
+    assert_eq!(report.hits[0].id.as_str(), "delta-17");
+}
+
+#[test]
 fn concurrent_drains_serialize_one_materialization_frontier() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
