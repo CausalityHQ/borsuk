@@ -252,6 +252,10 @@ impl CanonicalMutation {
     pub(crate) fn record(&self) -> Option<&crate::VectorRecord> {
         self.record.as_ref()
     }
+
+    pub(crate) fn into_record(self) -> Option<crate::VectorRecord> {
+        self.record
+    }
 }
 
 fn put_digest(record: &crate::VectorRecord) -> Result<[u8; 32]> {

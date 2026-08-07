@@ -25,6 +25,7 @@ use arrow_schema::{DataType, Field, Schema};
 
 use crate::{
     BorsukError, Result,
+    mutation::{MutationStamp, MutationVersion},
     record::{RecordId, SidecarCompression, VectorElementType, VectorRecord},
 };
 
@@ -41,6 +42,7 @@ const META_ELEMENT_TYPE: &str = "borsuk.vector.element_type";
 pub(crate) struct ExactSidecarRow {
     pub(crate) id: RecordId,
     pub(crate) generation: u64,
+    pub(crate) mutation_stamp: Option<MutationStamp>,
     pub(crate) vector: Vec<f32>,
 }
 
@@ -53,6 +55,7 @@ pub(crate) struct SidecarIndex {
     row_count: usize,
     batch_rows: usize,
     element_type: VectorElementType,
+    mutation_stamped: bool,
 }
 
 impl SidecarIndex {
@@ -193,8 +196,58 @@ impl SidecarIndex {
                         batch.num_rows()
                     )));
                 }
+                let mutation_stamp = if self.mutation_stamped {
+                    let hlcs = batch
+                        .column(2)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "Arrow vector sidecar mutation_hlc is not UInt64".to_string(),
+                            )
+                        })?;
+                    let writers = batch
+                        .column(3)
+                        .as_any()
+                        .downcast_ref::<FixedSizeBinaryArray>()
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "Arrow vector sidecar mutation_writer is not FixedSizeBinary"
+                                    .to_string(),
+                            )
+                        })?;
+                    let digests = batch
+                        .column(4)
+                        .as_any()
+                        .downcast_ref::<FixedSizeBinaryArray>()
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "Arrow vector sidecar mutation_digest is not FixedSizeBinary"
+                                    .to_string(),
+                            )
+                        })?;
+                    Some(MutationStamp::new(
+                        MutationVersion::from_parts(
+                            hlcs.value(row_in_batch),
+                            writers.value(row_in_batch).try_into().map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "Arrow vector sidecar mutation writer must contain 16 bytes"
+                                        .to_string(),
+                                )
+                            })?,
+                        ),
+                        digests.value(row_in_batch).try_into().map_err(|_| {
+                            BorsukError::InvalidStorage(
+                                "Arrow vector sidecar mutation digest must contain 32 bytes"
+                                    .to_string(),
+                            )
+                        })?,
+                    ))
+                } else {
+                    None
+                };
                 let vector = decode_vector(
-                    batch.column(2).as_ref(),
+                    batch.column(self.vector_column()).as_ref(),
                     row_in_batch,
                     self.dimensions,
                     self.element_type,
@@ -212,6 +265,7 @@ impl SidecarIndex {
                     ExactSidecarRow {
                         id: RecordId::from_bytes(ids.value(row_in_batch)),
                         generation: generations.value(row_in_batch),
+                        mutation_stamp,
                         vector,
                     },
                 ))
@@ -260,13 +314,17 @@ impl SidecarIndex {
         (0..batch.num_rows())
             .map(|row| {
                 decode_vector(
-                    batch.column(2).as_ref(),
+                    batch.column(self.vector_column()).as_ref(),
                     row,
                     self.dimensions,
                     self.element_type,
                 )
             })
             .collect()
+    }
+
+    fn vector_column(&self) -> usize {
+        if self.mutation_stamped { 5 } else { 2 }
     }
 }
 
@@ -528,6 +586,16 @@ pub(crate) fn encode_record_sidecar_typed_with(
             ))
         })?;
     }
+    let stamped_rows = records
+        .iter()
+        .filter(|record| record.mutation_stamp().is_some())
+        .count();
+    if stamped_rows != 0 && stamped_rows != records.len() {
+        return Err(BorsukError::InvalidStorage(
+            "Arrow vector sidecar cannot mix stamped and unstamped records".to_string(),
+        ));
+    }
+    let mutation_stamped = stamped_rows == records.len();
 
     let batch_rows = recommended_batch_rows(dimensions, element_type)?;
     let metadata = HashMap::from([
@@ -539,14 +607,23 @@ pub(crate) fn encode_record_sidecar_typed_with(
             element_type.as_str().to_string(),
         ),
     ]);
-    let schema = Schema::new_with_metadata(
-        vec![
-            Field::new("record_id", DataType::Binary, false),
-            Field::new("generation", DataType::UInt64, false),
-            Field::new("vector", vector_data_type(element_type, dimensions)?, false),
-        ],
-        metadata,
-    );
+    let mut fields = vec![
+        Field::new("record_id", DataType::Binary, false),
+        Field::new("generation", DataType::UInt64, false),
+    ];
+    if mutation_stamped {
+        fields.extend([
+            Field::new("mutation_hlc", DataType::UInt64, false),
+            Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+            Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+        ]);
+    }
+    fields.push(Field::new(
+        "vector",
+        vector_data_type(element_type, dimensions)?,
+        false,
+    ));
+    let schema = Schema::new_with_metadata(fields, metadata);
     let write_options = match compression {
         SidecarCompression::Uncompressed => IpcWriteOptions::default(),
         SidecarCompression::Zstd => {
@@ -564,9 +641,37 @@ pub(crate) fn encode_record_sidecar_typed_with(
             let generations = Arc::new(UInt64Array::from_iter_values(
                 rows.iter().map(|record| record.generation),
             ));
-            let vectors = encode_vector_array(rows, dimensions, element_type)?;
-            let batch =
-                RecordBatch::try_new(Arc::new(schema.clone()), vec![ids, generations, vectors])?;
+            let mut columns: Vec<Arc<dyn Array>> = vec![ids, generations];
+            if mutation_stamped {
+                columns.extend([
+                    Arc::new(UInt64Array::from_iter_values(rows.iter().map(|record| {
+                        record
+                            .mutation_stamp()
+                            .expect("all rows were validated as stamped")
+                            .version()
+                            .hlc()
+                    }))) as Arc<dyn Array>,
+                    Arc::new(FixedSizeBinaryArray::try_from_iter(rows.iter().map(
+                        |record| {
+                            record
+                                .mutation_stamp()
+                                .expect("all rows were validated as stamped")
+                                .version()
+                                .writer()
+                        },
+                    ))?) as Arc<dyn Array>,
+                    Arc::new(FixedSizeBinaryArray::try_from_iter(rows.iter().map(
+                        |record| {
+                            record
+                                .mutation_stamp()
+                                .expect("all rows were validated as stamped")
+                                .digest()
+                        },
+                    ))?) as Arc<dyn Array>,
+                ]);
+            }
+            columns.push(encode_vector_array(rows, dimensions, element_type)?);
+            let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
             writer.write(&batch)?;
         }
         writer.finish()?;
@@ -650,8 +755,42 @@ fn parse_tail_impl(tail: &[u8], expected_rows: Option<usize>) -> Result<SidecarI
         })?
         .parse::<VectorElementType>()
         .map_err(|error| BorsukError::InvalidStorage(error.to_string()))?;
+    if schema.fields().first().map(|field| field.as_ref())
+        != Some(&Field::new("record_id", DataType::Binary, false))
+        || schema.fields().get(1).map(|field| field.as_ref())
+            != Some(&Field::new("generation", DataType::UInt64, false))
+    {
+        return Err(BorsukError::InvalidStorage(
+            "Arrow vector sidecar has invalid identity columns".to_string(),
+        ));
+    }
+    let mutation_stamped = match (
+        schema.field_with_name("mutation_hlc"),
+        schema.field_with_name("mutation_writer"),
+        schema.field_with_name("mutation_digest"),
+    ) {
+        (Ok(hlc), Ok(writer), Ok(digest))
+            if hlc.data_type() == &DataType::UInt64
+                && writer.data_type() == &DataType::FixedSizeBinary(16)
+                && digest.data_type() == &DataType::FixedSizeBinary(32) =>
+        {
+            true
+        }
+        (Err(_), Err(_), Err(_)) => false,
+        _ => {
+            return Err(BorsukError::InvalidStorage(
+                "Arrow vector sidecar has incomplete or invalid mutation stamp columns".to_string(),
+            ));
+        }
+    };
     let expected_vector_type = vector_data_type(element_type, dimensions)?;
-    if schema.fields().get(2).map(|field| field.data_type()) != Some(&expected_vector_type) {
+    let vector_column = if mutation_stamped { 5 } else { 2 };
+    if schema
+        .fields()
+        .get(vector_column)
+        .map(|field| field.data_type())
+        != Some(&expected_vector_type)
+    {
         return Err(BorsukError::InvalidStorage(format!(
             "Arrow vector sidecar physical vector type does not match declared {element_type}"
         )));
@@ -686,6 +825,7 @@ fn parse_tail_impl(tail: &[u8], expected_rows: Option<usize>) -> Result<SidecarI
         row_count,
         batch_rows,
         element_type,
+        mutation_stamped,
     })
 }
 
@@ -968,6 +1108,29 @@ mod tests {
             assert_eq!(decoded.generation, expected.generation);
             assert_eq!(decoded.vector, expected.vector);
         }
+    }
+
+    #[test]
+    fn sidecar_round_trips_canonical_mutation_stamps() {
+        let version = crate::mutation::MutationVersion::from_parts(77, [3; 16]);
+        let record = crate::mutation::CanonicalMutation::put(
+            version,
+            VectorRecord::new("stamped", vec![0.25, 0.75]),
+        )
+        .unwrap()
+        .into_record()
+        .unwrap();
+        let expected = record.mutation_stamp().unwrap();
+        let bytes =
+            encode_record_sidecar_with(&[record], 2, SidecarCompression::Uncompressed).unwrap();
+        let index = parse(&bytes).unwrap();
+        let range = index.row_range(0).unwrap();
+
+        let decoded = index
+            .decode_record(0, &bytes[range.start as usize..range.end as usize])
+            .unwrap();
+
+        assert_eq!(decoded.mutation_stamp, Some(expected));
     }
 
     #[test]

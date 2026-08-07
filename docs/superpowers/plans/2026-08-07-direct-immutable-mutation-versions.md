@@ -183,6 +183,13 @@
   `docs/research/mutation-extent-standard-format-qualification.md`; this is a
   codec decision only, not an end-to-end latency claim.
 
+  The current v30 persistence slice carries the full HLC/writer/digest stamp
+  through WAL Parquet, materialized-segment Parquet, and exact-vector Arrow IPC,
+  rejects mixed stamped/unstamped batches, and makes grouped writers allocate
+  canonical stamps before deduplication. Global PQ, lexical/BM25,
+  late-interaction, tombstone, and lean ranged-read propagation remain open, so
+  this step is deliberately not checked complete.
+
 - [ ] **Step 6: Replace tombstone and ID-directory generations**
 
   Change `TombstoneOverlay`, `LiveDeleteRecord`, `CellWalIdDirectoryEntry`, live-WAL indexes, generation fences, and compaction comparisons to `MutationVersion`/`MutationStamp`. Deletes participate in the same greatest-version merge as puts. Foreground delete reports accepted durable mutations, while exact corpus counts remain materialized statistics.
@@ -230,6 +237,11 @@
 - [ ] **Step 3: Write RED publication-fence and ambiguous-PUT tests**
 
   Pause owner A after extent creation, take over with B through the stripe-head CAS, then resume A. Require A's head publication and acknowledgement to fail while its orphan extent remains invisible. Inject accept-then-timeout separately for extent creation and head publication. Require the stripe to block later work, read the exact object, validate identical checksum/content, return the original identities only when the intended head successor won, and only then allocate the next sequence. Inject unequal existing bytes or a different head successor and require fencing failure.
+
+  The stale-owner pause/takeover fence, exact observed-successor reconciliation,
+  and per-append two-object publication boundary landed in `8b95cc8`. Explicit
+  accept-then-timeout injection for both PUT stages remains part of Step 7's
+  lifecycle gate.
 
 - [ ] **Step 4: Verify RED**
 

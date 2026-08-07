@@ -686,6 +686,20 @@ impl VectorRecord {
     pub(crate) fn set_mutation_stamp(&mut self, stamp: MutationStamp) {
         self.mutation_stamp = Some(stamp);
     }
+
+    pub(crate) fn compare_mutation(&self, other: &Self) -> crate::Result<std::cmp::Ordering> {
+        match (self.mutation_stamp, other.mutation_stamp) {
+            (Some(left), Some(right)) => {
+                left.greatest(right)?;
+                Ok(left.version().cmp(&right.version()))
+            }
+            (None, None) => Ok(self.generation.cmp(&other.generation)),
+            _ => Err(BorsukError::InvalidStorage(format!(
+                "record `{}` mixes stamped and legacy mutation order",
+                self.id
+            ))),
+        }
+    }
 }
 
 fn dense_vector_from_sparse(
@@ -2641,7 +2655,7 @@ mod codec_name_tests {
 mod vector_element_physical_tests {
     use std::str::FromStr;
 
-    use super::VectorElementType;
+    use super::{MutationStamp, VectorElementType, VectorRecord};
 
     #[test]
     fn fp8_formats_have_explicit_stable_names_and_aliases() {
@@ -2773,5 +2787,31 @@ mod vector_element_physical_tests {
                 .decode_fixed_width(&[0; 1], 9)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn mutation_comparison_uses_complete_version_and_fails_on_digest_conflict() {
+        let mut older = VectorRecord::new("same", vec![1.0]);
+        older.set_mutation_stamp(MutationStamp::new(
+            crate::mutation::MutationVersion::from_parts(10, [0xff; 16]),
+            [1; 32],
+        ));
+        let mut newer = VectorRecord::new("same", vec![2.0]);
+        newer.set_mutation_stamp(MutationStamp::new(
+            crate::mutation::MutationVersion::from_parts(11, [0; 16]),
+            [2; 32],
+        ));
+
+        assert_eq!(
+            newer.compare_mutation(&older).unwrap(),
+            std::cmp::Ordering::Greater
+        );
+
+        let mut conflicting = newer.clone();
+        conflicting.set_mutation_stamp(MutationStamp::new(
+            newer.mutation_stamp().unwrap().version(),
+            [3; 32],
+        ));
+        assert!(newer.compare_mutation(&conflicting).is_err());
     }
 }
