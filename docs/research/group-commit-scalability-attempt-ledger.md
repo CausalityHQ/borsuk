@@ -717,3 +717,26 @@ records/s. Maximum process RSS was 3,684.4 MiB and maximum sampled CPU was
 the dominant core issue. Production work must now reduce delta training/drain
 CPU and the two-stage approximate-plus-exact object work itself; persistent
 cache warming remains excluded as a substitute for those fixes.
+
+## Deterministic parallel PQ training qualification launched (2026-08-07)
+
+Run `20260807T133142Z-parallel-pq-training` launched from commit `e1cd461` with
+source archive SHA-256
+`77cdc2af3febd9cf88afc57a5c9c679cae3149b47a233964d4e7e925e9f20b18`
+and unchanged manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+The one changed factor parallelizes independent SRHT sample transforms,
+per-subspace codebook fitting, farthest-first distance updates, and Lloyd
+assignment distance passes on the process CPU pool. Per-point SIMD distances,
+farthest selection, centroid sums, routing layout, sample reservoir, iteration
+counts, persisted codebooks, candidates, probes, and recall rules are unchanged.
+
+A TDD regression proves the parallel initialization and assignment passes are
+exactly equal to their serial reference order. The shifted-tail drain regression
+still occupies at least 128 cells with no cell above 64 rows. All 516 runnable
+library tests (six ignored), 32 group-commit integration tests, strict
+all-target/all-feature workspace Clippy, formatting, repository policy, and
+diff checks passed. The dedicated worker passed the account, instance, pinned
+768D Cohere dataset, and idle/no-contention preflights. Until root
+terminalization and process exit, inspect only markers, process state, and
+infrastructure health; do not open measurement CSVs.
