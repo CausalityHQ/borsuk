@@ -768,10 +768,16 @@ pub struct BorsukIndex {
 type LiveWalSnapshotCache =
     Arc<Mutex<Option<((u64, Vec<[u8; 32]>, Vec<String>), Arc<LiveWalSnapshot>)>>>;
 
-fn cached_snapshot<K, V, F>(cache: &Mutex<Option<(K, Arc<V>)>>, key: K, build: F) -> Result<Arc<V>>
+fn cached_snapshot<K, V, F>(
+    cache: &Mutex<Option<(K, Arc<V>)>>,
+    inflight: &InFlightReads<V>,
+    key: K,
+    flight_key: &str,
+    build: F,
+) -> Result<Arc<V>>
 where
     K: Eq,
-    F: FnOnce() -> Result<Arc<V>>,
+    F: FnOnce() -> Result<V>,
 {
     {
         let guard = cache.lock().unwrap_or_else(|error| error.into_inner());
@@ -781,7 +787,7 @@ where
             return Ok(Arc::clone(value));
         }
     }
-    let built = build()?;
+    let (built, _, _) = inflight.load(flight_key, || build().map(|value| (value, 0)))?;
     let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
     if let Some((cached_key, value)) = guard.as_ref()
         && cached_key == &key
@@ -887,6 +893,7 @@ struct CollectionReadRuntime {
     vector_sidecar_indexes: Arc<Mutex<SidecarIndexCache>>,
     decoded_vector_sidecars: Arc<DecodedObjectCache<Vec<Vec<f32>>>>,
     inflight_vector_sidecars: Arc<InFlightReads<Vec<Vec<f32>>>>,
+    inflight_live_wal_snapshots: Arc<InFlightReads<LiveWalSnapshot>>,
     late_interaction_sidecar_indexes: Arc<Mutex<LateInteractionSidecarIndexCache>>,
     inflight_late_interaction_batches: Arc<InFlightReads<LateInteractionBatch>>,
     decoded_late_interaction_batches: Arc<DecodedObjectCache<LateInteractionBatch>>,
@@ -1905,6 +1912,7 @@ impl CollectionReadRuntime {
                 &retained_pool,
             ),
             inflight_vector_sidecars: Arc::new(InFlightReads::default()),
+            inflight_live_wal_snapshots: Arc::new(InFlightReads::default()),
             late_interaction_sidecar_indexes,
             inflight_late_interaction_batches: Arc::new(InFlightReads::default()),
             decoded_late_interaction_batches: decoded_cache_with_pool(
@@ -8878,35 +8886,55 @@ impl BorsukIndex {
         )
     }
 
+    fn live_wal_snapshot_flight_key(key: &(u64, Vec<[u8; 32]>, Vec<String>)) -> String {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&key.0.to_le_bytes());
+        for checksum in &key.1 {
+            hasher.update(checksum);
+        }
+        for run in &key.2 {
+            hasher.update(run.as_bytes());
+            hasher.update(&[0]);
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
     fn live_wal_snapshot(&self) -> Result<Arc<LiveWalSnapshot>> {
         let key = self.live_wal_snapshot_key();
-        cached_snapshot(&self.live_wal_snapshot_cache, key, || {
-            let records = Arc::new(self.live_wal_tail_records_for_cells(None)?);
-            let by_id = records
-                .iter()
-                .enumerate()
-                .map(|(ordinal, record)| (record.id.as_bytes().to_vec(), ordinal))
-                .collect();
-            let stored_norms = matches!(
-                &self.manifest.config.metric,
-                VectorMetric::Cosine | VectorMetric::Angular
-            )
-            .then(|| {
-                Arc::new(
-                    records
-                        .iter()
-                        .map(|record| {
-                            crate::metric::dot_product(&record.vector, &record.vector).sqrt()
-                        })
-                        .collect(),
+        let flight_key = Self::live_wal_snapshot_flight_key(&key);
+        cached_snapshot(
+            &self.live_wal_snapshot_cache,
+            &self.read_runtime.inflight_live_wal_snapshots,
+            key,
+            &flight_key,
+            || {
+                let records = Arc::new(self.live_wal_tail_records_for_cells(None)?);
+                let by_id = records
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, record)| (record.id.as_bytes().to_vec(), ordinal))
+                    .collect();
+                let stored_norms = matches!(
+                    &self.manifest.config.metric,
+                    VectorMetric::Cosine | VectorMetric::Angular
                 )
-            });
-            Ok(Arc::new(LiveWalSnapshot {
-                records,
-                by_id,
-                stored_norms,
-            }))
-        })
+                .then(|| {
+                    Arc::new(
+                        records
+                            .iter()
+                            .map(|record| {
+                                crate::metric::dot_product(&record.vector, &record.vector).sqrt()
+                            })
+                            .collect(),
+                    )
+                });
+                Ok(LiveWalSnapshot {
+                    records,
+                    by_id,
+                    stored_norms,
+                })
+            },
+        )
     }
 
     fn live_wal_tail_records_for_cells(
@@ -22627,45 +22655,44 @@ mod tests {
     use std::sync::{Barrier, Mutex};
 
     #[test]
-    fn snapshot_cache_build_does_not_hold_mutex_during_build() {
+    fn snapshot_cache_build_is_single_flight_without_holding_mutex() {
         let cache: Mutex<Option<(u64, Arc<u64>)>> = Mutex::new(None);
-        let start = Arc::new(Barrier::new(3));
-        let both_builders = Arc::new(Barrier::new(2));
+        let inflight = Arc::new(InFlightReads::<u64>::default());
+        let start = Arc::new(Barrier::new(2));
         let builds = Arc::new(AtomicUsize::new(0));
         let first_start = Arc::clone(&start);
-        let first_both_builders = Arc::clone(&both_builders);
         let first_builds = Arc::clone(&builds);
         let first_cache = &cache;
+        let first_inflight = Arc::clone(&inflight);
         let first = thread::scope(|scope| {
             scope.spawn(move || {
-                cached_snapshot(first_cache, 7, || {
+                cached_snapshot(first_cache, &first_inflight, 7, "seven", || {
                     first_builds.fetch_add(1, AtomicOrdering::Relaxed);
                     first_start.wait();
-                    first_both_builders.wait();
-                    Ok(Arc::new(11_u64))
+                    Ok(11_u64)
                 })
                 .unwrap()
             });
             let second_start = Arc::clone(&start);
-            let second_both_builders = Arc::clone(&both_builders);
             let second_builds = Arc::clone(&builds);
             let second_cache = &cache;
+            let second_inflight = Arc::clone(&inflight);
             scope.spawn(move || {
-                cached_snapshot(second_cache, 7, || {
+                cached_snapshot(second_cache, &second_inflight, 7, "seven", || {
                     second_builds.fetch_add(1, AtomicOrdering::Relaxed);
                     second_start.wait();
-                    second_both_builders.wait();
-                    Ok(Arc::new(11_u64))
+                    Ok(11_u64)
                 })
                 .unwrap()
             });
-            // Both builders must enter before either can publish. A cache
-            // mutex held during build would deadlock the second lookup.
+            // The leader reaches the barrier while the follower waits on the
+            // same in-flight result; a cache mutex held during build would
+            // deadlock the lookup, while duplicate builders would count twice.
             start.wait();
             Arc::new(11_u64)
         });
         assert_eq!(*first, 11);
-        assert_eq!(builds.load(AtomicOrdering::Relaxed), 2);
+        assert_eq!(builds.load(AtomicOrdering::Relaxed), 1);
     }
     use crate::collection_control::collection_wal_frontier_shard;
 
