@@ -452,3 +452,13 @@ per wave.  The next causal factor keeps the 64 KiB merge gap and 4 MiB physical
 span cap unchanged, but gives global exact reranks a bounded 32-request wave so
 the production shortlist does not serialize internally.  No result is assigned
 until a fresh terminal arm measures that revision.
+
+## 32-request global rerank wave qualification launched (2026-08-07)
+
+Run `20260807T092504Z-rerank-wave32` launched from commit `a0402e6` with source
+archive SHA-256
+`e209494085b5ea03ded6b107d38d31c147d8186ce51ab7c3ed0942aafb14e80b` and
+the unchanged frozen manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+The launcher again passed its dedicated-worker and no-contention preflight.
+Until terminalization, inspect markers and infrastructure/process health only.
