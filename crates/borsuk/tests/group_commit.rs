@@ -460,7 +460,7 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
 }
 
 #[test]
-fn lane_log_ack_is_one_generation_cas_plus_one_extent_and_visible_after_reopen() {
+fn lane_log_ack_publishes_extent_and_stripe_head_after_legacy_generation_cas() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///group-lane-log-cutover";
     let writer = GroupCommitWriter::new(
@@ -479,7 +479,7 @@ fn lane_log_ack_is_one_generation_cas_plus_one_extent_and_visible_after_reopen()
 
     assert_eq!(receipt.lane_receipts.len(), 1);
     assert!(receipt.lane_receipts[0].lease_epoch > 0);
-    assert_eq!(receipt.requests.puts, 2);
+    assert_eq!(receipt.requests.puts, 3);
     assert_eq!(receipt.requests.gets, 1);
     assert_eq!(receipt.requests.heads, 0);
     assert_eq!(receipt.requests.lists, 0);
@@ -1095,7 +1095,7 @@ fn one_worker_coalesces_cross_ownership_records_into_one_stripe_extent() {
     let receipt = writer.append(records).unwrap();
 
     assert_eq!(receipt.lane_receipts.len(), 1);
-    assert_eq!(receipt.requests.puts, 2);
+    assert_eq!(receipt.requests.puts, 3);
     assert_eq!(
         concurrency.peak(),
         1,
@@ -1174,7 +1174,7 @@ fn independent_commit_lanes_report_lane_local_requests() {
 }
 
 #[test]
-fn repeated_groups_use_one_generation_cas_and_one_extent() {
+fn repeated_groups_publish_a_fenced_head_after_the_extent() {
     const GROUPS: usize = 12;
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
@@ -1204,7 +1204,7 @@ fn repeated_groups_use_one_generation_cas_and_one_extent() {
         );
     }
 
-    assert!(receipts.iter().all(|receipt| receipt.requests.puts == 2));
+    assert!(receipts.iter().all(|receipt| receipt.requests.puts == 3));
     assert!(receipts.iter().all(|receipt| receipt.requests.gets == 1));
     assert!(receipts.iter().all(|receipt| receipt.requests.heads == 0));
     assert!(receipts.iter().all(|receipt| receipt.requests.lists == 0));
@@ -1223,8 +1223,8 @@ fn repeated_groups_use_one_generation_cas_and_one_extent() {
     );
     assert!(
         operations.count_matching(|operation, _| operation == common::StoreOperation::Put)
-            >= GROUPS * 2,
-        "each group reserves one generation range and creates one extent"
+            >= GROUPS * 3,
+        "each group currently reserves a legacy generation, creates an extent, and publishes its stripe head"
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
@@ -1279,8 +1279,8 @@ fn small_groups_publish_only_immutable_extents_before_release() {
             .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
             .unwrap();
         assert_eq!(
-            receipt.requests.puts, 2,
-            "the generation CAS and extent are the only foreground PUTs"
+            receipt.requests.puts, 3,
+            "legacy generation CAS, immutable extent, and fenced stripe-head publication"
         );
     }
 
@@ -1304,8 +1304,8 @@ fn small_groups_publish_only_immutable_extents_before_release() {
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put && path.ends_with("/HEAD")
         }),
-        0,
-        "HEAD progress publication must stay outside foreground acknowledgement"
+        5,
+        "every extent must be discoverable through a conditionally published stripe head before acknowledgement"
     );
     drop(writer);
     assert_eq!(
@@ -1599,9 +1599,12 @@ fn live_lane_writer_does_not_recreate_a_disappeared_head_and_reopen_fails_closed
     )
     .unwrap();
 
-    writer
-        .append(vec![VectorRecord::new("before-loss", vec![2.0, 0.0])])
-        .unwrap();
+    assert!(
+        writer
+            .append(vec![VectorRecord::new("before-loss", vec![2.0, 0.0])])
+            .is_err(),
+        "an append cannot be acknowledged without its stripe-head publication fence"
+    );
     assert!(
         !directory
             .path()
