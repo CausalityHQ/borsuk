@@ -205,3 +205,13 @@ launcher now refuses an existing remote result directory before creating a
 tmux session. Group-commit dispatch also uses sparse lane buckets, avoiding an
 empty allocation for every persisted lane on scalar appends; the focused
 group-commit suite remains green.
+
+## v64 sparse-dispatch qualification launched (2026-08-07)
+
+Run `20260807T043548Z` launched from source commit `cb0ab50`, archive SHA-256
+`b81faed0b67b65eb0f123ec23d9c2d57cd699e24e0de713527cd3ec78f2ddc81`, and the
+same frozen manifest SHA-256
+`e05d6718eafd72723ef4b72990132abc5ec35b30d08f3e261f728cc02c15158f`. It uses
+fresh S3 result/index prefixes and the launcher verified the c7g.8xlarge worker
+had no competing BORSUK workload. The watcher is polling terminal markers and
+EC2 health every 15 minutes; no incomplete measurement CSV is being inspected.
