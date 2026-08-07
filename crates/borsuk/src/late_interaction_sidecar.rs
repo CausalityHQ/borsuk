@@ -3,8 +3,8 @@
 use std::{collections::HashMap, mem::size_of, ops::Range, sync::Arc};
 
 use arrow_array::{
-    Array, BinaryArray, FixedSizeListArray, Float16Array, Float32Array, ListArray, RecordBatch,
-    UInt64Array,
+    Array, BinaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array, Float32Array,
+    ListArray, RecordBatch, UInt64Array,
     builder::{FixedSizeListBuilder, Float16Builder, Float32Builder, ListBuilder},
 };
 use arrow_buffer::Buffer;
@@ -40,6 +40,7 @@ pub(crate) struct SidecarIndex {
     row_count: usize,
     batch_rows: usize,
     element_type: VectorElementType,
+    mutation_stamped: bool,
 }
 
 impl SidecarIndex {
@@ -117,7 +118,7 @@ impl SidecarIndex {
                 )
             })?;
         let matrices = batch
-            .column(2)
+            .column(if self.mutation_stamped { 5 } else { 2 })
             .as_any()
             .downcast_ref::<ListArray>()
             .ok_or_else(|| {
@@ -213,14 +214,32 @@ pub(crate) fn encode(
             }
         }
     }
+    let stamped_rows = records
+        .iter()
+        .filter(|record| record.mutation_stamp().is_some())
+        .count();
+    if stamped_rows != 0 && stamped_rows != records.len() {
+        return Err(BorsukError::InvalidStorage(
+            "late-interaction sidecar cannot mix stamped and unstamped records".to_string(),
+        ));
+    }
+    let mutation_stamped = stamped_rows == records.len();
     let batch_rows = recommended_batch_rows(dimensions, element_type)?;
     let vector_type = vector_data_type(dimensions, element_type)?;
+    let mut fields = vec![
+        Field::new("record_id", DataType::Binary, false),
+        Field::new("generation", DataType::UInt64, false),
+    ];
+    if mutation_stamped {
+        fields.extend([
+            Field::new("mutation_hlc", DataType::UInt64, false),
+            Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+            Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+        ]);
+    }
+    fields.push(Field::new("vectors", vector_type, true));
     let schema = Schema::new_with_metadata(
-        vec![
-            Field::new("record_id", DataType::Binary, false),
-            Field::new("generation", DataType::UInt64, false),
-            Field::new("vectors", vector_type, true),
-        ],
+        fields,
         HashMap::from([
             (META_DIMENSIONS.to_string(), dimensions.to_string()),
             (META_ROW_COUNT.to_string(), records.len().to_string()),
@@ -245,11 +264,38 @@ pub(crate) fn encode(
             let generations = Arc::new(UInt64Array::from_iter_values(
                 rows.iter().map(|record| record.generation),
             ));
+            let mut columns: Vec<Arc<dyn Array>> = vec![ids, generations];
+            if mutation_stamped {
+                columns.extend([
+                    Arc::new(UInt64Array::from_iter_values(rows.iter().map(|record| {
+                        record
+                            .mutation_stamp()
+                            .expect("all rows were validated as stamped")
+                            .version()
+                            .hlc()
+                    }))) as Arc<dyn Array>,
+                    Arc::new(FixedSizeBinaryArray::try_from_iter(rows.iter().map(
+                        |record| {
+                            record
+                                .mutation_stamp()
+                                .expect("all rows were validated as stamped")
+                                .version()
+                                .writer()
+                        },
+                    ))?) as Arc<dyn Array>,
+                    Arc::new(FixedSizeBinaryArray::try_from_iter(rows.iter().map(
+                        |record| {
+                            record
+                                .mutation_stamp()
+                                .expect("all rows were validated as stamped")
+                                .digest()
+                        },
+                    ))?) as Arc<dyn Array>,
+                ]);
+            }
             let vectors = encode_vectors(rows, field_name, dimensions, element_type)?;
-            writer.write(&RecordBatch::try_new(
-                Arc::new(schema.clone()),
-                vec![ids, generations, vectors],
-            )?)?;
+            columns.push(vectors);
+            writer.write(&RecordBatch::try_new(Arc::new(schema.clone()), columns)?)?;
         }
         writer.finish()?;
     }
@@ -359,7 +405,29 @@ fn parse_tail_impl(tail: &[u8], expected_rows: Option<usize>) -> Result<SidecarI
             expected_rows.unwrap_or_default()
         )));
     }
-    if schema.fields().get(2).map(|field| field.data_type())
+    let mutation_stamped = match (
+        schema.field_with_name("mutation_hlc"),
+        schema.field_with_name("mutation_writer"),
+        schema.field_with_name("mutation_digest"),
+    ) {
+        (Ok(hlc), Ok(writer), Ok(digest))
+            if hlc.data_type() == &DataType::UInt64
+                && writer.data_type() == &DataType::FixedSizeBinary(16)
+                && digest.data_type() == &DataType::FixedSizeBinary(32) =>
+        {
+            true
+        }
+        (Err(_), Err(_), Err(_)) => false,
+        _ => {
+            return Err(BorsukError::InvalidStorage(
+                "late-interaction Arrow has incomplete mutation stamp columns".to_string(),
+            ));
+        }
+    };
+    if schema
+        .fields()
+        .get(if mutation_stamped { 5 } else { 2 })
+        .map(|field| field.data_type())
         != Some(&vector_data_type(dimensions, element_type)?)
     {
         return Err(BorsukError::InvalidStorage(
@@ -386,6 +454,7 @@ fn parse_tail_impl(tail: &[u8], expected_rows: Option<usize>) -> Result<SidecarI
         row_count,
         batch_rows,
         element_type,
+        mutation_stamped,
     })
 }
 
@@ -550,5 +619,51 @@ mod tests {
             f32::from(half::f16::from_f32(1.000_1))
         );
         assert!(decoded[1].is_none());
+    }
+
+    #[test]
+    fn canonical_stamp_columns_are_typed_and_keep_row_decode_valid() {
+        let stamped = records()
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, record)| {
+                crate::mutation::CanonicalMutation::put(
+                    crate::mutation::MutationVersion::from_parts(
+                        100 + ordinal as u64,
+                        [ordinal as u8 + 1; 16],
+                    ),
+                    record,
+                )
+                .unwrap()
+                .into_record()
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let bytes = encode(
+            &stamped,
+            "tokens",
+            2,
+            VectorElementType::Float16,
+            SidecarCompression::Uncompressed,
+        )
+        .unwrap();
+
+        let index = parse_tail_impl(&bytes, Some(2)).unwrap();
+        assert!(index.mutation_stamped);
+        assert_eq!(
+            index
+                .schema
+                .field_with_name("mutation_writer")
+                .unwrap()
+                .data_type(),
+            &DataType::FixedSizeBinary(16)
+        );
+        assert_eq!(
+            decode_all(&bytes, 2).unwrap()[0]
+                .as_ref()
+                .unwrap()
+                .token_count(),
+            2
+        );
     }
 }

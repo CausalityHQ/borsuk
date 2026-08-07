@@ -184,10 +184,10 @@
   codec decision only, not an end-to-end latency claim.
 
   The current v30 persistence slice carries the full HLC/writer/digest stamp
-  through WAL Parquet, materialized-segment Parquet, and exact-vector Arrow IPC,
-  rejects mixed stamped/unstamped batches, and makes grouped writers allocate
-  canonical stamps before deduplication. Global PQ, lexical/BM25,
-  late-interaction, tombstone, and lean ranged-read propagation remain open, so
+  through WAL Parquet, materialized-segment Parquet, exact-vector Arrow IPC,
+  and late-interaction Arrow IPC; rejects mixed stamped/unstamped batches; and
+  makes grouped writers allocate canonical stamps before deduplication. Global
+  PQ, lexical/BM25, tombstone, and lean ranged-read propagation remain open, so
   this step is deliberately not checked complete.
 
 - [ ] **Step 6: Replace tombstone and ID-directory generations**
