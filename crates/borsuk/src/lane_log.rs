@@ -15,13 +15,15 @@ use crate::{
 };
 use object_store::{ObjectStore, UpdateVersion};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const BLOCK_MAGIC: &[u8; 8] = b"BRSLBL25";
 const HEAD_MAGIC: &[u8; 8] = b"BRSLHD26";
-const EPOCH_HEAD_MAGIC: &[u8; 8] = b"BRSLHD32";
 const EXTENT_MAGIC: &[u8; 8] = b"BRSLXT28";
-const ACTIVE_STRIPE_MAGIC: &[u8; 8] = b"BRSLAD32";
 const ACTIVE_STRIPE_PATH: &str = "lane-log/ACTIVE";
+const COORDINATION_SCHEMA_VERSION: u8 = 30;
+const EPOCH_HEAD_ROLE: &str = "lane_epoch_head";
+const ACTIVE_STRIPE_ROLE: &str = "active_stripe_directory";
 const MAX_LINEARIZABLE_PROBE_EXTENTS: u64 = 128;
 const MAX_HEAD_UPDATE_ATTEMPTS: usize = 16;
 const CHECKSUM_BYTES: usize = 32;
@@ -323,7 +325,8 @@ struct LaneLogHead {
     blocks: Vec<LaneLogBlockRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LaneEpochSeal {
     lease_epoch: u64,
     durable_sequence: u64,
@@ -332,7 +335,8 @@ struct LaneEpochSeal {
     generation_end: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LaneEpochHead {
     lane: u16,
     lease_epoch: u64,
@@ -345,12 +349,39 @@ struct LaneEpochHead {
     sealed_epoch: Option<LaneEpochSeal>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ActiveStripeDirectory {
     generation: u64,
     active_bits: u64,
+    #[serde(with = "serde_u64_64")]
     activation_epochs: [u64; 64],
+    #[serde(with = "serde_u64_64")]
     retirement_manifest_versions: [u64; 64],
+}
+
+mod serde_u64_64 {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+
+    pub(super) fn serialize<S>(values: &[u64; 64], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        values.as_slice().serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<[u64; 64], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values = Vec::<u64>::deserialize(deserializer)?;
+        let length = values.len();
+        values.try_into().map_err(|_| {
+            D::Error::custom(format!(
+                "active stripe directory requires exactly 64 entries, got {length}"
+            ))
+        })
+    }
 }
 
 type ActiveLaneEpochStates = (ActiveStripeDirectory, [u8; 32], Vec<(u16, LaneEpochState)>);
@@ -596,134 +627,87 @@ fn fenced_body<'a>(bytes: &'a [u8], magic: &[u8; 8], label: &str) -> Result<&'a 
     Ok(body)
 }
 
+#[derive(Serialize)]
+struct CoordinationDocumentRef<'a, T> {
+    schema_version: u8,
+    object_role: &'static str,
+    payload_checksum_blake3: String,
+    payload: &'a T,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoordinationDocument<T> {
+    schema_version: u8,
+    object_role: String,
+    payload_checksum_blake3: String,
+    payload: T,
+}
+
+fn coordination_json_bytes<T: Serialize>(role: &'static str, payload: &T) -> Result<Vec<u8>> {
+    let payload_bytes = serde_json::to_vec(payload).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "lane-log {role} payload is not JSON-serializable: {error}"
+        ))
+    })?;
+    serde_json::to_vec(&CoordinationDocumentRef {
+        schema_version: COORDINATION_SCHEMA_VERSION,
+        object_role: role,
+        payload_checksum_blake3: blake3::hash(&payload_bytes).to_hex().to_string(),
+        payload,
+    })
+    .map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "lane-log {role} document is not JSON-serializable: {error}"
+        ))
+    })
+}
+
+fn coordination_json_from_bytes<T: DeserializeOwned + Serialize>(
+    bytes: &[u8],
+    expected_role: &'static str,
+) -> Result<T> {
+    let document: CoordinationDocument<T> = serde_json::from_slice(bytes).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "invalid lane-log {expected_role} JSON document: {error}"
+        ))
+    })?;
+    if document.schema_version != COORDINATION_SCHEMA_VERSION
+        || document.object_role != expected_role
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "unsupported lane-log {expected_role} schema or object role"
+        )));
+    }
+    let payload_bytes = serde_json::to_vec(&document.payload).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "lane-log {expected_role} payload cannot be canonicalized: {error}"
+        ))
+    })?;
+    let actual_checksum = blake3::hash(&payload_bytes).to_hex().to_string();
+    if document.payload_checksum_blake3 != actual_checksum {
+        return Err(BorsukError::InvalidStorage(format!(
+            "lane-log {expected_role} checksum mismatch"
+        )));
+    }
+    Ok(document.payload)
+}
+
 fn epoch_head_bytes(head: &LaneEpochHead) -> Result<Vec<u8>> {
     head.validate(head.lane)?;
-    let mut body = Vec::with_capacity(128);
-    body.push(32);
-    body.extend_from_slice(&head.lane.to_le_bytes());
-    body.extend_from_slice(&head.lease_epoch.to_le_bytes());
-    body.extend_from_slice(&head.lease_owner);
-    body.extend_from_slice(&head.lease_expires_at_ms.to_le_bytes());
-    body.extend_from_slice(&head.durable_sequence.to_le_bytes());
-    body.extend_from_slice(&head.materialized_sequence.to_le_bytes());
-    body.extend_from_slice(&head.materialized_manifest_version.to_le_bytes());
-    body.extend_from_slice(&head.generation_base.to_le_bytes());
-    let seal = head.sealed_epoch.unwrap_or(LaneEpochSeal {
-        lease_epoch: 0,
-        durable_sequence: 0,
-        materialized_sequence: 0,
-        materialized_manifest_version: 0,
-        generation_end: 0,
-    });
-    body.push(u8::from(head.sealed_epoch.is_some()));
-    body.extend_from_slice(&seal.lease_epoch.to_le_bytes());
-    body.extend_from_slice(&seal.durable_sequence.to_le_bytes());
-    body.extend_from_slice(&seal.materialized_sequence.to_le_bytes());
-    body.extend_from_slice(&seal.materialized_manifest_version.to_le_bytes());
-    body.extend_from_slice(&seal.generation_end.to_le_bytes());
-    Ok(fenced_bytes(EPOCH_HEAD_MAGIC, &body))
+    coordination_json_bytes(EPOCH_HEAD_ROLE, head)
 }
 
 fn active_stripe_directory_bytes(directory: &ActiveStripeDirectory) -> Result<Vec<u8>> {
-    let mut body = Vec::with_capacity(1 + 8 + 8 + 64 * 8 * 2);
-    body.push(32);
-    body.extend_from_slice(&directory.generation.to_le_bytes());
-    body.extend_from_slice(&directory.active_bits.to_le_bytes());
-    for epoch in directory.activation_epochs {
-        body.extend_from_slice(&epoch.to_le_bytes());
-    }
-    for version in directory.retirement_manifest_versions {
-        body.extend_from_slice(&version.to_le_bytes());
-    }
-    Ok(fenced_bytes(ACTIVE_STRIPE_MAGIC, &body))
+    coordination_json_bytes(ACTIVE_STRIPE_ROLE, directory)
 }
 
 fn active_stripe_directory_from_bytes(bytes: &[u8]) -> Result<ActiveStripeDirectory> {
-    let body = fenced_body(bytes, ACTIVE_STRIPE_MAGIC, "active stripe directory")?;
-    let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 32 {
-        return Err(BorsukError::InvalidStorage(
-            "unsupported active stripe directory version".to_string(),
-        ));
-    }
-    let generation = take_u64(body, &mut cursor)?;
-    let active_bits = take_u64(body, &mut cursor)?;
-    let mut activation_epochs = [0; 64];
-    for epoch in &mut activation_epochs {
-        *epoch = take_u64(body, &mut cursor)?;
-    }
-    let mut retirement_manifest_versions = [0; 64];
-    for version in &mut retirement_manifest_versions {
-        *version = take_u64(body, &mut cursor)?;
-    }
-    let directory = ActiveStripeDirectory {
-        generation,
-        active_bits,
-        activation_epochs,
-        retirement_manifest_versions,
-    };
-    if cursor != body.len() {
-        return Err(BorsukError::InvalidStorage(
-            "active stripe directory has trailing bytes".to_string(),
-        ));
-    }
-    Ok(directory)
+    coordination_json_from_bytes(bytes, ACTIVE_STRIPE_ROLE)
 }
 
 fn epoch_head_from_bytes(bytes: &[u8], expected_lane: u16) -> Result<LaneEpochHead> {
-    let body = fenced_body(bytes, EPOCH_HEAD_MAGIC, "epoch HEAD")?;
-    let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 32 {
-        return Err(BorsukError::InvalidStorage(
-            "unsupported epoch lane-log HEAD version".to_string(),
-        ));
-    }
-    let lane = take_u16(body, &mut cursor)?;
-    let lease_epoch = take_u64(body, &mut cursor)?;
-    let lease_owner = take_array(body, &mut cursor)?;
-    let lease_expires_at_ms = take_u64(body, &mut cursor)?;
-    let durable_sequence = take_u64(body, &mut cursor)?;
-    let materialized_sequence = take_u64(body, &mut cursor)?;
-    let materialized_manifest_version = take_u64(body, &mut cursor)?;
-    let generation_base = take_u64(body, &mut cursor)?;
-    let seal_present = take_u8(body, &mut cursor)?;
-    let seal = LaneEpochSeal {
-        lease_epoch: take_u64(body, &mut cursor)?,
-        durable_sequence: take_u64(body, &mut cursor)?,
-        materialized_sequence: take_u64(body, &mut cursor)?,
-        materialized_manifest_version: take_u64(body, &mut cursor)?,
-        generation_end: take_u64(body, &mut cursor)?,
-    };
-    if cursor != body.len() || seal_present > 1 {
-        return Err(BorsukError::InvalidStorage(
-            "epoch lane-log HEAD has trailing bytes or an invalid seal tag".to_string(),
-        ));
-    }
-    if seal_present == 0
-        && seal
-            != (LaneEpochSeal {
-                lease_epoch: 0,
-                durable_sequence: 0,
-                materialized_sequence: 0,
-                materialized_manifest_version: 0,
-                generation_end: 0,
-            })
-    {
-        return Err(BorsukError::InvalidStorage(
-            "epoch lane-log HEAD absent seal must use canonical zeros".to_string(),
-        ));
-    }
-    let head = LaneEpochHead {
-        lane,
-        lease_epoch,
-        lease_owner,
-        lease_expires_at_ms,
-        durable_sequence,
-        materialized_sequence,
-        materialized_manifest_version,
-        generation_base,
-        sealed_epoch: (seal_present == 1).then_some(seal),
-    };
+    let head: LaneEpochHead = coordination_json_from_bytes(bytes, EPOCH_HEAD_ROLE)?;
     head.validate(expected_lane)?;
     Ok(head)
 }
@@ -3489,7 +3473,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_head_size_is_constant_across_extent_counts() {
+    fn v30_head_is_bounded_versioned_stock_json() {
         let head = |durable_sequence| LaneEpochHead {
             lane: 3,
             lease_epoch: 7,
@@ -3511,7 +3495,11 @@ mod tests {
         let first = epoch_head_bytes(&head(1)).unwrap();
         let millionth = epoch_head_bytes(&head(1_000_000)).unwrap();
 
-        assert_eq!(first.len(), millionth.len());
+        let document: serde_json::Value = serde_json::from_slice(&millionth).unwrap();
+        assert_eq!(document["schema_version"], 30);
+        assert_eq!(document["object_role"], "lane_epoch_head");
+        assert!(first.len() < 1_024);
+        assert!(millionth.len() < 1_024);
         assert_eq!(
             epoch_head_from_bytes(&millionth, 3).unwrap(),
             head(1_000_000)
@@ -3543,6 +3531,9 @@ mod tests {
             retirement_manifest_versions: [0; 64],
         };
         let bytes = active_stripe_directory_bytes(&directory).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(document["schema_version"], 30);
+        assert_eq!(document["object_role"], "active_stripe_directory");
 
         assert_eq!(
             active_stripe_directory_from_bytes(&bytes).unwrap(),
@@ -3550,6 +3541,26 @@ mod tests {
         );
         assert_eq!(directory.active_stripes(64), vec![2, 41]);
         assert!(active_stripe_directory_from_bytes(&bytes[..bytes.len() - 1]).is_err());
+
+        let mut changed_payload = document.clone();
+        changed_payload["payload"]["generation"] = serde_json::json!(8);
+        assert!(
+            active_stripe_directory_from_bytes(
+                &serde_json::to_vec(&changed_payload).expect("mutated document is JSON")
+            )
+            .is_err(),
+            "payload changes require a matching checksum"
+        );
+
+        let mut changed_schema = document;
+        changed_schema["schema_version"] = serde_json::json!(31);
+        assert!(
+            active_stripe_directory_from_bytes(
+                &serde_json::to_vec(&changed_schema).expect("mutated document is JSON")
+            )
+            .is_err(),
+            "unknown schemas fail closed"
+        );
     }
 
     #[test]
