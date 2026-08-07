@@ -300,3 +300,15 @@ Run `20260807T061500Z-cache-reuse` terminalized with
 The terminal diagnostic reports a production performance-gate failure; the
 decoded-segment cache reuse change did not clear the eight-writer read gate.
 The run is claim-ineligible and no measurement CSV was inspected.
+
+## sidecar-cache qualification launched (2026-08-07)
+
+Run `20260807T053500Z-sidecar-cache` launched from verified commit `25c436a`
+with source archive SHA-256
+`d5d3b79f56e0aa183e08f94f2d5972a13f22de4bab75835261329151874b3529` and
+manifest SHA-256
+`2c2c7d219289f16779170f8b786a3de9de47a356b1b44c57672e56497af44bd5`.
+Launcher preflight confirmed the dedicated c7g.8xlarge worker was running and
+idle, with unique source, result, and index paths. A persistent watcher polls
+only terminal markers and EC2 health every 15 minutes; no measurement CSV is
+being inspected while the campaign is incomplete.
