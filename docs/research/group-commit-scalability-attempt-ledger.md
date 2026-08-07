@@ -223,6 +223,18 @@ the benchmark did not execute and produced no performance evidence. This is a
 claim-ineligible harness collision, not a library result; no measurement CSV
 was opened.
 
+## v66 corrected-diagnostics qualification launched (2026-08-07)
+
+Run `20260807T044600Z-r4` launched from source commit `3e7be41`, archive
+SHA-256
+`7e0f3bee30d197e34945a5f7e7ac3f9f15879eb6d140e0916247f17304302dfd`, and
+manifest SHA-256
+`e05d6718eafd72723ef4b72990132abc5ec35b30d08f3e261f728cc02c15158f`. The
+worker preflight confirmed an absent EC2-local result directory and no
+competing benchmark process. A detached watcher polls only terminal markers
+and EC2 health every 15 minutes; no incomplete measurement CSV is being
+inspected.
+
 ## v65 unique-prefix qualification launched (2026-08-07)
 
 Run `20260807T044500Z-r3` launched from source commit `bf54837`, archive
