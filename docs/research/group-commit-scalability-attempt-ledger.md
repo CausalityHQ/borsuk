@@ -910,3 +910,19 @@ a manifest-version retirement fence so old pinned readers cannot omit an
 unmaterialized tail. Therefore historical writer churn is not yet bounded and
 the AWS 1/8/32 campaign remains unlaunched. The runner must also use distinct
 processes or hosts before its results can qualify multi-instance scaling.
+
+## Directory-guided writer claim ordering (2026-08-07)
+
+Operation tracing exposed a pre-benchmark startup bottleneck: every separately
+constructed one-worker instance began at physical stripe zero. Opening 32 live
+instances sequentially therefore issued 528 authoritative stripe-HEAD reads
+(`1 + 2 + ... + 32`) before any acknowledgement. Concurrent hosts would also
+begin by contending on the same slot.
+
+The corrected claim path reads the checked active directory once per local
+worker, rotates the candidate order from a per-instance UUID, tries inactive
+slots first, and retains active slots as expiry/takeover candidates. The RED
+operation-level test observed 528 HEAD reads; the GREEN test observes exactly
+32. All 39 group-commit integration tests, all 48 lane-log tests, and strict
+all-target/all-feature crate Clippy pass. No acknowledgement or materialization
+path changed, and no AWS performance claim is made from this local evidence.

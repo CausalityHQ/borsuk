@@ -10,6 +10,7 @@ use std::{
 
 use crate::{BorsukError, BorsukIndex, RequestCounts, Result, VectorRecord};
 use rayon::prelude::*;
+use uuid::Uuid;
 
 const LANE_LEASE_TTL_MS: u64 = 60 * 60 * 1_000;
 // Keep the active WAL bounded while allowing one materialization pass to
@@ -295,11 +296,13 @@ impl GroupCommitWriter {
         let mut requests = Vec::with_capacity(config.worker_lanes);
         let mut worker_stripes = Vec::with_capacity(config.worker_lanes);
         let mut claimed_stripes = std::collections::HashSet::with_capacity(config.worker_lanes);
+        let claim_start = (Uuid::new_v4().as_u128() % u128::from(lane_count)) as u16;
         for (worker, index) in indexes.into_iter().enumerate() {
             let mut claimed = None;
-            for offset in 0..usize::from(lane_count) {
-                let lane = u16::try_from((worker + offset) % usize::from(lane_count))
-                    .expect("persisted lane fits u16");
+            let worker_offset =
+                u16::try_from(worker % usize::from(lane_count)).expect("persisted lane fits u16");
+            let worker_start = (claim_start + worker_offset) % lane_count;
+            for lane in index.lane_log_claim_candidates(worker_start)? {
                 if claimed_stripes.contains(&lane) {
                     continue;
                 }

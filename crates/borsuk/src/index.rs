@@ -2063,6 +2063,14 @@ impl BorsukIndex {
         crate::lane_log::GROUP_COMMIT_STRIPE_COUNT
     }
 
+    pub(crate) fn lane_log_claim_candidates(&self, start: u16) -> Result<Vec<u16>> {
+        crate::lane_log::stripe_claim_candidates(
+            &self.collection_storage,
+            crate::lane_log::GROUP_COMMIT_STRIPE_COUNT,
+            start,
+        )
+    }
+
     pub(crate) fn materialize_lane_log_tail(&mut self) -> Result<Vec<u64>> {
         // Background group-commit maintenance only needs the newest lane
         // extents. Avoid reloading the collection snapshot and immutable
