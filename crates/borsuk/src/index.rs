@@ -898,6 +898,8 @@ struct CollectionReadRuntime {
     vector_sidecar_indexes: Arc<Mutex<SidecarIndexCache>>,
     decoded_vector_sidecars: Arc<DecodedObjectCache<Vec<Vec<f32>>>>,
     routing_page_cache: Arc<DecodedObjectCache<ReadBytes>>,
+    decoded_routing_page_children: Arc<DecodedObjectCache<Vec<RoutingLayerPageRef>>>,
+    decoded_routing_page_summaries: Arc<DecodedObjectCache<Vec<SegmentSummary>>>,
     inflight_vector_sidecars: Arc<InFlightReads<Vec<Vec<f32>>>>,
     decoded_global_identity_ranges: Arc<DecodedObjectCache<GlobalIdentityRanges>>,
     inflight_live_wal_snapshots: Arc<InFlightReads<LiveWalSnapshot>>,
@@ -1926,6 +1928,14 @@ impl CollectionReadRuntime {
             ),
             routing_page_cache: decoded_cache_with_pool(
                 DEFAULT_ROUTING_PAGE_CACHE_BYTES,
+                &retained_pool,
+            ),
+            decoded_routing_page_children: decoded_cache_with_pool(
+                DEFAULT_ROUTING_PAGE_CACHE_BYTES / 2,
+                &retained_pool,
+            ),
+            decoded_routing_page_summaries: decoded_cache_with_pool(
+                DEFAULT_ROUTING_PAGE_CACHE_BYTES / 2,
                 &retained_pool,
             ),
             inflight_vector_sidecars: Arc::new(InFlightReads::default()),
@@ -16405,6 +16415,14 @@ impl BorsukIndex {
                     .as_deref()
                     .and_then(|cache| cache.get(&parent_ref.path))
                     .is_none()
+                    && self
+                        .read_runtime
+                        .decoded_routing_page_children
+                        .get(&routing_page_cache_key(
+                            &parent_ref.path,
+                            &parent_ref.checksum,
+                        ))
+                        .is_none()
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -16420,6 +16438,28 @@ impl BorsukIndex {
         for parent_ref in parent_refs {
             if let Some(cache) = decoded_parent_pages.as_deref_mut()
                 && let Some(cached_page_refs) = cache.get(&parent_ref.path)
+            {
+                if cached_page_refs.len() != parent_ref.page_segments {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "cached routing parent page `{}` yielded {} child page refs, expected {}",
+                        parent_ref.path,
+                        cached_page_refs.len(),
+                        parent_ref.page_segments
+                    )));
+                }
+                read_result
+                    .page_refs
+                    .extend(cached_page_refs.iter().cloned());
+                continue;
+            }
+
+            if let Some(cached_page_refs) =
+                self.read_runtime
+                    .decoded_routing_page_children
+                    .get(&routing_page_cache_key(
+                        &parent_ref.path,
+                        &parent_ref.checksum,
+                    ))
             {
                 if cached_page_refs.len() != parent_ref.page_segments {
                     return Err(BorsukError::InvalidStorage(format!(
@@ -16480,6 +16520,11 @@ impl BorsukIndex {
             if let Some(cache) = decoded_parent_pages.as_deref_mut() {
                 cache.insert(parent_ref.path.clone(), child_page_refs.clone());
             }
+            self.read_runtime.decoded_routing_page_children.insert(
+                routing_page_cache_key(&parent_ref.path, &parent_ref.checksum),
+                Arc::new(child_page_refs.clone()),
+                read.bytes.len() as u64,
+            );
             read_result.page_refs.append(&mut child_page_refs);
         }
 
@@ -16657,6 +16702,25 @@ impl BorsukIndex {
             })?;
 
         for (page_ref, page_read) in page_refs.iter().zip(page_reads) {
+            let cache_key = routing_page_cache_key(&page_ref.path, &page_ref.checksum);
+            if let Some(cached_summaries) = self
+                .read_runtime
+                .decoded_routing_page_summaries
+                .get(&cache_key)
+            {
+                if cached_summaries.len() != page_ref.page_segments {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "cached routing page `{}` yielded {} segment summaries, expected {}",
+                        page_ref.path,
+                        cached_summaries.len(),
+                        page_ref.page_segments
+                    )));
+                }
+                read_result
+                    .summaries
+                    .extend(cached_summaries.iter().cloned());
+                continue;
+            }
             let read = page_read.read;
             read_result.bytes_read += read.bytes.len() as u64;
             read_result.routing_pages_read += 1;
@@ -16689,6 +16753,11 @@ impl BorsukIndex {
                     page_ref.page_segments
                 )));
             }
+            self.read_runtime.decoded_routing_page_summaries.insert(
+                cache_key,
+                Arc::new(page_summaries.clone()),
+                read.bytes.len() as u64,
+            );
             read_result.summaries.append(&mut page_summaries);
         }
 
