@@ -251,6 +251,9 @@ for cells in "${CELL_COUNTS[@]}"; do
       CURRENT_CELL="$cell_output"
       resource_output="${cell_output}.resources.csv"
       storage_trace_output="${cell_output}.storage-access.csv"
+      benchmark_stdout="$cell_output/benchmark.stdout.log"
+      benchmark_stderr="$cell_output/benchmark.stderr.log"
+      mkdir -p "$cell_output"
       set +e
       env \
         BORSUK_GROUP_COMMIT_PROTOCOL="$PROTOCOL" \
@@ -281,7 +284,8 @@ for cells in "${CELL_COUNTS[@]}"; do
         python3 "$ROOT_DIR/scripts/benchmark_with_resources.py" \
           --output "$resource_output" \
           --interval-ms "$RESOURCE_INTERVAL_MS" \
-          -- timeout --signal=TERM --kill-after=30s "$CELL_TIMEOUT_SECONDS" "$GROUP_BINARY"
+          -- timeout --signal=TERM --kill-after=30s "$CELL_TIMEOUT_SECONDS" "$GROUP_BINARY" \
+          >"$benchmark_stdout" 2>"$benchmark_stderr"
       status=$?
       set -e
       mkdir -p "$cell_output"
