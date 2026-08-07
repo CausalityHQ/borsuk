@@ -2039,11 +2039,26 @@ impl Storage {
         manifest: &Manifest,
         previous: Option<&Manifest>,
     ) -> Result<(StagedManifest, StorageWriteReport)> {
+        self.stage_manifest_with_report_and_routing_summaries(modality, manifest, previous, None)
+    }
+
+    pub(crate) fn stage_manifest_with_report_and_routing_summaries(
+        &self,
+        modality: &str,
+        manifest: &Manifest,
+        previous: Option<&Manifest>,
+        routing_summaries: Option<&[SegmentSummary]>,
+    ) -> Result<(StagedManifest, StorageWriteReport)> {
         let span = observability::publish_span(manifest.version);
         let _entered = span.enter();
         let mut report = StorageWriteReport::default();
-        let page_refs =
-            self.routing_layer_page_refs_with_report(manifest, previous, 0, &mut report)?;
+        let page_refs = self.routing_layer_page_refs_with_report(
+            manifest,
+            previous,
+            0,
+            &mut report,
+            routing_summaries,
+        )?;
         let staged = self.stage_manifest_with_routing_page_refs_with_report(
             modality,
             manifest,
@@ -2257,6 +2272,7 @@ impl Storage {
         previous: Option<&Manifest>,
         routing_level: u8,
         report: &mut StorageWriteReport,
+        routing_summaries: Option<&[SegmentSummary]>,
     ) -> Result<Vec<RoutingLayerPageRef>> {
         let previous_refs = previous
             .map(|previous| self.read_routing_layer_page_index(previous.version, routing_level))
@@ -2264,11 +2280,8 @@ impl Storage {
             .unwrap_or_default();
         let mut page_refs = Vec::new();
 
-        for (page_ordinal, segments) in manifest
-            .segments
-            .chunks(manifest.routing_page_fanout)
-            .enumerate()
-        {
+        let segments = routing_summaries.unwrap_or(&manifest.segments);
+        for (page_ordinal, segments) in segments.chunks(manifest.routing_page_fanout).enumerate() {
             if let Some(previous_manifest) = previous
                 && routing_layer_page_unchanged(
                     previous_manifest,
