@@ -91,7 +91,10 @@ pub(crate) fn collection_wal_now_ms() -> Result<u64> {
 // set turn into a whole-sidecar transfer. A four-megabyte physical cap keeps
 // reranks bounded for 768d/1536d vectors while still amortizing adjacent rows;
 // larger spans are split into independently parallel range GETs.
-const SIDECAR_RANGE_COALESCE_BYTES: u64 = 256 * 1024;
+// Sidecar candidate ranges are already bounded Arrow record batches.  Merging
+// across larger gaps turns sparse reranks into near-full-object reads on a
+// cold handle, so only coalesce adjacent batches with a small IPC boundary.
+const SIDECAR_RANGE_COALESCE_BYTES: u64 = 8 * 1024;
 const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 4 * 1024 * 1024;
 const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
