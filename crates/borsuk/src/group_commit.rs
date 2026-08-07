@@ -8,7 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{BorsukError, BorsukIndex, RequestCounts, Result, VectorRecord};
+use crate::{
+    BorsukError, BorsukIndex, RequestCounts, Result, VectorRecord,
+    mutation::{CanonicalMutation, MutationClock},
+};
 use rayon::prelude::*;
 use uuid::Uuid;
 
@@ -320,6 +323,7 @@ impl GroupCommitWriter {
         let mut requests = Vec::with_capacity(config.worker_lanes);
         let mut worker_handles = Vec::with_capacity(config.worker_lanes);
         let mut worker_stripes = Vec::with_capacity(config.worker_lanes);
+        let mutation_clock = Arc::new(MutationClock::new(*Uuid::new_v4().as_bytes()));
         let mut claimed_stripes = std::collections::HashSet::with_capacity(config.worker_lanes);
         let claim_start = (Uuid::new_v4().as_u128() % u128::from(lane_count)) as u16;
         for (worker, index) in indexes.into_iter().enumerate() {
@@ -356,9 +360,19 @@ impl GroupCommitWriter {
             worker_stripes.push(stripe);
             let dimensions = index.primary_dimensions();
             let (sender, receiver) = mpsc::channel();
+            let worker_mutation_clock = Arc::clone(&mutation_clock);
             let handle = std::thread::Builder::new()
                 .name(format!("borsuk-group-commit-{worker}"))
-                .spawn(move || run_worker(index, vec![lane_writer], dimensions, config, receiver))
+                .spawn(move || {
+                    run_worker(
+                        index,
+                        vec![lane_writer],
+                        worker_mutation_clock,
+                        dimensions,
+                        config,
+                        receiver,
+                    )
+                })
                 .map_err(|error| {
                     BorsukError::InvalidStorage(format!(
                         "failed to start group commit worker {worker}: {error}"
@@ -622,6 +636,7 @@ fn current_time_ms() -> Result<u64> {
 fn run_worker(
     mut index: BorsukIndex,
     mut lane_writers: Vec<crate::lane_log::LaneEpochWriter>,
+    mutation_clock: Arc<MutationClock>,
     dimensions: usize,
     config: GroupCommitConfig,
     requests: Receiver<WorkerRequest>,
@@ -725,9 +740,60 @@ fn run_worker(
                         len
                     })
                     .collect::<Vec<_>>();
+                let now_ms = match current_time_ms() {
+                    Ok(now_ms) => now_ms,
+                    Err(error) => {
+                        let message = error.to_string();
+                        for request in same_lane {
+                            let _ = request.response.send(Err(message.clone()));
+                        }
+                        return;
+                    }
+                };
+                let now_ms_i64 = match i64::try_from(now_ms) {
+                    Ok(now_ms) => now_ms,
+                    Err(_) => {
+                        let message = "system clock milliseconds exceed i64".to_string();
+                        for request in same_lane {
+                            let _ = request.response.send(Err(message.clone()));
+                        }
+                        return;
+                    }
+                };
+                let versions = match mutation_clock.allocate_range_at(now_ms_i64, combined.len()) {
+                    Ok(versions) => versions,
+                    Err(error) => {
+                        let message = error.to_string();
+                        for request in same_lane {
+                            let _ = request.response.send(Err(message.clone()));
+                        }
+                        return;
+                    }
+                };
+                let mut stamped = Vec::with_capacity(combined.len());
+                for (ordinal, record) in combined.into_iter().enumerate() {
+                    let mutation = match versions
+                        .at(ordinal)
+                        .and_then(|version| CanonicalMutation::put(version, record))
+                    {
+                        Ok(mutation) => mutation,
+                        Err(error) => {
+                            let message = error.to_string();
+                            for request in same_lane {
+                                let _ = request.response.send(Err(message.clone()));
+                            }
+                            return;
+                        }
+                    };
+                    stamped.push(
+                        mutation
+                            .into_record()
+                            .expect("canonical put mutations carry records"),
+                    );
+                }
                 let mut by_id = std::collections::HashMap::<Vec<u8>, usize>::new();
-                let mut deduplicated = Vec::with_capacity(combined.len());
-                for record in combined {
+                let mut deduplicated = Vec::with_capacity(stamped.len());
+                for record in stamped {
                     let key = record.id.as_bytes().to_vec();
                     if let Some(index) = by_id.get(&key).copied() {
                         deduplicated[index] = record;
@@ -740,37 +806,35 @@ fn run_worker(
                 let committed = index
                     .reserve_lane_log_generation_range(deduplicated.len())
                     .and_then(|(first_generation, coordination_requests)| {
-                        current_time_ms().and_then(|now_ms| {
-                            let mut receipt = writer
-                                .append_upsert_records_with_reserved_generation_at(
-                                    &deduplicated,
-                                    dimensions,
-                                    first_generation,
-                                    now_ms,
-                                    LANE_LEASE_TTL_MS,
-                                )?;
-                            receipt.requests.gets = receipt
-                                .requests
-                                .gets
-                                .saturating_add(coordination_requests.gets);
-                            receipt.requests.puts = receipt
-                                .requests
-                                .puts
-                                .saturating_add(coordination_requests.puts);
-                            receipt.requests.deletes = receipt
-                                .requests
-                                .deletes
-                                .saturating_add(coordination_requests.deletes);
-                            receipt.requests.heads = receipt
-                                .requests
-                                .heads
-                                .saturating_add(coordination_requests.heads);
-                            receipt.requests.lists = receipt
-                                .requests
-                                .lists
-                                .saturating_add(coordination_requests.lists);
-                            Ok(receipt)
-                        })
+                        let mut receipt = writer
+                            .append_upsert_records_with_reserved_generation_at(
+                                &deduplicated,
+                                dimensions,
+                                first_generation,
+                                now_ms,
+                                LANE_LEASE_TTL_MS,
+                            )?;
+                        receipt.requests.gets = receipt
+                            .requests
+                            .gets
+                            .saturating_add(coordination_requests.gets);
+                        receipt.requests.puts = receipt
+                            .requests
+                            .puts
+                            .saturating_add(coordination_requests.puts);
+                        receipt.requests.deletes = receipt
+                            .requests
+                            .deletes
+                            .saturating_add(coordination_requests.deletes);
+                        receipt.requests.heads = receipt
+                            .requests
+                            .heads
+                            .saturating_add(coordination_requests.heads);
+                        receipt.requests.lists = receipt
+                            .requests
+                            .lists
+                            .saturating_add(coordination_requests.lists);
+                        Ok(receipt)
                     })
                     .map_err(|error| error.to_string());
                 for (request, caller_records) in same_lane.into_iter().zip(caller_sizes) {

@@ -6,9 +6,9 @@ use std::{
 };
 
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float16Array, Float32Array,
-    Int64Array, ListArray, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
+    Float16Array, Float32Array, Int64Array, ListArray, RecordBatch, StringArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array,
     types::{
         Float16Type, Float32Type, Int8Type, Int64Type, UInt8Type, UInt16Type, UInt32Type,
         UInt64Type,
@@ -39,6 +39,7 @@ use crate::{
         SegmentSummary,
     },
     metric::VectorMetric,
+    mutation::{MutationStamp, MutationVersion},
     record::{LeafMode, RecordId, StorageEncoding, VectorElementType, VectorRecord},
     segment::{GraphEdge, Segment, SegmentGraph},
 };
@@ -119,7 +120,10 @@ use crate::{
 // Bumped 28 -> 29 when lane materialization and directory retirement became
 // manifest-version fenced. A v28 reader could hide a materialized WAL extent
 // from a reader still pinned to the manifest that preceded its drain.
-const CURRENT_VERSION: u16 = 29;
+// Bumped 29 -> 30 when canonical 192-bit mutation versions and 256-bit
+// mutation digests became typed columns in WAL, segment, and exact-vector
+// artifacts. A v29 reader would discard the convergent multi-writer order.
+const CURRENT_VERSION: u16 = 30;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -2681,11 +2685,13 @@ fn wal_records_to_batch(
         .iter()
         .any(|record| !record.text_term_ids.is_empty());
     let include_generation = records.iter().any(|record| record.generation != 0);
+    let include_mutation_stamp = mutation_stamps_present(records)?;
     let schema = wal_records_schema(
         dimensions,
         include_sparse,
         include_text,
         include_generation,
+        include_mutation_stamp,
         vector_element_type,
     )?;
     let mut columns = vec![
@@ -2720,6 +2726,9 @@ fn wal_records_to_batch(
         columns.push(array(UInt64Array::from_iter_values(
             records.iter().map(|record| record.generation),
         )));
+    }
+    if include_mutation_stamp {
+        columns.extend(mutation_stamp_arrays(records)?);
     }
     columns.push(optional_typed_vector_array(
         records,
@@ -2782,6 +2791,64 @@ struct WalRecordExtras {
     storage: crate::StorageEncoding,
 }
 
+type MutationStampColumns = (usize, usize, usize);
+
+fn mutation_stamp_columns(schema: &Schema) -> Result<Option<MutationStampColumns>> {
+    let columns = [
+        schema.index_of("mutation_hlc").ok(),
+        schema.index_of("mutation_writer").ok(),
+        schema.index_of("mutation_digest").ok(),
+    ];
+    match columns {
+        [None, None, None] => Ok(None),
+        [Some(hlc), Some(writer), Some(digest)] => Ok(Some((hlc, writer, digest))),
+        _ => Err(BorsukError::InvalidStorage(
+            "record table must contain mutation_hlc, mutation_writer, and mutation_digest together"
+                .to_string(),
+        )),
+    }
+}
+
+fn mutation_stamp_value(
+    batch: &RecordBatch,
+    columns: Option<MutationStampColumns>,
+    row: usize,
+) -> Result<Option<MutationStamp>> {
+    let Some((hlc_column, writer_column, digest_column)) = columns else {
+        return Ok(None);
+    };
+    let hlc = primitive_value::<UInt64Type>(batch, hlc_column, row, "mutation_hlc")?;
+    let writer = fixed_size_binary_value::<16>(batch, writer_column, row, "mutation_writer")?;
+    let digest = fixed_size_binary_value::<32>(batch, digest_column, row, "mutation_digest")?;
+    Ok(Some(MutationStamp::new(
+        MutationVersion::from_parts(hlc, writer),
+        digest,
+    )))
+}
+
+fn fixed_size_binary_value<const N: usize>(
+    batch: &RecordBatch,
+    column: usize,
+    row: usize,
+    name: &str,
+) -> Result<[u8; N]> {
+    let array = batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(format!("column `{name}` has wrong physical type"))
+        })?;
+    if array.is_null(row) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "column `{name}` contains a null value"
+        )));
+    }
+    array.value(row).try_into().map_err(|_| {
+        BorsukError::InvalidStorage(format!("column `{name}` must contain exactly {N} bytes"))
+    })
+}
+
 fn wal_records_from_batches(batches: Vec<RecordBatch>) -> Result<Vec<VectorRecord>> {
     let mut records = Vec::new();
     let mut expected_element_type = None;
@@ -2823,6 +2890,7 @@ fn wal_records_from_batches(batches: Vec<RecordBatch>) -> Result<Vec<VectorRecor
             ));
         }
         let generation_column = schema.index_of("generation").ok();
+        let mutation_stamp_columns = mutation_stamp_columns(&schema)?;
 
         for row in 0..batch.num_rows() {
             let element_type = wal_vector_element_type_from_code(primitive_value::<UInt8Type>(
@@ -2901,6 +2969,7 @@ fn wal_records_from_batches(batches: Vec<RecordBatch>) -> Result<Vec<VectorRecor
                 Some(column) => primitive_value::<UInt64Type>(&batch, column, row, "generation")?,
                 None => 0,
             };
+            let mutation_stamp = mutation_stamp_value(&batch, mutation_stamp_columns, row)?;
             let extras: WalRecordExtras = serde_json::from_slice(binary_value(
                 &batch,
                 extras_column,
@@ -2922,7 +2991,7 @@ fn wal_records_from_batches(batches: Vec<RecordBatch>) -> Result<Vec<VectorRecor
                 text_term_freqs,
                 metadata,
                 generation,
-                mutation_stamp: None,
+                mutation_stamp,
             });
         }
     }
@@ -3005,12 +3074,14 @@ fn segment_to_batch_impl(
         .iter()
         .any(|record| !record.text_term_ids.is_empty());
     let include_generation = records.iter().any(|record| record.generation != 0);
+    let include_mutation_stamp = mutation_stamps_present(records)?;
     let schema = segment_schema(
         segment.dimensions,
         pq_code_dimensions,
         include_sparse,
         include_text,
         include_generation,
+        include_mutation_stamp,
         include_vectors,
         vector_element_type,
     );
@@ -3057,6 +3128,9 @@ fn segment_to_batch_impl(
         columns.push(array(UInt64Array::from_iter_values(
             records.iter().map(|record| record.generation),
         )));
+    }
+    if include_mutation_stamp {
+        columns.extend(mutation_stamp_arrays(records)?);
     }
     if include_vectors {
         // WAL objects inline the dense vector so the un-flushed tail is fully
@@ -3658,6 +3732,7 @@ fn segment_from_batches_with_header(
             ));
         }
         let generation_column = batch.schema().index_of("generation").ok();
+        let mutation_stamp_columns = mutation_stamp_columns(&batch.schema())?;
         // Normal Parquet segments carry no dense-vector column — their dense
         // vectors live in the per-segment Arrow IPC sidecar and are
         // reconstructed at the read boundary, so decode yields empty dense
@@ -3794,6 +3869,7 @@ fn segment_from_batches_with_header(
                 Some(column) => primitive_value::<UInt64Type>(&batch, column, row, "generation")?,
                 None => 0,
             };
+            let mutation_stamp = mutation_stamp_value(&batch, mutation_stamp_columns, row)?;
             let (extra_vectors, extra_sparse, extra_multi_vectors, storage) = if let Some(column) =
                 wal_record_extras_column
             {
@@ -3830,7 +3906,7 @@ fn segment_from_batches_with_header(
                 text_term_freqs,
                 metadata,
                 generation,
-                mutation_stamp: None,
+                mutation_stamp,
             });
             routing_codes.push(routing_code);
         }
@@ -4838,6 +4914,51 @@ fn pivots_schema(dimensions: usize) -> Arc<Schema> {
     ]))
 }
 
+fn mutation_stamps_present(records: &[VectorRecord]) -> Result<bool> {
+    let stamped = records
+        .iter()
+        .filter(|record| record.mutation_stamp().is_some())
+        .count();
+    if stamped != 0 && stamped != records.len() {
+        return Err(BorsukError::InvalidStorage(
+            "record table cannot mix stamped and unstamped mutations".to_string(),
+        ));
+    }
+    Ok(stamped == records.len())
+}
+
+fn mutation_stamp_fields() -> [Field; 3] {
+    [
+        Field::new("mutation_hlc", DataType::UInt64, false),
+        Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+        Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+    ]
+}
+
+fn mutation_stamp_arrays(records: &[VectorRecord]) -> Result<[ArrayRef; 3]> {
+    let stamps = records
+        .iter()
+        .map(|record| {
+            record.mutation_stamp().ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "record table mutation stamp disappeared during encoding".to_string(),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok([
+        array(UInt64Array::from_iter_values(
+            stamps.iter().map(|stamp| stamp.version().hlc()),
+        )),
+        array(FixedSizeBinaryArray::try_from_iter(
+            stamps.iter().map(|stamp| stamp.version().writer()),
+        )?),
+        array(FixedSizeBinaryArray::try_from_iter(
+            stamps.iter().map(|stamp| stamp.digest()),
+        )?),
+    ])
+}
+
 #[allow(clippy::too_many_arguments)]
 fn segment_schema(
     dimensions: usize,
@@ -4845,6 +4966,7 @@ fn segment_schema(
     include_sparse: bool,
     include_text: bool,
     include_generation: bool,
+    include_mutation_stamp: bool,
     include_vectors: bool,
     vector_element_type: VectorElementType,
 ) -> Arc<Schema> {
@@ -4870,6 +4992,9 @@ fn segment_schema(
     }
     if include_generation {
         fields.push(Field::new("generation", DataType::UInt64, false));
+    }
+    if include_mutation_stamp {
+        fields.extend(mutation_stamp_fields());
     }
     if include_vectors {
         // Nullable: sparse rows carry no dense vector. Appended last so all
@@ -4899,6 +5024,7 @@ fn wal_records_schema(
     include_sparse: bool,
     include_text: bool,
     include_generation: bool,
+    include_mutation_stamp: bool,
     vector_element_type: VectorElementType,
 ) -> Result<Arc<Schema>> {
     let mut fields = vec![
@@ -4915,6 +5041,9 @@ fn wal_records_schema(
     }
     if include_generation {
         fields.push(Field::new("generation", DataType::UInt64, false));
+    }
+    if include_mutation_stamp {
+        fields.extend(mutation_stamp_fields());
     }
     fields.push(Field::new(
         "vector",
@@ -7992,6 +8121,35 @@ mod tests {
     }
 
     #[test]
+    fn mutation_stamp_round_trips_through_wal_and_materialized_segment_tables() {
+        let version = crate::mutation::MutationVersion::from_parts(0x1234_5678, [0x5a; 16]);
+        let stamped = crate::mutation::CanonicalMutation::put(
+            version,
+            VectorRecord::new("stamped", vec![0.25, 0.75]),
+        )
+        .unwrap()
+        .record()
+        .unwrap()
+        .clone();
+        let expected_stamp = stamped.mutation_stamp().unwrap();
+
+        let bytes = wal_records_to_table(
+            std::slice::from_ref(&stamped),
+            2,
+            VectorElementType::Float32,
+            crate::PhysicalFormat::Parquet,
+        )
+        .unwrap();
+        let decoded = wal_records_from_table(bytes, "wal/run.parquet").unwrap();
+        assert_eq!(decoded[0].mutation_stamp(), Some(expected_stamp));
+
+        let mut segment = valid_segment();
+        segment.records[0] = stamped;
+        let decoded = segment_from_parquet(&segment_to_parquet(&segment).unwrap()).unwrap();
+        assert_eq!(decoded.records[0].mutation_stamp(), Some(expected_stamp));
+    }
+
+    #[test]
     fn wal_uses_record_only_schema_in_both_table_formats() {
         let mut segment = valid_segment();
         segment.records[0].storage = crate::StorageEncoding::Dense;
@@ -9093,7 +9251,16 @@ mod tests {
     fn external_segment_parquet_with_records<const N: usize>(
         records: [(&str, [f32; 2]); N],
     ) -> Vec<u8> {
-        let schema = segment_schema(2, 2, false, false, false, false, VectorElementType::Float32);
+        let schema = segment_schema(
+            2,
+            2,
+            false,
+            false,
+            false,
+            false,
+            false,
+            VectorElementType::Float32,
+        );
         let header = external_packed_segment_header(vec![0.0, 0.0], 0.0, 2);
         let pq_code = [128_u8, 128_u8];
         let batch = RecordBatch::try_new(

@@ -2111,7 +2111,7 @@ impl BorsukIndex {
                     entry.insert(record.clone());
                 }
                 std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    if record.generation >= entry.get().generation {
+                    if record.compare_mutation(entry.get())?.is_ge() {
                         entry.insert(record.clone());
                     }
                 }
