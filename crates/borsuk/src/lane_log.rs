@@ -2074,7 +2074,10 @@ impl LaneLogReader {
         current_blocks: &[LaneLogRecordBlock],
         runtime: &crate::index::WalTailRuntime,
     ) -> Result<Option<LaneLogSnapshot>> {
-        self.ensure_epoch_format()?;
+        // `read_epoch_identities` decodes every authoritative HEAD below, so
+        // it also validates the epoch-v29 format. Avoid a separate lane-zero
+        // HEAD read on every WAL-tail poll; active-tail readers already pay the
+        // fixed fan-out needed to detect newly created immutable extents.
         let identities = self.read_epoch_identities(current_blocks)?;
         if identities
             .iter()
