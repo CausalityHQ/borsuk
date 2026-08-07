@@ -35,11 +35,13 @@ The eight-writer arm therefore searched the complete growing WAL tail.
 
 ### Direct immutable acknowledgement
 
-Ordinary upsert and delete paths allocate versions in process memory and write
-one checksum-verified immutable WAL extent. Successful extent creation remains
-the durability and acknowledgement boundary. Normal acknowledgement performs
-no collection counter GET, conditional counter PUT, manifest publication,
-materialization, or external-service request.
+Ordinary upsert and delete paths allocate versions in process memory, create
+one checksum-verified immutable WAL extent, then conditionally publish that
+extent through the owning stripe's versioned JSON head. The per-stripe head CAS
+is the durability, discoverability, and stale-owner acknowledgement boundary.
+Normal acknowledgement therefore performs two sequential S3 PUTs but no GET,
+HEAD, LIST, collection counter, manifest publication, materialization, or
+external-service request. Independent stripes never contend on one head.
 
 S3 remains the only durable service. DynamoDB, a required RPC ingest service,
 and cache-dependent correctness or performance are excluded.
@@ -247,12 +249,22 @@ collection-root commit makes all modality manifests visible together.
 
 - A clock allocation followed by a failed extent PUT is an unused version gap.
 - Versions and canonical bytes are allocated once for the stable
-  `(stripe, lease_epoch, extent_sequence)` key. An accepted-but-response-lost
-  PUT blocks later work on that stripe until the exact key is read and its
-  checksum reconciled; unequal bytes are a fencing failure. Receipts expose the
-  complete extent identity.
-- A process crash after extent creation leaves an authoritative immutable
-  write discoverable by the existing epoch recovery protocol.
+  `(stripe, lease_epoch, extent_sequence)` key. Extent creation alone is staged,
+  not acknowledged. A conditional JSON-head PUT names the exact extent,
+  checksum, sequence, cumulative tail counters, and maximum mutation version.
+  Only a successful or exactly reconciled head publication makes it
+  authoritative. Receipts expose the complete extent and head identities.
+- If extent creation succeeds but head publication loses its CAS, the extent is
+  an unreachable GC candidate and the write is not acknowledged. A stale owner
+  can never publish after takeover because it retains the predecessor head
+  version; this remains true even when it paused before or during extent PUT.
+- Accepted-but-response-lost extent or head PUTs block later stripe work until
+  the exact object/head is read and checksum/content reconciled. Unequal bytes
+  or a different successor are fencing failures. Exceptional reconciliation
+  requests are reported separately from the two-request steady state.
+- A process crash after head publication leaves an authoritative immutable
+  write discoverable from the stripe head. A crash before publication leaves a
+  non-authoritative immutable GC candidate.
 - Clock rollback cannot make one live clock regress because its HLC is
   monotonic. Cross-process rollback is covered by the documented convergent,
   non-linearizable conflict contract.
@@ -285,9 +297,12 @@ Implementation proceeds in independently delivered slices and must prove:
    metadata. Stock Parquet, Arrow IPC, and JSON readers validate every durable
    object role. Old experimental formats are rejected clearly with no dual
    reader.
-4. A normal group uses exactly one immutable extent PUT per touched writer
-   stripe and zero global generation-counter requests. Ordinary upsert/delete
-   use no `id-directory/last-write-wins/NEXT` object.
+4. A normal group uses exactly one immutable extent PUT and one conditional
+   per-stripe JSON-head PUT per touched writer stripe, with zero steady-state
+   GET/HEAD/LIST or global generation-counter requests. Ordinary upsert/delete
+   use no `id-directory/last-write-wins/NEXT` object. A paused stale owner loses
+   head publication after takeover and cannot acknowledge an undiscoverable
+   extent.
 5. Independent writers with disjoint and conflicting IDs converge after
    reopen, drain, compaction, crash takeover, and reversed stripe assignment.
    Every acknowledged non-conflicting record remains visible exactly once.

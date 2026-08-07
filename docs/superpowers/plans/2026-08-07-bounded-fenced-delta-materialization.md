@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - This plan begins only after the direct mutation-version plan is green and pushed.
-- One-PUT ordinary acknowledgement remains unchanged below the local hard quota.
+- The two-PUT extent-plus-stripe-head acknowledgement remains unchanged below the local hard quota; maintenance adds no foreground request.
 - Hard bounds decompose into fixed stripe quotas; do not claim an exact dynamic aggregate cap from stale observations.
 - Maximum age is an active-maintenance SLO, not a structural guarantee after all writers exit.
 - Materializer leases are efficiency hints; monotonic fencing plus root CAS provide correctness.

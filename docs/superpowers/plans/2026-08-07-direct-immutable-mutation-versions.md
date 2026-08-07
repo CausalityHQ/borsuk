@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the collection-wide S3 generation counter with locally allocated, deterministic convergent mutation versions so ordinary durable upsert/delete acknowledgement performs one immutable extent PUT per touched writer stripe.
+**Goal:** Replace the collection-wide S3 generation counter with locally allocated, deterministic convergent mutation versions so ordinary durable upsert/delete acknowledgement performs one immutable extent PUT plus one uncontended conditional JSON-head PUT per touched writer stripe.
 
 **Architecture:** An internal 192-bit `MutationVersion` combines a 64-bit HLC prefix with a complete 128-bit writer identity. One `Arc<MutationClock>` belongs to a logical handle, and one canonical put/delete envelope carries the version and digest through WAL, materialization, sidecars, compaction, and reopen. The persistent cutover is atomic at standard-schema v30: hot immutable mutation extents are Arrow IPC, materialized tables are Parquet or Arrow IPC by access pattern, and control objects are versioned JSON. Old experimental indexes are rejected.
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - S3 is the only durable service; do not add DynamoDB or a required RPC service.
-- Normal upsert/delete acknowledgement performs no global generation-counter request, manifest publication, or materialization.
+- Normal upsert/delete acknowledgement performs two sequential per-stripe PUTs and no steady-state GET/HEAD/LIST, global generation-counter request, manifest publication, or materialization.
 - Preserve one deterministic winner per ID and fail closed on equal-version unequal-digest mutations.
 - Cross-host unobserved writes are convergent, not linearizable; do not retain tests or docs that claim acknowledgement order defines the winner.
 - Mutation versions are internal and cannot be supplied by callers.
@@ -221,15 +221,15 @@
 
 - [ ] **Step 1: Write RED request-count tests**
 
-  Replace `repeated_groups_use_one_generation_cas_and_one_extent` with `repeated_groups_use_one_extent_and_no_generation_coordination`. For 12 groups require exactly 12 extent PUTs and zero operations whose path is `id-directory/last-write-wins/NEXT`. Require each normal receipt to report one PUT, zero GET/HEAD/LIST, and its exact extent identity.
+  Replace `repeated_groups_use_one_generation_cas_and_one_extent` with `repeated_groups_use_extent_plus_stripe_publication_without_global_coordination`. For 12 groups require exactly 12 extent PUTs, 12 conditional PUTs to that writer's stripe head, and zero operations whose path is `id-directory/last-write-wins/NEXT`. Require each normal receipt to report two PUTs, zero GET/HEAD/LIST, and its exact extent and published-head identities.
 
 - [ ] **Step 2: Write RED convergence and documented-skew tests**
 
   Replace acknowledgement-order assertions with deterministic version assertions. Inject clocks so two independent writers conflict in both stripe orders, reopen/drain/compact, and require the same winner. Add a permanent case where a later acknowledged but unobserved clock-skewed write loses, proving the documented non-linearizable contract rather than accidentally preserving the old test.
 
-- [ ] **Step 3: Write RED ambiguous-PUT tests**
+- [ ] **Step 3: Write RED publication-fence and ambiguous-PUT tests**
 
-  Inject accept-then-timeout. Require the stripe to block later work, read the exact same extent key, validate identical checksum/bytes, return the original extent identity, and only then allocate the next sequence. Inject unequal existing bytes and require fencing failure.
+  Pause owner A after extent creation, take over with B through the stripe-head CAS, then resume A. Require A's head publication and acknowledgement to fail while its orphan extent remains invisible. Inject accept-then-timeout separately for extent creation and head publication. Require the stripe to block later work, read the exact object, validate identical checksum/content, return the original identities only when the intended head successor won, and only then allocate the next sequence. Inject unequal existing bytes or a different head successor and require fencing failure.
 
 - [ ] **Step 4: Verify RED**
 
@@ -245,7 +245,7 @@
 
 - [ ] **Step 6: Implement standard-format extents and delete the counter**
 
-  Replace `first_generation`/`generation_end` with typed Arrow IPC mutation fields and documented schema metadata. Keep stable sequence-addressed create-only keys and exact checksum reconciliation. Store heads/directories as versioned JSON. Remove the counter path and its startup floor read entirely. Increment the standard schema marker and reject earlier custom extents.
+  Replace `first_generation`/`generation_end` with typed Arrow IPC mutation fields and documented schema metadata. Keep stable sequence-addressed create-only keys and exact checksum reconciliation. Store heads/directories as versioned JSON. After extent creation, conditionally publish the exact extent/checksum/counters/max-version through the writer's expected stripe-head version; acknowledgement follows only that CAS. Remove the counter path and its startup floor read entirely. Increment the standard schema marker and reject earlier custom extents.
 
 - [ ] **Step 7: Verify GREEN and lifecycle safety**
 
