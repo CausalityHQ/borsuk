@@ -237,7 +237,7 @@ Run formatting, `git diff --check`, repository policy, strict all-target/all-fea
 Clippy, full locked Rust workspace tests, and the pinned Python suite with the
 shared sccache wrapper. Expected: all exit zero with no warnings.
 
-- [ ] **Step 2: Commit and fast-forward push**
+- [x] **Step 2: Commit and fast-forward push**
 
 Commit the evidence/docs slice. Fetch `origin/main`, prove it is an ancestor of
 `HEAD`, push `HEAD:main`, verify `HEAD == origin/main`, and require a clean
