@@ -12,8 +12,12 @@ import sys
 from collections.abc import Iterable
 
 
-COMPLETE = "GLOBAL_CELL_STRIPE_QUALIFICATION_COMPLETE"
-FAILED = "GLOBAL_CELL_STRIPE_QUALIFICATION_FAILED"
+QUALIFICATION_CAMPAIGN = "global-cell-stripe-qualification-v1"
+CONFIRMATION_CAMPAIGN = "global-cell-stripe-confirmation-v1"
+QUALIFICATION_COMPLETE = "GLOBAL_CELL_STRIPE_QUALIFICATION_COMPLETE"
+QUALIFICATION_FAILED = "GLOBAL_CELL_STRIPE_QUALIFICATION_FAILED"
+CONFIRMATION_COMPLETE = "GLOBAL_CELL_STRIPE_CONFIRMATION_COMPLETE"
+CONFIRMATION_FAILED = "GLOBAL_CELL_STRIPE_CONFIRMATION_FAILED"
 
 
 class ValidationError(RuntimeError):
@@ -73,25 +77,119 @@ def stripe_name(stripe_bytes: int) -> str:
     return f"s{stripe_bytes // (1024 * 1024)}m"
 
 
+def campaign_schema(manifest: dict[str, object]) -> tuple[str, str, list[int]]:
+    campaign_id = manifest.get("campaign_id")
+    mib = 1024 * 1024
+    if campaign_id == QUALIFICATION_CAMPAIGN:
+        complete = QUALIFICATION_COMPLETE
+        failed = QUALIFICATION_FAILED
+        stripes = [mib, 2 * mib, 4 * mib]
+        expected_orders = [
+            [mib, 2 * mib, 4 * mib],
+            [2 * mib, 4 * mib, mib],
+            [4 * mib, mib, 2 * mib],
+            [mib, 2 * mib, 4 * mib],
+            [2 * mib, 4 * mib, mib],
+        ]
+        require(manifest.get("protocol_kind") == "production-diagnostic", "qualification protocol changed")
+        require(manifest.get("queries_per_arm") == 100, "qualification query count changed")
+    elif campaign_id == CONFIRMATION_CAMPAIGN:
+        complete = CONFIRMATION_COMPLETE
+        failed = CONFIRMATION_FAILED
+        stripes = [mib, 4 * mib]
+        expected_orders = [
+            [mib, 4 * mib],
+            [4 * mib, mib],
+            [mib, 4 * mib],
+            [4 * mib, mib],
+            [mib, 4 * mib],
+        ]
+        require(manifest.get("protocol_kind") == "stripe-confirmation", "confirmation protocol changed")
+        require(manifest.get("queries_per_arm") == 500, "confirmation query count changed")
+        require(manifest.get("max_pooled_p95_ms") == 200.0, "confirmation pooled p95 limit changed")
+        require(
+            manifest.get("max_worst_repetition_p95_ms") == 200.0,
+            "confirmation worst-repeat p95 limit changed",
+        )
+        require(
+            manifest.get("minimum_pooled_p95_improvement_fraction") == 0.10,
+            "confirmation p95 effect floor changed",
+        )
+        require(
+            manifest.get("maximum_pooled_p50_regression_fraction") == 0.05,
+            "confirmation p50 regression guard changed",
+        )
+    else:
+        raise ValidationError(f"unknown campaign_id {campaign_id!r}")
+    frozen_common = {
+        "architecture": "aarch64",
+        "instance_type": "c7g.8xlarge",
+        "base_run_id": "20260808T091300Z-v67-40911df",
+        "base_cell": "c2000/r01/l1/w8",
+        "base_index_uri": "s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260808T091300Z-v67-40911df/index/cells/c2000/r01/l1/w8",
+        "base_samples_uri": "s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260808T091300Z-v67-40911df/results/cells/c2000/r01/l1/w8/samples.csv",
+        "base_source_sha256": "4ea819fbb9cb4e203811410e40f7c158dca5fc18a3644012d96341155aa52423",
+        "base_manifest_sha256": "81c849548d9ef7300cffd88a0a13aca2023645ae0af40e66f0da5a60ad37408a",
+        "base_samples_sha256": "7ec84babc5dc24bdc6275898155d362bf7e4c487c39491d1e136e2ba9906f578",
+        "dataset": "cohere-medium-1M",
+        "dataset_sha256": "54c733e39adfcaa9ee10f3ed8bd8e66ada9f8f9a1a73e9753f5c5c2044b79254",
+        "dimensions": 768,
+        "writers": 8,
+        "operations_per_writer": 1000,
+        "records_per_operation": 16,
+        "max_read_segments": 4,
+        "resource_sample_interval_ms": 100,
+    }
+    for key, expected in frozen_common.items():
+        require(manifest.get(key) == expected, f"manifest {key} changed")
+    require(
+        manifest.get("required_artifacts")
+        == [
+            "summary.csv",
+            "reads.csv",
+            "resources.csv",
+            "storage-access.csv",
+            "environment.txt",
+            "process_exit.txt",
+            "READ_QUALIFICATION_COMPLETE",
+            "CELL_COMPLETE",
+        ],
+        "required artifact set changed",
+    )
+    require(manifest.get("root_complete_marker") == complete, "manifest completion marker changed")
+    require(manifest.get("root_failure_marker") == failed, "manifest failure marker changed")
+    require(manifest.get("stripe_bytes") == stripes, "manifest stripe arms changed")
+    require(manifest.get("repetitions") == 5, "manifest repetition count changed")
+    require(manifest.get("arm_orders") == expected_orders, "manifest arm orders changed")
+    require(manifest.get("fresh_process_per_arm") is True, "fresh-process requirement changed")
+    require(manifest.get("fresh_cache_per_arm") is True, "fresh-cache requirement changed")
+    require(manifest.get("required_recall_at_10") == 1.0, "recall requirement changed")
+    require(
+        manifest.get("required_nonworse_paired_repetitions") == 4,
+        "paired repetition requirement changed",
+    )
+    return complete, failed, stripes
+
+
 def validate(
     manifest_path: pathlib.Path,
     root: pathlib.Path,
     recover_terminal_validator_failure: bool = False,
 ) -> dict[str, object]:
-    # Terminality is deliberately checked before any campaign CSV is opened.
-    if recover_terminal_validator_failure:
-        require(not (root / COMPLETE).exists(), "recovery requires no completion marker")
-        require((root / FAILED).is_file(), "recovery requires the terminal failure marker")
-        terminal_mode = "validator-failure-recovery"
-    else:
-        require((root / COMPLETE).is_file(), "campaign is incomplete")
-        require(not (root / FAILED).exists(), "campaign has a failure marker")
-        terminal_mode = "complete"
-
+    # The immutable manifest selects exact marker names. Terminality is checked
+    # before any campaign measurement CSV is opened.
     manifest_bytes = manifest_path.read_bytes()
     manifest = json.loads(manifest_bytes)
-    require(manifest["root_complete_marker"] == COMPLETE, "manifest completion marker changed")
-    require(manifest["root_failure_marker"] == FAILED, "manifest failure marker changed")
+    complete, failed, expected_stripes = campaign_schema(manifest)
+    if recover_terminal_validator_failure:
+        require(not (root / complete).exists(), "recovery requires no completion marker")
+        require((root / failed).is_file(), "recovery requires the terminal failure marker")
+        terminal_mode = "validator-failure-recovery"
+    else:
+        require((root / complete).is_file(), "campaign is incomplete")
+        require(not (root / failed).exists(), "campaign has a failure marker")
+        terminal_mode = "complete"
+
     preserved_manifest = root / "manifest.json"
     require(preserved_manifest.is_file(), "missing preserved manifest.json")
     require(preserved_manifest.read_bytes() == manifest_bytes, "preserved manifest differs")
@@ -102,10 +200,7 @@ def validate(
     repetitions = int(manifest["repetitions"])
     orders = manifest["arm_orders"]
     require(len(orders) == repetitions, "manifest arm-order count differs from repetitions")
-    require(
-        sorted(manifest["stripe_bytes"]) == [1048576, 2097152, 4194304],
-        "manifest stripe arms changed",
-    )
+    require(manifest["stripe_bytes"] == expected_stripes, "manifest stripe arms changed")
 
     seen_caches: set[str] = set()
     source_sha: str | None = None
@@ -219,8 +314,11 @@ def validate(
                 paired_query_ids = current_query_ids
             require(current_query_ids == paired_query_ids, f"paired query IDs differ in {arm}")
             computed_p95 = percentile(latencies, 0.95)
+            computed_p50 = percentile(latencies, 0.50)
             reported_p95 = floating(summary, "read_p95_ms", arm / "summary.csv")
+            reported_p50 = floating(summary, "read_p50_ms", arm / "summary.csv")
             require(abs(computed_p95 - reported_p95) <= 1e-6, f"read_p95_ms does not reconcile in {arm}")
+            require(abs(computed_p50 - reported_p50) <= 1e-6, f"read_p50_ms does not reconcile in {arm}")
             require(integer(summary, "read_storage_gets", arm / "summary.csv") == gets, f"GET total mismatch in {arm}")
             require(integer(summary, "read_storage_requests", arm / "summary.csv") == requests, f"request total mismatch in {arm}")
             require(integer(summary, "read_storage_puts", arm / "summary.csv") == puts, f"PUT total mismatch in {arm}")
@@ -242,6 +340,7 @@ def validate(
         arms[name] = {
             "queries": queries,
             "recall_at_10": arm_hits[name] / queries,
+            "pooled_p50_ms": percentile(values, 0.50),
             "pooled_p95_ms": percentile(values, 0.95),
             "worst_repetition_p95_ms": max(repetition_p95[name]),
             "gets_per_query": arm_gets[name] / queries,
@@ -252,7 +351,34 @@ def validate(
     control = repetition_p95["s1m"]
     promotable: list[str] = []
     paired_nonworse: dict[str, int] = {}
-    for name in ("s2m", "s4m"):
+    selection_criteria: dict[str, bool] = {}
+    winner = None
+    if manifest["campaign_id"] == QUALIFICATION_CAMPAIGN:
+        for name in ("s2m", "s4m"):
+            require(
+                len(repetition_p95[name]) == len(control),
+                f"{name} paired repetition count differs from the control",
+            )
+            count = sum(
+                candidate <= baseline
+                for candidate, baseline in zip(repetition_p95[name], control)
+            )
+            paired_nonworse[name] = count
+            if (
+                arms[name]["pooled_p95_ms"] < float(manifest["max_pooled_p95_ms"])
+                and count >= int(manifest["required_nonworse_paired_repetitions"])
+            ):
+                promotable.append(name)
+        if promotable:
+            winner = min(
+                promotable,
+                key=lambda name: (
+                    arms[name]["worst_repetition_p95_ms"],
+                    arms[name]["gets_per_query"],
+                ),
+            )
+    else:
+        name = "s4m"
         require(
             len(repetition_p95[name]) == len(control),
             f"{name} paired repetition count differs from the control",
@@ -262,20 +388,27 @@ def validate(
             for candidate, baseline in zip(repetition_p95[name], control)
         )
         paired_nonworse[name] = count
-        if (
-            arms[name]["pooled_p95_ms"] < float(manifest["max_pooled_p95_ms"])
-            and count >= int(manifest["required_nonworse_paired_repetitions"])
-        ):
+        baseline_p95 = float(arms["s1m"]["pooled_p95_ms"])
+        candidate_p95 = float(arms[name]["pooled_p95_ms"])
+        require(baseline_p95 > 0.0, "control pooled p95 must be positive")
+        improvement = (baseline_p95 - candidate_p95) / baseline_p95
+        selection_criteria = {
+            "pooled_p95_below_limit": candidate_p95 < float(manifest["max_pooled_p95_ms"]),
+            "worst_repetition_p95_below_limit": float(arms[name]["worst_repetition_p95_ms"])
+            < float(manifest["max_worst_repetition_p95_ms"]),
+            "paired_nonworse_repetitions": count
+            >= int(manifest["required_nonworse_paired_repetitions"]),
+            "minimum_pooled_p95_improvement": improvement
+            >= float(manifest["minimum_pooled_p95_improvement_fraction"]),
+            "maximum_pooled_p50_regression": float(arms[name]["pooled_p50_ms"])
+            <= float(arms["s1m"]["pooled_p50_ms"])
+            * (1.0 + float(manifest["maximum_pooled_p50_regression_fraction"])),
+            "identical_logical_bytes": arms[name]["bytes_per_query"]
+            == arms["s1m"]["bytes_per_query"],
+        }
+        if all(selection_criteria.values()):
             promotable.append(name)
-    winner = None
-    if promotable:
-        winner = min(
-            promotable,
-            key=lambda name: (
-                arms[name]["worst_repetition_p95_ms"],
-                arms[name]["gets_per_query"],
-            ),
-        )
+            winner = name
     return {
         "campaign_id": manifest["campaign_id"],
         "terminal_mode": terminal_mode,
@@ -283,6 +416,7 @@ def validate(
         "manifest_sha256": manifest_sha,
         "arms": arms,
         "paired_nonworse_repetitions": paired_nonworse,
+        "selection_criteria": selection_criteria,
         "promotable": promotable,
         "winner": winner,
     }

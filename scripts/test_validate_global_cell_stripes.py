@@ -140,7 +140,7 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
                             "stripe_bytes": stripe_bytes,
                             "queries": 100,
                             "inserted_id_recall_at_10": 1.0,
-                            "read_p50_ms": baseline + 0.49,
+                            "read_p50_ms": baseline + 0.50,
                             "read_p95_ms": baseline + 0.94,
                             "read_storage_requests": 200,
                             "read_storage_gets": 200,
