@@ -129,8 +129,7 @@ pub struct GroupCommitLaneReceipt {
     /// Persisted writer-stripe ordinal; paired with `commit_sequence`, this
     /// uniquely identifies the durable group.
     pub commit_lane: usize,
-    /// Bytes in the immutable extent created by this receipt. Generation-counter
-    /// coordination bytes remain visible in request/storage telemetry.
+    /// Bytes in the immutable extent created by this receipt.
     pub acknowledgement_bytes: u64,
     /// Physical requests issued by the whole shared commit.
     pub requests: RequestCounts,
@@ -266,14 +265,14 @@ enum WorkerRequest {
 /// Cloneable high-throughput writer that group-commits concurrent appends.
 ///
 /// The writer owns one independent [`BorsukIndex`] handle per background
-/// worker stripe. Calls remain synchronous and return only after a globally
-/// ordered generation range is reserved and the selected stripe creates its
-/// immutable WAL extent, so grouping and parallelism change neither durability
-/// nor read visibility. The generation reservation is one conditional update
-/// per group, not per record. Strict duplicate-rejecting insertion remains
-/// available through [`BorsukIndex::add`]. A short bounded delay amortizes
-/// cross-writer ordering over larger immutable transactions, while stripes
-/// avoid process-local head-of-line blocking between those transactions.
+/// worker stripe. Calls remain synchronous and return only after the selected
+/// stripe creates its immutable WAL extent and conditionally publishes the
+/// stripe head that makes it visible. Records carry handle-local convergent
+/// mutation versions; independent unobserved writers resolve deterministically
+/// rather than by acknowledgement order. Strict duplicate-rejecting insertion
+/// remains available through [`BorsukIndex::add`]. A short bounded delay
+/// amortizes object-store requests over larger immutable transactions, while
+/// stripes avoid process-local head-of-line blocking between them.
 pub struct GroupCommitWriter {
     requests: Arc<[Sender<WorkerRequest>]>,
     worker_stripes: Arc<[u16]>,
@@ -301,10 +300,22 @@ impl Clone for GroupCommitWriter {
 impl GroupCommitWriter {
     /// Consume an index handle and start its group-commit worker.
     pub fn new(index: BorsukIndex, config: GroupCommitConfig) -> Result<Self> {
+        Self::new_with_mutation_clock(
+            index,
+            config,
+            Arc::new(MutationClock::new(*Uuid::new_v4().as_bytes())),
+        )
+    }
+
+    fn new_with_mutation_clock(
+        index: BorsukIndex,
+        config: GroupCommitConfig,
+        mutation_clock: Arc<MutationClock>,
+    ) -> Result<Self> {
         let config = config.validate()?;
         index.ensure_lane_log_payloads_supported()?;
         let lane_count = index.lane_log_lane_count();
-        let minimum_generation = index.lane_log_generation_floor()?;
+        let minimum_generation = 0;
         if config.worker_lanes > usize::from(lane_count) {
             return Err(BorsukError::InvalidStorage(format!(
                 "group commit worker_lanes {} exceeds persisted lane count {lane_count}",
@@ -323,7 +334,6 @@ impl GroupCommitWriter {
         let mut requests = Vec::with_capacity(config.worker_lanes);
         let mut worker_handles = Vec::with_capacity(config.worker_lanes);
         let mut worker_stripes = Vec::with_capacity(config.worker_lanes);
-        let mutation_clock = Arc::new(MutationClock::new(*Uuid::new_v4().as_bytes()));
         let mut claimed_stripes = std::collections::HashSet::with_capacity(config.worker_lanes);
         let claim_start = (Uuid::new_v4().as_u128() % u128::from(lane_count)) as u16;
         for (worker, index) in indexes.into_iter().enumerate() {
@@ -803,39 +813,13 @@ fn run_worker(
                     }
                 }
                 let committed_records = deduplicated.len();
-                let committed = index
-                    .reserve_lane_log_generation_range(deduplicated.len())
-                    .and_then(|(first_generation, coordination_requests)| {
-                        let mut receipt = writer
-                            .append_upsert_records_with_reserved_generation_at(
-                                &deduplicated,
-                                dimensions,
-                                first_generation,
-                                now_ms,
-                                LANE_LEASE_TTL_MS,
-                            )?;
-                        receipt.requests.gets = receipt
-                            .requests
-                            .gets
-                            .saturating_add(coordination_requests.gets);
-                        receipt.requests.puts = receipt
-                            .requests
-                            .puts
-                            .saturating_add(coordination_requests.puts);
-                        receipt.requests.deletes = receipt
-                            .requests
-                            .deletes
-                            .saturating_add(coordination_requests.deletes);
-                        receipt.requests.heads = receipt
-                            .requests
-                            .heads
-                            .saturating_add(coordination_requests.heads);
-                        receipt.requests.lists = receipt
-                            .requests
-                            .lists
-                            .saturating_add(coordination_requests.lists);
-                        Ok(receipt)
-                    })
+                let committed = writer
+                    .append_upsert_records_with_renewal_at(
+                        &deduplicated,
+                        dimensions,
+                        now_ms,
+                        LANE_LEASE_TTL_MS,
+                    )
                     .map_err(|error| error.to_string());
                 for (request, caller_records) in same_lane.into_iter().zip(caller_sizes) {
                     let response = committed.as_ref().map_or_else(
@@ -864,6 +848,8 @@ fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{IndexConfig, VectorMetric, mutation::MutationVersion};
+    use object_store::{ObjectStore, memory::InMemory};
 
     #[test]
     fn partial_lane_failure_preserves_every_committed_receipt() {
@@ -907,5 +893,53 @@ mod tests {
         assert_eq!(failed_lanes.len(), 1);
         assert_eq!(failed_lanes[0].commit_lane, 6);
         assert_eq!(failed_lanes[0].message, "injected lane failure");
+    }
+
+    #[test]
+    fn independent_unobserved_writers_converge_by_complete_version_not_ack_order() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = "memory:///group-convergent-writer-order";
+        let config = IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1_000,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        };
+        let writer_config = GroupCommitConfig {
+            max_delay: Duration::ZERO,
+            max_records: 1,
+            worker_lanes: 1,
+        };
+        let observed_floor = MutationVersion::from_parts(4_000_000_000_000_u64 << 16, [0; 16]);
+        let high_clock = Arc::new(MutationClock::new([0xff; 16]));
+        high_clock.observe(observed_floor).unwrap();
+        let low_clock = Arc::new(MutationClock::new([0x01; 16]));
+        low_clock.observe(observed_floor).unwrap();
+        let high = GroupCommitWriter::new_with_mutation_clock(
+            BorsukIndex::create_with_object_store(Arc::clone(&store), config).unwrap(),
+            writer_config,
+            high_clock,
+        )
+        .unwrap();
+        let low = GroupCommitWriter::new_with_mutation_clock(
+            BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap(),
+            writer_config,
+            low_clock,
+        )
+        .unwrap();
+
+        let high_first = high
+            .append(vec![VectorRecord::new("shared", vec![9.0, 0.0])])
+            .unwrap();
+        let low_later = low
+            .append(vec![VectorRecord::new("shared", vec![1.0, 0.0])])
+            .unwrap();
+        assert_ne!(high_first.commit_lane, low_later.commit_lane);
+
+        let reopened = BorsukIndex::open_with_object_store(store, uri).unwrap();
+        assert_eq!(reopened.get_vector("shared").unwrap(), Some(vec![9.0, 0.0]));
     }
 }

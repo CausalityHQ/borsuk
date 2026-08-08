@@ -1956,13 +1956,13 @@ fn validate_cell_wal_run_extension(kind: CellWalRunKind, extension: &str) -> Res
     let valid = match kind {
         CellWalRunKind::Records => matches!(extension, "parquet" | "vortex"),
         CellWalRunKind::Tombstones => extension == "parquet",
-        CellWalRunKind::IdDirectory => extension == "bin",
+        CellWalRunKind::IdDirectory => extension == "parquet",
     };
     if !valid {
         let expected = match kind {
             CellWalRunKind::Records => "parquet or vortex",
             CellWalRunKind::Tombstones => "parquet",
-            CellWalRunKind::IdDirectory => "bin",
+            CellWalRunKind::IdDirectory => "parquet",
         };
         return Err(BorsukError::InvalidStorage(format!(
             "cell WAL {} run extension must be `{expected}`, got `{extension}`",
@@ -2487,7 +2487,10 @@ mod tests {
             lane: 3,
             kind: CellWalRunKind::IdDirectory,
             metadata: vec![1, 2, 3],
-            path: format!("cells/7/9/wal/3/runs/id-directory/{}.bin", "ab".repeat(32)),
+            path: format!(
+                "cells/7/9/wal/3/runs/id-directory/{}.parquet",
+                "ab".repeat(32)
+            ),
             checksum: "ab".repeat(32),
             record_count: 5,
             byte_len: 123,

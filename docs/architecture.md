@@ -297,11 +297,11 @@ index-root/ or s3://bucket/prefix/
       HEAD                                # checked packed bounded active collection commits
   id-directory/
     claim-shards/<00..15>/LOCK            # fixed batch insert claims
-    last-write-wins/NEXT                   # global group-amortized MVCC allocator
     generated/NEXT                       # checked packed generated-id counter
   lane-log/
-    lanes/<writer-stripe>/HEAD             # v30 checked lease/watermark
-    lanes/<writer-stripe>/epochs/<epoch>/extents/<sequence>.wal
+    ACTIVE                                 # versioned JSON active-stripe directory
+    lanes/<writer-stripe>/HEAD             # versioned JSON lease/frontier/publication fence
+    lanes/<writer-stripe>/epochs/<epoch>/extents/<sequence>.wal # immutable; standard-container migration open
   objects/
 ```
 

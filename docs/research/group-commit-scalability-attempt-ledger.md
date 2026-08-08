@@ -1039,3 +1039,70 @@ all-feature/all-target Clippy, and `cargo test --locked --workspace
 --all-targets` all exited zero. The workspace test gate reported 1,105 passed
 and 25 ignored across 69 suites in 389.71 seconds. No AWS workload was launched
 during diagnosis or qualification.
+
+## Direct convergent mutation cutover checkpoint (2026-08-08)
+
+The earlier global-counter design in this ledger is immutable historical
+context, not the current architecture. The in-progress v30 cutover removes
+`id-directory/last-write-wins/NEXT` from healthy grouped acknowledgement and
+uses one immutable extent PUT followed by one conditional writer-stripe HEAD
+PUT. A request-traced 12-group local integration test records exactly 12 of
+each PUT, zero counter-path operations, and zero steady-state GET/HEAD/LIST.
+This is structural evidence, not an S3 latency or throughput result.
+
+Full mutation stamps now participate in tombstone, ID-directory, lexical,
+late-interaction, and global-PQ identity/rerank resolution. A regression exposed
+that the no-counter append entrypoint failed to reactivate a stripe retired by
+drain: acknowledged extents became undiscoverable and repeated upserts appeared
+stale. Reactivation now precedes the next append, and the two direct regressions
+plus all 41 group-commit integration cases pass locally. A fixed-clock test also
+proves that unobserved cross-host writes converge by complete version rather
+than acknowledgement order.
+
+The first all-target gate then caught a reproducibility regression: mutation
+stamps made independently built exact-vector sidecars differ because creation
+used a random writer identity and wall-clock prefix. Fresh collection creation
+now uses one fixed bootstrap writer and logical HLC sequence for its initial
+handle; reopened and independent live writers retain random 128-bit identities
+and wall-clock HLCs. Both deterministic-build regressions, the complete
+nine-test build-configuration suite, consistency, and group-commit suites pass.
+The 38-test cell-WAL suite also rejects the obsolete global-counter artifact,
+requires the new Parquet ID-directory role, and verifies every row in a
+500-record repeated-upsert batch after reopen.
+
+The subsequent all-target lifecycle gate caught the same parent-version issue
+inside late-interaction replacement. The child had allocated an independent
+delete version for every old token, which could outrank replacement tokens
+stamped by the parent after compaction. Replacement now publishes put state for
+retained physical token IDs and delete state only for removed IDs, all using the
+single parent entity version. The WAL/flush/reopen/upsert/compaction/delete
+MaxSim regression and the full late-interaction, named-vector, and consistency
+suites pass locally.
+
+The next all-target pass identified one sparse compaction assertion that still
+read the transitional UInt64 `generation` column. The persisted regression now
+uses stock Parquet readers to require exactly the three live sparse IDs, a
+strictly newer replacement `mutation_hlc`, and complete 16-byte writer plus
+32-byte digest columns. All eight sparse named-shard tests pass.
+
+No performance claim is promoted from this checkpoint. The lane extent outer
+record and the global-PQ scan code/location field are still packed experimental
+layouts; receipt-level extent identity, complete convergence permutations,
+standard-format inventory, realistic local qualification, and the five-repeat
+2K/16K by 1/8/32 AWS matrix remain open.
+
+The terminal workspace gate found three WAL integration assertions that still
+treated a transaction as one anonymous Parquet object. The current typed
+transaction deliberately persists one records Parquet object and one
+ID-directory Parquet object. The regressions now count those roles separately:
+append creates exactly one of each, flush plus a second append leaves exactly
+two of each before collection, and zero-retention GC removes both obsolete
+roles while preserving both live roles. All 23 WAL integration tests pass.
+
+Terminal local verification from the exact resulting tree is green:
+`cargo fmt --all -- --check`, strict all-feature/all-target workspace Clippy,
+and `cargo test --locked --workspace --all-targets` exited zero. The Rust gate
+reported 1,127 passed and 25 ignored across 70 suites in 409.81 seconds. The
+declared Python benchmark-validation environment reported 458 passed in 15.254
+seconds. These are functional and structural gates, not production-performance
+evidence. No AWS workload was launched or inspected during this checkpoint.

@@ -66,21 +66,22 @@ prepared/committing/committed/aborted transaction state fences crash recovery.
 Explicit-ID coordination is bounded by the fixed shard count rather than
 issuing one conditional PUT per record.
 
-High-throughput group commit does not use strict-insert claims. Its `put`
-semantics reserve one monotonic last-write-wins generation for the complete
-group and atomically publish the replacement fence with the records. Repeated
-IDs resolve to the highest generation after reopen and concurrent puts expose
-one live version. The checked descriptor uploads concurrently with its immutable
-payloads; the collection-root CAS still waits for both and remains the sole
-visibility boundary.
+High-throughput group commit does not use strict-insert claims or a global
+last-write-wins counter. Each logical handle allocates internal convergent
+mutation versions, canonicalizes the complete record digest, writes one
+immutable extent to its leased writer stripe, and conditionally publishes that
+extent through the stripe head. A healthy group acknowledgement therefore
+reports exactly two PUTs and zero GET/HEAD/LIST. Repeated IDs merge by the full
+`(HLC, writer, digest, operation)` mutation state; equal-version unequal-digest
+evidence fails closed. Cross-host unobserved writes are deterministic but not
+linearizable by acknowledgement order.
 
-Upsert and delete generation allocation uses the same fixed shard function.
-Each touched shard conditionally reserves one monotonic generation range, and
-the ranges are reserved in parallel. Same-ID concurrent mutations therefore
-still receive distinct generations, while a batch performs at most sixteen
-generation-counter read/modify/write operations instead of one per record.
-Generation shard counters are allocators only; visibility remains atomic at the
-root collection commit and the counters intentionally survive purge.
+Ordinary upsert and delete use the same complete mutation state. Dense, named,
+sparse, text, and late-interaction children inherit the parent entity version;
+physical child IDs receive their own canonical digest. Collection-root
+publication remains the atomic visibility boundary for direct multimodal
+transactions. The lane-log multimodal materializer and complete standard-
+format inventory are still open release gates.
 Ordinary collection mutations stage one immutable record bundle, one optional
 tombstone bundle, one ID-directory bundle, and one descriptor. They do not
 publish the standalone cell-lane frontier or an inner commit marker; the final

@@ -1686,6 +1686,9 @@ impl LaneEpochWriter {
         now_ms: u64,
         ttl_ms: u64,
     ) -> Result<LaneLogReceipt> {
+        if !self.directory_active {
+            self.activate_directory(GROUP_COMMIT_STRIPE_COUNT)?;
+        }
         if now_ms >= self.head.lease_expires_at_ms {
             return Err(BorsukError::ConcurrentModification {
                 path: format!("{}/LEASE_EXPIRED", head_path(self.head.lane)),

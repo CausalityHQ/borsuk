@@ -39,7 +39,7 @@ use crate::{
         SegmentSummary,
     },
     metric::VectorMetric,
-    mutation::{MutationStamp, MutationVersion},
+    mutation::{MutationOperation, MutationStamp, MutationState, MutationVersion},
     record::{LeafMode, RecordId, StorageEncoding, VectorElementType, VectorRecord},
     segment::{GraphEdge, Segment, SegmentGraph},
 };
@@ -140,9 +140,19 @@ pub(crate) const LEAN_SEGMENT_ROW_COLUMNS: &[&str] = &[
     "text_term_ids",
     "text_term_freqs",
     "generation",
+    "mutation_hlc",
+    "mutation_writer",
+    "mutation_digest",
 ];
-pub(crate) const LEAN_SEGMENT_SCORING_COLUMNS: &[&str] =
-    &["routing_code", "pq_code", "record_id", "generation"];
+pub(crate) const LEAN_SEGMENT_SCORING_COLUMNS: &[&str] = &[
+    "routing_code",
+    "pq_code",
+    "record_id",
+    "generation",
+    "mutation_hlc",
+    "mutation_writer",
+    "mutation_digest",
+];
 pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     validate_manifest_config(
         manifest.config.dimensions,
@@ -2610,7 +2620,7 @@ pub(crate) fn segment_to_table(
     match format {
         crate::DurableTableFormat::Parquet => segment_to_parquet(segment),
         crate::DurableTableFormat::Vortex => {
-            let batch = segment_to_batch_impl(segment, false, VectorElementType::Float32)?;
+            let batch = segment_to_batch_impl(segment, false, VectorElementType::Float32, true)?;
             write_vortex_table_sync(vec![batch])
         }
     }
@@ -2629,7 +2639,12 @@ pub(crate) fn wal_records_to_table(
     element_type: VectorElementType,
     format: crate::PhysicalFormat,
 ) -> Result<Vec<u8>> {
-    let batch = wal_records_to_batch(records, dimensions, element_type)?;
+    let batch = wal_records_to_batch(
+        records,
+        dimensions,
+        element_type,
+        format == crate::PhysicalFormat::Vortex,
+    )?;
     match format {
         crate::PhysicalFormat::Parquet => {
             write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
@@ -2648,6 +2663,7 @@ fn wal_records_to_batch(
     records: &[VectorRecord],
     dimensions: usize,
     vector_element_type: VectorElementType,
+    vortex_compatible_mutation_stamp: bool,
 ) -> Result<RecordBatch> {
     if records.is_empty() {
         return Err(BorsukError::InvalidStorage(
@@ -2693,6 +2709,7 @@ fn wal_records_to_batch(
         include_generation,
         include_mutation_stamp,
         vector_element_type,
+        vortex_compatible_mutation_stamp,
     )?;
     let mut columns = vec![
         array(BinaryArray::from_iter_values(
@@ -2728,7 +2745,11 @@ fn wal_records_to_batch(
         )));
     }
     if include_mutation_stamp {
-        columns.extend(mutation_stamp_arrays(records)?);
+        columns.extend(if vortex_compatible_mutation_stamp {
+            vortex_mutation_stamp_arrays(records)?
+        } else {
+            mutation_stamp_arrays(records)?
+        });
     }
     columns.push(optional_typed_vector_array(
         records,
@@ -2832,10 +2853,21 @@ fn fixed_size_binary_value<const N: usize>(
     row: usize,
     name: &str,
 ) -> Result<[u8; N]> {
-    let array = batch
-        .column(column)
+    let column = batch.column(column);
+    if let Some(array) = column.as_any().downcast_ref::<FixedSizeBinaryArray>() {
+        if array.is_null(row) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "column `{name}` contains a null value"
+            )));
+        }
+        return array.value(row).try_into().map_err(|_| {
+            BorsukError::InvalidStorage(format!("column `{name}` must contain exactly {N} bytes"))
+        });
+    }
+    let array = column
         .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
+        .downcast_ref::<FixedSizeListArray>()
+        .filter(|array| array.value_length() == N as i32)
         .ok_or_else(|| {
             BorsukError::InvalidStorage(format!("column `{name}` has wrong physical type"))
         })?;
@@ -2844,9 +2876,23 @@ fn fixed_size_binary_value<const N: usize>(
             "column `{name}` contains a null value"
         )));
     }
-    array.value(row).try_into().map_err(|_| {
-        BorsukError::InvalidStorage(format!("column `{name}` must contain exactly {N} bytes"))
-    })
+    let values = array.value(row);
+    let values = values
+        .as_any()
+        .downcast_ref::<UInt8Array>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(format!("column `{name}` list values are not UInt8"))
+        })?;
+    let mut decoded = [0_u8; N];
+    for (position, value) in decoded.iter_mut().enumerate() {
+        if values.is_null(position) {
+            return Err(BorsukError::InvalidStorage(format!(
+                "column `{name}` contains a null byte"
+            )));
+        }
+        *value = values.value(position);
+    }
+    Ok(decoded)
 }
 
 fn wal_records_from_batches(batches: Vec<RecordBatch>) -> Result<Vec<VectorRecord>> {
@@ -3009,7 +3055,7 @@ fn segment_to_parquet_impl(
     include_vectors: bool,
     vector_element_type: VectorElementType,
 ) -> Result<Vec<u8>> {
-    let batch = segment_to_batch_impl(segment, include_vectors, vector_element_type)?;
+    let batch = segment_to_batch_impl(segment, include_vectors, vector_element_type, false)?;
     write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
 }
 
@@ -3017,6 +3063,7 @@ fn segment_to_batch_impl(
     segment: &Segment,
     include_vectors: bool,
     vector_element_type: VectorElementType,
+    vortex_compatible_mutation_stamp: bool,
 ) -> Result<RecordBatch> {
     validate_segment_centroid_dimensions(&segment.id, segment.dimensions, segment.centroid.len())?;
     validate_segment_centroid_values(&segment.id, &segment.centroid)?;
@@ -3084,6 +3131,7 @@ fn segment_to_batch_impl(
         include_mutation_stamp,
         include_vectors,
         vector_element_type,
+        vortex_compatible_mutation_stamp,
     );
     let header = encode_segment_header(segment)?;
     let mut columns = vec![
@@ -3130,7 +3178,11 @@ fn segment_to_batch_impl(
         )));
     }
     if include_mutation_stamp {
-        columns.extend(mutation_stamp_arrays(records)?);
+        columns.extend(if vortex_compatible_mutation_stamp {
+            vortex_mutation_stamp_arrays(records)?
+        } else {
+            mutation_stamp_arrays(records)?
+        });
     }
     if include_vectors {
         // WAL objects inline the dense vector so the un-flushed tail is fully
@@ -4995,6 +5047,46 @@ fn mutation_stamp_arrays(records: &[VectorRecord]) -> Result<[ArrayRef; 3]> {
     ])
 }
 
+/// Vortex does not currently encode Arrow `FixedSizeBinary`, so its opt-in
+/// table paths use the semantically equivalent stock Arrow
+/// `FixedSizeList<UInt8>` representation. Readers accept both representations
+/// and validate the exact logical width.
+fn vortex_mutation_stamp_fields() -> [Field; 3] {
+    [
+        Field::new("mutation_hlc", DataType::UInt64, false),
+        fixed_u8_field("mutation_writer", 16),
+        fixed_u8_field("mutation_digest", 32),
+    ]
+}
+
+fn vortex_mutation_stamp_arrays(records: &[VectorRecord]) -> Result<[ArrayRef; 3]> {
+    let stamps = records
+        .iter()
+        .map(|record| {
+            record.mutation_stamp().ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "record table mutation stamp disappeared during encoding".to_string(),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let writers = stamps
+        .iter()
+        .map(|stamp| stamp.version().writer())
+        .collect::<Vec<_>>();
+    let digests = stamps
+        .iter()
+        .map(|stamp| stamp.digest())
+        .collect::<Vec<_>>();
+    Ok([
+        array(UInt64Array::from_iter_values(
+            stamps.iter().map(|stamp| stamp.version().hlc()),
+        )),
+        array(fixed_u8_array(writers.iter().map(<[_; 16]>::as_slice), 16)),
+        array(fixed_u8_array(digests.iter().map(<[_; 32]>::as_slice), 32)),
+    ])
+}
+
 #[allow(clippy::too_many_arguments)]
 fn segment_schema(
     dimensions: usize,
@@ -5005,6 +5097,7 @@ fn segment_schema(
     include_mutation_stamp: bool,
     include_vectors: bool,
     vector_element_type: VectorElementType,
+    vortex_compatible_mutation_stamp: bool,
 ) -> Arc<Schema> {
     // `pq_code` is sized to the quantizer's actual code length, NOT
     // `dimensions`: TurboQuant's SRHT rotation pads to the next power of two,
@@ -5030,7 +5123,11 @@ fn segment_schema(
         fields.push(Field::new("generation", DataType::UInt64, false));
     }
     if include_mutation_stamp {
-        fields.extend(mutation_stamp_fields());
+        fields.extend(if vortex_compatible_mutation_stamp {
+            vortex_mutation_stamp_fields()
+        } else {
+            mutation_stamp_fields()
+        });
     }
     if include_vectors {
         // Nullable: sparse rows carry no dense vector. Appended last so all
@@ -5062,6 +5159,7 @@ fn wal_records_schema(
     include_generation: bool,
     include_mutation_stamp: bool,
     vector_element_type: VectorElementType,
+    vortex_compatible_mutation_stamp: bool,
 ) -> Result<Arc<Schema>> {
     let mut fields = vec![
         Field::new("record_id", DataType::Binary, false),
@@ -5079,7 +5177,11 @@ fn wal_records_schema(
         fields.push(Field::new("generation", DataType::UInt64, false));
     }
     if include_mutation_stamp {
-        fields.extend(mutation_stamp_fields());
+        fields.extend(if vortex_compatible_mutation_stamp {
+            vortex_mutation_stamp_fields()
+        } else {
+            mutation_stamp_fields()
+        });
     }
     fields.push(Field::new(
         "vector",
@@ -5404,14 +5506,17 @@ fn optional_f32_list_array<'a>(values: impl IntoIterator<Item = Option<&'a [f32]
     ListArray::from_iter_primitive::<Float32Type, _, _>(values)
 }
 
-/// Encode the cumulative tombstone into a Parquet object with a binary
-/// `record_id` column and a `min_visible_generation` column: a record of that
-/// id is suppressed (deleted or superseded by a newer upsert) when its
-/// generation is below the stored minimum-visible generation.
-pub(crate) fn tombstone_ids_to_parquet(entries: &[(Vec<u8>, u64)]) -> Result<Vec<u8>> {
+/// Encode one sorted convergent record-state run as stock-readable Parquet.
+/// Both winning puts and deletes are retained so independent writers merge by
+/// the complete `(HLC, writer)` order without a collection-wide counter.
+pub(crate) fn tombstone_ids_to_parquet(entries: &[(Vec<u8>, MutationState)]) -> Result<Vec<u8>> {
+    validate_mutation_state_entries(entries)?;
     let schema = Arc::new(Schema::new(vec![
         Field::new("record_id", DataType::Binary, false),
-        Field::new("min_visible_generation", DataType::UInt64, false),
+        Field::new("mutation_hlc", DataType::UInt64, false),
+        Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+        Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+        Field::new("deleted", DataType::Boolean, false),
     ]));
     let batch = RecordBatch::try_new(
         schema,
@@ -5420,42 +5525,167 @@ pub(crate) fn tombstone_ids_to_parquet(entries: &[(Vec<u8>, u64)]) -> Result<Vec
                 entries.iter().map(|(id, _)| id.as_slice()),
             )),
             array(UInt64Array::from_iter_values(
-                entries.iter().map(|(_, generation)| *generation),
+                entries
+                    .iter()
+                    .map(|(_, state)| state.stamp().version().hlc()),
+            )),
+            array(FixedSizeBinaryArray::try_from_iter(
+                entries
+                    .iter()
+                    .map(|(_, state)| state.stamp().version().writer()),
+            )?),
+            array(FixedSizeBinaryArray::try_from_iter(
+                entries.iter().map(|(_, state)| state.stamp().digest()),
+            )?),
+            array(BooleanArray::from_iter(
+                entries.iter().map(|(_, state)| Some(state.is_deleted())),
             )),
         ],
     )?;
     write_batch(batch)
 }
 
-/// Decode the cumulative tombstone entries `(record_id, min_visible_generation)`
-/// from a Parquet object. A legacy single-column tombstone (no generation
-/// column) decodes every id as fully deleted (`u64::MAX`).
-pub(crate) fn tombstone_ids_from_parquet(bytes: &[u8]) -> Result<Vec<(Vec<u8>, u64)>> {
+/// Decode a convergent record-state run. Experimental generation-only tables
+/// are deliberately rejected instead of acquiring a compatibility fallback.
+pub(crate) fn tombstone_ids_from_parquet(bytes: &[u8]) -> Result<Vec<(Vec<u8>, MutationState)>> {
     let mut entries = Vec::new();
     for batch in read_batches(bytes)? {
-        let column = batch.column_by_name("record_id").ok_or_else(|| {
-            BorsukError::InvalidStorage("tombstone table is missing record_id".to_string())
+        let stamp_columns = mutation_stamp_columns(&batch.schema())?.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "tombstone table is missing canonical mutation columns".to_string(),
+            )
         })?;
-        let ids = column
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("tombstone record_id column is not binary".to_string())
-            })?;
-        let generations = match batch.column_by_name("min_visible_generation") {
-            Some(column) => Some(column.as_any().downcast_ref::<UInt64Array>().ok_or_else(
-                || {
+        let deleted_column = column_index(&batch, "deleted")?;
+        for row in 0..batch.num_rows() {
+            let stamp =
+                mutation_stamp_value(&batch, Some(stamp_columns), row)?.ok_or_else(|| {
                     BorsukError::InvalidStorage(
-                        "tombstone min_visible_generation column is not u64".to_string(),
+                        "tombstone mutation stamp disappeared during decoding".to_string(),
                     )
-                },
-            )?),
-            None => None,
-        };
-        for row in 0..ids.len() {
-            let generation = generations.map_or(u64::MAX, |values| values.value(row));
-            entries.push((ids.value(row).to_vec(), generation));
+                })?;
+            let operation = if boolean_value(&batch, deleted_column, row, "deleted")? {
+                MutationOperation::Delete
+            } else {
+                MutationOperation::Put
+            };
+            entries.push((
+                binary_value_by_name(&batch, row, "record_id")?.to_vec(),
+                MutationState::new(stamp, operation),
+            ));
         }
+    }
+    validate_mutation_state_entries(&entries)?;
+    Ok(entries)
+}
+
+fn validate_mutation_state_entries(entries: &[(Vec<u8>, MutationState)]) -> Result<()> {
+    if entries.iter().any(|(id, _)| id.is_empty())
+        || entries
+            .windows(2)
+            .any(|pair| pair[0].0.as_slice() >= pair[1].0.as_slice())
+    {
+        return Err(BorsukError::InvalidStorage(
+            "tombstone mutation states must have non-empty, strictly sorted ids".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) type IdDirectoryStateRow = (Vec<u8>, u64, u32, MutationState);
+
+pub(crate) fn id_directory_states_to_parquet(entries: &[IdDirectoryStateRow]) -> Result<Vec<u8>> {
+    if entries.iter().any(|(id, _, _, _)| id.is_empty())
+        || entries
+            .windows(2)
+            .any(|pair| pair[0].0.as_slice() >= pair[1].0.as_slice())
+    {
+        return Err(BorsukError::InvalidStorage(
+            "ID-directory rows must have non-empty, strictly sorted ids".to_string(),
+        ));
+    }
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("record_id", DataType::Binary, false),
+        Field::new("routing_epoch", DataType::UInt64, false),
+        Field::new("cell_ordinal", DataType::UInt32, false),
+        Field::new("mutation_hlc", DataType::UInt64, false),
+        Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+        Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+        Field::new("deleted", DataType::Boolean, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            array(BinaryArray::from_iter_values(
+                entries.iter().map(|(id, _, _, _)| id.as_slice()),
+            )),
+            array(UInt64Array::from_iter_values(
+                entries.iter().map(|(_, epoch, _, _)| *epoch),
+            )),
+            array(UInt32Array::from_iter_values(
+                entries.iter().map(|(_, _, ordinal, _)| *ordinal),
+            )),
+            array(UInt64Array::from_iter_values(
+                entries
+                    .iter()
+                    .map(|(_, _, _, state)| state.stamp().version().hlc()),
+            )),
+            array(FixedSizeBinaryArray::try_from_iter(
+                entries
+                    .iter()
+                    .map(|(_, _, _, state)| state.stamp().version().writer()),
+            )?),
+            array(FixedSizeBinaryArray::try_from_iter(
+                entries
+                    .iter()
+                    .map(|(_, _, _, state)| state.stamp().digest()),
+            )?),
+            array(BooleanArray::from_iter(
+                entries
+                    .iter()
+                    .map(|(_, _, _, state)| Some(state.is_deleted())),
+            )),
+        ],
+    )?;
+    write_batch(batch)
+}
+
+pub(crate) fn id_directory_states_from_parquet(bytes: &[u8]) -> Result<Vec<IdDirectoryStateRow>> {
+    let mut entries = Vec::new();
+    for batch in read_batches(bytes)? {
+        let stamp_columns = mutation_stamp_columns(&batch.schema())?.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "ID-directory table is missing canonical mutation columns".to_string(),
+            )
+        })?;
+        let deleted_column = column_index(&batch, "deleted")?;
+        for row in 0..batch.num_rows() {
+            let stamp =
+                mutation_stamp_value(&batch, Some(stamp_columns), row)?.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "ID-directory mutation stamp disappeared during decoding".to_string(),
+                    )
+                })?;
+            let operation = if boolean_value(&batch, deleted_column, row, "deleted")? {
+                MutationOperation::Delete
+            } else {
+                MutationOperation::Put
+            };
+            entries.push((
+                binary_value_by_name(&batch, row, "record_id")?.to_vec(),
+                primitive_value_by_name::<UInt64Type>(&batch, row, "routing_epoch")?,
+                primitive_value_by_name::<UInt32Type>(&batch, row, "cell_ordinal")?,
+                MutationState::new(stamp, operation),
+            ));
+        }
+    }
+    if entries.iter().any(|(id, _, _, _)| id.is_empty())
+        || entries
+            .windows(2)
+            .any(|pair| pair[0].0.as_slice() >= pair[1].0.as_slice())
+    {
+        return Err(BorsukError::InvalidStorage(
+            "ID-directory rows must have non-empty, strictly sorted ids".to_string(),
+        ));
     }
     Ok(entries)
 }
@@ -6532,6 +6762,54 @@ mod tests {
                 .to_string()
                 .contains("cannot mix stamped and unstamped mutations")
         );
+    }
+
+    #[test]
+    fn tombstone_state_round_trips_as_typed_parquet_without_legacy_fallback() {
+        let entries = vec![
+            (
+                b"delete".to_vec(),
+                MutationState::new(
+                    MutationStamp::new(MutationVersion::from_parts(33, [1; 16]), [4; 32]),
+                    MutationOperation::Delete,
+                ),
+            ),
+            (
+                b"put".to_vec(),
+                MutationState::new(
+                    MutationStamp::new(MutationVersion::from_parts(33, [2; 16]), [5; 32]),
+                    MutationOperation::Put,
+                ),
+            ),
+        ];
+
+        let bytes = tombstone_ids_to_parquet(&entries).unwrap();
+        let batches = read_batches(&bytes).unwrap();
+        let schema = batches[0].schema();
+        assert_eq!(
+            schema.field_with_name("mutation_hlc").unwrap().data_type(),
+            &DataType::UInt64
+        );
+        assert_eq!(
+            schema
+                .field_with_name("mutation_writer")
+                .unwrap()
+                .data_type(),
+            &DataType::FixedSizeBinary(16)
+        );
+        assert_eq!(
+            schema
+                .field_with_name("mutation_digest")
+                .unwrap()
+                .data_type(),
+            &DataType::FixedSizeBinary(32)
+        );
+        assert_eq!(
+            schema.field_with_name("deleted").unwrap().data_type(),
+            &DataType::Boolean
+        );
+        assert!(schema.field_with_name("min_visible_generation").is_err());
+        assert_eq!(tombstone_ids_from_parquet(&bytes).unwrap(), entries);
     }
 
     #[test]
@@ -9354,6 +9632,7 @@ mod tests {
             false,
             false,
             VectorElementType::Float32,
+            false,
         );
         let header = external_packed_segment_header(vec![0.0, 0.0], 0.0, 2);
         let pq_code = [128_u8, 128_u8];

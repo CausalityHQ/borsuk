@@ -3,9 +3,9 @@
 BORSUK uses one canonical storage/output strategy:
 
 - **Arrow** for schemas, in-memory arrays, record batches, and FFI boundaries.
-- **Parquet** for durable local-file and blob/object-store control, routing,
-  graph, and lexical tables. It is also the default immutable normal-segment
-  and cell-WAL table format.
+- **Parquet** for durable scan-oriented materialized tables, including normal
+  segments, cell-WAL runs, lexical rows, tombstone state, and ID-directory
+  state.
 - **Vortex compact layout** is a selectable normal-segment or cell-WAL codec in
   the versioned role policy. The frozen normal-segment and v5 cell-WAL
   qualifications rejected both placements, so Vortex is an explicit research
@@ -16,16 +16,19 @@ BORSUK uses one canonical storage/output strategy:
   and optional IPC V5 ZSTD buffer compression.
 - **Arrow IPC File** for each global PQ/SRHT/TurboQuant ANN bundle. Every cell
   chunk is one record batch with a fixed-size `scan_payload` column (code plus
-  packed row location), a binary `record_identity` column, and a typed
-  `exact_vector` column. The `identity-v2` Parquet ANN descriptor persists the
-  Arrow-derived padding to the identity offset and value buffers rather than
-  inferring a fixed IPC alignment. Checked range reconstruction lets S3 reads
-  fetch identities together with selected exact rows without downloading the
-  scan payload or whole file. Exact rows retain the declared physical
-  `f32/f16/bf16/i8/binary` width.
-- Checked compact binary records for `CURRENT`, cell-lane heads/frontier nodes,
-  transaction descriptors and commit markers, ID-directory runs, mutation
-  metadata, and coordination counters.
+  packed row location), binary `record_id`, typed `mutation_hlc`,
+  `mutation_writer`, `mutation_digest`, `row_integrity`, and typed
+  `exact_vector` columns. The `typed-mutation-v3` Parquet ANN descriptor
+  persists the required Arrow buffer offsets. Checked range reconstruction
+  fetches identities, full mutation stamps, integrity digests, and selected
+  exact rows without downloading the scan payload or whole file. Exact rows
+  retain the declared physical `f32/f16/bf16/i8/binary` width. Splitting the
+  still-packed scan code/location field into independently typed Arrow columns
+  remains an open standard-format migration gate.
+- Versioned JSON for writer-stripe heads and their active directory. Some older
+  cell-WAL and transaction controls remain checked compact binary and are an
+  explicit open migration gap; they are not claimed as production-standard
+  artifacts.
 
 Storage format v23 partitions each live-WAL ID-directory run by the BLAKE3
 ID-hash logical cell recorded on the run. Insert-only duplicate validation reads
@@ -483,12 +486,11 @@ Until the first release, every incompatible storage change increments the
 relevant pointer/table/artifact marker and requires a fresh build from canonical
 Parquet/Arrow source. No benchmark result may cross such a format change.
 
-The current table format is v27. It rejects v26 indexes because group commit
-now leases independent writer stripes and all last-write-wins mutation paths
-reserve ranges from one global group-amortized counter. Silently opening an
-older index could mix incomparable per-lane or sharded generations and return
-the wrong value across processes. Pre-release indexes are rebuilt from their
-canonical source rather than migrated.
+The current table format is v30. It rejects v29 indexes because persisted rows
+now carry the complete convergent mutation stamp: a 64-bit HLC, 128-bit writer
+identity, and 256-bit canonical digest. Silently opening an older index would
+discard cross-writer ordering or conflict evidence. Pre-release indexes are
+rebuilt from their canonical source rather than migrated.
 
 - **Pointer-format version** changes whenever the fixed binary `CURRENT`
   layout, checksum coverage, or publication semantics become incompatible.
@@ -516,13 +518,14 @@ after an orphaned namespace relies on conditional `CURRENT` updates for strict
 cross-version arbitration; S3, Azure, and GCS provide this through object
 ETag/version support. Foreground cell-WAL transactions use create-only commit
 markers and conditional lane heads, so different cells and lanes progress
-independently. Epoch lane-log format v30 interprets its fixed lane set as leased
-writer stripes: each live group-commit worker owns one stripe, reserves a
-globally ordered generation range through one conditional counter, and creates
-one checksum-verified immutable extent without publishing a mutable stripe HEAD
-on the critical path. Independent processes claim different stripes through
-conditional HEAD updates; readers inspect the fixed stripe set and merge by
-global generation. After a collection-wide materialization publish, any client
+independently. The epoch lane log interprets its fixed lane set as leased writer
+stripes. Each live group-commit worker owns one stripe, creates one
+checksum-verified immutable extent, then conditionally publishes that exact
+extent through the stripe's versioned JSON head before acknowledgement. The
+steady-state group path performs two PUTs and no GET/HEAD/LIST or collection-
+wide generation-counter request. Independent processes claim different
+stripes; readers inspect the checked active-stripe directory and merge rows by
+their complete mutation stamps. After a collection-wide materialization publish, any client
 may conditionally advance the captured materialized frontier on every stripe
 without changing lease ownership. The live owner merges this checkpoint-only
 HEAD version into its next publication, preventing stale-owner overwrites and
