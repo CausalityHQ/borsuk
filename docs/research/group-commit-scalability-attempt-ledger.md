@@ -1248,3 +1248,19 @@ and 561 filtered across 71 suites in 413.97 seconds. The pinned Python 3.12
 benchmark-validation environment exited zero with 465 tests in 120.996
 seconds. These gates validate implementation and artifact structure only; they
 do not supply the pending S3 latency selection result.
+
+The exact verified tree was fast-forward pushed to `origin/main` at
+`1a2a731921829b75a28c95dfd2b5f7bc64f52d34`, with `HEAD` and `origin/main`
+equal and the worktree clean. Causality account `453182569524`, EC2 system,
+instance, and EBS reachability, and SSM connectivity all passed preflight.
+With no competing workload admitted by the remote launcher, paired campaign
+`20260808T104352Z-v68-1a2a731` started in retained tmux session
+`borsuk-global-cell-stripes-20260808T104352Z-v68-1a2a731`. Its source archive
+SHA-256 is
+`9ee80123ab1cdf07fde308fe9b3fc6227a359cb5b8efebaa62afb5b21d5d8752`,
+manifest SHA-256 is
+`2755ce65c2ac8aa7f64360c7cd9cc2901adbf4f2035f0329a125e737d1ef74fb`,
+and fresh result prefix is
+`s3://borsuk-bench-453182569524-euc1/research/global-cell-stripes/20260808T104352Z-v68-1a2a731/results/`.
+No measurement CSV is eligible for inspection until a root terminal marker is
+present and the fail-closed validator runs.

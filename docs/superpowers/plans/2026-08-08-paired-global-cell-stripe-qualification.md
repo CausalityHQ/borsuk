@@ -70,14 +70,14 @@ work, durable formats, or production gates.
 - [x] Run format, diff check, repository policy, strict all-feature/all-target
   Clippy, full locked workspace tests, and pinned Python tests once.
 - [x] Record verification in the group-commit attempt ledger.
-- [ ] Commit coherent slices, fetch `origin/main`, prove it is an ancestor of
+- [x] Commit coherent slices, fetch `origin/main`, prove it is an ancestor of
   `HEAD`, push `HEAD:main`, verify equality, and require a clean tree.
 
 ### Task 5: Run and act on paired AWS evidence
 
-- [ ] Prove Causality identity, worker health/exclusivity, terminal v67 base
+- [x] Prove Causality identity, worker health/exclusivity, terminal v67 base
   markers, base artifact checksums, and fresh result/cache locations.
-- [ ] Launch exactly one five-repetition paired campaign and retain its
+- [x] Launch exactly one five-repetition paired campaign and retain its
   process/session identity.
 - [ ] Observe 15-minute retained waits followed by marker/process/EC2-health
   checks only; never inspect incomplete CSV files.
