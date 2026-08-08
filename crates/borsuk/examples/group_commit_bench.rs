@@ -470,6 +470,22 @@ fn read_qualification_query_ordinal(
     Ok(ordinal)
 }
 
+fn read_qualification_order_position(repetition: usize, stripe_bytes: usize) -> BenchResult<usize> {
+    const MIB: usize = 1024 * 1024;
+    if !(1..=5).contains(&repetition) {
+        return Err("read qualification repetition is outside 1..=5".into());
+    }
+    let order = match (repetition - 1) % 3 {
+        0 => [MIB, 2 * MIB, 4 * MIB],
+        1 => [2 * MIB, 4 * MIB, MIB],
+        _ => [4 * MIB, MIB, 2 * MIB],
+    };
+    order
+        .iter()
+        .position(|candidate| *candidate == stripe_bytes)
+        .ok_or_else(|| "read qualification stripe is not preregistered".into())
+}
+
 fn measure_reads(
     index: &mut BorsukIndex,
     samples: &[Sample],
@@ -849,6 +865,15 @@ fn run_read_qualification() -> BenchResult<()> {
         repetition: number("BORSUK_GROUP_COMMIT_READ_REPETITION")?,
     };
     validate_read_qualification_shape(shape, structural_smoke)?;
+    let order_position: usize = number("BORSUK_GROUP_COMMIT_READ_ORDER_POSITION")?;
+    let expected_order_position = if structural_smoke {
+        0
+    } else {
+        read_qualification_order_position(shape.repetition, shape.stripe_bytes)?
+    };
+    if order_position != expected_order_position {
+        return Err("read qualification arm order differs from the preregistration".into());
+    }
     let samples_path = PathBuf::from(required("BORSUK_GROUP_COMMIT_BASE_SAMPLES")?);
     let dataset = if structural_smoke {
         None
@@ -929,11 +954,11 @@ fn run_read_qualification() -> BenchResult<()> {
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
     writeln!(
         summary,
-        "protocol_kind,source_sha256,manifest_sha256,base_source_sha256,base_manifest_sha256,base_samples_sha256,dataset_sha256,base_cell,index_uri,repetition,stripe_bytes,queries,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
+        "protocol_kind,source_sha256,manifest_sha256,base_source_sha256,base_manifest_sha256,base_samples_sha256,dataset_sha256,base_cell,index_uri,repetition,order_position,stripe_bytes,queries,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
     )?;
     writeln!(
         summary,
-        "{},{source_sha},{manifest_sha},{base_source_sha},{base_manifest_sha},{base_samples_sha},{dataset_sha},{base_cell},{uri},{},{},{},{recall:.9},{read_p50_ms:.9},{read_p95_ms:.9},{},{},{},{},{},{},{},{}",
+        "{},{source_sha},{manifest_sha},{base_source_sha},{base_manifest_sha},{base_samples_sha},{dataset_sha},{base_cell},{uri},{},{order_position},{},{},{recall:.9},{read_p50_ms:.9},{read_p95_ms:.9},{},{},{},{},{},{},{},{}",
         if structural_smoke {
             "structural-smoke"
         } else {
@@ -955,7 +980,7 @@ fn run_read_qualification() -> BenchResult<()> {
     fs::write(
         output.join("environment.txt"),
         format!(
-            "source_sha256={source_sha}\nmanifest_sha256={manifest_sha}\nbase_source_sha256={base_source_sha}\nbase_manifest_sha256={base_manifest_sha}\nbase_samples_sha256={base_samples_sha}\ndataset_sha256={dataset_sha}\nbase_cell={base_cell}\nindex_uri={uri}\ncache_dir={}\nrepetition={}\nstripe_bytes={}\n",
+            "source_sha256={source_sha}\nmanifest_sha256={manifest_sha}\nbase_source_sha256={base_source_sha}\nbase_manifest_sha256={base_manifest_sha}\nbase_samples_sha256={base_samples_sha}\ndataset_sha256={dataset_sha}\nbase_cell={base_cell}\nindex_uri={uri}\ncache_dir={}\nrepetition={}\nstripe_bytes={}\norder_position={order_position}\n",
             cache_dir.display(),
             shape.repetition,
             shape.stripe_bytes,
@@ -1588,6 +1613,17 @@ mod tests {
             true,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn read_qualification_arm_order_matches_the_preregistration() {
+        const MIB: usize = 1024 * 1024;
+        assert_eq!(read_qualification_order_position(1, MIB).unwrap(), 0);
+        assert_eq!(read_qualification_order_position(1, 2 * MIB).unwrap(), 1);
+        assert_eq!(read_qualification_order_position(2, 2 * MIB).unwrap(), 0);
+        assert_eq!(read_qualification_order_position(3, MIB).unwrap(), 1);
+        assert!(read_qualification_order_position(0, MIB).is_err());
+        assert!(read_qualification_order_position(1, 3 * MIB).is_err());
     }
 
     #[test]
