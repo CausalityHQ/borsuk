@@ -270,7 +270,7 @@ git merge-base --is-ancestor origin/main HEAD
 git push origin HEAD:main
 ```
 
-- [ ] **Step 4: Preflight and launch exactly one AWS campaign**
+- [x] **Step 4: Preflight and launch exactly one AWS campaign**
 
 Verify Causality account `453182569524`, EC2 instance/SSM/EBS health, absence of
 active BORSUK benchmark processes or non-shell tmux panes, clean/equal main, and
