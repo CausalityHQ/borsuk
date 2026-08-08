@@ -402,12 +402,12 @@ uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
   python -m unittest discover -s scripts -p 'test_*.py'
 ```
 
-- [ ] **Step 7: Commit and fast-forward push**
+- [x] **Step 7: Commit and fast-forward push**
 
 Fetch `origin/main`, require it to be an ancestor of `HEAD`, commit the complete
 harness slice, and push `HEAD:main` without force.
 
-- [ ] **Step 8: Launch and monitor terminally**
+- [x] **Step 8: Launch and monitor terminally**
 
 Launch exactly once if no workload competes. Retain the execution handle; wait
 in at most 55-second observations around one 15-minute background timer. Check
@@ -427,7 +427,7 @@ or leave it disabled.
 - Produces: a frozen source revision eligible for the 2K/16K × 1/8/32 writer
   matrix or a new root-cause iteration.
 
-- [ ] **Step 1: Apply the terminal decision without goal substitution**
+- [x] **Step 1: Apply the terminal decision without goal substitution**
 
 If all hedge gates pass, change the `OpenOptions` default to 75 ms with a
 focused test, complete gate, and separate commit. If any gate fails, retain
