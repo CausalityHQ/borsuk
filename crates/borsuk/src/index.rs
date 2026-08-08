@@ -565,6 +565,12 @@ pub struct OpenOptions {
     /// envelope cap, 8 MiB query-stage byte budget, exact rerank, and durable
     /// Arrow bytes remain unchanged. Values must be in `1..=4 MiB`.
     pub global_pq_prefetch_stripe_bytes: usize,
+    /// Delay before one duplicate immutable global-PQ stripe GET is started.
+    ///
+    /// The first successful response wins and the other request is cancelled.
+    /// `None` disables slow-read hedging. The default remains disabled until a
+    /// terminal paired object-store qualification proves a production value.
+    pub global_pq_slow_read_hedge_after: Option<Duration>,
     /// Optional runtime resident manifest/routing memory budget in bytes.
     pub ram_budget_bytes: Option<u64>,
     /// Keep full segment routing summaries resident after open.
@@ -656,6 +662,7 @@ impl Default for OpenOptions {
             cache_dir: None,
             cache_max_bytes: None,
             global_pq_prefetch_stripe_bytes: DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES,
+            global_pq_slow_read_hedge_after: None,
             ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
             resident_routing: false,
             segment_cache_max_bytes: None,
@@ -964,6 +971,7 @@ struct CollectionReadRuntime {
     admission: Option<Arc<AdmissionGate>>,
     decode_admission: Option<Arc<AdmissionGate>>,
     global_pq_prefetch_stripe_bytes: usize,
+    global_pq_slow_read_hedge_after: Option<Duration>,
     global_pq_rerank_admission: Arc<AdmissionGate>,
     inflight_segment_reads: Arc<InFlightSegmentReads>,
     projected_segment_cache: Arc<DecodedObjectCache<Segment>>,
@@ -1919,6 +1927,7 @@ impl CollectionReadRuntime {
                 .filter(|permits| *permits > 0)
                 .map(|permits| Arc::new(AdmissionGate::new(permits))),
             global_pq_prefetch_stripe_bytes: options.global_pq_prefetch_stripe_bytes,
+            global_pq_slow_read_hedge_after: options.global_pq_slow_read_hedge_after,
             global_pq_rerank_admission: Arc::new(AdmissionGate::new(
                 DEFAULT_GLOBAL_PQ_RERANK_READS,
             )),
@@ -3117,6 +3126,7 @@ impl BorsukIndex {
                 cache_dir,
                 cache_max_bytes: None,
                 global_pq_prefetch_stripe_bytes: DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES,
+                global_pq_slow_read_hedge_after: None,
                 ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
                 resident_routing: false,
                 segment_cache_max_bytes: None,
@@ -12801,6 +12811,7 @@ impl BorsukIndex {
                                 start as u64..end as u64,
                                 self.read_runtime.global_pq_prefetch_stripe_bytes as u64,
                                 DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES,
+                                self.read_runtime.global_pq_slow_read_hedge_after,
                             )?
                             .bytes
                     } else {
@@ -25937,6 +25948,11 @@ mod tests {
         assert_eq!(
             OpenOptions::default().global_pq_prefetch_stripe_bytes,
             DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES
+        );
+        assert_eq!(
+            OpenOptions::default().global_pq_slow_read_hedge_after,
+            None,
+            "hedging must remain opt-in until terminal AWS qualification"
         );
         assert_eq!(
             SearchOptions::default().prefetch_depth,

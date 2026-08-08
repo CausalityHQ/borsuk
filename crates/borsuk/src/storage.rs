@@ -12,7 +12,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use arrow_array::RecordBatch;
@@ -228,6 +228,44 @@ fn global_rerank_coalesce_bytes(ranges: &[Range<u64>]) -> u64 {
         SIDECAR_MAX_PHYSICAL_RANGE_BYTES
     } else {
         GLOBAL_RERANK_RANGE_COALESCE_BYTES
+    }
+}
+
+async fn fetch_with_optional_hedge<F, Fut, T, E>(
+    mut fetch: F,
+    hedge_after: Option<Duration>,
+) -> std::result::Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = std::result::Result<T, E>>,
+{
+    let Some(delay) = hedge_after else {
+        return fetch().await;
+    };
+    let primary = fetch();
+    tokio::pin!(primary);
+    if delay.is_zero() {
+        return primary.await;
+    }
+    tokio::select! {
+        result = &mut primary => match result {
+            Ok(value) => Ok(value),
+            Err(primary_error) => fetch().await.or(Err(primary_error)),
+        },
+        () = tokio::time::sleep(delay) => {
+            let hedge = fetch();
+            tokio::pin!(hedge);
+            tokio::select! {
+                result = &mut primary => match result {
+                    Ok(value) => Ok(value),
+                    Err(primary_error) => hedge.await.or(Err(primary_error)),
+                },
+                result = &mut hedge => match result {
+                    Ok(value) => Ok(value),
+                    Err(hedge_error) => primary.await.or(Err(hedge_error)),
+                },
+            }
+        }
     }
 }
 
@@ -3320,6 +3358,7 @@ impl Storage {
             SIDECAR_RANGE_COALESCE_BYTES,
             SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
             SIDECAR_RANGE_MAX_PARALLEL,
+            None,
         )
     }
 
@@ -3338,6 +3377,7 @@ impl Storage {
             max_gap,
             SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
             GLOBAL_RERANK_RANGE_MAX_PARALLEL,
+            None,
         )
     }
 
@@ -3351,6 +3391,7 @@ impl Storage {
         range: Range<u64>,
         stripe_bytes: u64,
         max_parallel: usize,
+        hedge_after: Option<Duration>,
     ) -> Result<ReadBytes> {
         if max_parallel == 0 {
             return Err(BorsukError::InvalidStorage(
@@ -3358,8 +3399,14 @@ impl Storage {
             ));
         }
         let ranges = split_contiguous_range(range, stripe_bytes)?;
-        let read =
-            self.read_ranges_with_policy(relative, &ranges, 0, stripe_bytes, max_parallel)?;
+        let read = self.read_ranges_with_policy(
+            relative,
+            &ranges,
+            0,
+            stripe_bytes,
+            max_parallel,
+            hedge_after,
+        )?;
         Ok(ReadBytes {
             bytes: read.chunks.concat(),
             cache_hit: read.cache_hit,
@@ -3374,6 +3421,7 @@ impl Storage {
         max_gap: u64,
         max_physical_range_bytes: u64,
         max_parallel: usize,
+        hedge_after: Option<Duration>,
     ) -> Result<ReadRanges> {
         let cacheable = !is_mutable_lane_head(relative);
         if cacheable && let Some(bytes) = self.read_cache_file(relative)? {
@@ -3442,16 +3490,31 @@ impl Storage {
                         let physical_bytes = Arc::clone(&physical_bytes);
                         let object_bytes = Arc::clone(&object_bytes);
                         async move {
-                            let result = store
-                                .get_opts(
-                                    &location,
-                                    GetOptions::new().with_range(Some(GetRange::Bounded(range))),
-                                )
-                                .await?;
-                            object_bytes.fetch_max(result.meta.size, Ordering::Relaxed);
-                            let bytes = result.bytes().await?;
-                            physical_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-                            Ok(bytes)
+                            fetch_with_optional_hedge(
+                                || {
+                                    let store = Arc::clone(&store);
+                                    let location = location.clone();
+                                    let range = range.clone();
+                                    let physical_bytes = Arc::clone(&physical_bytes);
+                                    let object_bytes = Arc::clone(&object_bytes);
+                                    async move {
+                                        let result = store
+                                            .get_opts(
+                                                &location,
+                                                GetOptions::new()
+                                                    .with_range(Some(GetRange::Bounded(range))),
+                                            )
+                                            .await?;
+                                        object_bytes.fetch_max(result.meta.size, Ordering::Relaxed);
+                                        let bytes = result.bytes().await?;
+                                        physical_bytes
+                                            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                                        Ok(bytes)
+                                    }
+                                },
+                                hedge_after,
+                            )
+                            .await
                         }
                     },
                     max_gap,
@@ -4497,7 +4560,7 @@ mod tests {
             atomic::{AtomicBool, AtomicUsize, Ordering},
             mpsc,
         },
-        time::{Duration, SystemTime},
+        time::{Duration, Instant, SystemTime},
     };
 
     use super::{
@@ -4519,9 +4582,148 @@ mod tests {
         metric::VectorMetric,
         record::{BuildConfig, LeafCapability},
     };
+    use object_store::{
+        memory::InMemory,
+        throttle::{ThrottleConfig, ThrottledStore},
+    };
     use url::Url;
 
     struct DropFlag(Arc<AtomicBool>);
+
+    #[test]
+    fn slow_fetch_is_hedged_once_and_fast_fetch_is_not_hedged() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let started = Instant::now();
+        let value = runtime
+            .block_on(super::fetch_with_optional_hedge(
+                {
+                    let attempts = Arc::clone(&attempts);
+                    move || {
+                        let ordinal = attempts.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            tokio::time::sleep(if ordinal == 0 {
+                                Duration::from_millis(100)
+                            } else {
+                                Duration::from_millis(5)
+                            })
+                            .await;
+                            Ok::<&'static [u8], &'static str>(if ordinal == 0 {
+                                b"primary".as_slice()
+                            } else {
+                                b"hedge".as_slice()
+                            })
+                        }
+                    }
+                },
+                Some(Duration::from_millis(20)),
+            ))
+            .unwrap();
+        assert_eq!(value, b"hedge");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert!(started.elapsed() < Duration::from_millis(80));
+
+        let fast_attempts = Arc::new(AtomicUsize::new(0));
+        let fast = runtime
+            .block_on(super::fetch_with_optional_hedge(
+                {
+                    let fast_attempts = Arc::clone(&fast_attempts);
+                    move || {
+                        fast_attempts.fetch_add(1, Ordering::SeqCst);
+                        async {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                            Ok::<&'static [u8], &'static str>(b"fast".as_slice())
+                        }
+                    }
+                },
+                Some(Duration::from_millis(20)),
+            ))
+            .unwrap();
+        assert_eq!(fast, b"fast");
+        assert_eq!(fast_attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn hedged_fetch_uses_the_other_success_and_fails_only_after_both_fail() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let success = runtime
+            .block_on(super::fetch_with_optional_hedge(
+                {
+                    let attempts = Arc::clone(&attempts);
+                    move || {
+                        let ordinal = attempts.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            tokio::time::sleep(if ordinal == 0 {
+                                Duration::from_millis(30)
+                            } else {
+                                Duration::from_millis(5)
+                            })
+                            .await;
+                            if ordinal == 0 {
+                                Ok::<&'static [u8], &'static str>(b"primary".as_slice())
+                            } else {
+                                Err("hedge")
+                            }
+                        }
+                    }
+                },
+                Some(Duration::from_millis(20)),
+            ))
+            .unwrap();
+        assert_eq!(success, b"primary");
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let retry_success = runtime
+            .block_on(super::fetch_with_optional_hedge(
+                {
+                    let attempts = Arc::clone(&attempts);
+                    move || {
+                        let ordinal = attempts.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            if ordinal == 0 {
+                                Err::<&'static [u8], _>("primary")
+                            } else {
+                                Ok(b"retry".as_slice())
+                            }
+                        }
+                    }
+                },
+                Some(Duration::from_millis(20)),
+            ))
+            .unwrap();
+        assert_eq!(retry_success, b"retry");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let error = runtime
+            .block_on(super::fetch_with_optional_hedge(
+                {
+                    let attempts = Arc::clone(&attempts);
+                    move || {
+                        let ordinal = attempts.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            tokio::time::sleep(if ordinal == 0 {
+                                Duration::from_millis(30)
+                            } else {
+                                Duration::from_millis(5)
+                            })
+                            .await;
+                            Err::<&'static [u8], _>(if ordinal == 0 { "primary" } else { "hedge" })
+                        }
+                    }
+                },
+                Some(Duration::from_millis(20)),
+            ))
+            .unwrap_err();
+        assert_eq!(error, "hedge");
+    }
 
     #[test]
     fn global_rerank_range_wave_does_not_serialize_twenty_small_gets() {
@@ -5206,7 +5408,7 @@ mod tests {
     }
 
     #[test]
-    fn striped_range_reads_large_ranges_in_parallel_parts() {
+    fn striped_range_hedge_setting_preserves_order_and_fast_request_count() {
         const MIB: usize = 1024 * 1024;
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
@@ -5231,6 +5433,7 @@ mod tests {
                 0..bytes.len() as u64,
                 MIB as u64,
                 16,
+                Some(Duration::from_secs(1)),
             )
             .unwrap();
         assert_eq!(first.bytes, bytes);
@@ -5244,6 +5447,7 @@ mod tests {
                 0..bytes.len() as u64,
                 MIB as u64,
                 16,
+                None,
             )
             .unwrap();
         assert_eq!(second.bytes, bytes);
@@ -5257,17 +5461,60 @@ mod tests {
                 0..(MIB / 2) as u64,
                 MIB as u64,
                 16,
+                None,
             )
             .unwrap();
         assert_eq!(small.bytes, bytes[..MIB / 2]);
         assert_eq!(storage.request_counts().delta(&before_small).gets, 1);
 
-        assert!(storage.read_striped_range("x", 1..1, 1, 1).is_err());
+        assert!(storage.read_striped_range("x", 1..1, 1, 1, None).is_err());
         #[allow(clippy::reversed_empty_ranges)]
         let reversed = 2..1;
-        assert!(storage.read_striped_range("x", reversed, 1, 1).is_err());
-        assert!(storage.read_striped_range("x", 0..1, 0, 1).is_err());
-        assert!(storage.read_striped_range("x", 0..1, 1, 0).is_err());
+        assert!(
+            storage
+                .read_striped_range("x", reversed, 1, 1, None)
+                .is_err()
+        );
+        assert!(storage.read_striped_range("x", 0..1, 0, 1, None).is_err());
+        assert!(storage.read_striped_range("x", 0..1, 1, 0, None).is_err());
+    }
+
+    #[test]
+    fn hedged_striped_read_preserves_order_and_hedges_each_slow_stripe_once() {
+        let throttled = ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(50),
+                ..ThrottleConfig::default()
+            },
+        );
+        let storage = Storage::from_object_store(
+            "memory:///hedged-striped-read".to_string(),
+            Arc::new(throttled),
+        )
+        .unwrap();
+        let expected = b"abcdefghijkl";
+        storage
+            .write_bytes("global-pq/bundles/hedged.arrow", expected)
+            .unwrap();
+
+        let before = storage.request_counts();
+        let read = storage
+            .read_striped_range(
+                "global-pq/bundles/hedged.arrow",
+                0..expected.len() as u64,
+                4,
+                3,
+                Some(Duration::from_millis(10)),
+            )
+            .unwrap();
+
+        assert_eq!(read.bytes, expected);
+        assert_eq!(
+            storage.request_counts().delta(&before).gets,
+            6,
+            "three slow stripes should each issue one bounded hedge"
+        );
     }
 
     #[test]
