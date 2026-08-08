@@ -20,9 +20,13 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def run_validator(self):
+    def run_validator(self, recover=False):
+        command = ["python3", str(VALIDATOR), "--manifest", str(MANIFEST)]
+        if recover:
+            command.append("--recover-terminal-validator-failure")
+        command.append(str(self.root))
         return subprocess.run(
-            ["python3", str(VALIDATOR), "--manifest", str(MANIFEST), str(self.root)],
+            command,
             text=True,
             capture_output=True,
             check=False,
@@ -169,6 +173,22 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("failure marker", result.stderr)
 
+    def test_explicit_recovery_validates_all_arms_after_terminal_validator_failure(self):
+        self.write_terminal_matrix()
+        (self.root / self.manifest["root_complete_marker"]).unlink()
+        (self.root / self.manifest["root_failure_marker"]).touch()
+
+        ordinary = self.run_validator()
+        self.assertNotEqual(ordinary.returncode, 0)
+        self.assertIn("campaign is incomplete", ordinary.stderr)
+
+        recovered = self.run_validator(recover=True)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(json.loads(recovered.stdout)["terminal_mode"], "validator-failure-recovery")
+
+    def test_validator_avoids_python_310_only_zip_strict_keyword(self):
+        self.assertNotIn("strict=True", VALIDATOR.read_text())
+
     def test_accepts_exact_terminal_matrix_and_selects_paired_winner(self):
         self.write_terminal_matrix()
         result = self.run_validator()
@@ -208,4 +228,3 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
