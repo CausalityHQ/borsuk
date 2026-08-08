@@ -29,7 +29,7 @@
 - Consumes: existing `ReadQualificationShape`, `run_read_qualification`, deterministic sample-to-dataset reconstruction, and `measure_reads`.
 - Produces: protocol value `read-stripe-confirmation`; helper `read_confirmation_order_position(repetition, stripe_bytes)`; exact confirmation shape validation.
 
-- [ ] **Step 1: Write failing protocol tests**
+- [x] **Step 1: Write failing protocol tests**
 
 Add tests proving that production confirmation accepts only:
 
@@ -52,7 +52,7 @@ shape fails, and that paired orders are `[1,4]`, `[4,1]`, `[1,4]`, `[4,1]`,
 structural-smoke shape for the new protocol, but allow only its 1 MiB or 4 MiB
 arm and require order position zero.
 
-- [ ] **Step 2: Run the focused Rust test and observe RED**
+- [x] **Step 2: Run the focused Rust test and observe RED**
 
 Run:
 
@@ -65,7 +65,7 @@ cargo test -p borsuk --example group_commit_bench read_confirmation -- --nocaptu
 Expected: compile failure because the new confirmation validator/order helper
 does not exist.
 
-- [ ] **Step 3: Implement minimal campaign-specific dispatch**
+- [x] **Step 3: Implement minimal campaign-specific dispatch**
 
 Parse the protocol before shape validation. Keep `read-qualification` bound to
 its existing 100-query/three-arm validator. Bind `read-stripe-confirmation` to
@@ -74,7 +74,7 @@ continue through the existing immutable sample validation, dataset reconstructio
 search measurement, raw artifact writing, and marker creation. Emit the protocol
 kind in `summary.csv` so the validator can distinguish confirmation artifacts.
 
-- [ ] **Step 4: Run focused tests and formatting**
+- [x] **Step 4: Run focused tests and formatting**
 
 Run the focused command from Step 2 and:
 
@@ -84,7 +84,7 @@ cargo fmt --all -- --check
 
 Expected: all focused tests pass and formatting exits zero.
 
-- [ ] **Step 5: Commit and fast-forward push**
+- [x] **Step 5: Commit and fast-forward push**
 
 ```bash
 git add crates/borsuk/examples/group_commit_bench.rs
