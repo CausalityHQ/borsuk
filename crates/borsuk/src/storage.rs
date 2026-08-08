@@ -5263,7 +5263,9 @@ mod tests {
         assert_eq!(storage.request_counts().delta(&before_small).gets, 1);
 
         assert!(storage.read_striped_range("x", 1..1, 1, 1).is_err());
-        assert!(storage.read_striped_range("x", 2..1, 1, 1).is_err());
+        #[allow(clippy::reversed_empty_ranges)]
+        let reversed = 2..1;
+        assert!(storage.read_striped_range("x", reversed, 1, 1).is_err());
         assert!(storage.read_striped_range("x", 0..1, 0, 1).is_err());
         assert!(storage.read_striped_range("x", 0..1, 1, 0).is_err());
     }
