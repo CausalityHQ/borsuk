@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 import subprocess
 import sys
@@ -857,6 +858,33 @@ def benchmark_row(
     return matching
 
 
+def assert_global_range_hedge_manifest(manifest: dict[str, object]) -> None:
+    expected_orders = [
+        ["control", "candidate"],
+        ["candidate", "control"],
+        ["control", "candidate"],
+        ["candidate", "control"],
+        ["control", "candidate"],
+    ]
+    require(
+        manifest.get("campaign_id") == "global-range-hedge-qualification-v1",
+        "global range hedge campaign id changed",
+    )
+    require(
+        manifest.get("disk_cache_enabled") is False,
+        "global range hedge qualification must disable disk cache",
+    )
+    require(manifest.get("repetitions") == 5, "global range hedge campaign must use five repetitions")
+    require(manifest.get("arm_orders") == expected_orders, "global range hedge arms must alternate")
+    require(manifest.get("queries_per_arm") == 500, "global range hedge arms must use 500 queries")
+    require(manifest.get("read_writer") == 0, "global range hedge cohort must use writer zero")
+    require(manifest.get("stripe_bytes") == 1024 * 1024, "global range hedge stripe width changed")
+    require(
+        manifest.get("hedge_after_ms") == {"control": "none", "candidate": "75"},
+        "global range hedge delay arms changed",
+    )
+
+
 def main() -> None:
     require((ROOT / "Cargo.lock").is_file(), "Cargo.lock must exist")
     require(
@@ -893,6 +921,18 @@ def main() -> None:
     assert_tracked("packages/borsuk/test/api.test.ts")
     assert_tracked("scripts/test_check_repo_policy.py")
     assert_tracked("scripts/test_docs_web.mjs")
+    for path in [
+        "docs/research/global-range-hedge-qualification.json",
+        "scripts/bench_global_range_hedge_qualification.sh",
+        "scripts/launch_aws_global_range_hedge_qualification.sh",
+        "scripts/validate_global_range_hedge_qualification.py",
+        "scripts/test_bench_global_range_hedge_qualification.py",
+        "scripts/test_validate_global_range_hedge_qualification.py",
+    ]:
+        assert_tracked(path)
+    assert_global_range_hedge_manifest(
+        json.loads((ROOT / "docs/research/global-range-hedge-qualification.json").read_text())
+    )
     assert_no_files_matching(
         "python/src/borsuk",
         ["_borsuk*.so", "_borsuk*.pyd", "_borsuk*.dll", "_borsuk*.dylib"],

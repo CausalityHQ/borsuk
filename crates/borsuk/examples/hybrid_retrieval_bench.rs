@@ -495,6 +495,7 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
             cache_dir,
             cache_max_bytes: env_optional_u64("BORSUK_HYBRID_CACHE_MAX_BYTES")?,
             global_pq_prefetch_stripe_bytes: OpenOptions::default().global_pq_prefetch_stripe_bytes,
+            global_pq_slow_read_hedge_after: None,
             ram_budget_bytes: Some(ram_budget_bytes),
             resident_routing: env_bool("BORSUK_HYBRID_RESIDENT_ROUTING", false)?,
             segment_cache_max_bytes: env_optional_u64("BORSUK_HYBRID_SEGMENT_CACHE_MAX_BYTES")?,

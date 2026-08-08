@@ -352,14 +352,14 @@ identical logical/backing bytes. Their local latency is not S3 evidence.
 - Produces: ten terminal arms, root `GLOBAL_RANGE_HEDGE_QUALIFICATION_COMPLETE`,
   immutable raw/resource/storage artifacts, and a validator JSON decision.
 
-- [ ] **Step 1: Write RED validator fixtures**
+- [x] **Step 1: Write RED validator fixtures**
 
 Create one literal terminal fixture that passes every invariant and mutations
 for missing markers, wrong hedge, cache enabled, query mismatch, recall below
 1.0, logical byte mismatch, writes, p95/worst-repeat gate, fewer than 4/5 paired
 wins, p50 regression, GET amplification, and backing-byte amplification.
 
-- [ ] **Step 2: Observe RED**
+- [x] **Step 2: Observe RED**
 
 ```bash
 python3 -m unittest scripts.test_validate_global_range_hedge_qualification
@@ -367,7 +367,7 @@ python3 -m unittest scripts.test_validate_global_range_hedge_qualification
 
 Expected: import failure because the validator does not exist.
 
-- [ ] **Step 3: Implement manifest, runner, launcher, validator, and policy discovery**
+- [x] **Step 3: Implement manifest, runner, launcher, validator, and policy discovery**
 
 The validator checks root and all arm markers before opening any CSV. It then
 requires the exact v67 identities and shape, reconciles raw rows to summaries,
@@ -376,7 +376,7 @@ AWS account `453182569524`, profile `causality`, instance health, SSM health,
 free disk, and absence of another benchmark process before starting one
 retained tmux session.
 
-- [ ] **Step 4: Run validator and harness tests**
+- [x] **Step 4: Run validator and harness tests**
 
 ```bash
 python3 -m unittest scripts.test_validate_global_range_hedge_qualification scripts.test_check_repo_policy
@@ -384,13 +384,13 @@ python3 scripts/check_repo_policy.py
 bash -n scripts/bench_global_range_hedge_qualification.sh scripts/launch_aws_global_range_hedge_qualification.sh
 ```
 
-- [ ] **Step 5: Run a local structurally valid smoke**
+- [x] **Step 5: Run a local structurally valid smoke**
 
 Use an isolated `/data/home/rb/borsuk-local-qual/<commit>/global-range-hedge-smoke` directory and
 the canonical terminal local fixture. Record structure only; do not claim local
 latency as S3 evidence.
 
-- [ ] **Step 6: Run exact assurance once**
+- [x] **Step 6: Run exact assurance once**
 
 ```bash
 cargo fmt --all -- --check
