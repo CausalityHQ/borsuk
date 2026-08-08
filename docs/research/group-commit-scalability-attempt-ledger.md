@@ -1412,3 +1412,53 @@ larger range requests do not reliably reduce this path's tail; v68's apparent
 benefit was dominated by its noisy first/cold control tail. The next core read
 experiment must address request scheduling/overlap or delta-stage work rather
 than increasing stripe width or relying on cache.
+
+### Bounded global range hedge qualification harness
+
+Revision `1b22c03` added an optional one-retry hedge only around immutable
+global-PQ stripe reads. The primary starts immediately; after the configured
+delay exactly one duplicate may start, the first success wins, and one failure
+waits for the other request. WAL, manifest, sidecar, and ordinary range reads
+remain unhedged. The option defaults to disabled and changes neither candidates,
+logical bytes, exact reranking, recall, nor the standard Arrow/Parquet durable
+layout.
+
+Revision `a554d62` added the exact uncached qualification protocol. It rejects
+any disk-cache directory, fixes the physical stripe at 1 MiB, and selects 500
+writer-zero samples at operations `0,2,...,998` from the immutable terminal v67
+cell. Control and candidate therefore execute identical public k=10
+SrhtPqScan work; the sole difference is `none` versus a 75 ms hedge. Raw rows
+preserve disk-cache and backing-byte telemetry without changing the schema of
+historical read artifacts.
+
+The five-repeat campaign is separately preregistered in
+`global-range-hedge-qualification.json`, with alternating arm order and fresh
+processes. Promotion requires recall@10 1.0, zero writes and disk-cache bytes,
+pooled and worst-repeat p95 below 200 ms, at least four non-worse pairs, at
+least 10% pooled-p95 improvement, no more than 5% pooled-p50 regression,
+identical logical bytes, and no more than 20% GET or backing-byte amplification.
+The validator checks root terminality before reading measurement CSV files,
+reconciles every raw row with its summary, and supports explicit all-arm
+revalidation after a terminal validator-only failure.
+
+The canonical synthetic terminal fixture at
+`/data/home/rb/borsuk-local-qual/a554d62/global-range-hedge-validator-smoke`
+contains ten arms and 5,000 raw rows. The validator accepted it and emitted
+selection SHA-256
+`bf3dc29e5d4d7a2f63d08c2f16eabc92880ce7167a7695b44ded8e089c2c463a`.
+This is validator-structure evidence only; its fabricated fixture timings and
+selection are categorically ineligible for performance claims. The separate
+real local binary smoke under
+`/data/home/rb/borsuk-local-qual/20260808-read-hedge-smoke` proved both control
+and candidate preserve the expected IDs, recall 1.0, identical logical/backing
+bytes, zero writes, and zero disk-cache bytes. Its local timing is likewise not
+S3 evidence.
+
+The exact assurance gate then passed on the complete harness slice. Strict
+all-feature/all-target Clippy passed after the exhaustive historical hybrid
+benchmark initializer explicitly disabled the new hedge, preserving that
+benchmark's behavior. The full Rust gate passed 1,157 tests with 25 ignored
+across 71 suites in 487.78 seconds. The pinned Python gate passed all 486 tests
+in 134.456 seconds. Formatting, diff checks, repository policy, and shell syntax
+also passed. These are software-assurance results only; AWS execution remains
+pending and no S3 performance conclusion follows from them.

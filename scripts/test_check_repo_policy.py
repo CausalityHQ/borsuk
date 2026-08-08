@@ -9,6 +9,39 @@ import check_repo_policy
 
 
 class BenchmarkArtifactPolicyTests(unittest.TestCase):
+    def test_global_range_hedge_policy_rejects_cached_or_unpaired_campaign(self) -> None:
+        manifest = {
+            "campaign_id": "global-range-hedge-qualification-v1",
+            "disk_cache_enabled": False,
+            "repetitions": 5,
+            "arm_orders": [
+                ["control", "candidate"],
+                ["candidate", "control"],
+                ["control", "candidate"],
+                ["candidate", "control"],
+                ["control", "candidate"],
+            ],
+            "queries_per_arm": 500,
+            "read_writer": 0,
+            "stripe_bytes": 1048576,
+            "hedge_after_ms": {"control": "none", "candidate": "75"},
+        }
+        check_repo_policy.assert_global_range_hedge_manifest(manifest)
+
+        for key, invalid in [
+            ("disk_cache_enabled", True),
+            ("repetitions", 4),
+            ("queries_per_arm", 499),
+            ("read_writer", 1),
+        ]:
+            broken = {**manifest, key: invalid}
+            with (
+                self.subTest(key=key),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                check_repo_policy.assert_global_range_hedge_manifest(broken)
+
     def test_local_benchmark_gate_rejects_weak_id_recall_threshold(self) -> None:
         benchmark_text = (
             "use borsuk::recall_at_k;\n"
