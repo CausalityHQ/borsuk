@@ -1039,6 +1039,12 @@ pub struct SearchReport {
     /// Selected global cell chunks searched through the configured storage codec.
     #[serde(default)]
     pub global_scan_chunks_searched: usize,
+    /// Logical candidate identity rows authenticated and decoded before MVCC.
+    #[serde(default)]
+    pub global_identity_rows_resolved: usize,
+    /// Logical lossless vector rows fetched and validated after MVCC.
+    #[serde(default)]
+    pub global_exact_vectors_fetched: usize,
     /// Microseconds spent routing and producing approximate candidates in the
     /// stable global ANN base. Base and delta work may overlap.
     #[serde(default)]

@@ -1235,6 +1235,15 @@ struct GlobalIdentityRanges {
     mutation_digest: Vec<u8>,
     row_integrity: Vec<u8>,
 }
+
+#[derive(Debug, Clone)]
+struct GlobalPqIdentityCandidate {
+    node: usize,
+    local_row: usize,
+    id: RecordId,
+    stamp: MutationStamp,
+    row_integrity: [u8; 32],
+}
 type Bm25StatsPage = Vec<(u32, i64)>;
 type TextTermFrequencies = Vec<(u32, u32)>;
 
@@ -7873,6 +7882,8 @@ impl BorsukIndex {
             graph_candidates_added: 0,
             global_graph_chunks_searched: 0,
             global_scan_chunks_searched: 0,
+            global_identity_rows_resolved: 0,
+            global_exact_vectors_fetched: 0,
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
             global_delta_approximate_us: 0,
@@ -12792,7 +12803,7 @@ impl BorsukIndex {
                     let range = plan.range.clone();
                     let start = range.start;
                     let end = range.end;
-                    let bundled = if plan.prefetch_exact {
+                    let bundled = if plan.prefetch_identity {
                         self.storage
                             .read_striped_range(
                                 path,
@@ -12837,7 +12848,7 @@ impl BorsukIndex {
                         loaded.push((chunk.clone(), bytes::Bytes::copy_from_slice(bytes)));
                     }
                     let count = bundled.len() as u64;
-                    let prefetched = plan.prefetch_exact.then(|| QueryLocalRange {
+                    let prefetched = plan.prefetch_identity.then(|| QueryLocalRange {
                         path: path.clone(),
                         start: start as u64,
                         bytes: bundled,
@@ -13184,7 +13195,11 @@ impl BorsukIndex {
                 .push((entry.candidate.node, entry.candidate.local_row));
             candidate_rows.insert(
                 (entry.layer, entry.candidate.node),
-                (entry.candidate.row, entry.candidate.distance),
+                (
+                    entry.candidate.row,
+                    entry.candidate.distance,
+                    entry.candidate.chunk_row_start,
+                ),
             );
         }
         let mut bundled_groups = BTreeMap::<
@@ -13202,48 +13217,50 @@ impl BorsukIndex {
         }
         let groups = bundled_groups.into_iter().collect::<Vec<_>>();
         let exact_started = Instant::now();
-        // The current standard-Arrow range helper couples identity/MVCC columns
-        // with lossless vectors, so this first fused slice may fetch at most C
-        // raw rows from each layer (2C total). Identity resolution below still
-        // happens before exact distance work and exact-scores at most C unique
-        // live rows. Splitting identity reads from vector reads is the next
-        // bounded I/O slice; it does not require a durable-format change.
-        let fetched = bounded_io_map_with_gate(
+        let fetched_identities = bounded_io_map_with_gate(
             &groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
             Some(&self.global_pq_rerank_admission),
             |((layer, path), chunks)| {
-                self.global_exact_vectors_bundled(path, chunks, &query_local_ranges)
+                self.global_identities_bundled(path, chunks, &query_local_ranges)
                     .map(|(rows, bytes)| (*layer, rows, bytes))
             },
         );
         let mut bytes_read = layers.iter().map(|layer| layer.bytes_read).sum::<u64>();
-        let mut exact_by_node = HashMap::with_capacity(candidate_rows.len());
-        for result in fetched {
+        let mut identity_by_node = HashMap::with_capacity(candidate_rows.len());
+        let mut global_identity_rows_resolved = 0_usize;
+        for result in fetched_identities {
             let (layer, rows, bytes) = result?;
-            exact_by_node.extend(
-                rows.into_iter().map(|(node, vector, id, generation)| {
-                    ((layer, node), (vector, id, generation))
-                }),
-            );
+            global_identity_rows_resolved =
+                global_identity_rows_resolved.saturating_add(rows.len());
+            identity_by_node.extend(rows.into_iter().map(|row| ((layer, row.node), row)));
             bytes_read = bytes_read.saturating_add(bytes);
         }
-        let mut winning_candidates =
-            BTreeMap::<RecordId, (f32, usize, GlobalPqRow, Vec<f32>, MutationStamp)>::new();
-        for ((layer, node), (row, approximate_distance)) in candidate_rows {
-            let (vector, id, stamp) = exact_by_node.remove(&(layer, node)).ok_or_else(|| {
+        let mut winning_candidates = BTreeMap::<
+            RecordId,
+            (
+                f32,
+                GlobalPqSearchLayer,
+                usize,
+                GlobalPqRow,
+                GlobalPqIdentityCandidate,
+            ),
+        >::new();
+        for ((layer, node), (row, approximate_distance, chunk_row_start)) in candidate_rows {
+            let identity = identity_by_node.remove(&(layer, node)).ok_or_else(|| {
                 BorsukError::InvalidStorage(
-                    "resident global PQ candidate exact row is missing".to_string(),
+                    "resident global PQ candidate identity row is missing".to_string(),
                 )
             })?;
-            match winning_candidates.entry(id) {
+            match winning_candidates.entry(identity.id.clone()) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((approximate_distance, node, row, vector, stamp));
+                    entry.insert((approximate_distance, layer, chunk_row_start, row, identity));
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    let greatest = entry.get().4.greatest(stamp)?;
-                    if greatest == stamp && stamp.version() > entry.get().4.version() {
-                        entry.insert((approximate_distance, node, row, vector, stamp));
+                    let stamp = identity.stamp;
+                    let greatest = entry.get().4.stamp.greatest(stamp)?;
+                    if greatest == stamp && stamp.version() > entry.get().4.stamp.version() {
+                        entry.insert((approximate_distance, layer, chunk_row_start, row, identity));
                     }
                 }
             }
@@ -13251,14 +13268,23 @@ impl BorsukIndex {
         let mutation_states =
             self.mutation_states(winning_candidates.keys().map(|id| id.as_bytes()))?;
         let mut live_candidates = Vec::with_capacity(winning_candidates.len());
-        for (id, (approximate_distance, _node, _row, vector, stamp)) in winning_candidates {
+        for (id, (approximate_distance, layer, chunk_row_start, row, identity)) in
+            winning_candidates
+        {
             if Self::state_suppresses_stamp(
                 mutation_states.get(id.as_bytes()).copied().flatten(),
-                stamp,
+                identity.stamp,
             )? {
                 continue;
             }
-            live_candidates.push((approximate_distance, id, vector));
+            live_candidates.push((
+                approximate_distance,
+                id,
+                layer,
+                chunk_row_start,
+                row,
+                identity,
+            ));
         }
         live_candidates.sort_by(|left, right| {
             left.0
@@ -13267,9 +13293,49 @@ impl BorsukIndex {
         });
         live_candidates.truncate(candidate_limit);
 
+        let mut exact_by_chunk =
+            BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
+        for (_, _, layer, chunk_row_start, _, identity) in live_candidates {
+            exact_by_chunk
+                .entry((layer, chunk_row_start))
+                .or_default()
+                .push(identity);
+        }
+        let mut exact_groups = BTreeMap::<
+            (GlobalPqSearchLayer, String),
+            Vec<(GlobalPqChunkRef, Vec<GlobalPqIdentityCandidate>)>,
+        >::new();
+        for ((layer, chunk_row_start), identities) in exact_by_chunk {
+            let chunk = chunks_by_start
+                .get(&(layer, chunk_row_start))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "resident global PQ exact chunk is missing".to_string(),
+                    )
+                })?;
+            exact_groups
+                .entry((layer, chunk.path.clone()))
+                .or_default()
+                .push(((*chunk).clone(), identities));
+        }
+        let exact_groups = exact_groups.into_iter().collect::<Vec<_>>();
+        let fetched_exact = bounded_io_map_with_gate(
+            &exact_groups,
+            DEFAULT_GLOBAL_PQ_RERANK_READS,
+            Some(&self.global_pq_rerank_admission),
+            |((_layer, path), chunks)| self.global_exact_vectors_bundled(path, chunks),
+        );
+        let mut exact_rows = Vec::new();
+        for result in fetched_exact {
+            let (mut rows, bytes) = result?;
+            bytes_read = bytes_read.saturating_add(bytes);
+            exact_rows.append(&mut rows);
+        }
+        let global_exact_vectors_fetched = exact_rows.len();
+
         let metric = &self.manifest.config.metric;
-        let mut scored_vectors = Vec::with_capacity(live_candidates.len());
-        for (_approximate_distance, id, vector) in live_candidates {
+        let mut scored_vectors = Vec::with_capacity(exact_rows.len());
+        for (_node, vector, id, _stamp) in exact_rows {
             let distance = metric.distance_unchecked(query, &vector)?;
             scored_vectors.push((distance, vector, id));
         }
@@ -13343,6 +13409,8 @@ impl BorsukIndex {
                     .sum(),
                 global_graph_chunks_searched: graph_chunks_used,
                 global_scan_chunks_searched: scan_chunks_used,
+                global_identity_rows_resolved,
+                global_exact_vectors_fetched,
                 global_base_approximate_us: layers[0].approximate_us,
                 global_base_exact_rerank_us: exact_us,
                 global_delta_approximate_us: layers[1].approximate_us,
@@ -13624,7 +13692,7 @@ impl BorsukIndex {
                     let range = plan.range.clone();
                     let start = range.start;
                     let end = range.end;
-                    let bundled = if plan.prefetch_exact {
+                    let bundled = if plan.prefetch_identity {
                         self.storage
                             .read_striped_range(
                                 path,
@@ -13669,7 +13737,7 @@ impl BorsukIndex {
                         loaded.push((chunk.clone(), bytes::Bytes::copy_from_slice(bytes)));
                     }
                     let count = bundled.len() as u64;
-                    let prefetched = plan.prefetch_exact.then(|| QueryLocalRange {
+                    let prefetched = plan.prefetch_identity.then(|| QueryLocalRange {
                         path: path.clone(),
                         start: start as u64,
                         bytes: bundled,
@@ -13732,7 +13800,10 @@ impl BorsukIndex {
                 .entry(candidate.chunk_row_start)
                 .or_default()
                 .push((candidate.node, candidate.local_row));
-            candidate_rows.insert(candidate.node, candidate.row);
+            candidate_rows.insert(
+                candidate.node,
+                (candidate.row, candidate.distance, candidate.chunk_row_start),
+            );
         }
         let mut bundled_groups =
             BTreeMap::<String, Vec<(GlobalPqChunkRef, Vec<(usize, usize)>)>>::new();
@@ -13749,55 +13820,107 @@ impl BorsukIndex {
         let global_approximate_us =
             u64::try_from(global_approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let global_exact_rerank_started = Instant::now();
-        let fetched = bounded_io_map_with_gate(
+        let fetched_identities = bounded_io_map_with_gate(
             &groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
             Some(&self.global_pq_rerank_admission),
-            |(path, chunks)| self.global_exact_vectors_bundled(path, chunks, &query_local_ranges),
+            |(path, chunks)| self.global_identities_bundled(path, chunks, &query_local_ranges),
         );
-        let mut exact_by_node = HashMap::with_capacity(candidate_rows.len());
-        for result in fetched {
+        let mut identity_by_node = HashMap::with_capacity(candidate_rows.len());
+        let mut global_identity_rows_resolved = 0_usize;
+        for result in fetched_identities {
             let (rows, bytes) = result?;
-            exact_by_node.extend(
-                rows.into_iter()
-                    .map(|(node, vector, id, generation)| (node, (vector, id, generation))),
-            );
+            global_identity_rows_resolved =
+                global_identity_rows_resolved.saturating_add(rows.len());
+            identity_by_node.extend(rows.into_iter().map(|row| (row.node, row)));
             bytes_read = bytes_read.saturating_add(bytes);
         }
 
         let mut winning_candidates =
-            BTreeMap::<RecordId, (usize, GlobalPqRow, Vec<f32>, MutationStamp)>::new();
-        for (node, row) in candidate_rows {
-            let (vector, id, stamp) = exact_by_node.remove(&node).ok_or_else(|| {
+            BTreeMap::<RecordId, (f32, usize, GlobalPqRow, usize, GlobalPqIdentityCandidate)>::new(
+            );
+        for (node, (row, approximate_distance, chunk_row_start)) in candidate_rows {
+            let identity = identity_by_node.remove(&node).ok_or_else(|| {
                 BorsukError::InvalidStorage(
-                    "resident global PQ candidate exact row is missing".to_string(),
+                    "resident global PQ candidate identity row is missing".to_string(),
                 )
             })?;
-            match winning_candidates.entry(id) {
+            match winning_candidates.entry(identity.id.clone()) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((node, row, vector, stamp));
+                    entry.insert((approximate_distance, node, row, chunk_row_start, identity));
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    let greatest = entry.get().3.greatest(stamp)?;
-                    if greatest == stamp && stamp.version() > entry.get().3.version() {
-                        entry.insert((node, row, vector, stamp));
+                    let stamp = identity.stamp;
+                    let greatest = entry.get().4.stamp.greatest(stamp)?;
+                    if greatest == stamp && stamp.version() > entry.get().4.stamp.version() {
+                        entry.insert((approximate_distance, node, row, chunk_row_start, identity));
                     }
                 }
             }
         }
         let mutation_states =
             self.mutation_states(winning_candidates.keys().map(|id| id.as_bytes()))?;
-        let metric = &self.manifest.config.metric;
-        let mut scored_vectors = Vec::with_capacity(winning_candidates.len());
-        for (id, (node, row, vector, stamp)) in winning_candidates {
+        let mut live_candidates = Vec::with_capacity(winning_candidates.len());
+        for (id, (approximate_distance, node, row, chunk_row_start, identity)) in winning_candidates
+        {
             if Self::state_suppresses_stamp(
                 mutation_states.get(id.as_bytes()).copied().flatten(),
-                stamp,
+                identity.stamp,
             )? {
                 continue;
             }
+            live_candidates.push((
+                approximate_distance,
+                id,
+                node,
+                row,
+                chunk_row_start,
+                identity,
+            ));
+        }
+        live_candidates.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        live_candidates.truncate(candidate_limit);
+        let mut exact_by_chunk = BTreeMap::<usize, Vec<GlobalPqIdentityCandidate>>::new();
+        for (_, _, _, _, chunk_row_start, identity) in live_candidates {
+            exact_by_chunk
+                .entry(chunk_row_start)
+                .or_default()
+                .push(identity);
+        }
+        let mut exact_groups =
+            BTreeMap::<String, Vec<(GlobalPqChunkRef, Vec<GlobalPqIdentityCandidate>)>>::new();
+        for (chunk_row_start, identities) in exact_by_chunk {
+            let chunk = chunks_by_start.get(&chunk_row_start).ok_or_else(|| {
+                BorsukError::InvalidStorage("resident global PQ exact chunk is missing".to_string())
+            })?;
+            exact_groups
+                .entry(chunk.path.clone())
+                .or_default()
+                .push(((*chunk).clone(), identities));
+        }
+        let exact_groups = exact_groups.into_iter().collect::<Vec<_>>();
+        let fetched_exact = bounded_io_map_with_gate(
+            &exact_groups,
+            DEFAULT_GLOBAL_PQ_RERANK_READS,
+            Some(&self.global_pq_rerank_admission),
+            |(path, chunks)| self.global_exact_vectors_bundled(path, chunks),
+        );
+        let mut exact_rows = Vec::new();
+        for result in fetched_exact {
+            let (mut rows, bytes) = result?;
+            bytes_read = bytes_read.saturating_add(bytes);
+            exact_rows.append(&mut rows);
+        }
+        let global_exact_vectors_fetched = exact_rows.len();
+        let metric = &self.manifest.config.metric;
+        let mut scored_vectors = Vec::with_capacity(exact_rows.len());
+        for (node, vector, id, stamp) in exact_rows {
             let distance = metric.distance_unchecked(query, &vector)?;
-            scored_vectors.push((distance, node, row, vector, id, stamp));
+            scored_vectors.push((distance, node, vector, id, stamp));
         }
         scored_vectors.sort_by(|left, right| {
             left.0
@@ -13815,7 +13938,7 @@ impl BorsukIndex {
         scored_vectors.truncate(materialize);
 
         let mut scored = Vec::with_capacity(scored_vectors.len());
-        for (distance, _node, _row, vector, id, _stamp) in scored_vectors {
+        for (distance, _node, vector, id, _stamp) in scored_vectors {
             scored.push((distance, id, vector));
         }
         scored.sort_by(|left, right| {
@@ -13882,6 +14005,8 @@ impl BorsukIndex {
                 graph_candidates_added,
                 global_graph_chunks_searched: graph_chunks_used,
                 global_scan_chunks_searched: scan_chunks_used,
+                global_identity_rows_resolved,
+                global_exact_vectors_fetched,
                 global_base_approximate_us: global_approximate_us,
                 global_base_exact_rerank_us: global_exact_rerank_us,
                 global_delta_approximate_us: 0,
@@ -15818,6 +15943,14 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_scan_chunks_searched)
                 .sum(),
+            global_identity_rows_resolved: reports
+                .iter()
+                .map(|(_, report)| report.global_identity_rows_resolved)
+                .sum(),
+            global_exact_vectors_fetched: reports
+                .iter()
+                .map(|(_, report)| report.global_exact_vectors_fetched)
+                .sum(),
             global_base_approximate_us: reports
                 .iter()
                 .map(|(_, report)| report.global_base_approximate_us)
@@ -15978,6 +16111,8 @@ impl BorsukIndex {
                 graph_candidates_added: 0,
                 global_graph_chunks_searched: 0,
                 global_scan_chunks_searched: 0,
+                global_identity_rows_resolved: 0,
+                global_exact_vectors_fetched: 0,
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
                 global_delta_approximate_us: 0,
@@ -16187,6 +16322,8 @@ impl BorsukIndex {
             graph_candidates_added: 0,
             global_graph_chunks_searched: 0,
             global_scan_chunks_searched: 0,
+            global_identity_rows_resolved: 0,
+            global_exact_vectors_fetched: 0,
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
             global_delta_approximate_us: 0,
@@ -16542,6 +16679,8 @@ impl BorsukIndex {
                     graph_candidates_added: 0,
                     global_graph_chunks_searched: 0,
                     global_scan_chunks_searched: 0,
+                    global_identity_rows_resolved: 0,
+                    global_exact_vectors_fetched: 0,
                     global_base_approximate_us: 0,
                     global_base_exact_rerank_us: 0,
                     global_delta_approximate_us: 0,
@@ -17290,6 +17429,8 @@ impl BorsukIndex {
                 graph_candidates_added,
                 global_graph_chunks_searched: 0,
                 global_scan_chunks_searched: 0,
+                global_identity_rows_resolved: 0,
+                global_exact_vectors_fetched: 0,
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
                 global_delta_approximate_us: 0,
@@ -17392,6 +17533,8 @@ impl BorsukIndex {
                 graph_candidates_added: 0,
                 global_graph_chunks_searched: 0,
                 global_scan_chunks_searched: 0,
+                global_identity_rows_resolved: 0,
+                global_exact_vectors_fetched: 0,
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
                 global_delta_approximate_us: 0,
@@ -19806,15 +19949,13 @@ impl BorsukIndex {
         Ok((map, bytes))
     }
 
-    #[allow(clippy::type_complexity)]
-    fn global_exact_vectors_bundled(
+    fn global_identities_bundled(
         &self,
         path: &str,
         chunks: &[(GlobalPqChunkRef, Vec<(usize, usize)>)],
         query_local_ranges: &[QueryLocalRange],
-    ) -> Result<(Vec<(usize, Vec<f32>, RecordId, MutationStamp)>, u64)> {
+    ) -> Result<(Vec<GlobalPqIdentityCandidate>, u64)> {
         enum RequestedRow {
-            Exact { node: usize },
             IdentityOffsets { row_start: usize },
             IdentityValues { row_start: usize },
             MutationHlc { row_start: usize },
@@ -19822,111 +19963,30 @@ impl BorsukIndex {
             MutationDigest { row_start: usize },
             RowIntegrity { row_start: usize },
         }
-        let dimensions = self.manifest.config.dimensions;
-        let vector_element_type = self.manifest.build_config.vector_element_type;
-        let row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
-        // A few candidates can span several physical chunks, but that is still
-        // sparse relative to the immutable sidecars.  Treating one candidate
-        // per Arrow batch as a full-cache opportunity turned cold global-PQ
-        // reranks into full-object decodes.  Only use the full-vector path when
-        // every row in every selected chunk is requested; otherwise the indexed
-        // range path bounds bytes and decode work to the actual candidates.
-        let use_full_vector_cache = chunks
-            .iter()
-            .all(|(chunk, entries)| entries.len() >= chunk.rows);
-        let mut full_vectors = None;
-        let mut bytes_fetched = 0_u64;
-        if use_full_vector_cache {
-            let cached = self.read_runtime.decoded_vector_sidecars.get(path);
-            let full_result = if let Some(vectors) = cached {
-                Ok((vectors, 0, false))
-            } else {
-                self.read_runtime.inflight_vector_sidecars.load(path, || {
-                    let read = self.storage.read_bytes_with_cache_status(path)?;
-                    let bytes = if read.cache_hit {
-                        0
-                    } else {
-                        read.bytes.len() as u64
-                    };
-                    let decode_started = Instant::now();
-                    let vectors = crate::arrow_vector_sidecar::decode_all(&read.bytes, dimensions)?;
-                    self.storage
-                        .record_access_event(StorageAccessEvent::decode(
-                            path,
-                            physical_format_for_path(path),
-                            read.bytes.len() as u64,
-                            "vector",
-                            "all",
-                            vectors.len() as u64,
-                            vectors.len() as u64,
-                            elapsed_ns(decode_started),
-                        ))?;
-                    Ok((vectors, bytes))
-                })
-            };
-            match full_result {
-                Ok((vectors, bytes, _)) => {
-                    self.read_runtime.decoded_vector_sidecars.insert(
-                        path.to_string(),
-                        Arc::clone(&vectors),
-                        decoded_vector_sidecar_bytes(&vectors, dimensions),
-                    );
-                    full_vectors = Some(vectors);
-                    bytes_fetched = bytes_fetched.saturating_add(bytes);
-                }
-                Err(BorsukError::InvalidStorage(message))
-                    if message.contains("schema is missing `borsuk.vector.row_count`") => {}
-                Err(error) => return Err(error),
-            }
-        }
         let mut requested = Vec::<(Range<u64>, RequestedRow)>::new();
         let mut identity_cache_keys = HashMap::<usize, String>::new();
-        let mut identity_offsets = HashMap::<usize, Vec<u8>>::new();
-        let mut identity_values = HashMap::<usize, Vec<u8>>::new();
-        let mut mutation_hlc = HashMap::<usize, Vec<u8>>::new();
-        let mut mutation_writer = HashMap::<usize, Vec<u8>>::new();
-        let mut mutation_digest = HashMap::<usize, Vec<u8>>::new();
-        let mut row_integrity = HashMap::<usize, Vec<u8>>::new();
+        let mut identities = HashMap::<usize, GlobalIdentityRanges>::new();
         for (chunk, entries) in chunks {
             if chunk.path != path {
                 return Err(BorsukError::InvalidStorage(
-                    "global exact-vector bundle path mismatch".to_string(),
+                    "global identity bundle path mismatch".to_string(),
                 ));
             }
             for &(node, row) in entries {
+                let _ = node;
                 if row >= chunk.rows {
                     return Err(BorsukError::InvalidStorage(
-                        "global exact-vector row exceeds its chunk".to_string(),
+                        "global identity row exceeds its chunk".to_string(),
                     ));
-                }
-                if full_vectors.is_none() {
-                    let local_start = row.checked_mul(row_bytes).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "global exact-vector range overflows".to_string(),
-                        )
-                    })?;
-                    let start = chunk
-                        .exact_offset_bytes
-                        .checked_add(local_start)
-                        .ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "global exact-vector bundle offset overflows".to_string(),
-                            )
-                        })?;
-                    let end = start.checked_add(row_bytes).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "global exact-vector range overflows".to_string(),
-                        )
-                    })?;
-                    requested.push((start as u64..end as u64, RequestedRow::Exact { node }));
                 }
             }
             let (offsets_range, values_range) = chunk.identity_ranges()?;
             let [hlc_range, writer_range, digest_range, integrity_range] =
                 chunk.mutation_ranges()?;
             let identity_key = format!(
-                "{path}#{}:{}-{}:{}-{}:{}-{}:{}-{}:{}-{}:{}-{}",
+                "{path}#{}:{}:{}-{}:{}-{}:{}-{}:{}-{}:{}-{}:{}-{}",
                 chunk.row_start,
+                chunk.identity_checksum,
                 offsets_range.start,
                 offsets_range.end,
                 values_range.start,
@@ -19945,12 +20005,17 @@ impl BorsukIndex {
                 .decoded_global_identity_ranges
                 .get(&identity_key)
             {
-                identity_offsets.insert(chunk.row_start, identity.offsets.clone());
-                identity_values.insert(chunk.row_start, identity.values.clone());
-                mutation_hlc.insert(chunk.row_start, identity.mutation_hlc.clone());
-                mutation_writer.insert(chunk.row_start, identity.mutation_writer.clone());
-                mutation_digest.insert(chunk.row_start, identity.mutation_digest.clone());
-                row_integrity.insert(chunk.row_start, identity.row_integrity.clone());
+                identities.insert(
+                    chunk.row_start,
+                    GlobalIdentityRanges {
+                        offsets: identity.offsets.clone(),
+                        values: identity.values.clone(),
+                        mutation_hlc: identity.mutation_hlc.clone(),
+                        mutation_writer: identity.mutation_writer.clone(),
+                        mutation_digest: identity.mutation_digest.clone(),
+                        row_integrity: identity.row_integrity.clone(),
+                    },
+                );
             } else {
                 identity_cache_keys.insert(chunk.row_start, identity_key);
                 requested.push((
@@ -20022,38 +20087,14 @@ impl BorsukIndex {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut vectors = HashMap::new();
-        let mut exact_rows = HashMap::<usize, Vec<u8>>::new();
-        bytes_fetched = bytes_fetched.saturating_add(rerank_bytes_fetched);
-        if let Some(full_vectors) = full_vectors.as_ref() {
-            for (_chunk, entries) in chunks {
-                for &(node, row) in entries {
-                    let vector = full_vectors.get(row).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "global cached exact-vector row is missing".to_string(),
-                        )
-                    })?;
-                    vectors.insert(node, vector.clone());
-                    let mut encoded = Vec::with_capacity(row_bytes);
-                    vector_element_type.encode_canonical_fixed_width_into(vector, &mut encoded)?;
-                    exact_rows.insert(node, encoded);
-                }
-            }
-        }
+        let mut identity_offsets = HashMap::<usize, Vec<u8>>::new();
+        let mut identity_values = HashMap::<usize, Vec<u8>>::new();
+        let mut mutation_hlc = HashMap::<usize, Vec<u8>>::new();
+        let mut mutation_writer = HashMap::<usize, Vec<u8>>::new();
+        let mut mutation_digest = HashMap::<usize, Vec<u8>>::new();
+        let mut row_integrity = HashMap::<usize, Vec<u8>>::new();
         for ((_, kind), bytes) in requested.into_iter().zip(&fetched_chunks) {
             match kind {
-                RequestedRow::Exact { node } => {
-                    if bytes.len() != row_bytes {
-                        return Err(BorsukError::InvalidStorage(
-                            "global exact-vector row is truncated".to_string(),
-                        ));
-                    }
-                    vectors.insert(
-                        node,
-                        vector_element_type.decode_fixed_width(bytes, dimensions)?,
-                    );
-                    exact_rows.insert(node, bytes.clone());
-                }
                 RequestedRow::IdentityOffsets { row_start } => {
                     identity_offsets.insert(row_start, bytes.clone());
                 }
@@ -20093,65 +20134,65 @@ impl BorsukIndex {
             else {
                 continue;
             };
+            let identity = GlobalIdentityRanges {
+                offsets: offsets.clone(),
+                values: values.clone(),
+                mutation_hlc: hlc.clone(),
+                mutation_writer: writer.clone(),
+                mutation_digest: digest.clone(),
+                row_integrity: integrity.clone(),
+            };
+            let chunk = chunks
+                .iter()
+                .map(|(chunk, _)| chunk)
+                .find(|chunk| chunk.row_start == row_start)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global identity chunk disappeared during fetch".to_string(),
+                    )
+                })?;
+            let actual = global_pq_identity_checksum_bytes(&identity);
+            if actual != chunk.identity_checksum.as_ref() {
+                return Err(BorsukError::ChecksumMismatch {
+                    path: path.to_string(),
+                    expected: chunk.identity_checksum.to_string(),
+                    actual,
+                });
+            }
+            validate_global_pq_identity_ranges(chunk, &identity)?;
+            let identity = Arc::new(identity);
             self.read_runtime.decoded_global_identity_ranges.insert(
                 cache_key,
-                Arc::new(GlobalIdentityRanges {
-                    offsets: offsets.clone(),
-                    values: values.clone(),
-                    mutation_hlc: hlc.clone(),
-                    mutation_writer: writer.clone(),
-                    mutation_digest: digest.clone(),
-                    row_integrity: integrity.clone(),
-                }),
+                Arc::clone(&identity),
                 [offsets, values, hlc, writer, digest, integrity]
                     .into_iter()
                     .fold(0_u64, |bytes, value| {
                         bytes.saturating_add(value.len() as u64)
                     }),
             );
+            identities.insert(
+                row_start,
+                GlobalIdentityRanges {
+                    offsets: identity.offsets.clone(),
+                    values: identity.values.clone(),
+                    mutation_hlc: identity.mutation_hlc.clone(),
+                    mutation_writer: identity.mutation_writer.clone(),
+                    mutation_digest: identity.mutation_digest.clone(),
+                    row_integrity: identity.row_integrity.clone(),
+                },
+            );
         }
         let mut rows = Vec::new();
         for (chunk, entries) in chunks {
-            let offsets = identity_offsets.remove(&chunk.row_start).ok_or_else(|| {
-                BorsukError::InvalidStorage("global identity offsets are missing".to_string())
+            let identity = identities.remove(&chunk.row_start).ok_or_else(|| {
+                BorsukError::InvalidStorage("global identity envelope is missing".to_string())
             })?;
-            let values = identity_values.remove(&chunk.row_start).ok_or_else(|| {
-                BorsukError::InvalidStorage("global identity values are missing".to_string())
-            })?;
-            let hlc = mutation_hlc.remove(&chunk.row_start).ok_or_else(|| {
-                BorsukError::InvalidStorage("global mutation HLC values are missing".to_string())
-            })?;
-            let writers = mutation_writer.remove(&chunk.row_start).ok_or_else(|| {
-                BorsukError::InvalidStorage("global mutation writers are missing".to_string())
-            })?;
-            let digests = mutation_digest.remove(&chunk.row_start).ok_or_else(|| {
-                BorsukError::InvalidStorage("global mutation digests are missing".to_string())
-            })?;
-            let integrities = row_integrity.remove(&chunk.row_start).ok_or_else(|| {
-                BorsukError::InvalidStorage("global row integrities are missing".to_string())
-            })?;
-            if offsets.len() != (chunk.rows + 1).saturating_mul(4) {
-                return Err(BorsukError::InvalidStorage(
-                    "global identity offsets have an invalid size".to_string(),
-                ));
-            }
+            validate_global_pq_identity_ranges(chunk, &identity)?;
             for &(node, row) in entries {
-                let offset_at = |index: usize| -> Result<usize> {
-                    let start = index.checked_mul(4).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "global identity offset index overflows".to_string(),
-                        )
-                    })?;
-                    let bytes = offsets.get(start..start + 4).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "global identity offset is truncated".to_string(),
-                        )
-                    })?;
-                    Ok(u32::from_le_bytes(bytes.try_into().expect("four bytes")) as usize)
-                };
+                let offset_at = |index: usize| global_pq_identity_offset(&identity.offsets, index);
                 let start = offset_at(row)?;
                 let end = offset_at(row + 1)?;
-                let id = values.get(start..end).ok_or_else(|| {
+                let id = identity.values.get(start..end).ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "global identity value is outside its buffer".to_string(),
                     )
@@ -20159,39 +20200,99 @@ impl BorsukIndex {
                 let stamp = MutationStamp::new(
                     MutationVersion::from_parts(
                         u64::from_le_bytes(
-                            global_pq_fixed_row(&hlc, row, 8, "mutation HLC")?
+                            global_pq_fixed_row(&identity.mutation_hlc, row, 8, "mutation HLC")?
                                 .try_into()
                                 .expect("eight bytes"),
                         ),
-                        global_pq_fixed_row(&writers, row, 16, "mutation writer")?
+                        global_pq_fixed_row(&identity.mutation_writer, row, 16, "mutation writer")?
                             .try_into()
                             .expect("sixteen bytes"),
                     ),
-                    global_pq_fixed_row(&digests, row, 32, "mutation digest")?
+                    global_pq_fixed_row(&identity.mutation_digest, row, 32, "mutation digest")?
                         .try_into()
                         .expect("thirty-two bytes"),
                 );
-                let vector = vectors.remove(&node).ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "global exact-vector candidate is missing".to_string(),
-                    )
-                })?;
-                let exact = exact_rows.remove(&node).ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "global exact-vector candidate bytes are missing".to_string(),
-                    )
-                })?;
-                let expected_integrity = global_pq_row_integrity(id, stamp, &exact);
-                let actual_integrity = global_pq_fixed_row(&integrities, row, 32, "row integrity")?;
-                if actual_integrity != expected_integrity {
-                    return Err(BorsukError::InvalidStorage(
-                        "global PQ row integrity mismatch".to_string(),
-                    ));
-                }
-                rows.push((node, vector, RecordId::from_bytes(id.to_vec()), stamp));
+                let row_integrity =
+                    global_pq_fixed_row(&identity.row_integrity, row, 32, "row integrity")?
+                        .try_into()
+                        .expect("thirty-two bytes");
+                rows.push(GlobalPqIdentityCandidate {
+                    node,
+                    local_row: row,
+                    id: RecordId::from_bytes(id.to_vec()),
+                    stamp,
+                    row_integrity,
+                });
             }
         }
-        Ok((rows, bytes_fetched))
+        Ok((rows, rerank_bytes_fetched))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn global_exact_vectors_bundled(
+        &self,
+        path: &str,
+        chunks: &[(GlobalPqChunkRef, Vec<GlobalPqIdentityCandidate>)],
+    ) -> Result<(Vec<(usize, Vec<f32>, RecordId, MutationStamp)>, u64)> {
+        let dimensions = self.manifest.config.dimensions;
+        let vector_element_type = self.manifest.build_config.vector_element_type;
+        let row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
+        let mut requests = Vec::new();
+        for (chunk, entries) in chunks {
+            if chunk.path != path {
+                return Err(BorsukError::InvalidStorage(
+                    "global exact-vector bundle path mismatch".to_string(),
+                ));
+            }
+            for entry in entries {
+                if entry.local_row >= chunk.rows {
+                    return Err(BorsukError::InvalidStorage(
+                        "global exact-vector row exceeds its chunk".to_string(),
+                    ));
+                }
+                let start = entry
+                    .local_row
+                    .checked_mul(row_bytes)
+                    .and_then(|offset| chunk.exact_offset_bytes.checked_add(offset))
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global exact-vector bundle offset overflows".to_string(),
+                        )
+                    })?;
+                let end = start.checked_add(row_bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage("global exact-vector range overflows".to_string())
+                })?;
+                requests.push((start as u64..end as u64, entry));
+            }
+        }
+        requests.sort_unstable_by_key(|(range, _)| range.start);
+        let ranges = requests
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect::<Vec<_>>();
+        let fetched = self.storage.read_global_rerank_ranges(path, &ranges)?;
+        let mut rows = Vec::with_capacity(requests.len());
+        for ((_, entry), exact) in requests.into_iter().zip(fetched.chunks) {
+            if exact.len() != row_bytes {
+                return Err(BorsukError::InvalidStorage(
+                    "global exact-vector row is truncated".to_string(),
+                ));
+            }
+            if global_pq_row_integrity(entry.id.as_bytes(), entry.stamp, &exact)
+                != entry.row_integrity
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "global PQ row integrity mismatch".to_string(),
+                ));
+            }
+            rows.push((
+                entry.node,
+                vector_element_type.decode_fixed_width(&exact, dimensions)?,
+                entry.id.clone(),
+                entry.stamp,
+            ));
+        }
+        Ok((rows, fetched.bytes_fetched))
     }
 
     fn read_prefetched_segment(
@@ -21339,6 +21440,118 @@ fn global_pq_row_integrity(id: &[u8], stamp: MutationStamp, exact: &[u8]) -> [u8
     *hash.finalize().as_bytes()
 }
 
+fn global_pq_identity_checksum(slice: &GlobalPqBundleSlice, bundle: &[u8]) -> Result<String> {
+    let ranges = [
+        slice.identity_offsets_range.clone(),
+        slice.identity_values_range.clone(),
+        slice.mutation_hlc_range.clone(),
+        slice.mutation_writer_range.clone(),
+        slice.mutation_digest_range.clone(),
+        slice.row_integrity_range.clone(),
+    ];
+    let mut buffers = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        buffers.push(bundle.get(range).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "global PQ identity checksum range is outside its bundle".to_string(),
+            )
+        })?);
+    }
+    Ok(global_pq_identity_checksum_slices(
+        buffers.try_into().expect("six identity buffers"),
+    ))
+}
+
+fn global_pq_identity_checksum_bytes(identity: &GlobalIdentityRanges) -> String {
+    global_pq_identity_checksum_slices([
+        &identity.offsets,
+        &identity.values,
+        &identity.mutation_hlc,
+        &identity.mutation_writer,
+        &identity.mutation_digest,
+        &identity.row_integrity,
+    ])
+}
+
+fn global_pq_identity_checksum_slices(buffers: [&[u8]; 6]) -> String {
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"borsuk.global-pq.identity.v5\0");
+    for bytes in buffers {
+        hash.update(&(bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    hash.finalize().to_hex().to_string()
+}
+
+fn global_pq_identity_offset(offsets: &[u8], index: usize) -> Result<usize> {
+    let start = index.checked_mul(size_of::<i32>()).ok_or_else(|| {
+        BorsukError::InvalidStorage("global identity offset index overflows".to_string())
+    })?;
+    let bytes = offsets
+        .get(start..start + size_of::<i32>())
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global identity offset is truncated".to_string())
+        })?;
+    let value = i32::from_le_bytes(bytes.try_into().expect("four bytes"));
+    usize::try_from(value)
+        .map_err(|_| BorsukError::InvalidStorage("global identity offset is negative".to_string()))
+}
+
+fn validate_global_pq_identity_ranges(
+    chunk: &GlobalPqChunkRef,
+    identity: &GlobalIdentityRanges,
+) -> Result<()> {
+    let expected_offsets = chunk
+        .rows
+        .checked_add(1)
+        .and_then(|rows| rows.checked_mul(size_of::<i32>()))
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global identity offsets size overflows".to_string())
+        })?;
+    if identity.offsets.len() != expected_offsets {
+        return Err(BorsukError::InvalidStorage(
+            "global identity offsets have an invalid size".to_string(),
+        ));
+    }
+    for (values, width, name) in [
+        (&identity.mutation_hlc, 8, "mutation HLC"),
+        (&identity.mutation_writer, 16, "mutation writer"),
+        (&identity.mutation_digest, 32, "mutation digest"),
+        (&identity.row_integrity, 32, "row integrity"),
+    ] {
+        let expected = chunk
+            .rows
+            .checked_mul(width)
+            .ok_or_else(|| BorsukError::InvalidStorage(format!("global {name} size overflows")))?;
+        if values.len() != expected {
+            return Err(BorsukError::InvalidStorage(format!(
+                "global {name} buffer has an invalid size"
+            )));
+        }
+    }
+    let mut previous = global_pq_identity_offset(&identity.offsets, 0)?;
+    if previous != 0 {
+        return Err(BorsukError::InvalidStorage(
+            "global identity first offset is not zero".to_string(),
+        ));
+    }
+    for index in 1..=chunk.rows {
+        let current = global_pq_identity_offset(&identity.offsets, index)?;
+        if current < previous {
+            return Err(BorsukError::InvalidStorage(
+                "global identity offsets are not monotonic".to_string(),
+            ));
+        }
+        previous = current;
+    }
+    if previous > identity.values.len() {
+        return Err(BorsukError::InvalidStorage(
+            "global identity final offset exceeds its values buffer".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn global_pq_fixed_row<'a>(
     values: &'a [u8],
     row: usize,
@@ -21409,12 +21622,20 @@ fn global_pq_chunk_reference(
         offset_bytes: u32::try_from(scan_range.start).map_err(|_| {
             BorsukError::InvalidStorage("global PQ code offset exceeds u32".to_string())
         })?,
+        identity_checksum: global_pq_identity_checksum(slice, bundle)?.into_boxed_str(),
         exact_checksum: blake3::hash(exact).to_hex().to_string().into_boxed_str(),
         exact_offset_bytes: slice.exact_range.start,
         exact_size_bytes: exact.len(),
         cell_index: entry.cell_index,
         ordinal_buffer_offsets,
         typed_buffer_offsets,
+        identity_values_size_bytes: u32::try_from(slice.identity_values_range.len()).map_err(
+            |_| {
+                BorsukError::InvalidStorage(
+                    "global PQ identity values buffer exceeds u32".to_string(),
+                )
+            },
+        )?,
         row_start: entry.row_start,
         rows: entry.chunk.rows,
         size_bytes: u32::try_from(scan.len()).map_err(|_| {
@@ -21721,17 +21942,12 @@ fn global_pq_code_read_range(chunks: &[GlobalPqChunkRef]) -> Result<Range<usize>
             })?;
         Ok::<_, BorsukError>(end.max(chunk_end))
     })?;
-    let complete_end = chunks.iter().try_fold(code_end, |end, chunk| {
-        let chunk_end = chunk
-            .exact_offset_bytes
-            .checked_add(chunk.exact_size_bytes)
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global PQ exact range overflows".to_string())
-            })?;
+    let identity_end = chunks.iter().try_fold(code_end, |end, chunk| {
+        let chunk_end = chunk.mutation_ranges()?[3].end;
         Ok::<_, BorsukError>(end.max(chunk_end))
     })?;
-    let end = if complete_end.saturating_sub(start) <= DEFAULT_GLOBAL_PQ_CODE_PREFETCH_BYTES {
-        complete_end
+    let end = if identity_end.saturating_sub(start) <= DEFAULT_GLOBAL_PQ_CODE_PREFETCH_BYTES {
+        identity_end
     } else {
         code_end
     };
@@ -21799,7 +22015,9 @@ fn global_pq_layer_prefetch_weights(
     stripe_bytes: usize,
 ) -> (usize, usize) {
     chunks.iter().fold((0_usize, 0_usize), |weights, chunk| {
-        let bytes = (chunk.size_bytes as usize).saturating_add(chunk.exact_size_bytes);
+        let identity_end =
+            (chunk.typed_buffer_offsets[5] as usize).saturating_add(chunk.rows.saturating_mul(32));
+        let bytes = identity_end.saturating_sub(chunk.offset_bytes as usize);
         (
             weights.0.saturating_add(bytes),
             weights
@@ -21826,7 +22044,7 @@ fn global_pq_layer_largest_code_chunk(chunks: &[GlobalPqChunkRef]) -> usize {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GlobalPqCodeReadPlan {
     range: Range<usize>,
-    prefetch_exact: bool,
+    prefetch_identity: bool,
     stripes: usize,
 }
 
@@ -21854,21 +22072,21 @@ fn global_pq_code_read_plans(
             BorsukError::InvalidStorage("global PQ code range is invalid".to_string())
         })?;
         let candidate_stripes = candidate_bytes.div_ceil(stripe_bytes).max(1);
-        let prefetch_exact = candidate.end > code_end
+        let prefetch_identity = candidate.end > code_end
             && candidate_bytes <= bytes_left
             && candidate_stripes <= stripes_left;
-        if prefetch_exact {
+        if prefetch_identity {
             bytes_left -= candidate_bytes;
             stripes_left -= candidate_stripes;
             plans.push(GlobalPqCodeReadPlan {
                 range: candidate,
-                prefetch_exact: true,
+                prefetch_identity: true,
                 stripes: candidate_stripes,
             });
         } else {
             plans.push(GlobalPqCodeReadPlan {
                 range: candidate.start..code_end,
-                prefetch_exact: false,
+                prefetch_identity: false,
                 stripes: 0,
             });
         }
@@ -21887,7 +22105,7 @@ fn validated_global_pq_prefetch_stripe_bytes(stripe_bytes: usize) -> Result<usiz
 }
 
 fn global_pq_code_group_requires_io(plan: &GlobalPqCodeReadPlan, all_codes_cached: bool) -> bool {
-    plan.prefetch_exact || !all_codes_cached
+    plan.prefetch_identity || !all_codes_cached
 }
 
 fn should_flush_global_pq_bundle(
@@ -21925,36 +22143,30 @@ fn global_pq_code_read_groups(
                 .then_with(|| left.cell_index.cmp(&right.cell_index))
                 .then_with(|| left.row_start.cmp(&right.row_start))
         });
-        let requested = path_chunks
-            .iter()
-            .map(|chunk| {
-                let end = chunk
-                    .offset_bytes
-                    .checked_add(chunk.size_bytes)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "global PQ bundled code range overflows".to_string(),
-                        )
-                    })?;
-                Ok(chunk.offset_bytes as usize..end as usize)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let plan = crate::global_read_planner::plan_byte_ranges(
-            &requested,
-            max_gap_bytes,
-            request_weight_bytes,
-        )?;
-        let mut chunk_index = 0usize;
-        for span in plan.ranges {
-            let start = chunk_index;
-            while chunk_index < path_chunks.len()
-                && (path_chunks[chunk_index].offset_bytes as usize) < span.end
-            {
-                chunk_index += 1;
+        // Every chunk is one Arrow record batch, whose exact-vector buffer
+        // follows its identity buffers. A range spanning two chunks would
+        // necessarily cross the earlier batch's exact bytes before MVCC.
+        for chunk in path_chunks {
+            let end = chunk
+                .offset_bytes
+                .checked_add(chunk.size_bytes)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global PQ bundled code range overflows".to_string(),
+                    )
+                })?;
+            let requested = chunk.offset_bytes as usize..end as usize;
+            let plan = crate::global_read_planner::plan_byte_ranges(
+                std::slice::from_ref(&requested),
+                max_gap_bytes,
+                request_weight_bytes,
+            )?;
+            if plan.ranges.as_slice() != [requested] {
+                return Err(BorsukError::InvalidStorage(
+                    "global PQ single-batch code planner changed its range".to_string(),
+                ));
             }
-            if start < chunk_index {
-                groups.push((path.clone(), path_chunks[start..chunk_index].to_vec()));
-            }
+            groups.push((path.clone(), vec![chunk]));
         }
     }
     Ok(groups)
@@ -24641,6 +24853,14 @@ fn merge_search_execution_hits(
         .report
         .global_scan_chunks_searched
         .saturating_add(delta_report.global_scan_chunks_searched);
+    base.report.global_identity_rows_resolved = base
+        .report
+        .global_identity_rows_resolved
+        .saturating_add(delta_report.global_identity_rows_resolved);
+    base.report.global_exact_vectors_fetched = base
+        .report
+        .global_exact_vectors_fetched
+        .saturating_add(delta_report.global_exact_vectors_fetched);
     base.report.global_base_approximate_us = base
         .report
         .global_base_approximate_us
@@ -27191,12 +27411,14 @@ mod tests {
             path: format!("chunk-{size_bytes}"),
             checksum: "checksum".to_string(),
             offset_bytes: 0,
+            identity_checksum: "identity-checksum".into(),
             exact_checksum: "exact-checksum".into(),
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index: 0,
             ordinal_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
+            identity_values_size_bytes: 0,
             row_start: 0,
             rows: 1,
             size_bytes,
@@ -27238,17 +27460,19 @@ mod tests {
     }
 
     #[test]
-    fn global_pq_code_reads_do_not_span_distant_unselected_bundle_slices() {
+    fn global_pq_code_reads_never_coalesce_distinct_arrow_batches() {
         let chunk = |cell_index, offset_bytes, size_bytes| GlobalPqChunkRef {
             path: "packed-bundle".to_string(),
             checksum: format!("checksum-{cell_index}"),
             offset_bytes,
+            identity_checksum: "identity-checksum".into(),
             exact_checksum: "exact-checksum".into(),
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index,
             ordinal_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
+            identity_values_size_bytes: 0,
             row_start: 0,
             rows: 1,
             size_bytes,
@@ -27258,37 +27482,31 @@ mod tests {
 
         let groups = global_pq_code_read_groups(&selected, 64 * 1024, 64 * 1024).unwrap();
 
-        assert_eq!(groups.len(), 2);
-        assert_eq!(
-            groups[0]
-                .1
-                .iter()
-                .map(|chunk| chunk.cell_index)
-                .collect::<Vec<_>>(),
-            vec![1, 2]
-        );
-        assert_eq!(
-            groups[1]
-                .1
-                .iter()
-                .map(|chunk| chunk.cell_index)
-                .collect::<Vec<_>>(),
-            vec![3]
-        );
+        assert_eq!(groups.len(), 3);
+        assert!(groups.iter().all(|(_, chunks)| chunks.len() == 1));
     }
 
     #[test]
-    fn global_pq_code_reads_merge_parent_local_bundle_gaps() {
+    fn global_pq_code_reads_keep_parent_local_arrow_batches_independent() {
         let chunk = |cell_index, offset_bytes| GlobalPqChunkRef {
             path: "parent-bundle".to_string(),
             checksum: format!("checksum-{cell_index}"),
             offset_bytes,
+            identity_checksum: "identity-checksum".into(),
             exact_checksum: "exact-checksum".into(),
-            exact_offset_bytes: 1_000_000,
+            exact_offset_bytes: offset_bytes as usize + 800,
             exact_size_bytes: 4,
             cell_index,
             ordinal_buffer_offsets: [0; 2],
-            typed_buffer_offsets: [0; 6],
+            typed_buffer_offsets: [
+                offset_bytes + 128,
+                offset_bytes + 136,
+                offset_bytes + 200,
+                offset_bytes + 208,
+                offset_bytes + 224,
+                offset_bytes + 256,
+            ],
+            identity_values_size_bytes: 0,
             row_start: cell_index as usize,
             rows: 1,
             size_bytes: 100,
@@ -27298,39 +27516,90 @@ mod tests {
 
         let groups = global_pq_code_read_groups(&selected, 1024 * 1024, 1024 * 1024).unwrap();
 
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].1.len(), 3);
+        assert_eq!(groups.len(), 3);
+        let plans = global_pq_code_read_plans(&groups, 8 * 1024 * 1024, 16, 1024).unwrap();
+        assert!(plans.iter().zip(&groups).all(|(plan, (_, chunks))| {
+            plan.range.end <= chunks[0].exact_offset_bytes && chunks.len() == 1
+        }));
     }
 
     #[test]
-    fn global_pq_code_read_range_prefetches_only_bounded_arrow_cells() {
-        let chunk = |exact_size_bytes| GlobalPqChunkRef {
+    fn global_pq_code_read_range_prefetches_identity_but_excludes_exact_vectors() {
+        let chunk = |identity_start| GlobalPqChunkRef {
             path: "cell-bundle".to_string(),
             checksum: "checksum".to_string(),
             offset_bytes: 1_024,
+            identity_checksum: "identity-checksum".into(),
             exact_checksum: "exact-checksum".into(),
-            exact_offset_bytes: 64 * 1024,
-            exact_size_bytes,
+            exact_offset_bytes: identity_start as usize + 32_768 + 512 * 32 + 4_096,
+            exact_size_bytes: 512 * 768 * size_of::<f32>(),
             cell_index: 7,
             ordinal_buffer_offsets: [0; 2],
-            typed_buffer_offsets: [2_048, 3_048, 4_048, 5_048, 6_048, 7_048],
+            typed_buffer_offsets: [
+                identity_start,
+                identity_start + 2_056,
+                identity_start + 4_096,
+                identity_start + 8_192,
+                identity_start + 16_384,
+                identity_start + 32_768,
+            ],
+            identity_values_size_bytes: 0,
             row_start: 0,
             rows: 512,
             size_bytes: 32 * 1024,
             graph: None,
         };
 
-        let bounded = chunk(512 * 768 * size_of::<f32>());
+        let bounded = chunk(36 * 1024);
+        let row_integrity_end = bounded.typed_buffer_offsets[5] as usize + bounded.rows * 32;
         assert_eq!(
             global_pq_code_read_range(std::slice::from_ref(&bounded)).unwrap(),
-            1_024..bounded.exact_offset_bytes + bounded.exact_size_bytes,
+            1_024..row_integrity_end,
         );
+        assert!(row_integrity_end <= bounded.exact_offset_bytes);
 
         let oversized = chunk(4 * 1024 * 1024);
         assert_eq!(
             global_pq_code_read_range(std::slice::from_ref(&oversized)).unwrap(),
             1_024..1_024 + 32 * 1024,
         );
+    }
+
+    #[test]
+    fn global_pq_identity_validation_enforces_signed_offsets_and_fixed_widths() {
+        let chunk = GlobalPqChunkRef {
+            path: "bundle.arrow".to_string(),
+            checksum: "scan".to_string(),
+            offset_bytes: 0,
+            identity_checksum: "identity".into(),
+            exact_checksum: "exact".into(),
+            exact_offset_bytes: 1_024,
+            exact_size_bytes: 8,
+            cell_index: 0,
+            ordinal_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
+            identity_values_size_bytes: 0,
+            row_start: 0,
+            rows: 2,
+            size_bytes: 8,
+            graph: None,
+        };
+        let identity = |offsets: [i32; 3]| GlobalIdentityRanges {
+            offsets: offsets.into_iter().flat_map(i32::to_le_bytes).collect(),
+            values: b"ab\0\0".to_vec(),
+            mutation_hlc: vec![0; 16],
+            mutation_writer: vec![0; 32],
+            mutation_digest: vec![0; 64],
+            row_integrity: vec![0; 64],
+        };
+
+        validate_global_pq_identity_ranges(&chunk, &identity([0, 1, 2])).unwrap();
+        assert!(validate_global_pq_identity_ranges(&chunk, &identity([0, -1, 2])).is_err());
+        assert!(validate_global_pq_identity_ranges(&chunk, &identity([0, 2, 1])).is_err());
+        assert!(validate_global_pq_identity_ranges(&chunk, &identity([0, 1, 5])).is_err());
+        let mut truncated = identity([0, 1, 2]);
+        truncated.mutation_hlc.pop();
+        assert!(validate_global_pq_identity_ranges(&chunk, &truncated).is_err());
     }
 
     #[test]
@@ -27385,12 +27654,21 @@ mod tests {
                     path: format!("bundle-{cell_index}"),
                     checksum: format!("checksum-{cell_index}"),
                     offset_bytes: 0,
+                    identity_checksum: "identity-checksum".into(),
                     exact_checksum: "exact-checksum".into(),
-                    exact_offset_bytes: 64 * 1024,
-                    exact_size_bytes: complete_bytes - 64 * 1024,
+                    exact_offset_bytes: complete_bytes + 8,
+                    exact_size_bytes: 4,
                     cell_index,
                     ordinal_buffer_offsets: [0; 2],
-                    typed_buffer_offsets: [0; 6],
+                    typed_buffer_offsets: [
+                        65_536,
+                        65_544,
+                        complete_bytes as u32 - 104,
+                        complete_bytes as u32 - 96,
+                        complete_bytes as u32 - 80,
+                        complete_bytes as u32 - 32,
+                    ],
+                    identity_values_size_bytes: 0,
                     row_start: cell_index as usize,
                     rows: 1,
                     size_bytes: 64 * 1024,
@@ -27410,13 +27688,13 @@ mod tests {
 
         assert_eq!(plans.len(), 3);
         assert_eq!(plans[0].range, 0..3 * MIB);
-        assert!(plans[0].prefetch_exact);
+        assert!(plans[0].prefetch_identity);
         assert_eq!(plans[0].stripes, 3);
         assert_eq!(plans[1].range, 0..3 * MIB);
-        assert!(plans[1].prefetch_exact);
+        assert!(plans[1].prefetch_identity);
         assert_eq!(plans[1].stripes, 3);
         assert_eq!(plans[2].range, 0..64 * 1024);
-        assert!(!plans[2].prefetch_exact);
+        assert!(!plans[2].prefetch_identity);
         assert_eq!(plans[2].stripes, 0);
 
         let groups = (0..17)
@@ -27429,8 +27707,11 @@ mod tests {
             DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES,
         )
         .unwrap();
-        assert_eq!(plans.iter().filter(|plan| plan.prefetch_exact).count(), 16);
-        assert!(!plans[16].prefetch_exact);
+        assert_eq!(
+            plans.iter().filter(|plan| plan.prefetch_identity).count(),
+            16
+        );
+        assert!(!plans[16].prefetch_identity);
     }
 
     #[test]
@@ -27442,12 +27723,21 @@ mod tests {
                 path: "bundle".to_string(),
                 checksum: "checksum".to_string(),
                 offset_bytes: 0,
+                identity_checksum: "identity-checksum".into(),
                 exact_checksum: "exact-checksum".into(),
-                exact_offset_bytes: 64 * 1024,
-                exact_size_bytes: 4 * MIB - 64 * 1024,
+                exact_offset_bytes: 4 * MIB + 8,
+                exact_size_bytes: 4,
                 cell_index: 1,
                 ordinal_buffer_offsets: [0; 2],
-                typed_buffer_offsets: [0; 6],
+                typed_buffer_offsets: [
+                    65_536,
+                    65_544,
+                    (4 * MIB - 104) as u32,
+                    (4 * MIB - 96) as u32,
+                    (4 * MIB - 80) as u32,
+                    (4 * MIB - 32) as u32,
+                ],
+                identity_values_size_bytes: 0,
                 row_start: 0,
                 rows: 1,
                 size_bytes: 64 * 1024,
@@ -27458,7 +27748,7 @@ mod tests {
         for (stripe_bytes, expected_stripes) in [(MIB, 4), (2 * MIB, 2), (4 * MIB, 1)] {
             let plans = global_pq_code_read_plans(&groups, 8 * MIB, 16, stripe_bytes).unwrap();
             assert_eq!(plans.len(), 1);
-            assert!(plans[0].prefetch_exact);
+            assert!(plans[0].prefetch_identity);
             assert_eq!(plans[0].stripes, expected_stripes);
         }
     }
@@ -27474,7 +27764,7 @@ mod tests {
     }
 
     #[test]
-    fn global_pq_code_only_plans_do_not_consume_exact_prefetch_bytes() {
+    fn global_pq_code_only_plans_do_not_consume_identity_prefetch_bytes() {
         const MIB: usize = 1024 * 1024;
         let group = |cell_index: u16, complete_bytes: usize| {
             (
@@ -27483,12 +27773,21 @@ mod tests {
                     path: format!("bundle-{cell_index}"),
                     checksum: format!("checksum-{cell_index}"),
                     offset_bytes: 0,
+                    identity_checksum: "identity-checksum".into(),
                     exact_checksum: "exact-checksum".into(),
-                    exact_offset_bytes: 64 * 1024,
-                    exact_size_bytes: complete_bytes - 64 * 1024,
+                    exact_offset_bytes: complete_bytes + 8,
+                    exact_size_bytes: 4,
                     cell_index,
                     ordinal_buffer_offsets: [0; 2],
-                    typed_buffer_offsets: [0; 6],
+                    typed_buffer_offsets: [
+                        65_536,
+                        65_544,
+                        complete_bytes as u32 - 104,
+                        complete_bytes as u32 - 96,
+                        complete_bytes as u32 - 80,
+                        complete_bytes as u32 - 32,
+                    ],
+                    identity_values_size_bytes: 0,
                     row_start: cell_index as usize,
                     rows: 1,
                     size_bytes: 64 * 1024,
@@ -27506,26 +27805,26 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!plans[0].prefetch_exact);
+        assert!(!plans[0].prefetch_identity);
         assert_eq!(plans[0].range, 0..64 * 1024);
-        assert!(plans[1].prefetch_exact);
+        assert!(plans[1].prefetch_identity);
         assert_eq!(plans[1].range, 0..4 * MIB);
     }
 
     #[test]
     fn planned_global_pq_envelopes_are_not_bypassed_by_cached_codes() {
-        let full_envelope = GlobalPqCodeReadPlan {
+        let identity_envelope = GlobalPqCodeReadPlan {
             range: 0..3 * 1024 * 1024,
-            prefetch_exact: true,
+            prefetch_identity: true,
             stripes: 3,
         };
         let code_only = GlobalPqCodeReadPlan {
             range: 0..64 * 1024,
-            prefetch_exact: false,
+            prefetch_identity: false,
             stripes: 0,
         };
 
-        assert!(global_pq_code_group_requires_io(&full_envelope, true));
+        assert!(global_pq_code_group_requires_io(&identity_envelope, true));
         assert!(!global_pq_code_group_requires_io(&code_only, true));
         assert!(global_pq_code_group_requires_io(&code_only, false));
     }
@@ -27689,6 +27988,36 @@ mod tests {
                 .into_iter()
                 .flat_map(f32::to_le_bytes)
                 .collect::<Vec<_>>()
+        );
+        let reference = global_pq_chunk_reference(
+            "bundle.arrow",
+            &pending[0],
+            &encoded.slices[0],
+            &encoded.bytes,
+        )
+        .unwrap();
+        assert_eq!(
+            reference.identity_values_size_bytes as usize,
+            encoded.slices[0].identity_values_range.len()
+        );
+        let padding =
+            encoded.slices[0].identity_values_range.end..encoded.slices[0].mutation_hlc_range.start;
+        assert!(
+            !padding.is_empty(),
+            "fixture must contain Arrow buffer padding"
+        );
+        let mut padding_changed = encoded.bytes.clone();
+        padding_changed[padding.start] ^= 1;
+        let padding_changed_reference = global_pq_chunk_reference(
+            "bundle.arrow",
+            &pending[0],
+            &encoded.slices[0],
+            &padding_changed,
+        )
+        .unwrap();
+        assert_eq!(
+            padding_changed_reference.identity_checksum, reference.identity_checksum,
+            "identity authentication hashes raw Arrow buffers, not inter-buffer padding"
         );
     }
 
@@ -28609,14 +28938,12 @@ mod tests {
         assert!(global.delta.is_some());
         drop(index);
 
-        let report = BorsukIndex::open(&uri)
-            .unwrap()
-            .search_with_report(
-                &[0.0; 8],
-                SearchOptions::approx(1, LeafMode::SrhtPqScan)
-                    .with_max_segments(4)
-                    .with_max_candidates_per_segment(1),
-            )
+        let reader = BorsukIndex::open(&uri).unwrap();
+        let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
+            .with_max_segments(4)
+            .with_max_candidates_per_segment(1);
+        let report = reader
+            .search_with_report(&[0.0; 8], options.clone())
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("base-0"));
         assert!(
@@ -28624,6 +28951,115 @@ mod tests {
             "current base+delta coverage must use the fused path: {report:?}"
         );
         assert!(report.records_scored <= 1, "{report:?}");
+        let telemetry = serde_json::to_value(&report).unwrap();
+        assert_eq!(
+            telemetry["global_identity_rows_resolved"], 2,
+            "the stale base row and current delta row must both reach MVCC resolution"
+        );
+        assert_eq!(
+            telemetry["global_exact_vectors_fetched"], 1,
+            "only the post-MVCC winner may fetch its lossless vector"
+        );
+        assert_eq!(
+            reader.search_vectors(&[0.0; 8], options.clone()).unwrap(),
+            vec![moved],
+            "winner vectors must remain aligned with their current logical identity"
+        );
+        let scan_report = reader
+            .search_with_report(
+                &[0.0; 8],
+                options.with_cache_execution(crate::CacheExecutionPolicy::Scan),
+            )
+            .unwrap();
+        assert_eq!(scan_report.hits[0].id, RecordId::from("base-0"));
+        assert_eq!(scan_report.global_identity_rows_resolved, 2);
+        assert_eq!(scan_report.global_exact_vectors_fetched, 1);
+    }
+
+    #[test]
+    fn fused_global_search_rejects_corrupt_identity_for_a_losing_stale_candidate() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| {
+                        let value = if row == 0 { 0.0 } else { 100.0 };
+                        VectorRecord::new(format!("base-{row}"), vec![value; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index
+            .upsert(vec![VectorRecord::new("base-0", vec![10.0; 8])])
+            .unwrap();
+        index
+            .add(
+                (0..31)
+                    .map(|row| {
+                        VectorRecord::new(
+                            format!("delta-padding-{row}"),
+                            vec![1_000.0 + row as f32; 8],
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.flush().unwrap();
+        let global = index.manifest.global_pq_ref.as_ref().unwrap().clone();
+        let descriptor_bytes = index
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&global.path, &global.checksum)
+            .unwrap()
+            .bytes;
+        let base_chunks = GlobalPqDescriptor::decode(&descriptor_bytes)
+            .unwrap()
+            .chunks()
+            .to_vec();
+        drop(index);
+
+        let mut corrupted = std::collections::HashSet::new();
+        for chunk in base_chunks {
+            let (_, values) = chunk.identity_ranges().unwrap();
+            if values.is_empty() || !corrupted.insert((chunk.path.clone(), values.start)) {
+                continue;
+            }
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(dir.path().join(&chunk.path))
+                .unwrap();
+            file.seek(SeekFrom::Start(values.start as u64)).unwrap();
+            let mut byte = [0_u8; 1];
+            file.read_exact(&mut byte).unwrap();
+            byte[0] ^= 1;
+            file.seek(SeekFrom::Start(values.start as u64)).unwrap();
+            file.write_all(&byte).unwrap();
+        }
+
+        let error = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(1),
+            )
+            .unwrap_err();
+        assert!(matches!(error, BorsukError::ChecksumMismatch { .. }));
     }
 
     #[test]

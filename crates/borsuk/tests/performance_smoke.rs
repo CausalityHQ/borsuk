@@ -345,6 +345,8 @@ fn synthetic_report(
         graph_candidates_added: usize::from(graph_bytes_read > 0),
         global_graph_chunks_searched: 0,
         global_scan_chunks_searched: 0,
+        global_identity_rows_resolved: 0,
+        global_exact_vectors_fetched: 0,
         global_base_approximate_us: 0,
         global_base_exact_rerank_us: 0,
         global_delta_approximate_us: 0,
