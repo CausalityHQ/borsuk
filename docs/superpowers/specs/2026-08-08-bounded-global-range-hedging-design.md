@@ -61,8 +61,10 @@ ordinary drain must not adopt this approach.
 ## Runtime Contract
 
 - Add `OpenOptions::global_pq_slow_read_hedge_after: Option<Duration>`.
-- Default to `Some(Duration::from_millis(75))` for production S3-oriented
-  global-PQ reads; `None` disables the hedge.
+- Introduce the option with default `None` so the experiment cannot silently
+  change production behavior. The candidate explicitly uses
+  `Some(Duration::from_millis(75))`; a separate terminal-evidence commit may
+  promote that value to the production default.
 - Apply hedging only to immutable global-PQ striped range reads. Do not change
   WAL reads, coordination objects, manifests, segment writes, or exact-rerank
   candidate selection.
