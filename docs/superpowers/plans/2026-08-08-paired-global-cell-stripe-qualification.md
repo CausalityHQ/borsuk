@@ -25,26 +25,26 @@ work, durable formats, or production gates.
 
 **Files:** `crates/borsuk/src/index.rs`
 
-- [ ] Add failing tests proving that 1/2/4 MiB widths produce 4/2/1 planned
+- [x] Add failing tests proving that 1/2/4 MiB widths produce 4/2/1 planned
   stripes for a 4 MiB envelope and that zero or greater than 4 MiB is rejected
   before an index can perform I/O.
-- [ ] Add `OpenOptions::global_pq_prefetch_stripe_bytes`, default it to 1 MiB,
+- [x] Add `OpenOptions::global_pq_prefetch_stripe_bytes`, default it to 1 MiB,
   validate it at open, and share it through `CollectionReadRuntime`.
-- [ ] Pass the width into `global_pq_code_read_plans` and
+- [x] Pass the width into `global_pq_code_read_plans` and
   `Storage::read_striped_range`; retain the 8 MiB/16-stripe stage budgets.
-- [ ] Run all global-PQ, open-options, and storage unit tests.
+- [x] Run all global-PQ, open-options, and affected group-commit tests.
 
 ### Task 2: Add the exact read-only benchmark protocol
 
 **Files:** `crates/borsuk/examples/group_commit_bench.rs`
 
-- [ ] Add failing example tests for accepted frozen read configuration,
+- [x] Add failing example tests for accepted frozen read configuration,
   rejected widths/repetitions/query counts, and deterministic sample-to-dataset
   query mapping.
-- [ ] Add an early `read-qualification` protocol that reads a terminal
+- [x] Add an early `read-qualification` protocol that reads a terminal
   `samples.csv`, validates all identities and fixed dimensions/search knobs,
   opens a fresh cache, and performs no mutations.
-- [ ] Emit `reads.csv`, `summary.csv`, environment identity, and
+- [x] Emit `reads.csv`, `summary.csv`, environment identity, and
   `READ_QUALIFICATION_COMPLETE`; reject recall misses and write-like requests.
 - [ ] Run the complete example test target and a local immutable-index smoke.
 
@@ -85,4 +85,3 @@ work, durable formats, or production gates.
   defensible terminal measurements.
 - [ ] Promote the winner only if the preregistered selection rule passes;
   otherwise return to TDD using the failed terminal evidence.
-

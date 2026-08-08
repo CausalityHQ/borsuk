@@ -558,6 +558,13 @@ pub struct OpenOptions {
     pub cache_dir: Option<PathBuf>,
     /// Optional maximum local cache size in bytes. `None` leaves the cache unbounded.
     pub cache_max_bytes: Option<u64>,
+    /// Physical range width used when one bounded global-PQ cell envelope is
+    /// split into parallel object-store reads.
+    ///
+    /// This changes request partitioning only: the selected cells, 4 MiB
+    /// envelope cap, 8 MiB query-stage byte budget, exact rerank, and durable
+    /// Arrow bytes remain unchanged. Values must be in `1..=4 MiB`.
+    pub global_pq_prefetch_stripe_bytes: usize,
     /// Optional runtime resident manifest/routing memory budget in bytes.
     pub ram_budget_bytes: Option<u64>,
     /// Keep full segment routing summaries resident after open.
@@ -648,6 +655,7 @@ impl Default for OpenOptions {
         Self {
             cache_dir: None,
             cache_max_bytes: None,
+            global_pq_prefetch_stripe_bytes: DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES,
             ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
             resident_routing: false,
             segment_cache_max_bytes: None,
@@ -955,6 +963,7 @@ struct CollectionReadRuntime {
     segment_cache: Arc<OnceLock<Arc<DecodedSegmentCache>>>,
     admission: Option<Arc<AdmissionGate>>,
     decode_admission: Option<Arc<AdmissionGate>>,
+    global_pq_prefetch_stripe_bytes: usize,
     global_pq_rerank_admission: Arc<AdmissionGate>,
     inflight_segment_reads: Arc<InFlightSegmentReads>,
     projected_segment_cache: Arc<DecodedObjectCache<Segment>>,
@@ -1909,6 +1918,7 @@ impl CollectionReadRuntime {
                 .max_concurrent_cell_decodes
                 .filter(|permits| *permits > 0)
                 .map(|permits| Arc::new(AdmissionGate::new(permits))),
+            global_pq_prefetch_stripe_bytes: options.global_pq_prefetch_stripe_bytes,
             global_pq_rerank_admission: Arc::new(AdmissionGate::new(
                 DEFAULT_GLOBAL_PQ_RERANK_READS,
             )),
@@ -3106,6 +3116,7 @@ impl BorsukIndex {
             OpenOptions {
                 cache_dir,
                 cache_max_bytes: None,
+                global_pq_prefetch_stripe_bytes: DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES,
                 ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
                 resident_routing: false,
                 segment_cache_max_bytes: None,
@@ -3128,6 +3139,7 @@ impl BorsukIndex {
 
     /// Open an existing index with cache and runtime budget options.
     pub fn open_with_options(uri: &str, options: OpenOptions) -> Result<Self> {
+        validated_global_pq_prefetch_stripe_bytes(options.global_pq_prefetch_stripe_bytes)?;
         let storage = if let Some(cache_dir) = &options.cache_dir {
             Storage::from_uri_with_cache_and_max(
                 uri,
@@ -3152,6 +3164,7 @@ impl BorsukIndex {
         uri: &str,
         options: OpenOptions,
     ) -> Result<Self> {
+        validated_global_pq_prefetch_stripe_bytes(options.global_pq_prefetch_stripe_bytes)?;
         // Test seam: qualification can explicitly disable retained caches while
         // sharing an instrumented ObjectStore.
         let storage = Storage::from_object_store(uri.to_string(), store)?;
@@ -12741,6 +12754,7 @@ impl BorsukIndex {
                 &code_groups,
                 remaining_range_bytes,
                 remaining_range_stripes,
+                self.read_runtime.global_pq_prefetch_stripe_bytes,
             )?;
             let planned_groups = code_groups
                 .into_iter()
@@ -12785,7 +12799,7 @@ impl BorsukIndex {
                             .read_striped_range(
                                 path,
                                 start as u64..end as u64,
-                                DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES as u64,
+                                self.read_runtime.global_pq_prefetch_stripe_bytes as u64,
                                 DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES,
                             )?
                             .bytes
@@ -20867,7 +20881,9 @@ fn global_pq_code_read_plans(
     groups: &[(String, Vec<GlobalPqChunkRef>)],
     remaining_bytes: usize,
     remaining_stripes: usize,
+    stripe_bytes: usize,
 ) -> Result<Vec<GlobalPqCodeReadPlan>> {
+    let stripe_bytes = validated_global_pq_prefetch_stripe_bytes(stripe_bytes)?;
     let mut bytes_left = remaining_bytes;
     let mut stripes_left = remaining_stripes.min(DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES);
     let mut plans = Vec::with_capacity(groups.len());
@@ -20884,9 +20900,7 @@ fn global_pq_code_read_plans(
         let candidate_bytes = candidate.end.checked_sub(candidate.start).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ code range is invalid".to_string())
         })?;
-        let candidate_stripes = candidate_bytes
-            .div_ceil(DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES)
-            .max(1);
+        let candidate_stripes = candidate_bytes.div_ceil(stripe_bytes).max(1);
         let prefetch_exact = candidate.end > code_end
             && candidate_bytes <= bytes_left
             && candidate_stripes <= stripes_left;
@@ -20907,6 +20921,16 @@ fn global_pq_code_read_plans(
         }
     }
     Ok(plans)
+}
+
+fn validated_global_pq_prefetch_stripe_bytes(stripe_bytes: usize) -> Result<usize> {
+    if stripe_bytes == 0 || stripe_bytes > DEFAULT_GLOBAL_PQ_CODE_PREFETCH_BYTES {
+        return Err(BorsukError::InvalidStorage(format!(
+            "global PQ prefetch stripe width must be in 1..={} bytes, got {stripe_bytes}",
+            DEFAULT_GLOBAL_PQ_CODE_PREFETCH_BYTES
+        )));
+    }
+    Ok(stripe_bytes)
 }
 
 fn global_pq_code_group_requires_io(plan: &GlobalPqCodeReadPlan, all_codes_cached: bool) -> bool {
@@ -25911,6 +25935,10 @@ mod tests {
         );
         assert_eq!(OpenOptions::default().max_concurrent_cell_decodes, Some(24));
         assert_eq!(
+            OpenOptions::default().global_pq_prefetch_stripe_bytes,
+            DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES
+        );
+        assert_eq!(
             SearchOptions::default().prefetch_depth,
             16,
             "the production query default should overlap S3 waits up to the bounded per-query width"
@@ -26339,7 +26367,13 @@ mod tests {
         };
         let groups = vec![group(1, 3 * MIB), group(2, 3 * MIB), group(3, 3 * MIB)];
 
-        let plans = global_pq_code_read_plans(&groups, 8 * MIB, 16).unwrap();
+        let plans = global_pq_code_read_plans(
+            &groups,
+            8 * MIB,
+            16,
+            DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES,
+        )
+        .unwrap();
 
         assert_eq!(plans.len(), 3);
         assert_eq!(plans[0].range, 0..3 * MIB);
@@ -26355,9 +26389,54 @@ mod tests {
         let groups = (0..17)
             .map(|cell| group(cell, 128 * 1024))
             .collect::<Vec<_>>();
-        let plans = global_pq_code_read_plans(&groups, 8 * MIB, 16).unwrap();
+        let plans = global_pq_code_read_plans(
+            &groups,
+            8 * MIB,
+            16,
+            DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES,
+        )
+        .unwrap();
         assert_eq!(plans.iter().filter(|plan| plan.prefetch_exact).count(), 16);
         assert!(!plans[16].prefetch_exact);
+    }
+
+    #[test]
+    fn global_pq_code_read_plans_account_the_configured_stripe_width() {
+        const MIB: usize = 1024 * 1024;
+        let groups = vec![(
+            "bundle".to_string(),
+            vec![GlobalPqChunkRef {
+                path: "bundle".to_string(),
+                checksum: "checksum".to_string(),
+                offset_bytes: 0,
+                exact_checksum: "exact-checksum".into(),
+                exact_offset_bytes: 64 * 1024,
+                exact_size_bytes: 4 * MIB - 64 * 1024,
+                cell_index: 1,
+                typed_buffer_offsets: [0; 6],
+                row_start: 0,
+                rows: 1,
+                size_bytes: 64 * 1024,
+                graph: None,
+            }],
+        )];
+
+        for (stripe_bytes, expected_stripes) in [(MIB, 4), (2 * MIB, 2), (4 * MIB, 1)] {
+            let plans = global_pq_code_read_plans(&groups, 8 * MIB, 16, stripe_bytes).unwrap();
+            assert_eq!(plans.len(), 1);
+            assert!(plans[0].prefetch_exact);
+            assert_eq!(plans[0].stripes, expected_stripes);
+        }
+    }
+
+    #[test]
+    fn global_pq_prefetch_stripe_width_rejects_unbounded_values() {
+        const MIB: usize = 1024 * 1024;
+        assert!(validated_global_pq_prefetch_stripe_bytes(MIB).is_ok());
+        assert!(validated_global_pq_prefetch_stripe_bytes(2 * MIB).is_ok());
+        assert!(validated_global_pq_prefetch_stripe_bytes(4 * MIB).is_ok());
+        assert!(validated_global_pq_prefetch_stripe_bytes(0).is_err());
+        assert!(validated_global_pq_prefetch_stripe_bytes(4 * MIB + 1).is_err());
     }
 
     #[test]
@@ -26384,7 +26463,13 @@ mod tests {
         };
         let groups = vec![group(1, 5 * MIB), group(2, 4 * MIB)];
 
-        let plans = global_pq_code_read_plans(&groups, 4 * MIB, 16).unwrap();
+        let plans = global_pq_code_read_plans(
+            &groups,
+            4 * MIB,
+            16,
+            DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES,
+        )
+        .unwrap();
 
         assert!(!plans[0].prefetch_exact);
         assert_eq!(plans[0].range, 0..64 * 1024);

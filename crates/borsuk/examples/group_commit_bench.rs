@@ -75,6 +75,18 @@ struct ReadConfig {
     refresh_before_each: bool,
 }
 
+#[derive(Clone, Copy)]
+struct ReadQualificationShape {
+    writers: usize,
+    operations: usize,
+    records_per_operation: usize,
+    dimensions: usize,
+    query_count: usize,
+    max_read_segments: usize,
+    stripe_bytes: usize,
+    repetition: usize,
+}
+
 struct PendingAppend {
     operation: usize,
     record_ids: Vec<String>,
@@ -86,7 +98,10 @@ fn required(name: &str) -> BenchResult<String> {
     env::var(name).map_err(|_| format!("missing required environment variable {name}").into())
 }
 
-fn open_benchmark_index(uri: &str) -> borsuk::Result<BorsukIndex> {
+fn open_benchmark_index_with_stripe(
+    uri: &str,
+    global_pq_prefetch_stripe_bytes: usize,
+) -> borsuk::Result<BorsukIndex> {
     let cache_dir = env::var_os("BORSUK_GROUP_COMMIT_CACHE_DIR").map(PathBuf::from);
     BorsukIndex::open_with_options(
         uri,
@@ -95,10 +110,15 @@ fn open_benchmark_index(uri: &str) -> borsuk::Result<BorsukIndex> {
             // this is the bounded production read profile for object storage.
             cache_dir,
             cache_max_bytes: Some(256 * 1024 * 1024),
+            global_pq_prefetch_stripe_bytes,
             segment_cache_max_bytes: Some(64 * 1024 * 1024),
             ..OpenOptions::default()
         },
     )
+}
+
+fn open_benchmark_index(uri: &str) -> borsuk::Result<BorsukIndex> {
+    open_benchmark_index_with_stripe(uri, OpenOptions::default().global_pq_prefetch_stripe_bytes)
 }
 
 fn number<T: std::str::FromStr>(name: &str) -> BenchResult<T>
@@ -397,6 +417,57 @@ fn validate_writer_topology(
 
 fn production_record_id(ordinal: usize) -> String {
     format!("group-o{ordinal:08}")
+}
+
+fn validate_read_qualification_shape(
+    shape: ReadQualificationShape,
+    structural_smoke: bool,
+) -> BenchResult<()> {
+    const MIB: usize = 1024 * 1024;
+    let common =
+        shape.max_read_segments == 4 && [MIB, 2 * MIB, 4 * MIB].contains(&shape.stripe_bytes);
+    let expected = if structural_smoke {
+        shape.writers == 2
+            && shape.operations == 2
+            && shape.records_per_operation == 1
+            && shape.dimensions == 8
+            && shape.query_count == 4
+            && shape.repetition == 1
+    } else {
+        shape.writers == 8
+            && shape.operations == 1_000
+            && shape.records_per_operation == 16
+            && shape.dimensions == 768
+            && shape.query_count == 100
+            && (1..=5).contains(&shape.repetition)
+    };
+    if !common || !expected {
+        return Err("read qualification differs from the preregistered shape".into());
+    }
+    Ok(())
+}
+
+fn read_qualification_query_ordinal(
+    sample: &Sample,
+    operations: usize,
+    records_per_operation: usize,
+) -> BenchResult<usize> {
+    if sample.operation >= operations
+        || sample.batch_records != records_per_operation
+        || sample.record_ids.len() != records_per_operation
+    {
+        return Err("read qualification sample shape is invalid".into());
+    }
+    let ordinal = sample
+        .writer
+        .checked_mul(operations)
+        .and_then(|value| value.checked_add(sample.operation))
+        .and_then(|value| value.checked_mul(records_per_operation))
+        .ok_or("read qualification dataset ordinal exceeds usize")?;
+    if sample.record_ids[0] != production_record_id(ordinal) {
+        return Err("read qualification sample ID does not match its dataset ordinal".into());
+    }
+    Ok(ordinal)
 }
 
 fn measure_reads(
@@ -733,9 +804,173 @@ fn run_process_coordinator(output: &Path, writers: usize) -> BenchResult<(Vec<Sa
     Ok((samples, elapsed_ms))
 }
 
+fn required_sha256(name: &str) -> BenchResult<String> {
+    let value = required(name)?;
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("{name} must be a 64-character SHA-256").into());
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn run_read_qualification() -> BenchResult<()> {
+    let uri = required("BORSUK_GROUP_COMMIT_INDEX_URI")?;
+    let structural_smoke = env::var("BORSUK_GROUP_COMMIT_READ_SMOKE").as_deref() == Ok("1");
+    if !uri.starts_with("s3://") && !structural_smoke {
+        return Err("read qualification requires an s3:// index outside structural smoke".into());
+    }
+    let output = PathBuf::from(required("BORSUK_GROUP_COMMIT_OUTPUT")?);
+    let cache_dir = PathBuf::from(required("BORSUK_GROUP_COMMIT_CACHE_DIR")?);
+    if output.exists() {
+        return Err(format!("refusing to replace output {}", output.display()).into());
+    }
+    if cache_dir.exists() {
+        return Err(format!("refusing to reuse cache {}", cache_dir.display()).into());
+    }
+    let source_sha = required_sha256("BORSUK_SOURCE_SHA256")?;
+    let manifest_sha = required_sha256("BORSUK_GROUP_COMMIT_MANIFEST_SHA256")?;
+    let base_source_sha = required_sha256("BORSUK_GROUP_COMMIT_BASE_SOURCE_SHA256")?;
+    let base_manifest_sha = required_sha256("BORSUK_GROUP_COMMIT_BASE_MANIFEST_SHA256")?;
+    let base_samples_sha = required_sha256("BORSUK_GROUP_COMMIT_BASE_SAMPLES_SHA256")?;
+    let dataset_sha = required_sha256("BORSUK_GROUP_COMMIT_DATASET_SHA256")?;
+    let base_cell = required("BORSUK_GROUP_COMMIT_BASE_CELL")?;
+    if (!structural_smoke && base_cell != "c2000/r01/l1/w8")
+        || (structural_smoke && base_cell != "smoke")
+    {
+        return Err("read qualification base cell differs from the preregistration".into());
+    }
+    let shape = ReadQualificationShape {
+        writers: number("BORSUK_GROUP_COMMIT_WRITERS")?,
+        operations: number("BORSUK_GROUP_COMMIT_OPERATIONS_PER_WRITER")?,
+        records_per_operation: number("BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION")?,
+        dimensions: number("BORSUK_GROUP_COMMIT_DIMENSIONS")?,
+        query_count: number("BORSUK_GROUP_COMMIT_READ_QUERIES")?,
+        max_read_segments: number("BORSUK_GROUP_COMMIT_MAX_READ_SEGMENTS")?,
+        stripe_bytes: number("BORSUK_GROUP_COMMIT_PREFETCH_STRIPE_BYTES")?,
+        repetition: number("BORSUK_GROUP_COMMIT_READ_REPETITION")?,
+    };
+    validate_read_qualification_shape(shape, structural_smoke)?;
+    let samples_path = PathBuf::from(required("BORSUK_GROUP_COMMIT_BASE_SAMPLES")?);
+    let dataset = if structural_smoke {
+        None
+    } else {
+        Some(PathBuf::from(required("BORSUK_GROUP_COMMIT_DATASET")?))
+    };
+    let samples = read_samples(&samples_path)?;
+    let expected_samples = shape
+        .writers
+        .checked_mul(shape.operations)
+        .ok_or("read qualification sample count exceeds usize")?;
+    if samples.len() != expected_samples {
+        return Err(format!(
+            "read qualification requires {expected_samples} base samples, got {}",
+            samples.len()
+        )
+        .into());
+    }
+    for (row, sample) in samples.iter().enumerate() {
+        let expected_writer = row / shape.operations;
+        let expected_operation = row % shape.operations;
+        if sample.writer != expected_writer || sample.operation != expected_operation {
+            return Err(
+                "read qualification base samples are not in canonical writer/operation order"
+                    .into(),
+            );
+        }
+        read_qualification_query_ordinal(sample, shape.operations, shape.records_per_operation)?;
+    }
+    let query_samples = (0..shape.query_count)
+        .map(|query| {
+            let position = query * samples.len() / shape.query_count;
+            samples[position].clone()
+        })
+        .collect::<Vec<_>>();
+    let required_dataset_rows = query_samples.iter().try_fold(0_usize, |rows, sample| {
+        read_qualification_query_ordinal(sample, shape.operations, shape.records_per_operation)
+            .map(|ordinal| rows.max(ordinal.saturating_add(1)))
+    })?;
+    let input_vectors = if let Some(dataset) = dataset.as_deref() {
+        read_parquet_vectors(dataset, required_dataset_rows, shape.dimensions)?
+    } else {
+        let seed = cohort_seed(false, shape.writers, shape.repetition);
+        (0..required_dataset_rows)
+            .map(|ordinal| vector(seed, ordinal as u64, shape.dimensions))
+            .collect()
+    };
+
+    fs::create_dir_all(&output)?;
+    let mut index = open_benchmark_index_with_stripe(&uri, shape.stripe_bytes)?;
+    let reads = measure_reads(
+        &mut index,
+        &query_samples,
+        &input_vectors,
+        ReadConfig {
+            operations: shape.operations,
+            records_per_operation: shape.records_per_operation,
+            query_count: shape.query_count,
+            diagnostic_protocol: false,
+            max_read_segments: shape.max_read_segments,
+            refresh_before_each: false,
+        },
+    )?;
+    if reads.hits != shape.query_count {
+        return Err(format!(
+            "read qualification inserted-ID recall failed: {}/{}",
+            reads.hits, shape.query_count
+        )
+        .into());
+    }
+    if reads.requests.puts != 0 || reads.requests.deletes != 0 {
+        return Err("read qualification performed a write-like storage request".into());
+    }
+    write_read_samples(&output.join("reads.csv"), &reads.samples)?;
+    let read_p50_ms = percentile(&reads.latencies, 0.50);
+    let read_p95_ms = percentile(&reads.latencies, 0.95);
+    let recall = reads.hits as f64 / shape.query_count as f64;
+    let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
+    writeln!(
+        summary,
+        "protocol_kind,source_sha256,manifest_sha256,base_source_sha256,base_manifest_sha256,base_samples_sha256,dataset_sha256,base_cell,index_uri,repetition,stripe_bytes,queries,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
+    )?;
+    writeln!(
+        summary,
+        "{},{source_sha},{manifest_sha},{base_source_sha},{base_manifest_sha},{base_samples_sha},{dataset_sha},{base_cell},{uri},{},{},{},{recall:.9},{read_p50_ms:.9},{read_p95_ms:.9},{},{},{},{},{},{},{},{}",
+        if structural_smoke {
+            "structural-smoke"
+        } else {
+            "production-diagnostic"
+        },
+        shape.repetition,
+        shape.stripe_bytes,
+        shape.query_count,
+        reads.requests.total(),
+        reads.requests.gets,
+        reads.requests.puts,
+        reads.requests.deletes,
+        reads.requests.heads,
+        reads.requests.lists,
+        reads.bytes,
+        reads.segments_searched,
+    )?;
+    summary.flush()?;
+    fs::write(
+        output.join("environment.txt"),
+        format!(
+            "source_sha256={source_sha}\nmanifest_sha256={manifest_sha}\nbase_source_sha256={base_source_sha}\nbase_manifest_sha256={base_manifest_sha}\nbase_samples_sha256={base_samples_sha}\ndataset_sha256={dataset_sha}\nbase_cell={base_cell}\nindex_uri={uri}\ncache_dir={}\nrepetition={}\nstripe_bytes={}\n",
+            cache_dir.display(),
+            shape.repetition,
+            shape.stripe_bytes,
+        ),
+    )?;
+    fs::write(output.join("READ_QUALIFICATION_COMPLETE"), b"complete\n")?;
+    Ok(())
+}
+
 fn main() -> BenchResult<()> {
     let protocol =
         env::var("BORSUK_GROUP_COMMIT_PROTOCOL").unwrap_or_else(|_| "diagnostic".to_string());
+    if protocol == "read-qualification" {
+        return run_read_qualification();
+    }
     let uri = required("BORSUK_GROUP_COMMIT_INDEX_URI")?;
     let output = PathBuf::from(required("BORSUK_GROUP_COMMIT_OUTPUT")?);
     let source_sha = required("BORSUK_SOURCE_SHA256")?;
@@ -1296,6 +1531,93 @@ fn main() -> BenchResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_qualification_accepts_only_the_preregistered_shape() {
+        let shape = ReadQualificationShape {
+            writers: 8,
+            operations: 1_000,
+            records_per_operation: 16,
+            dimensions: 768,
+            query_count: 100,
+            max_read_segments: 4,
+            stripe_bytes: 2 * 1024 * 1024,
+            repetition: 3,
+        };
+        validate_read_qualification_shape(shape, false).unwrap();
+
+        for invalid in [
+            ReadQualificationShape {
+                stripe_bytes: 0,
+                ..shape
+            },
+            ReadQualificationShape {
+                stripe_bytes: 3 * 1024 * 1024,
+                ..shape
+            },
+            ReadQualificationShape {
+                repetition: 0,
+                ..shape
+            },
+            ReadQualificationShape {
+                repetition: 6,
+                ..shape
+            },
+            ReadQualificationShape {
+                query_count: 20,
+                ..shape
+            },
+        ] {
+            assert!(validate_read_qualification_shape(invalid, false).is_err());
+        }
+    }
+
+    #[test]
+    fn read_qualification_smoke_is_small_but_keeps_the_same_read_policy() {
+        validate_read_qualification_shape(
+            ReadQualificationShape {
+                writers: 2,
+                operations: 2,
+                records_per_operation: 1,
+                dimensions: 8,
+                query_count: 4,
+                max_read_segments: 4,
+                stripe_bytes: 4 * 1024 * 1024,
+                repetition: 1,
+            },
+            true,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn read_qualification_reconstructs_the_original_dataset_row() {
+        let sample = Sample {
+            process_id: 1,
+            writer: 3,
+            writer_instance: 3,
+            operation: 17,
+            batch_records: 16,
+            record_ids: (0..16)
+                .map(|batch| production_record_id((3 * 1_000 + 17) * 16 + batch))
+                .collect(),
+            latency_ms: 1.0,
+            commit_lane: 0,
+            commit_sequence: 1,
+            committed_records: 16,
+            acknowledgement_bytes: 1,
+            group_requests: RequestCounts::default(),
+            lane_receipts: Vec::new(),
+        };
+
+        assert_eq!(
+            read_qualification_query_ordinal(&sample, 1_000, 16).unwrap(),
+            48_272
+        );
+        let mut wrong_id = sample.clone();
+        wrong_id.record_ids[0] = "wrong".to_string();
+        assert!(read_qualification_query_ordinal(&wrong_id, 1_000, 16).is_err());
+    }
 
     #[test]
     fn writer_topology_rejects_thread_only_or_unrepresentable_assignments() {
