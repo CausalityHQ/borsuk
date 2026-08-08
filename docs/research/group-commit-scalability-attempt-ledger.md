@@ -1264,3 +1264,24 @@ and fresh result prefix is
 `s3://borsuk-bench-453182569524-euc1/research/global-cell-stripes/20260808T104352Z-v68-1a2a731/results/`.
 No measurement CSV is eligible for inspection until a root terminal marker is
 present and the fail-closed validator runs.
+
+After one retained 15-minute wait, marker-only inspection found all 15 arms
+terminal with `CELL_COMPLETE` and `READ_QUALIFICATION_COMPLETE`, but the root
+had `GLOBAL_CELL_STRIPE_QUALIFICATION_FAILED`. EC2 system, instance, and EBS
+health remained green. The repository validator was run against the frozen
+remote root before any measurement CSV was opened and correctly exited one
+with `campaign is incomplete`. Terminal pane inspection then identified an
+orchestration-only validator crash: the worker's Python rejected the
+Python-3.10-only `zip(..., strict=True)` keyword after all arms had completed.
+No measurement process remained, memory/disk were healthy, and no arm had a
+failure marker.
+
+The recovery fix removes that version-specific keyword, checks paired lengths
+explicitly, and adds an opt-in terminal-validator-failure mode. Recovery still
+requires the root failure marker, forbids a completion marker, and revalidates
+every required arm marker, identity, cache path, raw query, recall result,
+request/byte total, resource sample, and storage event before returning a
+selection. TDD observed both the unsupported option and keyword failures; all
+nine focused runner/validator tests, repository policy, diff checking, and the
+complete pinned Python suite (467 tests) now pass. The frozen v68 CSV files
+remain unopened pending recovery validation from the corrected revision.

@@ -73,10 +73,20 @@ def stripe_name(stripe_bytes: int) -> str:
     return f"s{stripe_bytes // (1024 * 1024)}m"
 
 
-def validate(manifest_path: pathlib.Path, root: pathlib.Path) -> dict[str, object]:
+def validate(
+    manifest_path: pathlib.Path,
+    root: pathlib.Path,
+    recover_terminal_validator_failure: bool = False,
+) -> dict[str, object]:
     # Terminality is deliberately checked before any campaign CSV is opened.
-    require((root / COMPLETE).is_file(), "campaign is incomplete")
-    require(not (root / FAILED).exists(), "campaign has a failure marker")
+    if recover_terminal_validator_failure:
+        require(not (root / COMPLETE).exists(), "recovery requires no completion marker")
+        require((root / FAILED).is_file(), "recovery requires the terminal failure marker")
+        terminal_mode = "validator-failure-recovery"
+    else:
+        require((root / COMPLETE).is_file(), "campaign is incomplete")
+        require(not (root / FAILED).exists(), "campaign has a failure marker")
+        terminal_mode = "complete"
 
     manifest_bytes = manifest_path.read_bytes()
     manifest = json.loads(manifest_bytes)
@@ -243,7 +253,14 @@ def validate(manifest_path: pathlib.Path, root: pathlib.Path) -> dict[str, objec
     promotable: list[str] = []
     paired_nonworse: dict[str, int] = {}
     for name in ("s2m", "s4m"):
-        count = sum(candidate <= baseline for candidate, baseline in zip(repetition_p95[name], control, strict=True))
+        require(
+            len(repetition_p95[name]) == len(control),
+            f"{name} paired repetition count differs from the control",
+        )
+        count = sum(
+            candidate <= baseline
+            for candidate, baseline in zip(repetition_p95[name], control)
+        )
         paired_nonworse[name] = count
         if (
             arms[name]["pooled_p95_ms"] < float(manifest["max_pooled_p95_ms"])
@@ -261,6 +278,7 @@ def validate(manifest_path: pathlib.Path, root: pathlib.Path) -> dict[str, objec
         )
     return {
         "campaign_id": manifest["campaign_id"],
+        "terminal_mode": terminal_mode,
         "source_sha256": source_sha,
         "manifest_sha256": manifest_sha,
         "arms": arms,
@@ -274,9 +292,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=pathlib.Path)
     parser.add_argument("--manifest", required=True, type=pathlib.Path)
+    parser.add_argument("--recover-terminal-validator-failure", action="store_true")
     args = parser.parse_args()
     try:
-        report = validate(args.manifest, args.root)
+        report = validate(
+            args.manifest,
+            args.root,
+            recover_terminal_validator_failure=args.recover_terminal_validator_failure,
+        )
     except (OSError, KeyError, json.JSONDecodeError, ValidationError) as error:
         print(str(error), file=sys.stderr)
         return 1

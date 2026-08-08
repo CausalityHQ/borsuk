@@ -79,7 +79,7 @@ work, durable formats, or production gates.
   markers, base artifact checksums, and fresh result/cache locations.
 - [x] Launch exactly one five-repetition paired campaign and retain its
   process/session identity.
-- [ ] Observe 15-minute retained waits followed by marker/process/EC2-health
+- [x] Observe 15-minute retained waits followed by marker/process/EC2-health
   checks only; never inspect incomplete CSV files.
 - [ ] At terminality, run the validator first, then inspect and record only
   defensible terminal measurements.
