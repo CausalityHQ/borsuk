@@ -9,9 +9,12 @@ INSTANCE_ID="${BORSUK_BENCH_INSTANCE_ID:-i-0e73bacb470807838}"
 BUCKET="${BORSUK_GROUP_COMMIT_BUCKET:-borsuk-bench-453182569524-euc1}"
 RUN_ID="${BORSUK_GLOBAL_CELL_STRIPE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CAMPAIGN="$ROOT_DIR/docs/research/global-cell-stripe-qualification.json"
-RESULT_URI="s3://${BUCKET}/research/global-cell-stripes/${RUN_ID}/results"
-SESSION="borsuk-global-cell-stripes-${RUN_ID}"
+CAMPAIGN="${BORSUK_GLOBAL_CELL_STRIPE_CAMPAIGN:-$ROOT_DIR/docs/research/global-cell-stripe-qualification.json}"
+RUNNER="${BORSUK_GLOBAL_CELL_STRIPE_RUNNER:-scripts/bench_global_cell_stripes.sh}"
+NAMESPACE="${BORSUK_GLOBAL_CELL_STRIPE_NAMESPACE:-global-cell-stripes}"
+SESSION_PREFIX="${BORSUK_GLOBAL_CELL_STRIPE_SESSION_PREFIX:-borsuk-global-cell-stripes}"
+RESULT_URI="s3://${BUCKET}/research/${NAMESPACE}/${RUN_ID}/results"
+SESSION="${SESSION_PREFIX}-${RUN_ID}"
 
 cd "$ROOT_DIR"
 account="$(aws --profile "$PROFILE" --region "$REGION" sts get-caller-identity --query Account --output text)"
@@ -22,19 +25,19 @@ instance_type="$(aws --profile "$PROFILE" --region "$REGION" ec2 describe-instan
 [[ "$instance_type" == c7g.8xlarge ]] || { echo "unexpected instance type: $instance_type" >&2; exit 3; }
 [[ -z "$(git status --porcelain)" ]] || { echo "launch requires a clean source tree" >&2; exit 3; }
 
-source_archive="$(mktemp /tmp/borsuk-global-cell-stripes-source.XXXXXX.tar)"
+source_archive="$(mktemp "/tmp/borsuk-${NAMESPACE}-source.XXXXXX.tar")"
 trap 'rm -f "$source_archive"' EXIT
 git archive --format=tar HEAD -o "$source_archive"
 source_sha="$(sha256sum "$source_archive" | awk '{print $1}')"
 manifest_sha="$(sha256sum "$CAMPAIGN" | awk '{print $1}')"
-source_key="research/global-cell-stripes/source/${source_sha}.tar"
+source_key="research/${NAMESPACE}/source/${source_sha}.tar"
 aws --profile "$PROFILE" --region "$REGION" s3 cp "$source_archive" "s3://${BUCKET}/${source_key}" --only-show-errors
 
 encoded_remote="$(cat <<EOF | base64 -w0
 set -euo pipefail
-workspace="/home/ec2-user/borsuk-global-cell-stripes-source-${source_sha}"
-remote_output="/home/ec2-user/borsuk-global-cell-stripes-results/${RUN_ID}"
-remote_cache="/home/ec2-user/borsuk-global-cell-stripes-cache/${RUN_ID}"
+workspace="/home/ec2-user/borsuk-${NAMESPACE}-source-${source_sha}"
+remote_output="/home/ec2-user/borsuk-${NAMESPACE}-results/${RUN_ID}"
+remote_cache="/home/ec2-user/borsuk-${NAMESPACE}-cache/${RUN_ID}"
 source_uri="s3://${BUCKET}/${source_key}"
 session="${SESSION}"
 result_uri="${RESULT_URI}"
@@ -44,7 +47,7 @@ if [[ -n "\$active_panes" ]]; then
   printf '%s\n' "\$active_panes" >&2
   exit 4
 fi
-if pgrep -af 'bench_global_cell_stripes|group_commit_bench|bench_group_commit_scalability|logical_cell_routing_bench|production_bench' >/dev/null; then
+if pgrep -af 'bench_global_cell_stripe|group_commit_bench|bench_group_commit_scalability|logical_cell_routing_bench|production_bench' >/dev/null; then
   echo 'another BORSUK benchmark process is active; refusing contention' >&2
   exit 4
 fi
@@ -53,18 +56,18 @@ fi
   exit 5
 }
 mkdir -p "\$workspace"
-aws s3 cp "\$source_uri" /tmp/borsuk-global-cell-stripes-source.tar --only-show-errors
-actual="\$(sha256sum /tmp/borsuk-global-cell-stripes-source.tar | awk '{print \$1}')"
+aws s3 cp "\$source_uri" "/tmp/borsuk-${NAMESPACE}-source.tar" --only-show-errors
+actual="\$(sha256sum "/tmp/borsuk-${NAMESPACE}-source.tar" | awk '{print \$1}')"
 [[ "\$actual" == "${source_sha}" ]] || { echo 'source archive checksum mismatch' >&2; exit 5; }
-tar -xf /tmp/borsuk-global-cell-stripes-source.tar -C "\$workspace"
+tar -xf "/tmp/borsuk-${NAMESPACE}-source.tar" -C "\$workspace"
 sudo chown -R ec2-user:ec2-user "\$workspace"
 dataset_root=/home/ec2-user/borsuk-datasets
 dataset_dir="\$dataset_root/cohere-medium-1M"
 sudo -iu ec2-user bash -lc "cd \"\$workspace\" && uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/fetch_vdbbench_dataset.py --dataset cohere-medium-1M --output-root \"\$dataset_root\" --check-existing" >/dev/null
 sudo -iu ec2-user tmux new-session -d -s "\$session" -c "\$workspace"
 sudo -iu ec2-user tmux set-option -t "\$session" remain-on-exit on
-sentinel="/home/ec2-user/borsuk-global-cell-stripes-started-${RUN_ID}"
-cmd="printf 'started\\n' > \"\$sentinel\" && exec env AWS_REGION='${REGION}' AWS_DEFAULT_REGION='${REGION}' BORSUK_SOURCE_ARCHIVE=/tmp/borsuk-global-cell-stripes-source.tar BORSUK_GLOBAL_CELL_STRIPE_OUTPUT_ROOT='\$remote_output' BORSUK_GLOBAL_CELL_STRIPE_CACHE_ROOT='\$remote_cache' BORSUK_GLOBAL_CELL_STRIPE_RESULT_URI='\$result_uri' BORSUK_GROUP_COMMIT_DATASET='\$dataset_dir' BORSUK_RUN_GLOBAL_CELL_STRIPES=1 bash scripts/bench_global_cell_stripes.sh"
+sentinel="/home/ec2-user/borsuk-${NAMESPACE}-started-${RUN_ID}"
+cmd="printf 'started\\n' > \"\$sentinel\" && exec env AWS_REGION='${REGION}' AWS_DEFAULT_REGION='${REGION}' BORSUK_SOURCE_ARCHIVE='/tmp/borsuk-${NAMESPACE}-source.tar' BORSUK_GLOBAL_CELL_STRIPE_OUTPUT_ROOT='\$remote_output' BORSUK_GLOBAL_CELL_STRIPE_CACHE_ROOT='\$remote_cache' BORSUK_GLOBAL_CELL_STRIPE_RESULT_URI='\$result_uri' BORSUK_GROUP_COMMIT_DATASET='\$dataset_dir' BORSUK_RUN_GLOBAL_CELL_STRIPES=1 BORSUK_RUN_GLOBAL_CELL_STRIPE_CONFIRMATION='${BORSUK_RUN_GLOBAL_CELL_STRIPE_CONFIRMATION:-0}' bash '${RUNNER}'"
 sudo -iu ec2-user tmux send-keys -t "\$session" -l -- "\$cmd"
 sudo -iu ec2-user tmux send-keys -t "\$session" Enter
 for _ in \$(seq 1 120); do
@@ -96,4 +99,3 @@ printf '%s\n' \
   "source_sha256=$source_sha" \
   "manifest_sha256=$manifest_sha" \
   "result_uri=$RESULT_URI"
-

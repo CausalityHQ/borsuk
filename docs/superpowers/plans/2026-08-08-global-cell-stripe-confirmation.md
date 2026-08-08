@@ -101,14 +101,12 @@ git push origin HEAD:main
 - Create: `scripts/bench_global_cell_stripe_confirmation.sh`
 - Create: `scripts/launch_aws_global_cell_stripe_confirmation.sh`
 - Create: `scripts/test_bench_global_cell_stripe_confirmation.py`
-- Modify: `scripts/check_repo_policy.py`
-- Modify: `scripts/test_check_repo_policy.py`
 
 **Interfaces:**
 - Consumes: `read-stripe-confirmation`, immutable v67 identities, `benchmark_with_resources.py`, and `validate_global_cell_stripes.py`.
 - Produces: immutable two-arm campaign configuration, root markers `GLOBAL_CELL_STRIPE_CONFIRMATION_COMPLETE` / `GLOBAL_CELL_STRIPE_CONFIRMATION_FAILED`, retained AWS tmux launch, and policy coverage.
 
-- [ ] **Step 1: Write failing structural and policy tests**
+- [x] **Step 1: Write failing structural and policy tests**
 
 Assert exact manifest values: 500 queries, five repetitions, arms
 `[1048576, 4194304]`, alternating order, 10% p95 improvement, 5% p50 regression,
@@ -116,20 +114,19 @@ and both 200 ms limits. Assert the runner sets
 `BORSUK_GROUP_COMMIT_PROTOCOL=read-stripe-confirmation`, unique cache/output paths,
 telemetry, terminal markers, empty-prefix protection, and terminal validator.
 Assert the launcher uses `causality`, `c7g.8xlarge`, retained tmux, process/tmux
-contention checks, and no force option. Add all production benchmark shell scripts
-and manifests to repository-policy discovery.
+contention checks, and no force option. The existing repository policy discovers
+the shared production runner and needed no path-list change.
 
-- [ ] **Step 2: Run tests and observe RED**
+- [x] **Step 2: Run tests and observe RED**
 
 ```bash
-uv run --python 3.12 --with-requirements scripts/requirements-test.txt \
-  python -m unittest scripts.test_bench_global_cell_stripe_confirmation \
+python3 -m unittest scripts.test_bench_global_cell_stripe_confirmation \
   scripts.test_check_repo_policy
 ```
 
 Expected: failures for missing files and policy entries.
 
-- [ ] **Step 3: Implement the manifest and scripts**
+- [x] **Step 3: Implement the manifest and scripts**
 
 Derive runner/launcher lifecycle from the v68 scripts, but use confirmation-only
 paths, markers, variables, and protocol. Generate the ten arms solely from the
@@ -137,11 +134,10 @@ new manifest. Copy the manifest into output, preserve the source archive identit
 sync after every completed arm, and run the validator only after writing the root
 complete marker. Refuse nonempty S3 prefixes and any active BORSUK workload.
 
-- [ ] **Step 4: Run focused tests and shell syntax**
+- [x] **Step 4: Run focused tests and shell syntax**
 
 ```bash
-uv run --python 3.12 --with-requirements scripts/requirements-test.txt \
-  python -m unittest scripts.test_bench_global_cell_stripe_confirmation \
+python3 -m unittest scripts.test_bench_global_cell_stripe_confirmation \
   scripts.test_check_repo_policy
 bash -n scripts/bench_global_cell_stripe_confirmation.sh \
   scripts/launch_aws_global_cell_stripe_confirmation.sh
@@ -150,14 +146,13 @@ python3 scripts/check_repo_policy.py
 
 Expected: every command exits zero.
 
-- [ ] **Step 5: Commit and fast-forward push**
+- [x] **Step 5: Commit and fast-forward push**
 
 ```bash
 git add docs/research/global-cell-stripe-confirmation.json \
   scripts/bench_global_cell_stripe_confirmation.sh \
   scripts/launch_aws_global_cell_stripe_confirmation.sh \
-  scripts/test_bench_global_cell_stripe_confirmation.py \
-  scripts/check_repo_policy.py scripts/test_check_repo_policy.py
+  scripts/test_bench_global_cell_stripe_confirmation.py
 git commit -m "bench: preregister stripe confirmation campaign"
 git fetch origin main
 git merge-base --is-ancestor origin/main HEAD
@@ -187,8 +182,7 @@ v1 tests green.
 - [ ] **Step 2: Run the validator tests and observe RED**
 
 ```bash
-uv run --python 3.12 --with-requirements scripts/requirements-test.txt \
-  python -m unittest scripts.test_validate_global_cell_stripes
+python3 -m unittest scripts.test_validate_global_cell_stripes
 ```
 
 Expected: confirmation manifest/schema is rejected or new selection fields are
@@ -207,8 +201,7 @@ its tests.
 - [ ] **Step 4: Run validator and harness tests**
 
 ```bash
-uv run --python 3.12 --with-requirements scripts/requirements-test.txt \
-  python -m unittest scripts.test_validate_global_cell_stripes \
+python3 -m unittest scripts.test_validate_global_cell_stripes \
   scripts.test_bench_global_cell_stripes \
   scripts.test_bench_global_cell_stripe_confirmation
 ```
@@ -255,8 +248,7 @@ cargo clippy --locked --workspace --all-features --all-targets -- -D warnings
 RUSTC_WRAPPER=/usr/local/libexec/devbox-rustc-wrapper \
 SCCACHE_DIR=/data/cache/sccache \
 cargo test --locked --workspace --all-features --all-targets
-uv run --python 3.12 --with-requirements scripts/requirements-test.txt \
-  python -m unittest discover -s scripts -p 'test_*.py'
+python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 Expected: all commands exit zero. If a layer fails, repair only that layer and
