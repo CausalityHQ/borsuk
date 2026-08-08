@@ -1,5 +1,13 @@
 # Multi-Instance Striped WAL Implementation Plan
 
+> **Superseded ordering note (2026-08-08):** The global-generation parts of
+> this plan are historical. The newer
+> `2026-08-07-direct-immutable-mutation-versions.md` plan replaces them with
+> complete HLC/writer/digest mutation stamps and a two-PUT extent-plus-head
+> publication fence. Do not reintroduce `id-directory/last-write-wins/NEXT` or
+> acknowledgement-order linearizability while completing the remaining
+> multi-instance qualification tasks.
+
 > **For agentic workers:** use test-driven development and verification before
 > completion. BORSUK is pre-release: replace v29 rather than retaining a legacy
 > reader or migration path.

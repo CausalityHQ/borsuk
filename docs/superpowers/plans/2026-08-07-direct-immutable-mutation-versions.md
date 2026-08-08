@@ -192,6 +192,13 @@
   Global PQ, tombstones, and lean ranged-read propagation remain open, so this
   step is deliberately not checked complete.
 
+  The 2026-08-08 checkpoint carries typed HLC/writer/digest state through
+  global-PQ identity and exact-rerank range reads, removes the mutation-tail
+  fallback that disabled the resident base, converts tombstone and ID-directory
+  state runs to Parquet, and preserves full versions through lean reads. The
+  global-PQ `scan_payload` still combines code and row location, so the
+  standard-format portion of this step remains deliberately open.
+
 - [ ] **Step 6: Replace tombstone and ID-directory generations**
 
   Change `TombstoneOverlay`, `LiveDeleteRecord`, `CellWalIdDirectoryEntry`, live-WAL indexes, generation fences, and compaction comparisons to `MutationVersion`/`MutationStamp`. Deletes participate in the same greatest-version merge as puts. Foreground delete reports accepted durable mutations, while exact corpus counts remain materialized statistics.
@@ -232,9 +239,24 @@
 
   Replace `repeated_groups_use_one_generation_cas_and_one_extent` with `repeated_groups_use_extent_plus_stripe_publication_without_global_coordination`. For 12 groups require exactly 12 extent PUTs, 12 conditional PUTs to that writer's stripe head, and zero operations whose path is `id-directory/last-write-wins/NEXT`. Require each normal receipt to report two PUTs, zero GET/HEAD/LIST, and its exact extent and published-head identities.
 
+  Request-count coverage now proves 12 extent PUTs, 12 stripe-head PUTs, zero
+  counter-path operations, and two PUTs with zero GET/HEAD/LIST per healthy
+  receipt. Exact receipt-level extent/checksum identities remain open.
+
 - [ ] **Step 2: Write RED convergence and documented-skew tests**
 
   Replace acknowledgement-order assertions with deterministic version assertions. Inject clocks so two independent writers conflict in both stripe orders, reopen/drain/compact, and require the same winner. Add a permanent case where a later acknowledged but unobserved clock-skewed write loses, proving the documented non-linearizable contract rather than accidentally preserving the old test.
+
+  A fixed-clock regression now proves a later acknowledged unobserved writer
+  can lose to the greater complete version, and the obsolete acknowledgement-
+  order integration assertion is removed. Reversed discovery, drain, and
+  compaction permutations remain open.
+
+  Fresh collection construction uses a fixed bootstrap writer plus a logical
+  HLC sequence so identical initial source rows retain byte-reproducible
+  content-addressed sidecars. Reopened and independent writers remain randomly
+  identified wall-clock HLC writers; the bootstrap identity is never reused by
+  those live handles.
 
 - [ ] **Step 3: Write RED publication-fence and ambiguous-PUT tests**
 
@@ -295,6 +317,15 @@
 **Interfaces:**
 - Removes: `ensure_lane_log_payloads_supported` rejection for text/named modalities.
 - Produces: one entity envelope whose derived modality manifests publish through one collection-root commit.
+
+The 2026-08-08 lifecycle gate exposed one remaining split clock in
+late-interaction upsert: the child independently tombstoned all old token IDs,
+then wrote replacement tokens carrying the parent version. Compaction could
+therefore suppress the replacement. Token replacement now writes parent-version
+put state for retained physical IDs and parent-version delete state only for
+removed IDs. The complete late-interaction, named-vector, and consistency
+suites pass; complete injected-failure atomicity across every sidecar remains
+open, so Task 4 is not marked complete.
 
 - [ ] **Step 1: Write RED atomic-modality tests**
 

@@ -21,6 +21,7 @@ use rayon::prelude::*;
 
 use crate::{
     BorsukError, Result,
+    mutation::{MutationStamp, MutationVersion},
     record::VectorElementType,
     rotated_product_quantizer::{
         ProductQuantizerState, RotatedProductQuantizer, product_code_locality_key,
@@ -787,19 +788,20 @@ pub(crate) struct GlobalPqChunkRef {
     pub(crate) path: String,
     /// Checksum of this chunk's code slice, not of the containing bundle.
     pub(crate) checksum: String,
-    pub(crate) offset_bytes: usize,
+    pub(crate) offset_bytes: u32,
     /// Checksum of this chunk's lossless-vector slice.
     pub(crate) exact_checksum: Box<str>,
     pub(crate) exact_offset_bytes: usize,
     pub(crate) exact_size_bytes: usize,
     pub(crate) cell_index: u16,
-    /// Arrow IPC padding between the scan buffer and identity offsets.
-    pub(crate) identity_offsets_padding_bytes: u16,
-    /// Arrow IPC padding between identity offsets and identity values.
-    pub(crate) identity_values_padding_bytes: u8,
+    /// Absolute starts for variable id values and mutation HLC. Arrow's
+    /// required 8-byte alignment and the fixed typed widths derive every other
+    /// range. Bundles are capped far below 4 GiB, so two u32 values keep a
+    /// 100M-scale descriptor bounded.
+    pub(crate) typed_buffer_offsets: [u32; 2],
     pub(crate) row_start: usize,
     pub(crate) rows: usize,
-    pub(crate) size_bytes: usize,
+    pub(crate) size_bytes: u32,
     /// Optional immutable graph for this exact cell chunk. Absence is a normal
     /// scan-only layout, not an error or a compatibility fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -808,12 +810,6 @@ pub(crate) struct GlobalPqChunkRef {
 
 impl GlobalPqChunkRef {
     pub(crate) fn identity_ranges(&self) -> Result<(Range<usize>, Range<usize>)> {
-        let code_end = self
-            .offset_bytes
-            .checked_add(self.size_bytes)
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global PQ code range overflows".to_string())
-            })?;
         let expected_offsets = self
             .rows
             .checked_add(1)
@@ -821,41 +817,110 @@ impl GlobalPqChunkRef {
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("global identity offsets size overflows".to_string())
             })?;
-        let offsets_start = code_end
-            .checked_add(usize::from(self.identity_offsets_padding_bytes))
+        let code_end = usize::try_from(self.offset_bytes)
+            .ok()
+            .and_then(|offset| offset.checked_add(self.size_bytes as usize))
             .ok_or_else(|| {
-                BorsukError::InvalidStorage("global identity offsets range overflows".to_string())
+                BorsukError::InvalidStorage("global PQ code range overflows".to_string())
             })?;
-        let minimum_values_end = self
-            .rows
-            .checked_mul(size_of::<u64>())
-            .and_then(|size| {
-                offsets_start
-                    .checked_add(expected_offsets)
-                    .and_then(|offsets_end| {
-                        offsets_end.checked_add(usize::from(self.identity_values_padding_bytes))
-                    })
-                    .and_then(|values_start| values_start.checked_add(size))
-            })
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global identity values size overflows".to_string())
-            })?;
+        let offsets_start = next_arrow_column_values(code_end)?;
+        let [values_start, hlc_start] = self.typed_buffer_offsets.map(|offset| offset as usize);
         let offsets_end = offsets_start.checked_add(expected_offsets).ok_or_else(|| {
             BorsukError::InvalidStorage("global identity offsets range overflows".to_string())
         })?;
-        let values_start = offsets_end
-            .checked_add(usize::from(self.identity_values_padding_bytes))
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global identity values range overflows".to_string())
-            })?;
-        if minimum_values_end > self.exact_offset_bytes {
+        if offsets_end > values_start
+            || values_start > hlc_start
+            || hlc_start > self.exact_offset_bytes
+        {
             return invalid("global PQ identity ranges are invalid");
         }
-        Ok((
-            offsets_start..offsets_end,
-            values_start..self.exact_offset_bytes,
-        ))
+        Ok((offsets_start..offsets_end, values_start..hlc_start))
     }
+
+    pub(crate) fn mutation_ranges(&self) -> Result<[Range<usize>; 4]> {
+        let range = |start: usize, width: usize, name: &str| -> Result<Range<usize>> {
+            let size = self.rows.checked_mul(width).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!("global {name} size overflows"))
+            })?;
+            let end = start.checked_add(size).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!("global {name} range overflows"))
+            })?;
+            if end > self.exact_offset_bytes {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "global {name} range is invalid"
+                )));
+            }
+            Ok(start..end)
+        };
+        let [_, hlc] = self.typed_buffer_offsets.map(|offset| offset as usize);
+        let writer =
+            next_arrow_column_values(hlc.checked_add(self.rows.saturating_mul(8)).ok_or_else(
+                || BorsukError::InvalidStorage("global mutation HLC range overflows".to_string()),
+            )?)?;
+        let digest = next_arrow_column_values(
+            writer
+                .checked_add(self.rows.saturating_mul(16))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global mutation writer range overflows".to_string(),
+                    )
+                })?,
+        )?;
+        let integrity = next_arrow_column_values(
+            digest
+                .checked_add(self.rows.saturating_mul(32))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global mutation digest range overflows".to_string(),
+                    )
+                })?,
+        )?;
+        Ok([
+            range(hlc, 8, "mutation HLC")?,
+            range(writer, 16, "mutation writer")?,
+            range(digest, 32, "mutation digest")?,
+            range(integrity, 32, "row integrity")?,
+        ])
+    }
+
+    #[cfg(test)]
+    fn with_test_typed_identity_ranges(mut self) -> Self {
+        let mut cursor = next_arrow_column_values(
+            (self.offset_bytes as usize).saturating_add(self.size_bytes as usize),
+        )
+        .expect("test Arrow column offset aligns");
+        cursor = cursor.saturating_add(self.rows.saturating_add(1).saturating_mul(4));
+        cursor = align_arrow_buffer(cursor).expect("test Arrow buffer offset aligns");
+        let values = cursor;
+        let hlc = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        cursor = hlc;
+        cursor = cursor.saturating_add(self.rows.saturating_mul(8));
+        cursor = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        cursor = cursor.saturating_add(self.rows.saturating_mul(16));
+        cursor = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        cursor = cursor.saturating_add(self.rows.saturating_mul(32));
+        cursor = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        cursor = cursor.saturating_add(self.rows.saturating_mul(32));
+        self.typed_buffer_offsets =
+            [values, hlc].map(|offset| u32::try_from(offset).expect("test bundle offset fits u32"));
+        self.exact_offset_bytes = cursor;
+        self
+    }
+}
+
+fn align_arrow_buffer(offset: usize) -> Result<usize> {
+    offset
+        .checked_add(63)
+        .map(|value| value & !63)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global Arrow buffer alignment overflows".to_string())
+        })
+}
+
+fn next_arrow_column_values(offset: usize) -> Result<usize> {
+    align_arrow_buffer(offset)?.checked_add(64).ok_or_else(|| {
+        BorsukError::InvalidStorage("global Arrow column buffer offset overflows".to_string())
+    })
 }
 
 /// Disk-backed external partitioner for the global IVF/PQ serving artifact.
@@ -882,7 +947,7 @@ pub(crate) struct GlobalPqCellSpool {
 
 struct SpoolRow {
     fixed: Vec<u8>,
-    generation: u64,
+    stamp: MutationStamp,
     id: Vec<u8>,
 }
 
@@ -901,10 +966,14 @@ fn read_spool_row(
     reader
         .read_exact(&mut fixed[1..])
         .map_err(|source| io_error(path, source))?;
-    let mut generation = [0_u8; 8];
+    let mut hlc = [0_u8; 8];
+    let mut writer = [0_u8; 16];
+    let mut digest = [0_u8; 32];
     let mut id_len = [0_u8; 4];
     reader
-        .read_exact(&mut generation)
+        .read_exact(&mut hlc)
+        .and_then(|()| reader.read_exact(&mut writer))
+        .and_then(|()| reader.read_exact(&mut digest))
         .and_then(|()| reader.read_exact(&mut id_len))
         .map_err(|source| io_error(path, source))?;
     let mut id = vec![0_u8; u32::from_le_bytes(id_len) as usize];
@@ -913,7 +982,10 @@ fn read_spool_row(
         .map_err(|source| io_error(path, source))?;
     Ok(Some(SpoolRow {
         fixed,
-        generation: u64::from_le_bytes(generation),
+        stamp: MutationStamp::new(
+            MutationVersion::from_parts(u64::from_le_bytes(hlc), writer),
+            digest,
+        ),
         id,
     }))
 }
@@ -923,7 +995,9 @@ fn write_spool_row(writer: &mut BufWriter<File>, path: &Path, row: &SpoolRow) ->
         .map_err(|_| BorsukError::InvalidStorage("record id exceeds u32 bytes".to_string()))?;
     writer
         .write_all(&row.fixed)
-        .and_then(|()| writer.write_all(&row.generation.to_le_bytes()))
+        .and_then(|()| writer.write_all(&row.stamp.version().hlc().to_le_bytes()))
+        .and_then(|()| writer.write_all(&row.stamp.version().writer()))
+        .and_then(|()| writer.write_all(&row.stamp.digest()))
         .and_then(|()| writer.write_all(&id_len.to_le_bytes()))
         .and_then(|()| writer.write_all(&row.id))
         .map_err(|source| io_error(path, source))
@@ -988,7 +1062,17 @@ impl GlobalPqCellSpool {
         generation: u64,
     ) -> Result<()> {
         let (cell, code) = self.encode_vector(vector)?;
-        self.push_encoded(cell, &code, row, exact_vector, id, generation)
+        self.push_encoded(
+            cell,
+            &code,
+            row,
+            exact_vector,
+            id,
+            MutationStamp::new(
+                MutationVersion::from_parts(generation, [0_u8; 16]),
+                [0_u8; 32],
+            ),
+        )
     }
 
     #[cfg(test)]
@@ -1019,7 +1103,7 @@ impl GlobalPqCellSpool {
         row: GlobalPqRow,
         exact_vector: &[f32],
         id: &[u8],
-        generation: u64,
+        stamp: MutationStamp,
     ) -> Result<()> {
         if exact_vector.len() != self.dimensions {
             return invalid("exact vector dimension does not match the spool");
@@ -1059,7 +1143,9 @@ impl GlobalPqCellSpool {
             .write_all(&self.exact_row_buffer)
             .map_err(|source| io_error(&self.primary_paths[primary], source))?;
         writer
-            .write_all(&generation.to_le_bytes())
+            .write_all(&stamp.version().hlc().to_le_bytes())
+            .and_then(|()| writer.write_all(&stamp.version().writer()))
+            .and_then(|()| writer.write_all(&stamp.digest()))
             .and_then(|()| {
                 let len = u32::try_from(id.len()).map_err(|_| {
                     std::io::Error::new(std::io::ErrorKind::InvalidInput, "record id exceeds u32")
@@ -1191,7 +1277,7 @@ impl GlobalPqCellSpool {
                 };
                 let next_identity_bytes = identity_bytes
                     .saturating_add(row.id.len())
-                    .saturating_add(12);
+                    .saturating_add(60);
                 if !chunk_rows.is_empty()
                     && next_identity_bytes > DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES
                 {
@@ -1235,7 +1321,7 @@ impl GlobalPqCellSpool {
                 .map(|&(_, row)| {
                     (
                         crate::RecordId::from_bytes(chunk_rows[row].id.clone()),
-                        chunk_rows[row].generation,
+                        chunk_rows[row].stamp,
                     )
                 })
                 .collect();
@@ -1266,8 +1352,8 @@ pub(crate) struct GlobalPqDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum GlobalPqBundleLayout {
-    #[serde(rename = "identity-v2")]
-    IdentityV2,
+    #[serde(rename = "typed-mutation-v3")]
+    TypedMutationV3,
 }
 
 impl GlobalPqDescriptor {
@@ -1352,7 +1438,7 @@ impl GlobalPqDescriptor {
             return invalid("chunk rows do not match the vector count");
         }
         Ok(Self {
-            bundle_layout: GlobalPqBundleLayout::IdentityV2,
+            bundle_layout: GlobalPqBundleLayout::TypedMutationV3,
             quantizer,
             coarse_quantizer,
             vectors,
@@ -1633,7 +1719,7 @@ impl GlobalPqDescriptor {
 pub(crate) struct GlobalPqChunkBytes {
     pub(crate) bytes: Vec<u8>,
     pub(crate) exact_bytes: Vec<u8>,
-    pub(crate) identities: Vec<(crate::RecordId, u64)>,
+    pub(crate) identities: Vec<(crate::RecordId, MutationStamp)>,
     pub(crate) rows: usize,
 }
 
@@ -1903,7 +1989,7 @@ impl<'a> ParsedChunk<'a> {
         let expected_size = reference.rows.checked_mul(row_width).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ scan chunk size overflows".to_string())
         })?;
-        if bytes.len() != reference.size_bytes || bytes.len() != expected_size {
+        if bytes.len() != reference.size_bytes as usize || bytes.len() != expected_size {
             return invalid("Arrow scan buffer does not match its descriptor");
         }
         Ok(Self {
@@ -2276,7 +2362,7 @@ impl GlobalCellGraph {
         if self.cell_index != reference.cell_index
             || self.row_start != reference.row_start
             || self.rows != reference.rows
-            || self.chunk.len() != reference.size_bytes
+            || self.chunk.len() != reference.size_bytes as usize
             || blake3::hash(&self.chunk).to_hex().as_str() != reference.checksum
         {
             return invalid("global cell graph does not match its chunk reference");
@@ -2293,11 +2379,10 @@ impl GlobalCellGraph {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index: self.cell_index,
-            identity_offsets_padding_bytes: 0,
-            identity_values_padding_bytes: 0,
+            typed_buffer_offsets: [0; 2],
             row_start: self.row_start,
             rows: self.rows,
-            size_bytes: self.chunk.len(),
+            size_bytes: u32::try_from(self.chunk.len()).expect("cell graph chunk fits u32"),
             graph: None,
         }
     }
@@ -2596,20 +2681,22 @@ mod tests {
         let quantizer = RotatedProductQuantizer::fit(config(), &vectors(256, 64)).unwrap();
         let location = LocationEncoding::for_layout(25_000, 4_096).unwrap();
         let chunks = (0..25_000)
-            .map(|segment| GlobalPqChunkRef {
-                path: format!("global-pq/chunks/{segment}.bin"),
-                checksum: "ab".repeat(32),
-                offset_bytes: 0,
-                exact_checksum: "cd".repeat(32).into_boxed_str(),
-                exact_offset_bytes: 192_028,
-                exact_size_bytes: 1_024_000,
-                cell_index: (segment % 16) as u16,
-                identity_offsets_padding_bytes: 0,
-                identity_values_padding_bytes: 0,
-                row_start: segment as usize * 4_000,
-                rows: 4_000,
-                size_bytes: 144_024,
-                graph: None,
+            .map(|segment| {
+                GlobalPqChunkRef {
+                    path: format!("global-pq/chunks/{segment}.bin"),
+                    checksum: "ab".repeat(32),
+                    offset_bytes: 0,
+                    exact_checksum: "cd".repeat(32).into_boxed_str(),
+                    exact_offset_bytes: 192_028,
+                    exact_size_bytes: 1_024_000,
+                    cell_index: (segment % 16) as u16,
+                    typed_buffer_offsets: [0; 2],
+                    row_start: segment as usize * 4_000,
+                    rows: 4_000,
+                    size_bytes: 144_024,
+                    graph: None,
+                }
+                .with_test_typed_identity_ranges()
             })
             .collect();
         let descriptor = GlobalPqDescriptor::new(
@@ -2639,23 +2726,25 @@ mod tests {
         let fit = vectors(128, 64);
         let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
         let location = LocationEncoding::for_layout(4, 64).unwrap();
-        let chunk = |path: &str, row_start: usize| GlobalPqChunkRef {
-            path: path.to_string(),
-            checksum: blake3::hash(path.as_bytes()).to_hex().to_string(),
-            offset_bytes: 0,
-            exact_checksum: blake3::hash(format!("exact-{path}").as_bytes())
-                .to_hex()
-                .to_string()
-                .into_boxed_str(),
-            exact_offset_bytes: 8_192,
-            exact_size_bytes: 64 * 64 * size_of::<f32>(),
-            cell_index: 0,
-            identity_offsets_padding_bytes: 0,
-            identity_values_padding_bytes: 0,
-            row_start,
-            rows: 64,
-            size_bytes: 4_096,
-            graph: None,
+        let chunk = |path: &str, row_start: usize| {
+            GlobalPqChunkRef {
+                path: path.to_string(),
+                checksum: blake3::hash(path.as_bytes()).to_hex().to_string(),
+                offset_bytes: 0,
+                exact_checksum: blake3::hash(format!("exact-{path}").as_bytes())
+                    .to_hex()
+                    .to_string()
+                    .into_boxed_str(),
+                exact_offset_bytes: 8_192,
+                exact_size_bytes: 64 * 64 * size_of::<f32>(),
+                cell_index: 0,
+                typed_buffer_offsets: [0; 2],
+                row_start,
+                rows: 64,
+                size_bytes: 4_096,
+                graph: None,
+            }
+            .with_test_typed_identity_ranges()
         };
         let old_chunk = chunk("old", 0);
         let descriptor = GlobalPqDescriptor::new(
@@ -2723,8 +2812,7 @@ mod tests {
             exact_offset_bytes: 80,
             exact_size_bytes: 64 * size_of::<f32>(),
             cell_index: 0,
-            identity_offsets_padding_bytes: 0,
-            identity_values_padding_bytes: 0,
+            typed_buffer_offsets: [0; 2],
             row_start: 0,
             rows: 1,
             size_bytes: 64,
@@ -2824,11 +2912,10 @@ mod tests {
                 + vectors.len() * size_of::<u64>(),
             exact_size_bytes: vectors.len() * 64 * size_of::<f32>(),
             cell_index: 7,
-            identity_offsets_padding_bytes: 0,
-            identity_values_padding_bytes: 0,
+            typed_buffer_offsets: [0; 2],
             row_start: 4_096,
             rows: vectors.len(),
-            size_bytes: chunk.bytes.len(),
+            size_bytes: u32::try_from(chunk.bytes.len()).unwrap(),
             graph: None,
         };
         let exact = vectors
@@ -2922,13 +3009,13 @@ mod tests {
                     + chunk.rows * size_of::<u64>(),
                 exact_size_bytes: 16_384,
                 cell_index: segment as u16,
-                identity_offsets_padding_bytes: 0,
-                identity_values_padding_bytes: 0,
+                typed_buffer_offsets: [0; 2],
                 row_start,
                 rows: chunk.rows,
-                size_bytes: chunk.bytes.len(),
+                size_bytes: u32::try_from(chunk.bytes.len()).unwrap(),
                 graph: None,
-            };
+            }
+            .with_test_typed_identity_ranges();
             row_start += chunk.rows;
             loaded.push((reference.clone(), Bytes::from(chunk.bytes)));
             refs.push(reference);
@@ -2961,22 +3048,24 @@ mod tests {
         let quantizer = RotatedProductQuantizer::fit(config(), &vectors).unwrap();
         let location = LocationEncoding::for_layout(4, 64).unwrap();
         let refs = (0..4_u32)
-            .map(|segment| GlobalPqChunkRef {
-                path: format!("chunk-{segment}"),
-                checksum: "ab".repeat(32),
-                offset_bytes: 0,
-                exact_checksum: "cd".repeat(32).into_boxed_str(),
-                exact_offset_bytes: 1_796,
-                exact_size_bytes: 16_384,
-                // Segments 0/2 and 1/3 represent the same two semantic
-                // regions, produced by separate bounded ingest checkpoints.
-                cell_index: (segment % 2) as u16,
-                identity_offsets_padding_bytes: 0,
-                identity_values_padding_bytes: 0,
-                row_start: segment as usize * 64,
-                rows: 64,
-                size_bytes: 1_024,
-                graph: None,
+            .map(|segment| {
+                GlobalPqChunkRef {
+                    path: format!("chunk-{segment}"),
+                    checksum: "ab".repeat(32),
+                    offset_bytes: 0,
+                    exact_checksum: "cd".repeat(32).into_boxed_str(),
+                    exact_offset_bytes: 1_796,
+                    exact_size_bytes: 16_384,
+                    // Segments 0/2 and 1/3 represent the same two semantic
+                    // regions, produced by separate bounded ingest checkpoints.
+                    cell_index: (segment % 2) as u16,
+                    typed_buffer_offsets: [0; 2],
+                    row_start: segment as usize * 64,
+                    rows: 64,
+                    size_bytes: 1_024,
+                    graph: None,
+                }
+                .with_test_typed_identity_ranges()
             })
             .collect();
         let descriptor = GlobalPqDescriptor::new(
@@ -3071,13 +3160,13 @@ mod tests {
                         + chunk.rows * size_of::<u64>(),
                     exact_size_bytes: chunk.exact_bytes.len(),
                     cell_index: cell,
-                    identity_offsets_padding_bytes: 0,
-                    identity_values_padding_bytes: 0,
+                    typed_buffer_offsets: [0; 2],
                     row_start,
                     rows: chunk.rows,
-                    size_bytes: chunk.bytes.len(),
+                    size_bytes: u32::try_from(chunk.bytes.len()).unwrap(),
                     graph: None,
-                };
+                }
+                .with_test_typed_identity_ranges();
                 row_start += chunk.rows;
                 loaded.push((reference.clone(), Bytes::from(chunk.bytes)));
                 refs.push(reference);

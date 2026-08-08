@@ -374,6 +374,7 @@ if [[ "$SMOKE" == "1" ]]; then
 else
   run_exact_test group_commit concurrent_appends_share_one_durable_wal_transaction
   run_exact_test group_commit independent_group_writers_can_share_one_collection
+  run_exact_test fault_injection collection_transaction_is_invisible_when_pending_publication_fails
   run_exact_lib_test lane_log::tests::v30_extent_put_is_the_acknowledgement_boundary
   run_exact_lib_test lane_log::tests::v30_extent_completing_after_lease_guard_is_not_acknowledged
   run_exact_lib_test lane_log::tests::v30_linearizable_reader_recovers_extents_beyond_a_stale_watermark

@@ -134,7 +134,7 @@ fn run_inputs_reject_path_injection_and_role_codec_mismatches() {
         (CellWalRunKind::Records, "../escape"),
         (CellWalRunKind::Records, "bin"),
         (CellWalRunKind::Tombstones, "vortex"),
-        (CellWalRunKind::IdDirectory, "parquet"),
+        (CellWalRunKind::IdDirectory, "bin"),
     ] {
         let error = wal
             .prepare_transaction(
@@ -875,7 +875,7 @@ fn concurrent_generated_ids_are_unique_without_collection_manifest_updates() {
 }
 
 #[test]
-fn concurrent_same_id_upserts_reserve_distinct_generations() {
+fn concurrent_same_id_upserts_converge_to_one_non_bootstrap_value() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut created = BorsukIndex::create(index_config(uri.clone())).unwrap();
@@ -916,10 +916,10 @@ fn concurrent_same_id_upserts_reserve_distinct_generations() {
 }
 
 #[test]
-fn large_upsert_batches_use_one_group_amortized_generation_range() {
+fn large_upsert_batches_use_local_mutation_versions_without_global_coordination() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(index_config(uri)).unwrap();
+    let mut index = BorsukIndex::create(index_config(uri.clone())).unwrap();
     let rows = 500_usize;
     index
         .add(
@@ -942,11 +942,11 @@ fn large_upsert_batches_use_one_group_amortized_generation_range() {
         "a batch upsert must not create one persistent generation counter per record"
     );
     assert!(
-        directory
+        !directory
             .path()
             .join("id-directory/last-write-wins/NEXT")
-            .is_file(),
-        "one global range must order the complete batch"
+            .exists(),
+        "local mutation versions must not coordinate through a global counter"
     );
     assert!(
         !directory
@@ -955,10 +955,17 @@ fn large_upsert_batches_use_one_group_amortized_generation_range() {
             .exists(),
         "v30 must not retain the superseded sharded generation protocol"
     );
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    for row in 0..rows {
+        assert_eq!(
+            reopened.get_vector(&format!("upsert-{row}")).unwrap(),
+            Some(vec![0.0, row as f32])
+        );
+    }
 }
 
 #[test]
-fn large_delete_batches_bound_generation_coordination_requests() {
+fn large_delete_batches_bound_mutation_publication_requests() {
     let object_store = store();
     let mut index = BorsukIndex::create_with_object_store(
         Arc::clone(&object_store),
@@ -989,12 +996,12 @@ fn large_delete_batches_bound_generation_coordination_requests() {
     assert_eq!(report.deleted, rows);
     assert!(
         report.requests.puts < 100,
-        "one delete batch must reserve one generation range, not one counter per row: {:?}",
+        "one delete batch must publish bounded immutable mutation state: {:?}",
         report.requests
     );
     assert!(
         report.requests.gets < 100 && report.requests.heads < 100,
-        "one generation range must bound the complete coordination round trip: {:?}",
+        "one delete batch must keep mutation discovery bounded: {:?}",
         report.requests
     );
 }

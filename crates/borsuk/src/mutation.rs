@@ -206,6 +206,46 @@ pub(crate) enum MutationOperation {
     Delete,
 }
 
+/// Compact convergent visibility state for one record id. This is the semantic
+/// value stored by tombstone/frontier and id-directory tables; it represents
+/// both a winning put and a winning delete without a global generation counter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MutationState {
+    stamp: MutationStamp,
+    operation: MutationOperation,
+}
+
+impl MutationState {
+    pub(crate) const fn new(stamp: MutationStamp, operation: MutationOperation) -> Self {
+        Self { stamp, operation }
+    }
+
+    pub(crate) const fn stamp(self) -> MutationStamp {
+        self.stamp
+    }
+
+    pub(crate) const fn is_deleted(self) -> bool {
+        matches!(self.operation, MutationOperation::Delete)
+    }
+
+    pub(crate) fn greatest(self, other: Self) -> Result<Self> {
+        match self.stamp.version().cmp(&other.stamp.version()) {
+            std::cmp::Ordering::Less => Ok(other),
+            std::cmp::Ordering::Greater => Ok(self),
+            std::cmp::Ordering::Equal => {
+                self.stamp.greatest(other.stamp)?;
+                if self.operation != other.operation {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "mutation version {:?} has conflicting operations",
+                        self.stamp.version().to_bytes()
+                    )));
+                }
+                Ok(self)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CanonicalMutation {
     id: crate::RecordId,
@@ -239,6 +279,10 @@ impl CanonicalMutation {
 
     pub(crate) const fn stamp(&self) -> MutationStamp {
         self.stamp
+    }
+
+    pub(crate) const fn state(&self) -> MutationState {
+        MutationState::new(self.stamp, self.operation)
     }
 
     pub(crate) fn id(&self) -> &crate::RecordId {
@@ -398,7 +442,10 @@ fn hash_metadata_value(hasher: &mut blake3::Hasher, value: &crate::MetaValue) ->
 mod tests {
     use std::{cmp::Ordering, collections::BTreeSet, sync::Arc, thread};
 
-    use super::{CanonicalMutation, MutationClock, MutationStamp, MutationVersion};
+    use super::{
+        CanonicalMutation, MutationClock, MutationOperation, MutationStamp, MutationState,
+        MutationVersion,
+    };
     use crate::{MetaValue, SparseVector, StorageEncoding, VectorElementType, VectorRecord};
 
     #[test]
@@ -458,6 +505,28 @@ mod tests {
 
         assert!(allocated > observed);
         assert_eq!(allocated.hlc(), observed.hlc() + 1);
+    }
+
+    #[test]
+    fn mutation_state_converges_by_full_version_and_operation() {
+        let older = MutationState::new(
+            MutationStamp::new(MutationVersion::from_parts(91, [1; 16]), [3; 32]),
+            MutationOperation::Put,
+        );
+        let newer = MutationState::new(
+            MutationStamp::new(MutationVersion::from_parts(91, [2; 16]), [4; 32]),
+            MutationOperation::Delete,
+        );
+
+        assert_eq!(older.greatest(newer).unwrap(), newer);
+        assert_eq!(newer.greatest(older).unwrap(), newer);
+        assert!(newer.is_deleted());
+
+        let conflicting = MutationState::new(
+            MutationStamp::new(newer.stamp().version(), [5; 32]),
+            MutationOperation::Put,
+        );
+        assert!(newer.greatest(conflicting).is_err());
     }
 
     #[test]

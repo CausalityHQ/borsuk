@@ -33,10 +33,10 @@ use crate::{
     format::{
         bm25_postings_from_batches, bm25_stats_delta_page_from_parquet,
         bm25_stats_delta_page_to_parquet, graph_from_parquet, graph_to_parquet,
-        lean_segment_from_table, lexical_root_from_parquet, lexical_root_to_parquet,
-        lexical_row_metadata_from_batches, lexical_term_page_from_batches,
-        lexical_term_page_from_parquet, lexical_term_page_to_parquet,
-        routing_layer_page_from_parquet,
+        id_directory_states_from_parquet, id_directory_states_to_parquet, lean_segment_from_table,
+        lexical_root_from_parquet, lexical_root_to_parquet, lexical_row_metadata_from_batches,
+        lexical_term_page_from_batches, lexical_term_page_from_parquet,
+        lexical_term_page_to_parquet, routing_layer_page_from_parquet,
         routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_table,
         segment_to_table, sparse_postings_from_batches, tombstone_ids_from_parquet,
         tombstone_ids_to_parquet, wal_records_from_table, wal_records_to_table,
@@ -65,7 +65,10 @@ use crate::{
         VectorMetric, angular_distance_with_norms, angular_distance_with_query_norm,
         cosine_distance_with_norms, cosine_distance_with_query_norm,
     },
-    mutation::MutationStamp,
+    mutation::{
+        CanonicalMutation, MutationClock, MutationOperation, MutationStamp, MutationState,
+        MutationVersion,
+    },
     observability,
     quantizer_sidecar::{PersistedQuantizer, is_quantizer_path, quantizer_relative_path},
     record::{
@@ -102,7 +105,6 @@ const ROUTING_SEARCH_PAGE_OVERFETCH: usize = 8;
 /// Hard entry-count guard for one global term page.
 const DEFAULT_LEXICAL_TERM_PAGE_ENTRIES: usize = 4096;
 const TOMBSTONE_BUCKETS: u16 = 4096;
-const ID_DIRECTORY_MAGIC: &[u8; 4] = b"BID1";
 const COORDINATION_COUNTER_MAGIC: &[u8; 4] = b"BCN1";
 const CELL_WAL_MUTATION_METADATA_MAGIC: &[u8; 4] = b"BMM1";
 const CELL_WAL_TOMBSTONE_METADATA_MAGIC: &[u8; 4] = b"BTM1";
@@ -686,6 +688,13 @@ pub struct BorsukIndex {
     pending_collection_claim: Arc<Mutex<Option<crate::cell_wal::CellWalClaimGuard>>>,
     /// Stable for this handle lifetime; clones retain the same lane identity.
     writer_id: Vec<u8>,
+    /// Handle-local convergent version allocator. Clones share one clock;
+    /// independent writers receive a distinct complete writer identity.
+    mutation_clock: Arc<MutationClock>,
+    /// Fresh collection construction uses a logical clock so identical source
+    /// rows produce byte-identical content-addressed artifacts. Reopened and
+    /// independent live writers use wall time and unique writer identities.
+    mutation_clock_time_ms: Option<i64>,
     /// Double-collected complete committed transactions pinned by this reader
     /// snapshot.
     cell_wal_snapshot: Vec<CommittedCellWalTransaction>,
@@ -1151,12 +1160,9 @@ struct StatsTotals {
     dense_encoded_vectors: usize,
 }
 
-/// Lazily loaded deleted-id set keyed by the active tombstone checksum.
-/// Tombstone overlay: `id -> minimum visible generation`. A stored record of
-/// that id is suppressed when its generation is below the mapped value (a plain
-/// delete maps it above every stored generation; an upsert maps it to the newest
-/// generation, suppressing the older copies).
-type TombstoneOverlay = HashMap<Vec<u8>, u64>;
+/// Lazily loaded convergent per-id mutation state keyed by content checksum.
+/// Both puts and deletes participate in one full-version merge.
+type TombstoneOverlay = HashMap<Vec<u8>, MutationState>;
 
 /// Byte-bounded immutable tombstone pages keyed by content checksum. Point
 /// lookups load only bloom-matching runs; full overlay materialization is
@@ -1167,13 +1173,17 @@ type TombstoneCache = Arc<DecodedObjectCache<TombstoneOverlay>>;
 struct GlobalIdentityRanges {
     offsets: Vec<u8>,
     values: Vec<u8>,
+    mutation_hlc: Vec<u8>,
+    mutation_writer: Vec<u8>,
+    mutation_digest: Vec<u8>,
+    row_integrity: Vec<u8>,
 }
 type Bm25StatsPage = Vec<(u32, i64)>;
 type TextTermFrequencies = Vec<(u32, u32)>;
 
 #[derive(Debug)]
 struct LiveDeleteRecord {
-    generation: u64,
+    stamp: MutationStamp,
     text_terms: Option<TextTermFrequencies>,
     persisted: bool,
 }
@@ -1181,8 +1191,10 @@ struct LiveDeleteRecord {
 fn decoded_tombstone_overlay_bytes(overlay: &TombstoneOverlay) -> u64 {
     let entries = overlay.iter().fold(0_u64, |total, (id, _)| {
         total.saturating_add(
-            (std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<u64>() + id.capacity() + 16)
-                as u64,
+            (std::mem::size_of::<Vec<u8>>()
+                + std::mem::size_of::<MutationState>()
+                + id.capacity()
+                + 16) as u64,
         )
     });
     entries.saturating_add(
@@ -1219,12 +1231,11 @@ struct CellWalTombstoneMetadata {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct CellWalIdDirectoryEntry {
     id: Vec<u8>,
     owner: LogicalCellId,
-    generation: u64,
-    deleted: bool,
+    state: MutationState,
 }
 
 fn finish_packed_index_control(mut bytes: Vec<u8>) -> Vec<u8> {
@@ -1252,90 +1263,36 @@ fn write_packed_index_string(bytes: &mut Vec<u8>, value: &str, label: &str) -> R
 }
 
 fn cell_wal_id_directory_bytes(entries: &[CellWalIdDirectoryEntry]) -> Result<Vec<u8>> {
-    if entries
-        .windows(2)
-        .any(|pair| pair[0].id.as_slice() >= pair[1].id.as_slice())
-    {
-        return Err(BorsukError::InvalidStorage(
-            "cell WAL ID-directory entries must be strictly sorted by id".to_string(),
-        ));
-    }
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(ID_DIRECTORY_MAGIC);
-    bytes.push(PACKED_INDEX_CONTROL_VERSION);
-    bytes.extend_from_slice(
-        &u32::try_from(entries.len())
-            .map_err(|_| {
-                BorsukError::InvalidStorage(
-                    "cell WAL ID-directory run contains too many entries".to_string(),
+    id_directory_states_to_parquet(
+        &entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.id.clone(),
+                    entry.owner.routing_epoch,
+                    entry.owner.cell_ordinal,
+                    entry.state,
                 )
-            })?
-            .to_le_bytes(),
-    );
-    for entry in entries {
-        if entry.id.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "cell WAL ID-directory entry has an empty id".to_string(),
-            ));
-        }
-        write_packed_index_bytes(&mut bytes, &entry.id, "ID-directory id")?;
-        bytes.extend_from_slice(&entry.owner.routing_epoch.to_le_bytes());
-        bytes.extend_from_slice(&entry.owner.cell_ordinal.to_le_bytes());
-        bytes.extend_from_slice(&entry.generation.to_le_bytes());
-        bytes.push(u8::from(entry.deleted));
-    }
-    Ok(finish_packed_index_control(bytes))
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn cell_wal_id_directory_from_slice(
     bytes: &[u8],
-    path: &str,
+    _path: &str,
 ) -> Result<Vec<CellWalIdDirectoryEntry>> {
-    let payload = checked_packed_index_control_payload(bytes, ID_DIRECTORY_MAGIC, path)?;
-    let mut cursor = ID_DIRECTORY_MAGIC.len() + 1;
-    let count = read_packed_index_u32(payload, &mut cursor, path)? as usize;
-    let mut entries = Vec::with_capacity(count.min(1_024));
-    for _ in 0..count {
-        let id_len = read_packed_index_u32(payload, &mut cursor, path)? as usize;
-        let id = take_packed_index_bytes(payload, &mut cursor, id_len, path)?.to_vec();
-        if id.is_empty() {
-            return Err(BorsukError::InvalidStorage(format!(
-                "cell WAL ID-directory run `{path}` contains an empty id"
-            )));
-        }
-        let routing_epoch = read_packed_index_u64(payload, &mut cursor, path)?;
-        let cell_ordinal = read_packed_index_u32(payload, &mut cursor, path)?;
-        let generation = read_packed_index_u64(payload, &mut cursor, path)?;
-        let deleted = match take_packed_index_bytes(payload, &mut cursor, 1, path)?[0] {
-            0 => false,
-            1 => true,
-            value => {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "cell WAL ID-directory run `{path}` has invalid deleted flag {value}"
-                )));
-            }
-        };
-        entries.push(CellWalIdDirectoryEntry {
-            id,
-            owner: LogicalCellId::new(routing_epoch, cell_ordinal),
-            generation,
-            deleted,
-        });
-    }
-    if entries
-        .windows(2)
-        .any(|pair| pair[0].id.as_slice() >= pair[1].id.as_slice())
-    {
-        return Err(BorsukError::InvalidStorage(format!(
-            "cell WAL ID-directory run `{path}` is not strictly sorted by id"
-        )));
-    }
-    if cursor != payload.len() {
-        return Err(BorsukError::InvalidStorage(format!(
-            "packed index control object `{path}` contains trailing bytes"
-        )));
-    }
-    Ok(entries)
+    id_directory_states_from_parquet(bytes).map(|rows| {
+        rows.into_iter()
+            .map(
+                |(id, routing_epoch, cell_ordinal, state)| CellWalIdDirectoryEntry {
+                    id,
+                    owner: LogicalCellId::new(routing_epoch, cell_ordinal),
+                    state,
+                },
+            )
+            .collect()
+    })
 }
 
 fn coordination_counter_bytes(value: u64) -> Vec<u8> {
@@ -2064,34 +2021,6 @@ impl BorsukIndex {
         Ok(writer)
     }
 
-    pub(crate) fn lane_log_generation_floor(&self) -> Result<u64> {
-        let path = "id-directory/last-write-wins/NEXT";
-        self.storage
-            .read_coordination_object(path)?
-            .map_or(Ok(0), |stored| {
-                coordination_counter_from_slice(&stored.bytes, path)
-                    .map(|next| next.saturating_sub(1))
-            })
-    }
-
-    pub(crate) fn reserve_lane_log_generation_range(
-        &self,
-        count: usize,
-    ) -> Result<(u64, RequestCounts)> {
-        let count = u64::try_from(count).map_err(|_| {
-            BorsukError::InvalidStorage("lane-log generation count exceeds u64".to_string())
-        })?;
-        if count == 0 {
-            return Err(BorsukError::InvalidStorage(
-                "lane-log generation range must be nonempty".to_string(),
-            ));
-        }
-        let before = self.storage.request_counts();
-        let first =
-            self.reserve_coordination_counter("id-directory/last-write-wins/NEXT", 1, count)?;
-        Ok((first, self.storage.request_counts().delta(&before)))
-    }
-
     pub(crate) fn primary_dimensions(&self) -> usize {
         self.manifest.config.dimensions
     }
@@ -2157,7 +2086,16 @@ impl BorsukIndex {
                     BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
                 })?;
             }
-            overlay.insert(record.id.as_bytes().to_vec(), record.generation);
+            let stamp = record.mutation_stamp().ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "lane record `{}` is missing its canonical mutation stamp",
+                    record.id
+                ))
+            })?;
+            overlay.insert(
+                record.id.as_bytes().to_vec(),
+                MutationState::new(stamp, MutationOperation::Put),
+            );
         }
         let tombstone = self.write_tombstone(overlay)?;
 
@@ -2328,7 +2266,10 @@ impl BorsukIndex {
     fn reset_independent_writer_state(&mut self, request_counter_source: &Storage) {
         self.active_collection_transaction = None;
         self.pending_collection_claim = Arc::new(Mutex::new(None));
-        self.writer_id = Uuid::new_v4().as_bytes().to_vec();
+        let writer = *Uuid::new_v4().as_bytes();
+        self.writer_id = writer.to_vec();
+        self.mutation_clock = Arc::new(MutationClock::new(writer));
+        self.mutation_clock_time_ms = None;
         self.cell_wal_snapshot_retries = Arc::new(AtomicUsize::new(0));
         self.cell_wal_claim_checkpoint = CellWalClaimCheckpoint::new();
         for child in self.named.values_mut() {
@@ -3036,6 +2977,7 @@ impl BorsukIndex {
             manifest.resident_bytes_estimate(),
         );
 
+        let writer = *Uuid::new_v4().as_bytes();
         let mut index = Self {
             collection_storage: storage.clone(),
             storage,
@@ -3044,7 +2986,9 @@ impl BorsukIndex {
             collection_snapshot: None,
             active_collection_transaction: None,
             pending_collection_claim: Arc::new(Mutex::new(None)),
-            writer_id: Uuid::new_v4().as_bytes().to_vec(),
+            writer_id: writer.to_vec(),
+            mutation_clock: Arc::new(MutationClock::new([0; 16])),
+            mutation_clock_time_ms: Some(0),
             cell_wal_snapshot: Vec::new(),
             lane_log_snapshot: Vec::new(),
             lane_log_committed_sequences: Vec::new(),
@@ -3344,6 +3288,7 @@ impl BorsukIndex {
         )?;
         observability::record_open(&span, &manifest);
         enforce_ram_budget(&manifest, options.ram_budget_bytes)?;
+        let writer = *Uuid::new_v4().as_bytes();
         let mut index = Self {
             collection_storage,
             storage,
@@ -3352,7 +3297,9 @@ impl BorsukIndex {
             collection_snapshot: Some(collection_snapshot.clone()),
             active_collection_transaction: None,
             pending_collection_claim: Arc::new(Mutex::new(None)),
-            writer_id: Uuid::new_v4().as_bytes().to_vec(),
+            writer_id: writer.to_vec(),
+            mutation_clock: Arc::new(MutationClock::new(writer)),
+            mutation_clock_time_ms: None,
             cell_wal_snapshot: Vec::new(),
             lane_log_snapshot: Vec::new(),
             lane_log_committed_sequences: Vec::new(),
@@ -4902,8 +4849,8 @@ impl BorsukIndex {
     }
 
     fn add_collection_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
-        self.canonicalize_sparse_named_records(&mut records)?;
-        self.canonicalize_late_interaction_records(&mut records)?;
+        self.prepare_primary_records(&mut records)?;
+        self.stamp_put_records(&mut records)?;
         let named_records = self.named_records_for_add(&records)?;
         let next_generated_id = next_generated_id_after_explicit_records(
             self.cell_wal_next_generated_id_floor()?,
@@ -4947,47 +4894,19 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return self.put_primary_records(records);
         }
-        let storage = self.storage.clone();
-        let (begin, generation) = rayon::join(
-            || self.begin_collection_transaction(),
-            || {
-                Self::reserve_coordination_counter_on(
-                    &storage,
-                    "id-directory/last-write-wins/NEXT",
-                    1,
-                    1,
-                )
-            },
-        );
-        begin?;
-        let result = generation
-            .and_then(|generation| self.put_primary_records_with_generation(records, generation));
+        self.begin_collection_transaction()?;
+        let result = self.put_primary_records(records);
         self.finish_collection_transaction(result)
     }
 
-    fn put_primary_records(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+    fn put_primary_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {
         if records.is_empty() {
             return Ok(());
         }
-        let generation =
-            self.reserve_coordination_counter("id-directory/last-write-wins/NEXT", 1, 1)?;
-        self.put_primary_records_with_generation(records, generation)
-    }
-
-    fn put_primary_records_with_generation(
-        &mut self,
-        mut records: Vec<VectorRecord>,
-        generation: u64,
-    ) -> Result<()> {
-        if records.is_empty() {
-            return Ok(());
-        }
+        self.prepare_primary_records(&mut records)?;
         self.validate_record_ids_allowing_existing(&records, false, true)?;
-        let mut overlay = BTreeMap::new();
-        for record in &mut records {
-            record.generation = generation;
-            overlay.insert(record.id.as_bytes().to_vec(), generation);
-        }
+        self.stamp_put_records(&mut records)?;
+        let overlay = Self::put_states(&records)?;
         let next_generated_id = next_generated_id_after_explicit_records(
             self.cell_wal_next_generated_id_floor()?,
             &records,
@@ -5012,19 +4931,16 @@ impl BorsukIndex {
         if records.is_empty() {
             return Ok(());
         }
+        self.prepare_primary_records(&mut records)?;
         let entity_ids = records
             .iter()
             .map(|record| record.id.clone())
             .collect::<Vec<_>>();
         let previous_late_token_ids = self.late_interaction_token_ids_for_entities(&entity_ids)?;
 
-        let mut minimums = BTreeMap::new();
-        for record in &records {
-            let key = record.id.as_bytes().to_vec();
-            if !minimums.contains_key(&key) {
-                minimums.insert(key.clone(), self.min_visible_generation(&key)?);
-            }
-        }
+        let prior_states =
+            self.mutation_states(records.iter().map(|record| record.id.as_bytes()))?;
+        self.stamp_put_records(&mut records)?;
 
         // Persist only corrections for superseded versions that already live in
         // immutable segments. An old WAL version is removed from the live WAL
@@ -5032,11 +4948,7 @@ impl BorsukIndex {
         // lexical root, so subtracting it here would double-correct N/df.
         let mut bm25_stats_delta_change = Bm25StatsDelta::default();
         if self.manifest.config.text {
-            let targets = minimums
-                .iter()
-                .map(|(key, minimum)| (key.clone(), minimum.unwrap_or(0)))
-                .collect::<BTreeMap<_, _>>();
-            for live in self.live_delete_records(&targets)?.into_values() {
+            for live in self.live_delete_records(&prior_states)?.into_values() {
                 if live.persisted
                     && let Some(terms) = live.text_terms
                 {
@@ -5046,42 +4958,15 @@ impl BorsukIndex {
         }
         let bm25_stats_delta = self.persist_bm25_stats_delta(&bm25_stats_delta_change)?;
 
-        // Stamp a strictly higher generation per id and append only this
-        // mutation batch to the tombstone WAL. Never clone/rewrite the
-        // accumulated deleted-id set on the foreground path.
-        let mut planned_overlay = BTreeMap::new();
-        let mut generation_requests = Vec::with_capacity(records.len());
-        let mut new_overlay_ids = 0_u64;
-        for record in &records {
-            let key = record.id.as_bytes().to_vec();
-            let previous_generation = planned_overlay
-                .get(&key)
-                .copied()
-                .or(minimums.get(&key).copied().flatten());
-            if previous_generation.is_none() {
-                new_overlay_ids = new_overlay_ids.checked_add(1).ok_or_else(|| {
-                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
-                })?;
-            }
-            let minimum_generation =
-                previous_generation
-                    .unwrap_or(0)
-                    .checked_add(1)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage("record generation exceeds u64".to_string())
-                    })?;
-            planned_overlay.insert(key.clone(), minimum_generation);
-            generation_requests.push((key, minimum_generation));
-        }
-        let reserved_generations = self.reserve_record_generations(&generation_requests)?;
-        let mut overlay_delta = BTreeMap::new();
-        for (record, generation) in records.iter_mut().zip(reserved_generations) {
-            record.generation = generation;
-            overlay_delta.insert(record.id.as_bytes().to_vec(), generation);
-        }
+        let new_overlay_ids = u64::try_from(
+            prior_states
+                .values()
+                .filter(|state| state.is_none())
+                .count(),
+        )
+        .map_err(|_| BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string()))?;
+        let overlay_delta = Self::put_states(&records)?;
 
-        self.canonicalize_sparse_named_records(&mut records)?;
-        self.canonicalize_late_interaction_records(&mut records)?;
         let named_records = self.named_records_for_add(&records)?;
         let next_generated_id = next_generated_id_after_explicit_records(
             self.cell_wal_next_generated_id_floor()?,
@@ -5147,30 +5032,78 @@ impl BorsukIndex {
         records: Vec<VectorRecord>,
         previous_token_ids: &[RecordId],
     ) -> Result<()> {
-        let mut generation_requests = Vec::with_capacity(previous_token_ids.len());
+        let mut entity_versions = BTreeMap::<Vec<u8>, MutationVersion>::new();
+        let mut replacement_ids = BTreeSet::<Vec<u8>>::new();
+        for record in &records {
+            let (entity_id, _, _) = decode_late_interaction_token_id(record.id.as_bytes())?;
+            let version = record
+                .mutation_stamp()
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "late-interaction replacement token {:?} is missing its parent mutation stamp",
+                        record.id.as_bytes()
+                    ))
+                })?
+                .version();
+            match entity_versions.entry(entity_id.to_vec()) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(version);
+                }
+                std::collections::btree_map::Entry::Occupied(entry) if *entry.get() == version => {}
+                std::collections::btree_map::Entry::Occupied(_) => {
+                    return Err(BorsukError::InvalidStorage(
+                        "one late-interaction entity received conflicting replacement versions"
+                            .to_string(),
+                    ));
+                }
+            }
+            replacement_ids.insert(record.id.as_bytes().to_vec());
+        }
+        let removed_token_ids = previous_token_ids
+            .iter()
+            .filter(|id| !replacement_ids.contains(id.as_bytes()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut states = BTreeMap::<Vec<u8>, MutationState>::new();
+        for record in &records {
+            let stamp = record.mutation_stamp().ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "late-interaction replacement token {:?} lost its parent mutation stamp",
+                    record.id.as_bytes()
+                ))
+            })?;
+            states.insert(
+                record.id.as_bytes().to_vec(),
+                MutationState::new(stamp, MutationOperation::Put),
+            );
+        }
+        for id in removed_token_ids {
+            let (entity_id, _, _) = decode_late_interaction_token_id(id.as_bytes())?;
+            let version = entity_versions.get(entity_id).copied().ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "late-interaction replacement has no parent version for entity {:?}",
+                    entity_id
+                ))
+            })?;
+            states.insert(
+                id.as_bytes().to_vec(),
+                CanonicalMutation::delete(version, id).state(),
+            );
+        }
         let mut new_overlay_ids = 0_u64;
-        for id in previous_token_ids {
-            let current = self.min_visible_generation(id.as_bytes())?;
+        for (id, state) in &states {
+            let current = self.mutation_state(id)?;
             if current.is_none() {
                 new_overlay_ids = new_overlay_ids.checked_add(1).ok_or_else(|| {
                     BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
                 })?;
             }
-            generation_requests.push((
-                id.as_bytes().to_vec(),
-                current.unwrap_or(0).checked_add(1).ok_or_else(|| {
-                    BorsukError::InvalidStorage("record generation exceeds u64".to_string())
-                })?,
-            ));
+            if let Some(current) = current {
+                current.greatest(*state)?;
+            }
         }
-        let reserved = self.reserve_record_generations(&generation_requests)?;
-        let tombstone = generation_requests
-            .into_iter()
-            .zip(reserved)
-            .map(|((id, _), generation)| (id, generation))
-            .collect::<BTreeMap<_, _>>();
         let tombstone = self
-            .write_tombstone(tombstone)?
+            .write_tombstone(states)?
             .map(|summary| (summary, new_overlay_ids));
         let next_generated_id = next_generated_id_after_explicit_records(
             self.cell_wal_next_generated_id_floor()?,
@@ -5323,7 +5256,8 @@ impl BorsukIndex {
 
     fn delete_collection_records(&mut self, ids: Vec<RecordId>) -> Result<DeleteReport> {
         let late_token_ids = self.late_interaction_token_ids_for_entities(&ids)?;
-        let report = self.delete_primary_with_report(ids.iter().cloned())?;
+        let (report, delete_states) =
+            self.delete_primary_with_report_and_states(ids.iter().cloned())?;
         for (name, child) in &mut self.named {
             let kind = self
                 .manifest
@@ -5334,16 +5268,40 @@ impl BorsukIndex {
                 .unwrap_or(VectorKind::Dense);
             if kind == VectorKind::LateInteraction {
                 if let Some(token_ids) = late_token_ids.get(name) {
-                    child.delete_with_report(token_ids.iter().cloned())?;
+                    let targets = token_ids
+                        .iter()
+                        .map(|token_id| {
+                            let (entity_id, _, _) =
+                                decode_late_interaction_token_id(token_id.as_bytes())?;
+                            Ok(delete_states
+                                .get(entity_id)
+                                .map(|state| (token_id.clone(), state.stamp().version())))
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>();
+                    child.apply_parent_delete_versions(targets)?;
                 }
             } else {
-                child.delete_with_report(ids.iter().cloned())?;
+                let targets = ids
+                    .iter()
+                    .filter_map(|id| {
+                        delete_states
+                            .get(id.as_bytes())
+                            .map(|state| (id.clone(), state.stamp().version()))
+                    })
+                    .collect::<Vec<_>>();
+                child.apply_parent_delete_versions(targets)?;
             }
         }
         Ok(report)
     }
 
-    fn delete_primary_with_report<I, R>(&mut self, ids: I) -> Result<DeleteReport>
+    fn delete_primary_with_report_and_states<I, R>(
+        &mut self,
+        ids: I,
+    ) -> Result<(DeleteReport, BTreeMap<Vec<u8>, MutationState>)>
     where
         I: IntoIterator<Item = R>,
         R: Into<RecordId>,
@@ -5354,27 +5312,20 @@ impl BorsukIndex {
             .into_iter()
             .map(|id| id.into().as_bytes().to_vec())
             .collect::<Vec<_>>();
-        let minimums = self.min_visible_generations(ids.iter().map(Vec::as_slice))?;
-        let live_targets = minimums
+        let states = self.mutation_states(ids.iter().map(Vec::as_slice))?;
+        let live_targets = states
             .iter()
-            .filter(|(_, minimum)| self.manifest.config.text || minimum.is_some())
-            .map(|(key, minimum)| (key.clone(), minimum.unwrap_or(0)))
+            .filter(|(_, state)| self.manifest.config.text || state.is_some())
+            .map(|(key, state)| (key.clone(), *state))
             .collect::<BTreeMap<_, _>>();
         let live_records = self.live_delete_records(&live_targets)?;
-        let mut planned_delta = BTreeMap::new();
-        let mut generation_requests = Vec::new();
+        let mut delete_ids = Vec::new();
         let mut newly = 0usize;
         let mut new_overlay_ids = 0_u64;
         let mut bm25_stats_delta_change = Bm25StatsDelta::default();
         for key in ids {
-            let current = planned_delta
-                .get(&key)
-                .copied()
-                .or(minimums.get(&key).copied().flatten());
+            let current = states.get(&key).copied().flatten();
             match current {
-                // First tombstone for this id: any stored copy has generation 0
-                // (an upsert would already have left an entry), so a minimum
-                // visible generation of 1 suppresses it.
                 None => {
                     if self.manifest.config.text
                         && let Some(live) = live_records.get(&key)
@@ -5383,50 +5334,40 @@ impl BorsukIndex {
                     {
                         bm25_stats_delta_change.suppress_document(terms)?;
                     }
-                    planned_delta.insert(key.clone(), 1);
-                    generation_requests.push((key, 1));
+                    delete_ids.push(RecordId::from_bytes(key));
                     newly += 1;
                     new_overlay_ids = new_overlay_ids.checked_add(1).ok_or_else(|| {
                         BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
                     })?;
                 }
-                // Already tombstoned: only bump — and count — when a still-visible
-                // copy exists (e.g. the id was re-upserted after a prior delete).
-                // Re-deleting an already-deleted id is a no-op.
-                Some(min_visible) => {
-                    if let Some(live) = live_records.get(&key)
-                        && live.generation >= min_visible
-                    {
+                Some(state) => {
+                    if !state.is_deleted() || live_records.contains_key(&key) {
                         if self.manifest.config.text
+                            && let Some(live) = live_records.get(&key)
                             && live.persisted
                             && let Some(terms) = &live.text_terms
                         {
                             bm25_stats_delta_change.suppress_document(terms)?;
                         }
-                        let minimum = min_visible.checked_add(1).ok_or_else(|| {
-                            BorsukError::InvalidStorage("record generation exceeds u64".to_string())
-                        })?;
-                        planned_delta.insert(key.clone(), minimum);
-                        generation_requests.push((key, minimum));
+                        delete_ids.push(RecordId::from_bytes(key));
                         newly += 1;
                     }
                 }
             }
         }
         if newly == 0 {
-            return Ok(DeleteReport {
-                deleted: 0,
-                total_tombstoned: before,
-                published: false,
-                requests: self.storage.request_counts().delta(&requests_before),
-            });
+            return Ok((
+                DeleteReport {
+                    deleted: 0,
+                    total_tombstoned: before,
+                    published: false,
+                    requests: self.storage.request_counts().delta(&requests_before),
+                },
+                BTreeMap::new(),
+            ));
         }
-        let reserved_generations = self.reserve_record_generations(&generation_requests)?;
-        let deleted_delta = generation_requests
-            .into_iter()
-            .zip(reserved_generations)
-            .map(|((key, _), generation)| (key, generation))
-            .collect();
+        let deleted_delta = self.allocate_delete_states(delete_ids)?;
+        let published_states = deleted_delta.clone();
         let bm25_stats_delta = self.persist_bm25_stats_delta(&bm25_stats_delta_change)?;
         let tombstone = self.write_tombstone(deleted_delta)?;
         let transaction_id = self
@@ -5446,13 +5387,87 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_none() {
             self.maybe_flush_wal()?;
         }
-        Ok(DeleteReport {
-            deleted: newly,
-            total_tombstoned: usize::try_from(self.visible_tombstone_id_count()?)
-                .unwrap_or(usize::MAX),
-            published: true,
-            requests: self.storage.request_counts().delta(&requests_before),
-        })
+        Ok((
+            DeleteReport {
+                deleted: newly,
+                total_tombstoned: usize::try_from(self.visible_tombstone_id_count()?)
+                    .unwrap_or(usize::MAX),
+                published: true,
+                requests: self.storage.request_counts().delta(&requests_before),
+            },
+            published_states,
+        ))
+    }
+
+    /// Apply parent-allocated entity versions to one physical modality. The
+    /// child recomputes its canonical digest for its own physical id, but never
+    /// allocates a second clock value. This keeps dense, sparse, text, and
+    /// late-interaction visibility on one logical entity order.
+    fn apply_parent_delete_versions(
+        &mut self,
+        targets: Vec<(RecordId, MutationVersion)>,
+    ) -> Result<()> {
+        if targets.is_empty() {
+            return Ok(());
+        }
+        if self.manifest.config.text {
+            return Err(BorsukError::InvalidStorage(
+                "derived modality delete unexpectedly targets a text-owning child".to_string(),
+            ));
+        }
+        let mut versions = BTreeMap::<Vec<u8>, MutationVersion>::new();
+        for (id, version) in targets {
+            match versions.entry(id.as_bytes().to_vec()) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(version);
+                }
+                std::collections::btree_map::Entry::Occupied(entry) if *entry.get() == version => {}
+                std::collections::btree_map::Entry::Occupied(_) => {
+                    return Err(BorsukError::InvalidStorage(
+                        "one derived delete id received conflicting parent versions".to_string(),
+                    ));
+                }
+            }
+        }
+        let current = self.mutation_states(versions.keys().map(Vec::as_slice))?;
+        let mut new_overlay_ids = 0_u64;
+        let mut states = BTreeMap::new();
+        for (id, version) in versions {
+            let state =
+                CanonicalMutation::delete(version, RecordId::from_bytes(id.clone())).state();
+            let previous = current.get(&id).copied().flatten();
+            if previous.is_none() {
+                new_overlay_ids = new_overlay_ids.checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                })?;
+            }
+            match previous {
+                Some(previous) if previous.greatest(state)? == previous => continue,
+                _ => {
+                    states.insert(id, state);
+                }
+            }
+        }
+        if states.is_empty() {
+            return Ok(());
+        }
+        let requests_before = self.storage.request_counts();
+        let tombstone = self.write_tombstone(states)?;
+        let transaction_id = self
+            .active_collection_transaction_id()
+            .map_or_else(|| Uuid::new_v4().simple().to_string(), str::to_string);
+        self.append_wal_and_publish(
+            Vec::new(),
+            self.cell_wal_next_generated_id_floor()?,
+            tombstone.map(|summary| (summary, new_overlay_ids)),
+            None,
+            &requests_before,
+            CellWalAppendTransaction {
+                id: &transaction_id,
+                state_prepared: false,
+            },
+        )?;
+        Ok(())
     }
 
     /// Physically remove every tombstoned row and clear the stable/live tombstone
@@ -6033,22 +6048,25 @@ impl BorsukIndex {
         Ok(live)
     }
 
-    /// Write one sorted tombstone-delta `(id, min_visible_generation)` run and
-    /// return its summary, or `None` when the batch is empty.
-    fn write_tombstone(&self, deleted: BTreeMap<Vec<u8>, u64>) -> Result<Option<TombstoneSummary>> {
-        self.write_tombstone_with_persistence(deleted, true)
+    /// Write one sorted convergent mutation-state run and return its summary,
+    /// or `None` when the batch is empty.
+    fn write_tombstone(
+        &self,
+        states: BTreeMap<Vec<u8>, MutationState>,
+    ) -> Result<Option<TombstoneSummary>> {
+        self.write_tombstone_with_persistence(states, true)
     }
 
     fn write_tombstone_with_persistence(
         &self,
-        deleted: BTreeMap<Vec<u8>, u64>,
+        states: BTreeMap<Vec<u8>, MutationState>,
         persist_intermediate: bool,
     ) -> Result<Option<TombstoneSummary>> {
-        if deleted.is_empty() {
+        if states.is_empty() {
             return Ok(None);
         }
         // BTreeMap already yields ids in sorted order.
-        let entries: Vec<(Vec<u8>, u64)> = deleted.into_iter().collect();
+        let entries: Vec<(Vec<u8>, MutationState)> = states.into_iter().collect();
         let bytes = tombstone_ids_to_parquet(&entries)?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = Manifest::tombstone_content_file_name(&checksum);
@@ -6096,15 +6114,27 @@ impl BorsukIndex {
             .collect::<Vec<_>>();
         let mut merged = HashMap::new();
         for tombstone in tombstones {
-            for (id, generation) in self.load_tombstone_run(tombstone)?.iter() {
-                let entry = merged.entry(id.clone()).or_insert(0_u64);
-                *entry = (*entry).max(*generation);
+            for (id, state) in self.load_tombstone_run(tombstone)?.iter() {
+                match merged.entry(id.clone()) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(*state);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        *entry.get_mut() = entry.get().greatest(*state)?;
+                    }
+                }
             }
         }
         for tombstone in &manifest.tombstone_pages {
-            for (id, generation) in self.load_tombstone_page(tombstone)?.iter() {
-                let entry = merged.entry(id.clone()).or_insert(0_u64);
-                *entry = (*entry).max(*generation);
+            for (id, state) in self.load_tombstone_page(tombstone)?.iter() {
+                match merged.entry(id.clone()) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(*state);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        *entry.get_mut() = entry.get().greatest(*state)?;
+                    }
+                }
             }
         }
         Ok(Some(Arc::new(merged)))
@@ -6297,19 +6327,22 @@ impl BorsukIndex {
         lexical_roots_will_rebuild: bool,
     ) -> Result<()> {
         if manifest.tombstone.is_some() || !manifest.tombstone_frontier.is_empty() {
-            let mut updates = BTreeMap::<u16, BTreeMap<Vec<u8>, u64>>::new();
+            let mut updates = BTreeMap::<u16, BTreeMap<Vec<u8>, MutationState>>::new();
             for run in manifest
                 .tombstone
                 .iter()
                 .chain(&manifest.tombstone_frontier)
             {
-                for (id, generation) in self.load_tombstone_run(run)?.iter() {
-                    let entry = updates
-                        .entry(tombstone_bucket(id))
-                        .or_default()
-                        .entry(id.clone())
-                        .or_insert(0);
-                    *entry = (*entry).max(*generation);
+                for (id, state) in self.load_tombstone_run(run)?.iter() {
+                    let bucket = updates.entry(tombstone_bucket(id)).or_default();
+                    match bucket.entry(id.clone()) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(*state);
+                        }
+                        std::collections::btree_map::Entry::Occupied(mut entry) => {
+                            *entry.get_mut() = entry.get().greatest(*state)?;
+                        }
+                    }
                 }
             }
             let mut pages = manifest
@@ -6320,9 +6353,15 @@ impl BorsukIndex {
                 .collect::<BTreeMap<_, _>>();
             for (bucket, mut changes) in updates {
                 if let Some(previous) = pages.get(&bucket) {
-                    for (id, generation) in self.load_tombstone_page(previous)?.iter() {
-                        let entry = changes.entry(id.clone()).or_insert(0);
-                        *entry = (*entry).max(*generation);
+                    for (id, state) in self.load_tombstone_page(previous)?.iter() {
+                        match changes.entry(id.clone()) {
+                            std::collections::btree_map::Entry::Vacant(entry) => {
+                                entry.insert(*state);
+                            }
+                            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                                *entry.get_mut() = entry.get().greatest(*state)?;
+                            }
+                        }
                     }
                 }
                 let summary = self.write_tombstone(changes)?.ok_or_else(|| {
@@ -6543,10 +6582,10 @@ impl BorsukIndex {
             // tombstone-matching cells rather than vector dimensions.
             let (segment, _) = self.read_segment_lean(summary)?;
             for record in &segment.records {
-                if overlay
-                    .get(record.id.as_bytes())
-                    .is_some_and(|minimum| record.generation < *minimum)
-                    && let Some(terms) = record_text_terms(record)
+                if Self::state_suppresses_record(
+                    overlay.get(record.id.as_bytes()).copied(),
+                    record,
+                )? && let Some(terms) = record_text_terms(record)
                 {
                     delta.suppress_document(&terms)?;
                 }
@@ -6555,23 +6594,22 @@ impl BorsukIndex {
         self.persist_bm25_stats_delta(&delta)
     }
 
-    /// The minimum visible generation for `id`, or `None` when the id carries no
-    /// tombstone entry. Bloom fast-path: an id absent from the tombstone bloom
-    /// pays zero I/O.
-    fn min_visible_generation(&self, id: &[u8]) -> Result<Option<u64>> {
-        let mut minimum = None;
+    /// The greatest convergent mutation state for `id`, or `None` when no
+    /// visibility frontier exists. Bloom negatives pay zero object I/O.
+    fn mutation_state(&self, id: &[u8]) -> Result<Option<MutationState>> {
+        let mut winner: Option<MutationState> = None;
         let bucket = tombstone_bucket(id);
         if let Ok(index) = self
             .manifest
             .tombstone_pages
             .binary_search_by_key(&bucket, |page| page.bucket)
             && self.manifest.tombstone_pages[index].might_contain_record_id(id)
-            && let Some(generation) = self
+            && let Some(state) = self
                 .load_tombstone_page(&self.manifest.tombstone_pages[index])?
                 .get(id)
                 .copied()
         {
-            minimum = Some(generation);
+            winner = Some(state);
         }
         for tombstone in self
             .manifest
@@ -6582,39 +6620,48 @@ impl BorsukIndex {
             if !tombstone.might_contain_record_id(id) {
                 continue;
             }
-            if let Some(generation) = self.load_tombstone_run(tombstone)?.get(id).copied() {
-                minimum = Some(minimum.map_or(generation, |current: u64| current.max(generation)));
+            if let Some(state) = self.load_tombstone_run(tombstone)?.get(id).copied() {
+                winner = Some(match winner {
+                    Some(current) => current.greatest(state)?,
+                    None => state,
+                });
             }
         }
         for tombstone in self.cell_wal_tombstone_summaries()? {
             if !tombstone.might_contain_record_id(id) {
                 continue;
             }
-            if let Some(generation) = self.load_tombstone_run(&tombstone)?.get(id).copied() {
-                minimum = Some(minimum.map_or(generation, |current: u64| current.max(generation)));
+            if let Some(state) = self.load_tombstone_run(&tombstone)?.get(id).copied() {
+                winner = Some(match winner {
+                    Some(current) => current.greatest(state)?,
+                    None => state,
+                });
             }
         }
-        Ok(minimum)
+        if let Some(state) = winner {
+            self.mutation_clock.observe(state.stamp().version())?;
+        }
+        Ok(winner)
     }
 
-    /// Resolve tombstone generations for a request batch while loading every
+    /// Resolve mutation states for a request batch while loading every
     /// matching immutable tombstone object at most once. The retained cache is
     /// deliberately not required for this bound: cold production handles and
     /// cache-disabled qualification runs still share I/O within the request.
-    fn min_visible_generations<'a, I>(&self, ids: I) -> Result<BTreeMap<Vec<u8>, Option<u64>>>
+    fn mutation_states<'a, I>(&self, ids: I) -> Result<BTreeMap<Vec<u8>, Option<MutationState>>>
     where
         I: IntoIterator<Item = &'a [u8]>,
     {
-        let mut minimums = ids
+        let mut states = ids
             .into_iter()
             .map(|id| (id.to_vec(), None))
             .collect::<BTreeMap<_, _>>();
-        if minimums.is_empty() {
-            return Ok(minimums);
+        if states.is_empty() {
+            return Ok(states);
         }
 
         let mut page_indexes = BTreeSet::new();
-        for id in minimums.keys() {
+        for id in states.keys() {
             let bucket = tombstone_bucket(id);
             if let Ok(index) = self
                 .manifest
@@ -6628,13 +6675,15 @@ impl BorsukIndex {
         for index in page_indexes {
             let page = &self.manifest.tombstone_pages[index];
             let overlay = self.load_tombstone_page(page)?;
-            for (id, minimum) in &mut minimums {
+            for (id, winner) in &mut states {
                 if tombstone_bucket(id) == page.bucket
                     && page.might_contain_record_id(id)
-                    && let Some(generation) = overlay.get(id).copied()
+                    && let Some(state) = overlay.get(id).copied()
                 {
-                    *minimum =
-                        Some(minimum.map_or(generation, |current: u64| current.max(generation)));
+                    *winner = Some(match *winner {
+                        Some(current) => current.greatest(state)?,
+                        None => state,
+                    });
                 }
             }
         }
@@ -6647,29 +6696,36 @@ impl BorsukIndex {
             .chain(&self.manifest.tombstone_frontier)
             .chain(&cell_tombstones)
         {
-            if !minimums
+            if !states
                 .keys()
                 .any(|id| tombstone.might_contain_record_id(id))
             {
                 continue;
             }
             let overlay = self.load_tombstone_run(tombstone)?;
-            for (id, minimum) in &mut minimums {
+            for (id, winner) in &mut states {
                 if tombstone.might_contain_record_id(id)
-                    && let Some(generation) = overlay.get(id).copied()
+                    && let Some(state) = overlay.get(id).copied()
                 {
-                    *minimum =
-                        Some(minimum.map_or(generation, |current: u64| current.max(generation)));
+                    *winner = Some(match *winner {
+                        Some(current) => current.greatest(state)?,
+                        None => state,
+                    });
                 }
             }
         }
-        Ok(minimums)
+        for state in states.values().flatten() {
+            self.mutation_clock.observe(state.stamp().version())?;
+        }
+        Ok(states)
     }
 
     /// Whether `id` carries any tombstone entry (deleted or superseded by a
     /// newer upsert). Used where the caller only has an id, not a record.
     fn id_is_tombstoned(&self, id: &[u8]) -> Result<bool> {
-        Ok(self.min_visible_generation(id)?.is_some())
+        Ok(self
+            .mutation_state(id)?
+            .is_some_and(MutationState::is_deleted))
     }
 
     /// Whether a stored record is suppressed: its id has a tombstone entry and
@@ -6677,9 +6733,34 @@ impl BorsukIndex {
     /// The newest upsert (whose generation equals the entry) and untombstoned
     /// records stay visible.
     fn is_suppressed(&self, record: &VectorRecord) -> Result<bool> {
-        match self.min_visible_generation(record.id.as_bytes())? {
-            Some(min_visible) => Ok(record.generation < min_visible),
-            None => Ok(false),
+        Self::state_suppresses_record(self.mutation_state(record.id.as_bytes())?, record)
+    }
+
+    fn state_suppresses_record(
+        state: Option<MutationState>,
+        record: &VectorRecord,
+    ) -> Result<bool> {
+        if state.is_none() {
+            return Ok(false);
+        }
+        let stamp = record.mutation_stamp().ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "record `{}` is missing its canonical mutation stamp",
+                record.id
+            ))
+        })?;
+        Self::state_suppresses_stamp(state, stamp)
+    }
+
+    fn state_suppresses_stamp(state: Option<MutationState>, stamp: MutationStamp) -> Result<bool> {
+        let Some(state) = state else {
+            return Ok(false);
+        };
+        state.stamp().greatest(stamp)?;
+        match state.stamp().version().cmp(&stamp.version()) {
+            Ordering::Greater => Ok(true),
+            Ordering::Less => Ok(false),
+            Ordering::Equal => Ok(state.is_deleted()),
         }
     }
 
@@ -6692,33 +6773,43 @@ impl BorsukIndex {
     /// projection — dense sidecars are never materialized for membership checks.
     fn live_delete_records(
         &self,
-        targets: &BTreeMap<Vec<u8>, u64>,
+        targets: &BTreeMap<Vec<u8>, Option<MutationState>>,
     ) -> Result<HashMap<Vec<u8>, LiveDeleteRecord>> {
         if targets.is_empty() {
             return Ok(HashMap::new());
         }
-        let mut live = HashMap::with_capacity(targets.len());
+        let mut live = HashMap::<Vec<u8>, LiveDeleteRecord>::with_capacity(targets.len());
         for summary in self.active_segment_summaries()? {
             if !targets.keys().any(|id| summary.might_contain_record_id(id)) {
                 continue;
             }
             let (segment, _) = self.read_segment_lean(&summary)?;
             for record in &segment.records {
-                let Some(threshold) = targets.get(record.id.as_bytes()) else {
+                let Some(state) = targets.get(record.id.as_bytes()) else {
                     continue;
                 };
-                if record.generation < *threshold {
+                if Self::state_suppresses_record(*state, record)? {
                     continue;
                 }
+                let stamp = record.mutation_stamp().ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "record `{}` is missing its canonical mutation stamp",
+                        record.id
+                    ))
+                })?;
                 let key = record.id.as_bytes().to_vec();
-                let replace = live.get(&key).is_none_or(|current: &LiveDeleteRecord| {
-                    record.generation >= current.generation
-                });
+                let replace = match live.get(&key) {
+                    Some(current) => {
+                        stamp.greatest(current.stamp)?;
+                        stamp.version() >= current.stamp.version()
+                    }
+                    None => true,
+                };
                 if replace {
                     live.insert(
                         key,
                         LiveDeleteRecord {
-                            generation: record.generation,
+                            stamp,
                             text_terms: record_text_terms(record),
                             persisted: true,
                         },
@@ -6730,21 +6821,31 @@ impl BorsukIndex {
         // equal-generation tail record wins without entering persisted BM25
         // physical-statistics corrections.
         for record in self.wal_tail()?.iter() {
-            let Some(threshold) = targets.get(record.id.as_bytes()) else {
+            let Some(state) = targets.get(record.id.as_bytes()) else {
                 continue;
             };
-            if record.generation < *threshold {
+            if Self::state_suppresses_record(*state, record)? {
                 continue;
             }
+            let stamp = record.mutation_stamp().ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "WAL record `{}` is missing its canonical mutation stamp",
+                    record.id
+                ))
+            })?;
             let key = record.id.as_bytes().to_vec();
-            let replace = live
-                .get(&key)
-                .is_none_or(|current| record.generation >= current.generation);
+            let replace = match live.get(&key) {
+                Some(current) => {
+                    stamp.greatest(current.stamp)?;
+                    stamp.version() >= current.stamp.version()
+                }
+                None => true,
+            };
             if replace {
                 live.insert(
                     key,
                     LiveDeleteRecord {
-                        generation: record.generation,
+                        stamp,
                         text_terms: record_text_terms(record),
                         persisted: false,
                     },
@@ -6801,10 +6902,15 @@ impl BorsukIndex {
                         spec.dimensions
                     )));
                 }
-                named_records.entry(name.clone()).or_default().push(
-                    VectorRecord::new(record.id.clone(), vector.clone())
-                        .with_metadata(record.metadata.clone()),
-                );
+                let child = VectorRecord::new(record.id.clone(), vector.clone())
+                    .with_metadata(record.metadata.clone());
+                let child = match record.mutation_stamp() {
+                    Some(stamp) => CanonicalMutation::put(stamp.version(), child)?
+                        .into_record()
+                        .expect("canonical put mutation contains a record"),
+                    None => child,
+                };
+                named_records.entry(name.clone()).or_default().push(child);
             }
             for (name, matrix) in &record.extra_multi_vectors {
                 let Some(spec) = self.manifest.config.named_vectors.get(name) else {
@@ -6820,17 +6926,22 @@ impl BorsukIndex {
                     )));
                 }
                 for (token_index, token) in matrix.tokens().enumerate() {
-                    named_records.entry(name.clone()).or_default().push(
-                        VectorRecord::new_bytes(
-                            encode_late_interaction_token_id(
-                                record.id.as_bytes(),
-                                record.generation,
-                                token_index,
-                            )?,
-                            token.to_vec(),
-                        )
-                        .with_metadata(record.metadata.clone()),
-                    );
+                    let child = VectorRecord::new_bytes(
+                        encode_late_interaction_token_id(
+                            record.id.as_bytes(),
+                            record.generation,
+                            token_index,
+                        )?,
+                        token.to_vec(),
+                    )
+                    .with_metadata(record.metadata.clone());
+                    let child = match record.mutation_stamp() {
+                        Some(stamp) => CanonicalMutation::put(stamp.version(), child)?
+                            .into_record()
+                            .expect("canonical put mutation contains a record"),
+                        None => child,
+                    };
+                    named_records.entry(name.clone()).or_default().push(child);
                 }
             }
         }
@@ -6926,6 +7037,99 @@ impl BorsukIndex {
             }
         }
         Ok(())
+    }
+
+    fn prepare_primary_records(&self, records: &mut [VectorRecord]) -> Result<()> {
+        for record in records.iter_mut() {
+            self.validate_vector(&record.vector)?;
+            record.vector = self
+                .manifest
+                .build_config
+                .vector_element_type
+                .canonicalize(&record.vector)?;
+        }
+        self.validate_text_records(records)?;
+        self.canonicalize_sparse_named_records(records)?;
+        self.canonicalize_late_interaction_records(records)
+    }
+
+    fn stamp_put_records(&self, records: &mut [VectorRecord]) -> Result<()> {
+        let stamped = records
+            .iter()
+            .filter(|record| record.mutation_stamp().is_some())
+            .count();
+        if stamped != 0 && stamped != records.len() {
+            return Err(BorsukError::InvalidStorage(
+                "mutation batch cannot mix stamped and unstamped records".to_string(),
+            ));
+        }
+        if stamped == records.len() {
+            for record in records {
+                self.mutation_clock.observe(
+                    record
+                        .mutation_stamp()
+                        .expect("stamped mutation batch checked")
+                        .version(),
+                )?;
+            }
+            return Ok(());
+        }
+        if records.is_empty() {
+            return Ok(());
+        }
+        let versions = self.mutation_clock.allocate_range_at(
+            self.mutation_clock_time_ms
+                .unwrap_or_else(|| Utc::now().timestamp_millis()),
+            records.len(),
+        )?;
+        for (ordinal, record) in records.iter_mut().enumerate() {
+            let mutation = CanonicalMutation::put(versions.at(ordinal)?, record.clone())?;
+            *record = mutation
+                .into_record()
+                .expect("canonical put mutation contains a record");
+        }
+        Ok(())
+    }
+
+    fn put_states(records: &[VectorRecord]) -> Result<BTreeMap<Vec<u8>, MutationState>> {
+        records
+            .iter()
+            .map(|record| {
+                let stamp = record.mutation_stamp().ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "record `{}` is missing its canonical mutation stamp",
+                        record.id
+                    ))
+                })?;
+                Ok((
+                    record.id.as_bytes().to_vec(),
+                    MutationState::new(stamp, MutationOperation::Put),
+                ))
+            })
+            .collect()
+    }
+
+    fn allocate_delete_states(
+        &self,
+        ids: impl IntoIterator<Item = RecordId>,
+    ) -> Result<BTreeMap<Vec<u8>, MutationState>> {
+        let ids = ids.into_iter().collect::<Vec<_>>();
+        if ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let versions = self.mutation_clock.allocate_range_at(
+            self.mutation_clock_time_ms
+                .unwrap_or_else(|| Utc::now().timestamp_millis()),
+            ids.len(),
+        )?;
+        ids.into_iter()
+            .enumerate()
+            .map(|(ordinal, id)| {
+                let key = id.as_bytes().to_vec();
+                let mutation = CanonicalMutation::delete(versions.at(ordinal)?, id);
+                Ok((key, mutation.state()))
+            })
+            .collect()
     }
 
     /// Exact ColBERT-style late-interaction search.
@@ -7049,8 +7253,8 @@ impl BorsukIndex {
                 let (entity_id, generation, _) =
                     decode_late_interaction_token_id(hit.id.as_bytes())?;
                 if self
-                    .min_visible_generation(entity_id)?
-                    .is_some_and(|minimum| generation < minimum)
+                    .mutation_state(entity_id)?
+                    .is_some_and(MutationState::is_deleted)
                 {
                     continue;
                 }
@@ -7239,10 +7443,9 @@ impl BorsukIndex {
         {
             return Ok(BTreeMap::new());
         }
-        let candidates = self
-            .min_visible_generations(ids.iter().map(|id| id.as_bytes()))?
-            .into_iter()
-            .map(|(id, minimum)| (id, minimum.unwrap_or(0)))
+        let candidates = ids
+            .iter()
+            .map(|id| (id.as_bytes().to_vec(), 0))
             .collect::<BTreeMap<_, _>>();
         let mut token_ids = BTreeMap::new();
         for (name, spec) in &self.manifest.config.named_vectors {
@@ -7519,10 +7722,16 @@ impl BorsukIndex {
                     if !touched[row] || score <= 0.0 {
                         continue;
                     }
-                    if self
-                        .min_visible_generation(&metadata.record_id)?
-                        .is_some_and(|min_visible| metadata.generation < min_visible)
-                    {
+                    let stamp = metadata.mutation_stamp.ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "sparse lexical row is missing its canonical mutation stamp"
+                                .to_string(),
+                        )
+                    })?;
+                    if Self::state_suppresses_stamp(
+                        self.mutation_state(&metadata.record_id)?,
+                        stamp,
+                    )? {
                         continue;
                     }
                     let mutation =
@@ -7678,15 +7887,8 @@ impl BorsukIndex {
             return Ok(report);
         }
 
-        for record in &mut records {
-            self.validate_vector(&record.vector)?;
-            record.vector = self
-                .manifest
-                .build_config
-                .vector_element_type
-                .canonicalize(&record.vector)?;
-        }
-        self.validate_text_records(&mut records)?;
+        self.prepare_primary_records(&mut records)?;
+        self.stamp_put_records(&mut records)?;
         let coordinated_write = self.manifest.wal_config.enabled;
         self.validate_record_ids_allowing_existing(
             &records,
@@ -8037,37 +8239,6 @@ impl BorsukIndex {
         })
     }
 
-    fn reserve_record_generations(&self, requests: &[(Vec<u8>, u64)]) -> Result<Vec<u64>> {
-        if requests.is_empty() {
-            return Ok(Vec::new());
-        }
-        let minimum = requests
-            .iter()
-            .map(|(_, minimum)| *minimum)
-            .max()
-            .unwrap_or(1);
-        let count = u64::try_from(requests.len()).map_err(|_| {
-            BorsukError::InvalidStorage("generation reservation count exceeds u64".to_string())
-        })?;
-        let start =
-            self.reserve_coordination_counter("id-directory/last-write-wins/NEXT", minimum, count)?;
-        (0..requests.len())
-            .map(|offset| {
-                start
-                    .checked_add(u64::try_from(offset).map_err(|_| {
-                        BorsukError::InvalidStorage(
-                            "generation reservation offset exceeds u64".to_string(),
-                        )
-                    })?)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "record generation reservation exceeds u64".to_string(),
-                        )
-                    })
-            })
-            .collect()
-    }
-
     fn cell_wal_metadata(
         transaction: &CommittedCellWalTransaction,
     ) -> Result<CellWalMutationMetadata> {
@@ -8378,12 +8549,15 @@ impl BorsukIndex {
                     std::collections::hash_map::Entry::Vacant(entry) => {
                         entry.insert(candidate);
                     }
-                    std::collections::hash_map::Entry::Occupied(mut entry)
-                        if candidate.generation > entry.get().generation =>
-                    {
-                        entry.insert(candidate);
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        let winner = candidate.state.greatest(entry.get().state)?;
+                        if winner == candidate.state
+                            && candidate.state.stamp().version()
+                                > entry.get().state.stamp().version()
+                        {
+                            entry.insert(candidate);
+                        }
                     }
-                    std::collections::hash_map::Entry::Occupied(_) => {}
                 }
             }
         }
@@ -8447,8 +8621,15 @@ impl BorsukIndex {
             bundled_directory.push(CellWalIdDirectoryEntry {
                 id: record.id.as_bytes().to_vec(),
                 owner,
-                generation: record.generation,
-                deleted: false,
+                state: MutationState::new(
+                    record.mutation_stamp().ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "record `{}` is missing its canonical mutation stamp",
+                            record.id
+                        ))
+                    })?,
+                    MutationOperation::Put,
+                ),
             });
             bundled_records.push(record);
         }
@@ -8470,7 +8651,7 @@ impl BorsukIndex {
             let mut tombstone_entries = self
                 .load_tombstone_run(&tombstone)?
                 .iter()
-                .map(|(id, generation)| (id.clone(), *generation))
+                .map(|(id, state)| (id.clone(), *state))
                 .collect::<Vec<_>>();
             tombstone_entries.sort_by(|left, right| left.0.cmp(&right.0));
             let tombstone_only_ids = tombstone_entries
@@ -8481,18 +8662,17 @@ impl BorsukIndex {
             let previous_entries = self
                 .cell_wal_id_directory_entries(tombstone_only_ids.iter().map(|id| id.as_slice()))?;
             let mut bundled_tombstones = Vec::with_capacity(tombstone_entries.len());
-            for (id, generation) in tombstone_entries {
+            for (id, state) in tombstone_entries {
                 let previous_owner = previous_entries
                     .get(&id)
-                    .filter(|entry| !entry.deleted)
+                    .filter(|entry| !entry.state.is_deleted())
                     .map_or_else(|| self.id_directory_partition(&id), |entry| entry.owner);
-                bundled_tombstones.push((id.clone(), generation));
-                if !replaced_ids.contains(&id) {
+                bundled_tombstones.push((id.clone(), state));
+                if state.is_deleted() && !replaced_ids.contains(&id) {
                     bundled_directory.push(CellWalIdDirectoryEntry {
                         id,
                         owner: previous_owner,
-                        generation,
-                        deleted: true,
+                        state,
                     });
                 }
             }
@@ -8531,7 +8711,7 @@ impl BorsukIndex {
                     metadata: Vec::new(),
                     record_count: entries.len(),
                     bytes,
-                    extension: "bin".to_string(),
+                    extension: "parquet".to_string(),
                 });
             }
         }
@@ -10253,7 +10433,7 @@ impl BorsukIndex {
         for record in records {
             if tail_entries
                 .get(record.id.as_bytes())
-                .is_some_and(|entry| !entry.deleted)
+                .is_some_and(|entry| !entry.state.is_deleted())
             {
                 return Err(BorsukError::InvalidRecordInput(format!(
                     "duplicate record id `{}` already exists",
@@ -12573,25 +12753,29 @@ impl BorsukIndex {
                 |(path, chunks)| {
                     let start = chunks
                         .iter()
-                        .map(|chunk| chunk.offset_bytes)
+                        .map(|chunk| chunk.offset_bytes as usize)
                         .min()
                         .unwrap_or(0);
                     let end = chunks
                         .iter()
-                        .map(|chunk| chunk.offset_bytes.saturating_add(chunk.size_bytes))
+                        .map(|chunk| {
+                            (chunk.offset_bytes as usize).saturating_add(chunk.size_bytes as usize)
+                        })
                         .max()
                         .unwrap_or(start);
                     let bundled = self.storage.read_range(path, start as u64..end as u64)?;
                     let mut loaded = Vec::with_capacity(chunks.len());
                     for chunk in chunks {
-                        let local_start =
-                            chunk.offset_bytes.checked_sub(start).ok_or_else(|| {
+                        let local_start = (chunk.offset_bytes as usize)
+                            .checked_sub(start)
+                            .ok_or_else(|| {
                                 BorsukError::InvalidStorage(
                                     "global PQ bundled code offset underflows".to_string(),
                                 )
                             })?;
-                        let local_end =
-                            local_start.checked_add(chunk.size_bytes).ok_or_else(|| {
+                        let local_end = local_start
+                            .checked_add(chunk.size_bytes as usize)
+                            .ok_or_else(|| {
                                 BorsukError::InvalidStorage(
                                     "global PQ bundled code range overflows".to_string(),
                                 )
@@ -12695,16 +12879,39 @@ impl BorsukIndex {
             bytes_read = bytes_read.saturating_add(bytes);
         }
 
-        let metric = &self.manifest.config.metric;
-        let mut scored_vectors = Vec::with_capacity(candidate_rows.len());
+        let mut winning_candidates =
+            BTreeMap::<RecordId, (usize, GlobalPqRow, Vec<f32>, MutationStamp)>::new();
         for (node, row) in candidate_rows {
-            let (vector, id, generation) = exact_by_node.remove(&node).ok_or_else(|| {
+            let (vector, id, stamp) = exact_by_node.remove(&node).ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "resident global PQ candidate exact row is missing".to_string(),
                 )
             })?;
+            match winning_candidates.entry(id) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert((node, row, vector, stamp));
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    let greatest = entry.get().3.greatest(stamp)?;
+                    if greatest == stamp && stamp.version() > entry.get().3.version() {
+                        entry.insert((node, row, vector, stamp));
+                    }
+                }
+            }
+        }
+        let mutation_states =
+            self.mutation_states(winning_candidates.keys().map(|id| id.as_bytes()))?;
+        let metric = &self.manifest.config.metric;
+        let mut scored_vectors = Vec::with_capacity(winning_candidates.len());
+        for (id, (node, row, vector, stamp)) in winning_candidates {
+            if Self::state_suppresses_stamp(
+                mutation_states.get(id.as_bytes()).copied().flatten(),
+                stamp,
+            )? {
+                continue;
+            }
             let distance = metric.distance_unchecked(query, &vector)?;
-            scored_vectors.push((distance, node, row, vector, id, generation));
+            scored_vectors.push((distance, node, row, vector, id, stamp));
         }
         scored_vectors.sort_by(|left, right| {
             left.0
@@ -12712,30 +12919,6 @@ impl BorsukIndex {
                 .then_with(|| left.1.cmp(&right.1))
         });
         let records_scored = scored_vectors.len();
-        // Appended delta chunks intentionally retain immutable rows from older
-        // generations. Remove those rows (and any duplicate live identity)
-        // before establishing the top-k distance boundary; otherwise stale
-        // nearest rows can consume k and hide the next live neighbours.
-        let mut minimums = HashMap::<RecordId, Option<u64>>::new();
-        let mut seen = HashSet::new();
-        let mut live_vectors = Vec::with_capacity(scored_vectors.len());
-        for entry in scored_vectors {
-            let id = &entry.4;
-            let generation = entry.5;
-            let minimum = match minimums.get(id) {
-                Some(minimum) => *minimum,
-                None => {
-                    let minimum = self.min_visible_generation(id.as_bytes())?;
-                    minimums.insert(id.clone(), minimum);
-                    minimum
-                }
-            };
-            if minimum.is_some_and(|minimum| generation < minimum) || !seen.insert(id.clone()) {
-                continue;
-            }
-            live_vectors.push(entry);
-        }
-        let mut scored_vectors = live_vectors;
         let materialize = options.k.min(scored_vectors.len());
         let boundary = materialize
             .checked_sub(1)
@@ -12746,7 +12929,7 @@ impl BorsukIndex {
         scored_vectors.truncate(materialize);
 
         let mut scored = Vec::with_capacity(scored_vectors.len());
-        for (distance, _node, _row, vector, id, _generation) in scored_vectors {
+        for (distance, _node, _row, vector, id, _stamp) in scored_vectors {
             scored.push((distance, id, vector));
         }
         scored.sort_by(|left, right| {
@@ -13417,38 +13600,7 @@ impl BorsukIndex {
             for (entry, slice) in pending.iter().zip(&encoded.slices) {
                 let code = &encoded.bytes[slice.code_range.clone()];
                 let exact = &encoded.bytes[slice.exact_range.clone()];
-                let identity_offsets_padding_bytes = u16::try_from(
-                    slice
-                        .identity_offsets_range
-                        .start
-                        .checked_sub(slice.code_range.end)
-                        .ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "global identity offsets overlap scan payload".to_string(),
-                            )
-                        })?,
-                )
-                .map_err(|_| {
-                    BorsukError::InvalidStorage(
-                        "global identity offsets padding exceeds u16".to_string(),
-                    )
-                })?;
-                let identity_values_padding_bytes = u8::try_from(
-                    slice
-                        .identity_values_range
-                        .start
-                        .checked_sub(slice.identity_offsets_range.end)
-                        .ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "global identity values overlap offsets".to_string(),
-                            )
-                        })?,
-                )
-                .map_err(|_| {
-                    BorsukError::InvalidStorage(
-                        "global identity values padding exceeds u8".to_string(),
-                    )
-                })?;
+                let mut reference = global_pq_chunk_reference(&path, entry, slice, &encoded.bytes)?;
                 let graph = self
                     .manifest
                     .build_config
@@ -13457,24 +13609,7 @@ impl BorsukIndex {
                     .filter(|_| entry.chunk.rows >= 2)
                     .map(|config| {
                         let graph = GlobalCellGraph::build(
-                            &GlobalPqChunkRef {
-                                path: path.clone(),
-                                checksum: blake3::hash(code).to_hex().to_string(),
-                                offset_bytes: slice.code_range.start,
-                                exact_checksum: blake3::hash(exact)
-                                    .to_hex()
-                                    .to_string()
-                                    .into_boxed_str(),
-                                exact_offset_bytes: slice.exact_range.start,
-                                exact_size_bytes: exact.len(),
-                                cell_index: entry.cell_index,
-                                identity_offsets_padding_bytes,
-                                identity_values_padding_bytes,
-                                row_start: entry.row_start,
-                                rows: entry.chunk.rows,
-                                size_bytes: code.len(),
-                                graph: None,
-                            },
+                            &reference,
                             code.to_vec(),
                             exact,
                             dimensions,
@@ -13501,21 +13636,8 @@ impl BorsukIndex {
                         })
                     })
                     .transpose()?;
-                chunk_refs.push(GlobalPqChunkRef {
-                    path: path.clone(),
-                    checksum: blake3::hash(code).to_hex().to_string(),
-                    offset_bytes: slice.code_range.start,
-                    exact_checksum: blake3::hash(exact).to_hex().to_string().into_boxed_str(),
-                    exact_offset_bytes: slice.exact_range.start,
-                    exact_size_bytes: exact.len(),
-                    cell_index: entry.cell_index,
-                    identity_offsets_padding_bytes,
-                    identity_values_padding_bytes,
-                    row_start: entry.row_start,
-                    rows: entry.chunk.rows,
-                    size_bytes: code.len(),
-                    graph,
-                });
+                reference.graph = graph;
+                chunk_refs.push(reference);
             }
             pending.clear();
             Ok(())
@@ -13575,7 +13697,11 @@ impl BorsukIndex {
                         },
                         &record.vector,
                         record.id.as_bytes(),
-                        record.generation,
+                        record.mutation_stamp().ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global PQ build record has no mutation stamp".to_string(),
+                            )
+                        })?,
                     )?;
                 }
                 segment_index = segment_index.saturating_add(1);
@@ -13590,7 +13716,7 @@ impl BorsukIndex {
             let identity_bytes = chunk
                 .identities
                 .iter()
-                .map(|(id, _)| id.as_bytes().len().saturating_add(8))
+                .map(|(id, _)| id.as_bytes().len().saturating_add(88))
                 .sum::<usize>()
                 .saturating_add(chunk.rows.saturating_add(1).saturating_mul(4));
             let next_code_bytes = pending_code_bytes.saturating_add(chunk.bytes.len());
@@ -14150,7 +14276,11 @@ impl BorsukIndex {
                     },
                     &record.vector,
                     record.id.as_bytes(),
-                    record.generation,
+                    record.mutation_stamp().ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global PQ append record has no mutation stamp".to_string(),
+                        )
+                    })?,
                 )?;
                 appended_vectors = appended_vectors.saturating_add(1);
             }
@@ -14235,36 +14365,7 @@ impl BorsukIndex {
             for (entry, slice) in pending.iter().zip(&encoded.slices) {
                 let code = &encoded.bytes[slice.code_range.clone()];
                 let exact = &encoded.bytes[slice.exact_range.clone()];
-                let offsets_padding =
-                    u16::try_from(slice.identity_offsets_range.start - slice.code_range.end)
-                        .map_err(|_| {
-                            BorsukError::InvalidStorage(
-                                "global identity offsets padding exceeds u16".to_string(),
-                            )
-                        })?;
-                let values_padding = u8::try_from(
-                    slice.identity_values_range.start - slice.identity_offsets_range.end,
-                )
-                .map_err(|_| {
-                    BorsukError::InvalidStorage(
-                        "global identity values padding exceeds u8".to_string(),
-                    )
-                })?;
-                let mut reference = GlobalPqChunkRef {
-                    path: path.clone(),
-                    checksum: blake3::hash(code).to_hex().to_string(),
-                    offset_bytes: slice.code_range.start,
-                    exact_checksum: blake3::hash(exact).to_hex().to_string().into_boxed_str(),
-                    exact_offset_bytes: slice.exact_range.start,
-                    exact_size_bytes: exact.len(),
-                    cell_index: entry.cell_index,
-                    identity_offsets_padding_bytes: offsets_padding,
-                    identity_values_padding_bytes: values_padding,
-                    row_start: entry.row_start,
-                    rows: entry.chunk.rows,
-                    size_bytes: code.len(),
-                    graph: None,
-                };
+                let mut reference = global_pq_chunk_reference(&path, entry, slice, &encoded.bytes)?;
                 if let Some(config) = self
                     .manifest
                     .build_config
@@ -14308,7 +14409,7 @@ impl BorsukIndex {
             let identity_bytes = chunk
                 .identities
                 .iter()
-                .map(|(id, _)| id.as_bytes().len().saturating_add(8))
+                .map(|(id, _)| id.as_bytes().len().saturating_add(88))
                 .sum::<usize>()
                 .saturating_add(chunk.rows.saturating_add(1).saturating_mul(4));
             let next_code_bytes = pending_code_bytes.saturating_add(chunk.bytes.len());
@@ -15124,11 +15225,18 @@ impl BorsukIndex {
                     &mut scores,
                 );
                 for (metadata, score) in read.rows.iter().zip(scores) {
-                    if score <= 0.0
-                        || self
-                            .min_visible_generation(&metadata.record_id)?
-                            .is_some_and(|min_visible| metadata.generation < min_visible)
-                    {
+                    if score <= 0.0 {
+                        continue;
+                    }
+                    let stamp = metadata.mutation_stamp.ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "BM25 lexical row is missing its canonical mutation stamp".to_string(),
+                        )
+                    })?;
+                    if Self::state_suppresses_stamp(
+                        self.mutation_state(&metadata.record_id)?,
+                        stamp,
+                    )? {
                         continue;
                     }
                     let mutation =
@@ -15277,13 +15385,15 @@ impl BorsukIndex {
                     "bm25 index row {row} has no generation mapping"
                 ))
             })?;
-            if self
-                .min_visible_generation(id_bytes)?
-                .is_some_and(|min_visible| generation < min_visible)
-            {
+            let stamp = sidecar.row_mutation_stamp(row).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "bm25 index row {row} has no canonical mutation stamp"
+                ))
+            })?;
+            if Self::state_suppresses_stamp(self.mutation_state(id_bytes)?, stamp)? {
                 continue;
             }
-            let mutation = MutationOrderKey::new(sidecar.row_mutation_stamp(row), generation);
+            let mutation = MutationOrderKey::new(Some(stamp), generation);
             match best_by_id.get_mut(id_bytes) {
                 Some(existing) if !mutation.compare(existing.0)?.is_gt() => {}
                 Some(existing) => *existing = (mutation, score),
@@ -18826,11 +18936,15 @@ impl BorsukIndex {
         path: &str,
         chunks: &[(GlobalPqChunkRef, Vec<(usize, usize)>)],
         query_local_ranges: &[QueryLocalRange],
-    ) -> Result<(Vec<(usize, Vec<f32>, RecordId, u64)>, u64)> {
+    ) -> Result<(Vec<(usize, Vec<f32>, RecordId, MutationStamp)>, u64)> {
         enum RequestedRow {
             Exact { node: usize },
             IdentityOffsets { row_start: usize },
             IdentityValues { row_start: usize },
+            MutationHlc { row_start: usize },
+            MutationWriter { row_start: usize },
+            MutationDigest { row_start: usize },
+            RowIntegrity { row_start: usize },
         }
         let dimensions = self.manifest.config.dimensions;
         let vector_element_type = self.manifest.build_config.vector_element_type;
@@ -18893,6 +19007,10 @@ impl BorsukIndex {
         let mut identity_cache_keys = HashMap::<usize, String>::new();
         let mut identity_offsets = HashMap::<usize, Vec<u8>>::new();
         let mut identity_values = HashMap::<usize, Vec<u8>>::new();
+        let mut mutation_hlc = HashMap::<usize, Vec<u8>>::new();
+        let mut mutation_writer = HashMap::<usize, Vec<u8>>::new();
+        let mut mutation_digest = HashMap::<usize, Vec<u8>>::new();
+        let mut row_integrity = HashMap::<usize, Vec<u8>>::new();
         for (chunk, entries) in chunks {
             if chunk.path != path {
                 return Err(BorsukError::InvalidStorage(
@@ -18928,13 +19046,23 @@ impl BorsukIndex {
                 }
             }
             let (offsets_range, values_range) = chunk.identity_ranges()?;
+            let [hlc_range, writer_range, digest_range, integrity_range] =
+                chunk.mutation_ranges()?;
             let identity_key = format!(
-                "{path}#{}:{}-{}:{}-{}",
+                "{path}#{}:{}-{}:{}-{}:{}-{}:{}-{}:{}-{}:{}-{}",
                 chunk.row_start,
                 offsets_range.start,
                 offsets_range.end,
                 values_range.start,
-                values_range.end
+                values_range.end,
+                hlc_range.start,
+                hlc_range.end,
+                writer_range.start,
+                writer_range.end,
+                digest_range.start,
+                digest_range.end,
+                integrity_range.start,
+                integrity_range.end,
             );
             if let Some(identity) = self
                 .read_runtime
@@ -18943,6 +19071,10 @@ impl BorsukIndex {
             {
                 identity_offsets.insert(chunk.row_start, identity.offsets.clone());
                 identity_values.insert(chunk.row_start, identity.values.clone());
+                mutation_hlc.insert(chunk.row_start, identity.mutation_hlc.clone());
+                mutation_writer.insert(chunk.row_start, identity.mutation_writer.clone());
+                mutation_digest.insert(chunk.row_start, identity.mutation_digest.clone());
+                row_integrity.insert(chunk.row_start, identity.row_integrity.clone());
             } else {
                 identity_cache_keys.insert(chunk.row_start, identity_key);
                 requested.push((
@@ -18954,6 +19086,30 @@ impl BorsukIndex {
                 requested.push((
                     values_range.start as u64..values_range.end as u64,
                     RequestedRow::IdentityValues {
+                        row_start: chunk.row_start,
+                    },
+                ));
+                requested.push((
+                    hlc_range.start as u64..hlc_range.end as u64,
+                    RequestedRow::MutationHlc {
+                        row_start: chunk.row_start,
+                    },
+                ));
+                requested.push((
+                    writer_range.start as u64..writer_range.end as u64,
+                    RequestedRow::MutationWriter {
+                        row_start: chunk.row_start,
+                    },
+                ));
+                requested.push((
+                    digest_range.start as u64..digest_range.end as u64,
+                    RequestedRow::MutationDigest {
+                        row_start: chunk.row_start,
+                    },
+                ));
+                requested.push((
+                    integrity_range.start as u64..integrity_range.end as u64,
+                    RequestedRow::RowIntegrity {
                         row_start: chunk.row_start,
                     },
                 ));
@@ -18991,6 +19147,7 @@ impl BorsukIndex {
             })
             .collect::<Result<Vec<_>>>()?;
         let mut vectors = HashMap::new();
+        let mut exact_rows = HashMap::<usize, Vec<u8>>::new();
         bytes_fetched = bytes_fetched.saturating_add(rerank_bytes_fetched);
         if let Some(full_vectors) = full_vectors.as_ref() {
             for (_chunk, entries) in chunks {
@@ -19001,6 +19158,9 @@ impl BorsukIndex {
                         )
                     })?;
                     vectors.insert(node, vector.clone());
+                    let mut encoded = Vec::with_capacity(row_bytes);
+                    vector_element_type.encode_canonical_fixed_width_into(vector, &mut encoded)?;
+                    exact_rows.insert(node, encoded);
                 }
             }
         }
@@ -19016,6 +19176,7 @@ impl BorsukIndex {
                         node,
                         vector_element_type.decode_fixed_width(bytes, dimensions)?,
                     );
+                    exact_rows.insert(node, bytes.clone());
                 }
                 RequestedRow::IdentityOffsets { row_start } => {
                     identity_offsets.insert(row_start, bytes.clone());
@@ -19023,13 +19184,37 @@ impl BorsukIndex {
                 RequestedRow::IdentityValues { row_start } => {
                     identity_values.insert(row_start, bytes.clone());
                 }
+                RequestedRow::MutationHlc { row_start } => {
+                    mutation_hlc.insert(row_start, bytes.clone());
+                }
+                RequestedRow::MutationWriter { row_start } => {
+                    mutation_writer.insert(row_start, bytes.clone());
+                }
+                RequestedRow::MutationDigest { row_start } => {
+                    mutation_digest.insert(row_start, bytes.clone());
+                }
+                RequestedRow::RowIntegrity { row_start } => {
+                    row_integrity.insert(row_start, bytes.clone());
+                }
             }
         }
         for (row_start, cache_key) in identity_cache_keys {
-            let (Some(offsets), Some(values)) = (
+            let (
+                Some(offsets),
+                Some(values),
+                Some(hlc),
+                Some(writer),
+                Some(digest),
+                Some(integrity),
+            ) = (
                 identity_offsets.get(&row_start),
                 identity_values.get(&row_start),
-            ) else {
+                mutation_hlc.get(&row_start),
+                mutation_writer.get(&row_start),
+                mutation_digest.get(&row_start),
+                row_integrity.get(&row_start),
+            )
+            else {
                 continue;
             };
             self.read_runtime.decoded_global_identity_ranges.insert(
@@ -19037,8 +19222,16 @@ impl BorsukIndex {
                 Arc::new(GlobalIdentityRanges {
                     offsets: offsets.clone(),
                     values: values.clone(),
+                    mutation_hlc: hlc.clone(),
+                    mutation_writer: writer.clone(),
+                    mutation_digest: digest.clone(),
+                    row_integrity: integrity.clone(),
                 }),
-                (offsets.len() as u64).saturating_add(values.len() as u64),
+                [offsets, values, hlc, writer, digest, integrity]
+                    .into_iter()
+                    .fold(0_u64, |bytes, value| {
+                        bytes.saturating_add(value.len() as u64)
+                    }),
             );
         }
         let mut rows = Vec::new();
@@ -19048,6 +19241,18 @@ impl BorsukIndex {
             })?;
             let values = identity_values.remove(&chunk.row_start).ok_or_else(|| {
                 BorsukError::InvalidStorage("global identity values are missing".to_string())
+            })?;
+            let hlc = mutation_hlc.remove(&chunk.row_start).ok_or_else(|| {
+                BorsukError::InvalidStorage("global mutation HLC values are missing".to_string())
+            })?;
+            let writers = mutation_writer.remove(&chunk.row_start).ok_or_else(|| {
+                BorsukError::InvalidStorage("global mutation writers are missing".to_string())
+            })?;
+            let digests = mutation_digest.remove(&chunk.row_start).ok_or_else(|| {
+                BorsukError::InvalidStorage("global mutation digests are missing".to_string())
+            })?;
+            let integrities = row_integrity.remove(&chunk.row_start).ok_or_else(|| {
+                BorsukError::InvalidStorage("global row integrities are missing".to_string())
             })?;
             if offsets.len() != (chunk.rows + 1).saturating_mul(4) {
                 return Err(BorsukError::InvalidStorage(
@@ -19070,27 +19275,44 @@ impl BorsukIndex {
                 };
                 let start = offset_at(row)?;
                 let end = offset_at(row + 1)?;
-                let payload = values.get(start..end).ok_or_else(|| {
+                let id = values.get(start..end).ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "global identity value is outside its buffer".to_string(),
                     )
                 })?;
-                let generation = payload.get(..8).ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "global identity value has no generation".to_string(),
-                    )
-                })?;
+                let stamp = MutationStamp::new(
+                    MutationVersion::from_parts(
+                        u64::from_le_bytes(
+                            global_pq_fixed_row(&hlc, row, 8, "mutation HLC")?
+                                .try_into()
+                                .expect("eight bytes"),
+                        ),
+                        global_pq_fixed_row(&writers, row, 16, "mutation writer")?
+                            .try_into()
+                            .expect("sixteen bytes"),
+                    ),
+                    global_pq_fixed_row(&digests, row, 32, "mutation digest")?
+                        .try_into()
+                        .expect("thirty-two bytes"),
+                );
                 let vector = vectors.remove(&node).ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "global exact-vector candidate is missing".to_string(),
                     )
                 })?;
-                rows.push((
-                    node,
-                    vector,
-                    RecordId::from_bytes(payload[8..].to_vec()),
-                    u64::from_le_bytes(generation.try_into().expect("eight bytes")),
-                ));
+                let exact = exact_rows.remove(&node).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global exact-vector candidate bytes are missing".to_string(),
+                    )
+                })?;
+                let expected_integrity = global_pq_row_integrity(id, stamp, &exact);
+                let actual_integrity = global_pq_fixed_row(&integrities, row, 32, "row integrity")?;
+                if actual_integrity != expected_integrity {
+                    return Err(BorsukError::InvalidStorage(
+                        "global PQ row integrity mismatch".to_string(),
+                    ));
+                }
+                rows.push((node, vector, RecordId::from_bytes(id.to_vec()), stamp));
             }
         }
         Ok((rows, bytes_fetched))
@@ -20025,6 +20247,10 @@ struct GlobalPqBundleSlice {
     code_range: Range<usize>,
     identity_offsets_range: Range<usize>,
     identity_values_range: Range<usize>,
+    mutation_hlc_range: Range<usize>,
+    mutation_writer_range: Range<usize>,
+    mutation_digest_range: Range<usize>,
+    row_integrity_range: Range<usize>,
     exact_range: Range<usize>,
 }
 
@@ -20058,7 +20284,23 @@ fn encode_global_pq_arrow_bundle(
     let schema = Arc::new(arrow_schema::Schema::new_with_metadata(
         vec![
             arrow_schema::Field::new("scan_payload", scan_type, false),
-            arrow_schema::Field::new("record_identity", arrow_schema::DataType::Binary, false),
+            arrow_schema::Field::new("record_id", arrow_schema::DataType::Binary, false),
+            arrow_schema::Field::new("mutation_hlc", arrow_schema::DataType::UInt64, false),
+            arrow_schema::Field::new(
+                "mutation_writer",
+                arrow_schema::DataType::FixedSizeBinary(16),
+                false,
+            ),
+            arrow_schema::Field::new(
+                "mutation_digest",
+                arrow_schema::DataType::FixedSizeBinary(32),
+                false,
+            ),
+            arrow_schema::Field::new(
+                "row_integrity",
+                arrow_schema::DataType::FixedSizeBinary(32),
+                false,
+            ),
             arrow_schema::Field::new("exact_vector", exact_type, false),
         ],
         HashMap::from([
@@ -20112,23 +20354,59 @@ fn encode_global_pq_arrow_bundle(
                     "global PQ identity count does not match its rows".to_string(),
                 ));
             }
-            let identity_payloads = entry
+            let identities = arrow_array::BinaryArray::from_iter_values(
+                entry.chunk.identities.iter().map(|(id, _)| id.as_bytes()),
+            );
+            let mutation_hlc = arrow_array::UInt64Array::from_iter_values(
+                entry
+                    .chunk
+                    .identities
+                    .iter()
+                    .map(|(_, stamp)| stamp.version().hlc()),
+            );
+            let mutation_writer = arrow_array::FixedSizeBinaryArray::try_from_iter(
+                entry
+                    .chunk
+                    .identities
+                    .iter()
+                    .map(|(_, stamp)| stamp.version().writer()),
+            )?;
+            let mutation_digest = arrow_array::FixedSizeBinaryArray::try_from_iter(
+                entry
+                    .chunk
+                    .identities
+                    .iter()
+                    .map(|(_, stamp)| stamp.digest()),
+            )?;
+            let exact_row_bytes = element_type.fixed_width_bytes(dimensions)?;
+            let row_integrity = entry
                 .chunk
                 .identities
                 .iter()
-                .map(|(id, generation)| {
-                    let mut payload = Vec::with_capacity(8 + id.as_bytes().len());
-                    payload.extend_from_slice(&generation.to_le_bytes());
-                    payload.extend_from_slice(id.as_bytes());
-                    payload
+                .enumerate()
+                .map(|(row, (id, stamp))| {
+                    let start = row * exact_row_bytes;
+                    global_pq_row_integrity(
+                        id.as_bytes(),
+                        *stamp,
+                        &entry.chunk.exact_bytes[start..start + exact_row_bytes],
+                    )
                 })
                 .collect::<Vec<_>>();
-            let identities = arrow_array::BinaryArray::from_iter_values(
-                identity_payloads.iter().map(Vec::as_slice),
-            );
+            let row_integrity = arrow_array::FixedSizeBinaryArray::try_from_iter(
+                row_integrity.iter().map(<[_; 32]>::as_slice),
+            )?;
             let batch = arrow_array::RecordBatch::try_new(
                 Arc::clone(&schema),
-                vec![Arc::new(scan), Arc::new(identities), exact],
+                vec![
+                    Arc::new(scan),
+                    Arc::new(identities),
+                    Arc::new(mutation_hlc),
+                    Arc::new(mutation_writer),
+                    Arc::new(mutation_digest),
+                    Arc::new(row_integrity),
+                    exact,
+                ],
             )?;
             writer.write(&batch)?;
         }
@@ -20136,6 +20414,118 @@ fn encode_global_pq_arrow_bundle(
     }
     let slices = global_pq_arrow_buffer_ranges(&bytes, pending.len())?;
     Ok(EncodedGlobalPqBundle { bytes, slices })
+}
+
+fn global_pq_row_integrity(id: &[u8], stamp: MutationStamp, exact: &[u8]) -> [u8; 32] {
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"borsuk.global-pq.row.v3\0");
+    hash.update(&(id.len() as u64).to_le_bytes());
+    hash.update(id);
+    hash.update(&stamp.version().hlc().to_le_bytes());
+    hash.update(&stamp.version().writer());
+    hash.update(&stamp.digest());
+    hash.update(&(exact.len() as u64).to_le_bytes());
+    hash.update(exact);
+    *hash.finalize().as_bytes()
+}
+
+fn global_pq_fixed_row<'a>(
+    values: &'a [u8],
+    row: usize,
+    width: usize,
+    name: &str,
+) -> Result<&'a [u8]> {
+    let start = row.checked_mul(width).ok_or_else(|| {
+        BorsukError::InvalidStorage(format!("global {name} row offset overflows"))
+    })?;
+    let end = start
+        .checked_add(width)
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("global {name} row range overflows")))?;
+    values
+        .get(start..end)
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("global {name} row is truncated")))
+}
+
+fn global_pq_chunk_reference(
+    path: &str,
+    entry: &PendingGlobalPqChunk,
+    slice: &GlobalPqBundleSlice,
+    bundle: &[u8],
+) -> Result<GlobalPqChunkRef> {
+    let code = bundle.get(slice.code_range.clone()).ok_or_else(|| {
+        BorsukError::InvalidStorage("global PQ code range is outside its bundle".to_string())
+    })?;
+    let exact = bundle.get(slice.exact_range.clone()).ok_or_else(|| {
+        BorsukError::InvalidStorage("global PQ exact range is outside its bundle".to_string())
+    })?;
+    let align = |offset: usize| {
+        offset
+            .checked_add(63)
+            .map(|value| value & !63)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global PQ Arrow buffer alignment overflows".to_string(),
+                )
+            })
+    };
+    let next_column_values = |offset: usize| {
+        align(offset)?.checked_add(64).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "global PQ Arrow column buffer offset overflows".to_string(),
+            )
+        })
+    };
+    let expected = [
+        next_column_values(slice.code_range.end)?,
+        next_column_values(slice.mutation_hlc_range.end)?,
+        next_column_values(slice.mutation_writer_range.end)?,
+        next_column_values(slice.mutation_digest_range.end)?,
+    ];
+    let actual = [
+        slice.identity_offsets_range.start,
+        slice.mutation_writer_range.start,
+        slice.mutation_digest_range.start,
+        slice.row_integrity_range.start,
+    ];
+    if actual != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "global PQ typed Arrow buffers violate the canonical aligned layout: actual {actual:?}, expected {expected:?}, ranges {slice:?}"
+        )));
+    }
+    let typed_buffer_offsets = [
+        slice.identity_values_range.start,
+        slice.mutation_hlc_range.start,
+    ]
+    .map(|offset| {
+        u32::try_from(offset).map_err(|_| {
+            BorsukError::InvalidStorage(
+                "global PQ Arrow buffer offset exceeds the 4 GiB bundle limit".to_string(),
+            )
+        })
+    });
+    let typed_buffer_offsets = typed_buffer_offsets
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?
+        .try_into()
+        .expect("two typed global PQ offsets");
+    Ok(GlobalPqChunkRef {
+        path: path.to_string(),
+        checksum: blake3::hash(code).to_hex().to_string(),
+        offset_bytes: u32::try_from(slice.code_range.start).map_err(|_| {
+            BorsukError::InvalidStorage("global PQ code offset exceeds u32".to_string())
+        })?,
+        exact_checksum: blake3::hash(exact).to_hex().to_string().into_boxed_str(),
+        exact_offset_bytes: slice.exact_range.start,
+        exact_size_bytes: exact.len(),
+        cell_index: entry.cell_index,
+        typed_buffer_offsets,
+        row_start: entry.row_start,
+        rows: entry.chunk.rows,
+        size_bytes: u32::try_from(code.len()).map_err(|_| {
+            BorsukError::InvalidStorage("global PQ code slice exceeds u32".to_string())
+        })?,
+        graph: None,
+    })
 }
 
 fn global_pq_exact_arrow_array(
@@ -20333,13 +20723,12 @@ fn global_pq_arrow_buffer_ranges(
                     "global PQ Arrow record batch has no buffers".to_string(),
                 )
             })?;
-            // FixedSizeList exact vectors contribute three buffers, while
-            // binary exact vectors use FixedSizeBinary and contribute two.
-            // Scan (2) + identity (3) + binary exact (2) is therefore the
-            // smallest valid three-column layout.
-            if buffers.len() < 7 {
+            // The six fixed identity/mutation columns contribute thirteen
+            // buffers before the exact vector. FixedSizeList exact vectors add
+            // three; binary exact vectors add two.
+            if !matches!(buffers.len(), 15 | 16) {
                 return Err(BorsukError::InvalidStorage(
-                    "global PQ Arrow record batch has too few buffers".to_string(),
+                    "global PQ Arrow record batch has an invalid typed-mutation layout".to_string(),
                 ));
             }
             let body_len = usize::try_from(block.bodyLength()).map_err(|_| {
@@ -20385,8 +20774,12 @@ fn global_pq_arrow_buffer_ranges(
             };
             Ok(GlobalPqBundleSlice {
                 code_range: buffer_range(buffers.get(1))?,
-                identity_offsets_range: buffer_range(buffers.get(buffers.len() - 5))?,
-                identity_values_range: buffer_range(buffers.get(buffers.len() - 4))?,
+                identity_offsets_range: buffer_range(buffers.get(3))?,
+                identity_values_range: buffer_range(buffers.get(4))?,
+                mutation_hlc_range: buffer_range(buffers.get(6))?,
+                mutation_writer_range: buffer_range(buffers.get(8))?,
+                mutation_digest_range: buffer_range(buffers.get(10))?,
+                row_integrity_range: buffer_range(buffers.get(12))?,
                 exact_range: buffer_range(buffers.get(buffers.len() - 1))?,
             })
         })
@@ -20404,7 +20797,7 @@ fn global_pq_code_read_wave_end(
     let mut bytes = 0_usize;
     let mut end = start;
     while end < hard_end {
-        let next = bytes.saturating_add(chunks[end].size_bytes);
+        let next = bytes.saturating_add(chunks[end].size_bytes as usize);
         if end > start && next > max_bytes.max(1) {
             break;
         }
@@ -20460,7 +20853,7 @@ fn global_pq_code_read_groups(
                             "global PQ bundled code range overflows".to_string(),
                         )
                     })?;
-                Ok(chunk.offset_bytes..end)
+                Ok(chunk.offset_bytes as usize..end as usize)
             })
             .collect::<Result<Vec<_>>>()?;
         let plan = crate::global_read_planner::plan_byte_ranges(
@@ -20472,7 +20865,7 @@ fn global_pq_code_read_groups(
         for span in plan.ranges {
             let start = chunk_index;
             while chunk_index < path_chunks.len()
-                && path_chunks[chunk_index].offset_bytes < span.end
+                && (path_chunks[chunk_index].offset_bytes as usize) < span.end
             {
                 chunk_index += 1;
             }
@@ -23652,6 +24045,100 @@ mod tests {
     use std::sync::{Barrier, Mutex};
 
     #[test]
+    fn collection_delete_uses_one_mutation_version_for_primary_and_named_dense() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "image".to_string(),
+                VectorSpec {
+                    dimensions: 2,
+                    metric: VectorMetric::Euclidean,
+                    kind: VectorKind::Dense,
+                    element_type: crate::VectorElementType::Float32,
+                },
+            )]),
+        })
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("entity", vec![1.0, 2.0])
+                    .with_named_vector("image", vec![3.0, 4.0]),
+            ])
+            .unwrap();
+
+        index.delete(["entity"]).unwrap();
+
+        let primary = index.mutation_state(b"entity").unwrap().unwrap();
+        let named = index
+            .named
+            .get("image")
+            .unwrap()
+            .mutation_state(b"entity")
+            .unwrap()
+            .unwrap();
+        assert!(primary.is_deleted());
+        assert!(named.is_deleted());
+        assert_eq!(primary.stamp().version(), named.stamp().version());
+        assert_eq!(
+            primary.stamp().digest(),
+            named.stamp().digest(),
+            "the same physical id and operation have one canonical digest"
+        );
+    }
+
+    #[test]
+    fn collection_delete_uses_parent_version_for_late_interaction_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "tokens".to_string(),
+                VectorSpec {
+                    dimensions: 2,
+                    metric: VectorMetric::InnerProduct,
+                    kind: VectorKind::LateInteraction,
+                    element_type: crate::VectorElementType::Float32,
+                },
+            )]),
+        })
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("entity", vec![1.0, 2.0])
+                    .with_late_interaction("tokens", vec![vec![3.0, 4.0], vec![5.0, 6.0]])
+                    .unwrap(),
+            ])
+            .unwrap();
+        let token_ids = index
+            .late_interaction_token_ids_for_entities(&[RecordId::from("entity")])
+            .unwrap()
+            .remove("tokens")
+            .unwrap();
+
+        index.delete(["entity"]).unwrap();
+
+        let primary = index.mutation_state(b"entity").unwrap().unwrap();
+        let child = index.named.get("tokens").unwrap();
+        for token_id in token_ids {
+            let token = child.mutation_state(token_id.as_bytes()).unwrap().unwrap();
+            assert!(token.is_deleted());
+            assert_eq!(primary.stamp().version(), token.stamp().version());
+            assert_ne!(primary.stamp().digest(), token.stamp().digest());
+        }
+    }
+
+    #[test]
     fn sparse_sidecar_rows_do_not_become_a_full_read_by_candidate_count() {
         let rows = (0..16).collect::<Vec<_>>();
 
@@ -25089,25 +25576,35 @@ mod tests {
     }
 
     #[test]
-    fn packed_id_directory_and_coordination_counters_round_trip_and_reject_corruption() {
+    fn parquet_id_directory_and_coordination_counters_round_trip_and_reject_corruption() {
         let entries = vec![
             CellWalIdDirectoryEntry {
                 id: vec![0, 255, 1],
                 owner: LogicalCellId::new(4, 8),
-                generation: 12,
-                deleted: true,
+                state: MutationState::new(
+                    MutationStamp::new(
+                        crate::mutation::MutationVersion::from_parts(12, [1; 16]),
+                        [2; 32],
+                    ),
+                    MutationOperation::Delete,
+                ),
             },
             CellWalIdDirectoryEntry {
                 id: b"alpha".to_vec(),
                 owner: LogicalCellId::new(3, 7),
-                generation: 11,
-                deleted: false,
+                state: MutationState::new(
+                    MutationStamp::new(
+                        crate::mutation::MutationVersion::from_parts(11, [3; 16]),
+                        [4; 32],
+                    ),
+                    MutationOperation::Put,
+                ),
             },
         ];
         let encoded = cell_wal_id_directory_bytes(&entries).unwrap();
-        assert!(encoded.starts_with(ID_DIRECTORY_MAGIC));
+        assert!(encoded.starts_with(b"PAR1"));
         assert_eq!(
-            cell_wal_id_directory_from_slice(&encoded, "id-directory.bin").unwrap(),
+            cell_wal_id_directory_from_slice(&encoded, "id-directory.parquet").unwrap(),
             entries
         );
 
@@ -25120,8 +25617,7 @@ mod tests {
 
         let mut corrupted = encoded;
         corrupted[9] ^= 1;
-        let error = cell_wal_id_directory_from_slice(&corrupted, "id-directory.bin").unwrap_err();
-        assert!(error.to_string().contains("checksum mismatch"), "{error}");
+        assert!(cell_wal_id_directory_from_slice(&corrupted, "id-directory.parquet").is_err());
     }
 
     #[test]
@@ -25197,8 +25693,13 @@ mod tests {
             cell_wal_id_directory_bytes(&[CellWalIdDirectoryEntry {
                 id,
                 owner,
-                generation: 1,
-                deleted: false,
+                state: MutationState::new(
+                    MutationStamp::new(
+                        crate::mutation::MutationVersion::from_parts(1, [1; 16]),
+                        [2; 32],
+                    ),
+                    MutationOperation::Put,
+                ),
             }])
             .unwrap()
         };
@@ -25216,7 +25717,7 @@ mod tests {
                         metadata: Vec::new(),
                         bytes: run(left_id.clone(), left),
                         record_count: 1,
-                        extension: "bin".to_string(),
+                        extension: "parquet".to_string(),
                     },
                     CellWalRunInput {
                         cell: right,
@@ -25224,7 +25725,7 @@ mod tests {
                         metadata: Vec::new(),
                         bytes: run(right_id, right),
                         record_count: 1,
-                        extension: "bin".to_string(),
+                        extension: "parquet".to_string(),
                     },
                 ],
                 &metadata,
@@ -25574,8 +26075,7 @@ mod tests {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index: 0,
-            identity_offsets_padding_bytes: 0,
-            identity_values_padding_bytes: 0,
+            typed_buffer_offsets: [0; 2],
             row_start: 0,
             rows: 1,
             size_bytes,
@@ -25626,8 +26126,7 @@ mod tests {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index,
-            identity_offsets_padding_bytes: 0,
-            identity_values_padding_bytes: 0,
+            typed_buffer_offsets: [0; 2],
             row_start: 0,
             rows: 1,
             size_bytes,
@@ -25666,8 +26165,7 @@ mod tests {
             exact_offset_bytes: 1_000_000,
             exact_size_bytes: 4,
             cell_index,
-            identity_offsets_padding_bytes: 0,
-            identity_values_padding_bytes: 0,
+            typed_buffer_offsets: [0; 2],
             row_start: cell_index as usize,
             rows: 1,
             size_bytes: 100,
@@ -25695,7 +26193,13 @@ mod tests {
                         "row-{}",
                         u32::from_le_bytes(locations.try_into().unwrap())
                     )),
-                    u64::from(u32::from_le_bytes(locations.try_into().unwrap())) + 4,
+                    MutationStamp::new(
+                        MutationVersion::from_parts(
+                            u64::from(u32::from_le_bytes(locations.try_into().unwrap())) + 4,
+                            [7_u8; 16],
+                        ),
+                        [9_u8; 32],
+                    ),
                 )],
                 rows: 1,
             }
@@ -25745,13 +26249,29 @@ mod tests {
         .unwrap();
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].schema().field(0).name(), "scan_payload");
-        assert_eq!(batches[0].schema().field(1).name(), "record_identity");
-        assert_eq!(batches[0].schema().field(2).name(), "exact_vector");
+        assert_eq!(batches[0].schema().field(1).name(), "record_id");
+        assert_eq!(batches[0].schema().field(2).name(), "mutation_hlc");
+        assert_eq!(batches[0].schema().field(3).name(), "mutation_writer");
+        assert_eq!(batches[0].schema().field(4).name(), "mutation_digest");
+        assert_eq!(batches[0].schema().field(5).name(), "row_integrity");
+        assert_eq!(batches[0].schema().field(6).name(), "exact_vector");
         assert_eq!(pending[0].chunk.identities[0].0, RecordId::from("row-7"));
-        assert_eq!(pending[0].chunk.identities[0].1, 11);
+        assert_eq!(pending[0].chunk.identities[0].1.version().hlc(), 11);
         assert_eq!(
             &encoded.bytes[encoded.slices[0].identity_values_range.clone()],
-            [11_u64.to_le_bytes().as_slice(), b"row-7"].concat()
+            b"row-7"
+        );
+        assert_eq!(
+            &encoded.bytes[encoded.slices[0].mutation_hlc_range.clone()],
+            11_u64.to_le_bytes()
+        );
+        assert_eq!(
+            &encoded.bytes[encoded.slices[0].mutation_writer_range.clone()],
+            &[7_u8; 16]
+        );
+        assert_eq!(
+            &encoded.bytes[encoded.slices[0].mutation_digest_range.clone()],
+            &[9_u8; 32]
         );
         assert_eq!(
             &encoded.bytes[encoded.slices[0].code_range.clone()],
@@ -25786,7 +26306,10 @@ mod tests {
             chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
                 bytes: [1_u8, 2, 7, 0, 0, 0].to_vec(),
                 exact_bytes: vec![0b0000_0101],
-                identities: vec![(RecordId::from("binary-row"), 9)],
+                identities: vec![(
+                    RecordId::from("binary-row"),
+                    MutationStamp::new(MutationVersion::from_parts(9, [1_u8; 16]), [2_u8; 32]),
+                )],
                 rows: 1,
             },
         }];
@@ -25814,7 +26337,15 @@ mod tests {
         let location = LocationEncoding::for_layout(1, 65_536).unwrap();
         let scan_row_width = CODE_WIDTH + location.width_bytes();
         let identities = (0..ROWS)
-            .map(|row| (RecordId::from(format!("cohere-row-{row}")), row as u64))
+            .map(|row| {
+                (
+                    RecordId::from(format!("cohere-row-{row}")),
+                    MutationStamp::new(
+                        MutationVersion::from_parts(row as u64, [3_u8; 16]),
+                        [4_u8; 32],
+                    ),
+                )
+            })
             .collect();
         let pending = vec![PendingGlobalPqChunk {
             cell_index: 0,
@@ -26633,11 +27164,15 @@ mod tests {
             .into_iter()
             .filter(|summary| !covered_before_delta_b.contains(&summary.checksum))
             .collect::<Vec<_>>();
+        let stamped_delta_b_records = delta_b_summaries
+            .iter()
+            .flat_map(|summary| index.read_segment(summary).unwrap().0.records)
+            .collect::<Vec<_>>();
         let direct = index
             .append_resident_global_delta_from_records(
                 &first_reference,
                 &delta_b_summaries,
-                &delta_b_records,
+                &stamped_delta_b_records,
             )
             .unwrap();
         assert_eq!(direct.checksum, second_reference.checksum);
@@ -28871,8 +29406,17 @@ mod tests {
             .find(|id| tombstone_bucket(id) != first_bucket)
             .unwrap();
         let mut initial = BTreeMap::new();
-        initial.insert(first_id.clone(), 1);
-        initial.insert(second_id, 1);
+        let state = |hlc, writer| {
+            MutationState::new(
+                MutationStamp::new(
+                    crate::mutation::MutationVersion::from_parts(hlc, [writer; 16]),
+                    [writer; 32],
+                ),
+                MutationOperation::Delete,
+            )
+        };
+        initial.insert(first_id.clone(), state(1, 1));
+        initial.insert(second_id, state(1, 1));
         let mut manifest = index.manifest.next_version();
         manifest
             .tombstone_frontier
@@ -28889,7 +29433,7 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
 
         let mut update = BTreeMap::new();
-        update.insert(first_id, 2);
+        update.insert(first_id, state(2, 2));
         manifest
             .tombstone_frontier
             .push(index.write_tombstone(update).unwrap().unwrap());
@@ -28932,10 +29476,7 @@ mod tests {
             Arc::new(DecodedObjectCache::new(DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES));
         let before_absent = index.storage.request_counts();
 
-        assert_eq!(
-            index.min_visible_generation(&absent_same_bucket).unwrap(),
-            None
-        );
+        assert_eq!(index.mutation_state(&absent_same_bucket).unwrap(), None);
         assert_eq!(
             index.storage.request_counts().delta(&before_absent).gets,
             0,

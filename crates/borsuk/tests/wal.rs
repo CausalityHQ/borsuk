@@ -45,8 +45,15 @@ fn small_wal() -> WalConfig {
     }
 }
 
-/// Count `wal/…parquet` objects currently on disk under the index root.
-fn wal_object_count(root: &std::path::Path) -> usize {
+#[derive(Debug, Default, PartialEq, Eq)]
+struct WalObjectCounts {
+    records: usize,
+    id_directory: usize,
+}
+
+/// Count durable WAL payload objects by logical role. A current transaction is
+/// complete only when both its records and ID-directory mutation table exist.
+fn wal_object_counts(root: &std::path::Path) -> WalObjectCounts {
     let wal_dir = root.join("wal");
     let legacy = if wal_dir.exists() {
         std::fs::read_dir(wal_dir)
@@ -57,28 +64,41 @@ fn wal_object_count(root: &std::path::Path) -> usize {
     } else {
         0
     };
-    fn cell_runs(path: &std::path::Path) -> usize {
+    fn cell_runs(path: &std::path::Path, counts: &mut WalObjectCounts) {
         let Ok(entries) = std::fs::read_dir(path) else {
-            return 0;
+            return;
         };
-        entries
+        for path in entries
             .filter_map(|entry| entry.ok())
-            .map(|entry| {
-                let path = entry.path();
-                if path.is_dir() {
-                    cell_runs(&path)
-                } else {
-                    usize::from(
-                        path.extension().is_some_and(|ext| ext == "parquet")
-                            && path
-                                .components()
-                                .any(|component| component.as_os_str() == "runs"),
-                    )
+            .map(|entry| entry.path())
+        {
+            if path.is_dir() {
+                cell_runs(&path, counts);
+            } else if path.extension().is_some_and(|ext| ext == "parquet") {
+                let components = path
+                    .components()
+                    .map(|component| component.as_os_str())
+                    .collect::<Vec<_>>();
+                if components
+                    .windows(2)
+                    .any(|pair| pair == ["runs", "records"])
+                {
+                    counts.records += 1;
+                } else if components
+                    .windows(2)
+                    .any(|pair| pair == ["runs", "id-directory"])
+                {
+                    counts.id_directory += 1;
                 }
-            })
-            .sum()
+            }
+        }
     }
-    legacy + cell_runs(&root.join("cells"))
+    let mut counts = WalObjectCounts {
+        records: legacy,
+        ..WalObjectCounts::default()
+    };
+    cell_runs(&root.join("cells"), &mut counts);
+    counts
 }
 
 fn segment_count(root: &std::path::Path) -> usize {
@@ -172,8 +192,8 @@ fn wal_disabled_matches_the_classic_segment_per_add_path() {
         .unwrap();
 
     assert_eq!(
-        wal_object_count(dir.path()),
-        0,
+        wal_object_counts(dir.path()),
+        WalObjectCounts::default(),
         "disabled WAL writes no wal/ object"
     );
     assert!(
@@ -200,8 +220,15 @@ fn wal_is_on_by_default_and_add_writes_a_wal_object_not_a_segment() {
         .add(vec![VectorRecord::new("a", vec![0.0, 0.0])])
         .unwrap();
 
-    // One WAL object, no segment yet: the write skipped the PQ/graph/segment build.
-    assert_eq!(wal_object_count(dir.path()), 1);
+    // One complete typed WAL transaction, no segment yet: the write skipped the
+    // PQ/graph/segment build.
+    assert_eq!(
+        wal_object_counts(dir.path()),
+        WalObjectCounts {
+            records: 1,
+            id_directory: 1,
+        }
+    );
     assert_eq!(segment_count(dir.path()), 0);
 }
 
@@ -508,7 +535,13 @@ fn explicit_flush_materializes_the_tail_and_empties_the_frontier() {
             VectorRecord::new("b", vec![1.0, 0.0]),
         ])
         .unwrap();
-    assert_eq!(wal_object_count(dir.path()), 1);
+    assert_eq!(
+        wal_object_counts(dir.path()),
+        WalObjectCounts {
+            records: 1,
+            id_directory: 1,
+        }
+    );
     assert_eq!(segment_count(dir.path()), 0);
     assert!(!index.manifest().wal_frontier_is_empty());
 
@@ -585,24 +618,37 @@ fn gc_reclaims_flushed_wal_objects_and_keeps_live_ones() {
     let uri = dir.path().to_string_lossy().to_string();
     let mut index = BorsukIndex::create_with_wal(config(uri), small_wal()).unwrap();
 
-    // First write -> one live WAL object.
+    // First write -> one live typed WAL transaction.
     index
         .add(vec![VectorRecord::new("a", vec![0.0, 0.0])])
         .unwrap();
-    assert_eq!(wal_object_count(dir.path()), 1);
+    assert_eq!(
+        wal_object_counts(dir.path()),
+        WalObjectCounts {
+            records: 1,
+            id_directory: 1,
+        }
+    );
     assert_eq!(
         collection_wal_history_object_count(dir.path()),
         0,
         "bounded root HEADs embed commits and create no immutable root history"
     );
 
-    // Flush -> that WAL object is now obsolete (dropped from the frontier).
+    // Flush -> that WAL transaction is now obsolete (dropped from the frontier).
     index.flush().unwrap();
-    // Second write -> a fresh, live WAL object that GC must NOT touch.
+    // Second write -> a fresh, live WAL transaction that GC must NOT touch.
     index
         .add(vec![VectorRecord::new("b", vec![1.0, 0.0])])
         .unwrap();
-    assert_eq!(wal_object_count(dir.path()), 2, "one flushed + one live");
+    assert_eq!(
+        wal_object_counts(dir.path()),
+        WalObjectCounts {
+            records: 2,
+            id_directory: 2,
+        },
+        "one flushed + one live transaction, each with both required roles"
+    );
     assert_eq!(
         collection_wal_history_object_count(dir.path()),
         0,
@@ -610,7 +656,8 @@ fn gc_reclaims_flushed_wal_objects_and_keeps_live_ones() {
     );
     assert!(!index.manifest().wal_frontier_is_empty());
 
-    // GC with zero retention reclaims the flushed WAL object; the live one stays.
+    // GC with zero retention reclaims both roles of the flushed WAL transaction;
+    // both roles of the live transaction stay.
     index
         .gc_obsolete_segments(GarbageCollectionOptions {
             dry_run: false,
@@ -618,9 +665,12 @@ fn gc_reclaims_flushed_wal_objects_and_keeps_live_ones() {
         })
         .unwrap();
     assert_eq!(
-        wal_object_count(dir.path()),
-        1,
-        "flushed WAL object reclaimed, live WAL object preserved"
+        wal_object_counts(dir.path()),
+        WalObjectCounts {
+            records: 1,
+            id_directory: 1,
+        },
+        "flushed WAL transaction reclaimed, live WAL transaction preserved"
     );
     assert_eq!(
         collection_wal_history_object_count(dir.path()),
@@ -818,7 +868,7 @@ fn bulk_add_is_append_only_and_compaction_is_the_single_build() {
     // artifacts (segment Parquet, dense-vector sidecar, graph) do NOT exist yet —
     // the write path built none of them.
     assert!(
-        wal_object_count(wal_dir.path()) > 0,
+        wal_object_counts(wal_dir.path()).records > 0,
         "bulk add must publish at least one WAL object"
     );
     assert!(

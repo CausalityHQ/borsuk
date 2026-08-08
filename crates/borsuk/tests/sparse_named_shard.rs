@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
-use arrow_array::{Array, BinaryArray, RecordBatch, UInt64Array};
+use arrow_array::{Array, BinaryArray, FixedSizeBinaryArray, RecordBatch, UInt64Array};
 use borsuk::{
     BorsukError, BorsukIndex, CompactionOptions, Fusion, GarbageCollectionOptions, HybridOptions,
     HybridQuery, IndexConfig, SearchOptions, SparseVector, VectorKind, VectorMetric, VectorRecord,
@@ -51,7 +51,15 @@ fn lexical_metadata_batches(path: &Path) -> Vec<RecordBatch> {
         .unwrap()
 }
 
-fn lexical_metadata_rows(path: &Path) -> Vec<(Vec<u8>, u64)> {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LexicalMutationRow {
+    id: Vec<u8>,
+    hlc: u64,
+    writer: Vec<u8>,
+    digest: Vec<u8>,
+}
+
+fn lexical_metadata_rows(path: &Path) -> Vec<LexicalMutationRow> {
     let mut rows = Vec::new();
     for batch in lexical_metadata_batches(path) {
         let ids = batch
@@ -60,16 +68,35 @@ fn lexical_metadata_rows(path: &Path) -> Vec<(Vec<u8>, u64)> {
             .as_any()
             .downcast_ref::<BinaryArray>()
             .unwrap();
-        let generations = batch
-            .column_by_name("generation")
+        let mutation_hlcs = batch
+            .column_by_name("mutation_hlc")
             .unwrap()
             .as_any()
             .downcast_ref::<UInt64Array>()
             .unwrap();
+        let mutation_writers = batch
+            .column_by_name("mutation_writer")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        let mutation_digests = batch
+            .column_by_name("mutation_digest")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
         for row in 0..batch.num_rows() {
             assert!(!ids.is_null(row));
-            assert!(!generations.is_null(row));
-            rows.push((ids.value(row).to_vec(), generations.value(row)));
+            assert!(!mutation_hlcs.is_null(row));
+            assert!(!mutation_writers.is_null(row));
+            assert!(!mutation_digests.is_null(row));
+            rows.push(LexicalMutationRow {
+                id: ids.value(row).to_vec(),
+                hlc: mutation_hlcs.value(row),
+                writer: mutation_writers.value(row).to_vec(),
+                digest: mutation_digests.value(row).to_vec(),
+            });
         }
     }
     rows
@@ -261,7 +288,7 @@ fn sparse_named_delete_is_respected_without_compaction() {
 }
 
 #[test]
-fn compaction_preserves_live_sparse_rows_and_prunes_superseded_and_deleted_generations() {
+fn compaction_preserves_live_sparse_rows_and_prunes_superseded_mutations() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(config(uri, 2)).unwrap();
@@ -331,12 +358,22 @@ fn compaction_preserves_live_sparse_rows_and_prunes_superseded_and_deleted_gener
     }
     active_rows.sort();
     assert_eq!(
-        active_rows,
+        active_rows
+            .iter()
+            .map(|row| row.id.as_slice())
+            .collect::<Vec<_>>(),
         vec![
-            (b"replace".to_vec(), 1),
-            (b"stable-a".to_vec(), 0),
-            (b"stable-b".to_vec(), 0),
+            b"replace".as_slice(),
+            b"stable-a".as_slice(),
+            b"stable-b".as_slice(),
         ]
+    );
+    assert!(active_rows[0].hlc > active_rows[1].hlc);
+    assert!(active_rows[0].hlc > active_rows[2].hlc);
+    assert!(
+        active_rows
+            .iter()
+            .all(|row| row.writer.len() == 16 && row.digest.len() == 32)
     );
 }
 

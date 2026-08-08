@@ -50,6 +50,12 @@
 - [ ] Prove all modalities reopen with exact metadata and version/digest preservation through stock readers.
 - [ ] Commit: `storage: standardize vector and search sidecars`
 
+The 2026-08-08 mutation checkpoint makes global-PQ identity, mutation, row
+integrity, and exact-vector columns stock-readable and converts convergent
+tombstone/ID-directory state to Parquet. The global-PQ scan code/location field
+and lane extent outer record remain packed, so Tasks 2-3 are not complete and
+the inventory gate must continue to reject a production-ready claim.
+
 ### Task 4: Close the inventory and qualify performance
 
 - [ ] Require the structural inventory to cover every reachable object and report zero unknown/custom payloads.

@@ -460,7 +460,7 @@ fn concurrent_appends_share_one_durable_wal_transaction() {
 }
 
 #[test]
-fn lane_log_ack_publishes_extent_and_stripe_head_after_legacy_generation_cas() {
+fn lane_log_ack_publishes_extent_and_stripe_head_without_global_coordination() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///group-lane-log-cutover";
     let writer = GroupCommitWriter::new(
@@ -479,8 +479,8 @@ fn lane_log_ack_publishes_extent_and_stripe_head_after_legacy_generation_cas() {
 
     assert_eq!(receipt.lane_receipts.len(), 1);
     assert!(receipt.lane_receipts[0].lease_epoch > 0);
-    assert_eq!(receipt.requests.puts, 3);
-    assert_eq!(receipt.requests.gets, 1);
+    assert_eq!(receipt.requests.puts, 2);
+    assert_eq!(receipt.requests.gets, 0);
     assert_eq!(receipt.requests.heads, 0);
     assert_eq!(receipt.requests.lists, 0);
     drop(writer);
@@ -894,52 +894,6 @@ fn released_peer_retires_a_tail_materialized_by_another_writer() {
 }
 
 #[test]
-fn independent_writer_acknowledgement_order_defines_last_write_wins() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///independent-group-writer-order";
-    let writer_config = GroupCommitConfig {
-        max_delay: std::time::Duration::ZERO,
-        max_records: 1,
-        worker_lanes: 1,
-    };
-    let first = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
-        writer_config,
-    )
-    .unwrap();
-    let second = GroupCommitWriter::new(
-        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
-        writer_config,
-    )
-    .unwrap();
-
-    second
-        .append(vec![VectorRecord::new("shared", vec![2.0, 0.0])])
-        .unwrap();
-    first
-        .append(vec![VectorRecord::new("shared", vec![3.0, 0.0])])
-        .unwrap();
-    first
-        .append(vec![VectorRecord::new("reverse", vec![4.0, 0.0])])
-        .unwrap();
-    second
-        .append(vec![VectorRecord::new("reverse", vec![5.0, 0.0])])
-        .unwrap();
-
-    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
-    assert_eq!(
-        reopened.get_vector("shared").unwrap(),
-        Some(vec![3.0, 0.0]),
-        "the later acknowledged cross-process write must win regardless of stripe ordinal"
-    );
-    assert_eq!(
-        reopened.get_vector("reverse").unwrap(),
-        Some(vec![5.0, 0.0]),
-        "the later acknowledged cross-process write must also win in the opposite stripe order"
-    );
-}
-
-#[test]
 fn group_writer_startup_fails_when_every_persisted_stripe_is_leased() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///group-writer-stripe-exhaustion";
@@ -1095,7 +1049,7 @@ fn one_worker_coalesces_cross_ownership_records_into_one_stripe_extent() {
     let receipt = writer.append(records).unwrap();
 
     assert_eq!(receipt.lane_receipts.len(), 1);
-    assert_eq!(receipt.requests.puts, 3);
+    assert_eq!(receipt.requests.puts, 2);
     assert_eq!(
         concurrency.peak(),
         1,
@@ -1149,8 +1103,8 @@ fn independent_commit_lanes_report_lane_local_requests() {
         LANES
     );
     assert!(receipts.iter().all(|receipt| {
-        receipt.requests.gets >= 1
-            && receipt.requests.puts >= 2
+        receipt.requests.gets == 0
+            && receipt.requests.puts == 2
             && receipt.requests.deletes == 0
             && receipt.requests.heads == 0
             && receipt.requests.lists == 0
@@ -1161,7 +1115,7 @@ fn independent_commit_lanes_report_lane_local_requests() {
             .map(|receipt| receipt.requests.gets)
             .sum::<u64>(),
         operations.count_matching(|operation, _| operation == common::StoreOperation::Get) as u64,
-        "generation-counter retry GETs must remain attributed to their issuing stripe"
+        "steady-state stripes must not read a global coordination object"
     );
     assert_eq!(
         receipts
@@ -1169,7 +1123,7 @@ fn independent_commit_lanes_report_lane_local_requests() {
             .map(|receipt| receipt.requests.puts)
             .sum::<u64>(),
         operations.count_matching(|operation, _| operation == common::StoreOperation::Put) as u64,
-        "counter CAS retries and extent PUTs must reconcile without cross-stripe double counting"
+        "one extent PUT plus one stripe-head PUT must reconcile exactly"
     );
 }
 
@@ -1204,14 +1158,14 @@ fn repeated_groups_publish_a_fenced_head_after_the_extent() {
         );
     }
 
-    assert!(receipts.iter().all(|receipt| receipt.requests.puts == 3));
-    assert!(receipts.iter().all(|receipt| receipt.requests.gets == 1));
+    assert!(receipts.iter().all(|receipt| receipt.requests.puts == 2));
+    assert!(receipts.iter().all(|receipt| receipt.requests.gets == 0));
     assert!(receipts.iter().all(|receipt| receipt.requests.heads == 0));
     assert!(receipts.iter().all(|receipt| receipt.requests.lists == 0));
 
     assert_eq!(
         operations.count_matching(|operation, _| operation == common::StoreOperation::Get),
-        GROUPS
+        0
     );
     assert_eq!(
         operations.count_matching(|operation, _| operation == common::StoreOperation::Head),
@@ -1221,10 +1175,15 @@ fn repeated_groups_publish_a_fenced_head_after_the_extent() {
         operations.count_matching(|operation, _| operation == common::StoreOperation::List),
         0
     );
-    assert!(
-        operations.count_matching(|operation, _| operation == common::StoreOperation::Put)
-            >= GROUPS * 3,
-        "each group currently reserves a legacy generation, creates an extent, and publishes its stripe head"
+    assert_eq!(
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Put),
+        GROUPS * 2,
+        "each group must create one extent and publish one stripe head"
+    );
+    assert_eq!(
+        operations.count_matching(|_, path| { path.contains("id-directory/last-write-wins/NEXT") }),
+        0,
+        "ordinary group commit must never coordinate through a collection-wide counter"
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
@@ -1234,6 +1193,15 @@ fn repeated_groups_publish_a_fenced_head_after_the_extent() {
         }),
         GROUPS,
         "every acknowledgement PUT must create exactly one immutable extent"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("lane-log/lanes/")
+                && path.ends_with("/HEAD")
+        }),
+        GROUPS,
+        "every acknowledgement must publish exactly one writer-stripe head"
     );
     drop(writer);
     assert_eq!(
@@ -1279,8 +1247,8 @@ fn small_groups_publish_only_immutable_extents_before_release() {
             .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
             .unwrap();
         assert_eq!(
-            receipt.requests.puts, 3,
-            "legacy generation CAS, immutable extent, and fenced stripe-head publication"
+            receipt.requests.puts, 2,
+            "immutable extent plus fenced stripe-head publication"
         );
     }
 
