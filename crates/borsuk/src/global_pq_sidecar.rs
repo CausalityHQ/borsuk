@@ -791,6 +791,8 @@ pub(crate) struct GlobalPqChunkRef {
     pub(crate) offset_bytes: u32,
     /// Domain-separated checksum of the complete identity/MVCC envelope.
     pub(crate) identity_checksum: Box<str>,
+    /// Separate standard-Arrow IPC object containing only exact-vector batches.
+    pub(crate) exact_path: String,
     /// Checksum of this chunk's lossless-vector slice.
     pub(crate) exact_checksum: Box<str>,
     pub(crate) exact_offset_bytes: usize,
@@ -887,7 +889,6 @@ impl GlobalPqChunkRef {
             || hlc_start > writer_start
             || writer_start > digest_start
             || digest_start > integrity_start
-            || hlc_start > self.exact_offset_bytes
         {
             return invalid("global PQ identity ranges are invalid");
         }
@@ -902,11 +903,6 @@ impl GlobalPqChunkRef {
             let end = start.checked_add(size).ok_or_else(|| {
                 BorsukError::InvalidStorage(format!("global {name} range overflows"))
             })?;
-            if end > self.exact_offset_bytes {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "global {name} range is invalid"
-                )));
-            }
             Ok(start..end)
         };
         let [_, _, hlc, writer, digest, integrity] =
@@ -951,12 +947,9 @@ impl GlobalPqChunkRef {
         cursor = digest;
         cursor = cursor.saturating_add(self.rows.saturating_mul(32));
         let integrity = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
-        cursor = integrity;
-        cursor = cursor.saturating_add(self.rows.saturating_mul(32));
         self.typed_buffer_offsets = [offsets, values, hlc, writer, digest, integrity]
             .map(|offset| u32::try_from(offset).expect("test bundle offset fits u32"));
         self.identity_values_size_bytes = 0;
-        self.exact_offset_bytes = cursor;
         self
     }
 }
@@ -1407,8 +1400,8 @@ pub(crate) struct GlobalPqDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum GlobalPqBundleLayout {
-    #[serde(rename = "typed-columns-v5")]
-    TypedColumnsV5,
+    #[serde(rename = "typed-columns-v6-dual-arrow")]
+    TypedColumnsV6DualArrow,
 }
 
 impl GlobalPqDescriptor {
@@ -1453,11 +1446,15 @@ impl GlobalPqDescriptor {
             if chunk.path.is_empty()
                 || chunk.checksum.is_empty()
                 || chunk.identity_checksum.is_empty()
+                || chunk.exact_path.is_empty()
                 || chunk.exact_checksum.is_empty()
                 || chunk.size_bytes == 0
                 || chunk.exact_size_bytes == 0
             {
                 return invalid("chunk code and exact sidecar references must be complete");
+            }
+            if chunk.path == chunk.exact_path {
+                return invalid("chunk scan and exact sidecar paths must be distinct");
             }
             chunk
                 .offset_bytes
@@ -1496,7 +1493,7 @@ impl GlobalPqDescriptor {
             return invalid("chunk rows do not match the vector count");
         }
         Ok(Self {
-            bundle_layout: GlobalPqBundleLayout::TypedColumnsV5,
+            bundle_layout: GlobalPqBundleLayout::TypedColumnsV6DualArrow,
             quantizer,
             coarse_quantizer,
             vectors,
@@ -1764,6 +1761,7 @@ impl GlobalPqDescriptor {
                     chunk.path.len()
                         + chunk.checksum.len()
                         + chunk.identity_checksum.len()
+                        + chunk.exact_path.len()
                         + chunk.exact_checksum.len()
                         + chunk
                             .graph
@@ -2457,6 +2455,7 @@ impl GlobalCellGraph {
             checksum: blake3::hash(&self.chunk).to_hex().to_string(),
             offset_bytes: 0,
             identity_checksum: String::new().into_boxed_str(),
+            exact_path: String::new(),
             exact_checksum: String::new().into_boxed_str(),
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
@@ -2805,6 +2804,7 @@ mod tests {
                     checksum: "ab".repeat(32),
                     offset_bytes: 0,
                     identity_checksum: "ef".repeat(32).into_boxed_str(),
+                    exact_path: format!("global-pq/exact/{segment}.arrow"),
                     exact_checksum: "cd".repeat(32).into_boxed_str(),
                     exact_offset_bytes: 192_028,
                     exact_size_bytes: 1_024_000,
@@ -2830,11 +2830,12 @@ mod tests {
         )
         .unwrap();
         let resident_bytes = descriptor.resident_bytes();
-        // Six explicit standard-Arrow buffer starts and one independently
-        // authenticated identity checksum keep 100M-scale routing metadata
-        // below 11 MiB while accepting every legal inter-column padding layout.
+        // Six explicit standard-Arrow buffer starts, independently authenticated
+        // identity metadata, and the V6 exact-object path keep 100M-scale routing
+        // metadata below 12 MiB while accepting every legal inter-column padding
+        // layout.
         assert!(
-            resident_bytes < 11 * 1024 * 1024,
+            resident_bytes < 12 * 1024 * 1024,
             "100M descriptor retains {resident_bytes} bytes"
         );
         let encoded = descriptor.encode().unwrap();
@@ -2856,6 +2857,7 @@ mod tests {
                 checksum: blake3::hash(path.as_bytes()).to_hex().to_string(),
                 offset_bytes: 0,
                 identity_checksum: "ef".repeat(32).into_boxed_str(),
+                exact_path: format!("exact-{path}"),
                 exact_checksum: blake3::hash(format!("exact-{path}").as_bytes())
                     .to_hex()
                     .to_string()
@@ -2901,6 +2903,40 @@ mod tests {
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
         assert!(error.to_string().contains("identity_checksum"));
 
+        let mut json = serde_json::to_value(&descriptor).unwrap();
+        json["chunks"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("exact_path");
+        let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
+        assert!(error.to_string().contains("exact_path"));
+
+        let mut missing_exact_path = old_chunk.clone();
+        missing_exact_path.exact_path.clear();
+        let error = GlobalPqDescriptor::new(
+            quantizer.state(),
+            coarse_state(&fit),
+            64,
+            VectorElementType::Float32,
+            location,
+            vec![missing_exact_path],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("must be complete"));
+
+        let mut shared_path = old_chunk.clone();
+        shared_path.exact_path.clone_from(&shared_path.path);
+        let error = GlobalPqDescriptor::new(
+            quantizer.state(),
+            coarse_state(&fit),
+            64,
+            VectorElementType::Float32,
+            location,
+            vec![shared_path],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("must be distinct"));
+
         let mut missing_checksum = old_chunk;
         missing_checksum.identity_checksum = String::new().into_boxed_str();
         let error = GlobalPqDescriptor::new(
@@ -2925,6 +2961,7 @@ mod tests {
             checksum: "ab".repeat(32),
             offset_bytes: 1_024,
             identity_checksum: "ef".repeat(32).into_boxed_str(),
+            exact_path: "typed-exact.arrow".to_string(),
             exact_checksum: "cd".repeat(32).into_boxed_str(),
             exact_offset_bytes: 16_384,
             exact_size_bytes: 64 * 64 * size_of::<f32>(),
@@ -2995,6 +3032,7 @@ mod tests {
             checksum: "ab".repeat(32),
             offset_bytes: 0,
             identity_checksum: "ef".repeat(32).into_boxed_str(),
+            exact_path: "exact.arrow".to_string(),
             exact_checksum: "cd".repeat(32).into_boxed_str(),
             exact_offset_bytes: 80,
             exact_size_bytes: 64 * size_of::<f32>(),
@@ -3036,16 +3074,16 @@ mod tests {
         )
         .unwrap();
         let mut json = serde_json::to_value(&descriptor).unwrap();
-        assert_eq!(json["bundle_layout"], "typed-columns-v5");
+        assert_eq!(json["bundle_layout"], "typed-columns-v6-dual-arrow");
         json.as_object_mut().unwrap().remove("bundle_layout");
 
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
         assert!(error.to_string().contains("bundle_layout"));
 
         let mut json = serde_json::to_value(descriptor).unwrap();
-        json["bundle_layout"] = serde_json::Value::String("typed-columns-v4".to_string());
+        json["bundle_layout"] = serde_json::Value::String("typed-columns-v5".to_string());
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
-        assert!(error.to_string().contains("typed-columns-v4"));
+        assert!(error.to_string().contains("typed-columns-v5"));
     }
 
     #[test]
@@ -3103,6 +3141,7 @@ mod tests {
             checksum: blake3::hash(&scan).to_hex().to_string(),
             offset_bytes: 0,
             identity_checksum: String::new().into_boxed_str(),
+            exact_path: String::new(),
             exact_checksum: String::new().into_boxed_str(),
             exact_offset_bytes: scan.len()
                 + (vectors.len() + 1) * size_of::<i32>()
@@ -3209,6 +3248,7 @@ mod tests {
                 checksum: blake3::hash(&scan).to_hex().to_string(),
                 offset_bytes: 0,
                 identity_checksum: "ef".repeat(32).into_boxed_str(),
+                exact_path: format!("exact-{segment}"),
                 exact_checksum: "cd".repeat(32).into_boxed_str(),
                 exact_offset_bytes: scan.len()
                     + (chunk.rows + 1) * size_of::<i32>()
@@ -3262,6 +3302,7 @@ mod tests {
                     checksum: "ab".repeat(32),
                     offset_bytes: 0,
                     identity_checksum: "ef".repeat(32).into_boxed_str(),
+                    exact_path: format!("exact-{segment}"),
                     exact_checksum: "cd".repeat(32).into_boxed_str(),
                     exact_offset_bytes: 1_796,
                     exact_size_bytes: 16_384,
@@ -3369,6 +3410,7 @@ mod tests {
                     checksum: blake3::hash(&scan).to_hex().to_string(),
                     offset_bytes: 0,
                     identity_checksum: "ef".repeat(32).into_boxed_str(),
+                    exact_path: format!("exact-{cell}"),
                     exact_checksum: blake3::hash(&chunk.exact_bytes)
                         .to_hex()
                         .to_string()
