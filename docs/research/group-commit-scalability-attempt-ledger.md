@@ -1592,3 +1592,45 @@ Fixed byte/deadline queries and exact-fringe/stale-coverage queries retain the
 recursive path until one absolute deadline and reservation ledger covers every
 source. Those paths are current correctness fallbacks, not legacy-format
 support, and they will be deleted after the shared scheduler subsumes them.
+
+### Authenticated identity projection and V6 dual Arrow bundles
+
+The next TDD slice removed the temporary coupled-vector read. The fused and
+fixed-budget resident-global paths now authenticate at most `2C` identity and
+mutation rows, resolve the greatest mutation stamp per `RecordId`, apply
+tombstones, sort live identities by approximate distance then `RecordId`, and
+truncate to `C` before any lossless-vector read. They then fetch, authenticate,
+decode, and exact-score at most `C` winner rows. Search telemetry reports the
+identity rows resolved and exact vectors fetched separately.
+
+The first implementation exposed two review defects before delivery. A range
+covering multiple Arrow record batches crossed an earlier batch's exact-vector
+buffer before MVCC, and the identity checksum included Arrow alignment padding
+instead of the exact raw identity-values buffer. The fixes added exact raw
+buffer length to the authenticated descriptor and prevented unsafe batch
+coalescing. The complete workspace gate then exposed a deterministic cold-read
+regression: safe per-batch reads raised a current-coverage query from its
+unchanged at-most-four GET contract to nine GETs. The assertion was not
+weakened and cache was not used as a substitute.
+
+The exclusive `typed-columns-v6-dual-arrow` layout resolves that physical
+conflict with two independently stock-readable, content-addressed Arrow IPC
+files per bundle. One contains scan codes, ordinals, and authenticated
+identity/MVCC columns; the other contains exact-vector batches with an
+independent path and offset space. Removing exact bytes from the scan object
+restores safe nearby-batch coalescing, while the exact object is touched only
+after MVCC. Descriptors reject V5, missing checksums, missing or empty paths,
+and equal scan/exact paths. GC and storage accounting retain both objects.
+The original request regression is green without exact prefetch or a relaxed
+ceiling. The 100M synthetic descriptor fixture is 12,111,332 bytes, below its
+12 MiB cap; the increase from below 11 MiB is the honestly accounted repeated
+exact-object path.
+
+Focused verification passed the fused, bundle, code-read, identity-validation,
+sidecar, cold-overlap, corruption, request-count, and stock-Arrow regressions.
+The final exact-tree assurance passed formatting, diff hygiene, repository
+policy, documentation-web checks, locked workspace Clippy with all features and
+targets, the complete locked Rust workspace with all features and targets, and
+all 486 pinned Python tests. These are functional, structural, and bounded-I/O
+results only; they are not AWS latency, throughput, cost, or recall evidence.
+No AWS workload was launched and no incomplete measurement CSV was inspected.
