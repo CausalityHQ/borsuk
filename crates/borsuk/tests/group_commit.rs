@@ -380,9 +380,9 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
         report.global_delta_approximate_us > 0,
         "cold base+delta search must report delta routing/code-scan work: {report:?}"
     );
-    assert!(
-        report.global_delta_exact_rerank_us > 0,
-        "cold base+delta search must report delta exact-rerank work: {report:?}"
+    assert_eq!(
+        report.global_delta_exact_rerank_us, 0,
+        "fused base+delta search must not retain a second exact-rerank phase: {report:?}"
     );
     assert!(
         gets.overlapped(),

@@ -43,8 +43,8 @@ use crate::{
     },
     global_pq_sidecar::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCellGraph, GlobalCellGraphRef, GlobalCoarseQuantizer,
-        GlobalPqCellSpool, GlobalPqChunkRef, GlobalPqDescriptor, GlobalPqRow, GlobalScanQuantizer,
-        HierarchicalCoarseQuantizer, LocationEncoding, ResidentGlobalPq,
+        GlobalPqCandidate, GlobalPqCellSpool, GlobalPqChunkRef, GlobalPqDescriptor, GlobalPqRow,
+        GlobalScanQuantizer, HierarchicalCoarseQuantizer, LocationEncoding, ResidentGlobalPq,
     },
     late_interaction::{LateInteractionSearchOptions, LateInteractionSearchReport},
     lexical_build::{
@@ -316,6 +316,33 @@ struct HybridCandidate {
 struct SearchExecution {
     report: SearchReport,
     vectors: Vec<Vec<f32>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum GlobalPqSearchLayer {
+    Delta,
+    Base,
+}
+
+struct ResidentGlobalPqLayerScan {
+    layer: GlobalPqSearchLayer,
+    index: Arc<ResidentGlobalPq>,
+    selected_chunks: Vec<GlobalPqChunkRef>,
+    wave_start: usize,
+    candidate_pages: Vec<Vec<GlobalPqCandidate>>,
+    graph_chunks_used: usize,
+    scan_chunks_used: usize,
+    graph_candidates_added: usize,
+    decoded_cache_hits: usize,
+    decoded_cache_bytes_read: u64,
+    bytes_read: u64,
+    approximate_us: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LayeredGlobalPqCandidate {
+    layer: GlobalPqSearchLayer,
+    candidate: GlobalPqCandidate,
 }
 
 enum MaterializedDeltaExecution {
@@ -12659,6 +12686,595 @@ impl BorsukIndex {
         Ok(Some((graph, shared_inflight)))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn scan_resident_global_pq_layer_wave(
+        &self,
+        pq_query: &[f32],
+        candidate_limit: usize,
+        use_cached_graphs: bool,
+        layer: &mut ResidentGlobalPqLayerScan,
+        query_local_ranges: &mut Vec<QueryLocalRange>,
+        query_local_range_bytes: &mut usize,
+        query_local_range_stripes: &mut usize,
+        query_local_range_byte_limit: usize,
+        query_local_range_stripe_limit: usize,
+    ) -> Result<bool> {
+        if layer.wave_start >= layer.selected_chunks.len() {
+            return Ok(false);
+        }
+        let approximate_started = Instant::now();
+        let wave_end = global_pq_code_read_wave_end(
+            &layer.selected_chunks,
+            layer.wave_start,
+            DEFAULT_GLOBAL_PQ_CODE_READS,
+            DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES,
+        );
+        let page = &layer.selected_chunks[layer.wave_start..wave_end];
+        let mut scan_page = Vec::with_capacity(page.len());
+        for chunk in page {
+            let graph = if use_cached_graphs {
+                self.cached_global_cell_graph(chunk)?
+            } else {
+                None
+            };
+            if let Some((graph, decoded_hit)) = graph {
+                if decoded_hit {
+                    layer.decoded_cache_hits = layer.decoded_cache_hits.saturating_add(1);
+                    layer.decoded_cache_bytes_read = layer
+                        .decoded_cache_bytes_read
+                        .saturating_add(u64::try_from(graph.resident_bytes()).unwrap_or(u64::MAX));
+                }
+                let candidates = layer.index.candidates_in_graph(
+                    pq_query,
+                    &graph,
+                    candidate_limit,
+                    candidate_limit.max(64),
+                )?;
+                layer.graph_chunks_used = layer.graph_chunks_used.saturating_add(1);
+                layer.graph_candidates_added = layer
+                    .graph_candidates_added
+                    .saturating_add(candidates.len());
+                layer.candidate_pages.push(candidates);
+            } else {
+                layer.scan_chunks_used = layer.scan_chunks_used.saturating_add(1);
+                scan_page.push(chunk.clone());
+            }
+        }
+        if !scan_page.is_empty() {
+            let code_groups = global_pq_code_read_groups(
+                &scan_page,
+                DEFAULT_GLOBAL_PQ_CODE_COALESCE_GAP_BYTES,
+                DEFAULT_GLOBAL_PQ_CODE_REQUEST_WEIGHT_BYTES,
+            )?;
+            let remaining_range_bytes =
+                query_local_range_byte_limit.saturating_sub(*query_local_range_bytes);
+            let remaining_range_stripes =
+                query_local_range_stripe_limit.saturating_sub(*query_local_range_stripes);
+            let plans = global_pq_code_read_plans(
+                &code_groups,
+                remaining_range_bytes,
+                remaining_range_stripes,
+                self.read_runtime.global_pq_prefetch_stripe_bytes,
+            )?;
+            let planned_groups = code_groups
+                .into_iter()
+                .zip(plans)
+                .map(|((path, chunks), plan)| (path, chunks, plan))
+                .collect::<Vec<_>>();
+            let code_reads = bounded_io_map_with_gate(
+                &planned_groups,
+                global_pq_code_read_parallelism(planned_groups.len()),
+                self.decode_admission.as_deref(),
+                |(path, chunks, plan)| {
+                    let cached_codes = chunks
+                        .iter()
+                        .map(|chunk| layer.index.cached_code(&chunk.checksum))
+                        .collect::<Vec<_>>();
+                    let all_codes_cached = cached_codes.iter().all(Option::is_some);
+                    if !global_pq_code_group_requires_io(plan, all_codes_cached) {
+                        let loaded = chunks
+                            .iter()
+                            .cloned()
+                            .zip(cached_codes)
+                            .map(|(chunk, bytes)| {
+                                bytes.map(|bytes| (chunk, bytes)).ok_or_else(|| {
+                                    BorsukError::InvalidStorage(
+                                        "global PQ cached code group is incomplete".to_string(),
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        return Ok::<_, BorsukError>((loaded, 0, None));
+                    }
+
+                    let range = plan.range.clone();
+                    let start = range.start;
+                    let end = range.end;
+                    let bundled = if plan.prefetch_exact {
+                        self.storage
+                            .read_striped_range(
+                                path,
+                                start as u64..end as u64,
+                                self.read_runtime.global_pq_prefetch_stripe_bytes as u64,
+                                query_local_range_stripe_limit,
+                                self.read_runtime.global_pq_slow_read_hedge_after,
+                            )?
+                            .bytes
+                    } else {
+                        self.storage.read_range(path, start as u64..end as u64)?
+                    };
+                    let mut loaded = Vec::with_capacity(chunks.len());
+                    for chunk in chunks {
+                        let local_start = (chunk.offset_bytes as usize)
+                            .checked_sub(start)
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "global PQ bundled code offset underflows".to_string(),
+                                )
+                            })?;
+                        let local_end = local_start
+                            .checked_add(chunk.size_bytes as usize)
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "global PQ bundled code range overflows".to_string(),
+                                )
+                            })?;
+                        let bytes = bundled.get(local_start..local_end).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global PQ bundled code range is truncated".to_string(),
+                            )
+                        })?;
+                        let actual = blake3::hash(bytes).to_hex().to_string();
+                        if actual != chunk.checksum {
+                            return Err(BorsukError::ChecksumMismatch {
+                                path: path.clone(),
+                                expected: chunk.checksum.clone(),
+                                actual,
+                            });
+                        }
+                        loaded.push((chunk.clone(), bytes::Bytes::copy_from_slice(bytes)));
+                    }
+                    let count = bundled.len() as u64;
+                    let prefetched = plan.prefetch_exact.then(|| QueryLocalRange {
+                        path: path.clone(),
+                        start: start as u64,
+                        bytes: bundled,
+                    });
+                    Ok::<_, BorsukError>((loaded, count, prefetched))
+                },
+            );
+            let mut loaded = Vec::with_capacity(code_reads.len());
+            for ((_, _, plan), result) in planned_groups.iter().zip(code_reads) {
+                let (mut chunks, count, prefetched) = result?;
+                loaded.append(&mut chunks);
+                layer.bytes_read = layer.bytes_read.saturating_add(count);
+                if let Some(prefetched) = prefetched {
+                    *query_local_range_bytes = query_local_range_bytes
+                        .checked_add(prefetched.bytes.len())
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global PQ query-local range budget overflows".to_string(),
+                            )
+                        })?;
+                    *query_local_range_stripes = query_local_range_stripes
+                        .checked_add(plan.stripes)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global PQ query-local stripe budget overflows".to_string(),
+                            )
+                        })?;
+                    query_local_ranges.push(prefetched);
+                }
+            }
+            for (chunk, bytes) in &loaded {
+                layer
+                    .index
+                    .cache_code(chunk.checksum.clone(), bytes.clone());
+            }
+            layer.candidate_pages.push(layer.index.candidates_in_chunks(
+                pq_query,
+                candidate_limit,
+                &loaded,
+                crate::configured_cpu_threads(),
+            )?);
+        }
+        layer.wave_start = wave_end;
+        layer.approximate_us = layer.approximate_us.saturating_add(
+            u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX),
+        );
+        Ok(layer.wave_start < layer.selected_chunks.len())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn search_fused_resident_global_pq(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        include_vectors: bool,
+        started: Instant,
+        requests_before: &RequestCounts,
+        global_ref: &GlobalPqRef,
+        delta_ref: &GlobalPqRef,
+        base_index: Arc<ResidentGlobalPq>,
+        delta_index: Arc<ResidentGlobalPq>,
+    ) -> Result<SearchExecution> {
+        let expected_leaf_mode = self.manifest.build_config.global_scan_codec.leaf_mode();
+        let requested_candidates = match &options.mode {
+            SearchMode::Approx {
+                max_candidates_per_segment: Some(value),
+                ..
+            } => *value,
+            _ => global_ref.candidates,
+        };
+        if requested_candidates < options.k {
+            return Err(BorsukError::InvalidSearchOptions(format!(
+                "whole-index candidate budget {requested_candidates} is smaller than requested k {}",
+                options.k
+            )));
+        }
+        let pq_query = if self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry()
+        {
+            crate::metric::unit_l2_normalized(query)
+        } else {
+            query.to_vec()
+        };
+        let (base_probes, delta_probes) = match &options.mode {
+            SearchMode::Approx {
+                max_segments: Some(value),
+                ..
+            } => {
+                let delta = if *value == 0 {
+                    0
+                } else {
+                    value
+                        .saturating_sub(1)
+                        .div_ceil(4)
+                        .max(1)
+                        .min(delta_ref.probes)
+                };
+                (value.saturating_sub(delta), delta)
+            }
+            _ => (global_ref.probes, delta_ref.probes),
+        };
+        let base_route_started = Instant::now();
+        let base_cells =
+            base_index.nearest_cells(&pq_query, base_probes.min(base_index.cell_count()))?;
+        let base_route_us =
+            u64::try_from(base_route_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let delta_route_started = Instant::now();
+        let delta_cells =
+            delta_index.nearest_cells(&pq_query, delta_probes.min(delta_index.cell_count()))?;
+        let delta_route_us =
+            u64::try_from(delta_route_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let base_chunks = base_index.chunks_for_cells(&base_cells);
+        let delta_chunks = delta_index.chunks_for_cells(&delta_cells);
+        let planned_records = base_chunks
+            .iter()
+            .chain(&delta_chunks)
+            .map(|chunk| chunk.rows)
+            .sum::<usize>();
+        let candidate_limit = requested_candidates.min(planned_records);
+        let [mut base_layer, mut delta_layer] = [
+            ResidentGlobalPqLayerScan {
+                layer: GlobalPqSearchLayer::Base,
+                index: base_index,
+                selected_chunks: base_chunks,
+                wave_start: 0,
+                candidate_pages: Vec::new(),
+                graph_chunks_used: 0,
+                scan_chunks_used: 0,
+                graph_candidates_added: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
+                bytes_read: 0,
+                approximate_us: base_route_us,
+            },
+            ResidentGlobalPqLayerScan {
+                layer: GlobalPqSearchLayer::Delta,
+                index: delta_index,
+                selected_chunks: delta_chunks,
+                wave_start: 0,
+                candidate_pages: Vec::new(),
+                graph_chunks_used: 0,
+                scan_chunks_used: 0,
+                graph_candidates_added: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
+                bytes_read: 0,
+                approximate_us: delta_route_us,
+            },
+        ];
+        let use_cached_graphs =
+            !matches!(options.cache_execution, crate::CacheExecutionPolicy::Scan);
+        let base_range_byte_limit = DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES.div_ceil(2);
+        let delta_range_byte_limit =
+            DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES.saturating_sub(base_range_byte_limit);
+        let base_range_stripe_limit = DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES.div_ceil(2);
+        let delta_range_stripe_limit =
+            DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES.saturating_sub(base_range_stripe_limit);
+
+        let delta_search = self.clone();
+        let delta_query = pq_query.clone();
+        let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(0);
+        let (result_sender, result_receiver) = std::sync::mpsc::sync_channel(1);
+        crate::parallel::spawn_io(move || {
+            if ready_sender.send(()).is_err() {
+                return;
+            }
+            let result = (|| {
+                let mut ranges = Vec::new();
+                let mut range_bytes = 0_usize;
+                let mut range_stripes = 0_usize;
+                while delta_search.scan_resident_global_pq_layer_wave(
+                    &delta_query,
+                    candidate_limit,
+                    use_cached_graphs,
+                    &mut delta_layer,
+                    &mut ranges,
+                    &mut range_bytes,
+                    &mut range_stripes,
+                    delta_range_byte_limit,
+                    delta_range_stripe_limit,
+                )? {}
+                Ok::<_, BorsukError>((delta_layer, ranges))
+            })();
+            let _ = result_sender.send(result);
+        });
+        ready_receiver.recv().map_err(|_| {
+            BorsukError::InvalidStorage(
+                "parallel global PQ delta scan stopped before starting".to_string(),
+            )
+        })?;
+
+        let mut query_local_ranges = Vec::new();
+        let mut query_local_range_bytes = 0_usize;
+        let mut query_local_range_stripes = 0_usize;
+        let base_result = (|| {
+            loop {
+                if !self.scan_resident_global_pq_layer_wave(
+                    &pq_query,
+                    candidate_limit,
+                    use_cached_graphs,
+                    &mut base_layer,
+                    &mut query_local_ranges,
+                    &mut query_local_range_bytes,
+                    &mut query_local_range_stripes,
+                    base_range_byte_limit,
+                    base_range_stripe_limit,
+                )? {
+                    break;
+                }
+            }
+            Ok::<_, BorsukError>(())
+        })();
+        let delta_result = result_receiver
+            .recv()
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "parallel global PQ delta scan stopped before reporting".to_string(),
+                )
+            })
+            .and_then(|result| result);
+        base_result?;
+        let (delta_layer, mut delta_ranges) = delta_result?;
+        query_local_ranges.append(&mut delta_ranges);
+        let mut layers = [base_layer, delta_layer];
+
+        let records_considered = layers
+            .iter()
+            .flat_map(|layer| &layer.selected_chunks[..layer.wave_start])
+            .map(|chunk| chunk.rows)
+            .sum::<usize>();
+        let mut candidates = layers
+            .iter_mut()
+            .flat_map(|layer| {
+                crate::global_pq_sidecar::merge_candidates(
+                    std::mem::take(&mut layer.candidate_pages),
+                    candidate_limit,
+                )
+                .into_iter()
+                .map(|candidate| LayeredGlobalPqCandidate {
+                    layer: layer.layer,
+                    candidate,
+                })
+                .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| {
+            left.candidate
+                .cmp(&right.candidate)
+                .then_with(|| left.layer.cmp(&right.layer))
+        });
+        candidates.truncate(candidate_limit);
+
+        let chunks_by_start = layers
+            .iter()
+            .flat_map(|layer| {
+                layer.selected_chunks[..layer.wave_start]
+                    .iter()
+                    .map(move |chunk| ((layer.layer, chunk.row_start), chunk))
+            })
+            .collect::<HashMap<_, _>>();
+        let mut candidate_rows = HashMap::with_capacity(candidates.len());
+        let mut grouped = BTreeMap::<(GlobalPqSearchLayer, usize), Vec<(usize, usize)>>::new();
+        for entry in candidates {
+            grouped
+                .entry((entry.layer, entry.candidate.chunk_row_start))
+                .or_default()
+                .push((entry.candidate.node, entry.candidate.local_row));
+            candidate_rows.insert((entry.layer, entry.candidate.node), entry.candidate.row);
+        }
+        let mut bundled_groups = BTreeMap::<
+            (GlobalPqSearchLayer, String),
+            Vec<(GlobalPqChunkRef, Vec<(usize, usize)>)>,
+        >::new();
+        for ((layer, row_start), entries) in grouped {
+            let chunk = chunks_by_start.get(&(layer, row_start)).ok_or_else(|| {
+                BorsukError::InvalidStorage("resident global PQ exact chunk is missing".to_string())
+            })?;
+            bundled_groups
+                .entry((layer, chunk.path.clone()))
+                .or_default()
+                .push(((*chunk).clone(), entries));
+        }
+        let groups = bundled_groups.into_iter().collect::<Vec<_>>();
+        let exact_started = Instant::now();
+        let fetched = bounded_io_map_with_gate(
+            &groups,
+            DEFAULT_GLOBAL_PQ_RERANK_READS,
+            Some(&self.global_pq_rerank_admission),
+            |((layer, path), chunks)| {
+                self.global_exact_vectors_bundled(path, chunks, &query_local_ranges)
+                    .map(|(rows, bytes)| (*layer, rows, bytes))
+            },
+        );
+        let mut bytes_read = layers.iter().map(|layer| layer.bytes_read).sum::<u64>();
+        let mut exact_by_node = HashMap::with_capacity(candidate_rows.len());
+        for result in fetched {
+            let (layer, rows, bytes) = result?;
+            exact_by_node.extend(
+                rows.into_iter().map(|(node, vector, id, generation)| {
+                    ((layer, node), (vector, id, generation))
+                }),
+            );
+            bytes_read = bytes_read.saturating_add(bytes);
+        }
+        let mut winning_candidates =
+            BTreeMap::<RecordId, (usize, GlobalPqRow, Vec<f32>, MutationStamp)>::new();
+        for ((layer, node), row) in candidate_rows {
+            let (vector, id, stamp) = exact_by_node.remove(&(layer, node)).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "resident global PQ candidate exact row is missing".to_string(),
+                )
+            })?;
+            match winning_candidates.entry(id) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert((node, row, vector, stamp));
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    let greatest = entry.get().3.greatest(stamp)?;
+                    if greatest == stamp && stamp.version() > entry.get().3.version() {
+                        entry.insert((node, row, vector, stamp));
+                    }
+                }
+            }
+        }
+        let mutation_states =
+            self.mutation_states(winning_candidates.keys().map(|id| id.as_bytes()))?;
+        let metric = &self.manifest.config.metric;
+        let mut scored_vectors = Vec::with_capacity(winning_candidates.len());
+        for (id, (_node, _row, vector, stamp)) in winning_candidates {
+            if Self::state_suppresses_stamp(
+                mutation_states.get(id.as_bytes()).copied().flatten(),
+                stamp,
+            )? {
+                continue;
+            }
+            let distance = metric.distance_unchecked(query, &vector)?;
+            scored_vectors.push((distance, vector, id));
+        }
+        scored_vectors.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        let records_scored = scored_vectors.len();
+        scored_vectors.truncate(options.k);
+        let hits = scored_vectors
+            .iter()
+            .map(|(distance, _, id)| SearchHit {
+                id: id.clone(),
+                distance: *distance,
+                metadata: None,
+            })
+            .collect::<Vec<_>>();
+        let vectors = if include_vectors {
+            scored_vectors
+                .into_iter()
+                .map(|(_, vector, _)| vector)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let exact_us = u64::try_from(exact_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let graph_chunks_used = layers.iter().map(|layer| layer.graph_chunks_used).sum();
+        let scan_chunks_used = layers.iter().map(|layer| layer.scan_chunks_used).sum();
+        let segments_total = global_ref
+            .segments
+            .len()
+            .saturating_add(delta_ref.segments.len());
+        let segments_searched = layers.iter().map(|layer| layer.wave_start).sum();
+        let execution_engine = match (graph_chunks_used, scan_chunks_used) {
+            (0, _) => expected_leaf_mode.to_string(),
+            (_, 0) => "global-cell-graph".to_string(),
+            _ => format!("mixed-global-cell-graph+{expected_leaf_mode}"),
+        };
+        Ok(SearchExecution {
+            report: SearchReport {
+                hits,
+                leaf_mode: format!("{execution_engine}+fused-materialized-delta"),
+                termination_reason: SearchTerminationReason::Complete,
+                recall_guarantee: RecallGuarantee::Degraded,
+                segments_total,
+                segments_searched,
+                segments_skipped: segments_total.saturating_sub(segments_searched),
+                routing_page_indexes_read: 0,
+                routing_pages_read: 0,
+                bytes_read,
+                prefetched_bytes_unused: 0,
+                graph_bytes_read: 0,
+                decoded_cache_hits: layers.iter().map(|layer| layer.decoded_cache_hits).sum(),
+                decoded_cache_bytes_read: layers
+                    .iter()
+                    .map(|layer| layer.decoded_cache_bytes_read)
+                    .sum(),
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
+                cache_repairs: 0,
+                records_considered,
+                records_scored,
+                graph_candidates_added: layers
+                    .iter()
+                    .map(|layer| layer.graph_candidates_added)
+                    .sum(),
+                global_graph_chunks_searched: graph_chunks_used,
+                global_scan_chunks_searched: scan_chunks_used,
+                global_base_approximate_us: layers[0].approximate_us,
+                global_base_exact_rerank_us: exact_us,
+                global_delta_approximate_us: layers[1].approximate_us,
+                global_delta_exact_rerank_us: 0,
+                global_delta_wait_us: 0,
+                resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                collection_resident_bytes: 0,
+                retained_bytes: 0,
+                retained_capacity_bytes: 0,
+                retained_peak_bytes: 0,
+                transient_bytes: 0,
+                transient_capacity_bytes: 0,
+                transient_peak_bytes: 0,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                requests: self.storage.request_counts().delta(requests_before),
+                rows_evaluated: records_considered,
+                rows_passed_filter: records_considered,
+                segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
+            },
+            vectors,
+        })
+    }
+
     fn search_resident_global_pq(
         &self,
         query: &[f32],
@@ -12692,6 +13308,28 @@ impl BorsukIndex {
         else {
             return Ok(None);
         };
+        if materialized_global_delta_runs_in_parallel(options)
+            && global_ref.covered_manifest_version == self.manifest.version
+            && delta_summaries.is_empty()
+            && let Some(delta_ref) = global_ref.delta.as_deref()
+            && delta_ref.exact_fringe.is_empty()
+        {
+            let base_index = self.load_resident_global_pq_search_layers(&global_ref)?;
+            let delta_index = self.load_resident_global_pq_reference(delta_ref)?;
+            return self
+                .search_fused_resident_global_pq(
+                    query,
+                    options,
+                    include_vectors,
+                    started,
+                    requests_before,
+                    &global_ref,
+                    delta_ref,
+                    base_index,
+                    delta_index,
+                )
+                .map(Some);
+        }
         let parallel_delta_allowed = materialized_global_delta_runs_in_parallel(options);
         let index = if parallel_delta_allowed {
             self.load_resident_global_pq_search_layers(&global_ref)?
@@ -27560,9 +28198,9 @@ mod tests {
         let report = reader
             .search_with_report(
                 &[11.0; 8],
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
                     .with_max_segments(4)
-                    .with_max_candidates_per_segment(64),
+                    .with_max_candidates_per_segment(1),
             )
             .unwrap();
 
@@ -27581,6 +28219,24 @@ mod tests {
         assert!(
             report.segments_searched <= 4,
             "base and delta ANN layers must share one segment budget: {report:?}"
+        );
+        assert!(
+            report.records_scored <= 1,
+            "base and delta ANN layers must share one whole-index exact-score budget: {report:?}"
+        );
+        let invalid_budget = reader
+            .search_with_report(
+                &[11.0; 8],
+                SearchOptions::approx(2, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(1),
+            )
+            .expect_err("a whole-index candidate budget below k must fail closed");
+        assert!(
+            invalid_budget
+                .to_string()
+                .contains("whole-index candidate budget 1 is smaller than requested k 2"),
+            "{invalid_budget}"
         );
         assert!(
             report.global_scan_chunks_searched >= 2,
@@ -27662,6 +28318,72 @@ mod tests {
             "WAL-only telemetry must include stable base and materialized delta segments"
         );
         assert_eq!(wal_only.segments_skipped, 10);
+    }
+
+    #[test]
+    fn fused_resident_global_search_keeps_a_moved_upsert_visible() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(format!("base-{row}"), vec![row as f32 / 128.0; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let moved = vec![20.0; 8];
+        index
+            .upsert(vec![VectorRecord::new("base-0", moved.clone())])
+            .unwrap();
+        index
+            .add(
+                (0..31)
+                    .map(|row| {
+                        VectorRecord::new(
+                            format!("delta-padding-{row}"),
+                            vec![40.0 + row as f32; 8],
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.flush().unwrap();
+        let global = index.manifest.global_pq_ref.as_ref().unwrap();
+        assert_eq!(global.covered_manifest_version, index.manifest.version);
+        assert!(global.exact_fringe.is_empty());
+        assert!(global.delta.is_some());
+        drop(index);
+
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &moved,
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(8),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("base-0"));
+        assert_eq!(report.hits[0].distance, 0.0);
+        assert!(
+            report.leaf_mode.contains("fused-materialized-delta"),
+            "current base+delta coverage must use the fused path: {report:?}"
+        );
+        assert!(report.records_scored <= 8, "{report:?}");
     }
 
     #[test]
