@@ -57,9 +57,9 @@ use crate::{
     maintenance::{self, MaintenanceConfig, MaintenanceHandle, MaintenanceReport},
     manifest::{
         Bm25StatsDeltaPageRef, Bm25StatsDeltaRef, DEFAULT_GRAPH_NEIGHBORS,
-        DEFAULT_ROUTING_PAGE_FANOUT, LexicalRootRef, Manifest, QuantizerRef, RoutingLayerPageRef,
-        SegmentLexicalShardRef, SegmentSummary, TombstonePageRef, TombstoneSummary, WalConfig,
-        segment_id_bloom, segment_vector_signature_bloom,
+        DEFAULT_ROUTING_PAGE_FANOUT, GlobalPqRef, LexicalRootRef, Manifest, QuantizerRef,
+        RoutingLayerPageRef, SegmentLexicalShardRef, SegmentSummary, TombstonePageRef,
+        TombstoneSummary, WalConfig, segment_id_bloom, segment_vector_signature_bloom,
     },
     metric::{
         VectorMetric, angular_distance_with_norms, angular_distance_with_query_norm,
@@ -12465,35 +12465,52 @@ impl BorsukIndex {
         let Some(global_ref) = self.manifest.global_pq_ref.clone() else {
             return Ok(None);
         };
-        let (base_segment_count, delta_summaries) =
-            if global_ref.covered_manifest_version == self.manifest.version {
-                (
-                    global_ref.segments.len(),
-                    Arc::new(global_ref.exact_fringe.clone()),
-                )
-            } else {
-                let active_summaries = self.active_segment_summaries()?;
-                let active_by_checksum = active_summaries
-                    .iter()
-                    .map(|summary| (summary.checksum.as_str(), summary))
-                    .collect::<HashMap<_, _>>();
-                for checksum in &global_ref.segments {
-                    if !active_by_checksum.contains_key(checksum.as_str()) {
-                        // A compaction replaced a segment covered by this
-                        // artifact. Its row ordinal is no longer resolvable.
-                        return Ok(None);
-                    }
-                }
-                let mut covered = global_ref.segments.iter().collect::<HashSet<_>>();
-                if let Some(delta) = &global_ref.delta {
-                    covered.extend(delta.segments.iter());
-                }
-                let fringe = active_summaries
-                    .into_iter()
-                    .filter(|summary| !covered.contains(&summary.checksum))
-                    .collect::<Vec<_>>();
-                (global_ref.segments.len(), Arc::new(fringe))
-            };
+        let Some((base_segment_count, delta_summaries)) =
+            self.resolve_resident_global_pq_coverage(&global_ref)?
+        else {
+            return Ok(None);
+        };
+        let index = self.load_resident_global_pq_reference(&global_ref)?;
+        Ok(Some((index, base_segment_count, delta_summaries)))
+    }
+
+    fn resolve_resident_global_pq_coverage(
+        &self,
+        global_ref: &GlobalPqRef,
+    ) -> Result<Option<(usize, Arc<Vec<SegmentSummary>>)>> {
+        if global_ref.covered_manifest_version == self.manifest.version {
+            return Ok(Some((
+                global_ref.segments.len(),
+                Arc::new(global_ref.exact_fringe.clone()),
+            )));
+        }
+        let active_summaries = self.active_segment_summaries()?;
+        let active_by_checksum = active_summaries
+            .iter()
+            .map(|summary| (summary.checksum.as_str(), summary))
+            .collect::<HashMap<_, _>>();
+        for checksum in &global_ref.segments {
+            if !active_by_checksum.contains_key(checksum.as_str()) {
+                // A compaction replaced a segment covered by this artifact. Its
+                // row ordinal is no longer resolvable.
+                return Ok(None);
+            }
+        }
+        let mut covered = global_ref.segments.iter().collect::<HashSet<_>>();
+        if let Some(delta) = &global_ref.delta {
+            covered.extend(delta.segments.iter());
+        }
+        let fringe = active_summaries
+            .into_iter()
+            .filter(|summary| !covered.contains(&summary.checksum))
+            .collect::<Vec<_>>();
+        Ok(Some((global_ref.segments.len(), Arc::new(fringe))))
+    }
+
+    fn load_resident_global_pq_reference(
+        &self,
+        global_ref: &GlobalPqRef,
+    ) -> Result<Arc<ResidentGlobalPq>> {
         let cached = self
             .resident_global_pq
             .lock()
@@ -12531,7 +12548,68 @@ impl BorsukIndex {
                 .insert(global_ref.checksum.clone(), Arc::clone(&index));
             index
         };
-        Ok(Some((index, base_segment_count, delta_summaries)))
+        Ok(index)
+    }
+
+    fn load_resident_global_pq_search_layers(
+        &self,
+        global_ref: &GlobalPqRef,
+    ) -> Result<Arc<ResidentGlobalPq>> {
+        let (cached_base, cached_delta) = {
+            let cache = self
+                .resident_global_pq
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            (
+                cache.get(&global_ref.checksum).cloned(),
+                global_ref
+                    .delta
+                    .as_deref()
+                    .map(|reference| cache.get(&reference.checksum).cloned()),
+            )
+        };
+        if let Some(base) = cached_base.as_ref()
+            && cached_delta.as_ref().is_none_or(Option::is_some)
+        {
+            return Ok(Arc::clone(base));
+        }
+        let delta = global_ref.delta.as_deref().and_then(|reference| {
+            if cached_delta.as_ref().is_some_and(Option::is_some) {
+                return None;
+            }
+            let index = self.clone();
+            let reference = reference.clone();
+            let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(0);
+            let (result_sender, result_receiver) = std::sync::mpsc::sync_channel(1);
+            crate::parallel::spawn_io(move || {
+                if ready_sender.send(()).is_err() {
+                    return;
+                }
+                let result = index.load_resident_global_pq_reference(&reference);
+                let _ = result_sender.send(result);
+            });
+            Some((ready_receiver, result_receiver))
+        });
+        if let Some((ready, _)) = &delta {
+            ready.recv().map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "parallel global PQ delta descriptor load stopped before starting".to_string(),
+                )
+            })?;
+        }
+        let base = if let Some(base) = cached_base {
+            base
+        } else {
+            self.load_resident_global_pq_reference(global_ref)?
+        };
+        if let Some((_, result)) = delta {
+            let _ = result.recv().map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "parallel global PQ delta descriptor load stopped before reporting".to_string(),
+                )
+            })??;
+        }
+        Ok(base)
     }
 
     fn cached_global_cell_graph(
@@ -12606,12 +12684,19 @@ impl BorsukIndex {
         if !eligible {
             return Ok(None);
         }
-        let Some(global_ref) = self.manifest.global_pq_ref.as_ref() else {
+        let Some(global_ref) = self.manifest.global_pq_ref.clone() else {
             return Ok(None);
         };
-        let Some((index, base_segment_count, delta_summaries)) = self.load_resident_global_pq()?
+        let Some((base_segment_count, delta_summaries)) =
+            self.resolve_resident_global_pq_coverage(&global_ref)?
         else {
             return Ok(None);
+        };
+        let parallel_delta_allowed = materialized_global_delta_runs_in_parallel(options);
+        let index = if parallel_delta_allowed {
+            self.load_resident_global_pq_search_layers(&global_ref)?
+        } else {
+            self.load_resident_global_pq_reference(&global_ref)?
         };
         let parallel_delta = self.start_parallel_materialized_global_delta(
             query,
@@ -13183,17 +13268,7 @@ impl BorsukIndex {
                 .global_pq_ref
                 .as_ref()
                 .is_some_and(|reference| reference.delta.is_some());
-        let has_fixed_budget = matches!(
-            options.mode,
-            SearchMode::Approx {
-                max_bytes: Some(_),
-                ..
-            } | SearchMode::Approx {
-                max_latency_ms: Some(_),
-                ..
-            }
-        );
-        if !has_delta || has_fixed_budget {
+        if !has_delta || !materialized_global_delta_runs_in_parallel(options) {
             return None;
         }
 
@@ -24188,6 +24263,19 @@ fn restrict_to_remaining_search_budget(
     None
 }
 
+fn materialized_global_delta_runs_in_parallel(options: &SearchOptions) -> bool {
+    !matches!(
+        options.mode,
+        SearchMode::Approx {
+            max_bytes: Some(_),
+            ..
+        } | SearchMode::Approx {
+            max_latency_ms: Some(_),
+            ..
+        }
+    )
+}
+
 fn search_prefetch_segment_budget_exhausted(mode: &SearchMode, reserved_segments: usize) -> bool {
     match mode {
         SearchMode::Exact => false,
@@ -27443,6 +27531,31 @@ mod tests {
         index.manifest = index
             .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))
             .unwrap();
+        let cold_bounded = BorsukIndex::open(&uri).unwrap();
+        let cold_bounded_report = cold_bounded
+            .search_with_report(
+                &[11.0; 8],
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64)
+                    .with_max_bytes(1),
+            )
+            .unwrap();
+        assert_eq!(
+            cold_bounded_report.termination_reason,
+            SearchTerminationReason::MaxBytes
+        );
+        assert_eq!(
+            cold_bounded
+                .resident_global_pq
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .len(),
+            1,
+            "a cold byte-limited base query must not load the skipped delta descriptor"
+        );
+        drop(cold_bounded);
+
         let reader = BorsukIndex::open(&uri).unwrap();
         let report = reader
             .search_with_report(
