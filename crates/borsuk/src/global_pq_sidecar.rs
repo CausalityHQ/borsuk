@@ -38,8 +38,8 @@ use crate::rotated_product_quantizer::ProductQuantizerConfig;
 
 const DESCRIPTOR_JSON_COLUMN: &str = "ann_descriptor_json";
 const CELL_GRAPH_MAGIC: &[u8; 8] = b"BRSGCG01";
-const CELL_GRAPH_VERSION: u32 = 1;
-const CELL_GRAPH_HEADER_LEN: usize = 52;
+const CELL_GRAPH_VERSION: u32 = 2;
+const CELL_GRAPH_HEADER_LEN: usize = 60;
 pub(crate) const DEFAULT_GLOBAL_PQ_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const DEFAULT_GLOBAL_EXACT_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -764,7 +764,7 @@ impl LocationEncoding {
         Ok(packed)
     }
 
-    fn unpack(self, packed: u64) -> GlobalPqRow {
+    pub(crate) fn unpack(self, packed: u64) -> GlobalPqRow {
         let mask = 1_u64
             .checked_shl(self.row_bits as u32)
             .unwrap_or(0)
@@ -786,7 +786,7 @@ pub(crate) struct GlobalCellGraphRef {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GlobalPqChunkRef {
     pub(crate) path: String,
-    /// Checksum of this chunk's code slice, not of the containing bundle.
+    /// Checksum of this chunk's typed code-and-ordinal envelope, not of the containing bundle.
     pub(crate) checksum: String,
     pub(crate) offset_bytes: u32,
     /// Checksum of this chunk's lossless-vector slice.
@@ -794,6 +794,8 @@ pub(crate) struct GlobalPqChunkRef {
     pub(crate) exact_offset_bytes: usize,
     pub(crate) exact_size_bytes: usize,
     pub(crate) cell_index: u16,
+    /// Absolute starts for the typed segment and row ordinal buffers.
+    pub(crate) ordinal_buffer_offsets: [u32; 2],
     /// Absolute starts for the identity offsets/values and four mutation
     /// buffers. Arrow permits implementation-defined padding between buffers,
     /// so every range start is persisted instead of deriving later columns
@@ -810,6 +812,40 @@ pub(crate) struct GlobalPqChunkRef {
 }
 
 impl GlobalPqChunkRef {
+    pub(crate) fn scan_buffer_ranges(&self, code_width: usize) -> Result<[Range<usize>; 3]> {
+        let scan_start = self.offset_bytes as usize;
+        let scan_end = scan_start
+            .checked_add(self.size_bytes as usize)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ scan envelope overflows".to_string())
+            })?;
+        let code_end = self
+            .rows
+            .checked_mul(code_width)
+            .and_then(|bytes| scan_start.checked_add(bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ code buffer range overflows".to_string())
+            })?;
+        let ordinal_bytes = self.rows.checked_mul(size_of::<u32>()).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ ordinal buffer size overflows".to_string())
+        })?;
+        let [segment_start, row_start] = self.ordinal_buffer_offsets.map(|offset| offset as usize);
+        let segment_end = segment_start.checked_add(ordinal_bytes).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ segment ordinal range overflows".to_string())
+        })?;
+        let row_end = row_start.checked_add(ordinal_bytes).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ row ordinal range overflows".to_string())
+        })?;
+        if code_end > segment_start || segment_end > row_start || row_end != scan_end {
+            return invalid("global PQ typed scan ordinal ranges are invalid");
+        }
+        Ok([
+            scan_start..code_end,
+            segment_start..segment_end,
+            row_start..row_end,
+        ])
+    }
+
     pub(crate) fn identity_ranges(&self) -> Result<(Range<usize>, Range<usize>)> {
         let expected_offsets = self
             .rows
@@ -879,10 +915,19 @@ impl GlobalPqChunkRef {
 
     #[cfg(test)]
     fn with_test_typed_identity_ranges(mut self) -> Self {
-        let offsets = next_arrow_column_values(
-            (self.offset_bytes as usize).saturating_add(self.size_bytes as usize),
-        )
-        .expect("test Arrow column offset aligns");
+        if self.ordinal_buffer_offsets == [0; 2] {
+            let minimum_scan_bytes = self.rows.saturating_mul(64 + 8);
+            self.size_bytes = u32::try_from((self.size_bytes as usize).max(minimum_scan_bytes))
+                .expect("test scan envelope fits u32");
+            let scan_end = (self.offset_bytes as usize).saturating_add(self.size_bytes as usize);
+            let row = scan_end.saturating_sub(self.rows.saturating_mul(4));
+            let segment = row.saturating_sub(self.rows.saturating_mul(4));
+            self.ordinal_buffer_offsets = [segment, row]
+                .map(|offset| u32::try_from(offset).expect("test ordinal offset fits u32"));
+        }
+        let scan_end = (self.offset_bytes as usize).saturating_add(self.size_bytes as usize);
+        let offsets =
+            next_arrow_column_values(scan_end).expect("test Arrow identity offset aligns");
         let mut cursor = offsets.saturating_add(self.rows.saturating_add(1).saturating_mul(4));
         cursor = align_arrow_buffer(cursor).expect("test Arrow buffer offset aligns");
         let values = cursor;
@@ -1351,8 +1396,8 @@ pub(crate) struct GlobalPqDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum GlobalPqBundleLayout {
-    #[serde(rename = "typed-mutation-v3")]
-    TypedMutationV3,
+    #[serde(rename = "typed-columns-v4")]
+    TypedColumnsV4,
 }
 
 impl GlobalPqDescriptor {
@@ -1369,7 +1414,7 @@ impl GlobalPqDescriptor {
         // Decode-time construction calls this same function. Validate both
         // persisted codec states here so metadata accessors cannot encounter a
         // malformed state and panic before `ResidentGlobalPq::load` runs.
-        let _ = GlobalScanQuantizer::from_state(quantizer.clone())?;
+        let scan_quantizer = GlobalScanQuantizer::from_state(quantizer.clone())?;
         let _ = GlobalCoarseQuantizer::from_state(coarse_quantizer.clone())?;
         let quantizer_dimensions = match &quantizer {
             GlobalScanQuantizerState::Pq(state) => state.dimensions,
@@ -1414,6 +1459,7 @@ impl GlobalPqDescriptor {
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage("global PQ exact range overflows".to_string())
                 })?;
+            chunk.scan_buffer_ranges(scan_quantizer.code_bytes_per_vector())?;
             chunk.identity_ranges()?;
             chunk.mutation_ranges()?;
             let expected_exact = chunk
@@ -1438,7 +1484,7 @@ impl GlobalPqDescriptor {
             return invalid("chunk rows do not match the vector count");
         }
         Ok(Self {
-            bundle_layout: GlobalPqBundleLayout::TypedMutationV3,
+            bundle_layout: GlobalPqBundleLayout::TypedColumnsV4,
             quantizer,
             coarse_quantizer,
             vectors,
@@ -1970,8 +2016,8 @@ struct ParsedChunk<'a> {
     bytes: &'a [u8],
     rows: usize,
     code_width: usize,
-    row_width: usize,
-    location: LocationEncoding,
+    segment_offset: usize,
+    row_offset: usize,
 }
 
 impl<'a> ParsedChunk<'a> {
@@ -1979,41 +2025,40 @@ impl<'a> ParsedChunk<'a> {
         reference: &GlobalPqChunkRef,
         bytes: &'a [u8],
         code_width: usize,
-        location: LocationEncoding,
+        _location: LocationEncoding,
     ) -> Result<Self> {
-        let row_width = code_width
-            .checked_add(usize::from(location.width))
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global PQ scan row width overflows".to_string())
-            })?;
-        let expected_size = reference.rows.checked_mul(row_width).ok_or_else(|| {
-            BorsukError::InvalidStorage("global PQ scan chunk size overflows".to_string())
-        })?;
-        if bytes.len() != reference.size_bytes as usize || bytes.len() != expected_size {
+        if bytes.len() != reference.size_bytes as usize {
             return invalid("Arrow scan buffer does not match its descriptor");
         }
+        let base = reference.offset_bytes as usize;
+        let [_, segment_range, row_range] = reference.scan_buffer_ranges(code_width)?;
+        let segment_start = segment_range.start.checked_sub(base).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ segment ordinal offset underflows".to_string())
+        })?;
+        let row_start = row_range.start.checked_sub(base).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ row ordinal offset underflows".to_string())
+        })?;
         Ok(Self {
             bytes,
             rows: reference.rows,
             code_width,
-            row_width,
-            location,
+            segment_offset: segment_start,
+            row_offset: row_start,
         })
     }
 
     fn code(&self, local: usize) -> &[u8] {
-        let start = local * self.row_width;
+        let start = local * self.code_width;
         &self.bytes[start..start + self.code_width]
     }
 
     fn row(&self, local: usize) -> Result<GlobalPqRow> {
-        let start = local * self.row_width + self.code_width;
-        let packed = match self.location.width {
-            4 => u64::from(read_u32(self.bytes, start)?),
-            8 => read_u64(self.bytes, start)?,
-            _ => return invalid("location width is unsupported"),
-        };
-        Ok(self.location.unpack(packed))
+        let segment_start = self.segment_offset + local * size_of::<u32>();
+        let row_start = self.row_offset + local * size_of::<u32>();
+        Ok(GlobalPqRow {
+            segment_index: read_u32(self.bytes, segment_start)?,
+            row_index: read_u32(self.bytes, row_start)?,
+        })
     }
 }
 
@@ -2039,7 +2084,7 @@ impl PartialOrd for CellGraphCandidate {
     }
 }
 
-/// Compact graph and existing scan payload for one independently cached global
+/// Compact graph and existing typed scan envelope for one independently cached global
 /// cell chunk. Exact vectors deliberately remain in the ordinary fixed-width
 /// lossless bundle and are fetched only for the merged final candidates.
 #[derive(Debug, Clone)]
@@ -2049,6 +2094,7 @@ pub(crate) struct GlobalCellGraph {
     rows: usize,
     code_width: usize,
     location: LocationEncoding,
+    ordinal_buffer_offsets: [u32; 2],
     entry: u32,
     node_layer_offsets: Vec<u32>,
     adjacency_offsets: Vec<u32>,
@@ -2126,12 +2172,26 @@ impl GlobalCellGraph {
             })?);
         }
         debug_assert_eq!(parsed.rows, reference.rows);
+        let scan_start = reference.offset_bytes;
+        let ordinal_buffer_offsets = reference.ordinal_buffer_offsets.map(|offset| {
+            offset.checked_sub(scan_start).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global cell graph ordinal offset underflows".to_string(),
+                )
+            })
+        });
+        let ordinal_buffer_offsets = ordinal_buffer_offsets
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .expect("two graph ordinal offsets");
         let graph = Self {
             cell_index: reference.cell_index,
             row_start: reference.row_start,
             rows: reference.rows,
             code_width,
             location,
+            ordinal_buffer_offsets,
             entry,
             node_layer_offsets,
             adjacency_offsets,
@@ -2165,6 +2225,8 @@ impl GlobalCellGraph {
         for value in [
             self.rows,
             self.code_width,
+            self.ordinal_buffer_offsets[0] as usize,
+            self.ordinal_buffer_offsets[1] as usize,
             self.entry as usize,
             self.node_layer_offsets.len(),
             self.adjacency_offsets.len(),
@@ -2208,12 +2270,14 @@ impl GlobalCellGraph {
         let row_start = usize::try_from(read_u64(bytes, 16)?).map_err(|_| {
             BorsukError::InvalidStorage("global cell graph row start exceeds usize".into())
         })?;
-        let fields = (0..7)
+        let fields = (0..9)
             .map(|index| read_u32(bytes, 24 + index * 4).map(|value| value as usize))
             .collect::<Result<Vec<_>>>()?;
         let [
             rows,
             code_width,
+            segment_offset,
+            row_offset,
             entry,
             node_len,
             adjacency_len,
@@ -2258,6 +2322,10 @@ impl GlobalCellGraph {
             rows: *rows,
             code_width: *code_width,
             location,
+            ordinal_buffer_offsets: [
+                u32::try_from(*segment_offset).expect("decoded u32 segment offset"),
+                u32::try_from(*row_offset).expect("decoded u32 row offset"),
+            ],
             entry: u32::try_from(*entry).expect("decoded u32 entry"),
             node_layer_offsets,
             adjacency_offsets,
@@ -2379,6 +2447,7 @@ impl GlobalCellGraph {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index: self.cell_index,
+            ordinal_buffer_offsets: self.ordinal_buffer_offsets,
             typed_buffer_offsets: [0; 6],
             row_start: self.row_start,
             rows: self.rows,
@@ -2545,6 +2614,40 @@ fn build_scratch_root() -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn typed_scan_fixture(
+        interleaved: &[u8],
+        rows: usize,
+        code_width: usize,
+        location: LocationEncoding,
+    ) -> (Vec<u8>, [u32; 2]) {
+        let row_width = code_width + location.width_bytes();
+        assert_eq!(interleaved.len(), rows * row_width);
+        let mut scan = Vec::with_capacity(rows * (code_width + 8));
+        for row in interleaved.chunks_exact(row_width) {
+            scan.extend_from_slice(&row[..code_width]);
+        }
+        let segment_offset = u32::try_from(scan.len()).unwrap();
+        let decoded = interleaved
+            .chunks_exact(row_width)
+            .map(|row| {
+                let packed = match location.width_bytes() {
+                    4 => u64::from(u32::from_le_bytes(row[code_width..].try_into().unwrap())),
+                    8 => u64::from_le_bytes(row[code_width..].try_into().unwrap()),
+                    _ => unreachable!("validated location width"),
+                };
+                location.unpack(packed)
+            })
+            .collect::<Vec<_>>();
+        for row in &decoded {
+            scan.extend_from_slice(&row.segment_index.to_le_bytes());
+        }
+        let row_offset = u32::try_from(scan.len()).unwrap();
+        for row in &decoded {
+            scan.extend_from_slice(&row.row_index.to_le_bytes());
+        }
+        (scan, [segment_offset, row_offset])
+    }
+
     fn vectors(rows: usize, dimensions: usize) -> Vec<Vec<f32>> {
         (0..rows)
             .map(|row| {
@@ -2690,6 +2793,7 @@ mod tests {
                     exact_offset_bytes: 192_028,
                     exact_size_bytes: 1_024_000,
                     cell_index: (segment % 16) as u16,
+                    ordinal_buffer_offsets: [0; 2],
                     typed_buffer_offsets: [0; 6],
                     row_start: segment as usize * 4_000,
                     rows: 4_000,
@@ -2742,6 +2846,7 @@ mod tests {
                 exact_offset_bytes: 8_192,
                 exact_size_bytes: 64 * 64 * size_of::<f32>(),
                 cell_index: 0,
+                ordinal_buffer_offsets: [0; 2],
                 typed_buffer_offsets: [0; 6],
                 row_start,
                 rows: 64,
@@ -2769,6 +2874,42 @@ mod tests {
         assert_eq!(appended.chunks()[1].path, "new");
         assert_eq!(appended.chunks()[1].row_start, 64);
         assert!(appended.encode().unwrap().starts_with(b"PAR1"));
+    }
+
+    #[test]
+    fn descriptor_rejects_scan_ordinal_offsets_outside_the_chunk_envelope() {
+        let fit = vectors(128, 64);
+        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let location = LocationEncoding::for_layout(1, 64).unwrap();
+        let mut chunk = GlobalPqChunkRef {
+            path: "typed.arrow".to_string(),
+            checksum: "ab".repeat(32),
+            offset_bytes: 1_024,
+            exact_checksum: "cd".repeat(32).into_boxed_str(),
+            exact_offset_bytes: 16_384,
+            exact_size_bytes: 64 * 64 * size_of::<f32>(),
+            cell_index: 0,
+            ordinal_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
+            row_start: 0,
+            rows: 64,
+            size_bytes: 8_192,
+            graph: None,
+        }
+        .with_test_typed_identity_ranges();
+        chunk.ordinal_buffer_offsets[1] = chunk.offset_bytes + chunk.size_bytes + 8;
+
+        let error = GlobalPqDescriptor::new(
+            quantizer.state(),
+            coarse_state(&fit),
+            64,
+            VectorElementType::Float32,
+            location,
+            vec![chunk],
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("ordinal"));
     }
 
     #[test]
@@ -2816,6 +2957,7 @@ mod tests {
             exact_offset_bytes: 80,
             exact_size_bytes: 64 * size_of::<f32>(),
             cell_index: 0,
+            ordinal_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             row_start: 0,
             rows: 1,
@@ -2851,6 +2993,7 @@ mod tests {
         )
         .unwrap();
         let mut json = serde_json::to_value(&descriptor).unwrap();
+        assert_eq!(json["bundle_layout"], "typed-columns-v4");
         json.as_object_mut().unwrap().remove("bundle_layout");
 
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
@@ -2906,20 +3049,27 @@ mod tests {
             );
         }
         let chunk = builder.flush().unwrap().unwrap();
+        let (scan, ordinal_buffer_offsets) = typed_scan_fixture(
+            &chunk.bytes,
+            chunk.rows,
+            quantizer.code_bytes_per_vector(),
+            location,
+        );
         let reference = GlobalPqChunkRef {
             path: "cell-7.bin".into(),
-            checksum: blake3::hash(&chunk.bytes).to_hex().to_string(),
+            checksum: blake3::hash(&scan).to_hex().to_string(),
             offset_bytes: 0,
             exact_checksum: String::new().into_boxed_str(),
-            exact_offset_bytes: chunk.bytes.len()
+            exact_offset_bytes: scan.len()
                 + (vectors.len() + 1) * size_of::<i32>()
                 + vectors.len() * size_of::<u64>(),
             exact_size_bytes: vectors.len() * 64 * size_of::<f32>(),
             cell_index: 7,
+            ordinal_buffer_offsets,
             typed_buffer_offsets: [0; 6],
             row_start: 4_096,
             rows: vectors.len(),
-            size_bytes: u32::try_from(chunk.bytes.len()).unwrap(),
+            size_bytes: u32::try_from(scan.len()).unwrap(),
             graph: None,
         };
         let exact = vectors
@@ -2930,7 +3080,7 @@ mod tests {
 
         let graph = GlobalCellGraph::build(
             &reference,
-            chunk.bytes,
+            scan,
             &exact,
             64,
             VectorElementType::Float32,
@@ -3003,25 +3153,32 @@ mod tests {
                     .unwrap();
             }
             let chunk = builder.flush().unwrap().unwrap();
+            let (scan, ordinal_buffer_offsets) = typed_scan_fixture(
+                &chunk.bytes,
+                chunk.rows,
+                quantizer.code_bytes_per_vector(),
+                location,
+            );
             let reference = GlobalPqChunkRef {
                 path: format!("chunk-{segment}"),
-                checksum: blake3::hash(&chunk.bytes).to_hex().to_string(),
+                checksum: blake3::hash(&scan).to_hex().to_string(),
                 offset_bytes: 0,
                 exact_checksum: "cd".repeat(32).into_boxed_str(),
-                exact_offset_bytes: chunk.bytes.len()
+                exact_offset_bytes: scan.len()
                     + (chunk.rows + 1) * size_of::<i32>()
                     + chunk.rows * size_of::<u64>(),
                 exact_size_bytes: 16_384,
                 cell_index: segment as u16,
+                ordinal_buffer_offsets,
                 typed_buffer_offsets: [0; 6],
                 row_start,
                 rows: chunk.rows,
-                size_bytes: u32::try_from(chunk.bytes.len()).unwrap(),
+                size_bytes: u32::try_from(scan.len()).unwrap(),
                 graph: None,
             }
             .with_test_typed_identity_ranges();
             row_start += chunk.rows;
-            loaded.push((reference.clone(), Bytes::from(chunk.bytes)));
+            loaded.push((reference.clone(), Bytes::from(scan)));
             refs.push(reference);
         }
         let descriptor = GlobalPqDescriptor::new(
@@ -3063,6 +3220,7 @@ mod tests {
                     // Segments 0/2 and 1/3 represent the same two semantic
                     // regions, produced by separate bounded ingest checkpoints.
                     cell_index: (segment % 2) as u16,
+                    ordinal_buffer_offsets: [0; 2],
                     typed_buffer_offsets: [0; 6],
                     row_start: segment as usize * 64,
                     rows: 64,
@@ -3151,28 +3309,35 @@ mod tests {
                         .collect::<Vec<_>>();
                     assert_eq!(exact.len(), 64);
                 }
+                let (scan, ordinal_buffer_offsets) = typed_scan_fixture(
+                    &chunk.bytes,
+                    chunk.rows,
+                    quantizer.code_bytes_per_vector(),
+                    location,
+                );
                 let reference = GlobalPqChunkRef {
                     path: format!("cell-{cell}"),
-                    checksum: blake3::hash(&chunk.bytes).to_hex().to_string(),
+                    checksum: blake3::hash(&scan).to_hex().to_string(),
                     offset_bytes: 0,
                     exact_checksum: blake3::hash(&chunk.exact_bytes)
                         .to_hex()
                         .to_string()
                         .into_boxed_str(),
-                    exact_offset_bytes: chunk.bytes.len()
+                    exact_offset_bytes: scan.len()
                         + (chunk.rows + 1) * size_of::<i32>()
                         + chunk.rows * size_of::<u64>(),
                     exact_size_bytes: chunk.exact_bytes.len(),
                     cell_index: cell,
+                    ordinal_buffer_offsets,
                     typed_buffer_offsets: [0; 6],
                     row_start,
                     rows: chunk.rows,
-                    size_bytes: u32::try_from(chunk.bytes.len()).unwrap(),
+                    size_bytes: u32::try_from(scan.len()).unwrap(),
                     graph: None,
                 }
                 .with_test_typed_identity_ranges();
                 row_start += chunk.rows;
-                loaded.push((reference.clone(), Bytes::from(chunk.bytes)));
+                loaded.push((reference.clone(), Bytes::from(scan)));
                 refs.push(reference);
                 Ok(())
             })

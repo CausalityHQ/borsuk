@@ -55,9 +55,13 @@ integrity, and exact-vector columns stock-readable and converts convergent
 tombstone/ID-directory state to Parquet. The subsequent v31 cutover replaces
 the lane extent outer record plus nested custom block/Parquet payload with one
 stock-readable Arrow IPC mutation table while preserving the two-PUT
-acknowledgement boundary. The global-PQ scan code/location field remains
-packed, so Tasks 2-3 are not complete and the inventory gate must continue to
-reject a production-ready claim.
+acknowledgement boundary. The 2026-08-08 typed-column checkpoint replaces the
+global-PQ `scan_payload` with stock-readable fixed-size byte-list codes plus `UInt32`
+segment and row ordinals. The reader preserves one bounded scan GET by
+checksumming and range-reading their contiguous Arrow value-buffer envelope.
+Task 3 remains incomplete because graph, lexical/filter, and other reachable
+sidecar roles still have custom persistent encodings; the inventory gate must
+continue to reject a production-ready claim.
 
 ### Task 4: Close the inventory and qualify performance
 
