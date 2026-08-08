@@ -12698,6 +12698,8 @@ impl BorsukIndex {
         query_local_range_stripes: &mut usize,
         query_local_range_byte_limit: usize,
         query_local_range_stripe_limit: usize,
+        code_wave_max_chunks: usize,
+        code_wave_max_bytes: usize,
     ) -> Result<bool> {
         if layer.wave_start >= layer.selected_chunks.len() {
             return Ok(false);
@@ -12706,8 +12708,8 @@ impl BorsukIndex {
         let wave_end = global_pq_code_read_wave_end(
             &layer.selected_chunks,
             layer.wave_start,
-            DEFAULT_GLOBAL_PQ_CODE_READS,
-            DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES,
+            code_wave_max_chunks,
+            code_wave_max_bytes,
         );
         let page = &layer.selected_chunks[layer.wave_start..wave_end];
         let mut scan_page = Vec::with_capacity(page.len());
@@ -12953,6 +12955,12 @@ impl BorsukIndex {
             global_pq_layer_prefetch_weights(&base_chunks, stripe_bytes);
         let (delta_range_byte_weight, delta_range_stripe_weight) =
             global_pq_layer_prefetch_weights(&delta_chunks, stripe_bytes);
+        let base_code_byte_weight = global_pq_layer_code_bytes(&base_chunks);
+        let delta_code_byte_weight = global_pq_layer_code_bytes(&delta_chunks);
+        let base_code_byte_minimum = global_pq_layer_largest_code_chunk(&base_chunks);
+        let delta_code_byte_minimum = global_pq_layer_largest_code_chunk(&delta_chunks);
+        let base_code_read_weight = base_chunks.len();
+        let delta_code_read_weight = delta_chunks.len();
         let planned_records = base_chunks
             .iter()
             .chain(&delta_chunks)
@@ -13002,9 +13010,39 @@ impl BorsukIndex {
                 base_range_stripe_weight,
                 delta_range_stripe_weight,
             );
+        // The layer workers overlap, so each receives a workload-proportional
+        // reservation from one query-wide code-wave envelope. Their dispatch
+        // widths and retained code payload caps sum to the existing 32-read /
+        // 32 MiB limits rather than multiplying those limits by two.
+        let (base_code_wave_max_bytes, delta_code_wave_max_bytes, code_waves_overlap) =
+            proportional_global_pq_layer_budget_with_minimums(
+                DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES,
+                base_code_byte_weight,
+                delta_code_byte_weight,
+                base_code_byte_minimum,
+                delta_code_byte_minimum,
+            );
+        let (base_code_wave_max_chunks, delta_code_wave_max_chunks) = if code_waves_overlap {
+            proportional_global_pq_layer_budget(
+                DEFAULT_GLOBAL_PQ_CODE_READS,
+                base_code_read_weight,
+                delta_code_read_weight,
+            )
+        } else {
+            // Serialized oversized waves may each use the full dispatch width;
+            // only one can retain results at a time.
+            (DEFAULT_GLOBAL_PQ_CODE_READS, DEFAULT_GLOBAL_PQ_CODE_READS)
+        };
+        let serial_code_wave = (!code_waves_overlap).then(|| Arc::new(Mutex::new(())));
+        // Acquire the base permit before launching the delta worker so the
+        // oversized fallback has deterministic base-then-delta ordering.
+        let base_serial_guard = serial_code_wave
+            .as_ref()
+            .map(|gate| gate.lock().unwrap_or_else(|error| error.into_inner()));
 
         let delta_search = self.clone();
         let delta_query = pq_query.clone();
+        let delta_serial_code_wave = serial_code_wave.clone();
         let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(0);
         let (result_sender, result_receiver) = std::sync::mpsc::sync_channel(1);
         crate::parallel::spawn_io(move || {
@@ -13012,6 +13050,9 @@ impl BorsukIndex {
                 return;
             }
             let result = (|| {
+                let _serial_guard = delta_serial_code_wave
+                    .as_ref()
+                    .map(|gate| gate.lock().unwrap_or_else(|error| error.into_inner()));
                 let mut ranges = Vec::new();
                 let mut range_bytes = 0_usize;
                 let mut range_stripes = 0_usize;
@@ -13025,6 +13066,8 @@ impl BorsukIndex {
                     &mut range_stripes,
                     delta_range_byte_limit,
                     delta_range_stripe_limit,
+                    delta_code_wave_max_chunks,
+                    delta_code_wave_max_bytes,
                 )? {}
                 Ok::<_, BorsukError>((delta_layer, ranges))
             })();
@@ -13051,12 +13094,15 @@ impl BorsukIndex {
                     &mut query_local_range_stripes,
                     base_range_byte_limit,
                     base_range_stripe_limit,
+                    base_code_wave_max_chunks,
+                    base_code_wave_max_bytes,
                 )? {
                     break;
                 }
             }
             Ok::<_, BorsukError>(())
         })();
+        drop(base_serial_guard);
         let delta_wait_started = Instant::now();
         let delta_result = result_receiver
             .recv()
@@ -21689,6 +21735,38 @@ fn proportional_global_pq_layer_budget(
     (base, total.saturating_sub(base))
 }
 
+fn proportional_global_pq_layer_budget_with_minimums(
+    total: usize,
+    base_weight: usize,
+    delta_weight: usize,
+    base_minimum: usize,
+    delta_minimum: usize,
+) -> (usize, usize, bool) {
+    if base_weight == 0 {
+        return (0, total, true);
+    }
+    if delta_weight == 0 {
+        return (total, 0, true);
+    }
+    let minimum = base_minimum.saturating_add(delta_minimum);
+    if minimum > total {
+        // Each layer may still make progress through the existing irreducible
+        // first-chunk rule, but their waves must be serialized.
+        return (total, total, false);
+    }
+    let remaining = total - minimum;
+    let (base_extra, delta_extra) = proportional_global_pq_layer_budget(
+        remaining,
+        base_weight.saturating_sub(base_minimum),
+        delta_weight.saturating_sub(delta_minimum),
+    );
+    (
+        base_minimum.saturating_add(base_extra),
+        delta_minimum.saturating_add(delta_extra),
+        true,
+    )
+}
+
 fn global_pq_layer_prefetch_weights(
     chunks: &[GlobalPqChunkRef],
     stripe_bytes: usize,
@@ -21702,6 +21780,20 @@ fn global_pq_layer_prefetch_weights(
                 .saturating_add(bytes.div_ceil(stripe_bytes).max(1)),
         )
     })
+}
+
+fn global_pq_layer_code_bytes(chunks: &[GlobalPqChunkRef]) -> usize {
+    chunks.iter().fold(0_usize, |bytes, chunk| {
+        bytes.saturating_add(chunk.size_bytes as usize)
+    })
+}
+
+fn global_pq_layer_largest_code_chunk(chunks: &[GlobalPqChunkRef]) -> usize {
+    chunks
+        .iter()
+        .map(|chunk| chunk.size_bytes as usize)
+        .max()
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27220,6 +27312,83 @@ mod tests {
         assert_eq!(proportional_global_pq_layer_budget(16, 0, 100), (0, 16));
         assert_eq!(proportional_global_pq_layer_budget(16, 100, 0), (16, 0));
         assert_eq!(proportional_global_pq_layer_budget(1, 100, 100), (1, 0));
+    }
+
+    #[test]
+    fn fused_global_layers_share_one_code_wave_cap() {
+        let (base_bytes, delta_bytes, overlap) = proportional_global_pq_layer_budget_with_minimums(
+            DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES,
+            100 * 1024 * 1024,
+            2 * 1024 * 1024,
+            2 * 1024 * 1024,
+            2 * 1024 * 1024,
+        );
+        let (base_reads, delta_reads) =
+            proportional_global_pq_layer_budget(DEFAULT_GLOBAL_PQ_CODE_READS, 24, 8);
+
+        assert!(overlap);
+        assert_eq!(base_bytes + delta_bytes, DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES);
+        assert_eq!(base_reads + delta_reads, DEFAULT_GLOBAL_PQ_CODE_READS);
+        assert_eq!(
+            (base_bytes, delta_bytes),
+            (30 * 1024 * 1024, 2 * 1024 * 1024)
+        );
+        assert_eq!((base_reads, delta_reads), (24, 8));
+
+        let (base_oversized, delta_oversized, overlap) =
+            proportional_global_pq_layer_budget_with_minimums(
+                DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES,
+                40 * 1024 * 1024,
+                40 * 1024 * 1024,
+                20 * 1024 * 1024,
+                20 * 1024 * 1024,
+            );
+        assert!(!overlap);
+        assert_eq!(base_oversized, DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES);
+        assert_eq!(delta_oversized, DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES);
+    }
+
+    #[test]
+    fn oversized_fused_global_workers_release_base_before_delta_completion() {
+        let (_, _, overlap) = proportional_global_pq_layer_budget_with_minimums(
+            DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES,
+            40 * 1024 * 1024,
+            40 * 1024 * 1024,
+            20 * 1024 * 1024,
+            20 * 1024 * 1024,
+        );
+        assert!(!overlap);
+
+        let gate = Arc::new(Mutex::new(()));
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let base_guard = gate.lock().unwrap_or_else(|error| error.into_inner());
+        let delta_gate = Arc::clone(&gate);
+        let delta_order = Arc::clone(&order);
+        let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(0);
+        let (done_sender, done_receiver) = std::sync::mpsc::sync_channel(0);
+        let delta = thread::spawn(move || {
+            ready_sender.send(()).unwrap();
+            let _guard = delta_gate.lock().unwrap_or_else(|error| error.into_inner());
+            delta_order
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push("delta");
+            done_sender.send(()).unwrap();
+        });
+        ready_receiver.recv().unwrap();
+        order
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push("base");
+        assert!(done_receiver.try_recv().is_err());
+
+        drop(base_guard);
+        done_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        delta.join().unwrap();
+        assert_eq!(
+            *order.lock().unwrap_or_else(|error| error.into_inner()),
+            ["base", "delta"]
+        );
     }
 
     #[test]
