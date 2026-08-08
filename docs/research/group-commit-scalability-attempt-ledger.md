@@ -1535,3 +1535,60 @@ stages with one query-wide scheduler and one exact/MVCC phase. Because BORSUK
 is unreleased, that cutover will replace the experimental path and format
 versions outright; no compatibility reader or migration layer will be
 retained.
+
+### Current-coverage base/delta query fusion
+
+The next TDD slice exposed two defects in the normal current-coverage query
+path. First, a whole-index candidate limit of one was independently spent by
+the stable base and immutable delta, producing two exact scores. Second, a
+stronger moved-upsert fixture put the stale base version at the approximate
+query optimum and its current delta version farther away; truncating the raw
+cross-layer union before reading identities returned no hit at `k=C=1`.
+
+The corrected production/default path keeps the independently trained base and
+delta quantizers and the existing shared probe partition, but removes the
+recursive result merge when manifest coverage is current and no exact fringe
+exists. Both layer scans overlap, their layer-local nodes remain tagged, and
+their concurrent code waves share one 32-read / 32 MiB envelope plus one 8 MiB
+/ 16-stripe query-local exact-range reuse allowance. Reservations are
+proportional to selected work and at least one largest selected chunk per
+nonempty layer. When two irreducible chunks cannot fit together, base and delta
+run synchronously in caller order; no worker waits on a mutex inside the shared
+I/O pool.
+
+The fused path retains at most `C` approximate rows from each layer, reads the
+coupled standard-Arrow identity/mutation/vector ranges in one exact admission
+phase, resolves the greatest mutation stamp per identity once, suppresses
+obsolete/deleted rows once, applies the `C` boundary to unique live identities,
+and exact-scores at most `C` rows. The stale-base fixture now returns the current
+delta generation with one exact score. A candidate limit below `k` fails closed
+before either the fused or fixed-budget global path; the cold one-byte query
+still does not preload a delta it may skip. Delta join wait is measured rather
+than hardcoded, final ties use exact distance then `RecordId`, and layer errors
+are settled before the query returns so no background read outlives a failed
+request.
+
+Focused evidence on the integrated revision includes the three new candidate,
+stale-upsert, and proportional-budget regressions; nine resident-global tests;
+the 43-test group-commit suite; and the deterministic 25 ms delayed-store
+overlap regression. These are correctness and structural-concurrency results,
+not S3 latency, throughput, or recall qualification.
+
+The complete repository assurance run passed formatting, diff hygiene,
+repository policy, documentation-web checks, strict locked workspace Clippy
+with all features and targets, and the complete locked Rust workspace with all
+features and targets. Its pinned Python layer initially rejected one hybrid
+fixture because the fixture requested `k=10` behind a whole-index candidate
+budget of four. That fail-closed result was correct. The fixture now declares
+`k=4`, reports captured benchmark output on subprocess failure, and the exact
+regression plus the complete 486-test Python layer pass. No performance claim
+is inferred from these assurance tests.
+
+Two deliberate gaps remain visible. The current Arrow range helper still
+couples identity columns with lossless vectors, so fusion may fetch up to `2C`
+raw vectors before exact-scoring `C`; the next slice must split identity/MVCC
+reads from winning-vector reads without changing the standard Arrow format.
+Fixed byte/deadline queries and exact-fringe/stale-coverage queries retain the
+recursive path until one absolute deadline and reservation ledger covers every
+source. Those paths are current correctness fallbacks, not legacy-format
+support, and they will be deleted after the shared scheduler subsumes them.

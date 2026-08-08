@@ -84,12 +84,13 @@ class HybridRetrievalBenchTests(unittest.TestCase):
                     "BORSUK_HYBRID_BATCH_SIZE": "2",
                     "BORSUK_HYBRID_REPETITIONS": "2",
                     "BORSUK_HYBRID_QUERY_SEED": "17",
+                    "BORSUK_HYBRID_K": "4",
                     "BORSUK_HYBRID_CANDIDATE_DEPTH": "4",
                     "BORSUK_HYBRID_MAX_SEGMENTS": "8",
                     "BORSUK_HYBRID_FUSION": "rrf",
                 }
             )
-            subprocess.run(
+            build = subprocess.run(
                 [
                     "cargo",
                     "run",
@@ -101,11 +102,16 @@ class HybridRetrievalBenchTests(unittest.TestCase):
                 ],
                 cwd=ROOT,
                 env=env,
-                check=True,
+                check=False,
                 capture_output=True,
                 text=True,
             )
-            subprocess.run(
+            self.assertEqual(
+                build.returncode,
+                0,
+                f"hybrid build failed\nstdout:\n{build.stdout}\nstderr:\n{build.stderr}",
+            )
+            query = subprocess.run(
                 [
                     "cargo",
                     "run",
@@ -117,9 +123,14 @@ class HybridRetrievalBenchTests(unittest.TestCase):
                 ],
                 cwd=ROOT,
                 env=env,
-                check=True,
+                check=False,
                 capture_output=True,
                 text=True,
+            )
+            self.assertEqual(
+                query.returncode,
+                0,
+                f"hybrid query failed\nstdout:\n{query.stdout}\nstderr:\n{query.stderr}",
             )
 
             with (output / "hybrid_build.csv").open(newline="") as handle:
