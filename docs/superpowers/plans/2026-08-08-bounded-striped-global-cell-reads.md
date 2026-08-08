@@ -243,7 +243,7 @@ Commit the evidence/docs slice. Fetch `origin/main`, prove it is an ancestor of
 `HEAD`, push `HEAD:main`, verify `HEAD == origin/main`, and require a clean
 worktree.
 
-- [ ] **Step 3: Prove AWS worker exclusivity and launch**
+- [x] **Step 3: Prove AWS worker exclusivity and launch**
 
 Using profile `causality`, require healthy EC2 status, idle load, no benchmark
 process, no competing tmux pane, and fresh disjoint S3 result/index prefixes.
