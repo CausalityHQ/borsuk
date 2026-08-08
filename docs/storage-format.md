@@ -15,16 +15,16 @@ BORSUK uses one canonical storage/output strategy:
   random-access record-batch file with a footer, typed fixed-size vector arrays,
   and optional IPC V5 ZSTD buffer compression.
 - **Arrow IPC File** for each global PQ/SRHT/TurboQuant ANN bundle. Every cell
-  chunk is one record batch with a fixed-size `scan_payload` column (code plus
-  packed row location), binary `record_id`, typed `mutation_hlc`,
-  `mutation_writer`, `mutation_digest`, `row_integrity`, and typed
-  `exact_vector` columns. The `typed-mutation-v3` Parquet ANN descriptor
-  persists the required Arrow buffer offsets. Checked range reconstruction
-  fetches identities, full mutation stamps, integrity digests, and selected
-  exact rows without downloading the scan payload or whole file. Exact rows
-  retain the declared physical `f32/f16/bf16/i8/binary` width. Splitting the
-  still-packed scan code/location field into independently typed Arrow columns
-  remains an open standard-format migration gate.
+  chunk is one record batch with typed `pq_code: FixedSizeList<UInt8>`,
+  `segment_ordinal: UInt32`, `row_ordinal: UInt32`, binary `record_id`, typed
+  `mutation_hlc`, `mutation_writer`, `mutation_digest`, `row_integrity`, and
+  typed `exact_vector` columns. The `typed-columns-v4` Parquet ANN descriptor
+  persists the required Arrow buffer offsets. One checked range fetch spans
+  the contiguous code and ordinal value buffers, retaining the single-request
+  scan path without hiding a private row-location encoding in Arrow. Separate
+  checked ranges fetch identities, full mutation stamps, integrity digests,
+  and selected exact rows without downloading the scan envelope or whole file.
+  Exact rows retain the declared physical `f32/f16/bf16/i8/binary` width.
 - Versioned JSON for writer-stripe heads and their active directory. Some older
   cell-WAL and transaction controls remain checked compact binary and are an
   explicit open migration gap; they are not claimed as production-standard
@@ -806,22 +806,26 @@ A finalized `pq-scan-only` index stores one small content-addressed standard
 Parquet file at
 `global-pq/descriptors/.../descriptor-<checksum>.parquet` plus immutable
 standard Arrow IPC files under `global-pq/bundles/`. Every bundle has one
-record batch per cell chunk. Its fixed-size `scan_payload` values contain an
-interleaved product code and packed `(segment ordinal, row ordinal)`; its
-`exact_vector` values use the declared typed Arrow vector representation. The
-descriptor stores the byte offset, length, and checksum of each Arrow value
-buffer, so queries range-read selected scan or exact slices without loading the
-other column, the bundle, or the corpus into memory. Global-PQ reference layout
-v4 records all six identity/mutation buffer starts explicitly: standard Arrow
-writers may insert more than one alignment block between columns, so later
-ranges must not be inferred from one implementation's padding choice. Bundles are capped at
-1 MiB of scan payload and 32 MiB total; a single oversize chunk is the
-irreducible exception. The descriptor contains the structured-rotation
+record batch per cell chunk. Product codes are a fixed-size list of bytes, and
+segment and row ordinals are independent `UInt32` columns; `exact_vector`
+values use the declared typed Arrow vector representation. The descriptor
+stores the byte offset, length, and checksum of the single code-and-ordinal
+scan envelope and of each independently fetched Arrow value buffer, so queries
+range-read selected scan or exact slices without loading the other columns,
+the bundle, or the corpus into memory. Global-PQ reference layout v4 records
+both ordinal buffer starts and all six identity/mutation buffer starts
+explicitly: standard Arrow writers may insert more than one alignment block
+between columns, so later ranges must not be inferred from one implementation's
+padding choice. Descriptor construction rejects envelopes whose typed ordinal
+ranges overlap, escape the checksum boundary, or do not terminate at its end.
+Cell scan envelopes are capped at 32 MiB. Ordinary bundles flush above 2 MiB
+of aggregate code bytes or 48 MiB of estimated total bytes; a single oversize
+chunk is the irreducible exception. The descriptor contains the structured-rotation
 product codebook, a bounded hierarchical full-dimensional coarse router trained
 from corpus vectors,
 and content-addressed cell/chunk references. Each chunk holds
-one byte per product subspace plus packed `(segment ordinal, row ordinal)`
-locations. Every code chunk has a row-aligned typed Arrow exact-vector values
+one byte per product subspace plus independent typed segment and row ordinal
+buffers. Every code chunk has a row-aligned typed Arrow exact-vector values
 buffer capped at 16 MiB; its row range is arithmetic, so it needs no offset
 table, dictionary, or decompression state. IDs and complete mutation stamps use
 typed Arrow columns in the same bundle and are range-read only for the final

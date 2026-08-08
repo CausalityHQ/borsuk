@@ -13664,7 +13664,7 @@ impl BorsukIndex {
             self.storage
                 .write_bytes_content_addressed(&path, &encoded.bytes)?;
             for (entry, slice) in pending.iter().zip(&encoded.slices) {
-                let code = &encoded.bytes[slice.code_range.clone()];
+                let scan = &encoded.bytes[slice.code_range.start..slice.row_ordinal_range.end];
                 let exact = &encoded.bytes[slice.exact_range.clone()];
                 let mut reference = global_pq_chunk_reference(&path, entry, slice, &encoded.bytes)?;
                 let graph = self
@@ -13676,7 +13676,7 @@ impl BorsukIndex {
                     .map(|config| {
                         let graph = GlobalCellGraph::build(
                             &reference,
-                            code.to_vec(),
+                            scan.to_vec(),
                             exact,
                             dimensions,
                             self.manifest.build_config.vector_element_type,
@@ -14429,7 +14429,7 @@ impl BorsukIndex {
             self.storage
                 .write_bytes_content_addressed(&path, &encoded.bytes)?;
             for (entry, slice) in pending.iter().zip(&encoded.slices) {
-                let code = &encoded.bytes[slice.code_range.clone()];
+                let scan = &encoded.bytes[slice.code_range.start..slice.row_ordinal_range.end];
                 let exact = &encoded.bytes[slice.exact_range.clone()];
                 let mut reference = global_pq_chunk_reference(&path, entry, slice, &encoded.bytes)?;
                 if let Some(config) = self
@@ -14441,7 +14441,7 @@ impl BorsukIndex {
                 {
                     let graph = GlobalCellGraph::build(
                         &reference,
-                        code.to_vec(),
+                        scan.to_vec(),
                         exact,
                         dimensions,
                         vector_element_type,
@@ -20311,6 +20311,8 @@ struct PendingGlobalPqChunk {
 #[derive(Debug)]
 struct GlobalPqBundleSlice {
     code_range: Range<usize>,
+    segment_ordinal_range: Range<usize>,
+    row_ordinal_range: Range<usize>,
     identity_offsets_range: Range<usize>,
     identity_values_range: Range<usize>,
     mutation_hlc_range: Range<usize>,
@@ -20342,14 +20344,21 @@ fn encode_global_pq_arrow_bundle(
         .ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ Arrow scan width overflows".to_string())
         })?;
-    let scan_type =
-        arrow_schema::DataType::FixedSizeBinary(i32::try_from(scan_row_width).map_err(|_| {
-            BorsukError::InvalidStorage("global PQ Arrow scan width exceeds i32".to_string())
-        })?);
+    let code_list_size = i32::try_from(code_width).map_err(|_| {
+        BorsukError::InvalidStorage("global PQ Arrow code width exceeds i32".to_string())
+    })?;
+    let code_item = Arc::new(arrow_schema::Field::new(
+        "item",
+        arrow_schema::DataType::UInt8,
+        false,
+    ));
+    let code_type = arrow_schema::DataType::FixedSizeList(Arc::clone(&code_item), code_list_size);
     let exact_type = crate::arrow_vector_sidecar::vector_data_type(element_type, dimensions)?;
     let schema = Arc::new(arrow_schema::Schema::new_with_metadata(
         vec![
-            arrow_schema::Field::new("scan_payload", scan_type, false),
+            arrow_schema::Field::new("pq_code", code_type, false),
+            arrow_schema::Field::new("segment_ordinal", arrow_schema::DataType::UInt32, false),
+            arrow_schema::Field::new("row_ordinal", arrow_schema::DataType::UInt32, false),
             arrow_schema::Field::new("record_id", arrow_schema::DataType::Binary, false),
             arrow_schema::Field::new("mutation_hlc", arrow_schema::DataType::UInt64, false),
             arrow_schema::Field::new(
@@ -20406,9 +20415,32 @@ fn encode_global_pq_arrow_bundle(
                     entry.chunk.bytes.len()
                 )));
             }
-            let scan = arrow_array::FixedSizeBinaryArray::try_from_iter(
-                entry.chunk.bytes.chunks_exact(scan_row_width),
+            let mut code_values = Vec::with_capacity(entry.chunk.rows * code_width);
+            let mut segment_ordinals = Vec::with_capacity(entry.chunk.rows);
+            let mut row_ordinals = Vec::with_capacity(entry.chunk.rows);
+            for row in entry.chunk.bytes.chunks_exact(scan_row_width) {
+                code_values.extend_from_slice(&row[..code_width]);
+                let packed = match location.width_bytes() {
+                    4 => u64::from(u32::from_le_bytes(
+                        row[code_width..].try_into().expect("four-byte location"),
+                    )),
+                    8 => u64::from_le_bytes(
+                        row[code_width..].try_into().expect("eight-byte location"),
+                    ),
+                    _ => unreachable!("validated location width"),
+                };
+                let decoded = location.unpack(packed);
+                segment_ordinals.push(decoded.segment_index);
+                row_ordinals.push(decoded.row_index);
+            }
+            let code = arrow_array::FixedSizeListArray::try_new(
+                code_item.clone(),
+                code_list_size,
+                Arc::new(arrow_array::UInt8Array::from(code_values)),
+                None,
             )?;
+            let segment_ordinals = arrow_array::UInt32Array::from(segment_ordinals);
+            let row_ordinals = arrow_array::UInt32Array::from(row_ordinals);
             let exact = global_pq_exact_arrow_array(
                 &entry.chunk.exact_bytes,
                 entry.chunk.rows,
@@ -20465,7 +20497,9 @@ fn encode_global_pq_arrow_bundle(
             let batch = arrow_array::RecordBatch::try_new(
                 Arc::clone(&schema),
                 vec![
-                    Arc::new(scan),
+                    Arc::new(code),
+                    Arc::new(segment_ordinals),
+                    Arc::new(row_ordinals),
                     Arc::new(identities),
                     Arc::new(mutation_hlc),
                     Arc::new(mutation_writer),
@@ -20518,13 +20552,16 @@ fn global_pq_chunk_reference(
     slice: &GlobalPqBundleSlice,
     bundle: &[u8],
 ) -> Result<GlobalPqChunkRef> {
-    let code = bundle.get(slice.code_range.clone()).ok_or_else(|| {
-        BorsukError::InvalidStorage("global PQ code range is outside its bundle".to_string())
+    let scan_range = slice.code_range.start..slice.row_ordinal_range.end;
+    let scan = bundle.get(scan_range.clone()).ok_or_else(|| {
+        BorsukError::InvalidStorage("global PQ scan range is outside its bundle".to_string())
     })?;
     let exact = bundle.get(slice.exact_range.clone()).ok_or_else(|| {
         BorsukError::InvalidStorage("global PQ exact range is outside its bundle".to_string())
     })?;
-    let typed_buffer_offsets = [
+    let all_typed_buffer_offsets = [
+        slice.segment_ordinal_range.start,
+        slice.row_ordinal_range.start,
         slice.identity_offsets_range.start,
         slice.identity_values_range.start,
         slice.mutation_hlc_range.start,
@@ -20532,12 +20569,15 @@ fn global_pq_chunk_reference(
         slice.mutation_digest_range.start,
         slice.row_integrity_range.start,
     ];
-    if typed_buffer_offsets.iter().any(|offset| offset % 8 != 0) {
+    if all_typed_buffer_offsets
+        .iter()
+        .any(|offset| offset % 8 != 0)
+    {
         return Err(BorsukError::InvalidStorage(format!(
-            "global PQ typed Arrow buffers are not 8-byte aligned: {typed_buffer_offsets:?}"
+            "global PQ typed Arrow buffers are not 8-byte aligned: {all_typed_buffer_offsets:?}"
         )));
     }
-    let typed_buffer_offsets = typed_buffer_offsets.map(|offset| {
+    let typed_buffer_offsets = all_typed_buffer_offsets.map(|offset| {
         u32::try_from(offset).map_err(|_| {
             BorsukError::InvalidStorage(
                 "global PQ Arrow buffer offset exceeds the 4 GiB bundle limit".to_string(),
@@ -20546,24 +20586,29 @@ fn global_pq_chunk_reference(
     });
     let typed_buffer_offsets = typed_buffer_offsets
         .into_iter()
-        .collect::<Result<Vec<_>>>()?
+        .collect::<Result<Vec<_>>>()?;
+    let ordinal_buffer_offsets = typed_buffer_offsets[..2]
         .try_into()
-        .expect("two typed global PQ offsets");
+        .expect("two ordinal offsets");
+    let typed_buffer_offsets = typed_buffer_offsets[2..]
+        .try_into()
+        .expect("six identity and mutation offsets");
     Ok(GlobalPqChunkRef {
         path: path.to_string(),
-        checksum: blake3::hash(code).to_hex().to_string(),
-        offset_bytes: u32::try_from(slice.code_range.start).map_err(|_| {
+        checksum: blake3::hash(scan).to_hex().to_string(),
+        offset_bytes: u32::try_from(scan_range.start).map_err(|_| {
             BorsukError::InvalidStorage("global PQ code offset exceeds u32".to_string())
         })?,
         exact_checksum: blake3::hash(exact).to_hex().to_string().into_boxed_str(),
         exact_offset_bytes: slice.exact_range.start,
         exact_size_bytes: exact.len(),
         cell_index: entry.cell_index,
+        ordinal_buffer_offsets,
         typed_buffer_offsets,
         row_start: entry.row_start,
         rows: entry.chunk.rows,
-        size_bytes: u32::try_from(code.len()).map_err(|_| {
-            BorsukError::InvalidStorage("global PQ code slice exceeds u32".to_string())
+        size_bytes: u32::try_from(scan.len()).map_err(|_| {
+            BorsukError::InvalidStorage("global PQ scan slice exceeds u32".to_string())
         })?,
         graph: None,
     })
@@ -20764,12 +20809,12 @@ fn global_pq_arrow_buffer_ranges(
                     "global PQ Arrow record batch has no buffers".to_string(),
                 )
             })?;
-            // The six fixed identity/mutation columns contribute thirteen
-            // buffers before the exact vector. FixedSizeList exact vectors add
-            // three; binary exact vectors add two.
-            if !matches!(buffers.len(), 15 | 16) {
+            // Typed PQ codes contribute three buffers, the two ordinal columns
+            // contribute two each, identity/mutation columns contribute eleven,
+            // and exact vectors contribute three (list) or two (binary).
+            if !matches!(buffers.len(), 20 | 21) {
                 return Err(BorsukError::InvalidStorage(
-                    "global PQ Arrow record batch has an invalid typed-mutation layout".to_string(),
+                    "global PQ Arrow record batch has an invalid typed-column layout".to_string(),
                 ));
             }
             let body_len = usize::try_from(block.bodyLength()).map_err(|_| {
@@ -20814,13 +20859,15 @@ fn global_pq_arrow_buffer_ranges(
                 Ok(start..end)
             };
             Ok(GlobalPqBundleSlice {
-                code_range: buffer_range(buffers.get(1))?,
-                identity_offsets_range: buffer_range(buffers.get(3))?,
-                identity_values_range: buffer_range(buffers.get(4))?,
-                mutation_hlc_range: buffer_range(buffers.get(6))?,
-                mutation_writer_range: buffer_range(buffers.get(8))?,
-                mutation_digest_range: buffer_range(buffers.get(10))?,
-                row_integrity_range: buffer_range(buffers.get(12))?,
+                code_range: buffer_range(buffers.get(2))?,
+                segment_ordinal_range: buffer_range(buffers.get(4))?,
+                row_ordinal_range: buffer_range(buffers.get(6))?,
+                identity_offsets_range: buffer_range(buffers.get(8))?,
+                identity_values_range: buffer_range(buffers.get(9))?,
+                mutation_hlc_range: buffer_range(buffers.get(11))?,
+                mutation_writer_range: buffer_range(buffers.get(13))?,
+                mutation_digest_range: buffer_range(buffers.get(15))?,
+                row_integrity_range: buffer_range(buffers.get(17))?,
                 exact_range: buffer_range(buffers.get(buffers.len() - 1))?,
             })
         })
@@ -26225,6 +26272,7 @@ mod tests {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index: 0,
+            ordinal_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             row_start: 0,
             rows: 1,
@@ -26276,6 +26324,7 @@ mod tests {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index,
+            ordinal_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             row_start: 0,
             rows: 1,
@@ -26315,6 +26364,7 @@ mod tests {
             exact_offset_bytes: 1_000_000,
             exact_size_bytes: 4,
             cell_index,
+            ordinal_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             row_start: cell_index as usize,
             rows: 1,
@@ -26339,6 +26389,7 @@ mod tests {
             exact_offset_bytes: 64 * 1024,
             exact_size_bytes,
             cell_index: 7,
+            ordinal_buffer_offsets: [0; 2],
             typed_buffer_offsets: [2_048, 3_048, 4_048, 5_048, 6_048, 7_048],
             row_start: 0,
             rows: 512,
@@ -26373,6 +26424,7 @@ mod tests {
                     exact_offset_bytes: 64 * 1024,
                     exact_size_bytes: complete_bytes - 64 * 1024,
                     cell_index,
+                    ordinal_buffer_offsets: [0; 2],
                     typed_buffer_offsets: [0; 6],
                     row_start: cell_index as usize,
                     rows: 1,
@@ -26429,6 +26481,7 @@ mod tests {
                 exact_offset_bytes: 64 * 1024,
                 exact_size_bytes: 4 * MIB - 64 * 1024,
                 cell_index: 1,
+                ordinal_buffer_offsets: [0; 2],
                 typed_buffer_offsets: [0; 6],
                 row_start: 0,
                 rows: 1,
@@ -26469,6 +26522,7 @@ mod tests {
                     exact_offset_bytes: 64 * 1024,
                     exact_size_bytes: complete_bytes - 64 * 1024,
                     cell_index,
+                    ordinal_buffer_offsets: [0; 2],
                     typed_buffer_offsets: [0; 6],
                     row_start: cell_index as usize,
                     rows: 1,
@@ -26512,7 +26566,7 @@ mod tests {
     }
 
     #[test]
-    fn global_pq_bundle_is_standard_arrow_with_independent_scan_and_exact_ranges() {
+    fn global_pq_bundle_uses_typed_code_and_row_columns_with_independent_ranges() {
         let chunk = |codes: &[u8], locations: &[u8], exact_bytes: Vec<u8>| {
             let mut bytes = Vec::new();
             bytes.extend_from_slice(codes);
@@ -26580,13 +26634,57 @@ mod tests {
         .collect::<std::result::Result<Vec<_>, _>>()
         .unwrap();
         assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].schema().field(0).name(), "scan_payload");
-        assert_eq!(batches[0].schema().field(1).name(), "record_id");
-        assert_eq!(batches[0].schema().field(2).name(), "mutation_hlc");
-        assert_eq!(batches[0].schema().field(3).name(), "mutation_writer");
-        assert_eq!(batches[0].schema().field(4).name(), "mutation_digest");
-        assert_eq!(batches[0].schema().field(5).name(), "row_integrity");
-        assert_eq!(batches[0].schema().field(6).name(), "exact_vector");
+        assert_eq!(batches[0].schema().field(0).name(), "pq_code");
+        assert_eq!(
+            batches[0].schema().field(0).data_type(),
+            &arrow_schema::DataType::FixedSizeList(
+                Arc::new(arrow_schema::Field::new(
+                    "item",
+                    arrow_schema::DataType::UInt8,
+                    false,
+                )),
+                2,
+            )
+        );
+        assert_eq!(batches[0].schema().field(1).name(), "segment_ordinal");
+        assert_eq!(
+            batches[0].schema().field(1).data_type(),
+            &arrow_schema::DataType::UInt32
+        );
+        assert_eq!(batches[0].schema().field(2).name(), "row_ordinal");
+        assert_eq!(
+            batches[0].schema().field(2).data_type(),
+            &arrow_schema::DataType::UInt32
+        );
+        assert_eq!(batches[0].schema().field(3).name(), "record_id");
+        assert_eq!(batches[0].schema().field(4).name(), "mutation_hlc");
+        assert_eq!(batches[0].schema().field(5).name(), "mutation_writer");
+        assert_eq!(batches[0].schema().field(6).name(), "mutation_digest");
+        assert_eq!(batches[0].schema().field(7).name(), "row_integrity");
+        assert_eq!(batches[0].schema().field(8).name(), "exact_vector");
+        let code = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::FixedSizeListArray>()
+            .unwrap();
+        let code_values = code
+            .values()
+            .as_any()
+            .downcast_ref::<arrow_array::UInt8Array>()
+            .unwrap();
+        assert_eq!(code_values.values(), &[1, 2]);
+        let segments = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::UInt32Array>()
+            .unwrap();
+        let rows = batches[0]
+            .column(2)
+            .as_any()
+            .downcast_ref::<arrow_array::UInt32Array>()
+            .unwrap();
+        assert_eq!(segments.values(), &[0]);
+        assert_eq!(rows.values(), &[7]);
         assert_eq!(pending[0].chunk.identities[0].0, RecordId::from("row-7"));
         assert_eq!(pending[0].chunk.identities[0].1.version().hlc(), 11);
         assert_eq!(
@@ -26607,11 +26705,11 @@ mod tests {
         );
         assert_eq!(
             &encoded.bytes[encoded.slices[0].code_range.clone()],
-            &[1, 2, 7, 0, 0, 0]
+            &[1, 2]
         );
         assert_eq!(
             &encoded.bytes[encoded.slices[1].code_range.clone()],
-            &[3, 4, 8, 0, 0, 0]
+            &[3, 4]
         );
         assert_eq!(
             &encoded.bytes[encoded.slices[0].exact_range.clone()],
@@ -27417,10 +27515,13 @@ mod tests {
                 SearchOptions::approx(5, LeafMode::SrhtPqScan)
                     .with_max_segments(4)
                     .with_max_candidates_per_segment(64)
-                    .with_max_bytes(400),
+                    .with_max_bytes(1_500),
             )
             .unwrap();
-        assert!(delta_exhausted.global_scan_chunks_searched >= 2);
+        assert!(
+            delta_exhausted.global_scan_chunks_searched >= 2,
+            "both ANN layers must execute before exhausting 1,500 bytes: {delta_exhausted:?}"
+        );
         assert_eq!(
             delta_exhausted.termination_reason,
             SearchTerminationReason::MaxBytes,
