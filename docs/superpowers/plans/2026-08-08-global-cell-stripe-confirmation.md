@@ -164,12 +164,13 @@ git push origin HEAD:main
 **Files:**
 - Modify: `scripts/validate_global_cell_stripes.py`
 - Modify: `scripts/test_validate_global_cell_stripes.py`
+- Create: `scripts/test_validate_global_cell_stripe_confirmation.py`
 
 **Interfaces:**
 - Consumes: either exact historical v1 manifest or exact confirmation v1 manifest.
 - Produces: reconciled JSON containing p50/p95/worst-repeat/GET/byte metrics and an explicit `winner` only if that campaign's frozen rule passes.
 
-- [ ] **Step 1: Write failing confirmation validator tests**
+- [x] **Step 1: Write failing confirmation validator tests**
 
 Generate a synthetic ten-arm terminal matrix from the confirmation manifest.
 Test a passing 4 MiB candidate and independently reject: incomplete roots before
@@ -179,7 +180,7 @@ paired wins, pooled improvement below 10%, pooled p50 regression above 5%, poole
 p95 at/above 200 ms, and worst-repeat p95 at/above 200 ms. Keep all historical
 v1 tests green.
 
-- [ ] **Step 2: Run the validator tests and observe RED**
+- [x] **Step 2: Run the validator tests and observe RED**
 
 ```bash
 python3 -m unittest scripts.test_validate_global_cell_stripes
@@ -188,7 +189,7 @@ python3 -m unittest scripts.test_validate_global_cell_stripes
 Expected: confirmation manifest/schema is rejected or new selection fields are
 missing.
 
-- [ ] **Step 3: Implement exact schema dispatch and selection**
+- [x] **Step 3: Implement exact schema dispatch and selection**
 
 Select expected markers, arms, orders, protocol kind, query count, and thresholds
 from the exact `campaign_id`. Reject unknown campaign IDs. Preserve the terminality
@@ -198,7 +199,7 @@ to `s1m` and require every criterion in the design; return the individual boolea
 criteria so failure is auditable. Preserve v1 winner behavior byte-for-byte in
 its tests.
 
-- [ ] **Step 4: Run validator and harness tests**
+- [x] **Step 4: Run validator and harness tests**
 
 ```bash
 python3 -m unittest scripts.test_validate_global_cell_stripes \
@@ -208,11 +209,12 @@ python3 -m unittest scripts.test_validate_global_cell_stripes \
 
 Expected: all focused tests pass.
 
-- [ ] **Step 5: Commit and fast-forward push**
+- [x] **Step 5: Commit and fast-forward push**
 
 ```bash
 git add scripts/validate_global_cell_stripes.py \
-  scripts/test_validate_global_cell_stripes.py
+  scripts/test_validate_global_cell_stripes.py \
+  scripts/test_validate_global_cell_stripe_confirmation.py
 git commit -m "bench: validate stripe confirmation evidence"
 git fetch origin main
 git merge-base --is-ancestor origin/main HEAD
