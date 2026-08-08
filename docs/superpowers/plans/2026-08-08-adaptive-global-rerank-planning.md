@@ -157,10 +157,19 @@ Run the new regression, the complete global-PQ unit subset, and `crates/borsuk/t
 
 Expected: one new regression, 40 global-PQ tests, and 43 group-commit tests pass without changing candidates or recall behavior.
 
-- [ ] **Step 4: Run repository assurance and exact-revision smoke**
+- [x] **Step 4: Run repository assurance and exact-revision smoke**
 
 Run formatting, strict Clippy, full locked Rust workspace tests, pinned Python tests, repository policy, and the bulk structural smoke from the committed revision.
 
-- [ ] **Step 5: Deliver and rerun AWS qualification**
+- [x] **Step 5: Deliver and rerun AWS qualification**
 
 Fast-forward push the verified commit to `origin/main`, launch a fresh immutable campaign after proving worker exclusivity, and apply the same terminal-marker/validator boundary before inspecting results.
+
+The immutable v66 attempt reached the 2K/r01/w8 cell and failed only the
+post-drain read-p95 gate at 203.884 ms. It preserved 128,000/128,000 records,
+recall@10 1.0, 78.009 ms write p95, and 127.790 ms active-tail read p95. The
+prefetch removed most exact-rerank requests (111 GETs versus v65's 297) and
+reduced post-drain p95 by 33.312 ms, but moved 1.4--4.1 MiB exact-cell payloads
+into the approximate stage. The next plan must separate compact routing/ADC
+bytes from exact-vector payload latency while retaining Arrow/Parquet durable
+artifacts and the 16-candidate exact rerank.
