@@ -10,11 +10,10 @@ use std::{
 
 use borsuk::{
     BorsukError, BorsukIndex, BuildConfig, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS,
-    DEFAULT_ROUTING_PAGE_FANOUT, DurableTableFormat, Fusion, GarbageCollectionOptions,
-    HybridOptions, HybridQuery, IncrementalMaintenanceOptions, IndexConfig, LeafCapability,
-    LeafMode, OpenOptions, RebuildOptions, RecordId, SearchHit, SearchMode, SearchOptions,
-    VectorMetric, VectorRecord, VectorSpec, WalConfig, metadata_from_json, metadata_to_json,
-    vector_records_from_parquet,
+    DEFAULT_ROUTING_PAGE_FANOUT, Fusion, GarbageCollectionOptions, HybridOptions, HybridQuery,
+    IncrementalMaintenanceOptions, IndexConfig, LeafCapability, LeafMode, OpenOptions,
+    RebuildOptions, RecordId, SearchHit, SearchMode, SearchOptions, VectorMetric, VectorRecord,
+    VectorSpec, WalConfig, metadata_from_json, metadata_to_json, vector_records_from_parquet,
 };
 use clap::{Parser, Subcommand};
 
@@ -191,7 +190,6 @@ fn run() -> Result<()> {
             uri,
             metric,
             vector_element_type,
-            segment_table_format,
             dimensions,
             segment_max_vectors,
             routing_page_fanout,
@@ -236,7 +234,6 @@ fn run() -> Result<()> {
                 leaf_capability.into(),
                 BuildConfig {
                     vector_element_type: vector_element_type.parse()?,
-                    segment_table_format,
                     global_scan_codec: global_scan_codec.into(),
                     global_pq_code_bytes,
                     global_turboquant_bits: turboquant_bits,
@@ -710,10 +707,6 @@ enum Commands {
         /// float8-e4m3fn (alias: fp8), float8-e5m2, int8, or binary.
         #[arg(long, default_value = "float32")]
         vector_element_type: String,
-        /// Durable normal-segment table format. Vortex is experimental and
-        /// changes only immutable segment metadata; exact vectors stay Arrow IPC.
-        #[arg(long, default_value = "parquet")]
-        segment_table_format: DurableTableFormat,
         /// Maximum vectors per immutable segment.
         #[arg(long)]
         segment_max_vectors: Option<usize>,

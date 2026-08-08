@@ -2,21 +2,11 @@
 
 use std::{collections::BTreeMap, fmt, str::FromStr};
 
-use crate::{BorsukError, DurableTableFormat, PhysicalObjectRole, Result, VectorElementType};
+use crate::{BorsukError, PhysicalObjectRole, Result};
 
-/// Third production layout-policy schema, including graph-table placement and
-/// policy-selected Parquet/Vortex WAL runs.
-pub const CURRENT_LAYOUT_POLICY_VERSION: u32 = 3;
-/// Integrity chunk used for independently authenticated range reads.
-pub const RANGE_INTEGRITY_CHUNK_BYTES: usize = 1024 * 1024;
-/// Lower row bound retained for the explicitly selected WAL Vortex experiment.
-pub const WAL_VORTEX_CANDIDATE_MIN_ROWS: usize = 500;
-/// Lower dimensionality bound retained for the explicitly selected WAL Vortex experiment.
-pub const WAL_VORTEX_CANDIDATE_MIN_DIMENSIONS: usize = 64;
-/// Primary types retained by the local screen for the rejected v5 AWS
-/// qualification. The rule remains available only for explicit experiments.
-pub const WAL_VORTEX_CANDIDATE_ELEMENT_TYPES: [VectorElementType; 1] = [VectorElementType::Float32];
-
+/// Fourth production layout-policy schema. Durable table roles are Parquet;
+/// Arrow IPC and packed roles retain their fixed standard encodings.
+pub const CURRENT_LAYOUT_POLICY_VERSION: u32 = 4;
 /// Physical codec selected for one immutable persisted object.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
@@ -25,8 +15,6 @@ pub const WAL_VORTEX_CANDIDATE_ELEMENT_TYPES: [VectorElementType; 1] = [VectorEl
 pub enum PhysicalFormat {
     /// Apache Parquet.
     Parquet,
-    /// Vortex file format.
-    Vortex,
     /// Apache Arrow IPC file format.
     ArrowIpc,
     /// BORSUK fixed-header packed bytes.
@@ -39,7 +27,6 @@ impl PhysicalFormat {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Parquet => "parquet",
-            Self::Vortex => "vortex",
             Self::ArrowIpc => "arrow-ipc",
             Self::Packed => "packed",
         }
@@ -51,7 +38,7 @@ impl PhysicalFormat {
         match self {
             Self::ArrowIpc => "arrow",
             Self::Packed => "bin",
-            Self::Parquet | Self::Vortex => self.as_str(),
+            Self::Parquet => self.as_str(),
         }
     }
 }
@@ -68,7 +55,6 @@ impl FromStr for PhysicalFormat {
     fn from_str(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
             "parquet" => Ok(Self::Parquet),
-            "vortex" => Ok(Self::Vortex),
             "arrow" | "arrow-ipc" => Ok(Self::ArrowIpc),
             "bin" | "binary" | "packed" => Ok(Self::Packed),
             _ => Err(BorsukError::InvalidStorage(format!(
@@ -78,82 +64,13 @@ impl FromStr for PhysicalFormat {
     }
 }
 
-impl From<DurableTableFormat> for PhysicalFormat {
-    fn from(value: DurableTableFormat) -> Self {
-        match value {
-            DurableTableFormat::Parquet => Self::Parquet,
-            DurableTableFormat::Vortex => Self::Vortex,
-        }
-    }
-}
-
-impl TryFrom<PhysicalFormat> for DurableTableFormat {
-    type Error = BorsukError;
-
-    fn try_from(value: PhysicalFormat) -> Result<Self> {
-        match value {
-            PhysicalFormat::Parquet => Ok(Self::Parquet),
-            PhysicalFormat::Vortex => Ok(Self::Vortex),
-            other => Err(BorsukError::InvalidStorage(format!(
-                "normal segment cannot use physical format `{other}`"
-            ))),
-        }
-    }
-}
-
-/// Whether a policy always uses its role default or evaluates checked rules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PhysicalLayoutPolicyKind {
-    /// One persisted format per role.
-    Fixed,
-    /// Versioned, deterministic rules may specialize a role by row count.
-    Adaptive,
-}
-
-/// Write-time facts available without encoding the object twice.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PhysicalLayoutContext {
-    /// Logical rows stored in the object.
-    pub rows: usize,
-    /// Primary vector dimensionality, or zero for non-vector objects.
-    pub dimensions: usize,
-    /// Declared primary vector type when the object contains primary vectors.
-    pub vector_element_type: Option<VectorElementType>,
-}
-
-/// Deterministic adaptive rule. The matching rule with the largest
-/// `(minimum_rows, minimum_dimensions, type-specificity)` tuple wins.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PhysicalLayoutRule {
-    /// Object family governed by this rule.
-    pub object_role: PhysicalObjectRole,
-    /// Inclusive lower logical-row bound.
-    pub minimum_rows: usize,
-    /// Inclusive lower primary-vector dimensionality.
-    pub minimum_dimensions: usize,
-    /// Optional primary-vector type allowlist. Empty means every type.
-    pub vector_element_types: Vec<VectorElementType>,
-    /// Resolved physical codec.
-    pub physical_format: PhysicalFormat,
-}
-
 /// Versioned role registry persisted in every collection catalog.
-///
-/// Policy v3 dispatches normal-segment and WAL-run writers. Other entries
-/// reserve the production role namespace and reject unsupported proposals;
-/// their writers emit the fixed formats listed in the checked storage-object
-/// inventory.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PhysicalLayoutPolicy {
     /// Policy schema and qualification version.
     pub version: u32,
-    /// Fixed or adaptive resolution.
-    pub kind: PhysicalLayoutPolicyKind,
     /// Required registry entry for every production object role.
     pub role_defaults: BTreeMap<PhysicalObjectRole, PhysicalFormat>,
-    /// Optional checked adaptive rules.
-    pub rules: Vec<PhysicalLayoutRule>,
 }
 
 impl Default for PhysicalLayoutPolicy {
@@ -168,17 +85,14 @@ impl PhysicalLayoutPolicy {
     /// Callers do not provide a collection cardinality estimate. Writers resolve
     /// every immutable object from its actual row count, vector dimensionality,
     /// and element type at the moment the object is persisted. The frozen
-    /// normal-segment and v5 WAL AWS qualifications rejected every Vortex
-    /// promotion, so this deliberately returns the all-Parquet baseline for
-    /// WAL and normal-segment tables.
+    /// normal-segment and WAL tables use Parquet.
     #[must_use]
     pub fn production_default() -> Self {
         Self::production_baseline()
     }
 
-    /// Current registry baseline. Normal segments and WAL runs are
-    /// writer-governed in policy v3; other wire formats remain owned by their
-    /// fixed writers.
+    /// Current registry baseline. Standard table and sidecar formats are owned
+    /// by their fixed writers.
     #[must_use]
     pub fn production_baseline() -> Self {
         use PhysicalFormat::{ArrowIpc, Packed, Parquet};
@@ -189,7 +103,6 @@ impl PhysicalLayoutPolicy {
         };
         Self {
             version: CURRENT_LAYOUT_POLICY_VERSION,
-            kind: PhysicalLayoutPolicyKind::Fixed,
             role_defaults: BTreeMap::from([
                 (Catalog, Parquet),
                 (WalRun, Parquet),
@@ -206,82 +119,16 @@ impl PhysicalLayoutPolicy {
                 (Tombstone, Parquet),
                 (IdDirectory, Packed),
             ]),
-            rules: Vec::new(),
         }
-    }
-
-    /// Set one role's baseline codec.
-    #[must_use]
-    pub fn with_role_format(mut self, role: PhysicalObjectRole, format: PhysicalFormat) -> Self {
-        self.role_defaults.insert(role, format);
-        self
-    }
-
-    /// Add a deterministic row-count rule and make the policy adaptive.
-    #[must_use]
-    pub fn with_minimum_rows_rule(
-        mut self,
-        role: PhysicalObjectRole,
-        minimum_rows: usize,
-        format: PhysicalFormat,
-    ) -> Self {
-        self.kind = PhysicalLayoutPolicyKind::Adaptive;
-        self.rules.push(PhysicalLayoutRule {
-            object_role: role,
-            minimum_rows,
-            minimum_dimensions: 0,
-            vector_element_types: Vec::new(),
-            physical_format: format,
-        });
-        self
-    }
-
-    /// Add a deterministic rule constrained by vector shape and element type.
-    #[must_use]
-    pub fn with_vector_characteristics_rule<I>(
-        mut self,
-        role: PhysicalObjectRole,
-        minimum_rows: usize,
-        minimum_dimensions: usize,
-        vector_element_types: I,
-        format: PhysicalFormat,
-    ) -> Self
-    where
-        I: IntoIterator<Item = VectorElementType>,
-    {
-        self.kind = PhysicalLayoutPolicyKind::Adaptive;
-        self.rules.push(PhysicalLayoutRule {
-            object_role: role,
-            minimum_rows,
-            minimum_dimensions,
-            vector_element_types: vector_element_types.into_iter().collect(),
-            physical_format: format,
-        });
-        self
-    }
-
-    /// Add the measured compact-Vortex WAL experiment without changing any
-    /// other production placement.
-    ///
-    /// The frozen v5 AWS qualification rejected this rule. It remains opt-in
-    /// for research and is intentionally absent from [`Self::production_default`].
-    #[must_use]
-    pub fn with_wal_vortex_candidate(self) -> Self {
-        self.with_vector_characteristics_rule(
-            PhysicalObjectRole::WalRun,
-            WAL_VORTEX_CANDIDATE_MIN_ROWS,
-            WAL_VORTEX_CANDIDATE_MIN_DIMENSIONS,
-            WAL_VORTEX_CANDIDATE_ELEMENT_TYPES,
-            PhysicalFormat::Vortex,
-        )
     }
 
     /// Validate completeness and deterministic rule structure.
     pub fn validate(&self) -> Result<()> {
-        if self.version == 0 {
-            return Err(BorsukError::InvalidStorage(
-                "physical layout policy version must be non-zero".to_string(),
-            ));
+        if self.version != CURRENT_LAYOUT_POLICY_VERSION {
+            return Err(BorsukError::InvalidStorage(format!(
+                "unsupported physical layout policy version {}; expected {}",
+                self.version, CURRENT_LAYOUT_POLICY_VERSION
+            )));
         }
         for role in production_object_roles() {
             if !self.role_defaults.contains_key(role) {
@@ -294,116 +141,27 @@ impl PhysicalLayoutPolicy {
         if self
             .role_defaults
             .contains_key(&PhysicalObjectRole::Unknown)
-            || self
-                .rules
-                .iter()
-                .any(|rule| rule.object_role == PhysicalObjectRole::Unknown)
         {
             return Err(BorsukError::InvalidStorage(
                 "physical layout policy cannot classify the unknown role".to_string(),
             ));
         }
-        if self.kind == PhysicalLayoutPolicyKind::Fixed && !self.rules.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "fixed physical layout policy cannot contain adaptive rules".to_string(),
-            ));
-        }
         for (&role, &format) in &self.role_defaults {
             validate_implemented_role_format(role, format)?;
-        }
-        for rule in &self.rules {
-            validate_implemented_role_format(rule.object_role, rule.physical_format)?;
-            if !rule.vector_element_types.is_empty()
-                && !matches!(
-                    rule.object_role,
-                    PhysicalObjectRole::WalRun | PhysicalObjectRole::NormalSegment
-                )
-            {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "physical layout type selectors are not implemented for object role `{}`",
-                    rule.object_role.as_str()
-                )));
-            }
-            if rule
-                .vector_element_types
-                .iter()
-                .enumerate()
-                .any(|(index, element_type)| {
-                    rule.vector_element_types[..index].contains(element_type)
-                })
-            {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "physical layout rule for `{}` repeats a vector element type",
-                    rule.object_role.as_str()
-                )));
-            }
-        }
-        for (index, left) in self.rules.iter().enumerate() {
-            for right in self.rules.iter().skip(index + 1) {
-                if left.object_role == right.object_role
-                    && left.minimum_rows == right.minimum_rows
-                    && left.minimum_dimensions == right.minimum_dimensions
-                    && left.physical_format != right.physical_format
-                    && type_selectors_overlap(
-                        &left.vector_element_types,
-                        &right.vector_element_types,
-                    )
-                {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "physical layout rules for `{}` are ambiguous at rows={} dimensions={}",
-                        left.object_role.as_str(),
-                        left.minimum_rows,
-                        left.minimum_dimensions
-                    )));
-                }
-            }
         }
         Ok(())
     }
 
     /// Resolve one object's codec at write time.
-    pub fn resolve(
-        &self,
-        role: PhysicalObjectRole,
-        context: PhysicalLayoutContext,
-    ) -> Result<PhysicalFormat> {
+    pub fn resolve(&self, role: PhysicalObjectRole) -> Result<PhysicalFormat> {
         self.validate()?;
-        let baseline = *self.role_defaults.get(&role).ok_or_else(|| {
+        self.role_defaults.get(&role).copied().ok_or_else(|| {
             BorsukError::InvalidStorage(format!(
                 "physical layout policy cannot resolve `{}`",
                 role.as_str()
             ))
-        })?;
-        if self.kind == PhysicalLayoutPolicyKind::Fixed {
-            return Ok(baseline);
-        }
-        Ok(self
-            .rules
-            .iter()
-            .filter(|rule| {
-                rule.object_role == role
-                    && rule.minimum_rows <= context.rows
-                    && rule.minimum_dimensions <= context.dimensions
-                    && (rule.vector_element_types.is_empty()
-                        || context.vector_element_type.is_some_and(|element_type| {
-                            rule.vector_element_types.contains(&element_type)
-                        }))
-            })
-            .max_by_key(|rule| {
-                (
-                    rule.minimum_rows,
-                    rule.minimum_dimensions,
-                    usize::from(!rule.vector_element_types.is_empty()),
-                )
-            })
-            .map_or(baseline, |rule| rule.physical_format))
+        })
     }
-}
-
-fn type_selectors_overlap(left: &[VectorElementType], right: &[VectorElementType]) -> bool {
-    left.is_empty()
-        || right.is_empty()
-        || left.iter().any(|element_type| right.contains(element_type))
 }
 
 /// Persisted resolution attached to an immutable object reference.
@@ -415,70 +173,16 @@ pub struct PhysicalLayoutRef {
     pub physical_format: PhysicalFormat,
     /// Policy version that selected the codec.
     pub layout_policy_version: u32,
-    /// Byte width of independently checksummed object chunks.
-    pub integrity_chunk_bytes: usize,
-    /// BLAKE3 hashes, in byte order, covering the complete object.
-    pub integrity_checksums: Vec<String>,
 }
 
 impl PhysicalLayoutRef {
     /// Resolve and construct one persisted reference.
-    pub fn resolve(
-        policy: &PhysicalLayoutPolicy,
-        role: PhysicalObjectRole,
-        context: PhysicalLayoutContext,
-    ) -> Result<Self> {
+    pub fn resolve(policy: &PhysicalLayoutPolicy, role: PhysicalObjectRole) -> Result<Self> {
         Ok(Self {
             object_role: role,
-            physical_format: policy.resolve(role, context)?,
+            physical_format: policy.resolve(role)?,
             layout_policy_version: policy.version,
-            integrity_chunk_bytes: 0,
-            integrity_checksums: Vec::new(),
         })
-    }
-
-    /// Attach complete chunk integrity after the writer has encoded the object.
-    #[must_use]
-    pub fn with_integrity(mut self, bytes: &[u8]) -> Self {
-        self.integrity_chunk_bytes = RANGE_INTEGRITY_CHUNK_BYTES;
-        self.integrity_checksums = bytes
-            .chunks(RANGE_INTEGRITY_CHUNK_BYTES)
-            .map(|chunk| blake3::hash(chunk).to_hex().to_string())
-            .collect();
-        self
-    }
-
-    /// Validate one complete stored integrity chunk.
-    pub(crate) fn verify_integrity_chunk(
-        &self,
-        object_path: &str,
-        index: usize,
-        bytes: &[u8],
-    ) -> Result<()> {
-        if self.integrity_chunk_bytes == 0 || self.integrity_checksums.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "range-readable object reference has no chunk integrity".to_string(),
-            ));
-        }
-        if bytes.len() > self.integrity_chunk_bytes {
-            return Err(BorsukError::InvalidStorage(
-                "range integrity chunk exceeds its declared width".to_string(),
-            ));
-        }
-        let expected = self.integrity_checksums.get(index).ok_or_else(|| {
-            BorsukError::InvalidStorage(format!(
-                "range integrity has no checksum for chunk {index}"
-            ))
-        })?;
-        let actual = blake3::hash(bytes).to_hex().to_string();
-        if &actual != expected {
-            return Err(BorsukError::ChecksumMismatch {
-                path: format!("{object_path}#chunk-{index}"),
-                expected: expected.clone(),
-                actual,
-            });
-        }
-        Ok(())
     }
 
     /// Validate the reference is suitable for the expected reader.
@@ -490,16 +194,13 @@ impl PhysicalLayoutRef {
                 expected_role.as_str()
             )));
         }
-        if self.layout_policy_version == 0 {
-            return Err(BorsukError::InvalidStorage(
-                "object reference has zero layout-policy version".to_string(),
-            ));
+        if self.layout_policy_version != CURRENT_LAYOUT_POLICY_VERSION {
+            return Err(BorsukError::InvalidStorage(format!(
+                "unsupported object layout-policy version {}; expected {}",
+                self.layout_policy_version, CURRENT_LAYOUT_POLICY_VERSION
+            )));
         }
-        if self.integrity_chunk_bytes == 0 || self.integrity_checksums.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "object reference is missing range integrity".to_string(),
-            ));
-        }
+        validate_implemented_role_format(expected_role, self.physical_format)?;
         Ok(())
     }
 }
@@ -508,7 +209,7 @@ fn validate_implemented_role_format(
     role: PhysicalObjectRole,
     format: PhysicalFormat,
 ) -> Result<()> {
-    use PhysicalFormat::{ArrowIpc, Packed, Parquet, Vortex};
+    use PhysicalFormat::{ArrowIpc, Packed, Parquet};
     use PhysicalObjectRole::{
         Catalog, CommitMarker, ExactVectors, FilterIndex, GraphIndex, IdDirectory, LaneHead,
         LateInteraction, LexicalBlock, NormalSegment, ProductCodes, RoutingPage, Tombstone, WalRun,
@@ -516,10 +217,10 @@ fn validate_implemented_role_format(
     };
     let supported = match role {
         Catalog | RoutingPage | GraphIndex | LexicalBlock | Tombstone => format == Parquet,
-        WalRun => matches!(format, Parquet | Vortex),
+        WalRun => format == Parquet,
         LaneHead | WriterDirectory | CommitMarker | FilterIndex | IdDirectory => format == Packed,
         ExactVectors | ProductCodes | LateInteraction => format == ArrowIpc,
-        NormalSegment => matches!(format, Parquet | Vortex),
+        NormalSegment => format == Parquet,
         PhysicalObjectRole::Unknown => false,
     };
     if !supported {

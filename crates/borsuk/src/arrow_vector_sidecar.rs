@@ -958,9 +958,9 @@ pub(crate) fn decode_vector(
                 .map(|dimension| f32::from((packed[dimension / 8] >> (dimension % 8)) & 1))
                 .collect());
         }
-        // WAL tables use a FixedSizeList<UInt8> of packed bytes because Vortex
-        // does not yet support Arrow FixedSizeBinary. Normal Arrow sidecars
-        // retain FixedSizeBinary; accepting both keeps the decoder shared.
+        // WAL Parquet tables use a FixedSizeList<UInt8> of packed bytes, while
+        // normal Arrow sidecars retain FixedSizeBinary. Accepting both keeps
+        // the decoder shared.
         let vectors = array
             .as_any()
             .downcast_ref::<FixedSizeListArray>()

@@ -4,8 +4,7 @@ use std::{fs, process::Command};
 
 use assert_cmd::prelude::*;
 use borsuk::{
-    BorsukIndex, DurableTableFormat, GlobalScanCodec, VectorElementType, VectorRecord,
-    vector_records_to_parquet,
+    BorsukIndex, GlobalScanCodec, VectorElementType, VectorRecord, vector_records_to_parquet,
 };
 
 #[test]
@@ -180,7 +179,7 @@ fn cli_create_persists_the_selected_global_scan_codec() {
 }
 
 #[test]
-fn cli_create_persists_the_selected_segment_table_format() {
+fn cli_create_rejects_the_removed_vortex_backend() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
@@ -198,13 +197,7 @@ fn cli_create_persists_the_selected_segment_table_format() {
             "vortex",
         ])
         .assert()
-        .success();
-
-    let index = BorsukIndex::open(&uri).unwrap();
-    assert_eq!(
-        index.build_config().segment_table_format,
-        DurableTableFormat::Vortex
-    );
+        .failure();
 }
 
 #[test]

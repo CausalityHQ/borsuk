@@ -19,10 +19,10 @@ use arrow_array::{
 };
 use borsuk::{
     BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
-    DEFAULT_MAX_CONCURRENT_CELL_DECODES, DEFAULT_MAX_CONCURRENT_SEARCHES, DurableTableFormat,
-    GlobalPqLayout, GlobalScanCodec, IndexConfig, LeafCapability, LeafMode, OpenOptions,
-    RequestCounts, SearchMode, SearchOptions, SearchReport, VectorElementType, VectorMetric,
-    VectorRecord, WalConfig, WarmReport, recall_at_k, recommended_segment_max_vectors,
+    DEFAULT_MAX_CONCURRENT_CELL_DECODES, DEFAULT_MAX_CONCURRENT_SEARCHES, GlobalPqLayout,
+    GlobalScanCodec, IndexConfig, LeafCapability, LeafMode, OpenOptions, RequestCounts, SearchMode,
+    SearchOptions, SearchReport, VectorElementType, VectorMetric, VectorRecord, WalConfig,
+    WarmReport, recall_at_k, recommended_segment_max_vectors,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Deserialize;
@@ -107,10 +107,6 @@ struct ResolvedConfig {
     concurrency: Vec<usize>,
     segment_max: usize,
     vector_element_type: VectorElementType,
-    segment_table_format: DurableTableFormat,
-    wal_table_format: borsuk::PhysicalFormat,
-    segment_vortex_min_rows: Option<usize>,
-    vortex_range_reads: bool,
     leaf_capability: LeafCapability,
     global_pq_layout: GlobalPqLayout,
     global_pq_code_bytes: Option<usize>,
@@ -493,27 +489,6 @@ fn run() -> BenchResult<()> {
             config.leaf_capability,
             BuildConfig {
                 vector_element_type: config.vector_element_type,
-                segment_table_format: config.segment_table_format,
-                physical_layout: config
-                    .segment_vortex_min_rows
-                    .map_or_else(
-                        || {
-                            borsuk::PhysicalLayoutPolicy::production_baseline().with_role_format(
-                                borsuk::PhysicalObjectRole::NormalSegment,
-                                config.segment_table_format.into(),
-                            )
-                        },
-                        |minimum_rows| {
-                            borsuk::PhysicalLayoutPolicy::production_baseline()
-                                .with_minimum_rows_rule(
-                                    borsuk::PhysicalObjectRole::NormalSegment,
-                                    minimum_rows,
-                                    borsuk::PhysicalFormat::Vortex,
-                                )
-                        },
-                    )
-                    .with_role_format(borsuk::PhysicalObjectRole::WalRun, config.wal_table_format),
-                vortex_range_reads: config.vortex_range_reads,
                 global_pq_layout: config.global_pq_layout.clone(),
                 global_pq_code_bytes: config.global_pq_code_bytes,
                 global_scan_codec: config.global_scan_codec,
@@ -771,17 +746,6 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
                 .map_err(|error| Box::<dyn Error>::from(invalid_input(&error.to_string())))
         },
     )?;
-    let segment_table_format = non_empty_env("BORSUK_SEGMENT_TABLE_FORMAT")
-        .map_or(Ok(DurableTableFormat::Parquet), |value| {
-            parse_segment_table_format(&value)
-        })?;
-    let wal_table_format = non_empty_env("BORSUK_WAL_TABLE_FORMAT")
-        .map_or(Ok(DurableTableFormat::Parquet), |value| {
-            parse_segment_table_format(&value)
-        })?
-        .into();
-    let segment_vortex_min_rows = env_optional_cap("BORSUK_SEGMENT_VORTEX_MIN_ROWS", None)?;
-    let vortex_range_reads = env_flag_with_default("BORSUK_VORTEX_RANGE_READS", true)?;
     let leaf_capability = non_empty_env("BORSUK_BENCH_LEAF_CAPABILITY")
         .map_or(Ok(default_build_leaf_capability()), |value| {
             parse_leaf_capability(&value)
@@ -935,10 +899,6 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         concurrency,
         segment_max,
         vector_element_type,
-        segment_table_format,
-        wal_table_format,
-        segment_vortex_min_rows,
-        vortex_range_reads,
         leaf_capability,
         global_pq_layout,
         global_pq_code_bytes,
@@ -989,7 +949,7 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} segment_table_format={} wal_table_format={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
@@ -1004,8 +964,6 @@ fn print_config(config: &ResolvedConfig) {
         concurrency,
         config.segment_max,
         config.vector_element_type,
-        config.segment_table_format,
-        config.wal_table_format,
         config.leaf_capability,
         config.global_scan_codec,
         config.global_pq_layout,
@@ -3624,12 +3582,6 @@ fn parse_leaf_capability(value: &str) -> BenchResult<LeafCapability> {
         .map_err(|error| invalid_input(&error.to_string()).into())
 }
 
-fn parse_segment_table_format(value: &str) -> BenchResult<DurableTableFormat> {
-    value
-        .parse::<DurableTableFormat>()
-        .map_err(|error| invalid_input(&error.to_string()).into())
-}
-
 fn parse_global_pq_layout(value: &str) -> BenchResult<GlobalPqLayout> {
     let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
     match normalized.as_str() {
@@ -3748,13 +3700,12 @@ mod tests {
         dollars_per_million_queries, ingest_batch_size, is_hot_workload_position,
         mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
         parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
-        parse_optional_byte_cap, parse_positive_list, parse_segment_table_format,
-        parse_serving_mode, permuted_positions, preload_query_count,
-        recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
-        sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
-        validate_build_only, validate_disk_cached_network, validate_generated_id_range,
-        validate_insert_only, validate_leaf_capability_modes, validate_phase_selection, vector_row,
-        write_batch_len, write_operation_count,
+        parse_optional_byte_cap, parse_positive_list, parse_serving_mode, permuted_positions,
+        preload_query_count, recall_preloads_local_snapshot, recall_row_count,
+        rotated_workload_index, sample_mean, sample_stddev, uses_bounded_decoded_cache_phases,
+        uses_memory_preloaded_phase, validate_build_only, validate_disk_cached_network,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
+        validate_phase_selection, vector_row, write_batch_len, write_operation_count,
     };
 
     #[test]
@@ -3771,21 +3722,6 @@ mod tests {
         LargeListArray,
         types::{Float32Type, Int64Type},
     };
-    use borsuk::DurableTableFormat;
-
-    #[test]
-    fn segment_table_format_parser_accepts_the_two_reproducible_formats() {
-        assert_eq!(
-            parse_segment_table_format("parquet").unwrap(),
-            DurableTableFormat::Parquet
-        );
-        assert_eq!(
-            parse_segment_table_format("vortex").unwrap(),
-            DurableTableFormat::Vortex
-        );
-        assert!(parse_segment_table_format("auto").is_err());
-    }
-
     #[test]
     fn format_ab_can_force_the_normal_segment_query_path() {
         let options = approximate_options(

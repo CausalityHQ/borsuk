@@ -54,7 +54,7 @@ fn persisted_paths_have_stable_physical_object_roles() {
         ),
         ("graphs/L0/aa/graph.parquet", PhysicalObjectRole::GraphIndex),
         (
-            "segments/L0/aa/segment.vortex",
+            "segments/L0/aa/segment.parquet",
             PhysicalObjectRole::NormalSegment,
         ),
         (
@@ -112,16 +112,16 @@ fn trace_sink_is_opt_in_and_writes_a_stable_schema() {
     let trace = StorageAccessTrace::create(&output).unwrap();
     trace
         .record(StorageAccessEvent::read(
-            "segments/L0/a.vortex",
-            "vortex",
+            "segments/L0/a.parquet",
+            "parquet",
             1024,
             256,
         ))
         .unwrap();
     trace
         .record(StorageAccessEvent::decode(
-            "segments/L0/a.vortex",
-            "vortex",
+            "segments/L0/a.parquet",
+            "parquet",
             1024,
             "record_id|pq_codes",
             "rows:3|9",
@@ -134,9 +134,9 @@ fn trace_sink_is_opt_in_and_writes_a_stable_schema() {
     assert!(csv.starts_with(
         "operation,object_role,path,physical_format,object_bytes,request_count,bytes_fetched,"
     ));
-    assert!(csv.contains("read,normal_segment,segments/L0/a.vortex,vortex,1024,1,256,"));
+    assert!(csv.contains("read,normal_segment,segments/L0/a.parquet,parquet,1024,1,256,"));
     assert!(csv.contains(
-        "decode,normal_segment,segments/L0/a.vortex,vortex,1024,0,0,\
+        "decode,normal_segment,segments/L0/a.parquet,parquet,1024,0,0,\
 record_id|pq_codes,rows:3|9,2,128,42000,memory,ok"
     ));
     assert!(csv.lines().all(|line| line.split(',').count() == 14));

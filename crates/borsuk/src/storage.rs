@@ -3270,11 +3270,6 @@ impl Storage {
         Ok(bytes)
     }
 
-    pub(crate) fn evict_cached_range(&self, relative: &str, range: Range<u64>) -> Result<()> {
-        self.delete_cache_file(relative)?;
-        self.delete_cache_file(&range_cache_key(relative, range.start, range.end))
-    }
-
     pub(crate) fn read_suffix(&self, relative: &str, length: u64) -> Result<ReadBytes> {
         let cacheable = !is_mutable_lane_head(relative);
         if cacheable && let Some(bytes) = self.read_cache_file(relative)? {

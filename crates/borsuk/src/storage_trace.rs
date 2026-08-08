@@ -409,7 +409,6 @@ pub(crate) fn configured_storage_access_trace() -> Result<StorageAccessTrace> {
 pub(crate) fn physical_format_for_path(path: &str) -> &'static str {
     match Path::new(path).extension().and_then(|value| value.to_str()) {
         Some("parquet" | "parq") => "parquet",
-        Some("vortex") => "vortex",
         Some("arrow" | "ipc") => "arrow",
         _ => "packed",
     }

@@ -598,30 +598,6 @@ test("create forwards globalPqLayout to the native builder", async () => {
   );
 });
 
-test("create forwards segmentTableFormat to the native builder", async () => {
-  const validDir = mkdtempSync(join(tmpdir(), "borsuk-ts-segment-table-format-"));
-  const index = await create({
-    uri: localUri(validDir),
-    metric: "euclidean",
-    dimensions: 2,
-    segmentTableFormat: "vortex",
-  });
-  await index.add([[0, 0]], ["near"]);
-  assert.deepEqual(await index.searchIds([0, 0], { k: 1 }), ["near"]);
-
-  const invalidDir = mkdtempSync(join(tmpdir(), "borsuk-ts-segment-table-format-invalid-"));
-  await assert.rejects(
-    () =>
-      create({
-        uri: localUri(invalidDir),
-        metric: "euclidean",
-        dimensions: 2,
-        segmentTableFormat: "auto" as "vortex",
-      }),
-    /durable table format/,
-  );
-});
-
 test("add accepts vectors with optional ids", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-simple-add-"));
   const index = await create({

@@ -15,9 +15,8 @@ use std::fs;
 use std::path::Path;
 
 use borsuk::{
-    BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions, DurableTableFormat,
-    IndexConfig, LeafMode, OpenOptions, SearchOptions, SidecarCompression, VectorElementType,
-    VectorMetric, VectorRecord,
+    BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions, IndexConfig, LeafMode,
+    OpenOptions, SearchOptions, SidecarCompression, VectorElementType, VectorMetric, VectorRecord,
 };
 
 fn base_config(uri: String, dimensions: usize) -> IndexConfig {
@@ -353,9 +352,7 @@ fn build_config_survives_manifest_round_trip() {
     let build = BuildConfig {
         vector_element_type: VectorElementType::BFloat16,
         sidecar_compression: SidecarCompression::Zstd,
-        segment_table_format: DurableTableFormat::Parquet,
         physical_layout: borsuk::PhysicalLayoutPolicy::production_baseline(),
-        vortex_range_reads: false,
         kmeans_sample_fraction: 0.25,
         kmeans_max_iterations: Some(8),
         pq_codebook_sample: Some(1000),

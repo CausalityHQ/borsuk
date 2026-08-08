@@ -20,7 +20,6 @@ pub struct CreateOptions {
     pub uri: String,
     pub metric: String,
     pub vector_element_type: Option<String>,
-    pub segment_table_format: Option<String>,
     pub dim: Option<u32>,
     pub dimensions: Option<u32>,
     pub segment_size: Option<u32>,
@@ -1452,12 +1451,6 @@ pub async fn create(options: CreateOptions) -> Result<JsIndex> {
         .unwrap_or("float32")
         .parse::<VectorElementType>()
         .map_err(to_js_error)?;
-    let segment_table_format = options
-        .segment_table_format
-        .as_deref()
-        .unwrap_or("parquet")
-        .parse::<borsuk::DurableTableFormat>()
-        .map_err(to_js_error)?;
     let named_vectors = named_vector_specs(options.named_vectors)?;
     let leaf_capability = options
         .leaf_capability
@@ -1501,7 +1494,6 @@ pub async fn create(options: CreateOptions) -> Result<JsIndex> {
             leaf_capability,
             borsuk::BuildConfig {
                 vector_element_type,
-                segment_table_format,
                 global_pq_layout,
                 global_pq_code_bytes: options.global_pq_code_bytes.map(|value| value as usize),
                 global_scan_codec,

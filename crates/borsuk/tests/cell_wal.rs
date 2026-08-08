@@ -133,6 +133,7 @@ fn run_inputs_reject_path_injection_and_role_codec_mismatches() {
     for (kind, extension) in [
         (CellWalRunKind::Records, "../escape"),
         (CellWalRunKind::Records, "bin"),
+        (CellWalRunKind::Records, "vortex"),
         (CellWalRunKind::Tombstones, "vortex"),
         (CellWalRunKind::IdDirectory, "bin"),
     ] {

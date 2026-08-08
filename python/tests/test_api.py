@@ -791,26 +791,6 @@ class PythonApiTests(unittest.TestCase):
                     global_pq_code_bytes=3,
                 )
 
-    def test_create_forwards_segment_table_format_to_native_builder(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            index = borsuk.create(
-                uri=local_uri(tmp),
-                metric="euclidean",
-                dimensions=2,
-                segment_table_format="vortex",
-            )
-            index.add([[0.0, 0.0]], ids=["near"])
-            self.assertEqual(index.search_ids([0.0, 0.0], k=1), ["near"])
-
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(ValueError, "durable table format"):
-                borsuk.create(
-                    uri=local_uri(tmp),
-                    metric="euclidean",
-                    dimensions=2,
-                    segment_table_format="auto",
-                )
-
     def test_add_accepts_vectors_with_optional_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             index = borsuk.create(

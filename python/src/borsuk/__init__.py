@@ -115,7 +115,6 @@ GlobalScanCodec: TypeAlias = Literal[
     "fast-turboquant-mse-scan",
     "fast-turboquant-scan",
 ]
-DurableTableFormat: TypeAlias = Literal["parquet", "vortex"]
 VectorElementType: TypeAlias = Literal[
     "float32",
     "float16",
@@ -789,7 +788,6 @@ def create(
     uri: str,
     metric: VectorMetric,
     vector_element_type: VectorElementType = "float32",
-    segment_table_format: DurableTableFormat = "parquet",
     dim: int | None = None,
     dimensions: int | None = None,
     segment_size: int | None = None,
@@ -812,7 +810,6 @@ def create(
         uri=uri,
         metric=_enum_value(metric),
         vector_element_type=vector_element_type,
-        segment_table_format=segment_table_format,
         dim=_validate_optional_search_int(dim, "dim"),
         dimensions=_validate_optional_search_int(dimensions, "dimensions"),
         segment_size=_validate_optional_search_int(segment_size, "segment_size"),
@@ -1775,7 +1772,6 @@ __all__ = [
     "CanonicalLeafMode",
     "CanonicalVectorMetric",
     "CompactionReport",
-    "DurableTableFormat",
     "Float32Buffer",
     "GarbageCollectionReport",
     "GlobalScanCodec",

@@ -792,12 +792,6 @@ pub struct IndexStats {
     /// Encoded bytes in visible Parquet cell-WAL record runs.
     #[serde(default)]
     pub wal_parquet_record_bytes: u64,
-    /// Visible Vortex cell-WAL record runs.
-    #[serde(default)]
-    pub wal_vortex_record_runs: usize,
-    /// Encoded bytes in visible Vortex cell-WAL record runs.
-    #[serde(default)]
-    pub wal_vortex_record_bytes: u64,
     /// Physical bytes in the active global scan artifact, including exact
     /// rerank vectors and optional cell graphs.
     #[serde(default)]
@@ -1409,60 +1403,6 @@ impl SidecarCompression {
     }
 }
 
-/// Durable columnar container used for immutable normal-segment metadata.
-///
-/// Dense exact vectors remain in the standard Arrow IPC sidecar regardless of
-/// this choice. WAL, routing/control-plane, graph, and lexical objects also keep
-/// their existing formats; this knob changes only `segments/**/seg-*`.
-#[derive(
-    Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-#[serde(rename_all = "kebab-case")]
-pub enum DurableTableFormat {
-    /// Apache Parquet segment table.
-    #[default]
-    Parquet,
-    /// Vortex segment table using its default layout strategy.
-    Vortex,
-}
-
-impl DurableTableFormat {
-    /// Stable persisted/configuration name.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Parquet => "parquet",
-            Self::Vortex => "vortex",
-        }
-    }
-
-    /// Required object-path extension for this format.
-    #[must_use]
-    pub fn extension(self) -> &'static str {
-        self.as_str()
-    }
-}
-
-impl FromStr for DurableTableFormat {
-    type Err = BorsukError;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "parquet" => Ok(Self::Parquet),
-            "vortex" => Ok(Self::Vortex),
-            _ => Err(BorsukError::InvalidStorage(format!(
-                "unknown durable table format `{value}`"
-            ))),
-        }
-    }
-}
-
-impl fmt::Display for DurableTableFormat {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 /// Default seed for the [`QuantizerKind::TurboQuant`] structured rotation. Fixed
 /// so a default TurboQuant config is fully reproducible; overridable per index.
 pub const DEFAULT_TURBOQUANT_SEED: u64 = 0x0B05_11C0_7A17_C0DE;
@@ -1738,21 +1678,9 @@ pub struct BuildConfig {
     /// bounded record batches.
     #[serde(default)]
     pub sidecar_compression: SidecarCompression,
-    /// Durable format for immutable normal-segment metadata tables. The exact
-    /// vector sidecar remains standard Arrow IPC in both modes.
-    ///
-    /// Deprecated configuration alias retained temporarily for language
-    /// bindings. Object writers resolve from `physical_layout`; readers never
-    /// consult this field.
-    #[serde(default)]
-    pub segment_table_format: DurableTableFormat,
     /// Versioned role-based physical layout resolved once per immutable object.
     #[serde(default)]
     pub physical_layout: crate::PhysicalLayoutPolicy,
-    /// Use Vortex's object-store-native range planner for Vortex normal
-    /// segments. Disable only for a checked full-object qualification arm.
-    #[serde(default = "default_vortex_range_reads")]
-    pub vortex_range_reads: bool,
     /// Fraction of points used to FIT the Voronoi/k-means centroids, in `(0, 1]`.
     /// `1.0` (default) fits on every point. Below `1.0` the centroids are fit on
     /// a deterministic uniform subsample and then ALL points are assigned — a
@@ -1835,10 +1763,6 @@ fn default_persist_coarse_quantizer() -> bool {
     true
 }
 
-const fn default_vortex_range_reads() -> bool {
-    true
-}
-
 /// serde default for [`BuildConfig::kmeans_sample_fraction`]: cluster on all
 /// points (the historical behavior).
 fn default_kmeans_sample_fraction() -> f32 {
@@ -1850,9 +1774,7 @@ impl Default for BuildConfig {
         Self {
             vector_element_type: VectorElementType::default(),
             sidecar_compression: SidecarCompression::default(),
-            segment_table_format: DurableTableFormat::default(),
             physical_layout: crate::PhysicalLayoutPolicy::default(),
-            vortex_range_reads: default_vortex_range_reads(),
             kmeans_sample_fraction: default_kmeans_sample_fraction(),
             kmeans_max_iterations: None,
             pq_codebook_sample: None,
@@ -2608,21 +2530,7 @@ pub struct RebuildReport {
 mod codec_name_tests {
     use std::str::FromStr;
 
-    use super::{BuildConfig, DurableTableFormat, GlobalScanCodec, LeafMode};
-
-    #[test]
-    fn durable_segment_table_format_defaults_to_parquet_and_has_stable_names() {
-        assert_eq!(
-            BuildConfig::default().segment_table_format,
-            DurableTableFormat::Parquet
-        );
-        assert_eq!(DurableTableFormat::Parquet.as_str(), "parquet");
-        assert_eq!(DurableTableFormat::Vortex.as_str(), "vortex");
-        assert_eq!(
-            DurableTableFormat::from_str("vortex").unwrap(),
-            DurableTableFormat::Vortex
-        );
-    }
+    use super::{GlobalScanCodec, LeafMode};
 
     #[test]
     fn turboquant_codecs_have_unambiguous_breaking_names() {

@@ -167,10 +167,7 @@ mod tests {
                 object_role: crate::PhysicalObjectRole::NormalSegment,
                 physical_format: crate::PhysicalFormat::Parquet,
                 layout_policy_version: crate::CURRENT_LAYOUT_POLICY_VERSION,
-                integrity_chunk_bytes: 0,
-                integrity_checksums: Vec::new(),
-            }
-            .with_integrity(b"fixture"),
+            },
             object_count: 4,
             dimensions: centroid.len(),
             centroid,

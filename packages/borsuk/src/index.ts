@@ -368,7 +368,6 @@ export interface CreateOptions {
   uri: string;
   metric: VectorMetric;
   vectorElementType?: VectorElementType;
-  segmentTableFormat?: "parquet" | "vortex";
   dim?: number;
   dimensions?: number;
   segmentSize?: number;
@@ -668,8 +667,6 @@ interface NativeCreateOptions {
   metric: string;
   vectorElementType?: string;
   vector_element_type?: string;
-  segmentTableFormat?: string;
-  segment_table_format?: string;
   dim?: number;
   dimensions?: number;
   segmentSize?: number;
@@ -1725,8 +1722,6 @@ export async function create(options: CreateOptions): Promise<Index> {
       metric: options.metric,
       vectorElementType: options.vectorElementType,
       vector_element_type: options.vectorElementType,
-      segmentTableFormat: options.segmentTableFormat,
-      segment_table_format: options.segmentTableFormat,
       dim: dim,
       dimensions: dimensions,
       segmentSize: segmentSize,

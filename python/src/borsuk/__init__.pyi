@@ -89,7 +89,6 @@ CacheExecutionPolicy: TypeAlias = Literal["scan", "graph", "auto"]
 GlobalScanCodec: TypeAlias = Literal[
     "pq-scan", "srht-pq-scan", "fast-turboquant-mse-scan", "fast-turboquant-scan"
 ]
-DurableTableFormat: TypeAlias = Literal["parquet", "vortex"]
 VectorElementType: TypeAlias = Literal[
     "float32",
     "float16",
@@ -741,7 +740,6 @@ def create(
     uri: str,
     metric: VectorMetric | VectorMetricName,
     vector_element_type: VectorElementType = "float32",
-    segment_table_format: DurableTableFormat = "parquet",
     dim: int | None = None,
     dimensions: int | None = None,
     segment_size: int | None = None,

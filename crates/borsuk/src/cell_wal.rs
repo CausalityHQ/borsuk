@@ -1954,13 +1954,13 @@ fn validate_transaction_id(transaction_id: &str) -> Result<()> {
 
 fn validate_cell_wal_run_extension(kind: CellWalRunKind, extension: &str) -> Result<()> {
     let valid = match kind {
-        CellWalRunKind::Records => matches!(extension, "parquet" | "vortex"),
+        CellWalRunKind::Records => extension == "parquet",
         CellWalRunKind::Tombstones => extension == "parquet",
         CellWalRunKind::IdDirectory => extension == "parquet",
     };
     if !valid {
         let expected = match kind {
-            CellWalRunKind::Records => "parquet or vortex",
+            CellWalRunKind::Records => "parquet",
             CellWalRunKind::Tombstones => "parquet",
             CellWalRunKind::IdDirectory => "parquet",
         };

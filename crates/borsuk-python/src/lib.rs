@@ -2367,13 +2367,12 @@ fn tie_aware_recall_at_k(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, uri, metric, vector_element_type = "float32", segment_table_format = "parquet", dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, leaf_capability = "pq-scan-only", global_scan_codec = "srht-pq-scan", global_pq_layout = "adaptive", global_pq_code_bytes = None, turboquant_bits = 4, turboquant_qjl_bits = 0, turboquant_shards = 1, ram_budget = None, cache_dir = None, text = false, named_vectors = None))]
+#[pyo3(signature = (*, uri, metric, vector_element_type = "float32", dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, leaf_capability = "pq-scan-only", global_scan_codec = "srht-pq-scan", global_pq_layout = "adaptive", global_pq_code_bytes = None, turboquant_bits = 4, turboquant_qjl_bits = 0, turboquant_shards = 1, ram_budget = None, cache_dir = None, text = false, named_vectors = None))]
 fn create(
     py: Python<'_>,
     uri: String,
     metric: String,
     vector_element_type: &str,
-    segment_table_format: &str,
     dim: Option<usize>,
     dimensions: Option<usize>,
     segment_size: Option<usize>,
@@ -2399,9 +2398,6 @@ fn create(
     let vector_element_type = vector_element_type
         .parse::<borsuk::VectorElementType>()
         .map_err(to_py_error)?;
-    let segment_table_format = segment_table_format
-        .parse::<borsuk::DurableTableFormat>()
-        .map_err(to_py_value_error)?;
     let ram_budget_bytes = ram_budget
         .as_deref()
         .map(borsuk::parse_ram_budget)
@@ -2435,7 +2431,6 @@ fn create(
             leaf_capability,
             borsuk::BuildConfig {
                 vector_element_type,
-                segment_table_format,
                 global_pq_layout,
                 global_pq_code_bytes,
                 global_scan_codec,

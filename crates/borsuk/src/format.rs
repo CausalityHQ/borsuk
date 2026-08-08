@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     panic::{AssertUnwindSafe, catch_unwind},
     str::FromStr,
-    sync::{Arc, OnceLock, mpsc},
+    sync::Arc,
 };
 
 use arrow_array::{
@@ -65,9 +65,9 @@ use crate::{
 // Bumped 11 -> 12 when normal-segment and WAL table constants moved from ten
 // values repeated in every row into one nullable packed `segment_header`
 // value in row zero. This keeps the row scan columnar while avoiding a severe
-// Vortex fixed-list expansion and redundant Parquet values.
+// repeated per-row values in columnar tables.
 // Bumped 12 -> 13 when WAL primary-vector types became a required physical
-// column (Vortex does not preserve Arrow schema metadata) and packed binary WAL
+// column and packed binary WAL
 // vectors moved from unsupported FixedSizeBinary to FixedSizeList<UInt8>.
 // Bumped 13 -> 14 when WAL record runs stopped reusing the normal-segment
 // header/routing/PQ schema and gained their dedicated record-only dimensions
@@ -126,12 +126,14 @@ use crate::{
 // Bumped 30 -> 31 when writer-stripe mutation extents replaced the custom
 // framed `.wal` envelope and nested Parquet payload with one stock-readable
 // Arrow IPC stream carrying typed mutation identity and modality columns.
-const CURRENT_VERSION: u16 = 31;
+// Bumped 31 -> 32 when durable table roles became fixed to Parquet and the
+// rejected alternate-backend fields/readers were removed. Pre-release v31
+// artifacts are rejected instead of retaining a compatibility path.
+const CURRENT_VERSION: u16 = 32;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
 const BLAKE3_HEX_CHECKSUM_LEN: usize = 64;
-const VORTEX_RUNTIME_THREADS: usize = 1;
 pub(crate) const LEAN_SEGMENT_HEADER_COLUMNS: &[&str] = &["segment_header"];
 pub(crate) const LEAN_SEGMENT_ROW_COLUMNS: &[&str] = &[
     "routing_code",
@@ -2615,20 +2617,6 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
     segment_to_parquet_impl(segment, false, VectorElementType::Float32)
 }
 
-/// Serialize a normal immutable segment using its configured durable container.
-pub(crate) fn segment_to_table(
-    segment: &Segment,
-    format: crate::DurableTableFormat,
-) -> Result<Vec<u8>> {
-    match format {
-        crate::DurableTableFormat::Parquet => segment_to_parquet(segment),
-        crate::DurableTableFormat::Vortex => {
-            let batch = segment_to_batch_impl(segment, false, VectorElementType::Float32, true)?;
-            write_vortex_table_sync(vec![batch])
-        }
-    }
-}
-
 /// Serialize `records` into an immutable WAL object. Unlike a normal segment
 /// (whose dense vectors live only in the per-segment Arrow sidecar), a WAL
 /// object carries the dense `vector` column INLINE so the un-flushed tail is
@@ -2642,20 +2630,11 @@ pub(crate) fn wal_records_to_table(
     element_type: VectorElementType,
     format: crate::PhysicalFormat,
 ) -> Result<Vec<u8>> {
-    let batch = wal_records_to_batch(
-        records,
-        dimensions,
-        element_type,
-        format == crate::PhysicalFormat::Vortex,
-    )?;
+    let batch = wal_records_to_batch(records, dimensions, element_type)?;
     match format {
         crate::PhysicalFormat::Parquet => {
             write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
         }
-        crate::PhysicalFormat::Vortex => write_vortex_table_sync_with_layout(
-            vec![batch],
-            crate::vortex_table::VortexLayout::Compact,
-        ),
         other => Err(BorsukError::InvalidStorage(format!(
             "WAL records cannot use physical format `{other}`"
         ))),
@@ -2666,7 +2645,6 @@ fn wal_records_to_batch(
     records: &[VectorRecord],
     dimensions: usize,
     vector_element_type: VectorElementType,
-    vortex_compatible_mutation_stamp: bool,
 ) -> Result<RecordBatch> {
     if records.is_empty() {
         return Err(BorsukError::InvalidStorage(
@@ -2712,7 +2690,6 @@ fn wal_records_to_batch(
         include_generation,
         include_mutation_stamp,
         vector_element_type,
-        vortex_compatible_mutation_stamp,
     )?;
     let mut columns = vec![
         array(BinaryArray::from_iter_values(
@@ -2748,11 +2725,7 @@ fn wal_records_to_batch(
         )));
     }
     if include_mutation_stamp {
-        columns.extend(if vortex_compatible_mutation_stamp {
-            vortex_mutation_stamp_arrays(records)?
-        } else {
-            mutation_stamp_arrays(records)?
-        });
+        columns.extend(mutation_stamp_arrays(records)?);
     }
     columns.push(optional_typed_vector_array(
         records,
@@ -2797,8 +2770,6 @@ fn wal_records_to_batch(
 pub(crate) fn wal_records_from_table(bytes: Vec<u8>, path: &str) -> Result<Vec<VectorRecord>> {
     let batches = if path.ends_with(".parquet") {
         read_batches(&bytes)?
-    } else if path.ends_with(".vortex") {
-        vec![read_vortex_table_sync(bytes)?]
     } else {
         return Err(BorsukError::InvalidStorage(format!(
             "WAL records object `{path}` has no supported table extension"
@@ -3058,7 +3029,7 @@ fn segment_to_parquet_impl(
     include_vectors: bool,
     vector_element_type: VectorElementType,
 ) -> Result<Vec<u8>> {
-    let batch = segment_to_batch_impl(segment, include_vectors, vector_element_type, false)?;
+    let batch = segment_to_batch_impl(segment, include_vectors, vector_element_type)?;
     write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
 }
 
@@ -3066,7 +3037,6 @@ fn segment_to_batch_impl(
     segment: &Segment,
     include_vectors: bool,
     vector_element_type: VectorElementType,
-    vortex_compatible_mutation_stamp: bool,
 ) -> Result<RecordBatch> {
     validate_segment_centroid_dimensions(&segment.id, segment.dimensions, segment.centroid.len())?;
     validate_segment_centroid_values(&segment.id, &segment.centroid)?;
@@ -3134,7 +3104,6 @@ fn segment_to_batch_impl(
         include_mutation_stamp,
         include_vectors,
         vector_element_type,
-        vortex_compatible_mutation_stamp,
     );
     let header = encode_segment_header(segment)?;
     let mut columns = vec![
@@ -3181,11 +3150,7 @@ fn segment_to_batch_impl(
         )));
     }
     if include_mutation_stamp {
-        columns.extend(if vortex_compatible_mutation_stamp {
-            vortex_mutation_stamp_arrays(records)?
-        } else {
-            mutation_stamp_arrays(records)?
-        });
+        columns.extend(mutation_stamp_arrays(records)?);
     }
     if include_vectors {
         // WAL objects inline the dense vector so the un-flushed tail is fully
@@ -3233,19 +3198,6 @@ pub(crate) fn segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
     segment_from_parquet_impl(bytes, false)
 }
 
-/// Decode a complete normal segment using the required format from its summary.
-pub(crate) fn segment_from_table(
-    bytes: Vec<u8>,
-    format: crate::DurableTableFormat,
-) -> Result<Segment> {
-    match format {
-        crate::DurableTableFormat::Parquet => segment_from_parquet(&bytes),
-        crate::DurableTableFormat::Vortex => {
-            segment_from_batches(vec![read_vortex_table_sync(bytes)?], false)
-        }
-    }
-}
-
 /// True when the segment carries persisted PQ bounds, so it can be decoded
 /// lean (without the vector column) and still quantize queries.
 #[cfg(test)]
@@ -3263,129 +3215,6 @@ pub(crate) fn lean_segment_from_parquet(bytes: &[u8]) -> Result<Segment> {
     let header = read_lean_segment_header(bytes)?;
     let batches = read_lean_segment_row_batches(bytes)?;
     segment_from_batches_with_header(batches, true, Some(header))
-}
-
-/// Decode a normal segment for candidate selection using the required durable
-/// format. Exact dense vectors remain absent and are fetched from Arrow IPC.
-pub(crate) fn lean_segment_from_table(
-    bytes: Vec<u8>,
-    format: crate::DurableTableFormat,
-) -> Result<Segment> {
-    match format {
-        crate::DurableTableFormat::Parquet => lean_segment_from_parquet(&bytes),
-        crate::DurableTableFormat::Vortex => read_vortex_lean_segment_sync(bytes),
-    }
-}
-
-pub(crate) fn lean_segment_from_vortex_storage(
-    storage: crate::storage::Storage,
-    path: String,
-    size_bytes: u64,
-    layout: crate::PhysicalLayoutRef,
-) -> Result<Segment> {
-    let runtime = vortex_runtime()?;
-    let (sender, receiver) = mpsc::sync_channel(1);
-    let _task = runtime.spawn(async move {
-        let reader =
-            crate::vortex_table::StorageVortexReadAt::new(storage, path, size_bytes, layout);
-        let header_options = crate::vortex_table::VortexScanOptions::default()
-            .with_projection(LEAN_SEGMENT_HEADER_COLUMNS.iter().copied())
-            .with_row_range(0..1);
-        let row_options = crate::vortex_table::VortexScanOptions::default()
-            .with_projection(LEAN_SEGMENT_ROW_COLUMNS.iter().copied());
-        let result =
-            crate::vortex_table::read_vortex_storage_pair(reader, header_options, row_options)
-                .await
-                .and_then(|(header, rows)| {
-                    let header = lean_segment_header_from_batch(&header)?;
-                    segment_from_batches_with_header(vec![rows], true, Some(header))
-                });
-        let _sent = sender.send(result);
-    });
-    receiver.recv().map_err(|error| {
-        BorsukError::InvalidStorage(format!(
-            "Vortex range-reader task stopped before completion: {error}"
-        ))
-    })?
-}
-
-fn vortex_runtime() -> Result<&'static tokio::runtime::Runtime> {
-    static RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
-        OnceLock::new();
-    match RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(VORTEX_RUNTIME_THREADS)
-            .thread_name("borsuk-vortex")
-            .build()
-            .map_err(|error| format!("failed to initialize Vortex runtime: {error}"))
-    }) {
-        Ok(runtime) => Ok(runtime),
-        Err(message) => Err(BorsukError::InvalidStorage(message.clone())),
-    }
-}
-
-fn write_vortex_table_sync(batches: Vec<RecordBatch>) -> Result<Vec<u8>> {
-    write_vortex_table_sync_with_layout(batches, crate::vortex_table::VortexLayout::Default)
-}
-
-fn write_vortex_table_sync_with_layout(
-    batches: Vec<RecordBatch>,
-    layout: crate::vortex_table::VortexLayout,
-) -> Result<Vec<u8>> {
-    let runtime = vortex_runtime()?;
-    let (sender, receiver) = mpsc::sync_channel(1);
-    let _task = runtime.spawn(async move {
-        let result = crate::vortex_table::write_vortex_table(&batches, layout).await;
-        let _sent = sender.send(result);
-    });
-    receiver.recv().map_err(|error| {
-        BorsukError::InvalidStorage(format!(
-            "Vortex writer task stopped before completion: {error}"
-        ))
-    })?
-}
-
-fn read_vortex_table_sync(bytes: Vec<u8>) -> Result<RecordBatch> {
-    let runtime = vortex_runtime()?;
-    let (sender, receiver) = mpsc::sync_channel(1);
-    let _task = runtime.spawn(async move {
-        let result = crate::vortex_table::read_vortex_table(
-            bytes,
-            crate::vortex_table::VortexScanOptions::default(),
-        )
-        .await;
-        let _sent = sender.send(result);
-    });
-    receiver.recv().map_err(|error| {
-        BorsukError::InvalidStorage(format!(
-            "Vortex reader task stopped before completion: {error}"
-        ))
-    })?
-}
-
-fn read_vortex_lean_segment_sync(bytes: Vec<u8>) -> Result<Segment> {
-    let runtime = vortex_runtime()?;
-    let (sender, receiver) = mpsc::sync_channel(1);
-    let _task = runtime.spawn(async move {
-        let header_options = crate::vortex_table::VortexScanOptions::default()
-            .with_projection(LEAN_SEGMENT_HEADER_COLUMNS.iter().copied())
-            .with_row_range(0..1);
-        let row_options = crate::vortex_table::VortexScanOptions::default()
-            .with_projection(LEAN_SEGMENT_ROW_COLUMNS.iter().copied());
-        let result =
-            crate::vortex_table::read_vortex_table_pair(bytes, header_options, row_options)
-                .await
-                .and_then(|(header, rows)| {
-                    let header = lean_segment_header_from_batch(&header)?;
-                    segment_from_batches_with_header(vec![rows], true, Some(header))
-                });
-        let _sent = sender.send(result);
-    });
-    receiver.recv().map_err(|error| {
-        BorsukError::InvalidStorage(format!(
-            "Vortex lean-reader task stopped before completion: {error}"
-        ))
-    })?
 }
 
 fn segment_from_parquet_impl(bytes: &[u8], lean: bool) -> Result<Segment> {
@@ -5050,46 +4879,6 @@ fn mutation_stamp_arrays(records: &[VectorRecord]) -> Result<[ArrayRef; 3]> {
     ])
 }
 
-/// Vortex does not currently encode Arrow `FixedSizeBinary`, so its opt-in
-/// table paths use the semantically equivalent stock Arrow
-/// `FixedSizeList<UInt8>` representation. Readers accept both representations
-/// and validate the exact logical width.
-fn vortex_mutation_stamp_fields() -> [Field; 3] {
-    [
-        Field::new("mutation_hlc", DataType::UInt64, false),
-        fixed_u8_field("mutation_writer", 16),
-        fixed_u8_field("mutation_digest", 32),
-    ]
-}
-
-fn vortex_mutation_stamp_arrays(records: &[VectorRecord]) -> Result<[ArrayRef; 3]> {
-    let stamps = records
-        .iter()
-        .map(|record| {
-            record.mutation_stamp().ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "record table mutation stamp disappeared during encoding".to_string(),
-                )
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let writers = stamps
-        .iter()
-        .map(|stamp| stamp.version().writer())
-        .collect::<Vec<_>>();
-    let digests = stamps
-        .iter()
-        .map(|stamp| stamp.digest())
-        .collect::<Vec<_>>();
-    Ok([
-        array(UInt64Array::from_iter_values(
-            stamps.iter().map(|stamp| stamp.version().hlc()),
-        )),
-        array(fixed_u8_array(writers.iter().map(<[_; 16]>::as_slice), 16)),
-        array(fixed_u8_array(digests.iter().map(<[_; 32]>::as_slice), 32)),
-    ])
-}
-
 #[allow(clippy::too_many_arguments)]
 fn segment_schema(
     dimensions: usize,
@@ -5100,13 +4889,11 @@ fn segment_schema(
     include_mutation_stamp: bool,
     include_vectors: bool,
     vector_element_type: VectorElementType,
-    vortex_compatible_mutation_stamp: bool,
 ) -> Arc<Schema> {
     // `pq_code` is sized to the quantizer's actual code length, NOT
     // `dimensions`: TurboQuant's SRHT rotation pads to the next power of two,
     // and the optional QJL correction adds a fixed tail. Per-segment constants
-    // and coarse bounds are encoded once in `segment_header`; repeating their
-    // wide fixed-list values in every row is particularly hostile to Vortex.
+    // and coarse bounds are encoded once in `segment_header`.
     let mut fields = vec![
         Field::new("segment_header", DataType::Binary, true),
         Field::new("routing_code", DataType::Float32, false),
@@ -5126,11 +4913,7 @@ fn segment_schema(
         fields.push(Field::new("generation", DataType::UInt64, false));
     }
     if include_mutation_stamp {
-        fields.extend(if vortex_compatible_mutation_stamp {
-            vortex_mutation_stamp_fields()
-        } else {
-            mutation_stamp_fields()
-        });
+        fields.extend(mutation_stamp_fields());
     }
     if include_vectors {
         // Nullable: sparse rows carry no dense vector. Appended last so all
@@ -5142,10 +4925,8 @@ fn segment_schema(
             true,
         ));
         fields.push(Field::new("wal_record_extras", DataType::Binary, false));
-        // Vortex currently does not preserve Arrow schema metadata. Persist the
-        // declared primary-vector type as a tiny constant column as well; both
-        // Parquet and Vortex compress this one-byte-per-row logical column to a
-        // negligible physical footprint.
+        // Persist the declared primary-vector type as a tiny constant column;
+        // Parquet compresses this repeated byte to a negligible footprint.
         fields.push(Field::new(
             "wal_vector_element_type",
             DataType::UInt8,
@@ -5162,7 +4943,6 @@ fn wal_records_schema(
     include_generation: bool,
     include_mutation_stamp: bool,
     vector_element_type: VectorElementType,
-    vortex_compatible_mutation_stamp: bool,
 ) -> Result<Arc<Schema>> {
     let mut fields = vec![
         Field::new("record_id", DataType::Binary, false),
@@ -5180,11 +4960,7 @@ fn wal_records_schema(
         fields.push(Field::new("generation", DataType::UInt64, false));
     }
     if include_mutation_stamp {
-        fields.extend(if vortex_compatible_mutation_stamp {
-            vortex_mutation_stamp_fields()
-        } else {
-            mutation_stamp_fields()
-        });
+        fields.extend(mutation_stamp_fields());
     }
     fields.push(Field::new(
         "vector",
@@ -6596,15 +6372,6 @@ mod tests {
     const VALID_GRAPH_CHECKSUM: &str =
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    #[test]
-    fn vortex_sync_bridge_uses_one_process_wide_worker() {
-        assert_eq!(VORTEX_RUNTIME_THREADS, 1);
-        assert!(std::ptr::eq(
-            vortex_runtime().unwrap(),
-            vortex_runtime().unwrap()
-        ));
-    }
-
     fn lexical_run_fixture() -> LexicalRunRef {
         LexicalRunRef {
             segment_key: "segment-2".to_string(),
@@ -7881,9 +7648,7 @@ mod tests {
 
     #[test]
     fn routing_to_parquet_round_trips_required_segment_layout() {
-        let mut segment = valid_segment_summary();
-        segment.layout.physical_format = crate::PhysicalFormat::Vortex;
-        segment.path = "segments/L0/seg.vortex".to_string();
+        let segment = valid_segment_summary();
         let manifest = manifest_with_segment(segment);
 
         let bytes = routing_to_parquet(&manifest).unwrap();
@@ -7891,7 +7656,7 @@ mod tests {
 
         assert_eq!(
             summaries[0].layout.physical_format,
-            crate::PhysicalFormat::Vortex
+            crate::PhysicalFormat::Parquet
         );
 
         let page = routing_layer_page_to_parquet(&manifest, 0, 0, 0, &manifest.segments).unwrap();
@@ -7899,36 +7664,19 @@ mod tests {
             routing_layer_page_from_parquet(&page, manifest.version, 0, 0, 2).unwrap();
         assert_eq!(
             page_summaries[0].layout.physical_format,
-            crate::PhysicalFormat::Vortex
+            crate::PhysicalFormat::Parquet
         );
     }
 
     #[test]
     fn routing_rejects_segment_extension_that_disagrees_with_required_format() {
         let mut segment = valid_segment_summary();
-        segment.layout.physical_format = crate::PhysicalFormat::Vortex;
+        segment.path = "segments/L0/seg.arrow".to_string();
         let manifest = manifest_with_segment(segment);
 
         let error = routing_to_parquet(&manifest).unwrap_err();
 
-        assert!(error.to_string().contains(".vortex"), "{error}");
-    }
-
-    #[test]
-    fn format_neutral_segment_codec_round_trips_vortex() {
-        let segment = valid_segment();
-
-        let bytes = segment_to_table(&segment, crate::DurableTableFormat::Vortex).unwrap();
-        assert_ne!(&bytes[..4], b"PAR1");
-        let decoded = segment_from_table(bytes.clone(), crate::DurableTableFormat::Vortex).unwrap();
-        let lean = lean_segment_from_table(bytes, crate::DurableTableFormat::Vortex).unwrap();
-
-        assert_eq!(decoded.id, segment.id);
-        assert_eq!(decoded.records[0].id, segment.records[0].id);
-        assert_eq!(decoded.pq_codes, segment.pq_codes);
-        assert_eq!(lean.pq_codes, segment.pq_codes);
-        assert!(decoded.records[0].vector.is_empty());
-        assert!(lean.records[0].vector.is_empty());
+        assert!(error.to_string().contains(".parquet"), "{error}");
     }
 
     #[test]
@@ -8461,24 +8209,18 @@ mod tests {
         );
         segment.records[0].storage = crate::StorageEncoding::Dense;
 
-        for format in [
+        let bytes = wal_records_to_table(
+            &segment.records,
+            segment.dimensions,
+            VectorElementType::Float32,
             crate::PhysicalFormat::Parquet,
-            crate::PhysicalFormat::Vortex,
-        ] {
-            let bytes = wal_records_to_table(
-                &segment.records,
-                segment.dimensions,
-                VectorElementType::Float32,
-                format,
-            )
-            .unwrap();
-            let path = format!("wal/run.{}", format.extension());
-            let decoded = wal_records_from_table(bytes, &path).unwrap();
+        )
+        .unwrap();
+        let decoded = wal_records_from_table(bytes, "wal/run.parquet").unwrap();
 
-            assert_eq!(decoded[0].extra_vectors, segment.records[0].extra_vectors);
-            assert_eq!(decoded[0].extra_sparse, segment.records[0].extra_sparse);
-            assert_eq!(decoded[0].storage, crate::StorageEncoding::Dense);
-        }
+        assert_eq!(decoded[0].extra_vectors, segment.records[0].extra_vectors);
+        assert_eq!(decoded[0].extra_sparse, segment.records[0].extra_sparse);
+        assert_eq!(decoded[0].storage, crate::StorageEncoding::Dense);
     }
 
     #[test]
@@ -8525,147 +8267,130 @@ mod tests {
     }
 
     #[test]
-    fn wal_uses_record_only_schema_in_both_table_formats() {
+    fn parquet_wal_uses_record_only_schema() {
         let mut segment = valid_segment();
         segment.records[0].storage = crate::StorageEncoding::Dense;
-        for format in [
+        let bytes = wal_records_to_table(
+            &segment.records,
+            segment.dimensions,
+            VectorElementType::Float32,
             crate::PhysicalFormat::Parquet,
-            crate::PhysicalFormat::Vortex,
-        ] {
-            let bytes = wal_records_to_table(
-                &segment.records,
-                segment.dimensions,
-                VectorElementType::Float32,
-                format,
-            )
-            .unwrap();
-            let batch = match format {
-                crate::PhysicalFormat::Parquet => first_batch(&bytes, "WAL").unwrap(),
-                crate::PhysicalFormat::Vortex => read_vortex_table_sync(bytes).unwrap(),
-                _ => unreachable!(),
-            };
-            let schema = batch.schema();
-            let names = schema
-                .fields()
-                .iter()
-                .map(|field| field.name().as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(
-                names,
-                [
-                    "record_id",
-                    "metadata",
-                    "vector",
-                    "wal_record_extras",
-                    "wal_vector_element_type",
-                    "wal_vector_dimensions",
-                ]
-            );
-            assert!(!names.contains(&"segment_header"));
-            assert!(!names.contains(&"routing_code"));
-            assert!(!names.contains(&"pq_code"));
-        }
+        )
+        .unwrap();
+        let batch = first_batch(&bytes, "WAL").unwrap();
+        let schema = batch.schema();
+        let names = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "record_id",
+                "metadata",
+                "vector",
+                "wal_record_extras",
+                "wal_vector_element_type",
+                "wal_vector_dimensions",
+            ]
+        );
+        assert!(!names.contains(&"segment_header"));
+        assert!(!names.contains(&"routing_code"));
+        assert!(!names.contains(&"pq_code"));
     }
 
     #[test]
-    fn wal_round_trips_every_primary_type_and_payload_in_both_formats() {
+    fn parquet_wal_round_trips_every_primary_type_and_payload() {
         use crate::metadata::MetaValue;
 
-        for format in [
-            crate::PhysicalFormat::Parquet,
-            crate::PhysicalFormat::Vortex,
+        let format = crate::PhysicalFormat::Parquet;
+        for element_type in [
+            VectorElementType::Float32,
+            VectorElementType::Float16,
+            VectorElementType::BFloat16,
+            VectorElementType::Float8E4M3Fn,
+            VectorElementType::Float8E5M2,
+            VectorElementType::Int8,
+            VectorElementType::Binary,
         ] {
-            for element_type in [
-                VectorElementType::Float32,
-                VectorElementType::Float16,
-                VectorElementType::BFloat16,
-                VectorElementType::Float8E4M3Fn,
-                VectorElementType::Float8E5M2,
-                VectorElementType::Int8,
-                VectorElementType::Binary,
-            ] {
-                let mut segment = valid_segment();
-                let record = &mut segment.records[0];
-                record.vector = vec![1.0, 0.0];
-                record
-                    .extra_vectors
-                    .insert("dense".to_string(), vec![0.25, -0.75]);
-                record.extra_sparse.insert(
-                    "sparse".to_string(),
-                    crate::SparseVector::new(vec![3, 17], vec![1.5, -0.5]).unwrap(),
-                );
-                record.extra_multi_vectors.insert(
-                    "tokens".to_string(),
-                    crate::LateInteractionVector::new(
-                        vec![vec![0.25, 0.5], vec![-0.75, 1.0]],
-                        VectorElementType::Float16,
-                    )
-                    .unwrap(),
-                );
-                record.storage = crate::StorageEncoding::Dense;
-                record.text_term_ids = vec![7, 11];
-                record.text_term_freqs = vec![2, 1];
-                record.metadata = crate::Metadata::from([
-                    ("tenant".to_string(), MetaValue::Str("alpha".to_string())),
-                    ("rank".to_string(), MetaValue::Int(42)),
-                ]);
-                record.generation = 9;
-
-                let bytes = wal_records_to_table(
-                    &segment.records,
-                    segment.dimensions,
-                    element_type,
-                    format,
+            let mut segment = valid_segment();
+            let record = &mut segment.records[0];
+            record.vector = vec![1.0, 0.0];
+            record
+                .extra_vectors
+                .insert("dense".to_string(), vec![0.25, -0.75]);
+            record.extra_sparse.insert(
+                "sparse".to_string(),
+                crate::SparseVector::new(vec![3, 17], vec![1.5, -0.5]).unwrap(),
+            );
+            record.extra_multi_vectors.insert(
+                "tokens".to_string(),
+                crate::LateInteractionVector::new(
+                    vec![vec![0.25, 0.5], vec![-0.75, 1.0]],
+                    VectorElementType::Float16,
                 )
-                .unwrap();
-                let path = format!("wal/run.{}", format.extension());
-                let decoded = wal_records_from_table(bytes, &path)
-                    .unwrap_or_else(|error| panic!("{format}/{element_type}: {error}"));
-                let actual = &decoded[0];
-                let expected = &segment.records[0];
+                .unwrap(),
+            );
+            record.storage = crate::StorageEncoding::Dense;
+            record.text_term_ids = vec![7, 11];
+            record.text_term_freqs = vec![2, 1];
+            record.metadata = crate::Metadata::from([
+                ("tenant".to_string(), MetaValue::Str("alpha".to_string())),
+                ("rank".to_string(), MetaValue::Int(42)),
+            ]);
+            record.generation = 9;
 
-                assert_eq!(
-                    actual.vector, expected.vector,
-                    "{format}/{element_type} primary vector"
-                );
-                assert_eq!(
-                    actual.extra_vectors, expected.extra_vectors,
-                    "{format}/{element_type} named dense"
-                );
-                assert_eq!(
-                    actual.extra_sparse, expected.extra_sparse,
-                    "{format}/{element_type} named sparse"
-                );
-                assert_eq!(
-                    actual.extra_multi_vectors, expected.extra_multi_vectors,
-                    "{format}/{element_type} late interaction"
-                );
-                assert_eq!(
-                    actual.storage, expected.storage,
-                    "{format}/{element_type} storage"
-                );
-                assert_eq!(
-                    actual.text_term_ids, expected.text_term_ids,
-                    "{format}/{element_type} text term ids"
-                );
-                assert_eq!(
-                    actual.text_term_freqs, expected.text_term_freqs,
-                    "{format}/{element_type} text term frequencies"
-                );
-                assert_eq!(
-                    actual.metadata, expected.metadata,
-                    "{format}/{element_type} metadata"
-                );
-                assert_eq!(
-                    actual.generation, expected.generation,
-                    "{format}/{element_type} generation"
-                );
-            }
+            let bytes =
+                wal_records_to_table(&segment.records, segment.dimensions, element_type, format)
+                    .unwrap();
+            let path = format!("wal/run.{}", format.extension());
+            let decoded = wal_records_from_table(bytes, &path)
+                .unwrap_or_else(|error| panic!("{format}/{element_type}: {error}"));
+            let actual = &decoded[0];
+            let expected = &segment.records[0];
+
+            assert_eq!(
+                actual.vector, expected.vector,
+                "{format}/{element_type} primary vector"
+            );
+            assert_eq!(
+                actual.extra_vectors, expected.extra_vectors,
+                "{format}/{element_type} named dense"
+            );
+            assert_eq!(
+                actual.extra_sparse, expected.extra_sparse,
+                "{format}/{element_type} named sparse"
+            );
+            assert_eq!(
+                actual.extra_multi_vectors, expected.extra_multi_vectors,
+                "{format}/{element_type} late interaction"
+            );
+            assert_eq!(
+                actual.storage, expected.storage,
+                "{format}/{element_type} storage"
+            );
+            assert_eq!(
+                actual.text_term_ids, expected.text_term_ids,
+                "{format}/{element_type} text term ids"
+            );
+            assert_eq!(
+                actual.text_term_freqs, expected.text_term_freqs,
+                "{format}/{element_type} text term frequencies"
+            );
+            assert_eq!(
+                actual.metadata, expected.metadata,
+                "{format}/{element_type} metadata"
+            );
+            assert_eq!(
+                actual.generation, expected.generation,
+                "{format}/{element_type} generation"
+            );
         }
     }
 
     #[test]
-    fn binary_wal_preserves_non_byte_aligned_dimensions_in_both_formats() {
+    fn parquet_binary_wal_preserves_non_byte_aligned_dimensions() {
         let segment = Segment::from_records(
             "wal".to_string(),
             0,
@@ -8677,21 +8402,15 @@ mod tests {
             )],
         )
         .unwrap();
-        for format in [
+        let bytes = wal_records_to_table(
+            &segment.records,
+            segment.dimensions,
+            VectorElementType::Binary,
             crate::PhysicalFormat::Parquet,
-            crate::PhysicalFormat::Vortex,
-        ] {
-            let bytes = wal_records_to_table(
-                &segment.records,
-                segment.dimensions,
-                VectorElementType::Binary,
-                format,
-            )
-            .unwrap();
-            let decoded =
-                wal_records_from_table(bytes, &format!("wal/run.{}", format.extension())).unwrap();
-            assert_eq!(decoded[0].vector, segment.records[0].vector);
-        }
+        )
+        .unwrap();
+        let decoded = wal_records_from_table(bytes, "wal/run.parquet").unwrap();
+        assert_eq!(decoded[0].vector, segment.records[0].vector);
     }
 
     #[test]
@@ -8922,10 +8641,7 @@ mod tests {
                 object_role: crate::PhysicalObjectRole::NormalSegment,
                 physical_format: crate::PhysicalFormat::Parquet,
                 layout_policy_version: crate::CURRENT_LAYOUT_POLICY_VERSION,
-                integrity_chunk_bytes: 0,
-                integrity_checksums: Vec::new(),
-            }
-            .with_integrity(b"fixture"),
+            },
             object_count: 1,
             dimensions: 2,
             centroid: vec![0.0, 0.0],
@@ -9245,8 +8961,6 @@ mod tests {
             object_role: crate::PhysicalObjectRole::NormalSegment,
             physical_format: crate::PhysicalFormat::Parquet,
             layout_policy_version: crate::CURRENT_LAYOUT_POLICY_VERSION,
-            integrity_chunk_bytes: crate::RANGE_INTEGRITY_CHUNK_BYTES,
-            integrity_checksums: vec![VALID_SEGMENT_CHECKSUM.to_string()],
         })
         .unwrap()
     }
@@ -9635,7 +9349,6 @@ mod tests {
             false,
             false,
             VectorElementType::Float32,
-            false,
         );
         let header = external_packed_segment_header(vec![0.0, 0.0], 0.0, 2);
         let pq_code = [128_u8, 128_u8];

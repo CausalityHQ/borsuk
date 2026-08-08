@@ -63,7 +63,6 @@ mod storage_trace;
 /// Text tokenization helpers for per-record term-frequency storage.
 pub mod text;
 mod turboquant;
-mod vortex_table;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
 /// breakdown accumulated since the last call. A no-op when timing is disabled.
@@ -149,22 +148,19 @@ pub use metric::{VectorMetric, recall_at_k, tie_aware_recall_at_k, vector_metric
 #[doc(hidden)]
 pub use object_store::ObjectStore;
 pub use physical_layout::{
-    CURRENT_LAYOUT_POLICY_VERSION, PhysicalFormat, PhysicalLayoutContext, PhysicalLayoutPolicy,
-    PhysicalLayoutPolicyKind, PhysicalLayoutRef, PhysicalLayoutRule, RANGE_INTEGRITY_CHUNK_BYTES,
-    WAL_VORTEX_CANDIDATE_ELEMENT_TYPES, WAL_VORTEX_CANDIDATE_MIN_DIMENSIONS,
-    WAL_VORTEX_CANDIDATE_MIN_ROWS, production_object_roles,
+    CURRENT_LAYOUT_POLICY_VERSION, PhysicalFormat, PhysicalLayoutPolicy, PhysicalLayoutRef,
+    production_object_roles,
 };
 pub use record::{
     AddReport, BuildConfig, CacheExecutionPolicy, CompactionOptions, CompactionReport,
     DEFAULT_COMPACTION_MAX_SEGMENTS, DEFAULT_GARBAGE_COLLECTION_MIN_AGE,
-    DEFAULT_SEARCH_PREFETCH_DEPTH, DEFAULT_TURBOQUANT_SEED, DeleteReport, DurableTableFormat,
-    ExplainReport, Fusion, GarbageCollectionOptions, GarbageCollectionReport,
-    GlobalCellGraphConfig, GlobalPqLayout, GlobalScanCodec, HybridOptions, HybridQuery,
-    IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafCapability, LeafMode,
-    PurgeReport, QuantizerKind, QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee,
-    RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
-    SearchTerminationReason, SidecarCompression, StorageEncoding, VectorElementType, VectorKind,
-    VectorRecord, VectorSpec, leaf_mode_names,
+    DEFAULT_SEARCH_PREFETCH_DEPTH, DEFAULT_TURBOQUANT_SEED, DeleteReport, ExplainReport, Fusion,
+    GarbageCollectionOptions, GarbageCollectionReport, GlobalCellGraphConfig, GlobalPqLayout,
+    GlobalScanCodec, HybridOptions, HybridQuery, IncrementalMaintenanceOptions, IncrementalReport,
+    IndexStats, LeafCapability, LeafMode, PurgeReport, QuantizerKind, QueryCostModel,
+    RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode,
+    SearchOptions, SearchReport, SearchTerminationReason, SidecarCompression, StorageEncoding,
+    VectorElementType, VectorKind, VectorRecord, VectorSpec, leaf_mode_names,
 };
 pub use sparse::{
     SparseVector, VectorView, cosine_distance, dot, euclidean_distance, inner_product_distance,

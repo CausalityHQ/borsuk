@@ -33,12 +33,13 @@ use crate::{
     format::{
         bm25_postings_from_batches, bm25_stats_delta_page_from_parquet,
         bm25_stats_delta_page_to_parquet, graph_from_parquet, graph_to_parquet,
-        id_directory_states_from_parquet, id_directory_states_to_parquet, lean_segment_from_table,
-        lexical_root_from_parquet, lexical_root_to_parquet, lexical_row_metadata_from_batches,
-        lexical_term_page_from_batches, lexical_term_page_from_parquet,
-        lexical_term_page_to_parquet, routing_layer_page_from_parquet,
-        routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_table,
-        segment_to_table, sparse_postings_from_batches, tombstone_ids_from_parquet,
+        id_directory_states_from_parquet, id_directory_states_to_parquet,
+        lean_segment_from_parquet, lexical_root_from_parquet, lexical_root_to_parquet,
+        lexical_row_metadata_from_batches, lexical_term_page_from_batches,
+        lexical_term_page_from_parquet, lexical_term_page_to_parquet,
+        routing_layer_page_from_parquet,
+        routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_parquet,
+        segment_to_parquet, sparse_postings_from_batches, tombstone_ids_from_parquet,
         tombstone_ids_to_parquet, wal_records_from_table, wal_records_to_table,
     },
     global_pq_sidecar::{
@@ -2940,26 +2941,10 @@ impl BorsukIndex {
         graph_neighbors: usize,
         wal: WalConfig,
         leaf_capability: LeafCapability,
-        mut build_config: BuildConfig,
+        build_config: BuildConfig,
         modality: &str,
         collection_root: bool,
     ) -> Result<Self> {
-        // Translate the temporary language-binding alias once at construction.
-        // The persisted policy is canonical and every writer/reader below uses
-        // per-object resolutions and references only.
-        if build_config.physical_layout == crate::PhysicalLayoutPolicy::production_baseline()
-            && build_config.segment_table_format != crate::DurableTableFormat::default()
-        {
-            build_config.physical_layout = build_config.physical_layout.clone().with_role_format(
-                crate::PhysicalObjectRole::NormalSegment,
-                build_config.segment_table_format.into(),
-            );
-        }
-        build_config.segment_table_format =
-            crate::DurableTableFormat::try_from(build_config.physical_layout.resolve(
-                crate::PhysicalObjectRole::NormalSegment,
-                crate::PhysicalLayoutContext::default(),
-            )?)?;
         validate_named_vector_config(&config.named_vectors)?;
         if config.dimensions == 0 {
             return Err(BorsukError::InvalidMetricInput(
@@ -4059,8 +4044,6 @@ impl BorsukIndex {
         let mut wal_record_bytes = 0_u64;
         let mut wal_parquet_record_runs = 0;
         let mut wal_parquet_record_bytes = 0_u64;
-        let mut wal_vortex_record_runs = 0;
-        let mut wal_vortex_record_bytes = 0_u64;
         for run in self
             .cell_wal_snapshot
             .iter()
@@ -4072,9 +4055,6 @@ impl BorsukIndex {
             if run.path.ends_with(".parquet") {
                 wal_parquet_record_runs += 1;
                 wal_parquet_record_bytes = wal_parquet_record_bytes.saturating_add(run.byte_len);
-            } else if run.path.ends_with(".vortex") {
-                wal_vortex_record_runs += 1;
-                wal_vortex_record_bytes = wal_vortex_record_bytes.saturating_add(run.byte_len);
             }
         }
         IndexStats {
@@ -4100,8 +4080,6 @@ impl BorsukIndex {
             wal_record_bytes,
             wal_parquet_record_runs,
             wal_parquet_record_bytes,
-            wal_vortex_record_runs,
-            wal_vortex_record_bytes,
             global_scan_bytes: self
                 .manifest
                 .global_pq_ref
@@ -8634,14 +8612,11 @@ impl BorsukIndex {
     /// id, dense vector, generation, metadata, text, and sparse encoding. This does
     /// NOT build a graph, sidecars, or routing summary — just one PUT.
     fn wal_object_bytes(&self, records: &[VectorRecord]) -> Result<(Vec<u8>, String)> {
-        let format = self.manifest.build_config.physical_layout.resolve(
-            crate::PhysicalObjectRole::WalRun,
-            crate::PhysicalLayoutContext {
-                rows: records.len(),
-                dimensions: self.manifest.config.dimensions,
-                vector_element_type: Some(self.manifest.build_config.vector_element_type),
-            },
-        )?;
+        let format = self
+            .manifest
+            .build_config
+            .physical_layout
+            .resolve(crate::PhysicalObjectRole::WalRun)?;
         let bytes = wal_records_to_table(
             records,
             self.manifest.config.dimensions,
@@ -18463,24 +18438,17 @@ impl BorsukIndex {
         let layout = crate::PhysicalLayoutRef::resolve(
             &self.manifest.build_config.physical_layout,
             crate::PhysicalObjectRole::NormalSegment,
-            crate::PhysicalLayoutContext {
-                rows: segment.records.len(),
-                dimensions: segment.dimensions,
-                vector_element_type: Some(self.manifest.build_config.vector_element_type),
-            },
         )?;
-        let table_format = crate::DurableTableFormat::try_from(layout.physical_format)?;
         let bytes = crate::build_timing::timed(crate::build_timing::Phase::SegmentTable, || {
-            segment_to_table(&segment, table_format)
+            segment_to_parquet(&segment)
         })?;
-        let layout = layout.with_integrity(&bytes);
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let prefix = &checksum[..2];
         let path = format!(
             "segments/L{}/{prefix}/seg-{}.{}",
             segment.level,
             segment.id,
-            table_format.extension()
+            layout.physical_format.extension()
         );
 
         // Build and write the per-segment graph only when the index's leaf
@@ -19549,9 +19517,8 @@ impl BorsukIndex {
     }
 
     /// Object-store-native lean read. Normal segment tables contain no dense
-    /// vector column (vectors live in the Arrow sidecar). Parquet currently
-    /// fetches its compact table in one known-size GET; Vortex supplies its own
-    /// projection/range plan through `StorageVortexReadAt`.
+    /// vector column (vectors live in the Arrow sidecar). Parquet fetches its
+    /// compact table in one known-size GET.
     fn read_segment_lean(&self, summary: &SegmentSummary) -> Result<(Segment, u64)> {
         let decode_started = Instant::now();
         summary
@@ -19577,40 +19544,7 @@ impl BorsukIndex {
                 } else {
                     read.bytes.len() as u64
                 };
-                (
-                    lean_segment_from_table(read.bytes, crate::DurableTableFormat::Parquet)?,
-                    bytes_fetched,
-                )
-            }
-            crate::PhysicalFormat::Vortex => {
-                if self.manifest.build_config.vortex_range_reads {
-                    let cache_before = self.storage.cache_read_counts();
-                    let segment = crate::format::lean_segment_from_vortex_storage(
-                        self.storage.clone(),
-                        summary.path.clone(),
-                        summary.size_bytes,
-                        summary.layout.clone(),
-                    )?;
-                    let cache_delta = self.storage.cache_read_counts().delta(&cache_before);
-                    (segment, cache_delta.backing_bytes)
-                } else {
-                    let read = self
-                        .storage
-                        .read_known_size_with_cache_status_and_checksum(
-                            &summary.path,
-                            summary.size_bytes,
-                            &summary.checksum,
-                        )?;
-                    let bytes_fetched = if read.cache_hit {
-                        0
-                    } else {
-                        read.bytes.len() as u64
-                    };
-                    (
-                        lean_segment_from_table(read.bytes, crate::DurableTableFormat::Vortex)?,
-                        bytes_fetched,
-                    )
-                }
+                (lean_segment_from_parquet(&read.bytes)?, bytes_fetched)
             }
             other => {
                 return Err(BorsukError::InvalidStorage(format!(
@@ -19669,8 +19603,6 @@ impl BorsukIndex {
                     header.bytes_fetched.saturating_add(rows.bytes_fetched),
                 )
             }
-            // Vortex already applies its format-native lean projection.
-            crate::PhysicalFormat::Vortex => return self.read_segment_lean(summary),
             other => {
                 return Err(BorsukError::InvalidStorage(format!(
                     "normal segment cannot use physical format `{other}`"
@@ -20364,10 +20296,13 @@ impl BorsukIndex {
         summary
             .layout
             .validate_for(crate::PhysicalObjectRole::NormalSegment)?;
-        let mut segment = segment_from_table(
-            read.bytes,
-            crate::DurableTableFormat::try_from(summary.layout.physical_format)?,
-        )?;
+        if summary.layout.physical_format != crate::PhysicalFormat::Parquet {
+            return Err(BorsukError::InvalidStorage(format!(
+                "normal segment cannot use physical format `{}`",
+                summary.layout.physical_format
+            )));
+        }
+        let mut segment = segment_from_parquet(&read.bytes)?;
         self.storage
             .record_access_event(StorageAccessEvent::decode(
                 &summary.path,
@@ -23049,11 +22984,14 @@ fn validate_graph_neighbors(graph_neighbors: usize) -> Result<()> {
 
 fn validate_build_config(build: &BuildConfig, dimensions: usize) -> Result<()> {
     build.physical_layout.validate()?;
-    let normal_segment_format = build.physical_layout.resolve(
-        crate::PhysicalObjectRole::NormalSegment,
-        crate::PhysicalLayoutContext::default(),
-    )?;
-    crate::DurableTableFormat::try_from(normal_segment_format)?;
+    let normal_segment_format = build
+        .physical_layout
+        .resolve(crate::PhysicalObjectRole::NormalSegment)?;
+    if normal_segment_format != crate::PhysicalFormat::Parquet {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "normal segments require parquet, got {normal_segment_format}"
+        )));
+    }
     let fraction = build.kmeans_sample_fraction;
     if !fraction.is_finite() || fraction <= 0.0 || fraction > 1.0 {
         return Err(BorsukError::InvalidMetricInput(format!(
@@ -23222,7 +23160,7 @@ fn is_parquet_path(path: &str) -> bool {
 }
 
 fn is_segment_table_path(path: &str) -> bool {
-    path.ends_with(".parquet") || path.ends_with(".vortex")
+    path.ends_with(".parquet")
 }
 
 fn is_filter_index_path(path: &str) -> bool {
@@ -31402,10 +31340,7 @@ mod tests {
                 object_role: crate::PhysicalObjectRole::NormalSegment,
                 physical_format: crate::PhysicalFormat::Parquet,
                 layout_policy_version: crate::CURRENT_LAYOUT_POLICY_VERSION,
-                integrity_chunk_bytes: 0,
-                integrity_checksums: Vec::new(),
-            }
-            .with_integrity(b"fixture"),
+            },
             object_count: 1,
             dimensions: 2,
             centroid: vector.clone(),
@@ -31665,9 +31600,9 @@ mod tests {
     }
 
     #[test]
-    fn gc_path_filters_cover_both_segment_table_formats_and_all_global_pq_objects() {
+    fn gc_path_filters_accept_only_parquet_segments_and_all_global_pq_objects() {
         assert!(is_segment_table_path("segments/L0/aa/seg-1.parquet"));
-        assert!(is_segment_table_path("segments/L0/aa/seg-1.vortex"));
+        assert!(!is_segment_table_path("segments/L0/aa/seg-1.vortex"));
         assert!(!is_segment_table_path("segments/L0/aa/seg-1.arrow"));
 
         let checksum = "ab".repeat(32);
@@ -31688,59 +31623,5 @@ mod tests {
         assert!(is_cell_wal_transaction_path(
             "transactions/tx/descriptors/abc.bin"
         ));
-    }
-
-    #[test]
-    fn vortex_segment_format_writes_reads_and_reopens_through_required_summary_metadata() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = dir.path().to_string_lossy().into_owned();
-        let mut index = BorsukIndex::create_with_build_config(
-            IndexConfig {
-                uri: uri.clone(),
-                metric: VectorMetric::Euclidean,
-                dimensions: 2,
-                segment_max_vectors: 2,
-                ram_budget_bytes: None,
-                text: false,
-                named_vectors: BTreeMap::new(),
-            },
-            BuildConfig {
-                physical_layout: crate::PhysicalLayoutPolicy::production_baseline()
-                    .with_role_format(
-                        crate::PhysicalObjectRole::NormalSegment,
-                        crate::PhysicalFormat::Vortex,
-                    ),
-                ..BuildConfig::default()
-            },
-        )
-        .unwrap();
-        index
-            .add(vec![
-                VectorRecord::new("a", vec![0.0, 1.0]),
-                VectorRecord::new("b", vec![2.0, 3.0]),
-            ])
-            .unwrap();
-        index.flush().unwrap();
-
-        let summary = index.manifest.segments.first().unwrap().clone();
-        assert_eq!(
-            summary.layout.physical_format,
-            crate::PhysicalFormat::Vortex
-        );
-        assert!(summary.path.ends_with(".vortex"), "{}", summary.path);
-        assert!(dir.path().join(&summary.path).is_file());
-        let (decoded, _, _, _) = index.read_segment(&summary).unwrap();
-        assert_eq!(decoded.records[0].vector, vec![0.0, 1.0]);
-        assert_eq!(decoded.records[1].vector, vec![2.0, 3.0]);
-
-        drop(index);
-        let reopened = BorsukIndex::open(&uri).unwrap();
-        let summaries = reopened.active_segment_summaries().unwrap();
-        assert_eq!(
-            summaries[0].layout.physical_format,
-            crate::PhysicalFormat::Vortex
-        );
-        let (decoded, _, _, _) = reopened.read_segment(&summaries[0]).unwrap();
-        assert_eq!(decoded.records.len(), 2);
     }
 }
