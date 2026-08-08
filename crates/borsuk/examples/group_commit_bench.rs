@@ -447,6 +447,33 @@ fn validate_read_qualification_shape(
     Ok(())
 }
 
+fn validate_read_confirmation_shape(
+    shape: ReadQualificationShape,
+    structural_smoke: bool,
+) -> BenchResult<()> {
+    const MIB: usize = 1024 * 1024;
+    let common = shape.max_read_segments == 4 && [MIB, 4 * MIB].contains(&shape.stripe_bytes);
+    let expected = if structural_smoke {
+        shape.writers == 2
+            && shape.operations == 2
+            && shape.records_per_operation == 1
+            && shape.dimensions == 8
+            && shape.query_count == 4
+            && shape.repetition == 1
+    } else {
+        shape.writers == 8
+            && shape.operations == 1_000
+            && shape.records_per_operation == 16
+            && shape.dimensions == 768
+            && shape.query_count == 500
+            && (1..=5).contains(&shape.repetition)
+    };
+    if !common || !expected {
+        return Err("read stripe confirmation differs from the preregistered shape".into());
+    }
+    Ok(())
+}
+
 fn read_qualification_query_ordinal(
     sample: &Sample,
     operations: usize,
@@ -484,6 +511,22 @@ fn read_qualification_order_position(repetition: usize, stripe_bytes: usize) -> 
         .iter()
         .position(|candidate| *candidate == stripe_bytes)
         .ok_or_else(|| "read qualification stripe is not preregistered".into())
+}
+
+fn read_confirmation_order_position(repetition: usize, stripe_bytes: usize) -> BenchResult<usize> {
+    const MIB: usize = 1024 * 1024;
+    if !(1..=5).contains(&repetition) {
+        return Err("read stripe confirmation repetition is outside 1..=5".into());
+    }
+    let order = if repetition % 2 == 1 {
+        [MIB, 4 * MIB]
+    } else {
+        [4 * MIB, MIB]
+    };
+    order
+        .iter()
+        .position(|candidate| *candidate == stripe_bytes)
+        .ok_or_else(|| "read stripe confirmation arm is not preregistered".into())
 }
 
 fn measure_reads(
@@ -828,7 +871,8 @@ fn required_sha256(name: &str) -> BenchResult<String> {
     Ok(value.to_ascii_lowercase())
 }
 
-fn run_read_qualification() -> BenchResult<()> {
+fn run_read_qualification(protocol: &str) -> BenchResult<()> {
+    let confirmation = protocol == "read-stripe-confirmation";
     let uri = required("BORSUK_GROUP_COMMIT_INDEX_URI")?;
     let structural_smoke = env::var("BORSUK_GROUP_COMMIT_READ_SMOKE").as_deref() == Ok("1");
     if !uri.starts_with("s3://") && !structural_smoke {
@@ -864,10 +908,16 @@ fn run_read_qualification() -> BenchResult<()> {
         stripe_bytes: number("BORSUK_GROUP_COMMIT_PREFETCH_STRIPE_BYTES")?,
         repetition: number("BORSUK_GROUP_COMMIT_READ_REPETITION")?,
     };
-    validate_read_qualification_shape(shape, structural_smoke)?;
+    if confirmation {
+        validate_read_confirmation_shape(shape, structural_smoke)?;
+    } else {
+        validate_read_qualification_shape(shape, structural_smoke)?;
+    }
     let order_position: usize = number("BORSUK_GROUP_COMMIT_READ_ORDER_POSITION")?;
     let expected_order_position = if structural_smoke {
         0
+    } else if confirmation {
+        read_confirmation_order_position(shape.repetition, shape.stripe_bytes)?
     } else {
         read_qualification_order_position(shape.repetition, shape.stripe_bytes)?
     };
@@ -961,6 +1011,8 @@ fn run_read_qualification() -> BenchResult<()> {
         "{},{source_sha},{manifest_sha},{base_source_sha},{base_manifest_sha},{base_samples_sha},{dataset_sha},{base_cell},{uri},{},{order_position},{},{},{recall:.9},{read_p50_ms:.9},{read_p95_ms:.9},{},{},{},{},{},{},{},{}",
         if structural_smoke {
             "structural-smoke"
+        } else if confirmation {
+            "stripe-confirmation"
         } else {
             "production-diagnostic"
         },
@@ -993,8 +1045,11 @@ fn run_read_qualification() -> BenchResult<()> {
 fn main() -> BenchResult<()> {
     let protocol =
         env::var("BORSUK_GROUP_COMMIT_PROTOCOL").unwrap_or_else(|_| "diagnostic".to_string());
-    if protocol == "read-qualification" {
-        return run_read_qualification();
+    if matches!(
+        protocol.as_str(),
+        "read-qualification" | "read-stripe-confirmation"
+    ) {
+        return run_read_qualification(&protocol);
     }
     let uri = required("BORSUK_GROUP_COMMIT_INDEX_URI")?;
     let output = PathBuf::from(required("BORSUK_GROUP_COMMIT_OUTPUT")?);
@@ -1624,6 +1679,106 @@ mod tests {
         assert_eq!(read_qualification_order_position(3, MIB).unwrap(), 1);
         assert!(read_qualification_order_position(0, MIB).is_err());
         assert!(read_qualification_order_position(1, 3 * MIB).is_err());
+    }
+
+    #[test]
+    fn read_confirmation_accepts_only_the_preregistered_shape() {
+        const MIB: usize = 1024 * 1024;
+        let shape = ReadQualificationShape {
+            writers: 8,
+            operations: 1_000,
+            records_per_operation: 16,
+            dimensions: 768,
+            query_count: 500,
+            max_read_segments: 4,
+            stripe_bytes: 4 * MIB,
+            repetition: 5,
+        };
+        validate_read_confirmation_shape(shape, false).unwrap();
+        validate_read_confirmation_shape(
+            ReadQualificationShape {
+                stripe_bytes: MIB,
+                ..shape
+            },
+            false,
+        )
+        .unwrap();
+
+        for invalid in [
+            ReadQualificationShape {
+                stripe_bytes: 2 * MIB,
+                ..shape
+            },
+            ReadQualificationShape {
+                query_count: 100,
+                ..shape
+            },
+            ReadQualificationShape {
+                query_count: 499,
+                ..shape
+            },
+            ReadQualificationShape {
+                repetition: 0,
+                ..shape
+            },
+            ReadQualificationShape {
+                repetition: 6,
+                ..shape
+            },
+            ReadQualificationShape {
+                max_read_segments: 3,
+                ..shape
+            },
+        ] {
+            assert!(validate_read_confirmation_shape(invalid, false).is_err());
+        }
+    }
+
+    #[test]
+    fn read_confirmation_preserves_the_structural_smoke_shape() {
+        const MIB: usize = 1024 * 1024;
+        let smoke = ReadQualificationShape {
+            writers: 2,
+            operations: 2,
+            records_per_operation: 1,
+            dimensions: 8,
+            query_count: 4,
+            max_read_segments: 4,
+            stripe_bytes: MIB,
+            repetition: 1,
+        };
+        validate_read_confirmation_shape(smoke, true).unwrap();
+        validate_read_confirmation_shape(
+            ReadQualificationShape {
+                stripe_bytes: 4 * MIB,
+                ..smoke
+            },
+            true,
+        )
+        .unwrap();
+        assert!(
+            validate_read_confirmation_shape(
+                ReadQualificationShape {
+                    stripe_bytes: 2 * MIB,
+                    ..smoke
+                },
+                true,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn read_confirmation_arm_order_matches_the_preregistration() {
+        const MIB: usize = 1024 * 1024;
+        assert_eq!(read_confirmation_order_position(1, MIB).unwrap(), 0);
+        assert_eq!(read_confirmation_order_position(1, 4 * MIB).unwrap(), 1);
+        assert_eq!(read_confirmation_order_position(2, 4 * MIB).unwrap(), 0);
+        assert_eq!(read_confirmation_order_position(2, MIB).unwrap(), 1);
+        assert_eq!(read_confirmation_order_position(5, MIB).unwrap(), 0);
+        assert!(read_confirmation_order_position(0, MIB).is_err());
+        assert!(read_confirmation_order_position(6, MIB).is_err());
+        assert!(read_confirmation_order_position(1, 2 * MIB).is_err());
     }
 
     #[test]
