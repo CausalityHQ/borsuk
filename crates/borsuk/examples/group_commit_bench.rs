@@ -1047,7 +1047,40 @@ fn main() -> BenchResult<()> {
         },
     )?;
     if active_tail_reads.hits != recall_queries {
-        return Err("active-tail inserted-ID recall gate failed".into());
+        let missed_samples = active_tail_reads
+            .samples
+            .iter()
+            .filter(|sample| !sample.contains_record_id)
+            .take(8)
+            .collect::<Vec<_>>();
+        let missed_ids = missed_samples
+            .iter()
+            .map(|sample| sample.record_id.as_str())
+            .collect::<Vec<_>>();
+        let point_states = active_tail_index.get_records(&missed_ids)?;
+        let misses = missed_samples
+            .into_iter()
+            .zip(point_states)
+            .map(|(sample, point)| {
+                format!(
+                    "{}:{}->{}({})",
+                    sample.query,
+                    sample.record_id,
+                    sample.hit_id,
+                    if point.is_some() {
+                        "point-visible"
+                    } else {
+                        "point-missing"
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "active-tail inserted-ID recall gate failed: {}/{} hits; first misses: {misses}",
+            active_tail_reads.hits, recall_queries
+        )
+        .into());
     }
     write_read_samples(
         &output.join("active-tail-reads.csv"),
@@ -1129,12 +1162,32 @@ fn main() -> BenchResult<()> {
         .collect::<Vec<_>>();
     let point_records = reopened.get_records(&point_ids)?;
     let mut visible = 0_usize;
+    let mut mismatches = Vec::new();
     for (ordinal, point_record) in point_records.into_iter().enumerate() {
         let expected = &input_vectors[ordinal];
-        visible += usize::from(point_record.is_some_and(|(stored, _)| &stored == expected));
+        if point_record
+            .as_ref()
+            .is_some_and(|(stored, _)| stored == expected)
+        {
+            visible += 1;
+        } else if mismatches.len() < 8 {
+            mismatches.push(format!(
+                "{}:{}",
+                point_ids[ordinal],
+                if point_record.is_some() {
+                    "wrong-vector"
+                } else {
+                    "missing"
+                }
+            ));
+        }
     }
     if visible != total_record_count {
-        return Err("post-reopen point visibility gate failed".into());
+        return Err(format!(
+            "post-reopen point visibility gate failed: {visible}/{total_record_count} exact; first mismatches: {}",
+            mismatches.join(", ")
+        )
+        .into());
     }
     fs::write(output.join("POINT_VISIBILITY_COMPLETE"), b"complete\n")?;
     let reads = measure_reads(
@@ -1151,7 +1204,19 @@ fn main() -> BenchResult<()> {
         },
     )?;
     if reads.hits != recall_queries {
-        return Err("post-reopen exact recall gate failed".into());
+        let misses = reads
+            .samples
+            .iter()
+            .filter(|sample| !sample.contains_record_id)
+            .take(8)
+            .map(|sample| format!("{}:{}->{}", sample.query, sample.record_id, sample.hit_id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "post-reopen exact recall gate failed: {}/{} hits; first misses: {misses}",
+            reads.hits, recall_queries
+        )
+        .into());
     }
     fs::write(output.join("READ_QUALIFICATION_COMPLETE"), b"complete\n")?;
 
