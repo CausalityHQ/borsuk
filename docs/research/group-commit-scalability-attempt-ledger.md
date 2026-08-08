@@ -1362,3 +1362,19 @@ the full Rust gate passed 1,149 tests with 25 ignored across 72 suites in 495.26
 seconds; and the pinned Python gate passed all 478 tests in 16.015 seconds. The
 confirmation harness is therefore eligible for an exclusive AWS preflight and
 launch, but no performance conclusion follows from these software gates.
+
+AWS preflight used profile `causality` in account `453182569524`. Instance
+`i-0e73bacb470807838` was a running `c7g.8xlarge`; instance, system, and attached
+EBS status were `ok`, SSM was online, the root volume had 126 GiB free, all live
+tmux panes were idle shells, and no BORSUK benchmark process existed. The
+exclusive confirmation launched as
+`20260808T120203Z-v69-36e67d3` in retained tmux session
+`borsuk-global-cell-stripe-confirmation-20260808T120203Z-v69-36e67d3` with source
+archive SHA-256
+`c2d210b4ca496d8c5d7c68a42a4914d8619551e8a10833ee35b1361291db6753`
+and manifest SHA-256
+`6471cb1874f277cb82cb744aeb5960ed26cf87e0ecafa01bb567c72f9fbf57de`.
+The immutable result prefix is
+`s3://borsuk-bench-453182569524-euc1/research/global-cell-stripe-confirmation/20260808T120203Z-v69-36e67d3/results`.
+Until a terminal root marker exists, monitoring is limited to markers and
+infrastructure/process health; incomplete measurement CSVs remain unread.
