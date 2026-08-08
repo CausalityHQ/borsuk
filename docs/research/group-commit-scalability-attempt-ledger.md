@@ -1314,3 +1314,51 @@ variation; per-query medians are near zero and the 100-query repetition p95 is
 too noisy for a defensible default change. The next qualification therefore
 must be a separately preregistered 1 MiB versus 4 MiB confirmation with more
 queries per repetition; v68's rule and rejection remain immutable.
+
+### Higher-sample stripe confirmation implementation
+
+Revisions `931bc85` and `cb6437e` preregistered a separate confirmation rather
+than changing v68 after observing it. The exact confirmation compares 1 MiB and
+4 MiB across five paired repetitions with 500 queries per arm. Promotion also
+requires a 10% pooled-p95 effect, a 5% pooled-p50 regression guard, identical
+logical bytes, recall@10 1.0, and pooled plus worst-repeat p95 below 200 ms.
+
+Revisions `1c75023`, `ff8b5d1`, and `ba59ff6` added the exact Rust protocol,
+manifest-driven shared runner with a confirmation-only wrapper/namespace, and
+campaign-specific terminal validation. The historical three-arm validator
+schema remains exact. Confirmation tests cover terminal-before-CSV behavior,
+frozen shapes and identities, paired query and byte equality, request
+reconciliation, effect size, median regression, and worst-repeat latency.
+
+The local structural smoke used source archive SHA-256
+`1e29e874ce4caa058c91aef7f57111fbb4eeea55ed695b61d271676e1cc97934`
+and confirmation manifest SHA-256
+`6471cb1874f277cb82cb744aeb5960ed26cf87e0ecafa01bb567c72f9fbf57de`.
+Attempt 01 failed before measurement because it was mistakenly given the
+campaign aggregate `output/samples.csv`; that file adds aggregation columns and
+does not match the read protocol. The failure's resource artifact is preserved
+under `/data/home/rb/borsuk-local-qual/ba59ff6/`. The canonical per-cell sample
+file has the expected SHA-256
+`79d2e19d478240ce9aa0ec3646a62132ccd20bb11138e958c1f78d1ad7c01e57`.
+Attempt 02 at
+`/data/home/rb/borsuk-local-qual/ba59ff6/global-cell-stripe-confirmation-smoke-s4m-attempt02`
+then completed all four queries with inserted-ID recall@10 1.0, four GETs, zero
+PUT/DELETE, nonempty resource telemetry, and 24 storage-trace events. Its local
+p95 of 2.478 ms is structural evidence only and is not a production result.
+
+The first assurance pass had clean formatting, diff, repository policy, shell
+syntax, and strict all-feature/all-target Clippy. The full Rust gate passed
+1,149 tests with 25 ignored across 72 suites (491.61 seconds of test execution).
+An unpinned direct Python invocation produced five missing NumPy/PyArrow import
+errors and no assertion failures; the repository's pinned
+`scripts/requirements-format-bench.txt` environment then passed all 478 tests
+in 16.240 seconds. The plan now records that pinned command. Per repository
+policy, one final full gate follows this repaired layer before delivery or AWS
+launch.
+
+That final gate completed on unchanged implementation code: formatting, diff,
+repository policy, shell syntax, and strict all-feature/all-target Clippy passed;
+the full Rust gate passed 1,149 tests with 25 ignored across 72 suites in 495.26
+seconds; and the pinned Python gate passed all 478 tests in 16.015 seconds. The
+confirmation harness is therefore eligible for an exclusive AWS preflight and
+launch, but no performance conclusion follows from these software gates.
