@@ -1139,3 +1139,54 @@ example tests, formatting, and strict all-target/all-feature workspace Clippy.
 These repetitions are race/correctness evidence only, not latency, throughput,
 recall, AWS, or publication evidence. AWS launch remains gated on the final
 workspace assurance pass and a clean pushed revision.
+
+## Bounded striped global-cell read qualification (2026-08-08)
+
+The completed 100-query cache-profile reproduction identified a read-path bug,
+not an S3 outage: PQ code bytes retained in memory bypassed the earlier full
+Arrow envelope read, so exact reranking later issued sparse backing reads that
+were absent from the disk cache. The pre-fix terminal run at
+`/data/home/rb/borsuk-local-qual/ed18e25/hier16-128k-r01/debug32-output`
+exited fail-closed with four backing GETs in its disk-cached phase.
+
+Revision `f6ed60e8e4d0b574f771a8f40d02c51bec377acf` plans full envelopes before
+I/O under one 8 MiB and 16-stripe query-stage budget. Eligible envelopes remain
+authoritative even when PQ codes are memory-resident; code-only groups retain
+the memory-cache shortcut. Each envelope is split into ordered, independently
+cacheable stripes no larger than 1 MiB, while the durable bundle remains stock
+Arrow IPC. The Git archive SHA-256 is
+`ae38189de7c61edd6cbab3f6230fdfb5a2fb0d42705d29fa1bb247d920b0dabd` and the
+release `production_bench` SHA-256 is
+`d0a26edeffd5d3284aafb06b289f67f0e935017214569491426dbbf614c9784c`.
+
+The exact fresh-cache reproduction at
+`/data/home/rb/borsuk-local-qual/f6ed60e/hier16-128k-cache-fix-r01` exited zero.
+Its completed disk-cached row reports 100 queries, recall@10 0.918, p95 4.222
+ms, and exactly 0.000 GETs/query; the completed uncached row reports recall@10
+0.918, p95 11.546 ms, and 62.510 GETs/query. The result CSV SHA-256 is
+`a22d9cf9a6471db8e2e8312f0ead1d080216e26bbe99a5935eb86fe8e6748b87` and the
+storage trace SHA-256 is
+`f10d848214face053955b076a0fc39e0ddff5cc1189a333653bf6b15146790d1`.
+These local-filesystem latencies are regression evidence only. The 1,024-cell
+hierarchical layout remains rejected because its 100-query curve reaches only
+0.941 recall@10 even at 64 probes; production qualification retains the
+flat-256 layout and exact reranking.
+
+The exact-revision 16-record bulk structural smoke at
+`/data/home/rb/borsuk-local-qual/f6ed60e/group-commit-smoke-bulk-r01/output`
+created all terminal phase/root markers and passed the fail-closed
+`validate_group_commit_scalability.py` validator both in-run and independently.
+It is correctness evidence only. No AWS workload was launched from this
+revision; paid qualification remains gated on the complete repository assurance
+pass, a clean fast-forward push, and worker exclusivity.
+
+The final repository assurance gate first stopped at strict Clippy because the
+striped-read negative test intentionally constructed the invalid literal range
+`2..1`. A statement-local lint allowance now documents that deliberate test
+input without weakening production lints. The failing Clippy layer then passed,
+and one final complete gate ran from the corrected tree. Formatting, diff
+checking, repository policy, strict all-feature/all-target workspace Clippy,
+and the full locked all-target Rust workspace suite all exited zero. The pinned
+Python 3.12 benchmark-validation environment reported 458 tests passed in
+116.520 seconds. This assurance proves functional and structural integrity, not
+AWS latency, throughput, recall, cost, or 100M scalability.

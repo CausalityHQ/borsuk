@@ -33,7 +33,7 @@
 - Produces: `Storage::read_striped_range(&self, relative: &str, range: Range<u64>, stripe_bytes: u64, max_parallel: usize) -> Result<ReadBytes>`.
 - Produces: `split_contiguous_range(range: Range<u64>, max_bytes: u64) -> Result<Vec<Range<u64>>>`.
 
-- [ ] **Step 1: Write the failing striped-read regression**
+- [x] **Step 1: Write the failing striped-read regression**
 
 Create a local object containing exactly `3 * 1024 * 1024` deterministic bytes. Call:
 
@@ -47,7 +47,7 @@ assert_eq!(storage.request_counts().delta(&before).gets, 3);
 
 Repeat the same call and require zero additional GETs. Add a `512 KiB` object case that requires one GET, plus empty, reversed, and zero-stripe-width error cases.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -59,7 +59,7 @@ cargo test --locked -p borsuk --lib storage::tests::striped_range_reads_large_ra
 
 Expected: compile failure because `read_striped_range` does not exist.
 
-- [ ] **Step 3: Implement the minimal storage API**
+- [x] **Step 3: Implement the minimal storage API**
 
 Split the logical range into adjacent ordered ranges of at most `stripe_bytes`.
 Extend `read_ranges_with_policy` with a `max_physical_range_bytes: u64`
@@ -69,11 +69,11 @@ Concatenate returned chunks into one `ReadBytes`; propagate `cache_hit` and set
 `cache_repaired` to false. Reject empty/reversed ranges, zero stripe bytes, and
 zero parallelism.
 
-- [ ] **Step 4: Run GREEN and storage coverage**
+- [x] **Step 4: Run GREEN and storage coverage**
 
 Run the new regression, `disk_cache_reuses_range_and_suffix_reads_without_store_requests`, and the complete storage unit subset. Expected: exact bytes, 3/1/0 GET behavior, and all storage tests pass.
 
-- [ ] **Step 5: Commit the independently verified storage slice**
+- [x] **Step 5: Commit the independently verified storage slice**
 
 ```bash
 git add crates/borsuk/src/storage.rs
@@ -91,7 +91,7 @@ git commit -m "storage: stripe bounded range reads"
 - Produces: `GlobalPqCodeReadPlan { range: Range<usize>, prefetch_exact: bool, stripes: usize }`.
 - Produces: `global_pq_code_read_plans(groups: &[(String, Vec<GlobalPqChunkRef>)], remaining_bytes: usize, remaining_stripes: usize) -> Result<Vec<GlobalPqCodeReadPlan>>`.
 
-- [ ] **Step 1: Write failing cumulative-budget tests**
+- [x] **Step 1: Write failing cumulative-budget tests**
 
 Create three synthetic groups whose full envelopes are 3 MiB and code ranges
 are 64 KiB. With an 8 MiB/16-stripe budget, require the first two plans to be
@@ -100,12 +100,12 @@ and require exactly sixteen full-envelope plans under the stripe cap. Assert
 that code-only plan bytes do not reduce the byte budget available to a later
 eligible group.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run the exact new test filter. Expected: compile failure because
 `global_pq_code_read_plans` and `GlobalPqCodeReadPlan` are absent.
 
-- [ ] **Step 3: Implement deterministic planning**
+- [x] **Step 3: Implement deterministic planning**
 
 Add constants:
 
@@ -119,13 +119,13 @@ arithmetic. Select the complete range only when it is at most 4 MiB and both
 remaining budgets cover it. Debit budgets only for selected complete ranges;
 set code-only `stripes` to zero.
 
-- [ ] **Step 4: Run GREEN and existing planner tests**
+- [x] **Step 4: Run GREEN and existing planner tests**
 
 Run the new tests plus
 `global_pq_code_read_range_prefetches_only_bounded_arrow_cells`, code-group
 coalescing, wave-bound, and query-local-range tests. Expected: all pass.
 
-- [ ] **Step 5: Commit the planner slice**
+- [x] **Step 5: Commit the planner slice**
 
 ```bash
 git add crates/borsuk/src/index.rs
@@ -142,7 +142,7 @@ git commit -m "search: bound global cell prefetch plans"
 - Consumes: `Storage::read_striped_range` and `global_pq_code_read_plans`.
 - Produces: one global-code load path whose full-envelope plans perform I/O regardless of code-cache residency.
 
-- [ ] **Step 1: Write the failing cache-state policy regression**
+- [x] **Step 1: Write the failing cache-state policy regression**
 
 Add a production helper `global_pq_code_group_requires_io(plan: &GlobalPqCodeReadPlan, all_codes_cached: bool) -> bool`. Require:
 
@@ -154,7 +154,7 @@ assert!(global_pq_code_group_requires_io(&code_only, false));
 
 Run it and observe RED because the helper is absent.
 
-- [ ] **Step 2: Refactor the query page into planned groups**
+- [x] **Step 2: Refactor the query page into planned groups**
 
 Build code groups from every selected scan chunk before applying the code-cache
 shortcut. Create plans using the remaining query-local byte and stripe budgets.
@@ -163,7 +163,7 @@ even when every code slice is memory-cached. For code-only plans, skip I/O only
 when every code slice is cached. Verify every returned code checksum exactly as
 before and retain only full-envelope bytes in `QueryLocalRange`.
 
-- [ ] **Step 3: Preserve bounded accounting**
+- [x] **Step 3: Preserve bounded accounting**
 
 Increment `query_local_range_bytes` and a new
 `query_local_range_stripes` only from full-envelope plans. Pass remaining
@@ -171,13 +171,13 @@ budgets into each later wave. Remove the post-I/O best-effort retention check;
 the pre-I/O plan is authoritative. Continue adding all fetched bytes to
 `SearchReport::bytes_read`.
 
-- [ ] **Step 4: Run GREEN and affected suites**
+- [x] **Step 4: Run GREEN and affected suites**
 
 Run the cache-state helper regression, all global-PQ unit tests, all storage
 tests, and `cargo test --locked -p borsuk --test group_commit`. Expected: the
 new policy and all existing exact-candidate/recall invariants pass.
 
-- [ ] **Step 5: Commit the integrated read path**
+- [x] **Step 5: Commit the integrated read path**
 
 ```bash
 git add crates/borsuk/src/index.rs
@@ -194,12 +194,12 @@ git commit -m "search: stripe planned global cell reads"
 - Consumes: the preserved 128K hierarchical local index and production benchmark harness.
 - Produces: terminal local evidence that the former 100-query disk-cache failure no longer performs backing I/O.
 
-- [ ] **Step 1: Build the exact release revision**
+- [x] **Step 1: Build the exact release revision**
 
 Build `production_bench` with the shared sccache wrapper and record the Git
 archive SHA-256.
 
-- [ ] **Step 2: Rerun the exact reproducer**
+- [x] **Step 2: Rerun the exact reproducer**
 
 Use the preserved index at
 `/data/home/rb/borsuk-local-qual/ed18e25/hier16-128k-r01/index`, a fresh cache
@@ -208,14 +208,14 @@ and output directory, 100 Cohere queries, `hierarchical-16`, `nprobe=32`,
 disk-cached row reports zero network GETs. This is a cache/read-path regression,
 not promotable recall or latency evidence.
 
-- [ ] **Step 3: Run the standard bulk structural smoke**
+- [x] **Step 3: Run the standard bulk structural smoke**
 
 Run the repository group-commit bulk smoke from the exact committed revision
 and validate its terminal artifacts with
 `scripts/validate_group_commit_scalability.py`. Expected: root and cell
 completion markers and validator exit zero.
 
-- [ ] **Step 4: Record honest local evidence**
+- [x] **Step 4: Record honest local evidence**
 
 Record the rejected 1,024-cell recall curve, the reproduced pre-fix four-GET
 failure, and the post-fix zero-GET result. Do not promote local-filesystem
@@ -231,7 +231,7 @@ latency or the self-query recall gate into a production claim.
 - Consumes: exact integrated revision and frozen realistic campaign manifest.
 - Produces: verified fast-forward `origin/main` commit and one fresh immutable AWS prefix.
 
-- [ ] **Step 1: Run repository assurance once**
+- [x] **Step 1: Run repository assurance once**
 
 Run formatting, `git diff --check`, repository policy, strict all-target/all-feature
 Clippy, full locked Rust workspace tests, and the pinned Python suite with the
