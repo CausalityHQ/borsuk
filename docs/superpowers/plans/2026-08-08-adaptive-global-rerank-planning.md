@@ -115,7 +115,7 @@ Run strict Clippy, the full locked Rust workspace test gate, pinned Python tests
 
 Expected: no warnings, test failures, or policy failures.
 
-- [ ] **Step 3: Commit and validate a structural smoke from the exact revision**
+- [x] **Step 3: Commit and validate a structural smoke from the exact revision**
 
 Commit the coherent slice, run the bulk structural group-commit smoke from that exact `HEAD`, and validate its terminal artifacts with `validate_group_commit_scalability.py`.
 
