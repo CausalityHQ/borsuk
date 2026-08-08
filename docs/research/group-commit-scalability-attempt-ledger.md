@@ -1285,3 +1285,32 @@ selection. TDD observed both the unsupported option and keyword failures; all
 nine focused runner/validator tests, repository policy, diff checking, and the
 complete pinned Python suite (467 tests) now pass. The frozen v68 CSV files
 remain unopened pending recovery validation from the corrected revision.
+
+Recovery validation from revision `de43e85` then passed every unchanged frozen
+artifact and all 1,500 query rows. The preserved report SHA-256 is
+`59fc231def8fa4018b2f3a03843f26a80521850a6b08cdada81428c181db338b`
+and it is stored separately from the frozen result prefix at
+`s3://borsuk-bench-453182569524-euc1/research/global-cell-stripes/20260808T104352Z-v68-1a2a731/validation/de43e85/recovery-selection.json`.
+All three arms retained inserted-ID recall@10 1.0 and identical 2,603,104.4
+logical bytes/query. The terminal pooled results were:
+
+| arm | pooled queries | pooled p95 | worst repeat p95 | GETs/query |
+| --- | ---: | ---: | ---: | ---: |
+| 1 MiB | 500 | 73.241 ms | 94.348 ms | 4.39 |
+| 2 MiB | 500 | 62.431 ms | 64.073 ms | 3.53 |
+| 4 MiB | 500 | 59.251 ms | 59.625 ms | 3.13 |
+
+The 4 MiB arm reduced pooled p95 by 19.1%, worst-repeat p95 by 36.8%, and
+GETs/query by 28.7% relative to 1 MiB without transferring more logical bytes.
+Its median latency was essentially unchanged (35.506 versus 35.517 ms), while
+global-delta wait p95 fell from 55.101 to 38.418 ms. This is causally
+consistent with removing slow-member amplification from a four-GET envelope
+wave rather than changing search work or using cache to hide it.
+
+No arm is promoted from v68. Both candidates were no worse than the 1 MiB
+control in only three of five repetition-level p95 pairs, below the frozen
+four-of-five rule. The two misses coincide with ordinary 50--64 ms control
+variation; per-query medians are near zero and the 100-query repetition p95 is
+too noisy for a defensible default change. The next qualification therefore
+must be a separately preregistered 1 MiB versus 4 MiB confirmation with more
+queries per repetition; v68's rule and rejection remain immutable.
