@@ -388,6 +388,11 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
         gets.overlapped(),
         "cold base and immutable-delta reads remained serial: {report:?}"
     );
+    assert!(
+        report.global_delta_wait_us < 10_000,
+        "cold descriptor setup left the delta pipeline trailing the base by {} us: {report:?}",
+        report.global_delta_wait_us
+    );
 }
 
 #[test]

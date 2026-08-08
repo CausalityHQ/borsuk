@@ -1496,3 +1496,42 @@ default remains disabled; this terminal rejection does not justify tuning the
 threshold on the same evidence. The next core read work is a fused base-plus-
 delta scheduler, while standard-format, WAL lifecycle, multimodal write, and
 100M quality/scale gaps remain separate release blockers.
+
+### Cold base/delta descriptor setup overlap
+
+The first terminal local 100K-by-768D typed-column smoke was validated before
+its CSVs were opened. Its first nprobe-8 query transferred 8,531,044 logical
+bytes versus an 8,429,082-byte ten-query mean (1.2% above the mean); the
+337,446,825-byte `global_scan_bytes` statistic is total stored global-artifact
+size, not per-query transfer. The smoke remains local structural evidence only:
+its ten-query recall/latency sample is too small and is not S3 performance
+evidence. The roughly 8 MiB/query transfer also reflects the explicit 8 MiB
+query-local exact-range reuse budget on this small-object shape and must not be
+extrapolated as a 100M bound.
+
+Cold-path tracing then isolated a real first-query setup defect. The stable-base
+descriptor was synchronously loaded before the materialized-delta worker could
+load its independently trained descriptor. A deterministic 25 ms object-store
+latency regression already proved later base/delta reads overlap, but the
+unchanged code left approximately one storage-delay interval in
+`global_delta_wait_us` after the base completed.
+
+The candidate separates coverage resolution from descriptor loading, validates
+the base and optional delta descriptors concurrently through the bounded shared
+I/O pool, and only then starts the existing overlapping code/rerank pipelines.
+The focused regression preserved the expected delta hit and remote-read overlap
+while bounding the post-base delta wait below 10 ms (observed 1--2 microseconds
+in the deterministic test). Review found and the final implementation avoids
+two regressions: when both descriptors are resident the steady-state path
+returns directly without a task or channel, and fixed byte/deadline searches do
+not preload a delta that the existing sequential budget may skip. A cold
+one-byte regression proves only the base descriptor becomes resident before
+the query terminates at `MaxBytes`.
+
+This is a cold-setup improvement, not a claim that base and delta are fused:
+candidate selection, exact rerank, MVCC work, and budgets remain per-layer and
+recursive. The next architecture slice must still replace those duplicate
+stages with one query-wide scheduler and one exact/MVCC phase. Because BORSUK
+is unreleased, that cutover will replace the experimental path and format
+versions outright; no compatibility reader or migration layer will be
+retained.
