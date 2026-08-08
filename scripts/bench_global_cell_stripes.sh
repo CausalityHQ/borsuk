@@ -2,7 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MANIFEST="$ROOT_DIR/docs/research/global-cell-stripe-qualification.json"
+MANIFEST="${BORSUK_GLOBAL_CELL_STRIPE_MANIFEST:-$ROOT_DIR/docs/research/global-cell-stripe-qualification.json}"
+READ_PROTOCOL="${BORSUK_GLOBAL_CELL_STRIPE_PROTOCOL:-read-qualification}"
+COMPLETE_MARKER="${BORSUK_GLOBAL_CELL_STRIPE_COMPLETE_MARKER:-GLOBAL_CELL_STRIPE_QUALIFICATION_COMPLETE}"
+FAILED_MARKER="${BORSUK_GLOBAL_CELL_STRIPE_FAILED_MARKER:-GLOBAL_CELL_STRIPE_QUALIFICATION_FAILED}"
 OUTPUT="${BORSUK_GLOBAL_CELL_STRIPE_OUTPUT_ROOT:?set BORSUK_GLOBAL_CELL_STRIPE_OUTPUT_ROOT}"
 RESULT_URI="${BORSUK_GLOBAL_CELL_STRIPE_RESULT_URI:?set BORSUK_GLOBAL_CELL_STRIPE_RESULT_URI}"
 DATASET_DIR="${BORSUK_GROUP_COMMIT_DATASET:?set validated Cohere dataset directory}"
@@ -59,8 +62,8 @@ failed() {
       printf 'failed\n' > "$CURRENT_CELL/CELL_FAILED"
     fi
     if [[ -d "$OUTPUT" ]]; then
-      rm -f "$OUTPUT/GLOBAL_CELL_STRIPE_QUALIFICATION_COMPLETE"
-      printf 'failed\n' > "$OUTPUT/GLOBAL_CELL_STRIPE_QUALIFICATION_FAILED"
+      rm -f "$OUTPUT/$COMPLETE_MARKER"
+      printf 'failed\n' > "$OUTPUT/$FAILED_MARKER"
       sync_results || true
     fi
   fi
@@ -136,6 +139,12 @@ printf '%s\n' \
 
 RESOURCE_INTERVAL_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["resource_sample_interval_ms"])' "$MANIFEST")"
 ARM_TIMEOUT_SECONDS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["arm_timeout_seconds"])' "$MANIFEST")"
+WRITERS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["writers"])' "$MANIFEST")"
+OPERATIONS_PER_WRITER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["operations_per_writer"])' "$MANIFEST")"
+RECORDS_PER_OPERATION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["records_per_operation"])' "$MANIFEST")"
+DIMENSIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dimensions"])' "$MANIFEST")"
+READ_QUERIES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["queries_per_arm"])' "$MANIFEST")"
+MAX_READ_SEGMENTS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_read_segments"])' "$MANIFEST")"
 TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 GROUP_BINARY="$TARGET_DIR/release/examples/group_commit_bench"
 cargo build --locked --release -p borsuk --example group_commit_bench
@@ -156,7 +165,7 @@ while IFS=$'\t' read -r repetition order_position stripe_bytes; do
   benchmark_stderr="${cell_output}.benchmark.stderr.log"
   set +e
   env \
-    BORSUK_GROUP_COMMIT_PROTOCOL=read-qualification \
+    BORSUK_GROUP_COMMIT_PROTOCOL="$READ_PROTOCOL" \
     BORSUK_GROUP_COMMIT_INDEX_URI="$BASE_INDEX_URI" \
     BORSUK_GROUP_COMMIT_OUTPUT="$cell_output" \
     BORSUK_GROUP_COMMIT_CACHE_DIR="$cache_dir" \
@@ -169,12 +178,12 @@ while IFS=$'\t' read -r repetition order_position stripe_bytes; do
     BORSUK_GROUP_COMMIT_BASE_CELL="$BASE_CELL" \
     BORSUK_GROUP_COMMIT_DATASET="$DATASET_DIR" \
     BORSUK_GROUP_COMMIT_DATASET_SHA256="$DATASET_SHA" \
-    BORSUK_GROUP_COMMIT_WRITERS=8 \
-    BORSUK_GROUP_COMMIT_OPERATIONS_PER_WRITER=1000 \
-    BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION=16 \
-    BORSUK_GROUP_COMMIT_DIMENSIONS=768 \
-    BORSUK_GROUP_COMMIT_READ_QUERIES=100 \
-    BORSUK_GROUP_COMMIT_MAX_READ_SEGMENTS=4 \
+    BORSUK_GROUP_COMMIT_WRITERS="$WRITERS" \
+    BORSUK_GROUP_COMMIT_OPERATIONS_PER_WRITER="$OPERATIONS_PER_WRITER" \
+    BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION="$RECORDS_PER_OPERATION" \
+    BORSUK_GROUP_COMMIT_DIMENSIONS="$DIMENSIONS" \
+    BORSUK_GROUP_COMMIT_READ_QUERIES="$READ_QUERIES" \
+    BORSUK_GROUP_COMMIT_MAX_READ_SEGMENTS="$MAX_READ_SEGMENTS" \
     BORSUK_GROUP_COMMIT_PREFETCH_STRIPE_BYTES="$stripe_bytes" \
     BORSUK_GROUP_COMMIT_READ_REPETITION="$repetition" \
     BORSUK_GROUP_COMMIT_READ_ORDER_POSITION="$order_position" \
@@ -217,10 +226,9 @@ for repetition, order in enumerate(manifest["arm_orders"], 1):
 PY
 )
 
-printf 'complete\n' > "$OUTPUT/GLOBAL_CELL_STRIPE_QUALIFICATION_COMPLETE"
+printf 'complete\n' > "$OUTPUT/$COMPLETE_MARKER"
 python3 "$ROOT_DIR/scripts/validate_global_cell_stripes.py" \
   --manifest "$MANIFEST" "$OUTPUT" > "$OUTPUT/selection.json.tmp"
 mv "$OUTPUT/selection.json.tmp" "$OUTPUT/selection.json"
 sync_results
 trap - EXIT
-
