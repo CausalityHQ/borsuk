@@ -1462,3 +1462,37 @@ across 71 suites in 487.78 seconds. The pinned Python gate passed all 486 tests
 in 134.456 seconds. Formatting, diff checks, repository policy, and shell syntax
 also passed. These are software-assurance results only; AWS execution remains
 pending and no S3 performance conclusion follows from them.
+
+Revision `090a72a` was fast-forward pushed to `origin/main`, then the exclusive
+Causality AWS campaign launched as `20260808T144521Z` on the expected
+`c7g.8xlarge`. The source archive SHA-256 was
+`cc16d6342915951cf5545fa68b87c65a5d1c1b19243c9ec8e1bd56658993fdc6`,
+the manifest SHA-256 was
+`4e7cb20a2df984dda430bd6abcc3f29c2a4c5f9bb72a533bc956db3a9a752de4`,
+and the immutable result root is
+`s3://borsuk-bench-453182569524-euc1/research/global-range-hedge/20260808T144521Z/results`.
+Marker-only monitoring found the root completion marker, all ten arm completion
+markers, no failure marker, a normally exited retained pane, and healthy
+instance, system, and SSM state before measurements were inspected.
+
+The repository fail-closed validator then independently accepted all terminal
+artifacts. Its report exactly matched the campaign-owned `selection.json`; both
+have SHA-256
+`28ea7f5d597224e4213c686d5d72e7182dc17484d78a035c66aee1d91351ac6f`.
+Each arm contains 2,500 queries with inserted-ID recall@10 1.0 and identical
+2,741,256.912 logical bytes/query.
+
+| arm | pooled p50 | pooled p95 | worst repeat p95 | GETs/query | backing bytes/query |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| no hedge | 34.661 ms | 53.349 ms | 66.612 ms | 5.8640 | 2,746,284.156 |
+| 75 ms hedge | 34.706 ms | 48.445 ms | 53.878 ms | 5.8664 | 2,746,703.586 |
+
+The candidate improved pooled p95 by 9.19%, below the frozen 10% minimum, and
+was no worse in three of five repetition-level pairs, below the frozen
+four-of-five requirement. It passed the pooled/worst 200 ms limits, p50,
+logical-byte equality, 0.041% GET amplification, and 0.015% backing-byte
+amplification gates. The validator therefore selected no winner. The 75 ms
+default remains disabled; this terminal rejection does not justify tuning the
+threshold on the same evidence. The next core read work is a fused base-plus-
+delta scheduler, while standard-format, WAL lifecycle, multimodal write, and
+100M quality/scale gaps remain separate release blockers.
