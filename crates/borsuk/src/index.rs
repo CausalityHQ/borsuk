@@ -518,6 +518,12 @@ const DEFAULT_GLOBAL_PQ_CODE_REQUEST_WEIGHT_BYTES: usize = 1024 * 1024;
 /// removes the dependent exact-rerank GET wave. Larger cells remain code-only
 /// and use sparse exact row reads, so this never becomes a whole-bundle fetch.
 const DEFAULT_GLOBAL_PQ_CODE_PREFETCH_BYTES: usize = 4 * 1024 * 1024;
+/// Physical S3 range width for a prefetched Arrow cell envelope. Adjacent
+/// stripes complete in one bounded wave and are concatenated before Arrow
+/// buffer offsets are applied.
+const DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES: usize = 1024 * 1024;
+/// Maximum envelope stripes admitted by one base or delta query stage.
+const DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES: usize = 16;
 /// Maximum compressed PQ-code payload retained by one query wave.
 ///
 /// Four admitted production queries can therefore retain at most 128 MiB of
@@ -20802,6 +20808,59 @@ fn global_pq_code_read_range(chunks: &[GlobalPqChunkRef]) -> Result<Range<usize>
     Ok(start..end)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GlobalPqCodeReadPlan {
+    range: Range<usize>,
+    prefetch_exact: bool,
+    stripes: usize,
+}
+
+fn global_pq_code_read_plans(
+    groups: &[(String, Vec<GlobalPqChunkRef>)],
+    remaining_bytes: usize,
+    remaining_stripes: usize,
+) -> Result<Vec<GlobalPqCodeReadPlan>> {
+    let mut bytes_left = remaining_bytes;
+    let mut stripes_left = remaining_stripes.min(DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES);
+    let mut plans = Vec::with_capacity(groups.len());
+    for (_path, chunks) in groups {
+        let candidate = global_pq_code_read_range(chunks)?;
+        let code_end = chunks.iter().try_fold(candidate.start, |end, chunk| {
+            let chunk_end = (chunk.offset_bytes as usize)
+                .checked_add(chunk.size_bytes as usize)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("global PQ code range overflows".to_string())
+                })?;
+            Ok::<_, BorsukError>(end.max(chunk_end))
+        })?;
+        let candidate_bytes = candidate.end.checked_sub(candidate.start).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ code range is invalid".to_string())
+        })?;
+        let candidate_stripes = candidate_bytes
+            .div_ceil(DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES)
+            .max(1);
+        let prefetch_exact = candidate.end > code_end
+            && candidate_bytes <= bytes_left
+            && candidate_stripes <= stripes_left;
+        if prefetch_exact {
+            bytes_left -= candidate_bytes;
+            stripes_left -= candidate_stripes;
+            plans.push(GlobalPqCodeReadPlan {
+                range: candidate,
+                prefetch_exact: true,
+                stripes: candidate_stripes,
+            });
+        } else {
+            plans.push(GlobalPqCodeReadPlan {
+                range: candidate.start..code_end,
+                prefetch_exact: false,
+                stripes: 0,
+            });
+        }
+    }
+    Ok(plans)
+}
+
 fn should_flush_global_pq_bundle(
     previous_cell: Option<u16>,
     next_cell: u16,
@@ -26202,6 +26261,83 @@ mod tests {
             global_pq_code_read_range(std::slice::from_ref(&oversized)).unwrap(),
             1_024..1_024 + 32 * 1024,
         );
+    }
+
+    #[test]
+    fn global_pq_code_read_plans_enforce_cumulative_byte_and_stripe_budgets() {
+        const MIB: usize = 1024 * 1024;
+        let group = |cell_index: u16, complete_bytes: usize| {
+            (
+                format!("bundle-{cell_index}"),
+                vec![GlobalPqChunkRef {
+                    path: format!("bundle-{cell_index}"),
+                    checksum: format!("checksum-{cell_index}"),
+                    offset_bytes: 0,
+                    exact_checksum: "exact-checksum".into(),
+                    exact_offset_bytes: 64 * 1024,
+                    exact_size_bytes: complete_bytes - 64 * 1024,
+                    cell_index,
+                    typed_buffer_offsets: [0; 6],
+                    row_start: cell_index as usize,
+                    rows: 1,
+                    size_bytes: 64 * 1024,
+                    graph: None,
+                }],
+            )
+        };
+        let groups = vec![group(1, 3 * MIB), group(2, 3 * MIB), group(3, 3 * MIB)];
+
+        let plans = global_pq_code_read_plans(&groups, 8 * MIB, 16).unwrap();
+
+        assert_eq!(plans.len(), 3);
+        assert_eq!(plans[0].range, 0..3 * MIB);
+        assert!(plans[0].prefetch_exact);
+        assert_eq!(plans[0].stripes, 3);
+        assert_eq!(plans[1].range, 0..3 * MIB);
+        assert!(plans[1].prefetch_exact);
+        assert_eq!(plans[1].stripes, 3);
+        assert_eq!(plans[2].range, 0..64 * 1024);
+        assert!(!plans[2].prefetch_exact);
+        assert_eq!(plans[2].stripes, 0);
+
+        let groups = (0..17)
+            .map(|cell| group(cell, 128 * 1024))
+            .collect::<Vec<_>>();
+        let plans = global_pq_code_read_plans(&groups, 8 * MIB, 16).unwrap();
+        assert_eq!(plans.iter().filter(|plan| plan.prefetch_exact).count(), 16);
+        assert!(!plans[16].prefetch_exact);
+    }
+
+    #[test]
+    fn global_pq_code_only_plans_do_not_consume_exact_prefetch_bytes() {
+        const MIB: usize = 1024 * 1024;
+        let group = |cell_index: u16, complete_bytes: usize| {
+            (
+                format!("bundle-{cell_index}"),
+                vec![GlobalPqChunkRef {
+                    path: format!("bundle-{cell_index}"),
+                    checksum: format!("checksum-{cell_index}"),
+                    offset_bytes: 0,
+                    exact_checksum: "exact-checksum".into(),
+                    exact_offset_bytes: 64 * 1024,
+                    exact_size_bytes: complete_bytes - 64 * 1024,
+                    cell_index,
+                    typed_buffer_offsets: [0; 6],
+                    row_start: cell_index as usize,
+                    rows: 1,
+                    size_bytes: 64 * 1024,
+                    graph: None,
+                }],
+            )
+        };
+        let groups = vec![group(1, 5 * MIB), group(2, 4 * MIB)];
+
+        let plans = global_pq_code_read_plans(&groups, 4 * MIB, 16).unwrap();
+
+        assert!(!plans[0].prefetch_exact);
+        assert_eq!(plans[0].range, 0..64 * 1024);
+        assert!(plans[1].prefetch_exact);
+        assert_eq!(plans[1].range, 0..4 * MIB);
     }
 
     #[test]
