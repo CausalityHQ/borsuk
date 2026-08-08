@@ -46,7 +46,7 @@ work, durable formats, or production gates.
   opens a fresh cache, and performs no mutations.
 - [x] Emit `reads.csv`, `summary.csv`, environment identity, and
   `READ_QUALIFICATION_COMPLETE`; reject recall misses and write-like requests.
-- [ ] Run the complete example test target and a local immutable-index smoke.
+- [x] Run the complete example test target and a local immutable-index smoke.
 
 ### Task 3: Add fail-closed paired runner and validator
 
@@ -62,14 +62,14 @@ work, durable formats, or production gates.
   inputs, source mismatch, nonterminal base evidence, and competing work.
 - [x] Implement the validator and paired selection report. The validator must
   fail closed before reading arm CSVs when the root is incomplete or failed.
-- [ ] Run shell syntax, complete runner/validator tests, and a local
+- [x] Run shell syntax, complete runner/validator tests, and a local
   structurally valid smoke.
 
 ### Task 4: Full assurance and direct delivery
 
-- [ ] Run format, diff check, repository policy, strict all-feature/all-target
+- [x] Run format, diff check, repository policy, strict all-feature/all-target
   Clippy, full locked workspace tests, and pinned Python tests once.
-- [ ] Record verification in the group-commit attempt ledger.
+- [x] Record verification in the group-commit attempt ledger.
 - [ ] Commit coherent slices, fetch `origin/main`, prove it is an ancestor of
   `HEAD`, push `HEAD:main`, verify equality, and require a clean tree.
 

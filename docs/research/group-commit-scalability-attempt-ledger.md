@@ -1197,3 +1197,54 @@ directly to `origin/main` at
 `558fc04e8bbe8bd437aa70bf699b9d5eac845e15`. A post-push substitution-free
 comparison reported `0 0` for `HEAD...origin/main`, and both references resolved
 to the same commit. No pull request or force push was used.
+
+## Paired global-cell stripe qualification harness (2026-08-08)
+
+The terminal v67 arm rejected 1 MiB striping as a production default rather
+than rejecting bounded envelope reuse itself: mean latency and GET count
+improved, but the four-member remote wave did not improve p95 robustly. The
+next decision is therefore preregistered as a source-identical, read-only
+comparison of 1 MiB by four, 2 MiB by two, and 4 MiB by one physical range
+shape against the same immutable v67 index and query records.
+
+Revision `f9e7bae` adds an open-time physical stripe width bounded by the
+existing 4 MiB envelope cap. The configured value participates in the
+pre-I/O stripe budget and the storage read itself; it does not change selected
+cells, candidate count, exact reranking, or durable Arrow/Parquet bytes. The
+same revision adds a mutation-free `read-qualification` mode to the existing
+group-commit benchmark. It validates the complete base sample ordering and ID
+to Cohere-row mapping, selects 100 fixed queries across all eight writers,
+uses the unchanged production `k=10`, SrhtPqScan, four-segment, 16-candidate
+search path, rejects recall misses and write-like requests, and records the
+complete public-call latency including lazy cold setup.
+
+Revision `f9a655a` freezes the five-repeat cyclic arm order, immutable v67
+source/manifest/sample/index identities, fail-closed terminal validator,
+fresh per-arm process/cache rule, resource sampling, storage trace, and paired
+selection rule in
+`docs/research/global-cell-stripe-qualification.json`. The validator refuses
+to open arm CSV files before the root is terminal, requires all 15 arm markers
+and identities, reconciles all 1,500 query rows and request/byte totals, and
+promotes a candidate only if pooled p95 is below 200 ms and it is no worse than
+the 1 MiB control in at least four of five repetitions.
+
+An exact-source local structural replay at
+`/data/home/rb/borsuk-local-qual/f9a655a/global-cell-read-smoke-s2m-r01`
+completed with the required marker, four of four inserted IDs found, zero
+PUT/DELETE requests, and a preserved storage trace. Its source archive
+SHA-256 is
+`7567e14bb1490149c524ecf426df43a121d90646d6b4aeaaa9dc32755f2512de`.
+The observed 2.338 ms p95 is local eight-dimensional structural evidence only;
+it is ineligible for production, S3, or performance claims. All 11 benchmark
+example tests, 45 focused global-PQ tests, 43 group-commit integration tests,
+seven new runner/validator tests, and both shell syntax checks pass. The full
+repository assurance gate and AWS execution remain pending.
+
+The final exact-tree assurance gate is terminal and green. Formatting, diff
+checking, repository policy, both new shell syntax checks, and strict
+all-feature/all-target workspace Clippy exited zero. The retained full locked
+workspace all-target session exited zero with 1,144 tests passed, 25 ignored,
+and 561 filtered across 71 suites in 413.97 seconds. The pinned Python 3.12
+benchmark-validation environment exited zero with 465 tests in 120.996
+seconds. These gates validate implementation and artifact structure only; they
+do not supply the pending S3 latency selection result.
