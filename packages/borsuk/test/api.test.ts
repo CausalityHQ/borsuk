@@ -2213,13 +2213,15 @@ test("compact rewrites segments and reports counters", async () => {
   assert.ok(report.bytesRead > 0);
   assert.ok(report.bytesWritten > 0);
   assert.equal(report.routingPageIndexesRead, 1);
-  assert.equal(report.routingPagesRead, 1);
+  // The page index carries the selected summaries, so compaction must not
+  // fetch the superseded routing page payload.
+  assert.equal(report.routingPagesRead, 0);
   assert.equal(report.routingPageIndexesWritten >= 1, true);
   assert.equal(report.routingPagesWritten >= 1, true);
   assert.equal(report.graphPayloadsRead, 0);
   assert.equal(report.graphBytesRead, 0);
   assert.equal(report.objectCacheHits, 0);
-  assert.equal(report.objectCacheMisses, 6);
+  assert.equal(report.objectCacheMisses, 5);
 
   const after = await index.searchWithReport([8.5, 0], { k: 2 });
   assert.equal(after.segmentsTotal, 2);
@@ -2340,12 +2342,12 @@ test("rebuild compacts all matching segments and deletes obsolete objects", asyn
   assert.equal(report.compaction.segmentsRead, 4);
   assert.equal(report.compaction.segmentsWritten, 2);
   assert.equal(report.garbageCollection.dryRun, false);
-  // Rebuild also reclaims the seven cell-WAL objects made obsolete by flush:
-  // two payloads, two frontier nodes, and the fenced descriptor/state/commit.
-  assert.equal(report.garbageCollection.objectsDeleted, 36);
+  // Rebuild also reclaims the four cell-WAL objects made obsolete by flush:
+  // the record and ID-directory runs plus the fenced descriptor and state.
+  assert.equal(report.garbageCollection.objectsDeleted, 33);
   assert.equal(report.garbageCollection.routingObjectsDeleted, 5);
-  assert.equal(report.garbageCollection.tablesDeleted, 15);
-  assert.equal(report.garbageCollection.candidates.length, 36);
+  assert.equal(report.garbageCollection.tablesDeleted, 14);
+  assert.equal(report.garbageCollection.candidates.length, 33);
   const ids = await index.searchIds([8.5, 0], { k: 2 });
   assert.deepEqual(ids, ["c", "d"]);
 });
@@ -2410,30 +2412,30 @@ test("gcObsoleteSegments dry-runs and deletes inactive segments", async () => {
 
   const dryRun = await index.gcObsoleteSegments({ minAgeMs: 0 });
   assert.equal(dryRun.dryRun, true);
-  // The object inventory includes the seven fenced cell-WAL objects written by add.
-  assert.equal(dryRun.objectsScanned, 40);
+  // The inventory includes the four fenced cell-WAL objects written by add.
+  assert.equal(dryRun.objectsScanned, 37);
   assert.equal(dryRun.objectsDeleted, 0);
   assert.equal(dryRun.routingObjectsDeleted, 0);
   assert.equal(dryRun.tablesDeleted, 0);
   assert.equal(dryRun.routingPageIndexesRead, 1);
-  assert.equal(dryRun.routingPagesRead, 1);
+  assert.equal(dryRun.routingPagesRead, 0);
   assert.ok(dryRun.bytesRead > 0);
   assert.equal(dryRun.objectCacheHits, 0);
-  assert.equal(dryRun.objectCacheMisses, 2);
-  assert.equal(dryRun.candidates.length, 26);
+  assert.equal(dryRun.objectCacheMisses, 1);
+  assert.equal(dryRun.candidates.length, 23);
   assert.ok(dryRun.bytesReclaimable > 0);
 
   // Repo-policy anchor for the delete path: gcObsoleteSegments({ dryRun: false }).
   const deleted = await index.gcObsoleteSegments({ dryRun: false, minAgeMs: 0 });
   assert.equal(deleted.dryRun, false);
-  assert.equal(deleted.objectsDeleted, 26);
+  assert.equal(deleted.objectsDeleted, 23);
   assert.equal(deleted.routingObjectsDeleted, 4);
-  assert.equal(deleted.tablesDeleted, 12);
+  assert.equal(deleted.tablesDeleted, 11);
   assert.equal(deleted.routingPageIndexesRead, 1);
-  assert.equal(deleted.routingPagesRead, 1);
+  assert.equal(deleted.routingPagesRead, 0);
   assert.ok(deleted.bytesRead > 0);
   assert.equal(deleted.objectCacheHits, 0);
-  assert.equal(deleted.objectCacheMisses, 2);
+  assert.equal(deleted.objectCacheMisses, 1);
   assert.deepEqual(deleted.candidates, dryRun.candidates);
   assert.equal(deleted.bytesReclaimed, dryRun.bytesReclaimable);
 
@@ -2493,9 +2495,9 @@ test("gcObsoleteSegments removes cached inactive objects", async () => {
 
   const deleted = await index.gcObsoleteSegments({ dryRun: false, minAgeMs: 0 });
 
-  assert.equal(deleted.objectsDeleted, 32);
+  assert.equal(deleted.objectsDeleted, 29);
   assert.equal(deleted.routingObjectsDeleted, 4);
-  assert.equal(deleted.tablesDeleted, 12);
+  assert.equal(deleted.tablesDeleted, 11);
   assert.equal(parquetFiles(join(cache, "segments", "L0")).length, 0);
   assert.equal(parquetFiles(join(cache, "graphs", "L0")).length, 0);
   assert.equal(parquetFiles(join(cache, "segments", "L1")).length, 2);
