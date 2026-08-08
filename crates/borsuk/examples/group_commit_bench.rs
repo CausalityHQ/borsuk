@@ -48,6 +48,8 @@ struct ReadSample {
     latency_ms: f64,
     requests: RequestCounts,
     bytes_read: u64,
+    disk_cache_bytes_read: u64,
+    backing_bytes_read: u64,
     segments_searched: usize,
     global_base_approximate_us: u64,
     global_base_exact_rerank_us: u64,
@@ -61,6 +63,8 @@ struct ReadMeasurement {
     latencies: Vec<f64>,
     requests: RequestCounts,
     bytes: u64,
+    disk_cache_bytes: u64,
+    backing_bytes: u64,
     segments_searched: usize,
     hits: usize,
 }
@@ -85,6 +89,13 @@ struct ReadQualificationShape {
     max_read_segments: usize,
     stripe_bytes: usize,
     repetition: usize,
+}
+
+#[derive(Clone, Copy)]
+struct ReadHedgeQualificationShape {
+    read: ReadQualificationShape,
+    read_writer: usize,
+    hedge_after_ms: Option<u64>,
 }
 
 struct PendingAppend {
@@ -114,6 +125,30 @@ fn open_benchmark_index_with_stripe(
             segment_cache_max_bytes: Some(64 * 1024 * 1024),
             ..OpenOptions::default()
         },
+    )
+}
+
+fn read_hedge_open_options(
+    global_pq_prefetch_stripe_bytes: usize,
+    hedge_after_ms: Option<u64>,
+) -> OpenOptions {
+    OpenOptions {
+        cache_dir: None,
+        global_pq_prefetch_stripe_bytes,
+        global_pq_slow_read_hedge_after: hedge_after_ms.map(Duration::from_millis),
+        segment_cache_max_bytes: Some(64 * 1024 * 1024),
+        ..OpenOptions::default()
+    }
+}
+
+fn open_read_hedge_index(
+    uri: &str,
+    global_pq_prefetch_stripe_bytes: usize,
+    hedge_after_ms: Option<u64>,
+) -> borsuk::Result<BorsukIndex> {
+    BorsukIndex::open_with_options(
+        uri,
+        read_hedge_open_options(global_pq_prefetch_stripe_bytes, hedge_after_ms),
     )
 }
 
@@ -474,6 +509,104 @@ fn validate_read_confirmation_shape(
     Ok(())
 }
 
+fn validate_read_hedge_qualification_shape(
+    shape: ReadHedgeQualificationShape,
+    structural_smoke: bool,
+) -> BenchResult<()> {
+    const MIB: usize = 1024 * 1024;
+    let common = shape.read.max_read_segments == 4
+        && shape.read.stripe_bytes == MIB
+        && shape.read_writer == 0;
+    let expected = if structural_smoke {
+        shape.read.writers == 2
+            && shape.read.operations == 2
+            && shape.read.records_per_operation == 1
+            && shape.read.dimensions == 8
+            && shape.read.query_count == 4
+            && shape.read.repetition == 1
+            && matches!(shape.hedge_after_ms, None | Some(5))
+    } else {
+        shape.read.writers == 8
+            && shape.read.operations == 1_000
+            && shape.read.records_per_operation == 16
+            && shape.read.dimensions == 768
+            && shape.read.query_count == 500
+            && (1..=5).contains(&shape.read.repetition)
+            && matches!(shape.hedge_after_ms, None | Some(75))
+    };
+    if !common || !expected {
+        return Err("read hedge qualification differs from the preregistered shape".into());
+    }
+    Ok(())
+}
+
+fn validate_read_hedge_qualification_inputs(
+    shape: ReadHedgeQualificationShape,
+    structural_smoke: bool,
+    cache_dir_present: bool,
+) -> BenchResult<()> {
+    validate_read_hedge_qualification_shape(shape, structural_smoke)?;
+    if cache_dir_present {
+        return Err("read hedge qualification forbids a disk cache".into());
+    }
+    Ok(())
+}
+
+fn parse_read_hedge_after_ms(value: &str, structural_smoke: bool) -> BenchResult<Option<u64>> {
+    match (value, structural_smoke) {
+        ("none", _) => Ok(None),
+        ("5", true) => Ok(Some(5)),
+        ("75", false) => Ok(Some(75)),
+        _ => Err("read hedge delay differs from the preregistration".into()),
+    }
+}
+
+fn read_hedge_order_position(
+    repetition: usize,
+    hedge_after_ms: Option<u64>,
+    structural_smoke: bool,
+) -> BenchResult<usize> {
+    let candidate_ms = if structural_smoke { 5 } else { 75 };
+    let repetition_is_valid = if structural_smoke {
+        repetition == 1
+    } else {
+        (1..=5).contains(&repetition)
+    };
+    if !repetition_is_valid || !hedge_after_ms.is_none_or(|value| value == candidate_ms) {
+        return Err("read hedge arm order differs from the preregistration".into());
+    }
+    let control_first = structural_smoke || repetition % 2 == 1;
+    Ok(match (control_first, hedge_after_ms.is_some()) {
+        (true, false) | (false, true) => 0,
+        (true, true) | (false, false) => 1,
+    })
+}
+
+fn read_hedge_query_positions(
+    writers: usize,
+    operations: usize,
+    read_writer: usize,
+    query_count: usize,
+) -> BenchResult<Vec<usize>> {
+    if writers == 0 || operations == 0 || query_count == 0 || read_writer >= writers {
+        return Err("read hedge query cohort is invalid".into());
+    }
+    let writer_start = read_writer
+        .checked_mul(operations)
+        .ok_or("read hedge writer offset exceeds usize")?;
+    (0..query_count)
+        .map(|query| {
+            let offset = query
+                .checked_mul(operations)
+                .ok_or("read hedge query offset exceeds usize")?
+                / query_count;
+            writer_start
+                .checked_add(offset)
+                .ok_or_else(|| "read hedge query position exceeds usize".into())
+        })
+        .collect()
+}
+
 fn read_qualification_query_ordinal(
     sample: &Sample,
     operations: usize,
@@ -540,6 +673,8 @@ fn measure_reads(
         latencies: Vec::with_capacity(config.query_count),
         requests: RequestCounts::default(),
         bytes: 0,
+        disk_cache_bytes: 0,
+        backing_bytes: 0,
         segments_searched: 0,
         hits: 0,
     };
@@ -572,6 +707,12 @@ fn measure_reads(
         measurement.requests.heads += report.requests.heads;
         measurement.requests.lists += report.requests.lists;
         measurement.bytes = measurement.bytes.saturating_add(report.bytes_read);
+        measurement.disk_cache_bytes = measurement
+            .disk_cache_bytes
+            .saturating_add(report.disk_cache_bytes_read);
+        measurement.backing_bytes = measurement
+            .backing_bytes
+            .saturating_add(report.backing_bytes_read);
         measurement.segments_searched = measurement
             .segments_searched
             .saturating_add(report.segments_searched);
@@ -588,6 +729,8 @@ fn measure_reads(
             latency_ms,
             requests: report.requests,
             bytes_read: report.bytes_read,
+            disk_cache_bytes_read: report.disk_cache_bytes_read,
+            backing_bytes_read: report.backing_bytes_read,
             segments_searched: report.segments_searched,
             global_base_approximate_us: report.global_base_approximate_us,
             global_base_exact_rerank_us: report.global_base_exact_rerank_us,
@@ -622,6 +765,42 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
             sample.requests.heads,
             sample.requests.lists,
             sample.bytes_read,
+            sample.segments_searched,
+            sample.global_base_approximate_us,
+            sample.global_base_exact_rerank_us,
+            sample.global_delta_approximate_us,
+            sample.global_delta_exact_rerank_us,
+            sample.global_delta_wait_us,
+        )?;
+    }
+    reads.flush()?;
+    Ok(())
+}
+
+fn write_read_hedge_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
+    let mut reads = BufWriter::new(File::create(path)?);
+    writeln!(
+        reads,
+        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us"
+    )?;
+    for sample in samples {
+        writeln!(
+            reads,
+            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            sample.query,
+            sample.record_id,
+            sample.hit_id,
+            sample.contains_record_id,
+            sample.latency_ms,
+            sample.requests.total(),
+            sample.requests.gets,
+            sample.requests.puts,
+            sample.requests.deletes,
+            sample.requests.heads,
+            sample.requests.lists,
+            sample.bytes_read,
+            sample.disk_cache_bytes_read,
+            sample.backing_bytes_read,
             sample.segments_searched,
             sample.global_base_approximate_us,
             sample.global_base_exact_rerank_us,
@@ -873,17 +1052,23 @@ fn required_sha256(name: &str) -> BenchResult<String> {
 
 fn run_read_qualification(protocol: &str) -> BenchResult<()> {
     let confirmation = protocol == "read-stripe-confirmation";
+    let hedge_qualification = protocol == "read-hedge-qualification";
     let uri = required("BORSUK_GROUP_COMMIT_INDEX_URI")?;
     let structural_smoke = env::var("BORSUK_GROUP_COMMIT_READ_SMOKE").as_deref() == Ok("1");
     if !uri.starts_with("s3://") && !structural_smoke {
         return Err("read qualification requires an s3:// index outside structural smoke".into());
     }
     let output = PathBuf::from(required("BORSUK_GROUP_COMMIT_OUTPUT")?);
-    let cache_dir = PathBuf::from(required("BORSUK_GROUP_COMMIT_CACHE_DIR")?);
+    let cache_dir = env::var_os("BORSUK_GROUP_COMMIT_CACHE_DIR").map(PathBuf::from);
+    if !hedge_qualification && cache_dir.is_none() {
+        return Err("missing required environment variable BORSUK_GROUP_COMMIT_CACHE_DIR".into());
+    }
     if output.exists() {
         return Err(format!("refusing to replace output {}", output.display()).into());
     }
-    if cache_dir.exists() {
+    if let Some(cache_dir) = cache_dir.as_deref()
+        && cache_dir.exists()
+    {
         return Err(format!("refusing to reuse cache {}", cache_dir.display()).into());
     }
     let source_sha = required_sha256("BORSUK_SOURCE_SHA256")?;
@@ -908,14 +1093,43 @@ fn run_read_qualification(protocol: &str) -> BenchResult<()> {
         stripe_bytes: number("BORSUK_GROUP_COMMIT_PREFETCH_STRIPE_BYTES")?,
         repetition: number("BORSUK_GROUP_COMMIT_READ_REPETITION")?,
     };
-    if confirmation {
+    let hedge_after_ms = if hedge_qualification {
+        parse_read_hedge_after_ms(
+            &required("BORSUK_GROUP_COMMIT_HEDGE_AFTER_MS")?,
+            structural_smoke,
+        )?
+    } else {
+        None
+    };
+    let read_writer = if hedge_qualification {
+        number("BORSUK_GROUP_COMMIT_READ_WRITER")?
+    } else {
+        0
+    };
+    if hedge_qualification {
+        validate_read_hedge_qualification_inputs(
+            ReadHedgeQualificationShape {
+                read: shape,
+                read_writer,
+                hedge_after_ms,
+            },
+            structural_smoke,
+            cache_dir.is_some(),
+        )?;
+    } else if confirmation {
         validate_read_confirmation_shape(shape, structural_smoke)?;
     } else {
         validate_read_qualification_shape(shape, structural_smoke)?;
     }
     let order_position: usize = number("BORSUK_GROUP_COMMIT_READ_ORDER_POSITION")?;
     let expected_order_position = if structural_smoke {
-        0
+        if hedge_qualification {
+            read_hedge_order_position(shape.repetition, hedge_after_ms, true)?
+        } else {
+            0
+        }
+    } else if hedge_qualification {
+        read_hedge_order_position(shape.repetition, hedge_after_ms, false)?
     } else if confirmation {
         read_confirmation_order_position(shape.repetition, shape.stripe_bytes)?
     } else {
@@ -953,12 +1167,24 @@ fn run_read_qualification(protocol: &str) -> BenchResult<()> {
         }
         read_qualification_query_ordinal(sample, shape.operations, shape.records_per_operation)?;
     }
-    let query_samples = (0..shape.query_count)
-        .map(|query| {
-            let position = query * samples.len() / shape.query_count;
-            samples[position].clone()
-        })
-        .collect::<Vec<_>>();
+    let query_samples = if hedge_qualification {
+        read_hedge_query_positions(
+            shape.writers,
+            shape.operations,
+            read_writer,
+            shape.query_count,
+        )?
+        .into_iter()
+        .map(|position| samples[position].clone())
+        .collect::<Vec<_>>()
+    } else {
+        (0..shape.query_count)
+            .map(|query| {
+                let position = query * samples.len() / shape.query_count;
+                samples[position].clone()
+            })
+            .collect::<Vec<_>>()
+    };
     let required_dataset_rows = query_samples.iter().try_fold(0_usize, |rows, sample| {
         read_qualification_query_ordinal(sample, shape.operations, shape.records_per_operation)
             .map(|ordinal| rows.max(ordinal.saturating_add(1)))
@@ -973,7 +1199,11 @@ fn run_read_qualification(protocol: &str) -> BenchResult<()> {
     };
 
     fs::create_dir_all(&output)?;
-    let mut index = open_benchmark_index_with_stripe(&uri, shape.stripe_bytes)?;
+    let mut index = if hedge_qualification {
+        open_read_hedge_index(&uri, shape.stripe_bytes, hedge_after_ms)?
+    } else {
+        open_benchmark_index_with_stripe(&uri, shape.stripe_bytes)?
+    };
     let reads = measure_reads(
         &mut index,
         &query_samples,
@@ -997,48 +1227,110 @@ fn run_read_qualification(protocol: &str) -> BenchResult<()> {
     if reads.requests.puts != 0 || reads.requests.deletes != 0 {
         return Err("read qualification performed a write-like storage request".into());
     }
-    write_read_samples(&output.join("reads.csv"), &reads.samples)?;
+    if hedge_qualification && reads.disk_cache_bytes != 0 {
+        return Err("read hedge qualification observed disk-cache bytes".into());
+    }
+    if hedge_qualification {
+        write_read_hedge_samples(&output.join("reads.csv"), &reads.samples)?;
+    } else {
+        write_read_samples(&output.join("reads.csv"), &reads.samples)?;
+    }
     let read_p50_ms = percentile(&reads.latencies, 0.50);
     let read_p95_ms = percentile(&reads.latencies, 0.95);
     let recall = reads.hits as f64 / shape.query_count as f64;
     let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
-    writeln!(
-        summary,
-        "protocol_kind,source_sha256,manifest_sha256,base_source_sha256,base_manifest_sha256,base_samples_sha256,dataset_sha256,base_cell,index_uri,repetition,order_position,stripe_bytes,queries,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
-    )?;
-    writeln!(
-        summary,
-        "{},{source_sha},{manifest_sha},{base_source_sha},{base_manifest_sha},{base_samples_sha},{dataset_sha},{base_cell},{uri},{},{order_position},{},{},{recall:.9},{read_p50_ms:.9},{read_p95_ms:.9},{},{},{},{},{},{},{},{}",
-        if structural_smoke {
-            "structural-smoke"
-        } else if confirmation {
-            "stripe-confirmation"
-        } else {
-            "production-diagnostic"
-        },
-        shape.repetition,
-        shape.stripe_bytes,
-        shape.query_count,
-        reads.requests.total(),
-        reads.requests.gets,
-        reads.requests.puts,
-        reads.requests.deletes,
-        reads.requests.heads,
-        reads.requests.lists,
-        reads.bytes,
-        reads.segments_searched,
-    )?;
+    if hedge_qualification {
+        let hedge_after_label =
+            hedge_after_ms.map_or_else(|| "none".to_string(), |ms| ms.to_string());
+        writeln!(
+            summary,
+            "protocol_kind,source_sha256,manifest_sha256,base_source_sha256,base_manifest_sha256,base_samples_sha256,dataset_sha256,base_cell,index_uri,repetition,order_position,writers,operations_per_writer,records_per_operation,dimensions,read_writer,stripe_bytes,hedge_after_ms,cache_enabled,queries,max_read_segments,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_disk_cache_bytes,read_backing_bytes,read_segments_searched"
+        )?;
+        writeln!(
+            summary,
+            "{},{source_sha},{manifest_sha},{base_source_sha},{base_manifest_sha},{base_samples_sha},{dataset_sha},{base_cell},{uri},{},{order_position},{},{},{},{},{read_writer},{},{hedge_after_label},false,{},{},{recall:.9},{read_p50_ms:.9},{read_p95_ms:.9},{},{},{},{},{},{},{},{},{},{}",
+            if structural_smoke {
+                "structural-smoke"
+            } else if hedge_after_ms.is_some() {
+                "range-hedge-candidate"
+            } else {
+                "range-hedge-control"
+            },
+            shape.repetition,
+            shape.writers,
+            shape.operations,
+            shape.records_per_operation,
+            shape.dimensions,
+            shape.stripe_bytes,
+            shape.query_count,
+            shape.max_read_segments,
+            reads.requests.total(),
+            reads.requests.gets,
+            reads.requests.puts,
+            reads.requests.deletes,
+            reads.requests.heads,
+            reads.requests.lists,
+            reads.bytes,
+            reads.disk_cache_bytes,
+            reads.backing_bytes,
+            reads.segments_searched,
+        )?;
+    } else {
+        writeln!(
+            summary,
+            "protocol_kind,source_sha256,manifest_sha256,base_source_sha256,base_manifest_sha256,base_samples_sha256,dataset_sha256,base_cell,index_uri,repetition,order_position,stripe_bytes,queries,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
+        )?;
+        writeln!(
+            summary,
+            "{},{source_sha},{manifest_sha},{base_source_sha},{base_manifest_sha},{base_samples_sha},{dataset_sha},{base_cell},{uri},{},{order_position},{},{},{recall:.9},{read_p50_ms:.9},{read_p95_ms:.9},{},{},{},{},{},{},{},{}",
+            if structural_smoke {
+                "structural-smoke"
+            } else if confirmation {
+                "stripe-confirmation"
+            } else {
+                "production-diagnostic"
+            },
+            shape.repetition,
+            shape.stripe_bytes,
+            shape.query_count,
+            reads.requests.total(),
+            reads.requests.gets,
+            reads.requests.puts,
+            reads.requests.deletes,
+            reads.requests.heads,
+            reads.requests.lists,
+            reads.bytes,
+            reads.segments_searched,
+        )?;
+    }
     summary.flush()?;
+    let cache_dir_label = cache_dir
+        .as_deref()
+        .map_or_else(|| "none".to_string(), |path| path.display().to_string());
+    let hedge_after_label = hedge_after_ms.map_or_else(|| "none".to_string(), |ms| ms.to_string());
     fs::write(
         output.join("environment.txt"),
         format!(
-            "source_sha256={source_sha}\nmanifest_sha256={manifest_sha}\nbase_source_sha256={base_source_sha}\nbase_manifest_sha256={base_manifest_sha}\nbase_samples_sha256={base_samples_sha}\ndataset_sha256={dataset_sha}\nbase_cell={base_cell}\nindex_uri={uri}\ncache_dir={}\nrepetition={}\nstripe_bytes={}\norder_position={order_position}\n",
-            cache_dir.display(),
+            "source_sha256={source_sha}\nmanifest_sha256={manifest_sha}\nbase_source_sha256={base_source_sha}\nbase_manifest_sha256={base_manifest_sha}\nbase_samples_sha256={base_samples_sha}\ndataset_sha256={dataset_sha}\nbase_cell={base_cell}\nindex_uri={uri}\ncache_dir={cache_dir_label}\ncache_enabled={}\nrepetition={}\nwriters={}\noperations_per_writer={}\nrecords_per_operation={}\ndimensions={}\nread_writer={read_writer}\nqueries={}\nmax_read_segments={}\nstripe_bytes={}\nhedge_after_ms={hedge_after_label}\norder_position={order_position}\n",
+            !hedge_qualification,
             shape.repetition,
+            shape.writers,
+            shape.operations,
+            shape.records_per_operation,
+            shape.dimensions,
+            shape.query_count,
+            shape.max_read_segments,
             shape.stripe_bytes,
         ),
     )?;
-    fs::write(output.join("READ_QUALIFICATION_COMPLETE"), b"complete\n")?;
+    fs::write(
+        output.join(if hedge_qualification {
+            "READ_HEDGE_QUALIFICATION_COMPLETE"
+        } else {
+            "READ_QUALIFICATION_COMPLETE"
+        }),
+        b"complete\n",
+    )?;
     Ok(())
 }
 
@@ -1047,7 +1339,7 @@ fn main() -> BenchResult<()> {
         env::var("BORSUK_GROUP_COMMIT_PROTOCOL").unwrap_or_else(|_| "diagnostic".to_string());
     if matches!(
         protocol.as_str(),
-        "read-qualification" | "read-stripe-confirmation"
+        "read-qualification" | "read-stripe-confirmation" | "read-hedge-qualification"
     ) {
         return run_read_qualification(&protocol);
     }
@@ -1611,6 +1903,171 @@ fn main() -> BenchResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_hedge_qualification_accepts_only_the_preregistered_shape() {
+        const MIB: usize = 1024 * 1024;
+        let shape = ReadHedgeQualificationShape {
+            read: ReadQualificationShape {
+                writers: 8,
+                operations: 1_000,
+                records_per_operation: 16,
+                dimensions: 768,
+                query_count: 500,
+                max_read_segments: 4,
+                stripe_bytes: MIB,
+                repetition: 3,
+            },
+            read_writer: 0,
+            hedge_after_ms: Some(75),
+        };
+        validate_read_hedge_qualification_shape(shape, false).unwrap();
+        validate_read_hedge_qualification_shape(
+            ReadHedgeQualificationShape {
+                hedge_after_ms: None,
+                ..shape
+            },
+            false,
+        )
+        .unwrap();
+
+        for invalid in [
+            ReadHedgeQualificationShape {
+                read_writer: 1,
+                ..shape
+            },
+            ReadHedgeQualificationShape {
+                hedge_after_ms: Some(74),
+                ..shape
+            },
+            ReadHedgeQualificationShape {
+                read: ReadQualificationShape {
+                    query_count: 499,
+                    ..shape.read
+                },
+                ..shape
+            },
+            ReadHedgeQualificationShape {
+                read: ReadQualificationShape {
+                    stripe_bytes: 2 * MIB,
+                    ..shape.read
+                },
+                ..shape
+            },
+            ReadHedgeQualificationShape {
+                read: ReadQualificationShape {
+                    repetition: 0,
+                    ..shape.read
+                },
+                ..shape
+            },
+        ] {
+            assert!(validate_read_hedge_qualification_shape(invalid, false).is_err());
+        }
+    }
+
+    #[test]
+    fn read_hedge_qualification_spreads_writer_zero_without_crossing_writers() {
+        let positions = read_hedge_query_positions(8, 1_000, 0, 500).unwrap();
+        assert_eq!(positions.len(), 500);
+        assert_eq!(positions.first(), Some(&0));
+        assert_eq!(positions.last(), Some(&998));
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(positions.iter().all(|position| *position < 1_000));
+        assert_eq!(positions[1], 2);
+        assert_eq!(positions[250], 500);
+    }
+
+    #[test]
+    fn read_hedge_qualification_rejects_cache_and_unregistered_delay_text() {
+        const MIB: usize = 1024 * 1024;
+        let shape = ReadHedgeQualificationShape {
+            read: ReadQualificationShape {
+                writers: 8,
+                operations: 1_000,
+                records_per_operation: 16,
+                dimensions: 768,
+                query_count: 500,
+                max_read_segments: 4,
+                stripe_bytes: MIB,
+                repetition: 1,
+            },
+            read_writer: 0,
+            hedge_after_ms: None,
+        };
+
+        validate_read_hedge_qualification_inputs(shape, false, false).unwrap();
+        assert!(validate_read_hedge_qualification_inputs(shape, false, true).is_err());
+        assert_eq!(parse_read_hedge_after_ms("none", false).unwrap(), None);
+        assert_eq!(parse_read_hedge_after_ms("75", false).unwrap(), Some(75));
+        assert_eq!(parse_read_hedge_after_ms("5", true).unwrap(), Some(5));
+        for invalid in ["", "0", "5", "74", "076", "75.0", "none "] {
+            assert!(parse_read_hedge_after_ms(invalid, false).is_err());
+        }
+    }
+
+    #[test]
+    fn read_hedge_qualification_alternates_control_and_candidate_order() {
+        assert_eq!(read_hedge_order_position(1, None, false).unwrap(), 0);
+        assert_eq!(read_hedge_order_position(1, Some(75), false).unwrap(), 1);
+        assert_eq!(read_hedge_order_position(2, Some(75), false).unwrap(), 0);
+        assert_eq!(read_hedge_order_position(2, None, false).unwrap(), 1);
+        assert_eq!(read_hedge_order_position(1, None, true).unwrap(), 0);
+        assert_eq!(read_hedge_order_position(1, Some(5), true).unwrap(), 1);
+        assert!(read_hedge_order_position(0, None, false).is_err());
+        assert!(read_hedge_order_position(1, Some(5), false).is_err());
+    }
+
+    #[test]
+    fn read_hedge_qualification_opens_uncached_with_the_selected_delay() {
+        let options = read_hedge_open_options(1024 * 1024, Some(75));
+        assert_eq!(options.cache_dir, None);
+        assert_eq!(options.global_pq_prefetch_stripe_bytes, 1024 * 1024);
+        assert_eq!(
+            options.global_pq_slow_read_hedge_after,
+            Some(Duration::from_millis(75))
+        );
+
+        let control = read_hedge_open_options(1024 * 1024, None);
+        assert_eq!(control.cache_dir, None);
+        assert_eq!(control.global_pq_slow_read_hedge_after, None);
+    }
+
+    #[test]
+    fn read_hedge_qualification_csv_preserves_physical_byte_telemetry() {
+        let path = env::temp_dir().join(format!(
+            "borsuk-read-hedge-samples-{}.csv",
+            std::process::id()
+        ));
+        let sample = ReadSample {
+            query: 0,
+            record_id: "group-o00000000".to_string(),
+            hit_id: "group-o00000000".to_string(),
+            contains_record_id: true,
+            latency_ms: 12.5,
+            requests: RequestCounts {
+                gets: 3,
+                ..RequestCounts::default()
+            },
+            bytes_read: 100,
+            disk_cache_bytes_read: 123,
+            backing_bytes_read: 456,
+            segments_searched: 4,
+            global_base_approximate_us: 1,
+            global_base_exact_rerank_us: 2,
+            global_delta_approximate_us: 3,
+            global_delta_exact_rerank_us: 4,
+            global_delta_wait_us: 5,
+        };
+
+        write_read_hedge_samples(&path, &[sample]).unwrap();
+        let csv = fs::read_to_string(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(csv.starts_with(
+            "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,"
+        ));
+        assert!(csv.contains(",100,123,456,4,1,2,3,4,5\n"));
+    }
 
     #[test]
     fn read_qualification_accepts_only_the_preregistered_shape() {

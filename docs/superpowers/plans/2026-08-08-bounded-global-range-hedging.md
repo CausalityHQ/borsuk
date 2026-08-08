@@ -283,7 +283,7 @@ git commit -m "perf: hedge slow global range reads"
 - Produces protocol `read-hedge-qualification`, `reads.csv`, `summary.csv`,
   `environment.txt`, and terminal arm marker.
 
-- [ ] **Step 1: Add failing shape and selection tests**
+- [x] **Step 1: Add failing shape and selection tests**
 
 Tests must hand-check that 500 selections for writer zero span operation 0
 through 998, never select another writer, and remain identical across control
@@ -291,7 +291,7 @@ and candidate. Add invalid-shape cases for cache directory presence, any writer
 other than zero, query count other than 500, and hedge values other than
 `none`/`75`.
 
-- [ ] **Step 2: Observe RED**
+- [x] **Step 2: Observe RED**
 
 ```bash
 cargo test --locked -p borsuk --example group_commit_bench read_hedge_qualification -- --nocapture
@@ -299,7 +299,7 @@ cargo test --locked -p borsuk --example group_commit_bench read_hedge_qualificat
 
 Expected: failure because the protocol and selector are absent.
 
-- [ ] **Step 3: Implement exact protocol**
+- [x] **Step 3: Implement exact protocol**
 
 Open with `cache_dir: None`, 1 MiB stripes, and the parsed optional 75 ms hedge.
 Select each operation with literal integer sampling:
@@ -315,18 +315,24 @@ candidates, logical bytes, physical requests, and phase telemetry stay honest.
 Reject every shape outside 8 writers, 1,000 operations, 16 records/operation,
 768 dimensions, writer zero, 500 queries, and repetitions 1..=5.
 
-- [ ] **Step 4: Observe GREEN**
+- [x] **Step 4: Observe GREEN**
 
 Run the example tests and an in-memory structural smoke with 2 writers, 2
 operations, 8 dimensions, 4 queries, hedge disabled and 5 ms candidate. The
 smoke must issue zero writes during reads and preserve every expected ID.
 
-- [ ] **Step 5: Commit the benchmark-binary slice**
+- [x] **Step 5: Commit the benchmark-binary slice**
 
 ```bash
 git add crates/borsuk/examples/group_commit_bench.rs
 git commit -m "bench: add uncached range hedge reads"
 ```
+
+Local structural evidence: both arms under
+`/data/home/rb/borsuk-local-qual/20260808-read-hedge-smoke` emitted
+`READ_HEDGE_QUALIFICATION_COMPLETE`; each preserved the four hand-checked
+writer-zero IDs with recall 1.0, zero PUTs/deletes, zero disk-cache bytes, and
+identical logical/backing bytes. Their local latency is not S3 evidence.
 
 ### Task 4: Preregister, run, and validate the paired campaign
 
