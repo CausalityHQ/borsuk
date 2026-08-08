@@ -250,13 +250,13 @@ process, no competing tmux pane, and fresh disjoint S3 result/index prefixes.
 Launch one immutable frozen campaign and preserve its source archive,
 manifest, resource telemetry, storage trace, and terminal markers.
 
-- [ ] **Step 4: Monitor without reading incomplete CSVs**
+- [x] **Step 4: Monitor without reading incomplete CSVs**
 
 Observe the original benchmark session through retained 15-minute sleeps.
 After each sleep, check root/cell phase markers, EC2 health, and the exact
 process only. Do not open a measurement CSV until the campaign is terminal.
 
-- [ ] **Step 5: Validate terminal evidence and continue**
+- [x] **Step 5: Validate terminal evidence and continue**
 
 At terminality, run the root and terminal-cell fail-closed validators before
 opening any CSV. If a cell fails, inspect its terminal raw measurements and
