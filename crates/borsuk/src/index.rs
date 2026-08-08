@@ -12671,6 +12671,7 @@ impl BorsukIndex {
         let mut decoded_cache_bytes_read = 0_u64;
         let mut query_local_ranges = Vec::new();
         let mut query_local_range_bytes = 0_usize;
+        let mut query_local_range_stripes = 0_usize;
         let use_cached_graphs =
             !matches!(options.cache_execution, crate::CacheExecutionPolicy::Scan);
         while wave_start < selected_chunks.len() {
@@ -12695,7 +12696,6 @@ impl BorsukIndex {
             );
             let page = &selected_chunks[wave_start..wave_end];
             let mut scan_page = Vec::with_capacity(page.len());
-            let mut cached_page = Vec::new();
             for chunk in page {
                 let graph = if use_cached_graphs {
                     self.cached_global_cell_graph(chunk)?
@@ -12720,26 +12720,11 @@ impl BorsukIndex {
                         graph_candidates_added.saturating_add(candidates.len());
                     candidate_pages.push(candidates);
                 } else {
-                    if max_bytes.is_none()
-                        && let Some(bytes) = index.cached_code(&chunk.checksum)
-                    {
-                        scan_chunks_used = scan_chunks_used.saturating_add(1);
-                        cached_page.push((chunk.clone(), bytes));
-                    } else {
-                        scan_chunks_used = scan_chunks_used.saturating_add(1);
-                        scan_page.push(chunk.clone());
-                    }
+                    scan_chunks_used = scan_chunks_used.saturating_add(1);
+                    scan_page.push(chunk.clone());
                 }
             }
             if scan_page.is_empty() {
-                if !cached_page.is_empty() {
-                    candidate_pages.push(index.candidates_in_chunks(
-                        &pq_query,
-                        candidate_limit,
-                        &cached_page,
-                        crate::configured_cpu_threads(),
-                    )?);
-                }
                 wave_start = wave_end;
                 continue;
             }
@@ -12748,15 +12733,65 @@ impl BorsukIndex {
                 DEFAULT_GLOBAL_PQ_CODE_COALESCE_GAP_BYTES,
                 DEFAULT_GLOBAL_PQ_CODE_REQUEST_WEIGHT_BYTES,
             )?;
-            let code_reads = bounded_io_map_with_gate(
+            let remaining_range_bytes =
+                DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES.saturating_sub(query_local_range_bytes);
+            let remaining_range_stripes =
+                DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES.saturating_sub(query_local_range_stripes);
+            let plans = global_pq_code_read_plans(
                 &code_groups,
-                global_pq_code_read_parallelism(code_groups.len()),
+                remaining_range_bytes,
+                remaining_range_stripes,
+            )?;
+            let planned_groups = code_groups
+                .into_iter()
+                .zip(plans)
+                .map(|((path, chunks), plan)| (path, chunks, plan))
+                .collect::<Vec<_>>();
+            let code_reads = bounded_io_map_with_gate(
+                &planned_groups,
+                global_pq_code_read_parallelism(planned_groups.len()),
                 self.decode_admission.as_deref(),
-                |(path, chunks)| {
-                    let range = global_pq_code_read_range(chunks)?;
+                |(path, chunks, plan)| {
+                    let cached_codes = if max_bytes.is_none() {
+                        chunks
+                            .iter()
+                            .map(|chunk| index.cached_code(&chunk.checksum))
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![None; chunks.len()]
+                    };
+                    let all_codes_cached = cached_codes.iter().all(Option::is_some);
+                    if !global_pq_code_group_requires_io(plan, all_codes_cached) {
+                        let loaded = chunks
+                            .iter()
+                            .cloned()
+                            .zip(cached_codes)
+                            .map(|(chunk, bytes)| {
+                                bytes.map(|bytes| (chunk, bytes)).ok_or_else(|| {
+                                    BorsukError::InvalidStorage(
+                                        "global PQ cached code group is incomplete".to_string(),
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        return Ok::<_, BorsukError>((loaded, 0, None));
+                    }
+
+                    let range = plan.range.clone();
                     let start = range.start;
                     let end = range.end;
-                    let bundled = self.storage.read_range(path, start as u64..end as u64)?;
+                    let bundled = if plan.prefetch_exact {
+                        self.storage
+                            .read_striped_range(
+                                path,
+                                start as u64..end as u64,
+                                DEFAULT_GLOBAL_PQ_PREFETCH_STRIPE_BYTES as u64,
+                                DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES,
+                            )?
+                            .bytes
+                    } else {
+                        self.storage.read_range(path, start as u64..end as u64)?
+                    };
                     let mut loaded = Vec::with_capacity(chunks.len());
                     for chunk in chunks {
                         let local_start = (chunk.offset_bytes as usize)
@@ -12788,32 +12823,45 @@ impl BorsukIndex {
                         }
                         loaded.push((chunk.clone(), bytes::Bytes::copy_from_slice(bytes)));
                     }
-                    Ok::<_, BorsukError>((
-                        loaded,
-                        bundled.len() as u64,
-                        QueryLocalRange {
-                            path: path.clone(),
-                            start: start as u64,
-                            bytes: bundled,
-                        },
-                    ))
+                    let count = bundled.len() as u64;
+                    let prefetched = plan.prefetch_exact.then(|| QueryLocalRange {
+                        path: path.clone(),
+                        start: start as u64,
+                        bytes: bundled,
+                    });
+                    Ok::<_, BorsukError>((loaded, count, prefetched))
                 },
             );
             let mut loaded = Vec::with_capacity(code_reads.len());
-            for result in code_reads {
+            for ((_, _, plan), result) in planned_groups.iter().zip(code_reads) {
                 let (mut chunks, count, prefetched) = result?;
                 loaded.append(&mut chunks);
                 bytes_read = bytes_read.saturating_add(count);
-                let retained = query_local_range_bytes.saturating_add(prefetched.bytes.len());
-                if retained <= DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES {
-                    query_local_range_bytes = retained;
+                if let Some(prefetched) = prefetched {
+                    query_local_range_bytes = query_local_range_bytes
+                        .checked_add(prefetched.bytes.len())
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global PQ query-local range budget overflows".to_string(),
+                            )
+                        })?;
+                    query_local_range_stripes = query_local_range_stripes
+                        .checked_add(plan.stripes)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global PQ query-local stripe budget overflows".to_string(),
+                            )
+                        })?;
+                    debug_assert!(
+                        query_local_range_bytes <= DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES
+                    );
+                    debug_assert!(query_local_range_stripes <= DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES);
                     query_local_ranges.push(prefetched);
                 }
             }
             for (chunk, bytes) in &loaded {
                 index.cache_code(chunk.checksum.clone(), bytes.clone());
             }
-            loaded.extend(cached_page);
             candidate_pages.push(index.candidates_in_chunks(
                 &pq_query,
                 candidate_limit,
@@ -20861,6 +20909,10 @@ fn global_pq_code_read_plans(
     Ok(plans)
 }
 
+fn global_pq_code_group_requires_io(plan: &GlobalPqCodeReadPlan, all_codes_cached: bool) -> bool {
+    plan.prefetch_exact || !all_codes_cached
+}
+
 fn should_flush_global_pq_bundle(
     previous_cell: Option<u16>,
     next_cell: u16,
@@ -26338,6 +26390,24 @@ mod tests {
         assert_eq!(plans[0].range, 0..64 * 1024);
         assert!(plans[1].prefetch_exact);
         assert_eq!(plans[1].range, 0..4 * MIB);
+    }
+
+    #[test]
+    fn planned_global_pq_envelopes_are_not_bypassed_by_cached_codes() {
+        let full_envelope = GlobalPqCodeReadPlan {
+            range: 0..3 * 1024 * 1024,
+            prefetch_exact: true,
+            stripes: 3,
+        };
+        let code_only = GlobalPqCodeReadPlan {
+            range: 0..64 * 1024,
+            prefetch_exact: false,
+            stripes: 0,
+        };
+
+        assert!(global_pq_code_group_requires_io(&full_envelope, true));
+        assert!(!global_pq_code_group_requires_io(&code_only, true));
+        assert!(global_pq_code_group_requires_io(&code_only, false));
     }
 
     #[test]
