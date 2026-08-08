@@ -52,9 +52,12 @@
 
 The 2026-08-08 mutation checkpoint makes global-PQ identity, mutation, row
 integrity, and exact-vector columns stock-readable and converts convergent
-tombstone/ID-directory state to Parquet. The global-PQ scan code/location field
-and lane extent outer record remain packed, so Tasks 2-3 are not complete and
-the inventory gate must continue to reject a production-ready claim.
+tombstone/ID-directory state to Parquet. The subsequent v31 cutover replaces
+the lane extent outer record plus nested custom block/Parquet payload with one
+stock-readable Arrow IPC mutation table while preserving the two-PUT
+acknowledgement boundary. The global-PQ scan code/location field remains
+packed, so Tasks 2-3 are not complete and the inventory gate must continue to
+reject a production-ready claim.
 
 ### Task 4: Close the inventory and qualify performance
 

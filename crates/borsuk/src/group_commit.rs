@@ -315,7 +315,6 @@ impl GroupCommitWriter {
         let config = config.validate()?;
         index.ensure_lane_log_payloads_supported()?;
         let lane_count = index.lane_log_lane_count();
-        let minimum_generation = 0;
         if config.worker_lanes > usize::from(lane_count) {
             return Err(BorsukError::InvalidStorage(format!(
                 "group commit worker_lanes {} exceeds persisted lane count {lane_count}",
@@ -349,7 +348,6 @@ impl GroupCommitWriter {
                     lane,
                     current_time_ms()?,
                     LANE_LEASE_TTL_MS,
-                    minimum_generation,
                 ) {
                     Ok(writer) => {
                         claimed = Some(writer);

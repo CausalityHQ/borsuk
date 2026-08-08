@@ -18,7 +18,7 @@ use crate::{
     mutation::{CanonicalMutation, MutationOperation, MutationVersion},
 };
 
-const SCHEMA_VERSION: &str = "30";
+const SCHEMA_VERSION: &str = "31";
 const OBJECT_ROLE: &str = "mutation_extent";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,18 +28,35 @@ pub(crate) struct MutationExtentIdentity {
     pub(crate) sequence: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MutationExtentIdState {
+    Inserted,
+    Live,
+    Deleted,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DecodedMutationExtent {
     pub(crate) identity: MutationExtentIdentity,
     pub(crate) dimensions: usize,
     pub(crate) max_version: MutationVersion,
     pub(crate) mutations: Vec<CanonicalMutation>,
+    pub(crate) id_states: Vec<MutationExtentIdState>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MutationExtentMetadata {
+    pub(crate) identity: MutationExtentIdentity,
+    pub(crate) dimensions: usize,
+    pub(crate) row_count: usize,
+    pub(crate) max_version: MutationVersion,
 }
 
 pub(crate) fn encode_mutation_extent(
     identity: MutationExtentIdentity,
     dimensions: usize,
     mutations: &[CanonicalMutation],
+    id_states: &[MutationExtentIdState],
 ) -> Result<Vec<u8>> {
     validate_identity(identity)?;
     if dimensions == 0 {
@@ -52,9 +69,18 @@ pub(crate) fn encode_mutation_extent(
             "mutation extent must contain at least one mutation".to_owned(),
         ));
     }
-    for mutation in mutations {
-        match (mutation.operation(), mutation.record()) {
-            (MutationOperation::Put, Some(record)) => {
+    if mutations.len() != id_states.len() {
+        return Err(BorsukError::InvalidRecordInput(
+            "mutation extent rows and ID states must have equal length".to_owned(),
+        ));
+    }
+    for (mutation, id_state) in mutations.iter().zip(id_states) {
+        match (mutation.operation(), mutation.record(), id_state) {
+            (
+                MutationOperation::Put,
+                Some(record),
+                MutationExtentIdState::Inserted | MutationExtentIdState::Live,
+            ) => {
                 if record.id != *mutation.id()
                     || record.vector.len() != dimensions
                     || record.mutation_stamp() != Some(mutation.stamp())
@@ -71,7 +97,7 @@ pub(crate) fn encode_mutation_extent(
                     )));
                 }
             }
-            (MutationOperation::Delete, None) => {}
+            (MutationOperation::Delete, None, MutationExtentIdState::Deleted) => {}
             _ => {
                 return Err(BorsukError::InvalidStorage(
                     "canonical mutation operation and record payload disagree".to_owned(),
@@ -85,7 +111,12 @@ pub(crate) fn encode_mutation_extent(
         .map(|mutation| mutation.stamp().version())
         .max()
         .expect("non-empty mutations have a maximum version");
-    let schema = Arc::new(mutation_extent_schema(identity, dimensions, max_version)?);
+    let schema = Arc::new(mutation_extent_schema(
+        identity,
+        dimensions,
+        mutations.len(),
+        max_version,
+    )?);
     let metadata_json = mutations
         .iter()
         .map(|mutation| {
@@ -113,6 +144,13 @@ pub(crate) fn encode_mutation_extent(
                 |mutation| match mutation.operation() {
                     MutationOperation::Put => "put",
                     MutationOperation::Delete => "delete",
+                },
+            ))) as ArrayRef,
+            Arc::new(StringArray::from_iter_values(id_states.iter().map(
+                |state| match state {
+                    MutationExtentIdState::Inserted => "inserted",
+                    MutationExtentIdState::Live => "live",
+                    MutationExtentIdState::Deleted => "deleted",
                 },
             ))) as ArrayRef,
             Arc::new(UInt64Array::from_iter_values(
@@ -300,41 +338,19 @@ fn encode_multimodal_columns(mutations: &[CanonicalMutation]) -> Result<EncodedM
 }
 
 pub(crate) fn decode_mutation_extent(bytes: &[u8]) -> Result<DecodedMutationExtent> {
+    validate_stream_end(bytes)?;
     let mut reader = StreamReader::try_new(Cursor::new(bytes), None)?;
     let schema = reader.schema();
-    let identity = MutationExtentIdentity {
-        stripe: parse_metadata(&schema, "borsuk.stripe")?,
-        lease_epoch: parse_metadata(&schema, "borsuk.lease_epoch")?,
-        sequence: parse_metadata(&schema, "borsuk.sequence")?,
-    };
-    validate_identity(identity)?;
-    require_metadata(&schema, "borsuk.object_role", OBJECT_ROLE)?;
-    require_metadata(&schema, "borsuk.schema_version", SCHEMA_VERSION)?;
-    let dimensions: usize = parse_metadata(&schema, "borsuk.dimensions")?;
-    if dimensions == 0 {
-        return Err(BorsukError::InvalidStorage(
-            "mutation extent dimensions must be positive".to_owned(),
-        ));
-    }
-    let metadata_max_hlc: u64 = parse_metadata(&schema, "borsuk.max_mutation_hlc")?;
-    let metadata_max_writer =
-        uuid::Uuid::parse_str(required_metadata(&schema, "borsuk.max_mutation_writer")?)
-            .map_err(|error| {
-                BorsukError::InvalidStorage(format!(
-                    "mutation extent max writer is not a UUID: {error}"
-                ))
-            })?
-            .into_bytes();
-    let metadata_max = MutationVersion::from_parts(metadata_max_hlc, metadata_max_writer);
-    validate_schema(&schema, dimensions)?;
+    let metadata = metadata_from_schema(&schema)?;
 
     let mut mutations = Vec::new();
+    let mut id_states = Vec::new();
     for batch in &mut reader {
-        decode_batch(&batch?, dimensions, &mut mutations)?;
+        decode_batch(&batch?, metadata.dimensions, &mut mutations, &mut id_states)?;
     }
-    if mutations.is_empty() {
+    if mutations.len() != metadata.row_count {
         return Err(BorsukError::InvalidStorage(
-            "mutation extent must contain at least one row".to_owned(),
+            "mutation extent row-count metadata does not match its batches".to_owned(),
         ));
     }
     let max_version = mutations
@@ -342,22 +358,74 @@ pub(crate) fn decode_mutation_extent(bytes: &[u8]) -> Result<DecodedMutationExte
         .map(|mutation| mutation.stamp().version())
         .max()
         .expect("decoded mutations have a maximum version");
-    if max_version != metadata_max {
+    if max_version != metadata.max_version {
         return Err(BorsukError::InvalidStorage(
             "mutation extent max-version metadata does not match its rows".to_owned(),
         ));
     }
     Ok(DecodedMutationExtent {
-        identity,
-        dimensions,
+        identity: metadata.identity,
+        dimensions: metadata.dimensions,
         max_version,
         mutations,
+        id_states,
+    })
+}
+
+pub(crate) fn inspect_mutation_extent(bytes: &[u8]) -> Result<MutationExtentMetadata> {
+    validate_stream_end(bytes)?;
+    let reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    metadata_from_schema(&reader.schema())
+}
+
+fn validate_stream_end(bytes: &[u8]) -> Result<()> {
+    const ARROW_STREAM_END: &[u8; 8] = b"\xff\xff\xff\xff\0\0\0\0";
+    if !bytes.ends_with(ARROW_STREAM_END) {
+        return Err(BorsukError::InvalidStorage(
+            "mutation extent is truncated or contains bytes after the Arrow stream".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn metadata_from_schema(schema: &Schema) -> Result<MutationExtentMetadata> {
+    let identity = MutationExtentIdentity {
+        stripe: parse_metadata(schema, "borsuk.stripe")?,
+        lease_epoch: parse_metadata(schema, "borsuk.lease_epoch")?,
+        sequence: parse_metadata(schema, "borsuk.sequence")?,
+    };
+    validate_identity(identity)?;
+    require_metadata(schema, "borsuk.object_role", OBJECT_ROLE)?;
+    require_metadata(schema, "borsuk.schema_version", SCHEMA_VERSION)?;
+    let dimensions: usize = parse_metadata(schema, "borsuk.dimensions")?;
+    let row_count: usize = parse_metadata(schema, "borsuk.row_count")?;
+    if dimensions == 0 || row_count == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "mutation extent dimensions and row count must be positive".to_owned(),
+        ));
+    }
+    let max_hlc: u64 = parse_metadata(schema, "borsuk.max_mutation_hlc")?;
+    let max_writer =
+        uuid::Uuid::parse_str(required_metadata(schema, "borsuk.max_mutation_writer")?)
+            .map_err(|error| {
+                BorsukError::InvalidStorage(format!(
+                    "mutation extent max writer is not a UUID: {error}"
+                ))
+            })?
+            .into_bytes();
+    validate_schema(schema, dimensions)?;
+    Ok(MutationExtentMetadata {
+        identity,
+        dimensions,
+        row_count,
+        max_version: MutationVersion::from_parts(max_hlc, max_writer),
     })
 }
 
 fn mutation_extent_schema(
     identity: MutationExtentIdentity,
     dimensions: usize,
+    row_count: usize,
     max_version: MutationVersion,
 ) -> Result<Schema> {
     let dimensions_i32 = i32::try_from(dimensions).map_err(|_| {
@@ -367,6 +435,7 @@ fn mutation_extent_schema(
         vec![
             Field::new("record_id", DataType::Binary, false),
             Field::new("operation", DataType::Utf8, false),
+            Field::new("id_state", DataType::Utf8, false),
             Field::new("mutation_hlc", DataType::UInt64, false),
             Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
             Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
@@ -414,6 +483,7 @@ fn mutation_extent_schema(
             ),
             ("borsuk.sequence".to_owned(), identity.sequence.to_string()),
             ("borsuk.dimensions".to_owned(), dimensions.to_string()),
+            ("borsuk.row_count".to_owned(), row_count.to_string()),
             (
                 "borsuk.max_mutation_hlc".to_owned(),
                 max_version.hlc().to_string(),
@@ -453,11 +523,12 @@ fn validate_schema(schema: &Schema, dimensions: usize) -> Result<()> {
             sequence: 1,
         },
         dimensions,
+        1,
         MutationVersion::from_parts(0, [0; 16]),
     )?;
     if schema.fields() != expected.fields() {
         return Err(BorsukError::InvalidStorage(
-            "mutation extent Arrow schema does not match standard schema v30".to_owned(),
+            "mutation extent Arrow schema does not match standard schema v31".to_owned(),
         ));
     }
     Ok(())
@@ -467,9 +538,11 @@ fn decode_batch(
     batch: &RecordBatch,
     dimensions: usize,
     mutations: &mut Vec<CanonicalMutation>,
+    id_states: &mut Vec<MutationExtentIdState>,
 ) -> Result<()> {
     let ids = column::<BinaryArray>(batch, "record_id")?;
     let operations = column::<StringArray>(batch, "operation")?;
+    let encoded_id_states = column::<StringArray>(batch, "id_state")?;
     let hlcs = column::<UInt64Array>(batch, "mutation_hlc")?;
     let writers = column::<FixedSizeBinaryArray>(batch, "mutation_writer")?;
     let digests = column::<FixedSizeBinaryArray>(batch, "mutation_digest")?;
@@ -498,8 +571,18 @@ fn decode_batch(
         })?;
         let version = MutationVersion::from_parts(hlcs.value(row), writer);
         let id = crate::RecordId::from(ids.value(row));
-        let mutation = match operations.value(row) {
-            "put" => {
+        let id_state = match encoded_id_states.value(row) {
+            "inserted" => MutationExtentIdState::Inserted,
+            "live" => MutationExtentIdState::Live,
+            "deleted" => MutationExtentIdState::Deleted,
+            other => {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "mutation extent ID state `{other}` is invalid"
+                )));
+            }
+        };
+        let mutation = match (operations.value(row), id_state) {
+            ("put", MutationExtentIdState::Inserted | MutationExtentIdState::Live) => {
                 if vectors.is_null(row) || storage.is_null(row) {
                     return Err(BorsukError::InvalidStorage(
                         "put mutation is missing vector or storage".to_owned(),
@@ -560,7 +643,7 @@ fn decode_batch(
                 record.text_term_freqs = list_u32_value(term_freqs, row, "text_term_freqs")?;
                 CanonicalMutation::put(version, record)?
             }
-            "delete" => {
+            ("delete", MutationExtentIdState::Deleted) => {
                 if !vectors.is_null(row)
                     || !metadata_json.is_null(row)
                     || !texts.is_null(row)
@@ -583,7 +666,7 @@ fn decode_batch(
                 }
                 CanonicalMutation::delete(version, id)
             }
-            value => {
+            (value, _) => {
                 return Err(BorsukError::InvalidStorage(format!(
                     "mutation extent has unknown operation `{value}`"
                 )));
@@ -595,6 +678,7 @@ fn decode_batch(
             ));
         }
         mutations.push(mutation);
+        id_states.push(id_state);
     }
     Ok(())
 }
@@ -854,7 +938,10 @@ mod tests {
     use arrow_ipc::writer::{IpcWriteOptions, StreamWriter};
     use arrow_schema::DataType;
 
-    use super::{MutationExtentIdentity, decode_mutation_extent, encode_mutation_extent};
+    use super::{
+        MutationExtentIdState, MutationExtentIdentity, decode_mutation_extent,
+        encode_mutation_extent,
+    };
     use crate::mutation::{CanonicalMutation, MutationVersion};
     use crate::{MetaValue, SparseVector, VectorElementType, VectorRecord};
 
@@ -898,7 +985,13 @@ mod tests {
                 crate::RecordId::from("deleted"),
             ),
         ];
-        let bytes = encode_mutation_extent(identity, 2, &mutations).unwrap();
+        let bytes = encode_mutation_extent(
+            identity,
+            2,
+            &mutations,
+            &[MutationExtentIdState::Live, MutationExtentIdState::Deleted],
+        )
+        .unwrap();
         let mut reader = StreamReader::try_new(Cursor::new(bytes), None).unwrap();
         let schema = reader.schema();
 
@@ -954,13 +1047,18 @@ mod tests {
             ),
         ];
 
-        let encoded = encode_mutation_extent(identity, 2, &mutations).unwrap();
+        let id_states = [
+            MutationExtentIdState::Inserted,
+            MutationExtentIdState::Deleted,
+        ];
+        let encoded = encode_mutation_extent(identity, 2, &mutations, &id_states).unwrap();
         let decoded = decode_mutation_extent(&encoded).unwrap();
 
         assert_eq!(decoded.identity, identity);
         assert_eq!(decoded.dimensions, 2);
         assert_eq!(decoded.max_version, mutations[1].stamp().version());
         assert_eq!(decoded.mutations, mutations);
+        assert_eq!(decoded.id_states, id_states);
     }
 
     #[test]
@@ -974,6 +1072,7 @@ mod tests {
             identity,
             2,
             &[put(MutationVersion::from_parts(77, [3; 16]))],
+            &[MutationExtentIdState::Live],
         )
         .unwrap();
         let mut reader = StreamReader::try_new(Cursor::new(encoded), None).unwrap();

@@ -301,7 +301,7 @@ index-root/ or s3://bucket/prefix/
   lane-log/
     ACTIVE                                 # versioned JSON active-stripe directory
     lanes/<writer-stripe>/HEAD             # versioned JSON lease/frontier/publication fence
-    lanes/<writer-stripe>/epochs/<epoch>/extents/<sequence>.wal # immutable; standard-container migration open
+    lanes/<writer-stripe>/epochs/<epoch>/extents/<sequence>.arrow # immutable Arrow IPC mutation table
   objects/
 ```
 

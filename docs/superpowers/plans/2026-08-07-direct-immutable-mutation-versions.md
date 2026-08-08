@@ -4,7 +4,7 @@
 
 **Goal:** Replace the collection-wide S3 generation counter with locally allocated, deterministic convergent mutation versions so ordinary durable upsert/delete acknowledgement performs one immutable extent PUT plus one uncontended conditional JSON-head PUT per touched writer stripe.
 
-**Architecture:** An internal 192-bit `MutationVersion` combines a 64-bit HLC prefix with a complete 128-bit writer identity. One `Arc<MutationClock>` belongs to a logical handle, and one canonical put/delete envelope carries the version and digest through WAL, materialization, sidecars, compaction, and reopen. The persistent cutover is atomic at standard-schema v30: hot immutable mutation extents are Arrow IPC, materialized tables are Parquet or Arrow IPC by access pattern, and control objects are versioned JSON. Old experimental indexes are rejected.
+**Architecture:** An internal 192-bit `MutationVersion` combines a 64-bit HLC prefix with a complete 128-bit writer identity. One `Arc<MutationClock>` belongs to a logical handle, and one canonical put/delete envelope carries the version and digest through WAL, materialization, sidecars, compaction, and reopen. The persistent cutover is atomic at standard-schema v31: hot immutable mutation extents are Arrow IPC, materialized tables are Parquet or Arrow IPC by access pattern, and control objects are versioned JSON. Old experimental indexes are rejected.
 
 **Tech Stack:** Rust, Arrow/Parquet, `object_store`, immutable S3 extents, BLAKE3, UUID, existing fail-closed benchmark validators.
 
@@ -25,7 +25,7 @@
 
 - Create `crates/borsuk/src/mutation.rs`: mutation version, HLC clock, canonical operation/stamp/digest, and range allocation.
 - Modify `crates/borsuk/src/record.rs`: remove public generation state and carry an internal mutation stamp.
-- Modify `crates/borsuk/src/format.rs`: standard-schema v30 typed mutation columns for Parquet materialized tables and Arrow IPC extents/sidecars.
+- Modify `crates/borsuk/src/format.rs`: standard-schema v31 typed mutation columns for Parquet materialized tables and Arrow IPC extents/sidecars.
 - Modify `crates/borsuk/src/lane_log.rs`: Arrow IPC mutation extents, JSON controls, stable identities, and no generation bases.
 - Modify `crates/borsuk/src/index.rs`: clock ownership, direct put/delete stamping, tombstone/ID overlays, refresh observation, and materialization merge.
 - Modify `crates/borsuk/src/group_commit.rs`: allocate before dedup/fan-out and remove the global counter from acknowledgement.
@@ -282,6 +282,13 @@
 - [ ] **Step 6: Implement standard-format extents and delete the counter**
 
   Replace `first_generation`/`generation_end` with typed Arrow IPC mutation fields and documented schema metadata. Keep stable sequence-addressed create-only keys and exact checksum reconciliation. Store heads/directories as versioned JSON. After extent creation, conditionally publish the exact extent/checksum/counters/max-version through the writer's expected stripe-head version; acknowledgement follows only that CAS. Remove the counter path and its startup floor read entirely. Increment the standard schema marker and reject earlier custom extents.
+
+  v31 now persists each foreground writer-stripe extent directly as the typed
+  Arrow IPC mutation schema, uses `.arrow` sequence keys, removes the custom
+  extent and ID-delta envelopes, removes the reserved-generation entrypoint and
+  startup floor, and records only `max_mutation_hlc` in its versioned JSON
+  stripe head/seal. The healthy acknowledgement remains one extent PUT plus one
+  conditional head PUT.
 
 - [ ] **Step 7: Verify GREEN and lifecycle safety**
 
