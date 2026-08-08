@@ -55,12 +55,12 @@ work, durable formats, or production gates.
 `scripts/bench_global_cell_stripes.sh`,
 `scripts/validate_global_cell_stripes.py`, and their tests.
 
-- [ ] Write RED Python tests for exact 1/2/4 MiB arms, five repetitions,
+- [x] Write RED Python tests for exact 1/2/4 MiB arms, five repetitions,
   cyclic order, unique caches, immutable identities, 100 queries, recall 1.0,
   zero writes, terminal markers, raw traces, and resource telemetry.
-- [ ] Implement a runner that refuses reused output, caches, non-S3 production
+- [x] Implement a runner that refuses reused output, caches, non-S3 production
   inputs, source mismatch, nonterminal base evidence, and competing work.
-- [ ] Implement the validator and paired selection report. The validator must
+- [x] Implement the validator and paired selection report. The validator must
   fail closed before reading arm CSVs when the root is incomplete or failed.
 - [ ] Run shell syntax, complete runner/validator tests, and a local
   structurally valid smoke.
