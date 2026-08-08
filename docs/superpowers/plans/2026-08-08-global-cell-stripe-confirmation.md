@@ -231,14 +231,14 @@ git push origin HEAD:main
 - Consumes: Tasks 1-3 and the dedicated Causality worker.
 - Produces: verified source revision, launch identity, immutable terminal artifacts, and a defensible promote/reject decision.
 
-- [ ] **Step 1: Run a local structurally valid confirmation smoke**
+- [x] **Step 1: Run a local structurally valid confirmation smoke**
 
 Use a temporary local index and samples with the existing structural-smoke shape,
 then invoke `read-stripe-confirmation` and verify nonempty summary, reads, resource
 telemetry, storage trace, zero process exit, and terminal markers. Record this as
 structural evidence only; do not report its latency as production data.
 
-- [ ] **Step 2: Run exact full assurance once**
+- [x] **Step 2: Run exact full assurance once**
 
 ```bash
 cargo fmt --all -- --check
@@ -250,13 +250,14 @@ cargo clippy --locked --workspace --all-features --all-targets -- -D warnings
 RUSTC_WRAPPER=/usr/local/libexec/devbox-rustc-wrapper \
 SCCACHE_DIR=/data/cache/sccache \
 cargo test --locked --workspace --all-features --all-targets
-python3 -m unittest discover -s scripts -p 'test_*.py'
+uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
+  python -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 Expected: all commands exit zero. If a layer fails, repair only that layer and
 then rerun one final full gate.
 
-- [ ] **Step 3: Record assurance, commit, and fast-forward push**
+- [x] **Step 3: Record assurance, commit, and fast-forward push**
 
 Record exact command counts/timings and structural artifact paths, then:
 
