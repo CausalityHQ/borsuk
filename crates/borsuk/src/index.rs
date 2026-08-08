@@ -12906,12 +12906,6 @@ impl BorsukIndex {
             } => *value,
             _ => global_ref.candidates,
         };
-        if requested_candidates < options.k {
-            return Err(BorsukError::InvalidSearchOptions(format!(
-                "whole-index candidate budget {requested_candidates} is smaller than requested k {}",
-                options.k
-            )));
-        }
         let pq_query = if self
             .manifest
             .config
@@ -12952,6 +12946,13 @@ impl BorsukIndex {
             u64::try_from(delta_route_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let base_chunks = base_index.chunks_for_cells(&base_cells);
         let delta_chunks = delta_index.chunks_for_cells(&delta_cells);
+        let stripe_bytes = validated_global_pq_prefetch_stripe_bytes(
+            self.read_runtime.global_pq_prefetch_stripe_bytes,
+        )?;
+        let (base_range_byte_weight, base_range_stripe_weight) =
+            global_pq_layer_prefetch_weights(&base_chunks, stripe_bytes);
+        let (delta_range_byte_weight, delta_range_stripe_weight) =
+            global_pq_layer_prefetch_weights(&delta_chunks, stripe_bytes);
         let planned_records = base_chunks
             .iter()
             .chain(&delta_chunks)
@@ -12990,12 +12991,17 @@ impl BorsukIndex {
         ];
         let use_cached_graphs =
             !matches!(options.cache_execution, crate::CacheExecutionPolicy::Scan);
-        let base_range_byte_limit = DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES.div_ceil(2);
-        let delta_range_byte_limit =
-            DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES.saturating_sub(base_range_byte_limit);
-        let base_range_stripe_limit = DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES.div_ceil(2);
-        let delta_range_stripe_limit =
-            DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES.saturating_sub(base_range_stripe_limit);
+        let (base_range_byte_limit, delta_range_byte_limit) = proportional_global_pq_layer_budget(
+            DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES,
+            base_range_byte_weight,
+            delta_range_byte_weight,
+        );
+        let (base_range_stripe_limit, delta_range_stripe_limit) =
+            proportional_global_pq_layer_budget(
+                DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES,
+                base_range_stripe_weight,
+                delta_range_stripe_weight,
+            );
 
         let delta_search = self.clone();
         let delta_query = pq_query.clone();
@@ -13051,6 +13057,7 @@ impl BorsukIndex {
             }
             Ok::<_, BorsukError>(())
         })();
+        let delta_wait_started = Instant::now();
         let delta_result = result_receiver
             .recv()
             .map_err(|_| {
@@ -13059,6 +13066,8 @@ impl BorsukIndex {
                 )
             })
             .and_then(|result| result);
+        let global_delta_wait_us =
+            u64::try_from(delta_wait_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         base_result?;
         let (delta_layer, mut delta_ranges) = delta_result?;
         query_local_ranges.append(&mut delta_ranges);
@@ -13069,7 +13078,7 @@ impl BorsukIndex {
             .flat_map(|layer| &layer.selected_chunks[..layer.wave_start])
             .map(|chunk| chunk.rows)
             .sum::<usize>();
-        let mut candidates = layers
+        let candidates = layers
             .iter_mut()
             .flat_map(|layer| {
                 crate::global_pq_sidecar::merge_candidates(
@@ -13084,12 +13093,6 @@ impl BorsukIndex {
                 .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        candidates.sort_by(|left, right| {
-            left.candidate
-                .cmp(&right.candidate)
-                .then_with(|| left.layer.cmp(&right.layer))
-        });
-        candidates.truncate(candidate_limit);
 
         let chunks_by_start = layers
             .iter()
@@ -13106,7 +13109,10 @@ impl BorsukIndex {
                 .entry((entry.layer, entry.candidate.chunk_row_start))
                 .or_default()
                 .push((entry.candidate.node, entry.candidate.local_row));
-            candidate_rows.insert((entry.layer, entry.candidate.node), entry.candidate.row);
+            candidate_rows.insert(
+                (entry.layer, entry.candidate.node),
+                (entry.candidate.row, entry.candidate.distance),
+            );
         }
         let mut bundled_groups = BTreeMap::<
             (GlobalPqSearchLayer, String),
@@ -13123,6 +13129,12 @@ impl BorsukIndex {
         }
         let groups = bundled_groups.into_iter().collect::<Vec<_>>();
         let exact_started = Instant::now();
+        // The current standard-Arrow range helper couples identity/MVCC columns
+        // with lossless vectors, so this first fused slice may fetch at most C
+        // raw rows from each layer (2C total). Identity resolution below still
+        // happens before exact distance work and exact-scores at most C unique
+        // live rows. Splitting identity reads from vector reads is the next
+        // bounded I/O slice; it does not require a durable-format change.
         let fetched = bounded_io_map_with_gate(
             &groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
@@ -13144,8 +13156,8 @@ impl BorsukIndex {
             bytes_read = bytes_read.saturating_add(bytes);
         }
         let mut winning_candidates =
-            BTreeMap::<RecordId, (usize, GlobalPqRow, Vec<f32>, MutationStamp)>::new();
-        for ((layer, node), row) in candidate_rows {
+            BTreeMap::<RecordId, (f32, usize, GlobalPqRow, Vec<f32>, MutationStamp)>::new();
+        for ((layer, node), (row, approximate_distance)) in candidate_rows {
             let (vector, id, stamp) = exact_by_node.remove(&(layer, node)).ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "resident global PQ candidate exact row is missing".to_string(),
@@ -13153,27 +13165,38 @@ impl BorsukIndex {
             })?;
             match winning_candidates.entry(id) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((node, row, vector, stamp));
+                    entry.insert((approximate_distance, node, row, vector, stamp));
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    let greatest = entry.get().3.greatest(stamp)?;
-                    if greatest == stamp && stamp.version() > entry.get().3.version() {
-                        entry.insert((node, row, vector, stamp));
+                    let greatest = entry.get().4.greatest(stamp)?;
+                    if greatest == stamp && stamp.version() > entry.get().4.version() {
+                        entry.insert((approximate_distance, node, row, vector, stamp));
                     }
                 }
             }
         }
         let mutation_states =
             self.mutation_states(winning_candidates.keys().map(|id| id.as_bytes()))?;
-        let metric = &self.manifest.config.metric;
-        let mut scored_vectors = Vec::with_capacity(winning_candidates.len());
-        for (id, (_node, _row, vector, stamp)) in winning_candidates {
+        let mut live_candidates = Vec::with_capacity(winning_candidates.len());
+        for (id, (approximate_distance, _node, _row, vector, stamp)) in winning_candidates {
             if Self::state_suppresses_stamp(
                 mutation_states.get(id.as_bytes()).copied().flatten(),
                 stamp,
             )? {
                 continue;
             }
+            live_candidates.push((approximate_distance, id, vector));
+        }
+        live_candidates.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        live_candidates.truncate(candidate_limit);
+
+        let metric = &self.manifest.config.metric;
+        let mut scored_vectors = Vec::with_capacity(live_candidates.len());
+        for (_approximate_distance, id, vector) in live_candidates {
             let distance = metric.distance_unchecked(query, &vector)?;
             scored_vectors.push((distance, vector, id));
         }
@@ -13251,7 +13274,7 @@ impl BorsukIndex {
                 global_base_exact_rerank_us: exact_us,
                 global_delta_approximate_us: layers[1].approximate_us,
                 global_delta_exact_rerank_us: 0,
-                global_delta_wait_us: 0,
+                global_delta_wait_us,
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
@@ -13303,6 +13326,7 @@ impl BorsukIndex {
         let Some(global_ref) = self.manifest.global_pq_ref.clone() else {
             return Ok(None);
         };
+        validate_global_whole_index_candidate_budget(options)?;
         let Some((base_segment_count, delta_summaries)) =
             self.resolve_resident_global_pq_coverage(&global_ref)?
         else {
@@ -21641,6 +21665,45 @@ fn global_pq_code_read_range(chunks: &[GlobalPqChunkRef]) -> Result<Range<usize>
     Ok(start..end)
 }
 
+fn proportional_global_pq_layer_budget(
+    total: usize,
+    base_weight: usize,
+    delta_weight: usize,
+) -> (usize, usize) {
+    if total == 0 {
+        return (0, 0);
+    }
+    if base_weight == 0 && delta_weight == 0 {
+        let base = total.div_ceil(2);
+        return (base, total - base);
+    }
+    if base_weight == 0 {
+        return (0, total);
+    }
+    if delta_weight == 0 {
+        return (total, 0);
+    }
+    let weight = (base_weight as u128).saturating_add(delta_weight as u128);
+    let proportional = ((total as u128).saturating_mul(base_weight as u128) / weight) as usize;
+    let base = proportional.clamp(1, total.saturating_sub(1).max(1));
+    (base, total.saturating_sub(base))
+}
+
+fn global_pq_layer_prefetch_weights(
+    chunks: &[GlobalPqChunkRef],
+    stripe_bytes: usize,
+) -> (usize, usize) {
+    chunks.iter().fold((0_usize, 0_usize), |weights, chunk| {
+        let bytes = (chunk.size_bytes as usize).saturating_add(chunk.exact_size_bytes);
+        (
+            weights.0.saturating_add(bytes),
+            weights
+                .1
+                .saturating_add(bytes.div_ceil(stripe_bytes).max(1)),
+        )
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GlobalPqCodeReadPlan {
     range: Range<usize>,
@@ -24914,6 +24977,21 @@ fn materialized_global_delta_runs_in_parallel(options: &SearchOptions) -> bool {
     )
 }
 
+fn validate_global_whole_index_candidate_budget(options: &SearchOptions) -> Result<()> {
+    if let SearchMode::Approx {
+        max_candidates_per_segment: Some(candidate_budget),
+        ..
+    } = &options.mode
+        && *candidate_budget < options.k
+    {
+        return Err(BorsukError::InvalidSearchOptions(format!(
+            "whole-index candidate budget {candidate_budget} is smaller than requested k {}",
+            options.k
+        )));
+    }
+    Ok(())
+}
+
 fn search_prefetch_segment_budget_exhausted(mode: &SearchMode, reserved_segments: usize) -> bool {
     match mode {
         SearchMode::Exact => false,
@@ -27137,6 +27215,14 @@ mod tests {
     }
 
     #[test]
+    fn fused_global_layers_reserve_prefetch_budget_in_workload_proportion() {
+        assert_eq!(proportional_global_pq_layer_budget(16, 300, 100), (12, 4));
+        assert_eq!(proportional_global_pq_layer_budget(16, 0, 100), (0, 16));
+        assert_eq!(proportional_global_pq_layer_budget(16, 100, 0), (16, 0));
+        assert_eq!(proportional_global_pq_layer_budget(1, 100, 100), (1, 0));
+    }
+
+    #[test]
     fn global_pq_code_read_plans_enforce_cumulative_byte_and_stripe_budgets() {
         const MIB: usize = 1024 * 1024;
         let group = |cell_index: u16, complete_bytes: usize| {
@@ -28229,9 +28315,10 @@ mod tests {
                 &[11.0; 8],
                 SearchOptions::approx(2, LeafMode::SrhtPqScan)
                     .with_max_segments(4)
-                    .with_max_candidates_per_segment(1),
+                    .with_max_candidates_per_segment(1)
+                    .with_max_bytes(1),
             )
-            .expect_err("a whole-index candidate budget below k must fail closed");
+            .expect_err("a fixed-budget whole-index candidate cap below k must fail closed");
         assert!(
             invalid_budget
                 .to_string()
@@ -28338,14 +28425,15 @@ mod tests {
             .add(
                 (0..128)
                     .map(|row| {
-                        VectorRecord::new(format!("base-{row}"), vec![row as f32 / 128.0; 8])
+                        let value = if row == 0 { 0.0 } else { 100.0 };
+                        VectorRecord::new(format!("base-{row}"), vec![value; 8])
                     })
                     .collect(),
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
 
-        let moved = vec![20.0; 8];
+        let moved = vec![10.0; 8];
         index
             .upsert(vec![VectorRecord::new("base-0", moved.clone())])
             .unwrap();
@@ -28355,7 +28443,7 @@ mod tests {
                     .map(|row| {
                         VectorRecord::new(
                             format!("delta-padding-{row}"),
-                            vec![40.0 + row as f32; 8],
+                            vec![1_000.0 + row as f32; 8],
                         )
                     })
                     .collect(),
@@ -28371,19 +28459,18 @@ mod tests {
         let report = BorsukIndex::open(&uri)
             .unwrap()
             .search_with_report(
-                &moved,
+                &[0.0; 8],
                 SearchOptions::approx(1, LeafMode::SrhtPqScan)
                     .with_max_segments(4)
-                    .with_max_candidates_per_segment(8),
+                    .with_max_candidates_per_segment(1),
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("base-0"));
-        assert_eq!(report.hits[0].distance, 0.0);
         assert!(
             report.leaf_mode.contains("fused-materialized-delta"),
             "current base+delta coverage must use the fused path: {report:?}"
         );
-        assert!(report.records_scored <= 8, "{report:?}");
+        assert!(report.records_scored <= 1, "{report:?}");
     }
 
     #[test]
