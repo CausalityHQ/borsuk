@@ -2171,33 +2171,24 @@ impl BorsukIndex {
             manifest.rebuild_pivots();
         }
         let mut global_delta_updated = false;
-        if let Some(base_reference) = previous.global_pq_ref.as_ref() {
-            match self.build_resident_global_delta(
+        if let Some(base_reference) = previous.global_pq_ref.as_ref()
+            && let Some((desired, promote)) = self.build_resident_global_delta(
                 base_reference,
                 &routing_summaries,
                 false,
                 Some((&new_segment_summaries, &records)),
-            ) {
-                Ok(Some((desired, promote))) => {
-                    let mut candidate = manifest.clone();
-                    let update = Self::apply_resident_global_delta_reference(
-                        &mut candidate,
-                        base_reference,
-                        desired,
-                        promote,
-                    )
-                    .and_then(|()| enforce_ram_budget(&candidate, self.runtime_ram_budget_bytes));
-                    match update {
-                        Ok(()) => {
-                            manifest = candidate;
-                            global_delta_updated = true;
-                        }
-                        Err(error) => observability::post_commit_maintenance_error(&error),
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => observability::post_commit_maintenance_error(&error),
-            }
+            )?
+        {
+            let mut candidate = manifest.clone();
+            Self::apply_resident_global_delta_reference(
+                &mut candidate,
+                base_reference,
+                desired,
+                promote,
+            )?;
+            enforce_ram_budget(&candidate, self.runtime_ram_budget_bytes)?;
+            manifest = candidate;
+            global_delta_updated = true;
         }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         self.manifest = if paged_manifest {
@@ -20456,45 +20447,20 @@ fn global_pq_chunk_reference(
     let exact = bundle.get(slice.exact_range.clone()).ok_or_else(|| {
         BorsukError::InvalidStorage("global PQ exact range is outside its bundle".to_string())
     })?;
-    let align = |offset: usize| {
-        offset
-            .checked_add(63)
-            .map(|value| value & !63)
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "global PQ Arrow buffer alignment overflows".to_string(),
-                )
-            })
-    };
-    let next_column_values = |offset: usize| {
-        align(offset)?.checked_add(64).ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "global PQ Arrow column buffer offset overflows".to_string(),
-            )
-        })
-    };
-    let expected = [
-        next_column_values(slice.code_range.end)?,
-        next_column_values(slice.mutation_hlc_range.end)?,
-        next_column_values(slice.mutation_writer_range.end)?,
-        next_column_values(slice.mutation_digest_range.end)?,
-    ];
-    let actual = [
+    let typed_buffer_offsets = [
         slice.identity_offsets_range.start,
+        slice.identity_values_range.start,
+        slice.mutation_hlc_range.start,
         slice.mutation_writer_range.start,
         slice.mutation_digest_range.start,
         slice.row_integrity_range.start,
     ];
-    if actual != expected {
+    if typed_buffer_offsets.iter().any(|offset| offset % 8 != 0) {
         return Err(BorsukError::InvalidStorage(format!(
-            "global PQ typed Arrow buffers violate the canonical aligned layout: actual {actual:?}, expected {expected:?}, ranges {slice:?}"
+            "global PQ typed Arrow buffers are not 8-byte aligned: {typed_buffer_offsets:?}"
         )));
     }
-    let typed_buffer_offsets = [
-        slice.identity_values_range.start,
-        slice.mutation_hlc_range.start,
-    ]
-    .map(|offset| {
+    let typed_buffer_offsets = typed_buffer_offsets.map(|offset| {
         u32::try_from(offset).map_err(|_| {
             BorsukError::InvalidStorage(
                 "global PQ Arrow buffer offset exceeds the 4 GiB bundle limit".to_string(),
@@ -26073,7 +26039,7 @@ mod tests {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index: 0,
-            typed_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
             row_start: 0,
             rows: 1,
             size_bytes,
@@ -26124,7 +26090,7 @@ mod tests {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index,
-            typed_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
             row_start: 0,
             rows: 1,
             size_bytes,
@@ -26163,7 +26129,7 @@ mod tests {
             exact_offset_bytes: 1_000_000,
             exact_size_bytes: 4,
             cell_index,
-            typed_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
             row_start: cell_index as usize,
             rows: 1,
             size_bytes: 100,
@@ -26371,6 +26337,56 @@ mod tests {
             (ROWS + 1) * size_of::<i32>()
         );
         assert!(!encoded.slices[0].identity_values_range.is_empty());
+    }
+
+    #[test]
+    fn global_pq_chunk_references_accept_standard_arrow_inter_batch_padding() {
+        const DIMENSIONS: usize = 8;
+        const CODE_WIDTH: usize = 64;
+        let location = LocationEncoding::for_layout(2, 1_024).unwrap();
+        let scan_row_width = CODE_WIDTH + location.width_bytes();
+        let mut row_start = 0;
+        let pending = [78_usize, 983]
+            .into_iter()
+            .enumerate()
+            .map(|(cell_index, rows)| {
+                let identities = (0..rows)
+                    .map(|row| {
+                        (
+                            RecordId::from(format!("group-o{:08}", row_start + row)),
+                            MutationStamp::new(
+                                MutationVersion::from_parts((row_start + row) as u64, [3_u8; 16]),
+                                [4_u8; 32],
+                            ),
+                        )
+                    })
+                    .collect();
+                let entry = PendingGlobalPqChunk {
+                    cell_index: cell_index as u16,
+                    row_start,
+                    chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
+                        bytes: vec![0; rows * scan_row_width],
+                        exact_bytes: vec![0; rows * DIMENSIONS * size_of::<f32>()],
+                        identities,
+                        rows,
+                    },
+                };
+                row_start += rows;
+                entry
+            })
+            .collect::<Vec<_>>();
+        let encoded = encode_global_pq_arrow_bundle(
+            &pending,
+            CODE_WIDTH,
+            location,
+            DIMENSIONS,
+            crate::VectorElementType::Float32,
+        )
+        .unwrap();
+
+        for (entry, slice) in pending.iter().zip(&encoded.slices) {
+            global_pq_chunk_reference("bundle.arrow", entry, slice, &encoded.bytes).unwrap();
+        }
     }
 
     #[test]

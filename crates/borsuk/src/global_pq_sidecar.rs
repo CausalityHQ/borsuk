@@ -794,11 +794,12 @@ pub(crate) struct GlobalPqChunkRef {
     pub(crate) exact_offset_bytes: usize,
     pub(crate) exact_size_bytes: usize,
     pub(crate) cell_index: u16,
-    /// Absolute starts for variable id values and mutation HLC. Arrow's
-    /// required 8-byte alignment and the fixed typed widths derive every other
-    /// range. Bundles are capped far below 4 GiB, so two u32 values keep a
-    /// 100M-scale descriptor bounded.
-    pub(crate) typed_buffer_offsets: [u32; 2],
+    /// Absolute starts for the identity offsets/values and four mutation
+    /// buffers. Arrow permits implementation-defined padding between buffers,
+    /// so every range start is persisted instead of deriving later columns
+    /// from one writer's current padding policy. Bundles are capped far below
+    /// 4 GiB, keeping these standard-Arrow offsets compact.
+    pub(crate) typed_buffer_offsets: [u32; 6],
     pub(crate) row_start: usize,
     pub(crate) rows: usize,
     pub(crate) size_bytes: u32,
@@ -823,13 +824,23 @@ impl GlobalPqChunkRef {
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("global PQ code range overflows".to_string())
             })?;
-        let offsets_start = next_arrow_column_values(code_end)?;
-        let [values_start, hlc_start] = self.typed_buffer_offsets.map(|offset| offset as usize);
+        let [
+            offsets_start,
+            values_start,
+            hlc_start,
+            writer_start,
+            digest_start,
+            integrity_start,
+        ] = self.typed_buffer_offsets.map(|offset| offset as usize);
         let offsets_end = offsets_start.checked_add(expected_offsets).ok_or_else(|| {
             BorsukError::InvalidStorage("global identity offsets range overflows".to_string())
         })?;
-        if offsets_end > values_start
+        if code_end > offsets_start
+            || offsets_end > values_start
             || values_start > hlc_start
+            || hlc_start > writer_start
+            || writer_start > digest_start
+            || digest_start > integrity_start
             || hlc_start > self.exact_offset_bytes
         {
             return invalid("global PQ identity ranges are invalid");
@@ -852,62 +863,49 @@ impl GlobalPqChunkRef {
             }
             Ok(start..end)
         };
-        let [_, hlc] = self.typed_buffer_offsets.map(|offset| offset as usize);
-        let writer =
-            next_arrow_column_values(hlc.checked_add(self.rows.saturating_mul(8)).ok_or_else(
-                || BorsukError::InvalidStorage("global mutation HLC range overflows".to_string()),
-            )?)?;
-        let digest = next_arrow_column_values(
-            writer
-                .checked_add(self.rows.saturating_mul(16))
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "global mutation writer range overflows".to_string(),
-                    )
-                })?,
-        )?;
-        let integrity = next_arrow_column_values(
-            digest
-                .checked_add(self.rows.saturating_mul(32))
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "global mutation digest range overflows".to_string(),
-                    )
-                })?,
-        )?;
-        Ok([
+        let [_, _, hlc, writer, digest, integrity] =
+            self.typed_buffer_offsets.map(|offset| offset as usize);
+        let ranges = [
             range(hlc, 8, "mutation HLC")?,
             range(writer, 16, "mutation writer")?,
             range(digest, 32, "mutation digest")?,
             range(integrity, 32, "row integrity")?,
-        ])
+        ];
+        if ranges.windows(2).any(|pair| pair[0].end > pair[1].start) {
+            return invalid("global PQ mutation ranges overlap");
+        }
+        Ok(ranges)
     }
 
     #[cfg(test)]
     fn with_test_typed_identity_ranges(mut self) -> Self {
-        let mut cursor = next_arrow_column_values(
+        let offsets = next_arrow_column_values(
             (self.offset_bytes as usize).saturating_add(self.size_bytes as usize),
         )
         .expect("test Arrow column offset aligns");
-        cursor = cursor.saturating_add(self.rows.saturating_add(1).saturating_mul(4));
+        let mut cursor = offsets.saturating_add(self.rows.saturating_add(1).saturating_mul(4));
         cursor = align_arrow_buffer(cursor).expect("test Arrow buffer offset aligns");
         let values = cursor;
         let hlc = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
         cursor = hlc;
         cursor = cursor.saturating_add(self.rows.saturating_mul(8));
-        cursor = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        let writer = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        cursor = writer;
         cursor = cursor.saturating_add(self.rows.saturating_mul(16));
-        cursor = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        let digest = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        cursor = digest;
         cursor = cursor.saturating_add(self.rows.saturating_mul(32));
-        cursor = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        let integrity = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
+        cursor = integrity;
         cursor = cursor.saturating_add(self.rows.saturating_mul(32));
-        self.typed_buffer_offsets =
-            [values, hlc].map(|offset| u32::try_from(offset).expect("test bundle offset fits u32"));
+        self.typed_buffer_offsets = [offsets, values, hlc, writer, digest, integrity]
+            .map(|offset| u32::try_from(offset).expect("test bundle offset fits u32"));
         self.exact_offset_bytes = cursor;
         self
     }
 }
 
+#[cfg(test)]
 fn align_arrow_buffer(offset: usize) -> Result<usize> {
     offset
         .checked_add(63)
@@ -917,6 +915,7 @@ fn align_arrow_buffer(offset: usize) -> Result<usize> {
         })
 }
 
+#[cfg(test)]
 fn next_arrow_column_values(offset: usize) -> Result<usize> {
     align_arrow_buffer(offset)?.checked_add(64).ok_or_else(|| {
         BorsukError::InvalidStorage("global Arrow column buffer offset overflows".to_string())
@@ -1416,6 +1415,7 @@ impl GlobalPqDescriptor {
                     BorsukError::InvalidStorage("global PQ exact range overflows".to_string())
                 })?;
             chunk.identity_ranges()?;
+            chunk.mutation_ranges()?;
             let expected_exact = chunk
                 .rows
                 .checked_mul(vector_element_type.fixed_width_bytes(quantizer_dimensions)?)
@@ -2379,7 +2379,7 @@ impl GlobalCellGraph {
             exact_offset_bytes: 0,
             exact_size_bytes: 0,
             cell_index: self.cell_index,
-            typed_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
             row_start: self.row_start,
             rows: self.rows,
             size_bytes: u32::try_from(self.chunk.len()).expect("cell graph chunk fits u32"),
@@ -2690,7 +2690,7 @@ mod tests {
                     exact_offset_bytes: 192_028,
                     exact_size_bytes: 1_024_000,
                     cell_index: (segment % 16) as u16,
-                    typed_buffer_offsets: [0; 2],
+                    typed_buffer_offsets: [0; 6],
                     row_start: segment as usize * 4_000,
                     rows: 4_000,
                     size_bytes: 144_024,
@@ -2709,8 +2709,12 @@ mod tests {
         )
         .unwrap();
         let resident_bytes = descriptor.resident_bytes();
+        // Six explicit standard-Arrow buffer starts cost 16 additional bytes
+        // per chunk versus the padding-derived v3 layout. At 25K chunks this
+        // is 400 KiB, keeping 100M-scale routing metadata below 9 MiB while
+        // accepting every legal inter-column padding layout.
         assert!(
-            resident_bytes < 8 * 1024 * 1024,
+            resident_bytes < 9 * 1024 * 1024,
             "100M descriptor retains {resident_bytes} bytes"
         );
         let encoded = descriptor.encode().unwrap();
@@ -2738,7 +2742,7 @@ mod tests {
                 exact_offset_bytes: 8_192,
                 exact_size_bytes: 64 * 64 * size_of::<f32>(),
                 cell_index: 0,
-                typed_buffer_offsets: [0; 2],
+                typed_buffer_offsets: [0; 6],
                 row_start,
                 rows: 64,
                 size_bytes: 4_096,
@@ -2812,7 +2816,7 @@ mod tests {
             exact_offset_bytes: 80,
             exact_size_bytes: 64 * size_of::<f32>(),
             cell_index: 0,
-            typed_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
             row_start: 0,
             rows: 1,
             size_bytes: 64,
@@ -2912,7 +2916,7 @@ mod tests {
                 + vectors.len() * size_of::<u64>(),
             exact_size_bytes: vectors.len() * 64 * size_of::<f32>(),
             cell_index: 7,
-            typed_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
             row_start: 4_096,
             rows: vectors.len(),
             size_bytes: u32::try_from(chunk.bytes.len()).unwrap(),
@@ -3009,7 +3013,7 @@ mod tests {
                     + chunk.rows * size_of::<u64>(),
                 exact_size_bytes: 16_384,
                 cell_index: segment as u16,
-                typed_buffer_offsets: [0; 2],
+                typed_buffer_offsets: [0; 6],
                 row_start,
                 rows: chunk.rows,
                 size_bytes: u32::try_from(chunk.bytes.len()).unwrap(),
@@ -3059,7 +3063,7 @@ mod tests {
                     // Segments 0/2 and 1/3 represent the same two semantic
                     // regions, produced by separate bounded ingest checkpoints.
                     cell_index: (segment % 2) as u16,
-                    typed_buffer_offsets: [0; 2],
+                    typed_buffer_offsets: [0; 6],
                     row_start: segment as usize * 64,
                     rows: 64,
                     size_bytes: 1_024,
@@ -3160,7 +3164,7 @@ mod tests {
                         + chunk.rows * size_of::<u64>(),
                     exact_size_bytes: chunk.exact_bytes.len(),
                     cell_index: cell,
-                    typed_buffer_offsets: [0; 2],
+                    typed_buffer_offsets: [0; 6],
                     row_start,
                     rows: chunk.rows,
                     size_bytes: u32::try_from(chunk.bytes.len()).unwrap(),

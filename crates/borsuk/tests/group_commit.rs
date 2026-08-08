@@ -221,6 +221,74 @@ fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_bas
 }
 
 #[test]
+fn drain_fails_closed_when_the_incremental_global_delta_cannot_be_published() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let faulted = common::FaultInjectingObjectStore::fail_nth_matching(
+        Arc::clone(&inner),
+        3,
+        true,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("global-pq/descriptors/")
+        },
+    );
+    let uri = "memory:///group-drain-global-delta-fail-closed";
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::new(faulted),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    index
+        .add(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    let manifest_version_before_drain = index.stats().manifest_version;
+
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 32,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    writer
+        .append(
+            (0..32)
+                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![1_000.0; 8]))
+                .collect(),
+        )
+        .unwrap();
+
+    let error = writer
+        .drain()
+        .expect_err("drain must not publish an unindexed large exact fringe");
+    assert!(
+        error.to_string().contains("injected Put failure"),
+        "{error}"
+    );
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(
+        reopened.stats().manifest_version,
+        manifest_version_before_drain
+    );
+    assert!(reopened.get_vector("delta-0").unwrap().is_some());
+}
+
+#[test]
 fn cold_search_overlaps_independent_global_base_and_delta_reads() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///parallel-global-base-delta-search";

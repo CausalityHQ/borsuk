@@ -811,7 +811,10 @@ interleaved product code and packed `(segment ordinal, row ordinal)`; its
 `exact_vector` values use the declared typed Arrow vector representation. The
 descriptor stores the byte offset, length, and checksum of each Arrow value
 buffer, so queries range-read selected scan or exact slices without loading the
-other column, the bundle, or the corpus into memory. Bundles are capped at
+other column, the bundle, or the corpus into memory. Global-PQ reference layout
+v4 records all six identity/mutation buffer starts explicitly: standard Arrow
+writers may insert more than one alignment block between columns, so later
+ranges must not be inferred from one implementation's padding choice. Bundles are capped at
 1 MiB of scan payload and 32 MiB total; a single oversize chunk is the
 irreducible exception. The descriptor contains the structured-rotation
 product codebook, a bounded hierarchical full-dimensional coarse router trained
@@ -820,8 +823,9 @@ and content-addressed cell/chunk references. Each chunk holds
 one byte per product subspace plus packed `(segment ordinal, row ordinal)`
 locations. Every code chunk has a row-aligned typed Arrow exact-vector values
 buffer capped at 16 MiB; its row range is arithmetic, so it needs no offset
-table, dictionary, or decompression state. IDs and MVCC generations remain in the
-physical exact-record sidecar and are materialized only for the final top-k.
+table, dictionary, or decompression state. IDs and complete mutation stamps use
+typed Arrow columns in the same bundle and are range-read only for the final
+top-k.
 Within each bounded chunk, learned centroid ordinals and rows use a deterministic
 full bit-plane Morton order. Every bit from every product-code subspace
 participates; 64/128-byte codes are not truncated to a 64-bit key. This does
