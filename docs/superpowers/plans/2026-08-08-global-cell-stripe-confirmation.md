@@ -279,7 +279,7 @@ empty destination prefix. Launch through
 manifest identities in the ledger, commit, and fast-forward push that launch
 record.
 
-- [ ] **Step 5: Monitor markers and infrastructure health periodically**
+- [x] **Step 5: Monitor markers and infrastructure health periodically**
 
 Retain one 15-minute background timer/session and wait on that same handle in
 at-most-55-second polls. At each timer boundary inspect only root/arm markers,
@@ -287,7 +287,7 @@ process/tmux state, and EC2/SSM/EBS health. Restart the timer if healthy and
 incomplete. On a terminal failure, run the root validator before opening any
 measurement CSV; then use terminal logs and eligible artifacts to debug.
 
-- [ ] **Step 6: Make the frozen decision**
+- [x] **Step 6: Make the frozen decision**
 
 At terminal completion, run the validator before any CSV inspection, preserve
 its JSON and SHA-256 separately from raw results, and record its exact decision.

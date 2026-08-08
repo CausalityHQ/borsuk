@@ -83,5 +83,5 @@ work, durable formats, or production gates.
   checks only; never inspect incomplete CSV files.
 - [x] At terminality, run the validator first, then inspect and record only
   defensible terminal measurements.
-- [ ] Promote the winner only if the preregistered selection rule passes;
+- [x] Promote the winner only if the preregistered selection rule passes;
   otherwise return to TDD using the failed terminal evidence.

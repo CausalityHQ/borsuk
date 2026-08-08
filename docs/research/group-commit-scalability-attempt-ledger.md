@@ -1378,3 +1378,37 @@ The immutable result prefix is
 `s3://borsuk-bench-453182569524-euc1/research/global-cell-stripe-confirmation/20260808T120203Z-v69-36e67d3/results`.
 Until a terminal root marker exists, monitoring is limited to markers and
 infrastructure/process health; incomplete measurement CSVs remain unread.
+
+After the retained 15-minute timer exited, marker-only inspection found the
+root completion marker and all ten arm completion/read markers, no failure
+marker, and green instance/system/EBS/SSM health. The repository validator was
+then run against the terminal remote root before any individual CSV inspection;
+it passed all 5,000 query rows and selected no winner. The independently rerun
+local validator report has SHA-256
+`2a9ae6c32f60e7000e59f3aeca0da163f663614f47deecb398236bf18d8c78a0`
+and is preserved separately at
+`s3://borsuk-bench-453182569524-euc1/research/global-cell-stripe-confirmation/20260808T120203Z-v69-36e67d3/validation/db5adb1/validation.json`.
+
+| arm | pooled queries | recall@10 | p50 | p95 | p99 | worst repeat p95 | GETs/query | bytes/query |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 MiB | 2,500 | 1.0 | 32.237 ms | 49.199 ms | 79.911 ms | 70.336 ms | 2.788 | 2,634,003.92 |
+| 4 MiB | 2,500 | 1.0 | 32.311 ms | 46.650 ms | 61.198 ms | 48.116 ms | 2.028 | 2,634,003.92 |
+
+The 4 MiB candidate lowered pooled p95 by only 5.18%, below the frozen 10%
+effect floor, and was no worse in only two of five repetition-level p95 pairs,
+below the frozen four-of-five requirement. It did pass both 200 ms tail limits,
+preserve recall and logical bytes, and keep pooled p50 within 0.23% of control.
+The default therefore remains 1 MiB; v69 is a terminal rejection, not a near
+pass to reinterpret.
+
+Eligible terminal diagnostics explain the difference from v68. Four MiB cut
+product-code backing requests from roughly 1,907--1,948 to 1,346--1,362 per
+repetition while fetching the identical 610,452,538 product-code bytes. Across
+all queries, GETs/query fell 27.3%, but mean latency was unchanged at 27.105 ms.
+Except for the first control repetition, 4 MiB generally increased the
+global-delta approximate/wait p95 and was slower on a majority of paired queries
+in repetitions 2, 4, and 5 (and effectively split repetition 3). Thus fewer,
+larger range requests do not reliably reduce this path's tail; v68's apparent
+benefit was dominated by its noisy first/cold control tail. The next core read
+experiment must address request scheduling/overlap or delta-stage work rather
+than increasing stripe width or relying on cache.
