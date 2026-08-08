@@ -69,8 +69,9 @@ issuing one conditional PUT per record.
 High-throughput group commit does not use strict-insert claims or a global
 last-write-wins counter. Each logical handle allocates internal convergent
 mutation versions, canonicalizes the complete record digest, writes one
-immutable extent to its leased writer stripe, and conditionally publishes that
-extent through the stripe head. A healthy group acknowledgement therefore
+immutable stock Arrow IPC mutation extent to its leased writer stripe, and
+conditionally publishes that extent through the versioned JSON stripe head. A
+healthy group acknowledgement therefore
 reports exactly two PUTs and zero GET/HEAD/LIST. Repeated IDs merge by the full
 `(HLC, writer, digest, operation)` mutation state; equal-version unequal-digest
 evidence fails closed. Cross-host unobserved writes are deterministic but not
@@ -170,9 +171,10 @@ Persistent index data is binary and efficient:
   routing/PQ fields that live-tail exact search never consumes. Manifests,
   segment summaries, routing pages, pivot/routing tables, graph blocks,
   BM25/named-sparse roots, term pages, postings, row metadata, and the coarse
-  quantizer remain standard cross-language Parquet files. Lane heads, commit
-  markers, and `CURRENT` are checked packed atomic records; exact sidecars and
-  global scan bundles are standard Arrow IPC files;
+  quantizer remain standard cross-language Parquet files. Writer-stripe heads
+  are versioned checked JSON control records; mutation extents, exact sidecars,
+  and global scan bundles are standard Arrow IPC files. Other commit markers
+  and `CURRENT` remain checked packed atomic records;
 - manifests, segment summaries, routing bloom filters, pivot/routing tables,
   coarse codes, and graph blocks are Parquet; normal segment records are
   Parquet by default or Vortex when explicitly selected. Exact dense vectors

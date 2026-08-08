@@ -123,7 +123,10 @@ use crate::{
 // Bumped 29 -> 30 when canonical 192-bit mutation versions and 256-bit
 // mutation digests became typed columns in WAL, segment, and exact-vector
 // artifacts. A v29 reader would discard the convergent multi-writer order.
-const CURRENT_VERSION: u16 = 30;
+// Bumped 30 -> 31 when writer-stripe mutation extents replaced the custom
+// framed `.wal` envelope and nested Parquet payload with one stock-readable
+// Arrow IPC stream carrying typed mutation identity and modality columns.
+const CURRENT_VERSION: u16 = 31;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

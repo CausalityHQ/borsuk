@@ -150,3 +150,32 @@ drain-inclusive throughput 46,655.775 records/s for 16,384 records. The
 bounded read window materially reduced active-tail p95 versus r35 while
 preserving the sub-200 ms post-drain gate; this remains a single-cell local
 result, not a five-repetition, AWS, or 100M-scale qualification.
+
+## Post-v31 standard mutation-extent checkpoint
+
+The v31 implementation checkpoint replaces each writer-stripe custom `.wal`
+envelope, nested ID-delta block, and nested Parquet payload with one
+stock-readable Arrow IPC stream. The typed schema carries the stable stripe,
+lease epoch, sequence, row count, mutation operation/version/digest, and the
+`inserted`/`live`/`deleted` ID state needed to distinguish first inserts from
+updates during materialization. Writer frontier refresh validates only Arrow
+stream/schema metadata; record decoding remains deferred to recovery or a
+tail-cache miss. The public group-commit regression opens the persisted object
+with the stock Arrow reader and preserves the healthy acknowledgement boundary
+of exactly two PUTs and zero GET/HEAD/LIST requests.
+
+The first full Rust gate caught a real cutover defect after 545 passing library
+tests: reconstructing every put as `live` caused first inserts to create an
+unnecessary tombstone frontier. A focused RED reproduction failed the original
+materialization invariant. Persisting the explicit standard Arrow `id_state`
+column and rebuilding fence IDs only from `live` rows made that exact test
+green. Fresh terminal verification then passed 1,128 Rust tests with 25 ignored
+across 70 suites, strict workspace Clippy, formatting, 42 group-commit tests,
+52 lane-log tests, 12 fault-injection tests, and 458 Python tests in the
+declared format-benchmark environment. The repository policy validator passes.
+The standalone research-document validator still fails on pre-existing absent
+historical raw directories and `resource-schema.csv`; no missing artifact was
+invented. This checkpoint changes the persistent format, so prior performance
+arms remain immutable historical evidence and are not attributed to v31. A new
+fresh-base terminal qualification is required before any latency, throughput,
+or recall claim.

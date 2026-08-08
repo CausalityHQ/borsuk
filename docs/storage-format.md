@@ -392,8 +392,8 @@ Compaction creates new immutable shards and rebuilds roots from the active
 segment set; old objects remain unreachable until garbage collection. Record id
 plus typed mutation HLC, writer identity, and canonical digest in the
 row-metadata groups preserve the same convergent mutation identity used by
-dense search. The temporary generation column remains during the v30 cutover;
-it is not the final cross-writer visibility key.
+dense search. A temporary generation column remains in some materialized tables
+during the v31 cutover; it is not the final cross-writer visibility key.
 
 ## Native FFI Rules
 
@@ -486,11 +486,20 @@ Until the first release, every incompatible storage change increments the
 relevant pointer/table/artifact marker and requires a fresh build from canonical
 Parquet/Arrow source. No benchmark result may cross such a format change.
 
-The current table format is v30. It rejects v29 indexes because persisted rows
-now carry the complete convergent mutation stamp: a 64-bit HLC, 128-bit writer
-identity, and 256-bit canonical digest. Silently opening an older index would
-discard cross-writer ordering or conflict evidence. Pre-release indexes are
-rebuilt from their canonical source rather than migrated.
+The current table format is v31. It rejects v30 indexes because writer-stripe
+foreground extents are now one stock-readable Arrow IPC stream rather than a
+custom `.wal` envelope containing a custom ID-delta block and nested Parquet
+payload. The Arrow schema carries stripe, lease epoch, sequence, dimensions,
+row count, maximum mutation version, record ID, operation, ID state
+(`inserted`, `live`, or `deleted`), complete mutation stamp, dense vector,
+metadata, text, named dense/sparse fields, and late-interaction fields. The ID
+state preserves whether materialization must fence an older value without a
+private side envelope. Frontier refresh validates the stock Arrow stream and
+reads schema properties without decoding record batches; full row decode is
+deferred until recovery or a tail-cache miss.
+Silently opening an older index would mix incompatible extent discovery and
+decoding rules. Pre-release indexes are rebuilt from canonical source rather
+than migrated.
 
 - **Pointer-format version** changes whenever the fixed binary `CURRENT`
   layout, checksum coverage, or publication semantics become incompatible.

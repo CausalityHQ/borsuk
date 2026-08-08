@@ -5,15 +5,18 @@ mod common;
 
 use std::{
     collections::HashSet,
+    io::Cursor,
     sync::{Arc, Barrier},
 };
 
+use arrow_ipc::reader::StreamReader;
+use arrow_schema::DataType;
 use borsuk::{
     BorsukIndex, GROUP_COMMIT_STRIPE_COUNT, GroupCommitConfig, GroupCommitWriter, IndexConfig,
     LeafMode, SearchOptions, VectorMetric, VectorRecord,
 };
 use futures_util::TryStreamExt;
-use object_store::{ObjectStore, memory::InMemory};
+use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory};
 
 fn config(uri: &str) -> IndexConfig {
     IndexConfig {
@@ -491,6 +494,84 @@ fn lane_log_ack_publishes_extent_and_stripe_head_without_global_coordination() {
             .unwrap(),
         Some(vec![1.0, 2.0])
     );
+}
+
+#[test]
+fn lane_log_ack_persists_a_stock_readable_arrow_mutation_extent() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///group-standard-arrow-extent";
+    let writer = GroupCommitWriter::new(
+        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 2,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+
+    let receipt = writer
+        .append(vec![
+            VectorRecord::new("first", vec![1.0, 2.0]),
+            VectorRecord::new("second", vec![3.0, 4.0]),
+        ])
+        .unwrap();
+    assert_eq!(receipt.requests.puts, 2);
+    assert_eq!(receipt.requests.gets, 0);
+    assert_eq!(receipt.requests.heads, 0);
+    assert_eq!(receipt.requests.lists, 0);
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let extent = runtime
+        .block_on(
+            inner
+                .list(Some(&"lane-log/lanes".into()))
+                .try_collect::<Vec<_>>(),
+        )
+        .unwrap()
+        .into_iter()
+        .find(|object| {
+            object.location.as_ref().contains("/extents/")
+                && object.location.as_ref().ends_with(".arrow")
+        })
+        .expect("group commit must persist one standard Arrow extent");
+    let bytes = runtime
+        .block_on(async { inner.get(&extent.location).await?.bytes().await })
+        .unwrap();
+    let mut reader = StreamReader::try_new(Cursor::new(bytes), None).unwrap();
+    let schema = reader.schema();
+
+    assert_eq!(
+        schema
+            .metadata()
+            .get("borsuk.object_role")
+            .map(String::as_str),
+        Some("mutation_extent")
+    );
+    assert_eq!(
+        schema.field_with_name("mutation_hlc").unwrap().data_type(),
+        &DataType::UInt64
+    );
+    assert_eq!(
+        schema.field_with_name("id_state").unwrap().data_type(),
+        &DataType::Utf8
+    );
+    assert_eq!(
+        schema
+            .field_with_name("mutation_writer")
+            .unwrap()
+            .data_type(),
+        &DataType::FixedSizeBinary(16)
+    );
+    assert_eq!(
+        schema
+            .field_with_name("mutation_digest")
+            .unwrap()
+            .data_type(),
+        &DataType::FixedSizeBinary(32)
+    );
+    assert_eq!(reader.next().unwrap().unwrap().num_rows(), 2);
+    assert!(reader.next().is_none());
 }
 
 #[test]
@@ -1189,7 +1270,7 @@ fn repeated_groups_publish_a_fenced_head_after_the_extent() {
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put
                 && path.contains("/extents/")
-                && path.ends_with(".wal")
+                && path.ends_with(".arrow")
         }),
         GROUPS,
         "every acknowledgement PUT must create exactly one immutable extent"
@@ -1263,7 +1344,7 @@ fn small_groups_publish_only_immutable_extents_before_release() {
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put
                 && path.contains("/extents/")
-                && path.ends_with(".wal")
+                && path.ends_with(".arrow")
         }),
         5,
         "each small group must create exactly one immutable extent"

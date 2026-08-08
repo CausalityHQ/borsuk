@@ -11,6 +11,11 @@ use std::{
 
 use crate::{
     BorsukError, PhysicalFormat, RequestCounts, Result, VectorElementType, VectorRecord,
+    mutation::{CanonicalMutation, MutationOperation, MutationVersion},
+    mutation_extent::{
+        MutationExtentIdState, MutationExtentIdentity, decode_mutation_extent,
+        encode_mutation_extent, inspect_mutation_extent,
+    },
     storage::Storage,
 };
 use object_store::{ObjectStore, UpdateVersion};
@@ -19,9 +24,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const BLOCK_MAGIC: &[u8; 8] = b"BRSLBL25";
 const HEAD_MAGIC: &[u8; 8] = b"BRSLHD26";
-const EXTENT_MAGIC: &[u8; 8] = b"BRSLXT28";
 const ACTIVE_STRIPE_PATH: &str = "lane-log/ACTIVE";
-const COORDINATION_SCHEMA_VERSION: u8 = 30;
+const COORDINATION_SCHEMA_VERSION: u8 = 31;
 const EPOCH_HEAD_ROLE: &str = "lane_epoch_head";
 const ACTIVE_STRIPE_ROLE: &str = "active_stripe_directory";
 const MAX_LINEARIZABLE_PROBE_EXTENTS: u64 = 128;
@@ -332,7 +336,7 @@ struct LaneEpochSeal {
     durable_sequence: u64,
     materialized_sequence: u64,
     materialized_manifest_version: u64,
-    generation_end: u64,
+    max_mutation_hlc: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -345,7 +349,7 @@ struct LaneEpochHead {
     durable_sequence: u64,
     materialized_sequence: u64,
     materialized_manifest_version: u64,
-    generation_base: u64,
+    max_mutation_hlc: u64,
     sealed_epoch: Option<LaneEpochSeal>,
 }
 
@@ -432,80 +436,91 @@ struct LaneExtent {
     lane: u16,
     lease_epoch: u64,
     sequence: u64,
-    first_generation: u64,
     records: u64,
+    max_mutation_hlc: u64,
     payload: Vec<u8>,
 }
 
 impl LaneExtent {
-    fn from_wal(
-        lane: u16,
-        lease_epoch: u64,
-        sequence: u64,
-        first_generation: u64,
-        wal_payload: &[u8],
-        deltas: &[LaneIdDelta],
+    fn from_mutations(
+        identity: MutationExtentIdentity,
+        dimensions: usize,
+        mutations: &[CanonicalMutation],
     ) -> Result<Self> {
-        let records = u64::try_from(deltas.len()).map_err(|_| {
+        let id_states = mutations
+            .iter()
+            .map(|mutation| match mutation.operation() {
+                MutationOperation::Put => MutationExtentIdState::Live,
+                MutationOperation::Delete => MutationExtentIdState::Deleted,
+            })
+            .collect::<Vec<_>>();
+        Self::from_mutations_with_id_states(identity, dimensions, mutations, &id_states)
+    }
+
+    fn from_mutations_with_id_states(
+        identity: MutationExtentIdentity,
+        dimensions: usize,
+        mutations: &[CanonicalMutation],
+        id_states: &[MutationExtentIdState],
+    ) -> Result<Self> {
+        let records = u64::try_from(mutations.len()).map_err(|_| {
             BorsukError::InvalidRecordInput("epoch lane-log record count exceeds u64".to_string())
         })?;
         if records == 0 {
             return Err(BorsukError::InvalidRecordInput(
-                "epoch lane-log WAL extent requires at least one ID delta".to_string(),
+                "epoch lane-log mutation extent requires at least one row".to_string(),
             ));
         }
-        first_generation.checked_add(records - 1).ok_or_else(|| {
-            BorsukError::InvalidRecordInput(
-                "epoch lane-log generation range exceeds u64".to_string(),
-            )
-        })?;
+        let max_mutation_hlc = mutations
+            .iter()
+            .map(|mutation| mutation.stamp().version().hlc())
+            .max()
+            .expect("non-empty mutation extent has a maximum HLC");
         Ok(Self {
-            lane,
-            lease_epoch,
-            sequence,
-            first_generation,
+            lane: identity.stripe,
+            lease_epoch: identity.lease_epoch,
+            sequence: identity.sequence,
             records,
-            payload: block_bytes_with_deltas(wal_payload, deltas)?,
+            max_mutation_hlc,
+            payload: encode_mutation_extent(identity, dimensions, mutations, id_states)?,
         })
     }
 
     fn decode_wal_records(&self) -> Result<(Vec<VectorRecord>, Vec<LaneIdDelta>)> {
-        let (payload, deltas) = block_from_bytes(&self.payload)?;
-        if u64::try_from(deltas.len()).ok() != Some(self.records) {
+        let decoded = decode_mutation_extent(&self.payload)?;
+        if decoded.identity
+            != (MutationExtentIdentity {
+                stripe: self.lane,
+                lease_epoch: self.lease_epoch,
+                sequence: self.sequence,
+            })
+            || u64::try_from(decoded.mutations.len()).ok() != Some(self.records)
+        {
             return Err(BorsukError::InvalidStorage(
-                "epoch lane-log extent record and ID-delta counts differ".to_string(),
+                "epoch lane-log extent identity or row count changed during decode".to_string(),
             ));
         }
-        let mut records =
-            crate::format::wal_records_from_table(payload.to_vec(), "lane-epoch-records.parquet")?;
-        if u64::try_from(records.len()).ok() != Some(self.records) {
-            return Err(BorsukError::InvalidStorage(
-                "epoch lane-log extent record count does not match its WAL payload".to_string(),
-            ));
-        }
-        for (ordinal, record) in records.iter_mut().enumerate() {
-            let ordinal = u64::try_from(ordinal).map_err(|_| {
-                BorsukError::InvalidStorage("epoch lane-log record ordinal exceeds u64".to_string())
-            })?;
-            record.generation = self.first_generation.checked_add(ordinal).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "epoch lane-log generation range exceeds u64".to_string(),
-                )
-            })?;
+        let mut records = Vec::with_capacity(decoded.mutations.len());
+        let mut deltas = Vec::with_capacity(decoded.mutations.len());
+        for (mutation, id_state) in decoded.mutations.into_iter().zip(decoded.id_states) {
+            deltas.push(LaneIdDelta {
+                id: mutation.id().as_bytes().to_vec(),
+                state: match id_state {
+                    MutationExtentIdState::Inserted => LaneIdDeltaState::Inserted,
+                    MutationExtentIdState::Live => LaneIdDeltaState::Live,
+                    MutationExtentIdState::Deleted => LaneIdDeltaState::Deleted,
+                },
+            });
+            if let Some(record) = mutation.into_record() {
+                records.push(record);
+            }
         }
         Ok((records, deltas))
     }
 }
 
-fn extent_generation_end(extent: &LaneExtent) -> Result<u64> {
-    extent
-        .first_generation
-        .checked_add(extent.records.saturating_sub(1))
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "epoch lane-log extent generation range exceeds u64".to_string(),
-            )
-        })
+fn extent_max_mutation_hlc(extent: &LaneExtent) -> u64 {
+    extent.max_mutation_hlc
 }
 
 impl LaneLogHead {
@@ -718,19 +733,7 @@ fn extent_bytes(extent: &LaneExtent) -> Result<Vec<u8>> {
             "epoch lane-log extents require positive sequence, records, and payload".to_string(),
         ));
     }
-    let payload_len = u64::try_from(extent.payload.len()).map_err(|_| {
-        BorsukError::InvalidRecordInput("epoch lane-log extent payload exceeds u64".to_string())
-    })?;
-    let mut body = Vec::with_capacity(43_usize.saturating_add(extent.payload.len()));
-    body.push(30);
-    body.extend_from_slice(&extent.lane.to_le_bytes());
-    body.extend_from_slice(&extent.lease_epoch.to_le_bytes());
-    body.extend_from_slice(&extent.sequence.to_le_bytes());
-    body.extend_from_slice(&extent.first_generation.to_le_bytes());
-    body.extend_from_slice(&extent.records.to_le_bytes());
-    body.extend_from_slice(&payload_len.to_le_bytes());
-    body.extend_from_slice(&extent.payload);
-    Ok(fenced_bytes(EXTENT_MAGIC, &body))
+    Ok(extent.payload.clone())
 }
 
 fn extent_path(lane: u16, lease_epoch: u64, sequence: u64) -> Result<String> {
@@ -740,7 +743,7 @@ fn extent_path(lane: u16, lease_epoch: u64, sequence: u64) -> Result<String> {
         ));
     }
     Ok(format!(
-        "lane-log/lanes/{lane:04}/epochs/{lease_epoch:016x}/extents/{sequence:016x}.wal"
+        "lane-log/lanes/{lane:04}/epochs/{lease_epoch:016x}/extents/{sequence:016x}.arrow"
     ))
 }
 
@@ -756,50 +759,27 @@ fn extent_from_bytes(
             "epoch lane-log extent path or checksum identity mismatch".to_string(),
         ));
     }
-    let body = fenced_body(bytes, EXTENT_MAGIC, "extent")?;
-    let mut cursor = 0;
-    if take_u8(body, &mut cursor)? != 30 {
-        return Err(BorsukError::InvalidStorage(
-            "unsupported epoch lane-log extent version".to_string(),
-        ));
-    }
-    let lane = take_u16(body, &mut cursor)?;
-    let lease_epoch = take_u64(body, &mut cursor)?;
-    let sequence = take_u64(body, &mut cursor)?;
-    let first_generation = take_u64(body, &mut cursor)?;
-    let records = take_u64(body, &mut cursor)?;
-    let payload_len = usize::try_from(take_u64(body, &mut cursor)?).map_err(|_| {
-        BorsukError::InvalidStorage("epoch lane-log extent payload exceeds usize".to_string())
-    })?;
-    let payload_end = cursor.checked_add(payload_len).ok_or_else(|| {
-        BorsukError::InvalidStorage("epoch lane-log extent payload length overflow".to_string())
-    })?;
-    let payload = body
-        .get(cursor..payload_end)
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage("epoch lane-log extent payload is truncated".to_string())
-        })?
-        .to_vec();
-    cursor = payload_end;
-    if cursor != body.len()
-        || lane != expected_lane
-        || lease_epoch != expected_epoch
-        || sequence != expected_sequence
-        || sequence == 0
-        || records == 0
-        || payload.is_empty()
+    let metadata = inspect_mutation_extent(bytes)?;
+    if metadata.identity
+        != (MutationExtentIdentity {
+            stripe: expected_lane,
+            lease_epoch: expected_epoch,
+            sequence: expected_sequence,
+        })
     {
         return Err(BorsukError::InvalidStorage(
             "epoch lane-log extent identity or bounds mismatch".to_string(),
         ));
     }
     Ok(LaneExtent {
-        lane,
-        lease_epoch,
-        sequence,
-        first_generation,
-        records,
-        payload,
+        lane: expected_lane,
+        lease_epoch: expected_epoch,
+        sequence: expected_sequence,
+        records: u64::try_from(metadata.row_count).map_err(|_| {
+            BorsukError::InvalidStorage("epoch lane-log row count exceeds u64".to_string())
+        })?,
+        max_mutation_hlc: metadata.max_version.hlc(),
+        payload: bytes.to_vec(),
     })
 }
 
@@ -1074,7 +1054,7 @@ pub(crate) fn initialize_empty_lane_heads(storage: &Storage, lane_count: u16) ->
             durable_sequence: 0,
             materialized_sequence: 0,
             materialized_manifest_version: 0,
-            generation_base: 0,
+            max_mutation_hlc: 0,
             sealed_epoch: None,
         };
         let bytes = epoch_head_bytes(&head)?;
@@ -1296,7 +1276,7 @@ impl LaneEpochWriter {
             durable_sequence: 0,
             materialized_sequence: 0,
             materialized_manifest_version: 0,
-            generation_base: 0,
+            max_mutation_hlc: 0,
             sealed_epoch: None,
         };
         let head_version =
@@ -1318,7 +1298,6 @@ impl LaneEpochWriter {
         now_ms: u64,
         ttl_ms: u64,
         id_budget_bytes: u64,
-        minimum_generation: u64,
     ) -> Result<Self> {
         if owner == [0; 16] || ttl_ms == 0 {
             return Err(BorsukError::InvalidRecordInput(
@@ -1346,7 +1325,7 @@ impl LaneEpochWriter {
                 durable_sequence: 0,
                 materialized_sequence: 0,
                 materialized_manifest_version: 0,
-                generation_base: minimum_generation,
+                max_mutation_hlc: 0,
                 sealed_epoch: None,
             },
             Some(stored) => {
@@ -1373,21 +1352,19 @@ impl LaneEpochWriter {
                     LaneEpochHead {
                         lease_expires_at_ms,
                         durable_sequence,
-                        generation_base: current_extents.iter().try_fold(
-                            current_head.generation_base.max(minimum_generation),
-                            |generation, extent| {
-                                extent_generation_end(extent).map(|end| generation.max(end))
-                            },
-                        )?,
+                        max_mutation_hlc: current_extents
+                            .iter()
+                            .fold(current_head.max_mutation_hlc, |maximum, extent| {
+                                maximum.max(extent_max_mutation_hlc(extent))
+                            }),
                         ..current_head
                     }
                 } else {
-                    let generation_end = current_extents.iter().try_fold(
-                        current_head.generation_base.max(minimum_generation),
-                        |generation, extent| {
-                            extent_generation_end(extent).map(|end| generation.max(end))
-                        },
-                    )?;
+                    let max_mutation_hlc = current_extents
+                        .iter()
+                        .fold(current_head.max_mutation_hlc, |maximum, extent| {
+                            maximum.max(extent_max_mutation_hlc(extent))
+                        });
                     LaneEpochHead {
                         lane,
                         lease_epoch: current_head.lease_epoch.checked_add(1).ok_or_else(|| {
@@ -1400,7 +1377,7 @@ impl LaneEpochWriter {
                         durable_sequence: 0,
                         materialized_sequence: 0,
                         materialized_manifest_version: 0,
-                        generation_base: generation_end,
+                        max_mutation_hlc,
                         sealed_epoch: (current_head.lease_epoch > 0).then(|| LaneEpochSeal {
                             lease_epoch: current_head.lease_epoch,
                             durable_sequence: current_extents
@@ -1411,7 +1388,7 @@ impl LaneEpochWriter {
                             materialized_sequence: current_head.materialized_sequence,
                             materialized_manifest_version: current_head
                                 .materialized_manifest_version,
-                            generation_end,
+                            max_mutation_hlc,
                         }),
                     }
                 }
@@ -1456,21 +1433,52 @@ impl LaneEpochWriter {
         records: u64,
         completed_at_ms: u64,
     ) -> Result<LaneLogReceipt> {
+        let record_count = usize::try_from(records).map_err(|_| {
+            BorsukError::InvalidRecordInput("epoch lane-log record count exceeds usize".to_string())
+        })?;
+        let first_hlc = self.head.max_mutation_hlc.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("epoch lane-log test HLC exceeds u64".to_string())
+        })?;
+        let mutations = (0..record_count)
+            .map(|ordinal| {
+                let ordinal = u64::try_from(ordinal).map_err(|_| {
+                    BorsukError::InvalidRecordInput(
+                        "epoch lane-log test ordinal exceeds u64".to_string(),
+                    )
+                })?;
+                CanonicalMutation::put(
+                    MutationVersion::from_parts(
+                        first_hlc.checked_add(ordinal).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "epoch lane-log test HLC exceeds u64".to_string(),
+                            )
+                        })?,
+                        [1; 16],
+                    ),
+                    VectorRecord::new_bytes(
+                        if record_count == 1 {
+                            payload.to_vec()
+                        } else {
+                            format!("{}-{ordinal}", String::from_utf8_lossy(payload)).into_bytes()
+                        },
+                        vec![ordinal as f32],
+                    ),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         let before = self.storage.request_counts();
         let sequence = self.head.durable_sequence.checked_add(1).ok_or_else(|| {
             BorsukError::InvalidStorage("epoch lane-log sequence exceeds u64".to_string())
         })?;
-        let first_generation = self.head.generation_base.checked_add(1).ok_or_else(|| {
-            BorsukError::InvalidStorage("epoch lane-log generation exceeds u64".to_string())
-        })?;
-        let extent = LaneExtent {
-            lane: self.head.lane,
-            lease_epoch: self.head.lease_epoch,
-            sequence,
-            first_generation,
-            records,
-            payload: payload.to_vec(),
-        };
+        let extent = LaneExtent::from_mutations(
+            MutationExtentIdentity {
+                stripe: self.head.lane,
+                lease_epoch: self.head.lease_epoch,
+                sequence,
+            },
+            1,
+            &mutations,
+        )?;
         let bytes = extent_bytes(&extent)?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = extent_path(self.head.lane, self.head.lease_epoch, sequence)?;
@@ -1483,7 +1491,12 @@ impl LaneEpochWriter {
         }
         let mut next = self.head.clone();
         next.durable_sequence = sequence;
-        next.generation_base = first_generation;
+        next.max_mutation_hlc = mutations
+            .last()
+            .expect("test extent requires at least one mutation")
+            .stamp()
+            .version()
+            .hlc();
         self.publish_head(next)?;
         Ok(LaneLogReceipt {
             lane: self.head.lane,
@@ -1501,24 +1514,6 @@ impl LaneEpochWriter {
         dimensions: usize,
         completed_at_ms: u64,
     ) -> Result<LaneLogReceipt> {
-        let first_generation = self.head.generation_base.checked_add(1).ok_or_else(|| {
-            BorsukError::InvalidStorage("epoch lane-log generation exceeds u64".to_string())
-        })?;
-        self.append_upsert_records_with_generation_at(
-            records,
-            dimensions,
-            first_generation,
-            completed_at_ms,
-        )
-    }
-
-    fn append_upsert_records_with_generation_at(
-        &mut self,
-        records: &[VectorRecord],
-        dimensions: usize,
-        first_generation: u64,
-        completed_at_ms: u64,
-    ) -> Result<LaneLogReceipt> {
         if records.is_empty() {
             return Err(BorsukError::InvalidRecordInput(
                 "epoch lane-log upsert requires at least one record".to_string(),
@@ -1533,54 +1528,49 @@ impl LaneEpochWriter {
             Some(authority) => Some(authority.prepare_upsert(&ids)?),
             None => None,
         };
+        let id_states = match self.id_authority.as_ref() {
+            Some(authority) => ids
+                .iter()
+                .map(|id| {
+                    if authority.states.contains_key(*id) {
+                        MutationExtentIdState::Live
+                    } else {
+                        MutationExtentIdState::Inserted
+                    }
+                })
+                .collect::<Vec<_>>(),
+            None => vec![MutationExtentIdState::Live; records.len()],
+        };
         let sequence = self.head.durable_sequence.checked_add(1).ok_or_else(|| {
             BorsukError::InvalidStorage("epoch lane-log sequence exceeds u64".to_string())
         })?;
-        if first_generation <= self.head.generation_base {
-            return Err(BorsukError::InvalidStorage(format!(
-                "epoch lane-log generation range starts at {first_generation} but stripe {} has already reached {}",
-                self.head.lane, self.head.generation_base
-            )));
-        }
-        let payload = crate::format::wal_records_to_table(
-            records,
+        let mutations = records
+            .iter()
+            .cloned()
+            .map(|record| {
+                let stamp = record.mutation_stamp().ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "epoch lane-log put is missing its canonical mutation stamp".to_string(),
+                    )
+                })?;
+                let mutation = CanonicalMutation::put(stamp.version(), record)?;
+                if mutation.stamp() != stamp {
+                    return Err(BorsukError::InvalidStorage(
+                        "epoch lane-log put digest changed before persistence".to_string(),
+                    ));
+                }
+                Ok(mutation)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let extent = LaneExtent::from_mutations_with_id_states(
+            MutationExtentIdentity {
+                stripe: self.head.lane,
+                lease_epoch: self.head.lease_epoch,
+                sequence,
+            },
             dimensions,
-            VectorElementType::Float32,
-            PhysicalFormat::Parquet,
-        )?;
-        let deltas: Vec<LaneIdDelta> =
-            prepared
-                .as_ref()
-                .map(|(prepared_ids, _)| {
-                    prepared_ids
-                        .iter()
-                        .map(|id| LaneIdDelta {
-                            id: id.clone(),
-                            state: if self.id_authority.as_ref().is_some_and(|authority| {
-                                authority.states.contains_key(id.as_slice())
-                            }) {
-                                LaneIdDeltaState::Live
-                            } else {
-                                LaneIdDeltaState::Inserted
-                            },
-                        })
-                        .collect()
-                })
-                .unwrap_or_else(|| {
-                    ids.iter()
-                        .map(|id| LaneIdDelta {
-                            id: id.to_vec(),
-                            state: LaneIdDeltaState::Live,
-                        })
-                        .collect()
-                });
-        let extent = LaneExtent::from_wal(
-            self.head.lane,
-            self.head.lease_epoch,
-            sequence,
-            first_generation,
-            &payload,
-            &deltas,
+            &mutations,
+            &id_states,
         )?;
         let bytes = extent_bytes(&extent)?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
@@ -1595,12 +1585,14 @@ impl LaneEpochWriter {
         let records = u64::try_from(records.len()).map_err(|_| {
             BorsukError::InvalidRecordInput("epoch lane-log record count exceeds u64".to_string())
         })?;
-        let generation_end = first_generation.checked_add(records - 1).ok_or_else(|| {
-            BorsukError::InvalidStorage("epoch lane-log generation range exceeds u64".to_string())
-        })?;
+        let max_mutation_hlc = mutations
+            .iter()
+            .map(|mutation| mutation.stamp().version().hlc())
+            .max()
+            .expect("non-empty mutation extent has a maximum HLC");
         let mut next = self.head.clone();
         next.durable_sequence = sequence;
-        next.generation_base = generation_end;
+        next.max_mutation_hlc = max_mutation_hlc;
         self.publish_head(next)?;
         if let (Some(authority), Some((ids, resident_bytes))) =
             (self.id_authority.as_mut(), prepared)
@@ -1704,32 +1696,6 @@ impl LaneEpochWriter {
         self.append_upsert_records_at(records, dimensions, now_ms)
     }
 
-    pub(crate) fn append_upsert_records_with_reserved_generation_at(
-        &mut self,
-        records: &[VectorRecord],
-        dimensions: usize,
-        first_generation: u64,
-        now_ms: u64,
-        ttl_ms: u64,
-    ) -> Result<LaneLogReceipt> {
-        if !self.directory_active {
-            self.activate_directory(GROUP_COMMIT_STRIPE_COUNT)?;
-        }
-        if now_ms >= self.head.lease_expires_at_ms {
-            return Err(BorsukError::ConcurrentModification {
-                path: format!("{}/LEASE_EXPIRED", head_path(self.head.lane)),
-            });
-        }
-        if self.head.lease_expires_at_ms.saturating_sub(now_ms) <= ttl_ms / 2 {
-            let mut renewed = self.head.clone();
-            renewed.lease_expires_at_ms = now_ms.checked_add(ttl_ms).ok_or_else(|| {
-                BorsukError::InvalidRecordInput("epoch lane lease expiry exceeds u64".to_string())
-            })?;
-            self.publish_head(renewed)?;
-        }
-        self.append_upsert_records_with_generation_at(records, dimensions, first_generation, now_ms)
-    }
-
     pub(crate) fn mark_materialized_through(
         &mut self,
         sequence: u64,
@@ -1822,7 +1788,7 @@ impl LaneEpochWriter {
                     next.materialized_manifest_version = next
                         .materialized_manifest_version
                         .max(observed.materialized_manifest_version);
-                    next.generation_base = next.generation_base.max(observed.generation_base);
+                    next.max_mutation_hlc = next.max_mutation_hlc.max(observed.max_mutation_hlc);
                     if observed.sealed_epoch.is_none() {
                         next.sealed_epoch = None;
                     }
@@ -2091,8 +2057,8 @@ impl LaneEpochReader {
                                 "cannot checkpoint missing epoch lane {lane} sequence {extent_sequence}"
                             ))
                         })?;
-                    next.generation_base =
-                        next.generation_base.max(extent_generation_end(&extent)?);
+                    next.max_mutation_hlc =
+                        next.max_mutation_hlc.max(extent_max_mutation_hlc(&extent));
                 }
                 next.durable_sequence = sequence;
             }
@@ -2197,7 +2163,7 @@ impl LaneEpochReader {
                         object.path
                     ))
                 })?;
-                let sequence = name.strip_suffix(".wal").ok_or_else(|| {
+                let sequence = name.strip_suffix(".arrow").ok_or_else(|| {
                     BorsukError::InvalidStorage(format!(
                         "epoch lane-log extent `{}` has an invalid name",
                         object.path
@@ -2459,12 +2425,12 @@ impl LaneLogReader {
                                     "epoch lane-log payload length exceeds u64".to_string(),
                                 )
                             })?;
-                            let load = || extent.decode_wal_records().map(|(records, _)| records);
+                            let (decoded_records, deltas) = extent.decode_wal_records()?;
+                            let load = || Ok(decoded_records);
                             let records = match runtime {
                                 Some(runtime) => runtime.load_record_run(&key, bytes, load)?,
                                 None => Arc::new(load()?),
                             };
-                            let (_, deltas) = block_from_bytes(&extent.payload)?;
                             let fence_ids = deltas
                                 .into_iter()
                                 .filter(|delta| delta.state == LaneIdDeltaState::Live)
@@ -3453,6 +3419,46 @@ mod tests {
         LaneLogWriter::new_empty(Arc::new(InMemory::new()), uri, 3, 7).unwrap()
     }
 
+    fn test_extent(
+        lane: u16,
+        lease_epoch: u64,
+        sequence: u64,
+        first_hlc: u64,
+        ids: &[&str],
+    ) -> LaneExtent {
+        let mutations = ids
+            .iter()
+            .enumerate()
+            .map(|(ordinal, id)| {
+                CanonicalMutation::put(
+                    MutationVersion::from_parts(first_hlc + ordinal as u64, [1; 16]),
+                    VectorRecord::new(*id, vec![ordinal as f32, 0.0]),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        LaneExtent::from_mutations(
+            MutationExtentIdentity {
+                stripe: lane,
+                lease_epoch,
+                sequence,
+            },
+            2,
+            &mutations,
+        )
+        .unwrap()
+    }
+
+    fn stamped_record(id: &str, vector: Vec<f32>, hlc: u64) -> VectorRecord {
+        CanonicalMutation::put(
+            MutationVersion::from_parts(hlc, [1; 16]),
+            VectorRecord::new(id, vector),
+        )
+        .unwrap()
+        .into_record()
+        .expect("canonical put contains a record")
+    }
+
     #[test]
     fn v30_head_is_bounded_versioned_stock_json() {
         let head = |durable_sequence| LaneEpochHead {
@@ -3463,13 +3469,13 @@ mod tests {
             durable_sequence,
             materialized_sequence: durable_sequence.saturating_sub(1),
             materialized_manifest_version: 17,
-            generation_base: 42,
+            max_mutation_hlc: 42,
             sealed_epoch: Some(LaneEpochSeal {
                 lease_epoch: 6,
                 durable_sequence: 91,
                 materialized_sequence: 90,
                 materialized_manifest_version: 17,
-                generation_end: 132,
+                max_mutation_hlc: 132,
             }),
         };
 
@@ -3477,7 +3483,7 @@ mod tests {
         let millionth = epoch_head_bytes(&head(1_000_000)).unwrap();
 
         let document: serde_json::Value = serde_json::from_slice(&millionth).unwrap();
-        assert_eq!(document["schema_version"], 30);
+        assert_eq!(document["schema_version"], 31);
         assert_eq!(document["object_role"], "lane_epoch_head");
         assert!(first.len() < 1_024);
         assert!(millionth.len() < 1_024);
@@ -3489,14 +3495,7 @@ mod tests {
 
     #[test]
     fn v30_extent_round_trips_identity_and_records() {
-        let extent = LaneExtent {
-            lane: 3,
-            lease_epoch: 7,
-            sequence: 11,
-            first_generation: 101,
-            records: 2,
-            payload: b"two durable records".to_vec(),
-        };
+        let extent = test_extent(3, 7, 11, 101, &["first", "second"]);
         let bytes = extent_bytes(&extent).unwrap();
         let path = extent_path(3, 7, 11).unwrap();
 
@@ -3513,7 +3512,7 @@ mod tests {
         };
         let bytes = active_stripe_directory_bytes(&directory).unwrap();
         let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(document["schema_version"], 30);
+        assert_eq!(document["schema_version"], 31);
         assert_eq!(document["object_role"], "active_stripe_directory");
 
         assert_eq!(
@@ -3534,7 +3533,7 @@ mod tests {
         );
 
         let mut changed_schema = document;
-        changed_schema["schema_version"] = serde_json::json!(31);
+        changed_schema["schema_version"] = serde_json::json!(32);
         assert!(
             active_stripe_directory_from_bytes(
                 &serde_json::to_vec(&changed_schema).expect("mutated document is JSON")
@@ -3626,39 +3625,25 @@ mod tests {
     }
 
     #[test]
-    fn v30_extent_round_trips_wal_records_id_deltas_and_generation_order() {
-        let records = vec![
-            VectorRecord::new("first", vec![1.0, 2.0]),
-            VectorRecord::new("second", vec![3.0, 4.0]),
-        ];
-        let deltas = records
-            .iter()
-            .enumerate()
-            .map(|(ordinal, record)| LaneIdDelta {
-                id: record.id.as_bytes().to_vec(),
-                state: if ordinal == 0 {
-                    LaneIdDeltaState::Inserted
-                } else {
-                    LaneIdDeltaState::Live
-                },
-            })
-            .collect::<Vec<_>>();
-        let payload = crate::format::wal_records_to_table(
-            &records,
-            2,
-            VectorElementType::Float32,
-            PhysicalFormat::Parquet,
-        )
-        .unwrap();
-        let extent = LaneExtent::from_wal(3, 7, 11, 101, &payload, &deltas).unwrap();
+    fn v30_extent_round_trips_typed_mutations_and_id_state() {
+        let extent = test_extent(3, 7, 11, 101, &["first", "second"]);
 
         let (decoded_records, decoded_deltas) = extent.decode_wal_records().unwrap();
 
-        assert_eq!(decoded_deltas, deltas);
+        assert_eq!(
+            decoded_deltas
+                .iter()
+                .map(|delta| (delta.id.as_slice(), delta.state))
+                .collect::<Vec<_>>(),
+            vec![
+                (b"first".as_slice(), LaneIdDeltaState::Live),
+                (b"second".as_slice(), LaneIdDeltaState::Live),
+            ]
+        );
         assert_eq!(
             decoded_records
                 .iter()
-                .map(|record| record.generation)
+                .map(|record| record.mutation_stamp().unwrap().version().hlc())
                 .collect::<Vec<_>>(),
             vec![101, 102]
         );
@@ -3673,14 +3658,7 @@ mod tests {
 
     #[test]
     fn v30_extent_rejects_path_or_checksum_identity_mismatch() {
-        let extent = LaneExtent {
-            lane: 3,
-            lease_epoch: 7,
-            sequence: 11,
-            first_generation: 101,
-            records: 2,
-            payload: b"two durable records".to_vec(),
-        };
+        let extent = test_extent(3, 7, 11, 101, &["first", "second"]);
         let bytes = extent_bytes(&extent).unwrap();
         let path = extent_path(3, 7, 11).unwrap();
 
@@ -3717,15 +3695,14 @@ mod tests {
                 .len(),
             1
         );
+        let visible = LaneEpochReader::new(store, "memory:///epoch-extent-ack", 8)
+            .unwrap()
+            .read_lane(3, LaneReadConsistency::Committed)
+            .unwrap();
+        assert_eq!(visible.len(), 1);
         assert_eq!(
-            LaneEpochReader::new(store, "memory:///epoch-extent-ack", 8)
-                .unwrap()
-                .read_lane(3, LaneReadConsistency::Committed)
-                .unwrap()
-                .into_iter()
-                .map(|extent| extent.payload)
-                .collect::<Vec<_>>(),
-            vec![b"durable".to_vec()]
+            visible[0].decode_wal_records().unwrap().0[0].id.as_bytes(),
+            b"durable"
         );
     }
 
@@ -3772,7 +3749,12 @@ mod tests {
         assert_eq!(
             committed
                 .into_iter()
-                .map(|extent| extent.payload)
+                .map(|extent| {
+                    extent.decode_wal_records().unwrap().0[0]
+                        .id
+                        .as_bytes()
+                        .to_vec()
+                })
                 .collect::<Vec<_>>(),
             vec![b"first".to_vec(), b"second".to_vec()]
         );
@@ -3866,8 +3848,8 @@ mod tests {
         let uri = "memory:///epoch-production-wal";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
         let records = vec![
-            VectorRecord::new("first", vec![1.0, 2.0]),
-            VectorRecord::new("second", vec![3.0, 4.0]),
+            stamped_record("first", vec![1.0, 2.0], 1),
+            stamped_record("second", vec![3.0, 4.0], 2),
         ];
 
         let receipt = writer.append_upsert_records_at(&records, 2, 10).unwrap();
@@ -3877,11 +3859,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(receipt.records, 2);
-        assert_eq!(writer.head.generation_base, 2);
+        assert_eq!(writer.head.max_mutation_hlc, 2);
         assert_eq!(
             recovered
                 .iter()
-                .map(|record| (record.id.as_str(), record.generation))
+                .map(|record| {
+                    (
+                        record.id.as_str(),
+                        record.mutation_stamp().unwrap().version().hlc(),
+                    )
+                })
                 .collect::<Vec<_>>(),
             vec![("first", 1), ("second", 2)]
         );
@@ -3893,14 +3880,7 @@ mod tests {
         let uri = "memory:///epoch-zombie-seal";
         let mut writer = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
         writer.append_extent_at(b"acknowledged", 1, 10).unwrap();
-        let orphan = LaneExtent {
-            lane: 3,
-            lease_epoch: 7,
-            sequence: 2,
-            first_generation: 2,
-            records: 1,
-            payload: b"late-zombie".to_vec(),
-        };
+        let orphan = test_extent(3, 7, 2, 2, &["late-zombie"]);
         let orphan_bytes = extent_bytes(&orphan).unwrap();
         writer
             .storage
@@ -3923,13 +3903,13 @@ mod tests {
             durable_sequence: 0,
             materialized_sequence: 0,
             materialized_manifest_version: 0,
-            generation_base: 1,
+            max_mutation_hlc: 1,
             sealed_epoch: Some(LaneEpochSeal {
                 lease_epoch: 7,
                 durable_sequence: 1,
                 materialized_sequence: 0,
                 materialized_manifest_version: 0,
-                generation_end: 1,
+                max_mutation_hlc: 1,
             }),
         };
         writer
@@ -3942,15 +3922,11 @@ mod tests {
             .unwrap();
         let reader = LaneEpochReader::new(store, uri, 8).unwrap();
 
-        assert_eq!(
-            reader
-                .read_lane(3, LaneReadConsistency::Linearizable)
-                .unwrap()
-                .into_iter()
-                .map(|extent| extent.payload)
-                .collect::<Vec<_>>(),
-            vec![b"acknowledged".to_vec()]
-        );
+        let visible = reader
+            .read_lane(3, LaneReadConsistency::Linearizable)
+            .unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].sequence, 1);
     }
 
     #[test]
@@ -3958,14 +3934,7 @@ mod tests {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let uri = "memory:///epoch-paused-owner";
         let mut paused = LaneEpochWriter::new_empty(Arc::clone(&store), uri, 3, 7, 100).unwrap();
-        let extent = LaneExtent {
-            lane: 3,
-            lease_epoch: 7,
-            sequence: 1,
-            first_generation: 1,
-            records: 1,
-            payload: b"unpublished".to_vec(),
-        };
+        let extent = test_extent(3, 7, 1, 1, &["unpublished"]);
         let extent_bytes = extent_bytes(&extent).unwrap();
         paused
             .storage
@@ -3989,13 +3958,13 @@ mod tests {
             durable_sequence: 0,
             materialized_sequence: 0,
             materialized_manifest_version: 0,
-            generation_base: 0,
+            max_mutation_hlc: 0,
             sealed_epoch: Some(LaneEpochSeal {
                 lease_epoch: 7,
                 durable_sequence: 0,
                 materialized_sequence: 0,
                 materialized_manifest_version: 0,
-                generation_end: 0,
+                max_mutation_hlc: 0,
             }),
         };
         paused
@@ -4009,7 +3978,7 @@ mod tests {
 
         let mut intended = paused.head.clone();
         intended.durable_sequence = 1;
-        intended.generation_base = 1;
+        intended.max_mutation_hlc = 1;
         let error = paused.publish_head(intended).unwrap_err();
 
         assert!(matches!(error, BorsukError::ConcurrentModification { .. }));
@@ -4035,7 +4004,7 @@ mod tests {
         .unwrap();
         let mut intended = writer.head.clone();
         intended.durable_sequence = 1;
-        intended.generation_base = 1;
+        intended.max_mutation_hlc = 1;
         writer
             .storage
             .write_coordination_object(
@@ -4060,15 +4029,15 @@ mod tests {
         let uri = "memory:///epoch-takeover";
         let storage = Storage::from_object_store(uri.to_string(), Arc::clone(&store)).unwrap();
         let mut first =
-            LaneEpochWriter::acquire_with_storage(storage.clone(), 3, [1; 16], 10, 100, 4_096, 0)
+            LaneEpochWriter::acquire_with_storage(storage.clone(), 3, [1; 16], 10, 100, 4_096)
                 .unwrap();
         first
-            .append_upsert_records_at(&[VectorRecord::new("first", vec![1.0, 2.0])], 2, 11)
+            .append_upsert_records_at(&[stamped_record("first", vec![1.0, 2.0], 1)], 2, 11)
             .unwrap();
         drop(first);
 
         let successor =
-            LaneEpochWriter::acquire_with_storage(storage, 3, [2; 16], 111, 100, 4_096, 0).unwrap();
+            LaneEpochWriter::acquire_with_storage(storage, 3, [2; 16], 111, 100, 4_096).unwrap();
 
         assert_eq!(successor.head.lease_epoch, 2);
         assert_eq!(
@@ -4078,7 +4047,7 @@ mod tests {
                 durable_sequence: 1,
                 materialized_sequence: 0,
                 materialized_manifest_version: 0,
-                generation_end: 1,
+                max_mutation_hlc: 1,
             })
         );
         assert!(
@@ -4097,22 +4066,22 @@ mod tests {
         let uri = "memory:///epoch-owner-reopen";
         let storage = Storage::from_object_store(uri.to_string(), store).unwrap();
         let mut first =
-            LaneEpochWriter::acquire_with_storage(storage.clone(), 3, [1; 16], 10, 100, 4_096, 0)
+            LaneEpochWriter::acquire_with_storage(storage.clone(), 3, [1; 16], 10, 100, 4_096)
                 .unwrap();
         first
-            .append_upsert_records_at(&[VectorRecord::new("first", vec![1.0, 2.0])], 2, 11)
+            .append_upsert_records_at(&[stamped_record("first", vec![1.0, 2.0], 1)], 2, 11)
             .unwrap();
         drop(first);
 
         let mut reopened =
-            LaneEpochWriter::acquire_with_storage(storage, 3, [1; 16], 20, 100, 4_096, 0).unwrap();
+            LaneEpochWriter::acquire_with_storage(storage, 3, [1; 16], 20, 100, 4_096).unwrap();
         let receipt = reopened
-            .append_upsert_records_at(&[VectorRecord::new("second", vec![3.0, 4.0])], 2, 21)
+            .append_upsert_records_at(&[stamped_record("second", vec![3.0, 4.0], 2)], 2, 21)
             .unwrap();
 
         assert_eq!(receipt.sequence, 1);
         assert_eq!(receipt.lease_epoch, 2);
-        assert_eq!(reopened.head.generation_base, 2);
+        assert_eq!(reopened.head.max_mutation_hlc, 2);
     }
 
     #[test]

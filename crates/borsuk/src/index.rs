@@ -1995,7 +1995,6 @@ impl BorsukIndex {
         lane: u16,
         now_ms: u64,
         ttl_ms: u64,
-        minimum_generation: u64,
     ) -> Result<crate::lane_log::LaneEpochWriter> {
         let lane_count = crate::lane_log::GROUP_COMMIT_STRIPE_COUNT;
         if lane >= lane_count {
@@ -2015,7 +2014,6 @@ impl BorsukIndex {
             now_ms,
             ttl_ms,
             lane_budget,
-            minimum_generation,
         )?;
         writer.activate_directory(lane_count)?;
         Ok(writer)
