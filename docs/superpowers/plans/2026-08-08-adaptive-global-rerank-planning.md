@@ -121,7 +121,7 @@ Commit the coherent slice, run the bulk structural group-commit smoke from that 
 
 Expected: smoke root and cell completion markers plus a passing validator.
 
-- [ ] **Step 4: Fast-forward push and launch the next immutable AWS attempt**
+- [x] **Step 4: Fast-forward push and launch the next immutable AWS attempt**
 
 Fetch `origin/main`, prove it is an ancestor of `HEAD`, push `HEAD:main` without force, verify a clean worktree, confirm the AWS worker is idle and healthy, then launch `scripts/launch_aws_group_commit_scalability.sh` from a fresh run ID.
 
@@ -132,3 +132,35 @@ Expected: the launcher records the exact Git archive SHA-256 and starts one deta
 Monitor only terminal markers, EC2 health, the exact `ec2-user` tmux pane, and non-measurement phase markers. At terminality, run fail-closed validators before opening CSVs.
 
 Expected for qualification: every 2K/16K × 1/8/32-writer cell completes across five repetitions with all frozen latency, throughput, visibility, and recall gates passing.
+
+### Task 4: Remove the dependent rerank wave for bounded Arrow cells
+
+**Files:**
+- Modify: `crates/borsuk/src/index.rs`
+- Test: `crates/borsuk/src/index.rs` module `tests`
+
+**Interfaces:**
+- Consumes: `GlobalPqChunkRef` code, typed-column, and exact-vector offsets plus the existing query-local range reuse path.
+- Produces: `global_pq_code_read_range(chunks: &[GlobalPqChunkRef]) -> Result<Range<usize>>`.
+
+- [x] **Step 1: Write and verify the failing bounded-prefetch test**
+
+Assert that a 512-row, 768D Arrow cell under 4 MiB returns the complete code-to-exact envelope, while an exact payload at the 4 MiB boundary returns only the compact code range. Before implementation the test must fail to compile because `global_pq_code_read_range` is absent.
+
+- [x] **Step 2: Implement one bounded query-local range**
+
+For each already-planned code group, compute the ordinary code range and the complete end of its exact buffers. Prefetch the complete span only when it is no larger than 4 MiB; otherwise retain the code-only range. Continue verifying each code slice checksum from the returned bytes and pass the retained range to exact reranking through `QueryLocalRange`.
+
+- [x] **Step 3: Run affected correctness suites**
+
+Run the new regression, the complete global-PQ unit subset, and `crates/borsuk/tests/group_commit.rs`.
+
+Expected: one new regression, 40 global-PQ tests, and 43 group-commit tests pass without changing candidates or recall behavior.
+
+- [ ] **Step 4: Run repository assurance and exact-revision smoke**
+
+Run formatting, strict Clippy, full locked Rust workspace tests, pinned Python tests, repository policy, and the bulk structural smoke from the committed revision.
+
+- [ ] **Step 5: Deliver and rerun AWS qualification**
+
+Fast-forward push the verified commit to `origin/main`, launch a fresh immutable campaign after proving worker exclusivity, and apply the same terminal-marker/validator boundary before inspecting results.

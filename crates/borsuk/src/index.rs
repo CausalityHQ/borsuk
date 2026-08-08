@@ -511,6 +511,13 @@ const DEFAULT_GLOBAL_PQ_CODE_COALESCE_GAP_BYTES: usize = 1024 * 1024;
 /// range planner. Parent-local gaps below this are cheaper to transfer than to
 /// pay as another S3 round trip.
 const DEFAULT_GLOBAL_PQ_CODE_REQUEST_WEIGHT_BYTES: usize = 1024 * 1024;
+/// Maximum Arrow cell envelope fetched with its selected PQ codes.
+///
+/// When codes, identities, mutation stamps, and exact vectors all fit inside
+/// one ordinary sidecar-sized transfer, retaining that one query-local range
+/// removes the dependent exact-rerank GET wave. Larger cells remain code-only
+/// and use sparse exact row reads, so this never becomes a whole-bundle fetch.
+const DEFAULT_GLOBAL_PQ_CODE_PREFETCH_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum compressed PQ-code payload retained by one query wave.
 ///
 /// Four admitted production queries can therefore retain at most 128 MiB of
@@ -12740,18 +12747,9 @@ impl BorsukIndex {
                 global_pq_code_read_parallelism(code_groups.len()),
                 self.decode_admission.as_deref(),
                 |(path, chunks)| {
-                    let start = chunks
-                        .iter()
-                        .map(|chunk| chunk.offset_bytes as usize)
-                        .min()
-                        .unwrap_or(0);
-                    let end = chunks
-                        .iter()
-                        .map(|chunk| {
-                            (chunk.offset_bytes as usize).saturating_add(chunk.size_bytes as usize)
-                        })
-                        .max()
-                        .unwrap_or(start);
+                    let range = global_pq_code_read_range(chunks)?;
+                    let start = range.start;
+                    let end = range.end;
                     let bundled = self.storage.read_range(path, start as u64..end as u64)?;
                     let mut loaded = Vec::with_capacity(chunks.len());
                     for chunk in chunks {
@@ -20771,6 +20769,39 @@ fn global_pq_code_read_wave_end(
     end.max(start + 1)
 }
 
+fn global_pq_code_read_range(chunks: &[GlobalPqChunkRef]) -> Result<Range<usize>> {
+    let start = chunks
+        .iter()
+        .map(|chunk| chunk.offset_bytes as usize)
+        .min()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ code read group is empty".to_string())
+        })?;
+    let code_end = chunks.iter().try_fold(start, |end, chunk| {
+        let chunk_end = (chunk.offset_bytes as usize)
+            .checked_add(chunk.size_bytes as usize)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ code range overflows".to_string())
+            })?;
+        Ok::<_, BorsukError>(end.max(chunk_end))
+    })?;
+    let complete_end = chunks.iter().try_fold(code_end, |end, chunk| {
+        let chunk_end = chunk
+            .exact_offset_bytes
+            .checked_add(chunk.exact_size_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ exact range overflows".to_string())
+            })?;
+        Ok::<_, BorsukError>(end.max(chunk_end))
+    })?;
+    let end = if complete_end.saturating_sub(start) <= DEFAULT_GLOBAL_PQ_CODE_PREFETCH_BYTES {
+        complete_end
+    } else {
+        code_end
+    };
+    Ok(start..end)
+}
+
 fn should_flush_global_pq_bundle(
     previous_cell: Option<u16>,
     next_cell: u16,
@@ -26141,6 +26172,36 @@ mod tests {
 
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].1.len(), 3);
+    }
+
+    #[test]
+    fn global_pq_code_read_range_prefetches_only_bounded_arrow_cells() {
+        let chunk = |exact_size_bytes| GlobalPqChunkRef {
+            path: "cell-bundle".to_string(),
+            checksum: "checksum".to_string(),
+            offset_bytes: 1_024,
+            exact_checksum: "exact-checksum".into(),
+            exact_offset_bytes: 64 * 1024,
+            exact_size_bytes,
+            cell_index: 7,
+            typed_buffer_offsets: [2_048, 3_048, 4_048, 5_048, 6_048, 7_048],
+            row_start: 0,
+            rows: 512,
+            size_bytes: 32 * 1024,
+            graph: None,
+        };
+
+        let bounded = chunk(512 * 768 * size_of::<f32>());
+        assert_eq!(
+            global_pq_code_read_range(std::slice::from_ref(&bounded)).unwrap(),
+            1_024..bounded.exact_offset_bytes + bounded.exact_size_bytes,
+        );
+
+        let oversized = chunk(4 * 1024 * 1024);
+        assert_eq!(
+            global_pq_code_read_range(std::slice::from_ref(&oversized)).unwrap(),
+            1_024..1_024 + 32 * 1024,
+        );
     }
 
     #[test]
