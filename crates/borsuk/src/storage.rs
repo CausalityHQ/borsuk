@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fmt,
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     future::Future,
     io::{self, Write},
     ops::Range,
@@ -2762,11 +2762,12 @@ impl Storage {
                 if expected.is_some() =>
             {
                 // LocalFileSystem does not implement conditional update. Keep
-                // its fallback correct for concurrent handles in this process;
+                // its fallback correct across processes on the same filesystem;
                 // production object stores continue through native ETag CAS.
                 let _guard = COORDINATION_FALLBACK_LOCK
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
+                let _file_guard = self.lock_local_coordination_path(relative)?;
                 let current = self.coordination_update_version(relative)?;
                 if current != expected {
                     return Err(BorsukError::ConcurrentModification {
@@ -2778,6 +2779,58 @@ impl Storage {
             }
             Err(error) => Err(error),
         }
+    }
+
+    fn lock_local_coordination_path(&self, relative: &str) -> Result<Option<File>> {
+        let local_root = if has_uri_scheme(&self.uri) {
+            let url = Url::parse(&self.uri).map_err(|error| {
+                BorsukError::InvalidStorage(format!(
+                    "invalid storage URI `{}` while locking coordination path: {error}",
+                    self.uri
+                ))
+            })?;
+            if url.scheme() != "file" {
+                return Ok(None);
+            }
+            url.to_file_path().map_err(|()| {
+                BorsukError::InvalidStorage(format!(
+                    "file storage URI `{}` is not a local path",
+                    self.uri
+                ))
+            })?
+        } else {
+            PathBuf::from(&self.uri)
+        };
+        let canonical_root = fs::canonicalize(&local_root).map_err(|source| BorsukError::Io {
+            path: local_root,
+            source,
+        })?;
+        let identity = format!(
+            "{}\0{}\0{relative}",
+            canonical_root.display(),
+            self.prefix.as_ref()
+        );
+        let lock_root = env::temp_dir().join("borsuk-coordination-locks");
+        fs::create_dir_all(&lock_root).map_err(|source| BorsukError::Io {
+            path: lock_root.clone(),
+            source,
+        })?;
+        let lock_path = lock_root.join(format!("{}.lock", blake3::hash(identity.as_bytes())));
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|source| BorsukError::Io {
+                path: lock_path.clone(),
+                source,
+            })?;
+        lock_file.lock().map_err(|source| BorsukError::Io {
+            path: lock_path,
+            source,
+        })?;
+        Ok(Some(lock_file))
     }
 
     fn coordination_update_version(&self, relative: &str) -> Result<Option<UpdateVersion>> {
@@ -4349,7 +4402,8 @@ mod tests {
     use std::{
         collections::BTreeMap,
         fs::{self, OpenOptions},
-        path::Path,
+        path::{Path, PathBuf},
+        process::Command,
         sync::{
             Arc,
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -4605,6 +4659,72 @@ mod tests {
         let whole_requests = storage.request_counts().delta(&before_whole);
         assert_eq!(whole_requests.heads, 0);
         assert_eq!(whole_requests.gets, 2);
+    }
+
+    #[test]
+    fn local_coordination_lock_serializes_processes() {
+        const ROLE: &str = "BORSUK_COORDINATION_LOCK_TEST_ROLE";
+        const ROOT: &str = "BORSUK_COORDINATION_LOCK_TEST_ROOT";
+        if let Ok(role) = std::env::var(ROLE) {
+            let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+            let storage = Storage::from_uri(&file_uri(&root)).unwrap();
+            if role == "waiter" {
+                fs::write(root.join("WAITING"), b"waiting\n").unwrap();
+            }
+            let _guard = storage
+                .lock_local_coordination_path("lane-log/ACTIVE")
+                .unwrap()
+                .expect("local storage must use a process-shared lock");
+            if role == "holder" {
+                fs::write(root.join("HELD"), b"held\n").unwrap();
+                while !root.join("RELEASE").is_file() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            } else {
+                fs::write(root.join("ACQUIRED"), b"acquired\n").unwrap();
+            }
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let test_name = "storage::tests::local_coordination_lock_serializes_processes";
+        let mut holder = Command::new(&executable)
+            .arg("--exact")
+            .arg(test_name)
+            .env(ROLE, "holder")
+            .env(ROOT, root.path())
+            .spawn()
+            .unwrap();
+        wait_for_test_marker(root.path(), "HELD");
+        let mut waiter = Command::new(executable)
+            .arg("--exact")
+            .arg(test_name)
+            .env(ROLE, "waiter")
+            .env(ROOT, root.path())
+            .spawn()
+            .unwrap();
+        wait_for_test_marker(root.path(), "WAITING");
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !root.path().join("ACQUIRED").is_file(),
+            "a second process acquired the same local coordination lock"
+        );
+        fs::write(root.path().join("RELEASE"), b"release\n").unwrap();
+        assert!(holder.wait().unwrap().success());
+        assert!(waiter.wait().unwrap().success());
+        assert!(root.path().join("ACQUIRED").is_file());
+    }
+
+    fn wait_for_test_marker(root: &Path, marker: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !root.join(marker).is_file() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for child marker {marker}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[test]

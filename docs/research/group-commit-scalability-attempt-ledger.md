@@ -1106,3 +1106,32 @@ reported 1,127 passed and 25 ignored across 70 suites in 409.81 seconds. The
 declared Python benchmark-validation environment reported 458 passed in 15.254
 seconds. These are functional and structural gates, not production-performance
 evidence. No AWS workload was launched or inspected during this checkpoint.
+
+## Cross-process local CAS qualification (2026-08-08)
+
+The first v31 bulk structural smoke reached ingest, active-tail reads, and
+drain, then failed post-reopen point visibility. Repeating fresh-output smokes
+reproduced an active-tail miss at roughly one in ten attempts. Failure-path
+point lookup proved the queried ID itself was absent rather than merely missed
+by ANN routing. The failed local index contained durable Arrow extents for both
+writers, but its stock JSON `lane-log/ACTIVE` directory retained only one active
+stripe bit. No incomplete measurement CSV was opened.
+
+Root cause was the `object_store` LocalFileSystem backend's lack of native
+conditional updates. BORSUK's fallback serialized compare-then-overwrite only
+with a process-local mutex, so separately opened writer processes could both
+accept the same version and lose an activation update. The fallback now takes
+an OS-backed, per-object lock shared by local processes before rechecking the
+version and overwriting. S3 and other production object stores continue through
+their native conditional-write path and do not take this local lock. A child
+process regression proves that a waiter cannot acquire the same coordination
+lock before the holder releases it.
+
+After the fix, 100 consecutive fresh-index, two-process, 16-record bulk smokes
+completed and passed the structural validator; the pre-fix stress reproduced
+the missing-stripe failure within ten attempts. Focused verification passes all
+41 storage tests, all 42 group-commit integration tests, all seven benchmark
+example tests, formatting, and strict all-target/all-feature workspace Clippy.
+These repetitions are race/correctness evidence only, not latency, throughput,
+recall, AWS, or publication evidence. AWS launch remains gated on the final
+workspace assurance pass and a clean pushed revision.
