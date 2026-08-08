@@ -3318,6 +3318,7 @@ impl Storage {
             relative,
             ranges,
             SIDECAR_RANGE_COALESCE_BYTES,
+            SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
             SIDECAR_RANGE_MAX_PARALLEL,
         )
     }
@@ -3331,7 +3332,39 @@ impl Storage {
         ranges: &[Range<u64>],
     ) -> Result<ReadRanges> {
         let max_gap = global_rerank_coalesce_bytes(ranges);
-        self.read_ranges_with_policy(relative, ranges, max_gap, GLOBAL_RERANK_RANGE_MAX_PARALLEL)
+        self.read_ranges_with_policy(
+            relative,
+            ranges,
+            max_gap,
+            SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+            GLOBAL_RERANK_RANGE_MAX_PARALLEL,
+        )
+    }
+
+    /// Read one logical range as independently parallel, ordered physical
+    /// stripes. The deterministic ordered range list is also the disk-cache
+    /// key, so a repeated read reconstructs the same bytes without backing
+    /// requests.
+    pub(crate) fn read_striped_range(
+        &self,
+        relative: &str,
+        range: Range<u64>,
+        stripe_bytes: u64,
+        max_parallel: usize,
+    ) -> Result<ReadBytes> {
+        if max_parallel == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "striped range parallelism must be positive".to_string(),
+            ));
+        }
+        let ranges = split_contiguous_range(range, stripe_bytes)?;
+        let read =
+            self.read_ranges_with_policy(relative, &ranges, 0, stripe_bytes, max_parallel)?;
+        Ok(ReadBytes {
+            bytes: read.chunks.concat(),
+            cache_hit: read.cache_hit,
+            cache_repaired: false,
+        })
     }
 
     fn read_ranges_with_policy(
@@ -3339,6 +3372,7 @@ impl Storage {
         relative: &str,
         ranges: &[Range<u64>],
         max_gap: u64,
+        max_physical_range_bytes: u64,
         max_parallel: usize,
     ) -> Result<ReadRanges> {
         let cacheable = !is_mutable_lane_head(relative);
@@ -3421,7 +3455,7 @@ impl Storage {
                         }
                     },
                     max_gap,
-                    SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+                    max_physical_range_bytes,
                     max_parallel,
                 )
                 .await
@@ -3929,6 +3963,27 @@ fn atomic_write_cache_file(path: &Path, bytes: &[u8]) -> Result<()> {
         ))
     })?;
     Ok(())
+}
+
+fn split_contiguous_range(range: Range<u64>, max_bytes: u64) -> Result<Vec<Range<u64>>> {
+    if range.start >= range.end {
+        return Err(BorsukError::InvalidStorage(
+            "striped range must be non-empty and ordered".to_string(),
+        ));
+    }
+    if max_bytes == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "striped range width must be positive".to_string(),
+        ));
+    }
+    let mut ranges = Vec::new();
+    let mut start = range.start;
+    while start < range.end {
+        let end = start.saturating_add(max_bytes).min(range.end);
+        ranges.push(start..end);
+        start = end;
+    }
+    Ok(ranges)
 }
 
 fn range_bundle_cache_key(relative: &str, ranges: &[Range<u64>]) -> String {
@@ -5148,6 +5203,69 @@ mod tests {
         let range = storage.read_range("segments/L0/aa/test.bin", 2..6).unwrap();
 
         assert_eq!(range, b"2345");
+    }
+
+    #[test]
+    fn striped_range_reads_large_ranges_in_parallel_parts() {
+        const MIB: usize = 1024 * 1024;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let writer = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        let bytes = (0..3 * MIB)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        writer
+            .write_bytes("global-pq/bundles/large.arrow", &bytes)
+            .unwrap();
+        writer
+            .write_bytes("global-pq/bundles/small.arrow", &bytes[..MIB / 2])
+            .unwrap();
+        let storage =
+            Storage::from_uri_with_cache(&file_uri(dir.path()), Some(cache.path().to_path_buf()))
+                .unwrap();
+
+        let before = storage.request_counts();
+        let first = storage
+            .read_striped_range(
+                "global-pq/bundles/large.arrow",
+                0..bytes.len() as u64,
+                MIB as u64,
+                16,
+            )
+            .unwrap();
+        assert_eq!(first.bytes, bytes);
+        assert!(!first.cache_hit);
+        assert_eq!(storage.request_counts().delta(&before).gets, 3);
+
+        let after_first = storage.request_counts();
+        let second = storage
+            .read_striped_range(
+                "global-pq/bundles/large.arrow",
+                0..bytes.len() as u64,
+                MIB as u64,
+                16,
+            )
+            .unwrap();
+        assert_eq!(second.bytes, bytes);
+        assert!(second.cache_hit);
+        assert_eq!(storage.request_counts().delta(&after_first).gets, 0);
+
+        let before_small = storage.request_counts();
+        let small = storage
+            .read_striped_range(
+                "global-pq/bundles/small.arrow",
+                0..(MIB / 2) as u64,
+                MIB as u64,
+                16,
+            )
+            .unwrap();
+        assert_eq!(small.bytes, bytes[..MIB / 2]);
+        assert_eq!(storage.request_counts().delta(&before_small).gets, 1);
+
+        assert!(storage.read_striped_range("x", 1..1, 1, 1).is_err());
+        assert!(storage.read_striped_range("x", 2..1, 1, 1).is_err());
+        assert!(storage.read_striped_range("x", 0..1, 0, 1).is_err());
+        assert!(storage.read_striped_range("x", 0..1, 1, 0).is_err());
     }
 
     #[test]
