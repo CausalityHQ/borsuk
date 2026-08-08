@@ -12888,6 +12888,37 @@ impl BorsukIndex {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn scan_resident_global_pq_layer(
+        &self,
+        pq_query: &[f32],
+        candidate_limit: usize,
+        use_cached_graphs: bool,
+        mut layer: ResidentGlobalPqLayerScan,
+        query_local_range_byte_limit: usize,
+        query_local_range_stripe_limit: usize,
+        code_wave_max_chunks: usize,
+        code_wave_max_bytes: usize,
+    ) -> Result<(ResidentGlobalPqLayerScan, Vec<QueryLocalRange>)> {
+        let mut ranges = Vec::new();
+        let mut range_bytes = 0_usize;
+        let mut range_stripes = 0_usize;
+        while self.scan_resident_global_pq_layer_wave(
+            pq_query,
+            candidate_limit,
+            use_cached_graphs,
+            &mut layer,
+            &mut ranges,
+            &mut range_bytes,
+            &mut range_stripes,
+            query_local_range_byte_limit,
+            query_local_range_stripe_limit,
+            code_wave_max_chunks,
+            code_wave_max_bytes,
+        )? {}
+        Ok((layer, ranges))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn search_fused_resident_global_pq(
         &self,
         query: &[f32],
@@ -12967,7 +12998,7 @@ impl BorsukIndex {
             .map(|chunk| chunk.rows)
             .sum::<usize>();
         let candidate_limit = requested_candidates.min(planned_records);
-        let [mut base_layer, mut delta_layer] = [
+        let [base_layer, delta_layer] = [
             ResidentGlobalPqLayerScan {
                 layer: GlobalPqSearchLayer::Base,
                 index: base_index,
@@ -13033,88 +13064,84 @@ impl BorsukIndex {
             // only one can retain results at a time.
             (DEFAULT_GLOBAL_PQ_CODE_READS, DEFAULT_GLOBAL_PQ_CODE_READS)
         };
-        let serial_code_wave = (!code_waves_overlap).then(|| Arc::new(Mutex::new(())));
-        // Acquire the base permit before launching the delta worker so the
-        // oversized fallback has deterministic base-then-delta ordering.
-        let base_serial_guard = serial_code_wave
-            .as_ref()
-            .map(|gate| gate.lock().unwrap_or_else(|error| error.into_inner()));
-
-        let delta_search = self.clone();
-        let delta_query = pq_query.clone();
-        let delta_serial_code_wave = serial_code_wave.clone();
-        let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(0);
-        let (result_sender, result_receiver) = std::sync::mpsc::sync_channel(1);
-        crate::parallel::spawn_io(move || {
-            if ready_sender.send(()).is_err() {
-                return;
-            }
-            let result = (|| {
-                let _serial_guard = delta_serial_code_wave
-                    .as_ref()
-                    .map(|gate| gate.lock().unwrap_or_else(|error| error.into_inner()));
-                let mut ranges = Vec::new();
-                let mut range_bytes = 0_usize;
-                let mut range_stripes = 0_usize;
-                while delta_search.scan_resident_global_pq_layer_wave(
+        let (base_result, delta_result, global_delta_wait_us) = if code_waves_overlap {
+            let delta_search = self.clone();
+            let delta_query = pq_query.clone();
+            let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(0);
+            let (result_sender, result_receiver) = std::sync::mpsc::sync_channel(1);
+            crate::parallel::spawn_io(move || {
+                if ready_sender.send(()).is_err() {
+                    return;
+                }
+                let result = delta_search.scan_resident_global_pq_layer(
                     &delta_query,
                     candidate_limit,
                     use_cached_graphs,
-                    &mut delta_layer,
-                    &mut ranges,
-                    &mut range_bytes,
-                    &mut range_stripes,
+                    delta_layer,
                     delta_range_byte_limit,
                     delta_range_stripe_limit,
                     delta_code_wave_max_chunks,
                     delta_code_wave_max_bytes,
-                )? {}
-                Ok::<_, BorsukError>((delta_layer, ranges))
-            })();
-            let _ = result_sender.send(result);
-        });
-        ready_receiver.recv().map_err(|_| {
-            BorsukError::InvalidStorage(
-                "parallel global PQ delta scan stopped before starting".to_string(),
-            )
-        })?;
-
-        let mut query_local_ranges = Vec::new();
-        let mut query_local_range_bytes = 0_usize;
-        let mut query_local_range_stripes = 0_usize;
-        let base_result = (|| {
-            loop {
-                if !self.scan_resident_global_pq_layer_wave(
-                    &pq_query,
-                    candidate_limit,
-                    use_cached_graphs,
-                    &mut base_layer,
-                    &mut query_local_ranges,
-                    &mut query_local_range_bytes,
-                    &mut query_local_range_stripes,
-                    base_range_byte_limit,
-                    base_range_stripe_limit,
-                    base_code_wave_max_chunks,
-                    base_code_wave_max_bytes,
-                )? {
-                    break;
-                }
-            }
-            Ok::<_, BorsukError>(())
-        })();
-        drop(base_serial_guard);
-        let delta_wait_started = Instant::now();
-        let delta_result = result_receiver
-            .recv()
-            .map_err(|_| {
+                );
+                let _ = result_sender.send(result);
+            });
+            ready_receiver.recv().map_err(|_| {
                 BorsukError::InvalidStorage(
-                    "parallel global PQ delta scan stopped before reporting".to_string(),
+                    "parallel global PQ delta scan stopped before starting".to_string(),
                 )
-            })
-            .and_then(|result| result);
-        let global_delta_wait_us =
-            u64::try_from(delta_wait_started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        base_result?;
+            })?;
+            let base_result = self.scan_resident_global_pq_layer(
+                &pq_query,
+                candidate_limit,
+                use_cached_graphs,
+                base_layer,
+                base_range_byte_limit,
+                base_range_stripe_limit,
+                base_code_wave_max_chunks,
+                base_code_wave_max_bytes,
+            );
+            let delta_wait_started = Instant::now();
+            let delta_result = result_receiver
+                .recv()
+                .map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "parallel global PQ delta scan stopped before reporting".to_string(),
+                    )
+                })
+                .and_then(|result| result);
+            let delta_wait_us =
+                u64::try_from(delta_wait_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            (base_result, delta_result, delta_wait_us)
+        } else {
+            // Never park an I/O-pool worker behind the caller: with a one-thread
+            // pool, that worker would prevent the caller's nested reads from
+            // running. Oversized waves therefore execute entirely in caller
+            // order, base first and delta second.
+            let base_result = self.scan_resident_global_pq_layer(
+                &pq_query,
+                candidate_limit,
+                use_cached_graphs,
+                base_layer,
+                base_range_byte_limit,
+                base_range_stripe_limit,
+                base_code_wave_max_chunks,
+                base_code_wave_max_bytes,
+            );
+            let delta_started = Instant::now();
+            let delta_result = self.scan_resident_global_pq_layer(
+                &pq_query,
+                candidate_limit,
+                use_cached_graphs,
+                delta_layer,
+                delta_range_byte_limit,
+                delta_range_stripe_limit,
+                delta_code_wave_max_chunks,
+                delta_code_wave_max_bytes,
+            );
+            let delta_us = u64::try_from(delta_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            (base_result, delta_result, delta_us)
+        };
+        let (base_layer, mut query_local_ranges) = base_result?;
         let (delta_layer, mut delta_ranges) = delta_result?;
         query_local_ranges.append(&mut delta_ranges);
         let mut layers = [base_layer, delta_layer];
@@ -27346,49 +27373,6 @@ mod tests {
         assert!(!overlap);
         assert_eq!(base_oversized, DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES);
         assert_eq!(delta_oversized, DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES);
-    }
-
-    #[test]
-    fn oversized_fused_global_workers_release_base_before_delta_completion() {
-        let (_, _, overlap) = proportional_global_pq_layer_budget_with_minimums(
-            DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES,
-            40 * 1024 * 1024,
-            40 * 1024 * 1024,
-            20 * 1024 * 1024,
-            20 * 1024 * 1024,
-        );
-        assert!(!overlap);
-
-        let gate = Arc::new(Mutex::new(()));
-        let order = Arc::new(Mutex::new(Vec::new()));
-        let base_guard = gate.lock().unwrap_or_else(|error| error.into_inner());
-        let delta_gate = Arc::clone(&gate);
-        let delta_order = Arc::clone(&order);
-        let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(0);
-        let (done_sender, done_receiver) = std::sync::mpsc::sync_channel(0);
-        let delta = thread::spawn(move || {
-            ready_sender.send(()).unwrap();
-            let _guard = delta_gate.lock().unwrap_or_else(|error| error.into_inner());
-            delta_order
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push("delta");
-            done_sender.send(()).unwrap();
-        });
-        ready_receiver.recv().unwrap();
-        order
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .push("base");
-        assert!(done_receiver.try_recv().is_err());
-
-        drop(base_guard);
-        done_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
-        delta.join().unwrap();
-        assert_eq!(
-            *order.lock().unwrap_or_else(|error| error.into_inner()),
-            ["base", "delta"]
-        );
     }
 
     #[test]
