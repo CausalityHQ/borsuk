@@ -106,6 +106,12 @@ const GLOBAL_RERANK_RANGE_MAX_PARALLEL: usize = 32;
 // and worsened tail latency for scattered exact rows. The separate 32-request
 // wave overlaps those sparse reads without turning them into bulk transfer.
 const GLOBAL_RERANK_RANGE_COALESCE_BYTES: u64 = SIDECAR_RANGE_COALESCE_BYTES;
+// For a dense shortlist inside one small Arrow batch, one bounded transfer is
+// cheaper than a wave of tiny S3 range requests. Charge each avoided request a
+// conservative 128 KiB of extra transfer, but never widen beyond the existing
+// four-megabyte physical cap. Sparse and large-cell reranks retain the proven
+// 64 KiB policy above.
+const GLOBAL_RERANK_REQUEST_WEIGHT_BYTES: u64 = 128 * 1024;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -191,6 +197,37 @@ fn plan_bounded_ranges(
             .into_iter()
             .map(|slice| slice.expect("every input range must be assigned"))
             .collect(),
+    }
+}
+
+fn global_rerank_coalesce_bytes(ranges: &[Range<u64>]) -> u64 {
+    let sparse = plan_bounded_ranges(
+        ranges,
+        GLOBAL_RERANK_RANGE_COALESCE_BYTES,
+        SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+    );
+    if sparse.physical.len() <= 1 {
+        return GLOBAL_RERANK_RANGE_COALESCE_BYTES;
+    }
+    let envelope_start = sparse.physical.first().map_or(0, |range| range.start);
+    let envelope_end = sparse
+        .physical
+        .last()
+        .map_or(envelope_start, |range| range.end);
+    let envelope_bytes = envelope_end.saturating_sub(envelope_start);
+    if envelope_bytes > SIDECAR_MAX_PHYSICAL_RANGE_BYTES {
+        return GLOBAL_RERANK_RANGE_COALESCE_BYTES;
+    }
+    let sparse_bytes = sparse.physical.iter().fold(0_u64, |bytes, range| {
+        bytes.saturating_add(range.end.saturating_sub(range.start))
+    });
+    let avoided_requests =
+        u64::try_from(sparse.physical.len().saturating_sub(1)).unwrap_or(u64::MAX);
+    let transfer_budget = avoided_requests.saturating_mul(GLOBAL_RERANK_REQUEST_WEIGHT_BYTES);
+    if envelope_bytes.saturating_sub(sparse_bytes) <= transfer_budget {
+        SIDECAR_MAX_PHYSICAL_RANGE_BYTES
+    } else {
+        GLOBAL_RERANK_RANGE_COALESCE_BYTES
     }
 }
 
@@ -3293,12 +3330,8 @@ impl Storage {
         relative: &str,
         ranges: &[Range<u64>],
     ) -> Result<ReadRanges> {
-        self.read_ranges_with_policy(
-            relative,
-            ranges,
-            GLOBAL_RERANK_RANGE_COALESCE_BYTES,
-            GLOBAL_RERANK_RANGE_MAX_PARALLEL,
-        )
+        let max_gap = global_rerank_coalesce_bytes(ranges);
+        self.read_ranges_with_policy(relative, ranges, max_gap, GLOBAL_RERANK_RANGE_MAX_PARALLEL)
     }
 
     fn read_ranges_with_policy(
@@ -5347,6 +5380,36 @@ mod tests {
         assert_eq!(read.chunks, vec![vec![7_u8; 4]; 2]);
         assert_eq!(requests.gets, 2);
         assert_eq!(read.bytes_fetched, 8);
+    }
+
+    #[test]
+    fn global_rerank_ranges_fold_a_dense_768d_shortlist_into_one_bounded_get() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        const VECTOR_BYTES: u64 = 768 * 4;
+        const ROW_STRIDE: u64 = 96 * 1024;
+        const CANDIDATES: u64 = 16;
+        let object_len = ((CANDIDATES - 1) * ROW_STRIDE + VECTOR_BYTES) as usize;
+        let object = vec![7_u8; object_len];
+        storage
+            .write_bytes("global-pq/bundles/dense-rerank.arrow", &object)
+            .unwrap();
+        let ranges = (0..CANDIDATES)
+            .map(|row| {
+                let start = row * ROW_STRIDE;
+                start..start + VECTOR_BYTES
+            })
+            .collect::<Vec<_>>();
+        let before = storage.request_counts();
+
+        let read = storage
+            .read_global_rerank_ranges("global-pq/bundles/dense-rerank.arrow", &ranges)
+            .unwrap();
+        let requests = storage.request_counts().delta(&before);
+
+        assert_eq!(read.chunks, vec![vec![7_u8; VECTOR_BYTES as usize]; 16]);
+        assert_eq!(requests.gets, 1);
+        assert_eq!(read.bytes_fetched, object_len as u64);
     }
 
     #[test]
