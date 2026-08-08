@@ -29,7 +29,7 @@
 - Consumes: two owned futures produced by the same `FnMut() -> Fut` request factory.
 - Produces: `async fn fetch_with_optional_hedge<F, Fut, T, E>(fetch: F, hedge_after: Option<Duration>) -> Result<T, E>`.
 
-- [ ] **Step 1: Write the failing behavior tests**
+- [x] **Step 1: Write the failing behavior tests**
 
 Add storage-module tests named:
 
@@ -145,7 +145,7 @@ attempt one sleeps 5 ms, and the hedge delay is 20 ms. Assert result `b"hedge"`,
 two attempts, and elapsed time below 80 ms. Its fast subcase sleeps 5 ms and
 asserts exactly one attempt.
 
-- [ ] **Step 2: Observe RED**
+- [x] **Step 2: Observe RED**
 
 Run:
 
@@ -158,7 +158,7 @@ cargo test --locked -p borsuk storage::tests::slow_fetch_is_hedged_once_and_fast
 
 Expected: compile failure because `fetch_with_optional_hedge` does not exist.
 
-- [ ] **Step 3: Implement the minimal primitive**
+- [x] **Step 3: Implement the minimal primitive**
 
 Implement this state machine in `storage.rs`:
 
@@ -199,7 +199,7 @@ Use the actual error-handling form accepted by the compiler without changing
 the contract: one failure waits for the other request and two failures return
 an error.
 
-- [ ] **Step 4: Observe GREEN and run neighboring storage tests**
+- [x] **Step 4: Observe GREEN and run neighboring storage tests**
 
 ```bash
 cargo test --locked -p borsuk storage::tests::slow_fetch_is_hedged_once_and_fast_fetch_is_not_hedged -- --exact
@@ -219,7 +219,7 @@ Expected: all pass with no warning.
 - Consumes: `OpenOptions::global_pq_slow_read_hedge_after: Option<Duration>`.
 - Produces: `Storage::read_striped_range(relative, range, stripe_bytes, max_parallel, hedge_after)` and the same ordered `ReadBytes` as today.
 
-- [ ] **Step 1: Write the failing ordered multi-stripe test**
+- [x] **Step 1: Write the failing ordered multi-stripe test**
 
 Add a real object-store integration test that writes literal bytes
 `b"abcdefghijkl"`, delays only the first attempt for one requested range, calls
@@ -228,7 +228,7 @@ then asserts the returned bytes equal the literal source and that only the slow
 stripe issued two GET attempts. Name the production mutation it catches:
 `hedged_striped_read_preserves_order_and_hedges_only_the_slow_stripe`.
 
-- [ ] **Step 2: Observe RED**
+- [x] **Step 2: Observe RED**
 
 ```bash
 cargo test --locked -p borsuk storage::tests::hedged_striped_read_preserves_order_and_hedges_only_the_slow_stripe -- --exact
@@ -236,7 +236,7 @@ cargo test --locked -p borsuk storage::tests::hedged_striped_read_preserves_orde
 
 Expected: compile failure because `read_striped_range` has no hedge parameter.
 
-- [ ] **Step 3: Thread the option through production code**
+- [x] **Step 3: Thread the option through production code**
 
 Add the field to `OpenOptions`, its `None` default, and
 `CollectionReadRuntime`. Pass it at `index.rs`'s sole global-PQ striped call:
@@ -256,13 +256,13 @@ striped caller and wrap each physical GET factory with
 `fetch_with_optional_hedge`. Ordinary sidecar, WAL, manifest, and coordination
 reads pass `None`.
 
-- [ ] **Step 4: Observe GREEN and mutation coverage**
+- [x] **Step 4: Observe GREEN and mutation coverage**
 
 Run the ordered hedge test, all `storage::tests::read_striped_range*` tests, and
 the resident global-PQ test group. Then temporarily pass `None` at the global
 call and verify the delayed integration test fails before restoring the hedge.
 
-- [ ] **Step 5: Format and commit the production slice**
+- [x] **Step 5: Format and commit the production slice**
 
 ```bash
 cargo fmt --all -- --check
