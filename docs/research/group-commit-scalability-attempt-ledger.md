@@ -1791,3 +1791,34 @@ requires two GETs afterward. The existing half-MiB two-row counterexample still
 requires two sparse GETs. No cache, candidate, recall, or durable-format rule
 changes. A logical range above 4 MiB is itself split into capped fragments and
 reassembled in caller order; reversed or empty ranges fail closed.
+
+### Terminal AWS v34 clustered-rerank result
+
+Revision `d312206` was fast-forwarded to `origin/main` after the complete
+all-feature/all-target Rust and Clippy gates, all 490 pinned Python tests, and
+the policy, documentation, formatting, and diff gates passed. The exclusive
+AWS attempt `20260809T024836Z-v34-d312206` used source archive SHA-256
+`3ba30f38b843483e952e195a1449964c6b3d0e335ddd4c41f33d3ec7e4ed0512`
+and unchanged manifest SHA-256
+`81c849548d9ef7300cffd88a0a13aca2023645ae0af40e66f0da5a60ad37408a`.
+After one retained 15-minute interval, marker-only monitoring found a terminal
+root failure at the eight-writer cell, a dead benchmark pane, no competing
+process, 62,617,788 KiB available memory, and 117 GiB free disk. The root
+validator rejected the incomplete campaign and both terminal-cell validations
+rejected the failure-marked tree before any CSV was opened.
+
+The one-writer cell passed every gate with 16,000 visible records, recall@10
+1.0, 80.624 ms write p95, 951.12 ingest records/s, 419.57 drain-inclusive
+records/s, 129.183 ms active-tail read p95, and 50.141 ms post-drain read p95.
+The eight-writer cell preserved 128,000 records, 2,000 durable groups, and
+recall@10 1.0. It measured 78.278 ms write p95, 7,380.29 ingest records/s,
+2,182.13 drain-inclusive records/s, and 167.634 ms active-tail read p95. It
+failed only the post-drain read gate at 229.811 ms.
+
+Against terminal v33, the clustered planner reduced post-drain GETs from 225
+to 174 and exact-rerank p95 from 167.789 to 148.691 ms; total post-drain p95
+fell from 253.366 to 229.811 ms. The wider requests increased transferred
+bytes from 15,415,864 to 20,023,864. This is a measured partial improvement,
+not a qualification pass. The next read-path work must address the remaining
+base/delta execution latency without changing recall, candidate correctness,
+or the standard Arrow durable representation.

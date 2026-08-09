@@ -79,16 +79,16 @@ linearizable by acknowledgement order.
 
 The latest terminal 2,000-cell AWS attempt confirms that this acknowledgement
 path is not the current bottleneck: eight independent writers measured
-80.700 ms write p95 and 7,301.30 768-dimensional ingest records/s while
-preserving recall@10 1.0. That attempt is not a qualification pass: its
-post-drain read p95 was 253.366 ms. The preceding chunk-envelope change left
-the measured 225 GETs and 15,415,864 bytes exactly unchanged, so it is not
-claimed as an improvement. The next candidate keeps Arrow and exact scoring
-but makes adaptive range widening operate across multiple independently capped
-dense clusters instead of falling back globally when the shortlist spans more
-than 4 MiB. Fresh AWS evidence is required before claiming the read-latency gap
-closed, and the full 2K/16K by 1/8/32-writer, five-repetition matrix remains an
-open release gate.
+78.278 ms write p95 and 7,380.29 768-dimensional ingest records/s while
+preserving recall@10 1.0. The clustered exact-range planner reduced the prior
+attempt's post-drain GETs from 225 to 174 and exact-rerank p95 from 167.789 to
+148.691 ms, while transferring 20,023,864 rather than 15,415,864 bytes. Total
+post-drain read p95 improved from 253.366 to 229.811 ms but still failed the
+200 ms production gate, so this is a partial result rather than a qualification
+pass. The next work targets remaining base/delta execution latency without
+changing recall, candidate correctness, or standard Arrow storage. Fresh AWS
+evidence is required before claiming the read-latency gap closed, and the full
+2K/16K by 1/8/32-writer, five-repetition matrix remains an open release gate.
 
 Ordinary upsert and delete use the same complete mutation state. Dense, named,
 sparse, text, and late-interaction children inherit the parent entity version;
