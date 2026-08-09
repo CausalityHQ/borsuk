@@ -469,22 +469,38 @@ struct CountingObjectStore {
 /// Per-scope counters collected by outer decorators and consumed by the
 /// admitted base decorator at the physical forwarding boundary.
 #[derive(Clone, Default)]
-struct ForwardedGetCounters(Vec<Arc<RequestCounters>>);
+struct ForwardedGetCounters {
+    request_counters: Vec<Arc<RequestCounters>>,
+    operation_attempts: Vec<Arc<AtomicU64>>,
+}
 
 impl ForwardedGetCounters {
     fn register(&mut self, counters: Arc<RequestCounters>) {
         if !self
-            .0
+            .request_counters
             .iter()
             .any(|registered| Arc::ptr_eq(registered, &counters))
         {
-            self.0.push(counters);
+            self.request_counters.push(counters);
+        }
+    }
+
+    fn register_operation_attempts(&mut self, attempts: Arc<AtomicU64>) {
+        if !self
+            .operation_attempts
+            .iter()
+            .any(|registered| Arc::ptr_eq(registered, &attempts))
+        {
+            self.operation_attempts.push(attempts);
         }
     }
 
     fn record_forwarded_get(self) {
-        for counters in self.0 {
+        for counters in self.request_counters {
             counters.gets.fetch_add(1, Ordering::Relaxed);
+        }
+        for attempts in self.operation_attempts {
+            attempts.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -3780,14 +3796,13 @@ impl Storage {
                                     let object_bytes = Arc::clone(&object_bytes);
                                     let request_attempts = Arc::clone(&request_attempts);
                                     async move {
-                                        request_attempts.fetch_add(1, Ordering::Relaxed);
-                                        let result = store
-                                            .get_opts(
-                                                &location,
-                                                GetOptions::new()
-                                                    .with_range(Some(GetRange::Bounded(range))),
-                                            )
-                                            .await?;
+                                        let mut options = GetOptions::new()
+                                            .with_range(Some(GetRange::Bounded(range)));
+                                        options
+                                            .extensions
+                                            .get_or_insert_default::<ForwardedGetCounters>()
+                                            .register_operation_attempts(request_attempts);
+                                        let result = store.get_opts(&location, options).await?;
                                         object_bytes.fetch_max(result.meta.size, Ordering::Relaxed);
                                         backing_response_bytes.fetch_add(
                                             result.range.end.saturating_sub(result.range.start),
@@ -6350,6 +6365,56 @@ mod tests {
             .sum::<u64>();
         assert_eq!(read.backing_reads, traced_gets);
         assert_eq!(read.backing_bytes, traced_bytes);
+    }
+
+    #[test]
+    fn global_rerank_queued_losing_hedge_is_not_reported_as_a_backing_read() {
+        let throttled = ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(50),
+                ..ThrottleConfig::default()
+            },
+        );
+        let trace_dir = tempfile::tempdir().unwrap();
+        let trace_path = trace_dir.path().join("storage-access.csv");
+        let admission = Arc::new(Semaphore::new(1));
+        let mut storage = Storage::from_parts_with_get_admission(
+            "memory:///queued-global-rerank-hedge".to_string(),
+            Arc::new(throttled),
+            object_store::path::Path::from(""),
+            None,
+            None,
+            admission,
+        )
+        .unwrap();
+        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
+        storage
+            .write_bytes("global-pq/exact/queued.arrow", b"body")
+            .unwrap();
+        storage.storage_trace.reset().unwrap();
+        let before = storage.request_counts();
+        let range = 0..4;
+
+        let read = storage
+            .read_global_rerank_ranges(
+                "global-pq/exact/queued.arrow",
+                std::slice::from_ref(&range),
+                Some(Duration::from_millis(10)),
+            )
+            .unwrap();
+
+        assert_eq!(read.chunks, vec![b"body".to_vec()]);
+        assert_eq!(storage.request_counts().delta(&before).gets, 1);
+        assert_eq!(read.backing_reads, 1);
+        assert_eq!(read.backing_bytes, 4);
+        let traced_gets = fs::read_to_string(&trace_path)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .map(|line| line.split(',').nth(5).unwrap().parse::<u64>().unwrap())
+            .sum::<u64>();
+        assert_eq!(traced_gets, 1);
     }
 
     #[test]
