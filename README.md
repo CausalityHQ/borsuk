@@ -10,9 +10,8 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)
 ![Node](https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-339933)
 
-BORSUK keeps your entire vector index as immutable objects — versioned
-role-policy tables (Parquet by default, with a Vortex qualification candidate),
-checked packed atomic records, and range-addressed Arrow IPC ANN bundles — in
+BORSUK keeps your entire vector index as immutable objects — versioned Parquet
+tables, checked packed atomic records, and range-addressed Arrow IPC ANN bundles — in
 the S3, MinIO, SeaweedFS, GCS, or Azure storage you already pay for. Search runs
 inside your
 Rust, Python, or TypeScript application process, so there is no separate BORSUK

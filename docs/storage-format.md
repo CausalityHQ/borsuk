@@ -6,11 +6,6 @@ BORSUK uses one canonical storage/output strategy:
 - **Parquet** for durable scan-oriented materialized tables, including normal
   segments, cell-WAL runs, lexical rows, tombstone state, and ID-directory
   state.
-- **Vortex compact layout** is a selectable normal-segment or cell-WAL codec in
-  the versioned role policy. The frozen normal-segment and v5 cell-WAL
-  qualifications rejected both placements, so Vortex is an explicit research
-  override rather than an automatic production placement. It does not change
-  manifests, routing, graph, sparse/BM25, or Arrow IPC sidecars.
 - **Arrow IPC File** for the dense-vector exact-rerank sidecar. It is a standard
   random-access record-batch file with a footer, typed fixed-size vector arrays,
   and optional IPC V5 ZSTD buffer compression.
@@ -47,9 +42,8 @@ For this use case, Arrow + Parquet is the canonical choice. Avro and Protobuf
 are useful formats, but they are not acceptable substitutes for BORSUK's
 persisted vector, graph, routing, manifest, or record output.
 
-Exact dense vectors live only in the rerank sidecar, not in the selectable
-normal-segment table. This split is unchanged by the segment-table experiment:
-Parquet or Vortex carries ids, coarse codes, metadata, and sketches, while the
+Exact dense vectors live only in the rerank sidecar, not in the normal-segment
+table. Parquet carries ids, coarse codes, metadata, and sketches, while the
 Arrow IPC sidecar carries lossless vectors for random-access rerank. See
 [Two storage formats](#two-storage-formats).
 
@@ -62,9 +56,8 @@ The short rule is:
 
 ```text
 Use Arrow for the schema and in-process/bulk FFI shape.
-Use the versioned role policy for persisted output.
-Policy v3 uses Parquet for normal segments and WAL runs by default.
-Use Vortex only as an explicit experiment; both frozen AWS gates rejected it.
+Use Parquet for durable scan-oriented tables.
+Use Arrow IPC File for exact-vector and global ANN sidecars.
 Do not use Avro or Protobuf for vector/index output.
 ```
 
@@ -72,28 +65,15 @@ For BORSUK's output use case, the right answer is split by boundary rather
 than choosing one universal serialization format:
 
 ```text
-published index output     role-specific automatic policy; currently Parquet table baseline
+published index output     Parquet tables plus Arrow IPC sidecars
 bulk FFI/API output        Arrow-compatible arrays or record batches
 human CLI/admin output     JSON allowed for inspection only
 ```
 
-Parquet therefore remains the frozen default durable table format. Users do
-not provide a collection row-count estimate. At each immutable-object write,
-the engine already knows that object's actual row count, vector dimensions,
-and declared element type; it resolves and persists the format from those
-facts. Different objects in one live index may therefore use different
-formats without a user setting.
-
-The rejected WAL experiment is deterministic: runs below 500 rows, below 64
-dimensions, or using a non-f32 primary type remain Parquet; f32 runs with at
-least 500 rows and 64 dimensions may use compact Vortex only when a caller
-explicitly selects the experimental rule. Campaign
-`wal-layout-qualification-20260728-v5` completed all 220 paired cases and
-rejected promotion because the end-to-end latency, confidence, CPU, RSS, and
-storage gates did not all pass. One-record streaming writes remain immediately
-durable as small Parquet runs; BORSUK does not delay acknowledgement merely to
-accumulate a Vortex-sized batch. Normal-segment placement was qualified and
-rejected independently.
+Parquet is the only durable table format. Users do not provide a collection
+row-count estimate or select a table codec. One-record streaming writes remain
+immediately durable as small Parquet runs; BORSUK does not delay
+acknowledgement to accumulate a codec-sized batch.
 
 Arrow remains the schema and memory ABI that keeps Rust, Python, and TypeScript
 aligned. Avro and Protobuf remain outside vector/index output because they
@@ -102,36 +82,13 @@ skipping, vector columns, or object-store range reads.
 
 `BuildConfig::default()` uses
 `PhysicalLayoutPolicy::production_default()` and requires no cardinality or
-format hint. Explicit format selectors are experimental/qualification
-overrides. Set `BuildConfig::physical_layout` in Rust. The temporary
-`BuildConfig::segment_table_format` binding alias,
-`segment_table_format="vortex"` in Python, `segmentTableFormat: "vortex"` in
-TypeScript, `--segment-table-format vortex` in the CLI, or
-`BORSUK_SEGMENT_TABLE_FORMAT=vortex` in `production_bench`. Parquet is the
-default on every surface. The value is persisted at creation; comparison runs
-must use a fresh URI and rebuild the index rather than reuse objects from the
-other format.
-
-The Rust Vortex reader exposes object size plus asynchronous range reads backed
-by `Storage::read_range`; it does not preload a `Vec<u8>`. Lean serving performs
-a one-row packed-header projection and a separate vector-less row projection.
-Independently verified 1 MiB BLAKE3 chunks authenticate each transferred range,
-and per-chunk singleflight prevents concurrent duplicate fetches while leaving
-different chunks parallel.
-One process-wide Vortex runtime bounds codec CPU and prevents each caller from
-creating another runtime.
-
-Vortex 0.81's Unix I/O dependency currently pulls `custom-labels`, whose build
-script uses bindgen and therefore needs a C++ toolchain plus `libclang`. This is
-another reason the experiment is not the default: a clean Parquet-only BORSUK
-build should not silently acquire that system dependency or the associated
-compile-time cost.
+format hint. Removed experimental format selectors are rejected on every
+surface. The persisted role policy records Parquet for durable table roles.
 
 There is no small JSON manifest exception. Manifests, segment summaries,
 pivots, routing rows, and graph blocks are binary Parquet tables. Normal
-segment records are Parquet by default and may use the explicitly selected
-Vortex experiment. JSON may be emitted by tools for people, but it is not an
-index format and not a runtime API contract.
+segment records are Parquet. JSON may be emitted by tools for people, but it is
+not an index format and not a runtime API contract.
 
 ## Decision Matrix
 
@@ -141,7 +98,6 @@ index format and not a runtime API contract.
 | Parquet | Canonical durable tables and default normal-segment container | Column-oriented storage format designed for efficient storage/retrieval, compression, projection, and row-group/range access |
 | Arrow IPC File | The exact-vector rerank store | Standard typed `FixedSizeList` record batches, footer-addressable bounded range reads, and optional IPC V5 ZSTD buffer compression |
 | Arrow IPC File | PQ/TurboQuant ANN scan pages and colocated typed exact candidates | One record batch per bounded cell chunk; fixed-size scan and vector buffers remain independently range-addressable through standard Arrow metadata |
-| Vortex | Explicit experimental role-specific backend | The schedule-locked normal-segment campaign rejected every cross-backend candidate, and the independently reproduced 220-case v5 WAL campaign rejected compact Vortex. Normal segments and WAL runs therefore remain Parquet automatically. |
 | Avro | Not for index/vector storage | Compact binary serialization and container files; useful for optional streaming ingest logs if needed, but not for segment scans |
 | Protobuf | Not for index/vector storage | Good for small RPC/control messages; not a table/columnar storage format and a poor fit for large multidimensional numeric arrays |
 
@@ -153,10 +109,10 @@ footer-addressable record batch containing each candidate, not a projected scan
 of a large Parquet row group. Candidate rows in the same batch share one fetch
 and one decode.
 
-## Why Arrow IPC now, and where Vortex may fit
+## Why Arrow IPC and Parquet
 
-The current choice is evidence-led, not a claim that Arrow IPC is universally
-faster than Parquet or Vortex:
+The current choice follows each access pattern rather than claiming one format
+is universally fastest:
 
 - Arrow IPC File is a stable cross-language format whose footer records the
   offsets and sizes of every record batch, explicitly enabling random access.
@@ -168,49 +124,6 @@ faster than Parquet or Vortex:
   groups, projection, and statistics fit routing, metadata, postings, and
   lifecycle tables. See the
   [Apache Parquet page-index specification](https://parquet.apache.org/docs/file-format/pageindex/).
-- Vortex is retained as a research control and experimental normal-segment
-  container. Its stable file format exposes a footer-addressed layout tree and
-  segments for local and cloud range access; its default layout uses 8K-row
-  zones, 2 MiB uncompressed chunks, and buffered compressed chunks. See the
-  [Vortex file-format specification](https://docs.vortex.dev/specs/file-format)
-  and [default layout strategy](https://docs.vortex.dev/concepts/file-format).
-  Its I/O layer also documents backend-specific coalescing, byte backpressure,
-  a byte-sized segment cache, and single-flight reads—properties directly
-  relevant to BORSUK's multi-caller object-store path. See the
-  [Vortex I/O subsystem](https://docs.vortex.dev/developer-guide/internals/io).
-
-Vortex's project website publishes large performance claims against Parquet.
-Those are vendor/project claims, not BORSUK evidence. BORSUK therefore does
-**not** default to Vortex merely from those claims. On 24 July 2026 we found
-that the original benchmark timed compressed Vortex results without converting
-them to the Arrow values used downstream, while the Parquet path did perform
-that materialization. All Vortex latency comparisons and the earlier closed
-decision are therefore invalid. Footprint, writer-resource, type-compatibility,
-and Arrow range-policy measurements remain usable. Corrected comparisons report
-both materialized-Arrow execution and, only when the real downstream operation
-is implemented over Vortex arrays, compressed-native execution. See
-[ANN vector-buffer format A/B](research/vector-format-ab.md) and
-[Parquet/Vortex table-workload A/B](research/table-format-ab.md). No production
-default will be selected until the corrected real-artifact and AWS runs finish.
-
-The default Vortex layout is aimed at analytical scans. BORSUK's exact rerank
-trace is different: it is a `take` of small clustered or scattered candidate
-sets selected by ANN. Consequently the publication A/B reports the project's
-claimed Parquet speedups only as external claims and publishes BORSUK's own
-row-trace, NVMe, and S3 measurements beside them. Vortex is a Linux Foundation
-project originally donated by Spiral; it is not a BORSUK or Zilliz-owned
-format.
-
-The executable compatibility gate is
-[`scripts/probe_vector_format_compatibility.py`](../scripts/probe_vector_format_compatibility.py).
-It does not translate a rejected type to f32: that format/type cell is recorded
-as `blocked` in `compatibility.csv`. With Vortex Python 0.79, the current matrix
-accepts fixed-size f32, f16, bf16-as-UInt16, and i8 vector arrays, but rejects
-Arrow `FixedSizeBinary` input. That is compatibility evidence only, not a
-performance result; packed-binary Vortex remains ineligible until it has a
-same-physical-representation path. The selectable Rust backend uses Vortex
-0.81, raises BORSUK's MSRV to Rust 1.91, and aligns the workspace on
-Arrow/Parquet 58.4.
 
 The required comparison records:
 
@@ -232,23 +145,18 @@ the quantizer semantics, and which standard column buffers a query range-reads.
 The ANN bundle is derived and may be deleted and recreated from canonical
 sidecars, but it is not a private durable container.
 
-That distinction matters against Vortex. Vortex is a general physical
-array/file format with configurable layout trees and compressed-array compute.
-BORSUK is an index architecture that assigns physical representations by
-access pattern. The publication question is therefore not “is Arrow always
-better than Vortex?” but “for a known ANN candidate `take`, which physical
-layout minimizes S3 GETs, transferred bytes, decode CPU, and tail latency at
-the same recall and resource cap?”
+BORSUK is an index architecture that assigns standard physical representations
+by access pattern. The publication question is which layout minimizes S3 GETs,
+transferred bytes, decode CPU, and tail latency at the same recall and resource
+cap.
 
 For BORSUK's current workload, Arrow IPC has a concrete advantage over a generic
 columnar scan for exact rerank: candidate row numbers already exist, so the
 reader can jump to the bounded record batches containing those rows without
 evaluating a filter. Parquet has a concrete advantage for routing, lifecycle,
 metadata, sparse, and BM25 tables: mature projection/statistics/row-group tools
-and broad cross-language inspection. Vortex may be reconsidered when its exact
-physical types and dependency baseline align and it wins an end-to-end BORSUK
-workload. “Better” remains access-pattern-specific, not a universal format
-claim.
+and broad cross-language inspection. “Better” remains access-pattern-specific,
+not a universal format claim.
 
 The Arrow reader also avoids a pathological `take`: after candidate rows are
 deduplicated it compares their count with the sidecar's physical record-batch
@@ -422,7 +330,7 @@ CURRENT                         fixed binary pointer record with metadata checks
 manifests/manifest-*.parquet    manifest/config/version rows
 routing/segments-*.parquet      segment summary rows, including blooms, leaf_mode, and metadata stats
 routing/pivots-*.parquet        centroid-derived pivot/router rows
-segments/L*/xx/seg-*.{parquet,vortex} immutable record id, coarse-code, sketch, and metadata rows (no dense-vector column)
+segments/L*/xx/seg-*.parquet    immutable record id, coarse-code, sketch, and metadata rows (no dense-vector column)
 graphs/L*/xx/graph-*.parquet    segment-local graph edge rows
 vectors/xx/<checksum>.arrow     standard Arrow IPC exact-vector record batches (optional IPC ZSTD)
 quantizer/xx/<checksum>.parquet persisted IVF coarse quantizer (centroid HNSW), single-row Parquet
@@ -710,13 +618,11 @@ those legacy ids to local row indices after loading the segment payload.
 Each segment stores its vectors in **two** objects, split by access pattern:
 
 ```text
-segments/L*/xx/seg-<checksum>.{parquet,vortex}
-                                         packed header plus ids, coarse codes, sketches, metadata — a projected/scanned table
+segments/L*/xx/seg-<checksum>.parquet   ids, coarse codes, sketches, metadata — a projected/scanned table
 vectors/xx/<checksum>.arrow             the segment's exact dense vectors — a random-access row store
 ```
 
-The role policy chooses Parquet or Vortex for the normal-segment table. Routing
-and candidate selection scan that column-projectable object (decode coarse
+Routing and candidate selection scan the Parquet object (decode coarse
 codes and metadata without touching vectors), and it carries no dense-vector
 column. The sidecar is what exact rerank reads: after a budgeted scan picks a
 handful of candidate rows, BORSUK range-reads only those rows from the sidecar
@@ -1054,11 +960,11 @@ descriptors, and ID-directory runs use a `.bin` suffix; conditional `HEAD`,
 `STATE`, `COMMIT`, `LOCK`, and `NEXT` objects are also packed binary despite
 having no suffix.
 Run creation rejects caller-controlled extensions and fixes the role/codec
-mapping to records=`parquet|vortex`, tombstones=`parquet`, and
+mapping to records=`parquet`, tombstones=`parquet`, and
 ID-directory=`bin`, preventing path construction from becoming an escape hatch.
 
-WAL record runs use a dedicated record-only Arrow schema shared by their
-Parquet and Vortex containers. It stores `record_id`, metadata, optional
+WAL record runs use a dedicated record-only Arrow schema in Parquet. It stores
+`record_id`, metadata, optional
 sparse/text/generation columns, the nullable exact primary vector, named
 payload extras, and constant vector-type/dimension columns. It deliberately
 does not store the normal segment header, routing score, or product/rotated
@@ -1071,9 +977,8 @@ Because a WAL record has no exact-vector sidecar yet, its table serializes the
 full dense vector so the un-flushed tail is searchable and self-contained. The
 column keeps the declared Arrow physical type—`Float32`, `Float16`, bfloat16
 `UInt16` bits, FP8 `UInt8` bits, `Int8`, or bit-packed `UInt8`—and persists
-explicit type and logical-dimension constants because Vortex does not preserve
-Arrow schema metadata. WAL publication therefore does not silently expand a
-typed vector to float32 storage.
+explicit type and logical-dimension constants. WAL publication therefore does
+not silently expand a typed vector to float32 storage.
 `flush()` materializes the tail directly into real segments (with the normal
 vector-less Parquet plus a dense-vector sidecar) — there is no intermediate
 double-build. A finalized global artifact remains the immutable base: flush
@@ -1224,10 +1129,6 @@ are compact routing records, not larger vector payload blobs.
 - [Apache Parquet](https://parquet.apache.org/) describes Parquet as a
   column-oriented data file format for efficient storage and retrieval with
   high-performance compression/encoding.
-- [Vortex file-format specification](https://docs.vortex.dev/specs/file-format)
-  defines the stable-since-0.36 footer/segment container and its compatibility
-  boundary; [Vortex layouts](https://docs.vortex.dev/concepts/layouts) describe
-  the lazy, object-store-backed layout tree evaluated by the planned A/B.
 - [Apache Avro](https://avro.apache.org/docs/) describes Avro as a compact
   binary data serialization system with a container file and strong schema
   evolution.

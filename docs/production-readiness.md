@@ -177,13 +177,9 @@ Persistent index data is binary and efficient:
 - `CURRENT` is a fixed binary pointer, and the per-segment dense-vector rerank
   sidecar (`vectors/<checksum>.arrow`) is a standard Arrow IPC File with typed
   fixed-size vector arrays, bounded footer-addressable record batches, and
-  optional IPC V5 ZSTD buffer compression. Normal segment payloads are Parquet
-  automatically and may use the explicit Vortex experiment. Cell-WAL record
-  runs use a dedicated record-only Arrow schema in Parquet automatically. The
-  frozen normal-segment and independently reproduced 220-case v5 WAL
-  qualifications rejected both automatic Vortex placements; the compact rule
-  selected from actual object rows, dimensions, and element type remains an
-  explicit research override only. The WAL schema omits normal-segment
+  optional IPC V5 ZSTD buffer compression. Normal segment payloads are Parquet.
+  Cell-WAL record runs use a dedicated record-only Arrow schema in Parquet. The
+  WAL schema omits normal-segment
   routing/PQ fields that live-tail exact search never consumes. Manifests,
   segment summaries, routing pages, pivot/routing tables, graph blocks,
   BM25/named-sparse roots, term pages, postings, row metadata, and the coarse
@@ -192,10 +188,9 @@ Persistent index data is binary and efficient:
   and global scan bundles are standard Arrow IPC files. Other commit markers
   and `CURRENT` remain checked packed atomic records;
 - manifests, segment summaries, routing bloom filters, pivot/routing tables,
-  coarse codes, and graph blocks are Parquet; normal segment records are
-  Parquet by default or Vortex when explicitly selected. Exact dense vectors
-  live only in the Arrow rerank sidecar, so the segment table carries no
-  dense-vector column;
+  coarse codes, graph blocks, and normal segment records are Parquet. Exact
+  dense vectors live only in the Arrow rerank sidecar, so the segment table
+  carries no dense-vector column;
 - no persistent JSON *table* is allowed in the index format (two Parquet objects
   carry a JSON *string column* for cross-language inspectability — the
   quantizer's serialized centroid graph and the manifest's named-vector spec —

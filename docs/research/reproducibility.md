@@ -385,69 +385,12 @@ also clears the kernel page cache.
 
 ## Staged AWS format decision
 
-The full product/publication matrix must not run until the durable-table format
-decision is closed. Launch the format-only stage from an authenticated
-workstation:
-
-The product replay uses the same production benchmark binary for both
-normal-segment formats:
-
-```bash
-BORSUK_SEGMENT_TABLE_FORMAT=parquet cargo run --release -p borsuk \
-  --example production_bench
-BORSUK_SEGMENT_TABLE_FORMAT=vortex cargo run --release -p borsuk \
-  --example production_bench
-```
-
-Each row must use a new `BORSUK_BENCH_URI`, cache directory, and output
-directory. The selector is persisted in `BuildConfig`; it is not a read-time
-toggle, and changing it requires rebuilding/reingesting the index. Only
-`segments/**/seg-*` changes container. Arrow IPC exact-vector and global ANN
-sidecars plus WAL, routing, lexical, graph, and control tables remain identical
-in scope. Vortex runs use its default layout. Parquet stays the product default
-until corrected real-artifact local/NVMe/S3 distributions and CPU/RAM/disk/I/O
-evidence justify a promotion.
-
-```bash
-AWS_PROFILE=causality \
-  bash scripts/launch_aws_format_qualification.sh
-```
-
-The launcher verifies AWS account `453182569524`, packages the exact tracked
-and untracked source state required to build the workspace, content-addresses
-the archive by SHA-256, starts the dedicated `c7g.8xlarge`, and uses SSM to
-start a detached remote `tmux` session. Turning off the workstation does not
-stop the run.
-
-The remote
-[`bench_format_qualification_aws.sh`](../../scripts/bench_format_qualification_aws.sh)
-executes only:
-
-- Parquet versus Vortex-default/compact table workloads on EC2 local disk and
-  native S3;
-- Arrow IPC versus Vortex-default/compact ANN candidate-take workloads at
-  128-d and 960-d on EC2 local disk and native S3;
-- a no-coercion 15-type compatibility matrix covering the Arrow table shapes
-  used by BORSUK, including `FixedSizeBinary`, fixed-size lists, variable
-  lists, UTF-8, Binary, nullable primitives, and booleans;
-- a no-coercion typed-vector compatibility matrix for f32, f16, physical bf16,
-  i8, and fixed-size binary across Arrow IPC and both Vortex layouts.
-
-Every performance case owns a fresh output directory and S3 prefix, runs under
-the process-tree resource sampler, validates raw samples against its
-distribution summary, renders CPU/RAM/disk/network charts, and syncs artifacts
-to the result prefix. Native-S3 Vortex tests disable its segment cache; local
-local-disk tests retain the normal disk-cached profile. The artifact must record
-whether that disk is EBS, instance-store NVMe, or another class; those labels
-are not interchangeable.
-
-The stage-one artifact is `FORMAT_DECISION_REQUIRED`; it deliberately contains
-no product benchmark. The first 24 July 2026 Vortex latency run was invalidated
-because it did not materialize Vortex values to the same Arrow boundary used by
-Parquet. A corrected run must report `materialized-arrow` and
-`compressed-native` as distinct execution modes; the latter is valid only when
-it performs the real downstream computation. No format decision is frozen.
-The evidence and audit trail are in
+This stage is historical and closed. The frozen normal-segment and cell-WAL
+qualifications rejected the experimental backend, and the unreleased Vortex
+implementation, dependency graph, selectors, and launchers were subsequently
+removed. Reproduce those campaigns only from their recorded source archives;
+the current tree intentionally cannot launch or read the removed format. The
+immutable evidence and audit trail remain in
 [Parquet versus Vortex](table-format-ab.md) and
 [ANN vector-buffer format A/B](vector-format-ab.md).
 

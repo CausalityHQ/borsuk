@@ -1,11 +1,11 @@
 # Vortex Object-Role Investigation — 2026-07-26
 
-Status: the schedule-locked v13 AWS normal-segment qualification is complete
+Status: historical revision-bound evidence. The schedule-locked v13 AWS normal-segment qualification is complete
 and independently reproduced. Every cross-backend Vortex arm failed the frozen
 promotion rule, so Parquet remains the production normal-segment default.
-Compact Vortex for eligible cell-WAL runs is a separate v2 qualification and
-is not yet a production default. No partial campaign or local diagnostic is
-promotion evidence.
+The later cell-WAL qualification also rejected promotion, and the unreleased
+backend and current-tree harnesses were removed. No partial campaign or local
+diagnostic is promotion evidence.
 
 ## Final schedule-locked v13 decision
 

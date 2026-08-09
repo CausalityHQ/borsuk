@@ -1,7 +1,8 @@
 # ANN Vector-Buffer Format A/B
 
-Status: **Vortex latency results invalidated on 24 July 2026; corrected replay
-in progress.** The original Vortex reader timed `read_all()` followed by
+Status: **Vortex latency results were invalidated on 24 July 2026; the
+unreleased backend and its current-tree harnesses were later removed. Commands
+below describe the frozen historical revision only.** The original reader timed `read_all()` followed by
 `len(result)`, leaving compressed Vortex arrays unmaterialized, while the Arrow
 path returned decoded values. File size, writer-resource, Arrow range-policy,
 and physical-type compatibility evidence remains useful. Candidate-take
@@ -16,9 +17,8 @@ record batches keep `scan_payload` and typed `exact_vector` values in separate
 fixed-width buffers, allowing BORSUK to issue direct byte-range reads without
 decoding the other column. The ANN descriptor is standard Parquet.
 
-Vortex 0.79 remains an experimental physical backend. The previous
-candidate-`take` latency result is invalid and cannot justify excluding it from
-the runtime or making Arrow the default.
+Vortex 0.79 was an experimental physical backend. The previous candidate-`take`
+latency result is invalid and did not justify a production decision by itself.
 This is an ANN candidate-`take` decision, not a claim that Arrow is generally
 better than Vortex or that Vortex loses to Parquet for durable tables. The
 separate [Parquet/Vortex table A/B](table-format-ab.md) found Vortex materially

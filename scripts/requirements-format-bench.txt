@@ -4,4 +4,3 @@ numpy==2.4.2
 # Linux/aarch64 (and can segfault in the native writer). 24.0.0 passes the
 # exact round-trip preflight on the AWS Graviton qualification host.
 pyarrow==24.0.0
-vortex-data==0.79.0

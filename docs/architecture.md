@@ -53,9 +53,8 @@ qualified exact shortlist from 608 rows to 96, so only 1.5% more total index
 storage buys fewer probes and far fewer lossless rerank reads. Explicit build
 settings remain available for publishing matched code-width ablations.
 
-The normal-segment table has no dense float32 vector column. Its role policy
-automatically chooses Parquet or an explicitly requested Vortex experiment, while
-exact vectors remain in the independently range-readable Arrow IPC sidecar.
+The normal-segment Parquet table has no dense float32 vector column. Exact
+vectors remain in the independently range-readable Arrow IPC sidecar.
 New cosine/angular indexes build both IVF and shortlist geometry from
 unit-normalized copies while keeping the stored exact vectors unchanged.
 
@@ -151,11 +150,8 @@ thread stacks, clients, and the embedding application are outside this governor.
 The current implementation keeps these invariants:
 
 - one physical index has one fixed metric;
-- durable objects use the versioned role policy: control, routing, lexical, and
-  graph tables are Parquet; normal-segment tables are Parquet by default or
-  Vortex only when explicitly selected; cell-WAL record runs resolve Parquet
-  automatically or compact Vortex only under the rejected experimental rule
-  from their actual row count, dimensions, and element type; small atomic
+- durable objects use the versioned role policy: control, routing, lexical,
+  graph, normal-segment, and cell-WAL record tables are Parquet; small atomic
   pointers/heads/markers use checked packed records; and exact dense vectors
   live in standard Arrow IPC sidecars and fixed-width, cell-aligned global
   pages. No index table is a bare JSON object;
@@ -266,7 +262,7 @@ index-root/ or s3://bucket/prefix/
   segments/
     L0/
       ab/
-        seg-<checksum>.{parquet,vortex}
+        seg-<checksum>.parquet
     L1/
     L2/
   graphs/                       # absent for pq-scan-only indexes
@@ -285,7 +281,7 @@ index-root/ or s3://bucket/prefix/
     <routing-epoch>/<cell-ordinal>/wal/<lane>/
       HEAD                               # checked packed conditional lane frontier
       frontier/<checksum>.bin            # checked packed immutable linked frontier node
-      runs/records/<checksum>.parquet|vortex
+      runs/records/<checksum>.parquet
       runs/tombstones/<checksum>.parquet
       runs/id-directory/<checksum>.bin   # checked packed ownership rows
   transactions/
@@ -662,10 +658,8 @@ keyed by immutable run checksums, so an unchanged run pays zero re-decode. The
 tail is exact-scored as a small overlay alongside the immutable global base or
 cell-routed corpus, so records are searchable immediately, before they are
 flushed. Because a WAL record has no rerank sidecar yet, its object
-inlines the dense vector in a dedicated record-only Arrow table, persisted as
-automatic Parquet or explicitly selected experimental Vortex, so the
-un-flushed tail is self-contained. The frozen normal-segment and v5 WAL AWS
-qualifications rejected automatic Vortex promotion.
+inlines the dense vector in a dedicated record-only Arrow table persisted as
+Parquet, so the un-flushed tail is self-contained.
 Float16, bfloat16, FP8, int8, and binary WAL rows retain their declared
 physical widths rather than being expanded to a float32 column. WAL tables do
 not carry the normal segment's header, routing code, or product code because

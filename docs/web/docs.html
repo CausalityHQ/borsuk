@@ -954,13 +954,13 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
         <div class="section-head">
           <p class="eyebrow">Storage format</p>
           <h2>Binary Tables, One Tiny Pointer</h2>
-          <p>Table-shaped metadata and search indexes use standard Parquet by default. A fresh index may explicitly select the experimental Vortex backend for normal segment records only; routing, WAL, lexical/control tables, and graph objects remain Parquet. ANN scan payloads and typed exact vectors remain standard Arrow IPC files whose record-batch buffers can be range-read independently. The only custom durable object is the tiny fixed-width <code>CURRENT</code> publication pointer; it names the active manifest and checksums its metadata references.</p>
+          <p>Table-shaped metadata and search indexes use standard Parquet. ANN scan payloads and typed exact vectors use standard Arrow IPC files whose record-batch buffers can be range-read independently. The remaining checked binary control records are small coordination envelopes rather than vector or table containers.</p>
         </div>
         <div class="storage-map" aria-label="BORSUK object layout">
           <div class="storage-node current"><strong>CURRENT</strong><span>binary pointer</span></div>
           <div class="storage-node"><strong>manifests/*.parquet</strong><span>config, levels, active refs</span></div>
           <div class="storage-node"><strong>routing/*.parquet</strong><span>summaries, pivots, blooms</span></div>
-          <div class="storage-node"><strong>segments/L*/**/*.{parquet,vortex}</strong><span>ids, coarse codes, sketches · Parquet default</span></div>
+          <div class="storage-node"><strong>segments/L*/**/*.parquet</strong><span>ids, coarse codes, sketches</span></div>
           <div class="storage-node"><strong>vectors/**/*.arrow</strong><span>dense-vector rerank sidecar</span></div>
           <div class="storage-node"><strong>graphs/L*/**/*.parquet</strong><span>segment-local edges</span></div>
           <div class="storage-node"><strong>lexical/**/*.parquet</strong><span>roots, term pages, postings, row metadata</span></div>

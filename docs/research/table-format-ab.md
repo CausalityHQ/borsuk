@@ -2,7 +2,9 @@
 
 Status: **the earlier latency results were invalidated; the corrected replay
 completed on 24 July 2026, and the final schedule-locked v13 end-to-end product
-A/B completed on 27 July 2026 with no Vortex normal-segment promotion.** The
+A/B completed on 27 July 2026 with no Vortex normal-segment promotion. The
+unreleased backend and its current-tree harnesses were later removed; commands
+below describe the frozen historical revision only.** The
 original Vortex reader timed `read_all()` followed by
 `len(result)`, which did not materialize the compressed Vortex arrays to the
 Arrow values consumed by BORSUK. Parquet did materialize an Arrow table. File
