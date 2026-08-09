@@ -6,7 +6,7 @@ set -euo pipefail
   exit 2
 }
 
-repo_root="$(git rev-parse --show-toplevel)"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 manifest="${BORSUK_APPROXIMATE_FIRST_MANIFEST:-$repo_root/docs/research/approximate-first-cohere-1m-local-qualification.json}"
 dataset="${BORSUK_APPROXIMATE_FIRST_DATASET:-/data/home/rb/borsuk-datasets/cohere-medium-1M}"
 output="${BORSUK_APPROXIMATE_FIRST_OUTPUT:?set BORSUK_APPROXIMATE_FIRST_OUTPUT}"
@@ -15,12 +15,26 @@ cache_dir="${BORSUK_APPROXIMATE_FIRST_CACHE_DIR:?set BORSUK_APPROXIMATE_FIRST_CA
 
 [[ ! -e "$output" ]] || { echo "output already exists: $output" >&2; exit 2; }
 [[ -f "$dataset/dataset.json" ]] || { echo "dataset descriptor missing" >&2; exit 2; }
-[[ -z "$(git -C "$repo_root" status --porcelain)" ]] || { echo "source tree is dirty" >&2; exit 2; }
-git -C "$repo_root" fetch origin main
-git -C "$repo_root" merge-base --is-ancestor origin/main HEAD || {
-  echo "origin/main is not an ancestor of HEAD" >&2
-  exit 2
-}
+if [[ -d "$repo_root/.git" ]]; then
+  [[ -z "$(git -C "$repo_root" status --porcelain)" ]] || { echo "source tree is dirty" >&2; exit 2; }
+  git -C "$repo_root" fetch origin main
+  git -C "$repo_root" merge-base --is-ancestor origin/main HEAD || {
+    echo "origin/main is not an ancestor of HEAD" >&2
+    exit 2
+  }
+  source_commit="$(git -C "$repo_root" rev-parse HEAD)"
+  source_archive_sha256=""
+else
+  source_commit="${BORSUK_SOURCE_COMMIT:?gitless execution requires BORSUK_SOURCE_COMMIT}"
+  source_archive="${BORSUK_SOURCE_ARCHIVE:?gitless execution requires BORSUK_SOURCE_ARCHIVE}"
+  source_archive_sha256="${BORSUK_SOURCE_ARCHIVE_SHA256:?gitless execution requires BORSUK_SOURCE_ARCHIVE_SHA256}"
+  [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid source commit" >&2; exit 2; }
+  [[ "$source_archive_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid source archive SHA-256" >&2; exit 2; }
+  [[ "$(sha256sum "$source_archive" | awk '{print $1}')" == "$source_archive_sha256" ]] || {
+    echo "source archive SHA-256 mismatch" >&2
+    exit 2
+  }
+fi
 
 mkdir -p "$output" "$cache_dir"
 failure="$output/APPROXIMATE_FIRST_QUALIFICATION_FAILED"
@@ -55,11 +69,12 @@ target_dir="$(cargo metadata --locked --no-deps --format-version=1 | python3 -c 
 binary="$target_dir/release/examples/production_bench"
 [[ -x "$binary" ]] || { echo "production_bench binary missing" >&2; exit 2; }
 
-python3 - "$output/qualification_identity.json" "$manifest" "$dataset_sha" "$binary" <<'PY'
-import hashlib, json, subprocess, sys
-path, manifest, dataset_sha, binary = sys.argv[1:]
+python3 - "$output/qualification_identity.json" "$manifest" "$dataset_sha" "$binary" "$source_commit" "$source_archive_sha256" <<'PY'
+import hashlib, json, sys
+path, manifest, dataset_sha, binary, source_commit, source_archive_sha = sys.argv[1:]
 identity = {
-    "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+    "source_commit": source_commit,
+    "source_archive_sha256": source_archive_sha or None,
     "manifest_sha256": hashlib.sha256(open(manifest, "rb").read()).hexdigest(),
     "dataset_descriptor_sha256": dataset_sha,
     "binary_sha256": hashlib.sha256(open(binary, "rb").read()).hexdigest(),

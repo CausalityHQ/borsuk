@@ -2441,3 +2441,10 @@ trap, leaving no automatic failure marker. The runner now has explicit INT and
 TERM handlers that persist exit 130/143 before termination, with a focused
 regression. Remote relaunch must use a fresh root from the fixed revision; the
 failed local root will not be repaired or resumed.
+
+The selected Causality host has no GitHub deploy credential, so the runner also
+supports the existing AWS campaign boundary: a gitless checkout is eligible
+only when the caller supplies a 40-hex pushed source commit, the immutable source
+archive path, and its 64-hex SHA-256; the runner recomputes and matches that hash
+before compiling and records it in qualification identity. Ordinary Git
+execution retains the clean-tree and `origin/main` ancestry checks.

@@ -191,6 +191,11 @@ def validate(root, manifest_path):
     require(identity.get("origin_main_ancestor") is True, "source was not based on origin/main")
     for field in ("source_commit", "manifest_sha256", "dataset_descriptor_sha256", "binary_sha256"):
         require(re.fullmatch(r"[0-9a-f]{40}" if field == "source_commit" else r"[0-9a-f]{64}", str(identity.get(field, ""))) is not None, f"invalid identity {field}")
+    archive_sha = identity.get("source_archive_sha256")
+    require(
+        archive_sha is None or re.fullmatch(r"[0-9a-f]{64}", str(archive_sha)) is not None,
+        "invalid identity source_archive_sha256",
+    )
     manifest_sha = hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest()
     require(identity["manifest_sha256"] == manifest_sha, "manifest identity drift")
     require(identity["dataset_descriptor_sha256"] == manifest["dataset_descriptor_sha256"], "dataset identity drift")

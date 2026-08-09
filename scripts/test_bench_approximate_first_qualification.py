@@ -21,6 +21,7 @@ class ApproximateFirstRunnerContractTest(unittest.TestCase):
     def test_runner_captures_immutable_identity_before_measurement(self):
         for evidence in (
             "source_commit",
+            "source_archive_sha256",
             "manifest_sha256",
             "dataset_descriptor_sha256",
             "binary_sha256",
@@ -41,6 +42,11 @@ class ApproximateFirstRunnerContractTest(unittest.TestCase):
     def test_interrupts_and_termination_are_failure_marked(self):
         self.assertIn("trap 'mark_failure 130; exit 130' INT", RUNNER)
         self.assertIn("trap 'mark_failure 143; exit 143' TERM", RUNNER)
+
+    def test_gitless_remote_execution_verifies_the_source_archive(self):
+        self.assertIn("gitless execution requires BORSUK_SOURCE_COMMIT", RUNNER)
+        self.assertIn("gitless execution requires BORSUK_SOURCE_ARCHIVE", RUNNER)
+        self.assertIn("source archive SHA-256 mismatch", RUNNER)
 
 
 if __name__ == "__main__":
