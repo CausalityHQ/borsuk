@@ -466,9 +466,32 @@ struct CountingObjectStore {
     get_admission: Option<Arc<Semaphore>>,
 }
 
+/// Per-scope counters collected by outer decorators and consumed by the
+/// admitted base decorator at the physical forwarding boundary.
+#[derive(Clone, Default)]
+struct ForwardedGetCounters(Vec<Arc<RequestCounters>>);
+
+impl ForwardedGetCounters {
+    fn register(&mut self, counters: Arc<RequestCounters>) {
+        if !self
+            .0
+            .iter()
+            .any(|registered| Arc::ptr_eq(registered, &counters))
+        {
+            self.0.push(counters);
+        }
+    }
+
+    fn record_forwarded_get(self) {
+        for counters in self.0 {
+            counters.gets.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 struct AdmittedGetStream {
     inner: BoxStream<'static, object_store::Result<Bytes>>,
-    _permit: OwnedSemaphorePermit,
+    permit: Option<OwnedSemaphorePermit>,
 }
 
 impl Stream for AdmittedGetStream {
@@ -478,7 +501,14 @@ impl Stream for AdmittedGetStream {
         mut self: Pin<&mut Self>,
         context: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(context)
+        let poll = self.inner.as_mut().poll_next(context);
+        if matches!(
+            &poll,
+            std::task::Poll::Ready(None) | std::task::Poll::Ready(Some(Err(_)))
+        ) {
+            self.permit.take();
+        }
+        poll
     }
 }
 
@@ -563,7 +593,7 @@ impl ObjectStore for CountingObjectStore {
     fn get_opts<'life0, 'life1, 'async_trait>(
         &'life0 self,
         location: &'life1 ObjectPath,
-        options: GetOptions,
+        mut options: GetOptions,
     ) -> BoxFuture<'async_trait, object_store::Result<GetResult>>
     where
         'life0: 'async_trait,
@@ -573,10 +603,14 @@ impl ObjectStore for CountingObjectStore {
         Box::pin(async move {
             if options.head {
                 self.counters.heads.fetch_add(1, Ordering::Relaxed);
-            } else {
-                self.counters.gets.fetch_add(1, Ordering::Relaxed);
             }
             let is_head = options.head;
+            if !is_head && self.get_admission.is_none() {
+                options
+                    .extensions
+                    .get_or_insert_default::<ForwardedGetCounters>()
+                    .register(Arc::clone(&self.counters));
+            }
             let permit = if is_head {
                 None
             } else if let Some(admission) = &self.get_admission {
@@ -589,6 +623,14 @@ impl ObjectStore for CountingObjectStore {
             } else {
                 None
             };
+            if !is_head && self.get_admission.is_some() {
+                let mut forwarded = options
+                    .extensions
+                    .remove::<ForwardedGetCounters>()
+                    .unwrap_or_default();
+                forwarded.register(Arc::clone(&self.counters));
+                forwarded.record_forwarded_get();
+            }
             let result = self.inner.get_opts(location, options).await;
             if !is_head && let Ok(read) = &result {
                 self.cache_read_counters
@@ -596,15 +638,33 @@ impl ObjectStore for CountingObjectStore {
             }
             match (result, permit) {
                 (Ok(read), Some(permit)) => {
-                    let meta = read.meta.clone();
-                    let range = read.range.clone();
-                    let attributes = read.attributes.clone();
-                    let extensions = read.extensions.clone();
-                    let inner = read.into_stream();
+                    let GetResult {
+                        payload,
+                        meta,
+                        range,
+                        attributes,
+                        extensions,
+                    } = read;
+                    let inner = match payload {
+                        GetResultPayload::File(file, path) => {
+                            let optimized_file_read = GetResult {
+                                payload: GetResultPayload::File(file, path),
+                                meta: meta.clone(),
+                                range: range.clone(),
+                                attributes: attributes.clone(),
+                                extensions: extensions.clone(),
+                            };
+                            futures_util::stream::once(
+                                async move { optimized_file_read.bytes().await },
+                            )
+                            .boxed()
+                        }
+                        GetResultPayload::Stream(inner) => inner,
+                    };
                     Ok(GetResult {
                         payload: GetResultPayload::Stream(Box::pin(AdmittedGetStream {
                             inner,
-                            _permit: permit,
+                            permit: Some(permit),
                         })),
                         meta,
                         range,
@@ -4780,6 +4840,7 @@ mod tests {
         collections::BTreeMap,
         fs::{self, OpenOptions},
         future::Future,
+        io,
         ops::Range,
         path::{Path, PathBuf},
         process::Command,
@@ -4813,11 +4874,13 @@ mod tests {
         record::{BuildConfig, LeafCapability},
         storage_trace::StorageAccessTrace,
     };
+    use futures_util::StreamExt;
     use object_store::{
-        ObjectStoreExt,
+        GetOptions, ObjectStore, ObjectStoreExt,
         memory::InMemory,
         throttle::{ThrottleConfig, ThrottledStore},
     };
+    use tokio::sync::Semaphore;
     use url::Url;
 
     struct DropFlag(Arc<AtomicBool>);
@@ -4908,6 +4971,116 @@ mod tests {
     }
 
     #[test]
+    fn physical_get_admission_releases_when_exhausted_stream_is_retained() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let inner = Arc::new(InMemory::new());
+            let path = object_store::path::Path::from("retained-exhausted-body");
+            inner
+                .put(&path, bytes::Bytes::from_static(b"body").into())
+                .await
+                .unwrap();
+            let admission = Arc::new(Semaphore::new(1));
+            let store = super::CountingObjectStore::with_get_admission(
+                inner,
+                Arc::new(RequestCounters::default()),
+                Arc::new(CacheReadCounters::default()),
+                Arc::clone(&admission),
+            );
+
+            let mut retained = store.get(&path).await.unwrap().into_stream();
+            assert_eq!(
+                retained.next().await.unwrap().unwrap(),
+                bytes::Bytes::from_static(b"body")
+            );
+            assert!(retained.next().await.is_none());
+
+            let next = tokio::time::timeout(Duration::from_secs(1), store.get(&path))
+                .await
+                .expect("an exhausted retained body must release admission")
+                .unwrap();
+            assert_eq!(
+                next.bytes().await.unwrap(),
+                bytes::Bytes::from_static(b"body")
+            );
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
+
+    #[test]
+    fn physical_get_admission_releases_when_stream_yields_error() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let admission = Arc::new(Semaphore::new(1));
+            let permit = Arc::clone(&admission).acquire_owned().await.unwrap();
+            let error = object_store::Error::Generic {
+                store: "test",
+                source: Box::new(io::Error::other("payload failed")),
+            };
+            let inner = futures_util::stream::once(async move { Err(error) }).boxed();
+            let mut retained = super::AdmittedGetStream {
+                inner,
+                permit: Some(permit),
+            };
+
+            assert!(retained.next().await.unwrap().is_err());
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
+
+    #[test]
+    fn physical_get_admission_local_file_range_uses_one_read_and_releases_on_completion() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let directory = tempfile::tempdir().unwrap();
+            let path = object_store::path::Path::from("large-range.bin");
+            let bytes = (0..32 * 1024)
+                .map(|offset| u8::try_from(offset % 251).unwrap())
+                .collect::<Vec<_>>();
+            fs::write(directory.path().join(path.as_ref()), &bytes).unwrap();
+            let inner = Arc::new(
+                object_store::local::LocalFileSystem::new_with_prefix(directory.path()).unwrap(),
+            );
+            let admission = Arc::new(Semaphore::new(1));
+            let store = super::CountingObjectStore::with_get_admission(
+                inner,
+                Arc::new(RequestCounters::default()),
+                Arc::new(CacheReadCounters::default()),
+                Arc::clone(&admission),
+            );
+            let range = 257..(257 + 24 * 1024);
+
+            let read = store
+                .get_opts(
+                    &path,
+                    GetOptions::new()
+                        .with_range(Some(object_store::GetRange::Bounded(range.clone()))),
+                )
+                .await
+                .unwrap();
+            assert_eq!(read.range, range);
+            assert_eq!(read.meta.size, bytes.len() as u64);
+            assert_eq!(admission.available_permits(), 0);
+            let mut retained = read.into_stream();
+
+            let only_chunk = retained.next().await.unwrap().unwrap();
+            assert_eq!(only_chunk.len(), 24 * 1024);
+            assert_eq!(only_chunk.as_ref(), &bytes[257..257 + 24 * 1024]);
+            assert!(retained.next().await.is_none());
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
+
+    #[test]
     fn physical_get_admission_cancelled_waiter_does_not_leak_capacity() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -4972,6 +5145,188 @@ mod tests {
     }
 
     #[test]
+    fn physical_get_admission_cancelled_waiter_is_not_counted() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let inner = Arc::new(InMemory::new());
+            let path = object_store::path::Path::from("cancelled-waiter-counts");
+            inner
+                .put(&path, bytes::Bytes::from_static(b"body").into())
+                .await
+                .unwrap();
+            let admission = Arc::new(Semaphore::new(1));
+            let storage = Storage::from_parts_with_get_admission(
+                "memory:///cancelled-waiter-counts".to_string(),
+                inner,
+                object_store::path::Path::from(""),
+                None,
+                None,
+                Arc::clone(&admission),
+            )
+            .unwrap();
+            let isolated = storage.isolated_read_scope();
+
+            let first = isolated.store.get(&path).await.unwrap();
+            let (pending_tx, pending_rx) = tokio::sync::oneshot::channel();
+            let waiter = tokio::spawn({
+                let store = Arc::clone(&isolated.store);
+                let path = path.clone();
+                async move {
+                    let mut get = Box::pin(store.get(&path));
+                    let mut pending_tx = Some(pending_tx);
+                    std::future::poll_fn(move |context| {
+                        let poll = get.as_mut().poll(context);
+                        if poll.is_pending() {
+                            pending_tx
+                                .take()
+                                .expect("pending signal is sent once")
+                                .send(())
+                                .expect("pending receiver remains alive");
+                        }
+                        poll
+                    })
+                    .await
+                }
+            });
+            pending_rx.await.unwrap();
+
+            assert_eq!(storage.request_counts().gets, 1);
+            assert_eq!(isolated.request_counts().gets, 1);
+            waiter.abort();
+            assert!(waiter.await.unwrap_err().is_cancelled());
+            assert_eq!(storage.request_counts().gets, 1);
+            assert_eq!(isolated.request_counts().gets, 1);
+
+            drop(first);
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
+
+    #[test]
+    fn physical_get_admission_queued_losing_hedge_is_not_counted() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let inner = Arc::new(InMemory::new());
+            let path = object_store::path::Path::from("queued-losing-hedge");
+            inner
+                .put(&path, bytes::Bytes::from_static(b"body").into())
+                .await
+                .unwrap();
+            let admission = Arc::new(Semaphore::new(1));
+            let storage = Storage::from_parts_with_get_admission(
+                "memory:///queued-losing-hedge".to_string(),
+                inner,
+                object_store::path::Path::from(""),
+                None,
+                None,
+                Arc::clone(&admission),
+            )
+            .unwrap();
+            let isolated = storage.isolated_read_scope();
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let primary_holds_permit = Arc::new(tokio::sync::Notify::new());
+            let release_primary = Arc::new(Semaphore::new(0));
+            let hedge_polled = Arc::new(tokio::sync::Notify::new());
+
+            let fetch = tokio::spawn({
+                let store = Arc::clone(&isolated.store);
+                let path = path.clone();
+                let attempts = Arc::clone(&attempts);
+                let primary_holds_permit = Arc::clone(&primary_holds_permit);
+                let release_primary = Arc::clone(&release_primary);
+                let hedge_polled = Arc::clone(&hedge_polled);
+                async move {
+                    super::fetch_with_optional_hedge(
+                        move || {
+                            let ordinal = attempts.fetch_add(1, Ordering::SeqCst);
+                            let store = Arc::clone(&store);
+                            let path = path.clone();
+                            let primary_holds_permit = Arc::clone(&primary_holds_permit);
+                            let release_primary = Arc::clone(&release_primary);
+                            let hedge_polled = Arc::clone(&hedge_polled);
+                            async move {
+                                if ordinal == 1 {
+                                    hedge_polled.notify_one();
+                                }
+                                let read = store.get(&path).await?;
+                                if ordinal == 0 {
+                                    primary_holds_permit.notify_one();
+                                    release_primary
+                                        .acquire()
+                                        .await
+                                        .expect("test primary release gate remains open")
+                                        .forget();
+                                }
+                                Ok::<_, object_store::Error>(read)
+                            }
+                        },
+                        Some(Duration::from_millis(1)),
+                    )
+                    .await
+                }
+            });
+
+            primary_holds_permit.notified().await;
+            hedge_polled.notified().await;
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+            assert_eq!(storage.request_counts().gets, 1);
+            assert_eq!(isolated.request_counts().gets, 1);
+
+            release_primary.add_permits(1);
+            let winner = fetch.await.unwrap().unwrap();
+            assert_eq!(storage.request_counts().gets, 1);
+            assert_eq!(isolated.request_counts().gets, 1);
+            assert_eq!(
+                winner.bytes().await.unwrap(),
+                bytes::Bytes::from_static(b"body")
+            );
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
+
+    #[test]
+    fn physical_get_admission_does_not_block_head_under_saturation() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let inner = Arc::new(InMemory::new());
+            let path = object_store::path::Path::from("head-under-saturation");
+            inner
+                .put(&path, bytes::Bytes::from_static(b"body").into())
+                .await
+                .unwrap();
+            let admission = Arc::new(Semaphore::new(1));
+            let counters = Arc::new(RequestCounters::default());
+            let store = super::CountingObjectStore::with_get_admission(
+                inner,
+                Arc::clone(&counters),
+                Arc::new(CacheReadCounters::default()),
+                Arc::clone(&admission),
+            );
+
+            let held = store.get(&path).await.unwrap();
+            assert_eq!(admission.available_permits(), 0);
+            let meta = tokio::time::timeout(Duration::from_secs(1), store.head(&path))
+                .await
+                .expect("HEAD must bypass saturated GET admission")
+                .unwrap();
+            assert_eq!(meta.size, 4);
+            assert_eq!(counters.snapshot().heads, 1);
+
+            drop(held);
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
+
+    #[test]
     fn physical_get_admission_forwarding_error_releases_permit() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -4979,15 +5334,21 @@ mod tests {
             .unwrap();
         runtime.block_on(async {
             let admission = Arc::new(tokio::sync::Semaphore::new(1));
-            let store = super::CountingObjectStore::with_get_admission(
+            let storage = Storage::from_parts_with_get_admission(
+                "memory:///forwarding-error".to_string(),
                 Arc::new(InMemory::new()),
-                Arc::new(RequestCounters::default()),
-                Arc::new(CacheReadCounters::default()),
+                object_store::path::Path::from(""),
+                None,
+                None,
                 Arc::clone(&admission),
-            );
+            )
+            .unwrap();
+            let isolated = storage.isolated_read_scope();
 
             let missing = object_store::path::Path::from("missing");
-            assert!(store.get(&missing).await.is_err());
+            assert!(isolated.store.get(&missing).await.is_err());
+            assert_eq!(storage.request_counts().gets, 1);
+            assert_eq!(isolated.request_counts().gets, 1);
             assert_eq!(admission.available_permits(), 1);
         });
     }
