@@ -2289,3 +2289,40 @@ global cell-graph builders sliced the standard Arrow scan envelope at the old
 V7 exact-ordinal boundary, omitting the V8 residual-code and error buffers that
 the descriptor authenticates. The isolated graph regression and final complete
 Rust matrix passed after changing both builders to the V8 residual-error end.
+
+Revision `414b9bc` launched the single frozen V8 local arm into
+`/data/home/rb/borsuk-residual-pq-local-414b9bc`. The source archive SHA-256 was
+`784ccb9a142e709ddbbfc6eb419f151e591e9e4d46961e1077e3a18dc1a3ba13`,
+the manifest SHA-256 was
+`d5bb29f94b9606b030ee56d715e67d4c00ff48f209d1245118dad27ad79ab74254`,
+and the checksum-pinned Cohere descriptor SHA-256 was
+`54c733e39adfcaa9ee10f3ed8bd8e66ada9f8f9a1a73e9753f5c5c2044b79254`.
+The sole cell reached every phase marker, all 32 writer-process completion
+markers, `CELL_COMPLETE`, and process exit zero. All named post-cell correctness
+controls passed. The preterminal root validator accepted the complete artifact
+tree before the evaluator ran.
+
+The evaluator then failed closed on a tooling integration defect: it requested
+`backing_bytes_read`, a name that existed only in its unit-test fixture, while
+the frozen post-drain artifact and validator contract use `bytes_read`. The root
+is consequently and immutably marked `GROUP_COMMIT_SCALABILITY_FAILED`; it was
+not relabelled or repaired in place. The repository recovery boundary now has a
+separate `--completed-cell-after-root-failure` mode that requires a failed root,
+an exit-zero completed cell, every phase marker, and fully reconciled raw cell
+evidence. The recovered decision lives outside the immutable root at
+`/data/home/rb/borsuk-residual-pq-local-414b9bc-recovery/`.
+
+That recovered decision is a valid architectural rejection. All 20 inserted-ID
+queries were found and interval containment failures were zero. Uncached read
+p50/p95/p99 was 3.039/7.646/61.749 ms and certificate CPU p50/p95/p99 was
+455/483/487 microseconds. The ingest cell acknowledged 44,315 vectors/s with a
+71.301 ms operation p95 for 16-vector client operations, while the drain took
+18.516 seconds and reduced drain-inclusive throughput to 867.545 vectors/s.
+Residual storage met its 68-byte/vector cap, but survivor p95 was 16 of 16.
+The unchanged and predicted exact plans therefore both required 288 reads and
+2,617,344 bytes: zero request reduction and zero byte reduction against the
+frozen 30% gates. Total no-cache query bytes were 11,190,368, or 4.275x exact
+backing bytes, above the 2x cap. The failures are `survivors`, `reads`, `bytes`,
+and `total_backing_bytes`. Passing a 200 ms ceiling is irrelevant when the
+certificate removes no physical I/O; the V8 residual treatment cannot advance
+to enforcement, AWS, 100M scale, a production default, or a competitor claim.

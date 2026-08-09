@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.evaluate_exact_bound_shadow import evaluate
+from scripts.evaluate_exact_bound_shadow import completed_cell_reads_path, evaluate
 
 GATE = {
     "require_zero_containment_failures": True,
@@ -50,13 +50,22 @@ def row(**updates: str) -> dict[str, str]:
         "global_exact_bound_residual_scan_bytes": "4096",
         "global_exact_bound_cpu_us": "1000",
         "global_exact_bound_certificate_scratch_allocations": "3",
-        "backing_bytes_read": "180000",
+        "bytes_read": "180000",
     }
     values.update(updates)
     return values
 
 
 class ExactBoundShadowEvaluatorTests(unittest.TestCase):
+    def test_completed_root_failure_reads_only_the_selected_terminal_cell(self) -> None:
+        root = Path("/tmp/evidence")
+        self.assertEqual(
+            completed_cell_reads_path(root, "c2000/r1/l1/w32"),
+            root / "cells/c2000/r01/l1/w32/reads.csv",
+        )
+        with self.assertRaisesRegex(ValueError, "must match"):
+            completed_cell_reads_path(root, "../reads.csv")
+
     def test_malformed_or_incomplete_evidence_exits_above_valid_rejection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -101,7 +110,7 @@ class ExactBoundShadowEvaluatorTests(unittest.TestCase):
             "bytes": row(global_exact_bound_predicted_bytes="70001"),
             "cpu": row(global_exact_bound_cpu_us="2001"),
             "residual_bytes": row(global_exact_bound_residual_bytes="1089"),
-            "total_backing_bytes": row(backing_bytes_read="200001"),
+            "total_backing_bytes": row(bytes_read="200001"),
             "read_latency_hard_cap": row(latency_ms="201"),
         }
         for expected, failing in failures.items():

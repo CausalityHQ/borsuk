@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,29 @@ def percentile(values: list[float], quantile: float) -> float:
     ordered = sorted(values)
     index = math.floor((len(ordered) - 1) * quantile + 0.5)
     return ordered[index]
+
+
+def completed_cell_coordinates(locator: str) -> tuple[int, int, int, int]:
+    match = re.fullmatch(r"c(\d+)/r(\d+)/l(\d+)/w(\d+)", locator)
+    if match is None:
+        raise ValueError(
+            "completed cell locator must match cCELLS/rREPETITION/lLANES/wWRITERS"
+        )
+    cells, repetition, lanes, writers = match.groups()
+    return int(cells), int(repetition), int(lanes), int(writers)
+
+
+def completed_cell_reads_path(root: Path, locator: str) -> Path:
+    cells, repetition, lanes, writers = completed_cell_coordinates(locator)
+    return (
+        root
+        / "cells"
+        / f"c{cells}"
+        / f"r{repetition:02d}"
+        / f"l{lanes}"
+        / f"w{writers}"
+        / "reads.csv"
+    )
 
 
 def evaluate(
@@ -45,16 +69,13 @@ def evaluate(
     )
     scan_waves = [int(row["global_exact_bound_predicted_waves"]) for row in rows]
     scratch_allocations = [
-        int(row["global_exact_bound_certificate_scratch_allocations"])
-        for row in rows
+        int(row["global_exact_bound_certificate_scratch_allocations"]) for row in rows
     ]
-    residual_bytes = sum(
-        int(row["global_exact_bound_residual_bytes"]) for row in rows
-    )
+    residual_bytes = sum(int(row["global_exact_bound_residual_bytes"]) for row in rows)
     exact_backing_bytes = sum(
         int(row["global_exact_bound_exact_backing_bytes"]) for row in rows
     )
-    total_backing_bytes = sum(int(row["backing_bytes_read"]) for row in rows)
+    total_backing_bytes = sum(int(row["bytes_read"]) for row in rows)
     if baseline_reads <= 0 or baseline_bytes <= 0:
         raise ValueError("exact-bound shadow baseline must be positive")
     if exact_backing_bytes <= 0:
@@ -78,9 +99,7 @@ def evaluate(
     total_backing_byte_ratio = total_backing_bytes / exact_backing_bytes
     cpu_limit_us = max(
         float(gate["max_cpu_p95_us"]),
-        read_p95_ms
-        * 1_000.0
-        * float(gate["max_cpu_fraction_of_read_p95"]),
+        read_p95_ms * 1_000.0 * float(gate["max_cpu_fraction_of_read_p95"]),
     )
 
     failures: list[str] = []
@@ -133,8 +152,7 @@ def evaluate(
         "exact_bytes_above_lossless_survivor_payload": predicted_bytes
         - exact_byte_floor,
         "read_p95_ms_above_observed_minimum": read_p95_ms - min(read_values),
-        "certificate_cpu_p95_us_above_observed_minimum": cpu_p95_us
-        - min(cpu_values),
+        "certificate_cpu_p95_us_above_observed_minimum": cpu_p95_us - min(cpu_values),
     }
 
     return {
@@ -160,9 +178,7 @@ def evaluate(
             percentile([float(value) for value in scratch_allocations], 0.95)
         ),
         "scan_waves_total": scan_waves_total,
-        "scan_waves_p95": int(
-            percentile([float(value) for value in scan_waves], 0.95)
-        ),
+        "scan_waves_p95": int(percentile([float(value) for value in scan_waves], 0.95)),
         "residual_bytes_per_vector": residual_bytes_per_vector,
         "total_backing_bytes": total_backing_bytes,
         "exact_backing_bytes": exact_backing_bytes,
@@ -187,14 +203,31 @@ def main() -> int:
     parser.add_argument("root", type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument(
+    root_modes = parser.add_mutually_exclusive_group()
+    root_modes.add_argument(
         "--preterminal-root",
         action="store_true",
         help="evaluate a root that has passed validation but is not terminally marked yet",
     )
+    root_modes.add_argument(
+        "--completed-cell-after-root-failure",
+        metavar="cCELLS/rREPETITION/lLANES/wWRITERS",
+        help="evaluate one validated completed cell after a later root-level failure",
+    )
     args = parser.parse_args()
 
-    validate(args.root, args.manifest, preterminal_root=args.preterminal_root)
+    completed_cell = args.completed_cell_after_root_failure
+    coordinates = (
+        completed_cell_coordinates(completed_cell)
+        if completed_cell is not None
+        else None
+    )
+    validate(
+        args.root,
+        args.manifest,
+        completed_cell_after_root_failure=coordinates,
+        preterminal_root=args.preterminal_root,
+    )
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     gate = manifest.get("exact_bound_shadow")
     if not isinstance(gate, dict) or not gate.get("required"):
@@ -202,9 +235,16 @@ def main() -> int:
     optimization = manifest.get("optimization_contract")
     if not isinstance(optimization, dict):
         raise ValueError("manifest does not define an optimization contract")
-    with (args.root / "reads.csv").open(newline="", encoding="utf-8") as handle:
+    reads_path = (
+        completed_cell_reads_path(args.root, completed_cell)
+        if completed_cell is not None
+        else args.root / "reads.csv"
+    )
+    with reads_path.open(newline="", encoding="utf-8") as handle:
         result = evaluate(list(csv.DictReader(handle)), gate, optimization)
-    args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(json.dumps(result, sort_keys=True))
     return 0 if result["accepted"] else 1
 

@@ -96,8 +96,7 @@ def validate_residual_pq_manifest(manifest: dict[str, object]) -> None:
         (manifest.get("read_queries_per_cell") == 20, "read query count"),
         (manifest.get("min_inserted_id_recall_at_10") == 1.0, "recall gate"),
         (
-            exact.get("candidate_configuration")
-            == "residual-pq64-f32-error-shadow",
+            exact.get("candidate_configuration") == "residual-pq64-f32-error-shadow",
             "candidate configuration",
         ),
         (exact.get("residual_code_bytes") == 64, "residual code width"),
@@ -113,8 +112,7 @@ def validate_residual_pq_manifest(manifest: dict[str, object]) -> None:
         (exact.get("max_total_backing_byte_ratio") == 2.0, "backing byte gate"),
         (exact.get("max_drain_regression_fraction") == 0.10, "drain regression gate"),
         (
-            exact.get("max_physical_write_amplification_regression_fraction")
-            == 0.10,
+            exact.get("max_physical_write_amplification_regression_fraction") == 0.10,
             "physical write amplification regression gate",
         ),
         (
@@ -223,9 +221,7 @@ def integer(value: str, label: str) -> int:
         raise ValidationError(f"invalid {label}: {value!r}") from error
 
 
-def exact_bound_shadow_has_baseline(
-    read: dict[str, str], context: str
-) -> bool | None:
+def exact_bound_shadow_has_baseline(read: dict[str, str], context: str) -> bool | None:
     v1_count = sum(field in read for field in EXACT_BOUND_SHADOW_V1_FIELDS)
     baseline_count = sum(field in read for field in EXACT_BOUND_SHADOW_BASELINE_FIELDS)
     if v1_count == 0 and baseline_count == 0:
@@ -247,13 +243,8 @@ def validate_exact_bound_shadow_row(
     has_baseline: bool,
     require_residual_pq: bool = False,
 ) -> None:
-    fields = (
-        EXACT_BOUND_SHADOW_FIELDS if has_baseline else EXACT_BOUND_SHADOW_V1_FIELDS
-    )
-    values = {
-        field: integer(read[field], f"{context} {field}")
-        for field in fields
-    }
+    fields = EXACT_BOUND_SHADOW_FIELDS if has_baseline else EXACT_BOUND_SHADOW_V1_FIELDS
+    values = {field: integer(read[field], f"{context} {field}") for field in fields}
     require(
         all(value >= 0 for value in values.values()),
         f"negative exact-bound shadow telemetry in {context}",
@@ -264,9 +255,16 @@ def validate_exact_bound_shadow_row(
     failures = values["global_exact_bound_containment_failures"]
     predicted_reads = values["global_exact_bound_predicted_reads"]
     predicted_bytes = values["global_exact_bound_predicted_bytes"]
-    require(survivors <= candidates, f"exact-bound survivors exceed candidates in {context}")
-    require(fail_open <= survivors, f"exact-bound fail-open rows exceed survivors in {context}")
-    require(failures <= candidates, f"exact-bound failures exceed candidates in {context}")
+    require(
+        survivors <= candidates, f"exact-bound survivors exceed candidates in {context}"
+    )
+    require(
+        fail_open <= survivors,
+        f"exact-bound fail-open rows exceed survivors in {context}",
+    )
+    require(
+        failures <= candidates, f"exact-bound failures exceed candidates in {context}"
+    )
     require(
         survivors >= min(10, candidates),
         f"exact-bound shadow retained fewer than top-k candidates in {context}",
@@ -454,15 +452,28 @@ def validate(
     manifest_path: Path,
     terminal_cell: tuple[int, int, int, int] | None = None,
     failed_terminal_cell: tuple[int, int, int, int] | None = None,
+    completed_cell_after_root_failure: tuple[int, int, int, int] | None = None,
     preterminal_root: bool = False,
 ) -> None:
     require(
-        terminal_cell is None or failed_terminal_cell is None,
-        "completed and failed terminal-cell modes are mutually exclusive",
+        sum(
+            mode is not None
+            for mode in (
+                terminal_cell,
+                failed_terminal_cell,
+                completed_cell_after_root_failure,
+            )
+        )
+        <= 1,
+        "terminal-cell modes are mutually exclusive",
     )
     require(
         not preterminal_root
-        or (terminal_cell is None and failed_terminal_cell is None),
+        or (
+            terminal_cell is None
+            and failed_terminal_cell is None
+            and completed_cell_after_root_failure is None
+        ),
         "preterminal root and terminal-cell modes are mutually exclusive",
     )
     if preterminal_root:
@@ -471,21 +482,28 @@ def validate(
             and not (root / "GROUP_COMMIT_SCALABILITY_FAILED").exists(),
             "preterminal root must not have a terminal marker",
         )
-    elif failed_terminal_cell is not None:
+    elif (
+        failed_terminal_cell is not None
+        or completed_cell_after_root_failure is not None
+    ):
         require(
             not (root / "GROUP_COMMIT_SCALABILITY_COMPLETE").exists(),
-            "failed-cell recovery requires no completion marker",
+            "root-failure recovery requires no completion marker",
         )
         require(
             (root / "GROUP_COMMIT_SCALABILITY_FAILED").is_file(),
-            "failed-cell recovery requires the terminal failure marker",
+            "root-failure recovery requires the terminal failure marker",
         )
     elif terminal_cell is None:
         require(
             (root / "GROUP_COMMIT_SCALABILITY_COMPLETE").is_file(),
             "campaign is incomplete",
         )
-    if failed_terminal_cell is None and not preterminal_root:
+    if (
+        failed_terminal_cell is None
+        and completed_cell_after_root_failure is None
+        and not preterminal_root
+    ):
         require(
             not (root / "GROUP_COMMIT_SCALABILITY_FAILED").exists(),
             "campaign has a failure marker",
@@ -564,7 +582,18 @@ def validate(
         for lanes in worker_lanes
         for writers in manifest["writers"]
     }
-    selected_cell = terminal_cell if terminal_cell is not None else failed_terminal_cell
+    selected_cell = next(
+        (
+            mode
+            for mode in (
+                terminal_cell,
+                failed_terminal_cell,
+                completed_cell_after_root_failure,
+            )
+            if mode is not None
+        ),
+        None,
+    )
     if selected_cell is None:
         expected_cells = frozen_cells
     else:
@@ -1238,7 +1267,9 @@ def validate(
         ),
     )
     for name, observed, message in aggregate_contracts:
-        require(observed == expected_aggregate_rows(root, expected_cells, name), message)
+        require(
+            observed == expected_aggregate_rows(root, expected_cells, name), message
+        )
 
     correctness = rows(root / "correctness.csv")
     expected_gates = set(manifest["correctness_gates"])
@@ -1266,6 +1297,11 @@ def main() -> int:
         metavar="cCELLS/rREPETITION/lLANES/wWRITERS",
         help="reconcile one terminal production-gate failure after root failure",
     )
+    cell_modes.add_argument(
+        "--completed-cell-after-root-failure",
+        metavar="cCELLS/rREPETITION/lLANES/wWRITERS",
+        help="reconcile one completed cell after a later root-level failure",
+    )
     parser.add_argument(
         "--preterminal-root",
         action="store_true",
@@ -1274,6 +1310,7 @@ def main() -> int:
     args = parser.parse_args()
     terminal_cell = None
     failed_terminal_cell = None
+    completed_cell_after_root_failure = None
     if args.terminal_cell is not None:
         match = re.fullmatch(r"c(\d+)/r(\d+)/l(\d+)/w(\d+)", args.terminal_cell)
         if match is None:
@@ -1288,12 +1325,26 @@ def main() -> int:
                 "--failed-terminal-cell must match cCELLS/rREPETITION/lLANES/wWRITERS"
             )
         failed_terminal_cell = tuple(int(value) for value in match.groups())
+    if args.completed_cell_after_root_failure is not None:
+        match = re.fullmatch(
+            r"c(\d+)/r(\d+)/l(\d+)/w(\d+)",
+            args.completed_cell_after_root_failure,
+        )
+        if match is None:
+            parser.error(
+                "--completed-cell-after-root-failure must match "
+                "cCELLS/rREPETITION/lLANES/wWRITERS"
+            )
+        completed_cell_after_root_failure = tuple(
+            int(value) for value in match.groups()
+        )
     try:
         validate(
             args.root,
             args.manifest,
             terminal_cell=terminal_cell,
             failed_terminal_cell=failed_terminal_cell,
+            completed_cell_after_root_failure=completed_cell_after_root_failure,
             preterminal_root=args.preterminal_root,
         )
     except (
@@ -1307,6 +1358,11 @@ def main() -> int:
         return 1
     if args.failed_terminal_cell:
         scope = f"terminal failed cell {args.failed_terminal_cell}"
+    elif args.completed_cell_after_root_failure:
+        scope = (
+            "completed cell after root failure "
+            f"{args.completed_cell_after_root_failure}"
+        )
     elif args.terminal_cell:
         scope = f"terminal cell {args.terminal_cell}"
     else:

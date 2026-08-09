@@ -22,7 +22,9 @@ from validate_group_commit_scalability import (
 
 
 class ValidatorTests(unittest.TestCase):
-    def test_residual_pq_manifest_contract_rejects_any_shape_or_gate_drift(self) -> None:
+    def test_residual_pq_manifest_contract_rejects_any_shape_or_gate_drift(
+        self,
+    ) -> None:
         self.assertTrue(hasattr(validator, "validate_residual_pq_manifest"))
         manifest = json.loads(
             (
@@ -43,9 +45,7 @@ class ValidatorTests(unittest.TestCase):
             ),
             (
                 "survivor gate",
-                lambda value: value["exact_bound_shadow"].update(
-                    max_survivor_p95=12
-                ),
+                lambda value: value["exact_bound_shadow"].update(max_survivor_p95=12),
             ),
             (
                 "latency optimization contract",
@@ -61,7 +61,9 @@ class ValidatorTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValidationError, label):
                     validator.validate_residual_pq_manifest(candidate)
 
-    def test_residual_pq_rows_require_physical_waves_and_allocation_evidence(self) -> None:
+    def test_residual_pq_rows_require_physical_waves_and_allocation_evidence(
+        self,
+    ) -> None:
         shadow = {
             "global_exact_bound_candidates": "16",
             "global_exact_bound_survivors": "11",
@@ -78,7 +80,9 @@ class ValidatorTests(unittest.TestCase):
             "global_exact_bound_residual_bytes": "1088",
             "global_exact_bound_residual_scan_bytes": "69632",
         }
-        with self.assertRaisesRegex(ValidationError, "incomplete residual-PQ telemetry"):
+        with self.assertRaisesRegex(
+            ValidationError, "incomplete residual-PQ telemetry"
+        ):
             validator.validate_exact_bound_shadow_row(
                 shadow, "query", True, require_residual_pq=True
             )
@@ -585,6 +589,46 @@ class ValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "campaign has a failure marker"):
             validate(self.root, self.manifest_path, terminal_cell=(64, 1, 1, 1))
 
+    def test_completed_cell_after_root_failure_reconciles_raw_evidence(self) -> None:
+        (self.root / "GROUP_COMMIT_SCALABILITY_COMPLETE").unlink()
+        (self.root / "GROUP_COMMIT_SCALABILITY_FAILED").touch()
+        validate(
+            self.root,
+            self.manifest_path,
+            completed_cell_after_root_failure=(64, 1, 1, 1),
+        )
+
+    def test_completed_cell_after_root_failure_requires_root_failure_marker(
+        self,
+    ) -> None:
+        (self.root / "GROUP_COMMIT_SCALABILITY_COMPLETE").unlink()
+        with self.assertRaisesRegex(ValidationError, "terminal failure marker"):
+            validate(
+                self.root,
+                self.manifest_path,
+                completed_cell_after_root_failure=(64, 1, 1, 1),
+            )
+
+    def test_cli_recovers_completed_cell_after_root_failure_explicitly(self) -> None:
+        (self.root / "GROUP_COMMIT_SCALABILITY_COMPLETE").unlink()
+        (self.root / "GROUP_COMMIT_SCALABILITY_FAILED").touch()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent / "validate_group_commit_scalability.py"),
+                "--manifest",
+                str(self.manifest_path),
+                "--completed-cell-after-root-failure",
+                "c64/r1/l1/w1",
+                str(self.root),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("completed cell after root failure c64/r1/l1/w1", result.stdout)
+
     def test_terminal_cell_rejects_subgate_failure_marker(self) -> None:
         (self.root / "cells/c64/r01/l1/w1/PRODUCTION_READ_P95_FAILED").touch()
         with self.assertRaisesRegex(
@@ -923,7 +967,9 @@ class ValidatorTests(unittest.TestCase):
             records = list(reader)
         records[0]["latency_ms"] = "999"
         self._write_csv(aggregate, fields, records)
-        with self.assertRaisesRegex(ValidationError, "aggregate reads content mismatch"):
+        with self.assertRaisesRegex(
+            ValidationError, "aggregate reads content mismatch"
+        ):
             validate(self.root, self.manifest_path)
 
     def test_exact_bound_containment_failure_must_fail_the_query_open(self) -> None:
@@ -946,7 +992,9 @@ class ValidatorTests(unittest.TestCase):
         fields.extend(shadow)
         records[0].update(shadow)
         self._write_csv(reads_path, fields, records)
-        with self.assertRaisesRegex(ValidationError, "containment failure did not fail open"):
+        with self.assertRaisesRegex(
+            ValidationError, "containment failure did not fail open"
+        ):
             validate(self.root, self.manifest_path)
 
     def test_exact_bound_prediction_cannot_exceed_its_baseline(self) -> None:
@@ -969,7 +1017,9 @@ class ValidatorTests(unittest.TestCase):
         fields.extend(shadow)
         records[0].update(shadow)
         self._write_csv(reads_path, fields, records)
-        with self.assertRaisesRegex(ValidationError, "prediction exceeds exact-plan baseline"):
+        with self.assertRaisesRegex(
+            ValidationError, "prediction exceeds exact-plan baseline"
+        ):
             validate(self.root, self.manifest_path)
 
     def test_partial_v8_exact_bound_telemetry_fails(self) -> None:
@@ -993,7 +1043,9 @@ class ValidatorTests(unittest.TestCase):
         fields.extend(shadow)
         records[0].update(shadow)
         self._write_csv(reads_path, fields, records)
-        with self.assertRaisesRegex(ValidationError, "incomplete V8 exact-bound telemetry"):
+        with self.assertRaisesRegex(
+            ValidationError, "incomplete V8 exact-bound telemetry"
+        ):
             validate(self.root, self.manifest_path)
 
     def test_complete_v8_exact_bound_telemetry_is_valid(self) -> None:
@@ -1072,8 +1124,7 @@ class ResidualPqTerminalRootTests(unittest.TestCase):
             (root / "manifest.json").write_bytes(frozen)
             (root / "dataset.json").write_bytes(
                 (
-                    repository
-                    / "scripts/fixtures/cohere-medium-1M-dataset.json"
+                    repository / "scripts/fixtures/cohere-medium-1M-dataset.json"
                 ).read_bytes()
             )
             manifest = json.loads(frozen)
@@ -1210,9 +1261,7 @@ class ResidualPqTerminalRootTests(unittest.TestCase):
                 for query in range(20)
             ]
             self._write_csv(cell / "reads.csv", read_fields, reads)
-            active_reads = [
-                {**read, "latency_ms": "42"} for read in reads
-            ]
+            active_reads = [{**read, "latency_ms": "42"} for read in reads]
             self._write_csv(cell / "active-tail-reads.csv", read_fields, active_reads)
 
             total_records = 16_384
