@@ -11,7 +11,7 @@ BENCH = (ROOT / "crates/borsuk/examples/group_commit_bench.rs").read_text()
 ROUTING_BENCH = (ROOT / "crates/borsuk/examples/logical_cell_routing_bench.rs").read_text()
 REALISTIC_MANIFEST = ROOT / "docs/research/realistic-group-commit-campaign.json"
 EXACT_BOUND_LOCAL_MANIFEST = (
-    ROOT / "docs/research/group-commit-exact-bound-local-qualification-v2.json"
+    ROOT / "docs/research/group-commit-exact-bound-local-qualification-v3.json"
 )
 
 
@@ -27,6 +27,8 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertEqual(manifest["operations_per_writer"], 32)
         self.assertEqual(manifest["records_per_operation"], 16)
         self.assertEqual(manifest["worker_lanes"], [1])
+        self.assertEqual(manifest["writer_process_cpu_threads"], 1)
+        self.assertEqual(manifest["writer_process_io_threads"], 2)
         self.assertEqual(manifest["read_queries_per_cell"], 20)
         self.assertEqual(manifest["exact_bound_shadow"]["max_survivor_p95"], 12)
         self.assertEqual(
@@ -36,7 +38,9 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
             manifest["exact_bound_shadow"]["min_byte_reduction_fraction"], 0.30
         )
         self.assertIn("BORSUK_GROUP_COMMIT_EXACT_BOUND_LOCAL", RUNNER)
-        self.assertIn("group-commit-exact-bound-local-qualification-v2.json", RUNNER)
+        self.assertIn("group-commit-exact-bound-local-qualification-v3.json", RUNNER)
+        self.assertIn("BORSUK_GROUP_COMMIT_WRITER_CPU_THREADS", RUNNER)
+        self.assertIn("BORSUK_GROUP_COMMIT_WRITER_IO_THREADS", RUNNER)
         self.assertIn("EXACT_BOUND_SHADOW=1", RUNNER)
         self.assertIn(
             'BORSUK_GROUP_COMMIT_EXACT_BOUND_SHADOW="$EXACT_BOUND_SHADOW"', RUNNER

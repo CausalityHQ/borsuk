@@ -2196,3 +2196,22 @@ gate while changing worker lanes from eight to the production campaign's one.
 The resulting 32 stripes fit the fixed 64-stripe collection. This is a
 pre-measurement topology correction, not a result-driven threshold or workload
 change; V1 remains immutable and V2 receives a distinct manifest identity.
+
+Revision `9784ec4` launched V2 from source archive SHA-256
+`c4a2071d50747df3b2cc2b553fdfab10f9450aef758bfbdfb5f5aeb6a37c847e`
+and manifest SHA-256
+`89a530a00bcd77a353055552109e1bcb5612c203af2aa5e6b118ef4ff0747491`.
+The corrected 32-stripe topology reached writer-process preflight, but several
+children failed before the start barrier because every co-located process
+inherited the full four-CPU, 24-blocking-I/O, and Tokio worker pools on a
+four-vCPU devbox. The coordinator exited one and exposed a second defect by
+leaving 23 ready children alive. All remaining processes were identified by
+the exact qualification binary path, terminated, and confirmed absent. No
+ingest completion marker or measurement CSV exists, so none was inspected.
+
+V3 preserves the V2 workload and all decision gates. It gives each child
+writer one CPU worker and two blocking-I/O workers, while the coordinator's
+post-ingest read path keeps the normal library defaults. The coordinator also
+owns a fail-safe child guard that kills and reaps every remaining process on
+spawn, readiness, or execution failure. These are pre-measurement resource and
+cleanup corrections, not performance-driven workload changes.

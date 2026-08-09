@@ -1048,31 +1048,74 @@ fn finish_sample(writer_ordinal: usize, completed: PendingAppend) -> BenchResult
     })
 }
 
+type WriterProcess = (usize, PathBuf, std::process::Child);
+
+fn terminate_writer_processes(children: &mut Vec<WriterProcess>) {
+    for (_, _, child) in children.iter_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            let _ = child.kill();
+        }
+    }
+    for (_, _, mut child) in children.drain(..) {
+        let _ = child.wait();
+    }
+}
+
+struct WriterProcessGuard(Vec<WriterProcess>);
+
+impl Drop for WriterProcessGuard {
+    fn drop(&mut self) {
+        terminate_writer_processes(&mut self.0);
+    }
+}
+
+fn configure_writer_process_thread_budget(
+    command: &mut Command,
+    cpu_threads: usize,
+    io_threads: usize,
+) -> BenchResult<()> {
+    if !(1..=64).contains(&cpu_threads) || !(1..=128).contains(&io_threads) {
+        return Err("writer process thread budget is outside library bounds".into());
+    }
+    command
+        .env(borsuk::CPU_THREADS_ENV, cpu_threads.to_string())
+        .env(borsuk::IO_THREADS_ENV, io_threads.to_string());
+    Ok(())
+}
+
 fn run_process_coordinator(output: &Path, writers: usize) -> BenchResult<(Vec<Sample>, f64)> {
     let process_root = output.join("processes");
     fs::create_dir_all(&process_root)?;
     let start_marker = process_root.join("START");
     let executable = env::current_exe()?;
-    let mut children = Vec::with_capacity(writers);
+    let writer_cpu_threads: usize = number("BORSUK_GROUP_COMMIT_WRITER_CPU_THREADS")?;
+    let writer_io_threads: usize = number("BORSUK_GROUP_COMMIT_WRITER_IO_THREADS")?;
+    let mut children = WriterProcessGuard(Vec::with_capacity(writers));
     for writer in 0..writers {
         let process_dir = process_root.join(format!("w{writer:02}"));
         fs::create_dir_all(&process_dir)?;
         let stdout = File::create(process_dir.join("stdout.log"))?;
         let stderr = File::create(process_dir.join("stderr.log"))?;
-        let child = Command::new(&executable)
+        let mut command = Command::new(&executable);
+        command
             .env("BORSUK_GROUP_COMMIT_ROLE", "writer-process")
             .env("BORSUK_GROUP_COMMIT_WRITER_ORDINAL", writer.to_string())
             .env("BORSUK_GROUP_COMMIT_PROCESS_OUTPUT", &process_dir)
             .env("BORSUK_GROUP_COMMIT_START_MARKER", &start_marker)
             .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .spawn()?;
-        children.push((writer, process_dir, child));
+            .stderr(Stdio::from(stderr));
+        configure_writer_process_thread_budget(
+            &mut command,
+            writer_cpu_threads,
+            writer_io_threads,
+        )?;
+        let child = command.spawn()?;
+        children.0.push((writer, process_dir, child));
     }
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         let mut ready = 0;
-        for (writer, process_dir, child) in &mut children {
+        for (writer, process_dir, child) in &mut children.0 {
             if process_dir.join("READY").is_file() {
                 ready += 1;
             } else if let Some(status) = child.try_wait()? {
@@ -1091,7 +1134,7 @@ fn run_process_coordinator(output: &Path, writers: usize) -> BenchResult<(Vec<Sa
     }
     let started = Instant::now();
     fs::write(&start_marker, b"start\n")?;
-    for (writer, process_dir, mut child) in children {
+    for (writer, process_dir, child) in &mut children.0 {
         let status = child.wait()?;
         if !status.success() || !process_dir.join("COMPLETE").is_file() {
             return Err(format!("writer process {writer} failed: {status}").into());
@@ -1104,6 +1147,7 @@ fn run_process_coordinator(output: &Path, writers: usize) -> BenchResult<(Vec<Sa
             &process_root.join(format!("w{writer:02}/writer-samples.csv")),
         )?);
     }
+    children.0.clear();
     Ok((samples, elapsed_ms))
 }
 
@@ -1984,6 +2028,37 @@ fn main() -> BenchResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writer_process_cleanup_reaps_every_remaining_child() {
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 60")
+            .spawn()
+            .unwrap();
+        let mut children = vec![(0, PathBuf::from("unused"), child)];
+        terminate_writer_processes(&mut children);
+        assert!(children.is_empty());
+    }
+
+    #[test]
+    fn writer_process_thread_budget_is_explicit_and_bounded() {
+        let mut command = Command::new("true");
+        configure_writer_process_thread_budget(&mut command, 1, 2).unwrap();
+        let environment = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.unwrap().to_string_lossy().into_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(environment.get(borsuk::CPU_THREADS_ENV).unwrap(), "1");
+        assert_eq!(environment.get(borsuk::IO_THREADS_ENV).unwrap(), "2");
+        assert!(configure_writer_process_thread_budget(&mut command, 0, 2).is_err());
+        assert!(configure_writer_process_thread_budget(&mut command, 1, 129).is_err());
+    }
 
     #[test]
     fn read_hedge_qualification_accepts_only_the_preregistered_shape() {

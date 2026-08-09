@@ -19,6 +19,8 @@ PIPELINE_DEPTH="1"
 RECORDS_PER_OPERATION="${BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION:-1}"
 WORKER_LANES=(1)
 THROUGHPUT_GATE_WRITERS=()
+WRITER_CPU_THREADS="${BORSUK_GROUP_COMMIT_WRITER_CPU_THREADS:-4}"
+WRITER_IO_THREADS="${BORSUK_GROUP_COMMIT_WRITER_IO_THREADS:-24}"
 DATASET_DIR=""
 DATASET_SHA256=""
 if [[ "$SMOKE" == "1" ]]; then
@@ -43,7 +45,7 @@ if [[ "$SMOKE" == "1" ]]; then
   PROTOCOL=smoke
 elif [[ "$EXACT_BOUND_LOCAL" == "1" ]]; then
   EXACT_BOUND_SHADOW=1
-  MANIFEST="$ROOT_DIR/docs/research/group-commit-exact-bound-local-qualification-v2.json"
+  MANIFEST="$ROOT_DIR/docs/research/group-commit-exact-bound-local-qualification-v3.json"
   mapfile -t CELL_COUNTS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["cell_counts"], sep="\n")' "$MANIFEST")
   mapfile -t WRITERS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["writers"], sep="\n")' "$MANIFEST")
   REPETITIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["repetitions"])' "$MANIFEST")"
@@ -53,6 +55,8 @@ elif [[ "$EXACT_BOUND_LOCAL" == "1" ]]; then
   MAX_RECORDS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_group_records"])' "$MANIFEST")"
   PIPELINE_DEPTH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pipeline_depth_per_writer"])' "$MANIFEST")"
   RECORDS_PER_OPERATION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["records_per_operation"])' "$MANIFEST")"
+  WRITER_CPU_THREADS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["writer_process_cpu_threads"])' "$MANIFEST")"
+  WRITER_IO_THREADS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["writer_process_io_threads"])' "$MANIFEST")"
   mapfile -t WORKER_LANES < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["worker_lanes"], sep="\n")' "$MANIFEST")
   OUTPUT="${BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT:?set BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT}"
   INDEX_ROOT="${BORSUK_GROUP_COMMIT_SCALABILITY_INDEX_ROOT:?set BORSUK_GROUP_COMMIT_SCALABILITY_INDEX_ROOT}"
@@ -332,6 +336,8 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_WRITERS="$writers" \
         BORSUK_GROUP_COMMIT_WRITER_INSTANCES="$writers" \
         BORSUK_GROUP_COMMIT_EXECUTION="processes" \
+        BORSUK_GROUP_COMMIT_WRITER_CPU_THREADS="$WRITER_CPU_THREADS" \
+        BORSUK_GROUP_COMMIT_WRITER_IO_THREADS="$WRITER_IO_THREADS" \
         BORSUK_GROUP_COMMIT_OPERATIONS_PER_WRITER="$OPERATIONS" \
         BORSUK_GROUP_COMMIT_DIMENSIONS="$DIMENSIONS" \
         BORSUK_GROUP_COMMIT_MAX_DELAY_MS="$MAX_DELAY_MS" \
