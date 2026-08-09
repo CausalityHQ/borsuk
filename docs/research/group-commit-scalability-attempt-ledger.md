@@ -1752,3 +1752,42 @@ uses nonempty authenticated candidates across two nearby chunks and one distant
 chunk and requires exactly two backing GETs, correct decoded vectors, and bytes
 bounded by the two emitted envelopes. This is structural evidence only until a
 fresh immutable AWS attempt measures the delivered revision.
+
+### Terminal AWS v33 falsification and clustered rerank plan
+
+Revision `3e7d39f` was fast-forwarded to `origin/main` after the complete Rust,
+Python, policy, formatting, and documentation gates passed. The exclusive AWS
+attempt `20260809T015500Z-v33-3e7d39f` used source archive SHA-256
+`493413c1753bd0acce0a9d3be10e0dd2dfb37156ca8867d553cf5a0885008350`
+and the unchanged manifest SHA-256
+`81c849548d9ef7300cffd88a0a13aca2023645ae0af40e66f0da5a60ad37408a`.
+Marker-only monitoring found a terminal root failure and a dead pane with a
+healthy idle host. The root and terminal-cell fail-closed validations rejected
+the incomplete failed matrix before any measurement CSV was opened.
+
+The eight-writer cell again preserved 128,000 records, 2,000 durable groups,
+and recall@10 1.0. Write p95 improved to 80.700 ms, ingest reached 7,301.30
+records/s, drain-inclusive throughput reached 2,165.19 records/s, and
+active-tail read p95 was 148.099 ms. Post-drain read p95 was 253.366 ms and
+failed the production gate. Most importantly, the post-drain read performed
+exactly the same 225 GETs and transferred exactly the same 15,415,864 bytes as
+v32. The first chunk-envelope candidate therefore has no demonstrated AWS
+benefit and is not promoted as a performance result.
+
+The terminal descriptor contains 256 chunks across nine exact Arrow bundles.
+Exact chunks range from 3,072 bytes to 5,747,712 bytes, have a 1,482,240-byte
+median, and five exceed the 4 MiB request cap. The remaining defect is inside
+the adaptive physical planner: it widens only when the complete shortlist
+envelope is at most 4 MiB. A shortlist containing two distant but independently
+dense clusters therefore falls back globally to the 64 KiB sparse policy.
+
+The next TDD candidate uses dynamic programming over the actual selected-row
+ranges. Every legal contiguous partition costs its physical span plus a
+128 KiB request weight and may span at most 4 MiB; the minimum-total-cost plan
+therefore widens each dense cluster locally without letting one cluster pay for
+an expensive gap elsewhere. A new cold backing-store regression observed 32
+GETs before the change for two 16-row 768D clusters separated by 8 MiB and
+requires two GETs afterward. The existing half-MiB two-row counterexample still
+requires two sparse GETs. No cache, candidate, recall, or durable-format rule
+changes. A logical range above 4 MiB is itself split into capped fragments and
+reassembled in caller order; reversed or empty ranges fail closed.

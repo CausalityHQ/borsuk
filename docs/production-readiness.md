@@ -78,15 +78,17 @@ evidence fails closed. Cross-host unobserved writes are deterministic but not
 linearizable by acknowledgement order.
 
 The latest terminal 2,000-cell AWS attempt confirms that this acknowledgement
-path is not the current bottleneck: one and eight independent writers measured
-82.301 ms and 85.842 ms write p95, and the eight-writer cell ingested 6,978.43
-768-dimensional records/s while preserving recall@10 1.0. That attempt is not
-a qualification pass: its eight-writer post-drain read p95 was 244.098 ms. The
-causal trace attributed 183 of 225 query GETs to fragmented exact reranking.
-The candidate fix preserves Arrow and exact scoring but plans cap-bounded
-cell-chunk envelopes independently. A fresh AWS repetition is required before
-claiming the read-latency gap closed, and the full 2K/16K by 1/8/32-writer,
-five-repetition matrix remains an open release gate.
+path is not the current bottleneck: eight independent writers measured
+80.700 ms write p95 and 7,301.30 768-dimensional ingest records/s while
+preserving recall@10 1.0. That attempt is not a qualification pass: its
+post-drain read p95 was 253.366 ms. The preceding chunk-envelope change left
+the measured 225 GETs and 15,415,864 bytes exactly unchanged, so it is not
+claimed as an improvement. The next candidate keeps Arrow and exact scoring
+but makes adaptive range widening operate across multiple independently capped
+dense clusters instead of falling back globally when the shortlist spans more
+than 4 MiB. Fresh AWS evidence is required before claiming the read-latency gap
+closed, and the full 2K/16K by 1/8/32-writer, five-repetition matrix remains an
+open release gate.
 
 Ordinary upsert and delete use the same complete mutation state. Dense, named,
 sparse, text, and late-interaction children inherit the parent entity version;

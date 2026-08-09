@@ -103,16 +103,12 @@ const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
 // immutable bundle. Issue the complete bounded shortlist in one S3 wave
 // instead of serializing after ten.
 const GLOBAL_RERANK_RANGE_MAX_PARALLEL: usize = 32;
-// Global reranks retain the generic sidecar's small coalescing gap. A wider
-// one-megabyte policy reduced request count but multiplied uncached AWS bytes
-// and worsened tail latency for scattered exact rows. The separate 32-request
-// wave overlaps those sparse reads without turning them into bulk transfer.
-const GLOBAL_RERANK_RANGE_COALESCE_BYTES: u64 = SIDECAR_RANGE_COALESCE_BYTES;
-// For a dense shortlist inside one small Arrow batch, one bounded transfer is
-// cheaper than a wave of tiny S3 range requests. Charge each avoided request a
-// conservative 128 KiB of extra transfer, but never widen beyond the existing
-// four-megabyte physical cap. Sparse and large-cell reranks retain the proven
-// 64 KiB policy above.
+// For dense shortlist clusters, a few bounded transfers are cheaper than a
+// wave of tiny S3 range requests. The locally optimal partition charges every
+// physical request 128 KiB while retaining the four-megabyte span cap. Thus a
+// range crosses a gap only when the avoided request repays that transfer; a
+// distant dense cluster starts a separate request instead of disabling local
+// coalescing everywhere.
 const GLOBAL_RERANK_REQUEST_WEIGHT_BYTES: u64 = 128 * 1024;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
@@ -135,12 +131,12 @@ struct PlannedRangeSlice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BoundedRangePlan {
     physical: Vec<Range<u64>>,
-    slices: Vec<PlannedRangeSlice>,
+    slices: Vec<Vec<PlannedRangeSlice>>,
 }
 
 fn push_planned_range(
     physical: &mut Vec<Range<u64>>,
-    slices: &mut [Option<PlannedRangeSlice>],
+    slices: &mut [Vec<PlannedRangeSlice>],
     start: u64,
     end: u64,
     members: &[(usize, Range<u64>)],
@@ -148,7 +144,7 @@ fn push_planned_range(
     let physical_index = physical.len();
     physical.push(start..end);
     for (input_index, range) in members {
-        slices[*input_index] = Some(PlannedRangeSlice {
+        slices[*input_index].push(PlannedRangeSlice {
             physical_index,
             range: (range.start - start) as usize..(range.end - start) as usize,
         });
@@ -163,7 +159,7 @@ fn plan_bounded_ranges(
     if ranges.is_empty() {
         return BoundedRangePlan {
             physical: Vec::new(),
-            slices: Vec::new(),
+            slices: vec![Vec::new(); ranges.len()],
         };
     }
 
@@ -171,7 +167,7 @@ fn plan_bounded_ranges(
     sorted.sort_unstable_by_key(|(_, range)| (range.start, range.end));
 
     let mut physical = Vec::with_capacity(ranges.len());
-    let mut slices = vec![None; ranges.len()];
+    let mut slices = vec![Vec::new(); ranges.len()];
     let mut group_start = sorted[0].1.start;
     let mut group_end = sorted[0].1.end;
     let mut members = vec![sorted[0].clone()];
@@ -193,44 +189,85 @@ fn plan_bounded_ranges(
     }
     push_planned_range(&mut physical, &mut slices, group_start, group_end, &members);
 
-    BoundedRangePlan {
-        physical,
-        slices: slices
-            .into_iter()
-            .map(|slice| slice.expect("every input range must be assigned"))
-            .collect(),
-    }
+    BoundedRangePlan { physical, slices }
 }
 
-fn global_rerank_coalesce_bytes(ranges: &[Range<u64>]) -> u64 {
-    let sparse = plan_bounded_ranges(
-        ranges,
-        GLOBAL_RERANK_RANGE_COALESCE_BYTES,
-        SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
-    );
-    if sparse.physical.len() <= 1 {
-        return GLOBAL_RERANK_RANGE_COALESCE_BYTES;
+fn plan_global_rerank_ranges(ranges: &[Range<u64>]) -> Result<BoundedRangePlan> {
+    if ranges.is_empty() {
+        return Ok(plan_bounded_ranges(
+            ranges,
+            0,
+            SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+        ));
     }
-    let envelope_start = sparse.physical.first().map_or(0, |range| range.start);
-    let envelope_end = sparse
-        .physical
-        .last()
-        .map_or(envelope_start, |range| range.end);
-    let envelope_bytes = envelope_end.saturating_sub(envelope_start);
-    if envelope_bytes > SIDECAR_MAX_PHYSICAL_RANGE_BYTES {
-        return GLOBAL_RERANK_RANGE_COALESCE_BYTES;
+    let mut sorted = Vec::with_capacity(ranges.len());
+    for (input_index, range) in ranges.iter().enumerate() {
+        if range.start >= range.end {
+            return Err(BorsukError::InvalidStorage(format!(
+                "global rerank range {}..{} must be nonempty and ordered",
+                range.start, range.end
+            )));
+        }
+        let mut start = range.start;
+        while start < range.end {
+            let end = start
+                .saturating_add(SIDECAR_MAX_PHYSICAL_RANGE_BYTES)
+                .min(range.end);
+            sorted.push((input_index, start..end));
+            start = end;
+        }
     }
-    let sparse_bytes = sparse.physical.iter().fold(0_u64, |bytes, range| {
-        bytes.saturating_add(range.end.saturating_sub(range.start))
-    });
-    let avoided_requests =
-        u64::try_from(sparse.physical.len().saturating_sub(1)).unwrap_or(u64::MAX);
-    let transfer_budget = avoided_requests.saturating_mul(GLOBAL_RERANK_REQUEST_WEIGHT_BYTES);
-    if envelope_bytes.saturating_sub(sparse_bytes) <= transfer_budget {
-        SIDECAR_MAX_PHYSICAL_RANGE_BYTES
-    } else {
-        GLOBAL_RERANK_RANGE_COALESCE_BYTES
+    sorted.sort_unstable_by_key(|(_, range)| (range.start, range.end));
+    let count = sorted.len();
+    let mut best = vec![None::<(u64, usize)>; count + 1];
+    let mut previous = vec![0_usize; count + 1];
+    best[0] = Some((0, 0));
+
+    for end in 1..=count {
+        let mut group_end = sorted[end - 1].1.end;
+        for start in (0..end).rev() {
+            group_end = group_end.max(sorted[start].1.end);
+            let span = group_end.saturating_sub(sorted[start].1.start);
+            if span > SIDECAR_MAX_PHYSICAL_RANGE_BYTES {
+                break;
+            }
+            let Some((prefix_cost, prefix_requests)) = best[start] else {
+                continue;
+            };
+            let candidate = (
+                prefix_cost
+                    .saturating_add(span)
+                    .saturating_add(GLOBAL_RERANK_REQUEST_WEIGHT_BYTES),
+                prefix_requests.saturating_add(1),
+            );
+            if best[end].is_none_or(|current| candidate < current) {
+                best[end] = Some(candidate);
+                previous[end] = start;
+            }
+        }
     }
+
+    let mut partitions = Vec::new();
+    let mut end = count;
+    while end > 0 {
+        let start = previous[end];
+        partitions.push(start..end);
+        end = start;
+    }
+    partitions.reverse();
+    let mut physical = Vec::with_capacity(partitions.len());
+    let mut slices = vec![Vec::new(); ranges.len()];
+    for partition in partitions {
+        let members = &sorted[partition];
+        let start = members[0].1.start;
+        let end = members
+            .iter()
+            .map(|(_, range)| range.end)
+            .max()
+            .expect("a planned global rerank partition is nonempty");
+        push_planned_range(&mut physical, &mut slices, start, end, members);
+    }
+    Ok(BoundedRangePlan { physical, slices })
 }
 
 async fn fetch_with_optional_hedge<F, Fut, T, E>(
@@ -271,9 +308,10 @@ where
     }
 }
 
+#[cfg(test)]
 async fn coalesce_bounded_ranges<F, E, Fut>(
     ranges: &[Range<u64>],
-    mut fetch: F,
+    fetch: F,
     max_gap: u64,
     max_physical_range: u64,
     max_parallel: usize,
@@ -284,6 +322,19 @@ where
     Fut: Future<Output = std::result::Result<Bytes, E>> + Send,
 {
     let plan = plan_bounded_ranges(ranges, max_gap, max_physical_range);
+    fetch_bounded_range_plan(&plan, fetch, max_parallel).await
+}
+
+async fn fetch_bounded_range_plan<F, E, Fut>(
+    plan: &BoundedRangePlan,
+    mut fetch: F,
+    max_parallel: usize,
+) -> std::result::Result<Vec<Bytes>, E>
+where
+    F: Send + FnMut(Range<u64>) -> Fut,
+    E: Send,
+    Fut: Future<Output = std::result::Result<Bytes, E>> + Send,
+{
     let fetched = futures_util::stream::iter(plan.physical.iter().cloned())
         .map(&mut fetch)
         .buffered(max_parallel.max(1))
@@ -292,12 +343,25 @@ where
 
     Ok(plan
         .slices
-        .into_iter()
-        .map(|slice| {
-            let bytes = &fetched[slice.physical_index];
-            let start = slice.range.start.min(bytes.len());
-            let end = slice.range.end.min(bytes.len());
-            bytes.slice(start..end)
+        .iter()
+        .map(|slices| {
+            if let [slice] = slices.as_slice() {
+                let bytes = &fetched[slice.physical_index];
+                let start = slice.range.start.min(bytes.len());
+                let end = slice.range.end.min(bytes.len());
+                return bytes.slice(start..end);
+            }
+            let capacity = slices.iter().fold(0_usize, |bytes, slice| {
+                bytes.saturating_add(slice.range.end.saturating_sub(slice.range.start))
+            });
+            let mut assembled = Vec::with_capacity(capacity);
+            for slice in slices {
+                let bytes = &fetched[slice.physical_index];
+                let start = slice.range.start.min(bytes.len());
+                let end = slice.range.end.min(bytes.len());
+                assembled.extend_from_slice(&bytes[start..end]);
+            }
+            Bytes::from(assembled)
         })
         .collect())
 }
@@ -3372,8 +3436,11 @@ impl Storage {
         self.read_ranges_with_policy(
             relative,
             ranges,
-            SIDECAR_RANGE_COALESCE_BYTES,
-            SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+            plan_bounded_ranges(
+                ranges,
+                SIDECAR_RANGE_COALESCE_BYTES,
+                SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+            ),
             SIDECAR_RANGE_MAX_PARALLEL,
             None,
         )
@@ -3387,12 +3454,10 @@ impl Storage {
         relative: &str,
         ranges: &[Range<u64>],
     ) -> Result<ReadRanges> {
-        let max_gap = global_rerank_coalesce_bytes(ranges);
         self.read_ranges_with_policy(
             relative,
             ranges,
-            max_gap,
-            SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
+            plan_global_rerank_ranges(ranges)?,
             GLOBAL_RERANK_RANGE_MAX_PARALLEL,
             None,
         )
@@ -3419,8 +3484,7 @@ impl Storage {
         let read = self.read_ranges_with_policy(
             relative,
             &ranges,
-            0,
-            stripe_bytes,
+            plan_bounded_ranges(&ranges, 0, stripe_bytes),
             max_parallel,
             hedge_after,
         )?;
@@ -3435,8 +3499,7 @@ impl Storage {
         &self,
         relative: &str,
         ranges: &[Range<u64>],
-        max_gap: u64,
-        max_physical_range_bytes: u64,
+        plan: BoundedRangePlan,
         max_parallel: usize,
         hedge_after: Option<Duration>,
     ) -> Result<ReadRanges> {
@@ -3499,8 +3562,8 @@ impl Storage {
         let fetched = self
             .runtime
             .block_on(async {
-                coalesce_bounded_ranges(
-                    ranges,
+                fetch_bounded_range_plan(
+                    &plan,
                     |range| {
                         let store = Arc::clone(&self.store);
                         let location = location.clone();
@@ -3534,8 +3597,6 @@ impl Storage {
                             .await
                         }
                     },
-                    max_gap,
-                    max_physical_range_bytes,
                     max_parallel,
                 )
                 .await
@@ -4570,6 +4631,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         fs::{self, OpenOptions},
+        ops::Range,
         path::{Path, PathBuf},
         process::Command,
         sync::{
@@ -4583,7 +4645,8 @@ mod tests {
     use super::{
         CacheReadCounts, CreateOutcome, GLOBAL_RERANK_RANGE_MAX_PARALLEL, PrefetchedRead,
         RangedColumns, ReadBytes, SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES,
-        Storage, coalesce_bounded_ranges, plan_bounded_ranges,
+        Storage, coalesce_bounded_ranges, fetch_bounded_range_plan, plan_bounded_ranges,
+        plan_global_rerank_ranges,
     };
     use crate::{
         collection_control::{
@@ -5810,6 +5873,158 @@ mod tests {
     }
 
     #[test]
+    fn global_rerank_ranges_fold_distant_dense_clusters_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        const VECTOR_BYTES: u64 = 768 * 4;
+        const ROW_STRIDE: u64 = 96 * 1024;
+        const CANDIDATES_PER_CLUSTER: u64 = 16;
+        const SECOND_CLUSTER_START: u64 = 8 * 1024 * 1024;
+        let cluster_bytes = (CANDIDATES_PER_CLUSTER - 1) * ROW_STRIDE + VECTOR_BYTES;
+        let object = vec![7_u8; (SECOND_CLUSTER_START + cluster_bytes) as usize];
+        storage
+            .write_bytes("global-pq/bundles/clustered-rerank.arrow", &object)
+            .unwrap();
+        let ranges = [0, SECOND_CLUSTER_START]
+            .into_iter()
+            .flat_map(|cluster_start| {
+                (0..CANDIDATES_PER_CLUSTER).map(move |row| {
+                    let start = cluster_start + row * ROW_STRIDE;
+                    start..start + VECTOR_BYTES
+                })
+            })
+            .collect::<Vec<_>>();
+        let before = storage.request_counts();
+
+        let read = storage
+            .read_global_rerank_ranges("global-pq/bundles/clustered-rerank.arrow", &ranges)
+            .unwrap();
+        let requests = storage.request_counts().delta(&before);
+
+        assert_eq!(
+            read.chunks,
+            vec![vec![7_u8; VECTOR_BYTES as usize]; ranges.len()]
+        );
+        assert_eq!(requests.gets, 2, "one GET per bounded dense cluster");
+        assert_eq!(read.bytes_fetched, 2 * cluster_bytes);
+    }
+
+    #[test]
+    fn global_rerank_cluster_plan_fetches_both_physical_ranges_concurrently() {
+        const VECTOR_BYTES: u64 = 768 * 4;
+        const ROW_STRIDE: u64 = 96 * 1024;
+        const SECOND_CLUSTER_START: u64 = 8 * 1024 * 1024;
+        let ranges = [0, SECOND_CLUSTER_START]
+            .into_iter()
+            .flat_map(|cluster_start| {
+                (0..8).map(move |row| {
+                    let start = cluster_start + row * ROW_STRIDE;
+                    start..start + VECTOR_BYTES
+                })
+            })
+            .collect::<Vec<_>>();
+        let plan = plan_global_rerank_ranges(&ranges).unwrap();
+        assert_eq!(plan.physical.len(), 2);
+        assert!(plan.physical.iter().all(|range| {
+            range.end.saturating_sub(range.start) <= SIDECAR_MAX_PHYSICAL_RANGE_BYTES
+        }));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let fetched = runtime
+            .block_on(fetch_bounded_range_plan(
+                &plan,
+                |range| {
+                    let active = Arc::clone(&active);
+                    let peak = Arc::clone(&peak);
+                    async move {
+                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok::<_, ()>(bytes::Bytes::from(vec![
+                            7_u8;
+                            (range.end - range.start) as usize
+                        ]))
+                    }
+                },
+                GLOBAL_RERANK_RANGE_MAX_PARALLEL,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            fetched,
+            vec![bytes::Bytes::from(vec![7_u8; VECTOR_BYTES as usize]); 16]
+        );
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn global_rerank_ranges_preserve_shuffled_logical_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        const ROW_BYTES: usize = 768 * 4;
+        const SECOND_START: usize = 8 * 1024 * 1024;
+        let mut object = vec![0_u8; SECOND_START + ROW_BYTES];
+        object[..ROW_BYTES].fill(1);
+        object[SECOND_START..].fill(2);
+        storage
+            .write_bytes("global-pq/bundles/shuffled-rerank.arrow", &object)
+            .unwrap();
+        let ranges = [
+            SECOND_START as u64..(SECOND_START + ROW_BYTES) as u64,
+            0..ROW_BYTES as u64,
+        ];
+
+        let read = storage
+            .read_global_rerank_ranges("global-pq/bundles/shuffled-rerank.arrow", &ranges)
+            .unwrap();
+
+        assert_eq!(
+            read.chunks,
+            vec![vec![2_u8; ROW_BYTES], vec![1_u8; ROW_BYTES]]
+        );
+    }
+
+    #[test]
+    fn global_rerank_ranges_split_and_reassemble_a_logical_range_above_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
+        let object = vec![7_u8; SIDECAR_MAX_PHYSICAL_RANGE_BYTES as usize + 4];
+        storage
+            .write_bytes("global-pq/bundles/oversize-rerank.arrow", &object)
+            .unwrap();
+        let before = storage.request_counts();
+        let oversized = 0..object.len() as u64;
+
+        let read = storage
+            .read_global_rerank_ranges(
+                "global-pq/bundles/oversize-rerank.arrow",
+                std::slice::from_ref(&oversized),
+            )
+            .unwrap();
+        let requests = storage.request_counts().delta(&before);
+
+        assert_eq!(read.chunks, vec![object]);
+        assert_eq!(requests.gets, 2);
+        let exact_cap = 0..SIDECAR_MAX_PHYSICAL_RANGE_BYTES;
+        assert_eq!(
+            plan_global_rerank_ranges(std::slice::from_ref(&exact_cap))
+                .unwrap()
+                .physical,
+            vec![exact_cap]
+        );
+        let reversed = Range { start: 10, end: 5 };
+        assert!(plan_global_rerank_ranges(std::slice::from_ref(&reversed)).is_err());
+        let empty = 5..5;
+        assert!(plan_global_rerank_ranges(std::slice::from_ref(&empty)).is_err());
+    }
+
+    #[test]
     fn range_reads_enforce_the_four_mib_physical_span_cap() {
         let dir = tempfile::tempdir().unwrap();
         let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
@@ -5888,9 +6103,9 @@ mod tests {
                 4 * 1024 * 1024..4 * 1024 * 1024 + 4,
             ]
         );
-        assert_eq!(plan.slices[0].physical_index, 2);
-        assert_eq!(plan.slices[1].physical_index, 0);
-        assert_eq!(plan.slices[2].physical_index, 1);
+        assert_eq!(plan.slices[0][0].physical_index, 2);
+        assert_eq!(plan.slices[1][0].physical_index, 0);
+        assert_eq!(plan.slices[2][0].physical_index, 1);
     }
 
     #[test]
