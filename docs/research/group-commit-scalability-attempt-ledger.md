@@ -2366,3 +2366,30 @@ matrix: 1,163 tests passed and 24 research tests were explicitly ignored across
 70 suites. The next admissible evidence is a paired full-corpus Cohere Medium 1M
 run against its shipped `neighbors.parquet` ground truth; inserted-ID recall is
 not an acceptable substitute.
+
+The paired measurement harness is now implemented as a dedicated
+`production_bench` terminal mode. For each seeded full-corpus query and every
+declared nprobe/candidate point it compares the ordinary ADC plus exact-rerank
+control with an otherwise identical approximate-first treatment. Independent
+readers receive the same query history, arm order alternates, and the disk cache
+is reset before each arm. Each JSONL row preserves the source query identity,
+shipped top-10 ground truth, ordered hits, recall, end-to-end latency, physical
+and backing reads/bytes, decoded/disk cache telemetry, exact-vector count, base
+and delta phase times, and resident/retained/transient memory. Any search error,
+disk-cache read, or treatment exact-vector work aborts before a completion
+marker. Raw output is written through an `.incomplete` name, renamed atomically,
+and never overwritten.
+
+A 128-vector global-index smoke proves the paired options differ only in the
+exact-rerank policy, the serialized row is structurally valid, and the treatment
+reports zero exact vectors and exact-rerank time. This synthetic smoke carries
+no quality or speed claim. The next step remains a separately preregistered,
+checksum-pinned, no-cache full Cohere Medium 1M decision run with at least 1,000
+queries. The 200 ms p95 is only a rejection ceiling; promotion additionally
+requires the frozen recall distribution and a better observed latency/I/O
+frontier.
+
+Fresh assurance for the paired harness passed formatting, strict locked
+workspace/all-feature/all-target Clippy, diff hygiene, repository policy, and
+the complete locked workspace/all-feature/all-target matrix: 1,167 tests passed
+and 24 research tests were explicitly ignored across 71 suites.
