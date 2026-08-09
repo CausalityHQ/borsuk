@@ -342,7 +342,7 @@ struct ResidentGlobalPqLayerScan {
     approximate_us: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct LayeredGlobalPqCandidate {
     layer: GlobalPqSearchLayer,
     candidate: GlobalPqCandidate,

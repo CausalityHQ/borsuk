@@ -2074,16 +2074,15 @@ impl ResidentGlobalPq {
                         let chunk = ParsedChunk::new(reference, bytes, code_width, self.location)?;
                         for local in 0..chunk.rows {
                             let code = chunk.code(local);
-                            push_candidate(
+                            push_scanned_candidate(
                                 &mut heap,
-                                GlobalPqCandidate {
-                                    distance: self.quantizer.distance(&prepared, code)?,
-                                    node: reference.row_start + local,
-                                    chunk_row_start: reference.row_start,
-                                    local_row: local,
-                                    exact_ordinal: chunk.exact_ordinal(local)?,
-                                    row: chunk.row(local)?,
-                                },
+                                self.quantizer.distance(&prepared, code)?,
+                                reference.row_start + local,
+                                reference.row_start,
+                                local,
+                                chunk.exact_ordinal(local)?,
+                                chunk.row(local)?,
+                                code,
                                 limit,
                             );
                         }
@@ -2524,6 +2523,7 @@ impl GlobalCellGraph {
                     local_row: local,
                     exact_ordinal: chunk.exact_ordinal(local)?,
                     row: chunk.row(local)?,
+                    code: chunk.code(local).into(),
                 })
             })
             .collect()
@@ -2642,7 +2642,7 @@ impl GlobalCellGraph {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GlobalPqCandidate {
     pub(crate) distance: f32,
     pub(crate) node: usize,
@@ -2650,6 +2650,7 @@ pub(crate) struct GlobalPqCandidate {
     pub(crate) local_row: usize,
     pub(crate) exact_ordinal: usize,
     pub(crate) row: GlobalPqRow,
+    pub(crate) code: Box<[u8]>,
 }
 
 impl Eq for GlobalPqCandidate {}
@@ -2677,6 +2678,42 @@ fn push_candidate(
         best.pop();
         best.push(candidate);
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_scanned_candidate(
+    best: &mut BinaryHeap<GlobalPqCandidate>,
+    distance: f32,
+    node: usize,
+    chunk_row_start: usize,
+    local_row: usize,
+    exact_ordinal: usize,
+    row: GlobalPqRow,
+    code: &[u8],
+    limit: usize,
+) {
+    let should_insert = best.len() < limit
+        || best.peek().is_some_and(|worst| {
+            distance
+                .total_cmp(&worst.distance)
+                .then_with(|| node.cmp(&worst.node))
+                .is_lt()
+        });
+    if !should_insert {
+        return;
+    }
+    if best.len() == limit {
+        best.pop();
+    }
+    best.push(GlobalPqCandidate {
+        distance,
+        node,
+        chunk_row_start,
+        local_row,
+        exact_ordinal,
+        row,
+        code: code.into(),
+    });
 }
 
 /// Merge independently scanned code pages without retaining their payloads.
@@ -3374,6 +3411,7 @@ mod tests {
         assert!(candidates.iter().any(|candidate| {
             candidate.node == reference.row_start + 37
                 && candidate.exact_ordinal == vectors.len() - 1 - 37
+                && candidate.code.as_ref() == quantizer.encode(&vectors[37]).unwrap()
                 && candidate.row
                     == (GlobalPqRow {
                         segment_index: 0,
@@ -3464,6 +3502,12 @@ mod tests {
                 .iter()
                 .all(|candidate| candidate.row.segment_index == 2)
         );
+        for candidate in &candidates {
+            assert_eq!(
+                candidate.code.as_ref(),
+                quantizer.encode(&vectors[candidate.node]).unwrap()
+            );
+        }
     }
 
     #[test]
@@ -3760,6 +3804,7 @@ mod tests {
                     local_row: 7,
                     exact_ordinal: 7,
                     row: row(7),
+                    code: vec![7].into_boxed_slice(),
                 },
                 GlobalPqCandidate {
                     distance: 0.1,
@@ -3768,6 +3813,7 @@ mod tests {
                     local_row: 1,
                     exact_ordinal: 1,
                     row: row(1),
+                    code: vec![1].into_boxed_slice(),
                 },
             ],
             vec![
@@ -3778,6 +3824,7 @@ mod tests {
                     local_row: 2,
                     exact_ordinal: 2,
                     row: row(2),
+                    code: vec![2].into_boxed_slice(),
                 },
                 GlobalPqCandidate {
                     distance: 0.3,
@@ -3786,6 +3833,7 @@ mod tests {
                     local_row: 3,
                     exact_ordinal: 3,
                     row: row(3),
+                    code: vec![3].into_boxed_slice(),
                 },
             ],
         ];
@@ -3796,6 +3844,13 @@ mod tests {
                 .map(|candidate| candidate.node)
                 .collect::<Vec<_>>(),
             vec![1, 2, 3]
+        );
+        assert_eq!(
+            merged
+                .iter()
+                .map(|candidate| candidate.code.as_ref())
+                .collect::<Vec<_>>(),
+            vec![&[1][..], &[2][..], &[3][..]]
         );
     }
 }
