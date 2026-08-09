@@ -67,6 +67,138 @@ fn create_graph_enabled_with_wal(
     BorsukIndex::create_with_wal_and_leaf_capability(config, wal, LeafCapability::GraphEnabled)
 }
 
+fn resident_global_hedge_fixture(uri: &str) -> Arc<dyn ObjectStore> {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    writer
+        .add(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    writer.finish_bulk_load().unwrap();
+    inner
+}
+
+fn open_global_hedge_reader(
+    inner: Arc<dyn ObjectStore>,
+    uri: &str,
+    hedge_after: Option<Duration>,
+    slow_path_prefix: &'static str,
+) -> BorsukIndex {
+    let slow: Arc<dyn ObjectStore> = Arc::new(
+        common::FaultInjectingObjectStore::new(inner).with_get_latency_for(
+            Duration::from_millis(30),
+            move |operation, path| {
+                operation == common::StoreOperation::Get
+                    && path.as_ref().starts_with(slow_path_prefix)
+            },
+        ),
+    );
+    BorsukIndex::open_with_object_store_and_options(
+        slow,
+        uri,
+        OpenOptions {
+            global_pq_slow_read_hedge_after: hedge_after,
+            ..OpenOptions::default()
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn configured_hedge_reaches_real_exact_rerank_and_preserves_strict_budgets() {
+    let uri = "memory:///exact-rerank-hedge-propagation";
+    let inner = resident_global_hedge_fixture(uri);
+    let query = [0.0; 8];
+    let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
+        .with_max_segments(1)
+        .with_max_candidates_per_segment(1);
+
+    let control =
+        open_global_hedge_reader(Arc::clone(&inner), uri, None, "global-pq/exact-bundles/")
+            .search_with_report(&query, options.clone())
+            .unwrap();
+    let candidate = open_global_hedge_reader(
+        Arc::clone(&inner),
+        uri,
+        Some(Duration::from_millis(5)),
+        "global-pq/exact-bundles/",
+    )
+    .search_with_report(&query, options.clone())
+    .unwrap();
+
+    assert_eq!(candidate.hits, control.hits);
+    assert_eq!(candidate.bytes_read, control.bytes_read);
+    assert_eq!(candidate.global_exact_vectors_fetched, 1);
+    assert!(
+        candidate.requests.gets > control.requests.gets,
+        "a slow production exact range must issue its one configured duplicate: control={:?}, candidate={:?}",
+        control.requests,
+        candidate.requests
+    );
+
+    for bounded in [
+        options.clone().with_max_bytes(u64::MAX),
+        options.with_max_latency_ms(u64::MAX),
+    ] {
+        let report = open_global_hedge_reader(
+            Arc::clone(&inner),
+            uri,
+            Some(Duration::from_millis(5)),
+            "global-pq/exact-bundles/",
+        )
+        .search_with_report(&query, bounded)
+        .unwrap();
+        assert_eq!(report.hits, control.hits);
+        assert_eq!(report.bytes_read, control.bytes_read);
+        assert_eq!(report.requests.gets, control.requests.gets);
+    }
+}
+
+#[test]
+fn strict_global_pq_budgets_disable_query_stage_stripe_hedging() {
+    let uri = "memory:///strict-global-stripe-hedge";
+    let inner = resident_global_hedge_fixture(uri);
+    let query = [0.0; 8];
+    let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
+        .with_max_segments(1)
+        .with_max_candidates_per_segment(1);
+
+    let control = open_global_hedge_reader(Arc::clone(&inner), uri, None, "global-pq/bundles/")
+        .search_with_report(&query, options.clone().with_max_bytes(u64::MAX))
+        .unwrap();
+    for bounded in [
+        options.clone().with_max_bytes(u64::MAX),
+        options.with_max_latency_ms(u64::MAX),
+    ] {
+        let report = open_global_hedge_reader(
+            Arc::clone(&inner),
+            uri,
+            Some(Duration::from_millis(5)),
+            "global-pq/bundles/",
+        )
+        .search_with_report(&query, bounded)
+        .unwrap();
+        assert_eq!(report.hits, control.hits);
+        assert_eq!(report.bytes_read, control.bytes_read);
+        assert_eq!(report.requests.gets, control.requests.gets);
+    }
+}
+
 #[test]
 fn shared_in_memory_store_handles_see_published_data() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());

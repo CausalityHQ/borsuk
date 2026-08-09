@@ -89,6 +89,7 @@ pub struct FaultInjectingObjectStore {
     inner: Arc<dyn ObjectStore>,
     fault: Option<Arc<FaultRule>>,
     latency: Duration,
+    get_latency: Option<(Duration, Arc<PathPredicate>)>,
     operation_log: Option<Arc<OperationLog>>,
     put_barrier: Option<Arc<PutBarrier>>,
     put_concurrency: Option<Arc<PutConcurrencyProbe>>,
@@ -227,6 +228,7 @@ impl FaultInjectingObjectStore {
             inner,
             fault: None,
             latency: Duration::ZERO,
+            get_latency: None,
             operation_log: None,
             put_barrier: None,
             put_concurrency: None,
@@ -274,6 +276,7 @@ impl FaultInjectingObjectStore {
                 state: Mutex::new(FaultState::default()),
             })),
             latency: Duration::ZERO,
+            get_latency: None,
             operation_log: None,
             put_barrier: None,
             put_concurrency: None,
@@ -297,6 +300,14 @@ impl FaultInjectingObjectStore {
 
     pub fn with_latency(mut self, latency: Duration) -> Self {
         self.latency = latency;
+        self
+    }
+
+    pub fn with_get_latency_for<F>(mut self, latency: Duration, predicate: F) -> Self
+    where
+        F: Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync + 'static,
+    {
+        self.get_latency = Some((latency, Arc::new(predicate)));
         self
     }
 
@@ -353,6 +364,18 @@ impl FaultInjectingObjectStore {
         if !self.latency.is_zero() {
             tokio::time::sleep(self.latency).await;
         }
+    }
+
+    async fn maybe_sleep_get(&self, operation: StoreOperation, location: &ObjectPath) {
+        if let Some((latency, predicate)) = &self.get_latency
+            && predicate(operation, location)
+        {
+            if !latency.is_zero() {
+                tokio::time::sleep(*latency).await;
+            }
+            return;
+        }
+        self.maybe_sleep().await;
     }
 
     fn maybe_fail(
@@ -476,7 +499,7 @@ impl ObjectStore for FaultInjectingObjectStore {
             } else {
                 StoreOperation::Get
             };
-            self.maybe_sleep().await;
+            self.maybe_sleep_get(operation, location).await;
             self.maybe_fail(operation, location)?;
             self.record_operation(operation, location);
             self.inner.get_opts(location, options).await
@@ -499,7 +522,7 @@ impl ObjectStore for FaultInjectingObjectStore {
                 .get_group_concurrency
                 .as_deref()
                 .map(|probe| probe.enter(location));
-            self.maybe_sleep().await;
+            self.maybe_sleep_get(StoreOperation::Get, location).await;
             self.maybe_fail(StoreOperation::Get, location)?;
             self.record_operation(StoreOperation::Get, location);
             self.inner.get_ranges(location, ranges).await

@@ -593,7 +593,7 @@ pub struct OpenOptions {
     /// envelope cap, 8 MiB query-stage byte budget, exact rerank, and durable
     /// Arrow bytes remain unchanged. Values must be in `1..=4 MiB`.
     pub global_pq_prefetch_stripe_bytes: usize,
-    /// Delay before one duplicate immutable global-PQ stripe GET is started.
+    /// Delay before one duplicate immutable global-PQ range GET is started.
     ///
     /// The first successful response wins and the other request is cancelled.
     /// `None` disables slow-read hedging. The default remains disabled until a
@@ -12687,6 +12687,7 @@ impl BorsukIndex {
         query_local_range_stripe_limit: usize,
         code_wave_max_chunks: usize,
         code_wave_max_bytes: usize,
+        hedge_after: Option<Duration>,
     ) -> Result<bool> {
         if layer.wave_start >= layer.selected_chunks.len() {
             return Ok(false);
@@ -12786,7 +12787,7 @@ impl BorsukIndex {
                                 start as u64..end as u64,
                                 self.read_runtime.global_pq_prefetch_stripe_bytes as u64,
                                 query_local_range_stripe_limit,
-                                self.read_runtime.global_pq_slow_read_hedge_after,
+                                hedge_after,
                             )?
                             .bytes
                     } else {
@@ -12885,6 +12886,7 @@ impl BorsukIndex {
         query_local_range_stripe_limit: usize,
         code_wave_max_chunks: usize,
         code_wave_max_bytes: usize,
+        hedge_after: Option<Duration>,
     ) -> Result<(ResidentGlobalPqLayerScan, Vec<QueryLocalRange>)> {
         let mut ranges = Vec::new();
         let mut range_bytes = 0_usize;
@@ -12901,6 +12903,7 @@ impl BorsukIndex {
             query_local_range_stripe_limit,
             code_wave_max_chunks,
             code_wave_max_bytes,
+            hedge_after,
         )? {}
         Ok((layer, ranges))
     }
@@ -13016,6 +13019,8 @@ impl BorsukIndex {
         ];
         let use_cached_graphs =
             !matches!(options.cache_execution, crate::CacheExecutionPolicy::Scan);
+        let hedge_after =
+            global_pq_read_hedge_after(options, self.read_runtime.global_pq_slow_read_hedge_after);
         let (base_range_byte_limit, delta_range_byte_limit) = proportional_global_pq_layer_budget(
             DEFAULT_GLOBAL_PQ_QUERY_RANGE_REUSE_BYTES,
             base_range_byte_weight,
@@ -13068,6 +13073,7 @@ impl BorsukIndex {
                     delta_range_stripe_limit,
                     delta_code_wave_max_chunks,
                     delta_code_wave_max_bytes,
+                    hedge_after,
                 );
                 let _ = result_sender.send(result);
             });
@@ -13085,6 +13091,7 @@ impl BorsukIndex {
                 base_range_stripe_limit,
                 base_code_wave_max_chunks,
                 base_code_wave_max_bytes,
+                hedge_after,
             );
             let delta_wait_started = Instant::now();
             let delta_result = result_receiver
@@ -13112,6 +13119,7 @@ impl BorsukIndex {
                 base_range_stripe_limit,
                 base_code_wave_max_chunks,
                 base_code_wave_max_bytes,
+                hedge_after,
             );
             let delta_started = Instant::now();
             let delta_result = self.scan_resident_global_pq_layer(
@@ -13123,6 +13131,7 @@ impl BorsukIndex {
                 delta_range_stripe_limit,
                 delta_code_wave_max_chunks,
                 delta_code_wave_max_bytes,
+                hedge_after,
             );
             let delta_us = u64::try_from(delta_started.elapsed().as_micros()).unwrap_or(u64::MAX);
             (base_result, delta_result, delta_us)
@@ -13281,7 +13290,16 @@ impl BorsukIndex {
             &exact_groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
             Some(&self.global_pq_rerank_admission),
-            |(path, chunks)| self.global_exact_vectors_bundled(path, chunks),
+            |(path, chunks)| {
+                self.global_exact_vectors_bundled(
+                    path,
+                    chunks,
+                    global_pq_read_hedge_after(
+                        options,
+                        self.read_runtime.global_pq_slow_read_hedge_after,
+                    ),
+                )
+            },
         );
         let mut exact_rows = Vec::new();
         for result in fetched_exact {
@@ -13657,7 +13675,10 @@ impl BorsukIndex {
                                 start as u64..end as u64,
                                 self.read_runtime.global_pq_prefetch_stripe_bytes as u64,
                                 DEFAULT_GLOBAL_PQ_PREFETCH_STRIPES,
-                                self.read_runtime.global_pq_slow_read_hedge_after,
+                                global_pq_read_hedge_after(
+                                    options,
+                                    self.read_runtime.global_pq_slow_read_hedge_after,
+                                ),
                             )?
                             .bytes
                     } else {
@@ -13859,7 +13880,16 @@ impl BorsukIndex {
             &exact_groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
             Some(&self.global_pq_rerank_admission),
-            |(path, chunks)| self.global_exact_vectors_bundled(path, chunks),
+            |(path, chunks)| {
+                self.global_exact_vectors_bundled(
+                    path,
+                    chunks,
+                    global_pq_read_hedge_after(
+                        options,
+                        self.read_runtime.global_pq_slow_read_hedge_after,
+                    ),
+                )
+            },
         );
         let mut exact_rows = Vec::new();
         for result in fetched_exact {
@@ -20012,7 +20042,7 @@ impl BorsukIndex {
                 .collect::<Vec<_>>();
             let fetched = self
                 .storage
-                .read_global_rerank_ranges(path, &missing_ranges)?;
+                .read_global_rerank_ranges(path, &missing_ranges, None)?;
             rerank_bytes_fetched = fetched.bytes_fetched;
             for ((index, _), bytes) in missing.into_iter().zip(fetched.chunks) {
                 fetched_chunks[index] = Some(bytes);
@@ -20174,6 +20204,7 @@ impl BorsukIndex {
         &self,
         path: &str,
         chunks: &[(GlobalPqChunkRef, Vec<GlobalPqIdentityCandidate>)],
+        hedge_after: Option<Duration>,
     ) -> Result<(Vec<(usize, Vec<f32>, RecordId, MutationStamp)>, u64)> {
         let dimensions = self.manifest.config.dimensions;
         let vector_element_type = self.manifest.build_config.vector_element_type;
@@ -20211,7 +20242,9 @@ impl BorsukIndex {
             .iter()
             .map(|(range, _)| range.clone())
             .collect::<Vec<_>>();
-        let fetched = self.storage.read_global_rerank_ranges(path, &ranges)?;
+        let fetched = self
+            .storage
+            .read_global_rerank_ranges(path, &ranges, hedge_after)?;
         let mut rows = Vec::with_capacity(requests.len());
         for ((_, entry), exact) in requests.into_iter().zip(fetched.chunks) {
             if exact.len() != row_bytes {
@@ -25447,6 +25480,22 @@ fn materialized_global_delta_runs_in_parallel(options: &SearchOptions) -> bool {
     )
 }
 
+fn global_pq_read_hedge_after(
+    options: &SearchOptions,
+    configured: Option<Duration>,
+) -> Option<Duration> {
+    matches!(
+        options.mode,
+        SearchMode::Approx {
+            max_bytes: None,
+            max_latency_ms: None,
+            ..
+        }
+    )
+    .then_some(configured)
+    .flatten()
+}
+
 fn validate_global_whole_index_candidate_budget(options: &SearchOptions) -> Result<()> {
     if let SearchMode::Approx {
         max_candidates_per_segment: Some(candidate_budget),
@@ -25505,6 +25554,25 @@ mod tests {
 
     use super::*;
     use std::sync::{Barrier, Mutex};
+
+    #[test]
+    fn exact_rerank_hedging_is_disabled_by_strict_search_budgets() {
+        let configured = Some(Duration::from_millis(75));
+        let unbounded = SearchOptions::approx(10, LeafMode::SrhtPqScan);
+        let byte_bounded = unbounded.clone().with_max_bytes(1);
+        let latency_bounded = unbounded.clone().with_max_latency_ms(1);
+
+        assert_eq!(
+            global_pq_read_hedge_after(&unbounded, configured),
+            configured
+        );
+        assert_eq!(global_pq_read_hedge_after(&byte_bounded, configured), None);
+        assert_eq!(
+            global_pq_read_hedge_after(&latency_bounded, configured),
+            None
+        );
+        assert_eq!(global_pq_read_hedge_after(&unbounded, None), None);
+    }
 
     #[test]
     fn collection_delete_uses_one_mutation_version_for_primary_and_named_dense() {
@@ -27900,7 +27968,7 @@ mod tests {
             &groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
             Some(&index.global_pq_rerank_admission),
-            |(path, chunks)| index.global_exact_vectors_bundled(path, chunks),
+            |(path, chunks)| index.global_exact_vectors_bundled(path, chunks, None),
         );
         let requests = index.storage.request_counts().delta(&before);
         let mut rows = Vec::new();

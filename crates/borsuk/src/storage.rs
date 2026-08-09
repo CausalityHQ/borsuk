@@ -3453,13 +3453,14 @@ impl Storage {
         &self,
         relative: &str,
         ranges: &[Range<u64>],
+        hedge_after: Option<Duration>,
     ) -> Result<ReadRanges> {
         self.read_ranges_with_policy(
             relative,
             ranges,
             plan_global_rerank_ranges(ranges)?,
             GLOBAL_RERANK_RANGE_MAX_PARALLEL,
-            None,
+            hedge_after,
         )
     }
 
@@ -5611,6 +5612,46 @@ mod tests {
     }
 
     #[test]
+    fn global_rerank_ranges_hedge_each_slow_physical_range_once_and_preserve_order() {
+        let throttled = ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(50),
+                ..ThrottleConfig::default()
+            },
+        );
+        let storage = Storage::from_object_store(
+            "memory:///hedged-global-rerank".to_string(),
+            Arc::new(throttled),
+        )
+        .unwrap();
+        let mut object = vec![0_u8; 512 * 1024 + 4];
+        object[..4].copy_from_slice(b"left");
+        object[512 * 1024..].copy_from_slice(b"righ");
+        storage
+            .write_bytes("global-pq/exact/hedged.arrow", &object)
+            .unwrap();
+        let ranges = [512 * 1024..512 * 1024 + 4, 0..4];
+        let before = storage.request_counts();
+
+        let read = storage
+            .read_global_rerank_ranges(
+                "global-pq/exact/hedged.arrow",
+                &ranges,
+                Some(Duration::from_millis(10)),
+            )
+            .unwrap();
+
+        assert_eq!(read.chunks, vec![b"righ".to_vec(), b"left".to_vec()]);
+        assert_eq!(read.bytes_fetched, 8);
+        assert_eq!(
+            storage.request_counts().delta(&before).gets,
+            4,
+            "two slow physical ranges should each issue one bounded hedge"
+        );
+    }
+
+    #[test]
     fn disk_cache_reuses_range_and_suffix_reads_without_store_requests() {
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
@@ -5833,7 +5874,7 @@ mod tests {
         let before = storage.request_counts();
 
         let read = storage
-            .read_global_rerank_ranges("global-pq/bundles/rerank.arrow", &ranges)
+            .read_global_rerank_ranges("global-pq/bundles/rerank.arrow", &ranges, None)
             .unwrap();
         let requests = storage.request_counts().delta(&before);
 
@@ -5863,7 +5904,7 @@ mod tests {
         let before = storage.request_counts();
 
         let read = storage
-            .read_global_rerank_ranges("global-pq/bundles/dense-rerank.arrow", &ranges)
+            .read_global_rerank_ranges("global-pq/bundles/dense-rerank.arrow", &ranges, None)
             .unwrap();
         let requests = storage.request_counts().delta(&before);
 
@@ -5897,7 +5938,7 @@ mod tests {
         let before = storage.request_counts();
 
         let read = storage
-            .read_global_rerank_ranges("global-pq/bundles/clustered-rerank.arrow", &ranges)
+            .read_global_rerank_ranges("global-pq/bundles/clustered-rerank.arrow", &ranges, None)
             .unwrap();
         let requests = storage.request_counts().delta(&before);
 
@@ -5981,7 +6022,7 @@ mod tests {
         ];
 
         let read = storage
-            .read_global_rerank_ranges("global-pq/bundles/shuffled-rerank.arrow", &ranges)
+            .read_global_rerank_ranges("global-pq/bundles/shuffled-rerank.arrow", &ranges, None)
             .unwrap();
 
         assert_eq!(
@@ -6005,6 +6046,7 @@ mod tests {
             .read_global_rerank_ranges(
                 "global-pq/bundles/oversize-rerank.arrow",
                 std::slice::from_ref(&oversized),
+                None,
             )
             .unwrap();
         let requests = storage.request_counts().delta(&before);
