@@ -239,7 +239,7 @@ pub(crate) struct QuantizerRef {
 }
 
 /// Content-addressed resident global product-code artifact for one manifest.
-pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 7;
+pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 8;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GlobalPqRef {
@@ -422,6 +422,38 @@ impl GlobalPqRef {
                 .as_ref()
                 .map_or(0, |delta| delta.resident_bytes_estimate()),
         )
+    }
+}
+
+#[cfg(test)]
+mod global_pq_layout_tests {
+    use super::{GLOBAL_PQ_REF_LAYOUT_VERSION, GlobalPqRef};
+
+    #[test]
+    fn unreleased_v7_global_pq_layout_is_rejected() {
+        let reference = GlobalPqRef {
+            layout_version: 7,
+            path: "global-pq/ab/artifact.parquet".to_string(),
+            checksum: "ab".repeat(32),
+            vectors: 1,
+            subspaces: 1,
+            candidates: 1,
+            probes: 1,
+            resident_bytes: 1,
+            sidecar_index_bytes: 0,
+            storage_bytes: 1,
+            covered_manifest_version: 1,
+            segments: vec!["cd".repeat(32)],
+            exact_fringe: Vec::new(),
+            delta: None,
+        };
+
+        assert_ne!(GLOBAL_PQ_REF_LAYOUT_VERSION, 7);
+        let error = reference.validate_layout().unwrap_err().to_string();
+        assert!(
+            error.contains("unsupported global PQ reference layout version 7"),
+            "{error}"
+        );
     }
 }
 

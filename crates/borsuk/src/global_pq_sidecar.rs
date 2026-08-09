@@ -1441,8 +1441,8 @@ pub(crate) struct GlobalPqDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum GlobalPqBundleLayout {
-    #[serde(rename = "typed-columns-v9-local-exact-arrow")]
-    TypedColumnsV9LocalExactArrow,
+    #[serde(rename = "typed-columns-v9-cell-local-exact-arrow")]
+    TypedColumnsV9CellLocalExactArrow,
 }
 
 impl GlobalPqDescriptor {
@@ -1575,7 +1575,7 @@ impl GlobalPqDescriptor {
             }
         }
         Ok(Self {
-            bundle_layout: GlobalPqBundleLayout::TypedColumnsV9LocalExactArrow,
+            bundle_layout: GlobalPqBundleLayout::TypedColumnsV9CellLocalExactArrow,
             quantizer,
             coarse_quantizer,
             vectors,
@@ -3297,7 +3297,10 @@ mod tests {
         )
         .unwrap();
         let mut json = serde_json::to_value(&descriptor).unwrap();
-        assert_eq!(json["bundle_layout"], "typed-columns-v9-local-exact-arrow");
+        assert_eq!(
+            json["bundle_layout"],
+            "typed-columns-v9-cell-local-exact-arrow"
+        );
         json.as_object_mut().unwrap().remove("bundle_layout");
 
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
@@ -3307,6 +3310,7 @@ mod tests {
             "typed-columns-v6-dual-arrow",
             "typed-columns-v7-local-exact-arrow",
             "typed-columns-v8-residual-pq-arrow",
+            "typed-columns-v9-local-exact-arrow",
         ] {
             let mut json = serde_json::to_value(&descriptor).unwrap();
             json["bundle_layout"] = serde_json::Value::String(stale.to_string());

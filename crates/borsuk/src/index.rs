@@ -81,9 +81,7 @@ use crate::{
         RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
         SearchTerminationReason, StorageEncoding, VectorKind, VectorRecord, VectorSpec,
     },
-    rotated_product_quantizer::{
-        ProductQuantizerConfig, RotatedProductQuantizer, product_code_locality_key,
-    },
+    rotated_product_quantizer::{ProductQuantizerConfig, RotatedProductQuantizer},
     segment::{
         Segment, SegmentGraph, VECTOR_LOCALITY_KEY_LEN, pq_code_for_query, routing_code,
         vector_bounds, vector_locality_key, vector_signature,
@@ -568,6 +566,7 @@ const DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES: usize = 32 * 1024 * 1024;
 /// normal single PUT carry the accompanying fixed-width exact pages.
 const DEFAULT_GLOBAL_PQ_BUNDLE_CODE_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_GLOBAL_PQ_BUNDLE_BYTES: usize = 48 * 1024 * 1024;
+const GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES: usize = 96 * 1024;
 const DEFAULT_SIDECAR_INDEX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
 const DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 /// Bounded decoded exact-vector sidecar retention for repeated reranks. This
@@ -21705,6 +21704,125 @@ struct PendingGlobalPqChunk {
     chunk: crate::global_pq_sidecar::GlobalPqChunkBytes,
 }
 
+#[derive(Clone, Copy)]
+struct GlobalLeafPartitionRow<'a> {
+    cell_index: u16,
+    code: &'a [u8],
+    record_id: &'a [u8],
+    source_ordinal: usize,
+}
+
+fn global_leaf_partition_order(
+    rows: &[GlobalLeafPartitionRow<'_>],
+    code_width: usize,
+    exact_row_bytes: usize,
+    use_code_space: bool,
+) -> Result<Vec<Vec<usize>>> {
+    if code_width == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf code width must be positive".to_string(),
+        ));
+    }
+    if exact_row_bytes == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf exact-row width must be positive".to_string(),
+        ));
+    }
+    if rows.iter().any(|row| row.code.len() != code_width) {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf rows disagree on code width".to_string(),
+        ));
+    }
+    let max_rows = (GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / exact_row_bytes).max(1);
+    let mut by_cell = BTreeMap::<u16, Vec<usize>>::new();
+    for (index, row) in rows.iter().enumerate() {
+        by_cell.entry(row.cell_index).or_default().push(index);
+    }
+    let mut leaves = Vec::new();
+    for mut cell_rows in by_cell.into_values() {
+        if use_code_space {
+            partition_global_leaf_code_rows(rows, &mut cell_rows, max_rows, &mut leaves);
+        } else {
+            cell_rows.sort_unstable_by(|&left, &right| {
+                rows[left]
+                    .record_id
+                    .cmp(rows[right].record_id)
+                    .then_with(|| rows[left].source_ordinal.cmp(&rows[right].source_ordinal))
+                    .then_with(|| rows[left].code.cmp(rows[right].code))
+            });
+            leaves.extend(cell_rows.chunks(max_rows).map(<[usize]>::to_vec));
+        }
+    }
+    Ok(leaves)
+}
+
+fn partition_global_leaf_code_rows(
+    rows: &[GlobalLeafPartitionRow<'_>],
+    cell_rows: &mut [usize],
+    max_rows: usize,
+    leaves: &mut Vec<Vec<usize>>,
+) {
+    let page_count = cell_rows.len().div_ceil(max_rows);
+    if page_count <= 1 {
+        cell_rows.sort_unstable_by(|&left, &right| {
+            rows[left]
+                .code
+                .cmp(rows[right].code)
+                .then_with(|| rows[left].record_id.cmp(rows[right].record_id))
+                .then_with(|| rows[left].source_ordinal.cmp(&rows[right].source_ordinal))
+        });
+        leaves.push(cell_rows.to_vec());
+        return;
+    }
+
+    let mut selected_axis = 0_usize;
+    let mut selected_score = (0_usize, 0_u8);
+    for axis in 0..rows[cell_rows[0]].code.len() {
+        let mut present = [false; 256];
+        let mut minimum = u8::MAX;
+        let mut maximum = u8::MIN;
+        for &row in cell_rows.iter() {
+            let value = rows[row].code[axis];
+            present[usize::from(value)] = true;
+            minimum = minimum.min(value);
+            maximum = maximum.max(value);
+        }
+        let score = (
+            present.into_iter().filter(|value| *value).count(),
+            maximum.saturating_sub(minimum),
+        );
+        if score > selected_score {
+            selected_axis = axis;
+            selected_score = score;
+        }
+    }
+    cell_rows.sort_unstable_by(|&left, &right| {
+        rows[left].code[selected_axis]
+            .cmp(&rows[right].code[selected_axis])
+            .then_with(|| rows[left].code.cmp(rows[right].code))
+            .then_with(|| rows[left].record_id.cmp(rows[right].record_id))
+            .then_with(|| rows[left].source_ordinal.cmp(&rows[right].source_ordinal))
+    });
+
+    let left_pages = page_count / 2;
+    let right_pages = page_count - left_pages;
+    let minimum_left = cell_rows
+        .len()
+        .saturating_sub(right_pages.saturating_mul(max_rows))
+        .max(1);
+    let maximum_left = left_pages
+        .saturating_mul(max_rows)
+        .min(cell_rows.len().saturating_sub(1));
+    let proportional_left = cell_rows
+        .len()
+        .saturating_mul(left_pages)
+        .div_ceil(page_count);
+    let left_len = proportional_left.clamp(minimum_left, maximum_left);
+    let (left, right) = cell_rows.split_at_mut(left_len);
+    partition_global_leaf_code_rows(rows, left, max_rows, leaves);
+    partition_global_leaf_code_rows(rows, right, max_rows, leaves);
+}
+
 #[derive(Debug)]
 struct GlobalPqBundleSlice {
     code_range: Range<usize>,
@@ -21808,7 +21926,8 @@ fn encode_global_pq_arrow_bundle(
     u32::try_from(total_rows).map_err(|_| {
         BorsukError::InvalidStorage("global PQ bundle exact ordinals exceed UInt32".to_string())
     })?;
-    let mut exact_order = Vec::with_capacity(total_rows);
+    let mut leaf_rows = Vec::with_capacity(total_rows);
+    let mut leaf_sources = Vec::with_capacity(total_rows);
     for (chunk_index, entry) in pending.iter().enumerate() {
         let expected_scan = entry
             .chunk
@@ -21844,36 +21963,29 @@ fn encode_global_pq_arrow_bundle(
         for local_row in 0..entry.chunk.rows {
             let code_start = local_row * scan_row_width;
             let code = &entry.chunk.bytes[code_start..code_start + code_width];
-            exact_order.push((
-                if cross_cell_product_locality {
-                    product_code_locality_key(code)
-                } else {
-                    Vec::new()
-                },
-                entry.cell_index,
-                entry.row_start,
-                chunk_index,
-                local_row,
-            ));
+            let source_ordinal = leaf_rows.len();
+            leaf_rows.push(GlobalLeafPartitionRow {
+                cell_index: entry.cell_index,
+                code,
+                record_id: entry.chunk.identities[local_row].0.as_bytes(),
+                source_ordinal,
+            });
+            leaf_sources.push((chunk_index, local_row));
         }
     }
-    if cross_cell_product_locality {
-        exact_order.sort_unstable_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.cmp(&right.1))
-                .then_with(|| left.2.cmp(&right.2))
-                .then_with(|| left.4.cmp(&right.4))
-        });
-    }
+    let exact_order = global_leaf_partition_order(
+        &leaf_rows,
+        code_width,
+        exact_row_bytes,
+        cross_cell_product_locality,
+    )?;
     let mut exact_ordinals = pending
         .iter()
         .map(|entry| vec![0_u32; entry.chunk.rows])
         .collect::<Vec<_>>();
     let mut locality_exact_bytes = Vec::with_capacity(total_rows * exact_row_bytes);
-    for (ordinal, entry) in exact_order.iter().enumerate() {
-        let chunk_index = entry.3;
-        let local_row = entry.4;
+    for (ordinal, source) in exact_order.into_iter().flatten().enumerate() {
+        let (chunk_index, local_row) = leaf_sources[source];
         exact_ordinals[chunk_index][local_row] = u32::try_from(ordinal).map_err(|_| {
             BorsukError::InvalidStorage("global PQ exact ordinal exceeds UInt32".to_string())
         })?;
@@ -22351,7 +22463,7 @@ fn global_pq_arrow_buffer_ranges(
     })?;
     if !matches!(exact_buffers.len(), 2 | 3) {
         return Err(BorsukError::InvalidStorage(
-            "global PQ exact Arrow batch has an invalid V7 typed-vector layout".to_string(),
+            "global PQ exact Arrow batch has an invalid V8 typed-vector layout".to_string(),
         ));
     }
     let exact_range = exact_buffers.last().cloned().ok_or_else(|| {
@@ -22361,7 +22473,7 @@ fn global_pq_arrow_buffer_ranges(
         .map(|buffers| {
             if buffers.len() != 20 {
                 return Err(BorsukError::InvalidStorage(
-                    "global PQ Arrow record batch has an invalid V7 locality layout".to_string(),
+                    "global PQ Arrow record batch has an invalid V8 locality layout".to_string(),
                 ));
             }
             let range = |index: usize| {
@@ -29041,6 +29153,80 @@ mod tests {
     }
 
     #[test]
+    fn global_leaf_partition_is_cell_local_complete_deterministic_and_bounded() {
+        let rows = vec![
+            GlobalLeafPartitionRow {
+                cell_index: 7,
+                code: &[9, 1],
+                record_id: b"d",
+                source_ordinal: 3,
+            },
+            GlobalLeafPartitionRow {
+                cell_index: 2,
+                code: &[4, 8],
+                record_id: b"b",
+                source_ordinal: 1,
+            },
+            GlobalLeafPartitionRow {
+                cell_index: 7,
+                code: &[1, 9],
+                record_id: b"c",
+                source_ordinal: 2,
+            },
+            GlobalLeafPartitionRow {
+                cell_index: 2,
+                code: &[4, 8],
+                record_id: b"a",
+                source_ordinal: 0,
+            },
+            GlobalLeafPartitionRow {
+                cell_index: 7,
+                code: &[5, 5],
+                record_id: b"e",
+                source_ordinal: 4,
+            },
+        ];
+        let partitions = global_leaf_partition_order(&rows, 2, 48 * 1024, true).unwrap();
+        let partition_ordinals = |source: &[GlobalLeafPartitionRow<'_>], leaves: &[Vec<usize>]| {
+            leaves
+                .iter()
+                .map(|leaf| {
+                    leaf.iter()
+                        .map(|&row| source[row].source_ordinal)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let ordinals = partition_ordinals(&rows, &partitions);
+        assert!(partitions.iter().all(|leaf| (1..=2).contains(&leaf.len())));
+        assert!(partitions.iter().all(|leaf| {
+            leaf.iter()
+                .map(|&row| rows[row].cell_index)
+                .all(|cell| cell == rows[leaf[0]].cell_index)
+        }));
+        let mut covered = ordinals.iter().flatten().copied().collect::<Vec<_>>();
+        covered.sort_unstable();
+        assert_eq!(covered, [0, 1, 2, 3, 4]);
+
+        let mut shuffled = rows.clone();
+        shuffled.reverse();
+        let shuffled_partitions =
+            global_leaf_partition_order(&shuffled, 2, 48 * 1024, true).unwrap();
+        assert_eq!(
+            ordinals,
+            partition_ordinals(&shuffled, &shuffled_partitions),
+            "input chunk/order changes must not change durable leaf membership or order"
+        );
+
+        let non_pq = global_leaf_partition_order(&shuffled, 2, 48 * 1024, false).unwrap();
+        assert_eq!(
+            partition_ordinals(&shuffled, &non_pq),
+            vec![vec![0, 1], vec![2, 3], vec![4]],
+            "non-PQ codecs retain deterministic cell/id/source order"
+        );
+    }
+
+    #[test]
     fn global_pq_bundle_uses_typed_code_and_row_columns_with_independent_ranges() {
         let chunk = |codes: &[u8], locations: &[u8], exact_bytes: Vec<u8>| {
             let mut bytes = Vec::new();
@@ -29182,7 +29368,7 @@ mod tests {
             .unwrap();
         assert_eq!(segments.values(), &[0]);
         assert_eq!(rows.values(), &[7]);
-        assert_eq!(exact_ordinals.values(), &[1]);
+        assert_eq!(exact_ordinals.values(), &[0]);
         assert_eq!(pending[0].chunk.identities[0].0, RecordId::from("row-7"));
         assert_eq!(pending[0].chunk.identities[0].1.version().hlc(), 11);
         assert_eq!(
@@ -29212,7 +29398,7 @@ mod tests {
         assert_eq!(encoded.slices[0].exact_range, encoded.slices[1].exact_range);
         assert_eq!(
             &encoded.exact_bytes[encoded.slices[0].exact_range.clone()],
-            [3.0_f32, 4.0, 1.0, 2.0]
+            [1.0_f32, 2.0, 3.0, 4.0]
                 .into_iter()
                 .flat_map(f32::to_le_bytes)
                 .collect::<Vec<_>>()
@@ -29312,7 +29498,7 @@ mod tests {
     }
 
     #[test]
-    fn global_pq_locality_bundle_preserves_all_exact_physical_types() {
+    fn global_pq_cell_local_bundle_preserves_all_exact_physical_types() {
         let location = LocationEncoding::for_layout(1, 65_536).unwrap();
         for (element_type, dimensions, row_bytes) in [
             (crate::VectorElementType::Float32, 2, 8),
@@ -29362,8 +29548,8 @@ mod tests {
                 element_type,
             )
             .unwrap();
-            let mut expected = exact_low;
-            expected.extend_from_slice(&exact_high);
+            let mut expected = exact_high;
+            expected.extend_from_slice(&exact_low);
             assert_eq!(
                 &encoded.exact_bytes[encoded.slices[0].exact_range.clone()],
                 expected.as_slice(),
