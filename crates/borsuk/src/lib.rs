@@ -16,6 +16,7 @@ mod float8;
 mod format;
 #[cfg(test)]
 mod global_graph;
+mod global_leaf;
 mod global_pq_sidecar;
 mod global_read_planner;
 mod group_commit;

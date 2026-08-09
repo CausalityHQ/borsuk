@@ -138,7 +138,7 @@ enum PreparedGlobalScan {
 }
 
 impl GlobalScanQuantizer {
-    fn from_state(state: GlobalScanQuantizerState) -> Result<Self> {
+    pub(crate) fn from_state(state: GlobalScanQuantizerState) -> Result<Self> {
         match state {
             GlobalScanQuantizerState::Pq(state) => {
                 Ok(Self::Pq(RotatedProductQuantizer::from_state(state)?))
@@ -178,8 +178,7 @@ impl GlobalScanQuantizer {
         }
     }
 
-    #[cfg(test)]
-    fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
+    pub(crate) fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
         match self {
             Self::Pq(quantizer) => quantizer.encode(vector),
             Self::FastTurboQuantMse(quantizer) => quantizer.encode(vector),
@@ -1429,36 +1428,38 @@ impl GlobalPqCellSpool {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct GlobalPqDescriptor {
-    bundle_layout: GlobalPqBundleLayout,
+    layout: String,
     quantizer: GlobalScanQuantizerState,
     coarse_quantizer: GlobalCoarseQuantizerState,
     vectors: usize,
     vector_element_type: VectorElementType,
-    location: LocationEncoding,
-    chunks: Vec<GlobalPqChunkRef>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-enum GlobalPqBundleLayout {
-    #[serde(rename = "typed-columns-v9-cell-local-exact-arrow")]
-    TypedColumnsV9CellLocalExactArrow,
+    centroid_code_bytes: usize,
+    cell_root: crate::global_leaf::GlobalLeafTableRef,
+    shard_table: crate::global_leaf::GlobalLeafTableRef,
+    bundle_table: crate::global_leaf::GlobalLeafTableRef,
+    cell_count: usize,
+    page_count: usize,
+    bundle_count: usize,
 }
 
 impl GlobalPqDescriptor {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         quantizer: impl Into<GlobalScanQuantizerState>,
         coarse_quantizer: impl Into<GlobalCoarseQuantizerState>,
         vectors: usize,
         vector_element_type: VectorElementType,
-        location: LocationEncoding,
-        chunks: Vec<GlobalPqChunkRef>,
+        cell_root: crate::global_leaf::GlobalLeafTableRef,
+        shard_table: crate::global_leaf::GlobalLeafTableRef,
+        bundle_table: crate::global_leaf::GlobalLeafTableRef,
+        cell_count: usize,
+        page_count: usize,
+        bundle_count: usize,
     ) -> Result<Self> {
         let quantizer = quantizer.into();
         let coarse_quantizer = coarse_quantizer.into();
-        // Decode-time construction calls this same function. Validate both
-        // persisted codec states here so metadata accessors cannot encounter a
-        // malformed state and panic before `ResidentGlobalPq::load` runs.
         let scan_quantizer = GlobalScanQuantizer::from_state(quantizer.clone())?;
         let _ = GlobalCoarseQuantizer::from_state(coarse_quantizer.clone())?;
         let quantizer_dimensions = match &quantizer {
@@ -1470,214 +1471,49 @@ impl GlobalPqDescriptor {
             GlobalCoarseQuantizerState::Product(state) => state.dimensions,
             GlobalCoarseQuantizerState::Hierarchical(state) => state.dimensions,
         };
-        if coarse_dimensions != quantizer_dimensions {
-            return invalid("global scan and coarse quantizers disagree on dimensions");
+        if quantizer_dimensions != coarse_dimensions {
+            return invalid("V10 scan and coarse quantizers disagree on dimensions");
         }
-        if !matches!(location.width, 4 | 8)
-            || location.row_bits == 0
-            || u32::from(location.row_bits) >= u32::from(location.width) * 8
+        vector_element_type.fixed_width_bytes(quantizer_dimensions)?;
+        let tables = [&cell_root, &shard_table, &bundle_table];
+        if tables
+            .iter()
+            .any(|table| table.path.is_empty() || table.encoded_bytes == 0)
+            || tables[0].path == tables[1].path
+            || tables[0].path == tables[2].path
+            || tables[1].path == tables[2].path
         {
-            return invalid("global PQ location encoding is invalid");
+            return invalid("V10 leaf table references must be complete and distinct");
         }
-        let exact_row_bytes = vector_element_type.fixed_width_bytes(quantizer_dimensions)?;
-        let mut next = 0_usize;
-        let mut exact_bundles = HashMap::<(String, String), (Box<str>, usize, usize, usize)>::new();
-        let mut exact_objects = HashMap::<String, (Box<str>, usize, usize)>::new();
-        for chunk in &chunks {
-            if chunk.row_start != next || chunk.rows == 0 {
-                return invalid("chunk row ranges are not contiguous");
-            }
-            if chunk.path.is_empty()
-                || chunk.checksum.is_empty()
-                || chunk.identity_checksum.is_empty()
-                || chunk.exact_path.is_empty()
-                || chunk.exact_checksum.is_empty()
-                || chunk.size_bytes == 0
-                || chunk.exact_size_bytes == 0
-            {
-                return invalid("chunk code and exact sidecar references must be complete");
-            }
-            if chunk.path == chunk.exact_path {
-                return invalid("chunk scan and exact sidecar paths must be distinct");
-            }
-            let exact_object = (
-                chunk.exact_checksum.clone(),
-                chunk.exact_offset_bytes,
-                chunk.exact_size_bytes,
-            );
-            if exact_objects
-                .insert(chunk.exact_path.clone(), exact_object.clone())
-                .is_some_and(|existing| existing != exact_object)
-            {
-                return invalid("chunks sharing an exact object disagree on its values buffer");
-            }
-            match exact_bundles.entry((chunk.path.clone(), chunk.exact_path.clone())) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert((
-                        chunk.exact_checksum.clone(),
-                        chunk.exact_offset_bytes,
-                        chunk.exact_size_bytes,
-                        chunk.rows,
-                    ));
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    let layout = entry.get_mut();
-                    if layout.0 != chunk.exact_checksum
-                        || layout.1 != chunk.exact_offset_bytes
-                        || layout.2 != chunk.exact_size_bytes
-                    {
-                        return invalid(
-                            "chunks sharing an exact bundle disagree on its values buffer",
-                        );
-                    }
-                    layout.3 = layout.3.checked_add(chunk.rows).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "global PQ exact bundle row count overflows".to_string(),
-                        )
-                    })?;
-                }
-            }
-            chunk
-                .offset_bytes
-                .checked_add(chunk.size_bytes)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("global PQ code range overflows".to_string())
-                })?;
-            chunk
-                .exact_offset_bytes
-                .checked_add(chunk.exact_size_bytes)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("global PQ exact range overflows".to_string())
-                })?;
-            chunk.scan_buffer_ranges(scan_quantizer.code_bytes_per_vector())?;
-            chunk.identity_ranges()?;
-            chunk.mutation_ranges()?;
-            if chunk.exact_size_bytes % exact_row_bytes != 0
-                || chunk.exact_size_bytes / exact_row_bytes < chunk.rows
-            {
-                return invalid("bundle exact-vector size cannot address its chunk rows");
-            }
-            if chunk.graph.as_ref().is_some_and(|graph| {
-                graph.path.is_empty() || graph.checksum.is_empty() || graph.size_bytes == 0
-            }) {
-                return invalid("chunk graph reference must be complete when present");
-            }
-            next = next.checked_add(chunk.rows).ok_or_else(|| {
-                BorsukError::InvalidStorage("global PQ row count overflows".to_string())
-            })?;
-        }
-        if next != vectors {
-            return invalid("chunk rows do not match the vector count");
-        }
-        for (_, _, exact_size_bytes, rows) in exact_bundles.into_values() {
-            if rows.checked_mul(exact_row_bytes) != Some(exact_size_bytes) {
-                return invalid("exact bundle size does not match its aggregate chunk rows");
-            }
+        if vectors == 0
+            || cell_count == 0
+            || page_count == 0
+            || bundle_count == 0
+            || cell_count > page_count
+            || page_count > vectors
+            || bundle_count > page_count
+        {
+            return invalid("V10 vector, cell, page, and bundle counts are inconsistent");
         }
         Ok(Self {
-            bundle_layout: GlobalPqBundleLayout::TypedColumnsV9CellLocalExactArrow,
+            layout: "bounded-arrow-leaf-v10".to_string(),
             quantizer,
             coarse_quantizer,
             vectors,
             vector_element_type,
-            location,
-            chunks,
+            centroid_code_bytes: scan_quantizer.code_bytes_per_vector(),
+            cell_root,
+            shard_table,
+            bundle_table,
+            cell_count,
+            page_count,
+            bundle_count,
         })
-    }
-
-    /// Return a new descriptor that reuses every existing immutable chunk and
-    /// appends only newly encoded contiguous rows under the same trained
-    /// quantizers and packed-location layout.
-    pub(crate) fn append_chunks(
-        &self,
-        appended_vectors: usize,
-        appended_chunks: Vec<GlobalPqChunkRef>,
-    ) -> Result<Self> {
-        let vectors = self.vectors.checked_add(appended_vectors).ok_or_else(|| {
-            BorsukError::InvalidStorage("global PQ vector count overflows".to_string())
-        })?;
-        let mut chunks = self.chunks.clone();
-        chunks.extend(appended_chunks);
-        Self::new(
-            self.quantizer.clone(),
-            self.coarse_quantizer.clone(),
-            vectors,
-            self.vector_element_type,
-            self.location,
-            chunks,
-        )
-    }
-
-    pub(crate) fn occupied_cell_count(&self) -> usize {
-        self.chunks
-            .iter()
-            .map(|chunk| chunk.cell_index)
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-    }
-
-    /// Start a disjoint artifact with newly fitted scan and coarse quantizers.
-    ///
-    /// Delta artifacts use this when the newly materialized tail has drifted
-    /// away from the stable base distribution. Keeping this constructor here
-    /// preserves the descriptor's validation boundary while allowing the
-    /// caller to train on the records it already owns during a WAL drain.
-    pub(crate) fn empty_with_quantizers_for_layout(
-        quantizer: GlobalScanQuantizerState,
-        coarse_quantizer: GlobalCoarseQuantizerState,
-        vector_element_type: VectorElementType,
-        segment_count: usize,
-        max_rows_per_segment: usize,
-    ) -> Result<Self> {
-        Self::new(
-            quantizer,
-            coarse_quantizer,
-            0,
-            vector_element_type,
-            LocationEncoding::for_layout(segment_count, max_rows_per_segment)?,
-            Vec::new(),
-        )
-    }
-
-    /// Create an external spool that encodes new rows with this descriptor's
-    /// already-trained scan and coarse quantizers. The declared physical layout
-    /// must still fit the persisted packed-location width.
-    pub(crate) fn append_spool(
-        &self,
-        max_chunk_bytes: usize,
-        dimensions: usize,
-        segment_count: usize,
-        max_rows_per_segment: usize,
-    ) -> Result<GlobalPqCellSpool> {
-        let segment_index = u32::try_from(segment_count.saturating_sub(1)).map_err(|_| {
-            BorsukError::InvalidStorage("resident global PQ has more than u32 segments".to_string())
-        })?;
-        let row_index = u32::try_from(max_rows_per_segment.saturating_sub(1)).map_err(|_| {
-            BorsukError::InvalidStorage(
-                "resident global PQ segment has more than u32 rows".to_string(),
-            )
-        })?;
-        self.location.pack(GlobalPqRow {
-            segment_index,
-            row_index,
-        })?;
-        GlobalPqCellSpool::new(
-            GlobalScanQuantizer::from_state(self.quantizer.clone())?,
-            GlobalCoarseQuantizer::from_state(self.coarse_quantizer.clone())?,
-            self.location,
-            max_chunk_bytes,
-            dimensions,
-            self.vector_element_type,
-        )
-    }
-
-    pub(crate) fn uses_product_code_locality(&self) -> bool {
-        self.quantizer.uses_product_code_locality()
     }
 
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
         let json = serde_json::to_string(self).map_err(|error| {
-            BorsukError::InvalidStorage(format!("failed to encode global PQ descriptor: {error}"))
+            BorsukError::InvalidStorage(format!("failed to encode V10 descriptor: {error}"))
         })?;
         let schema = Arc::new(Schema::new(vec![Field::new(
             DESCRIPTOR_JSON_COLUMN,
@@ -1687,84 +1523,81 @@ impl GlobalPqDescriptor {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(StringArray::from(vec![json]))],
-        )
-        .map_err(|error| {
-            BorsukError::InvalidStorage(format!(
-                "failed to build global PQ descriptor Parquet row: {error}"
-            ))
-        })?;
+        )?;
         let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(Default::default()))
+            .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue::new(
+                "borsuk.ann.layout".to_string(),
+                "bounded-arrow-leaf-v10".to_string(),
+            )]))
             .build();
         let mut bytes = Vec::new();
-        let mut writer =
-            ArrowWriter::try_new(&mut bytes, schema, Some(properties)).map_err(|error| {
-                BorsukError::InvalidStorage(format!(
-                    "failed to open global PQ descriptor Parquet writer: {error}"
-                ))
-            })?;
-        writer.write(&batch).map_err(|error| {
-            BorsukError::InvalidStorage(format!(
-                "failed to write global PQ descriptor Parquet row: {error}"
-            ))
-        })?;
-        writer.close().map_err(|error| {
-            BorsukError::InvalidStorage(format!(
-                "failed to finalize global PQ descriptor Parquet: {error}"
-            ))
-        })?;
+        let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
+        writer.write(&batch)?;
+        writer.close()?;
         Ok(bytes)
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
-        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
-            .map_err(|error| {
-                BorsukError::InvalidStorage(format!(
-                    "failed to open global PQ descriptor Parquet: {error}"
-                ))
-            })?
-            .build()
-            .map_err(|error| {
-                BorsukError::InvalidStorage(format!(
-                    "failed to read global PQ descriptor Parquet: {error}"
-                ))
-            })?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+        let markers = builder
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .ok_or_else(|| invalid_error("V10 descriptor has no layout metadata"))?;
+        if markers
+            .iter()
+            .filter(|entry| entry.key == "borsuk.ann.layout")
+            .map(|entry| entry.value.as_deref())
+            .collect::<Vec<_>>()
+            != [Some("bounded-arrow-leaf-v10")]
+        {
+            return invalid("V10 descriptor layout metadata is missing or invalid");
+        }
+        let reader = builder.build()?;
         let mut payload = None;
         for batch in reader {
-            let batch = batch.map_err(|error| {
-                BorsukError::InvalidStorage(format!(
-                    "failed to decode global PQ descriptor Parquet: {error}"
-                ))
-            })?;
+            let batch = batch?;
+            if batch.num_columns() != 1
+                || batch.schema().field(0)
+                    != &Field::new(DESCRIPTOR_JSON_COLUMN, DataType::Utf8, false)
+            {
+                return invalid("V10 descriptor Parquet schema is invalid");
+            }
             let column = batch
-                .column_by_name(DESCRIPTOR_JSON_COLUMN)
-                .and_then(|column| column.as_any().downcast_ref::<StringArray>())
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "global PQ descriptor Parquet is missing ann_descriptor_json".to_string(),
-                    )
-                })?;
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| invalid_error("V10 descriptor payload is not Utf8"))?;
             if column.len() != 1 || column.is_null(0) || payload.is_some() {
-                return invalid("global PQ descriptor Parquet must contain exactly one row");
+                return invalid("V10 descriptor must contain exactly one row");
             }
             payload = Some(column.value(0).to_string());
         }
-        let payload = payload.ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "global PQ descriptor Parquet contains no descriptor row".to_string(),
-            )
-        })?;
+        let payload = payload.ok_or_else(|| invalid_error("V10 descriptor contains no row"))?;
         let descriptor: Self = serde_json::from_str(&payload).map_err(|error| {
-            BorsukError::InvalidStorage(format!("invalid global PQ descriptor: {error}"))
+            BorsukError::InvalidStorage(format!("invalid global PQ V10 descriptor: {error}"))
         })?;
-        Self::new(
+        if descriptor.layout != "bounded-arrow-leaf-v10" {
+            return invalid("V10 descriptor payload layout is invalid");
+        }
+        let centroid_code_bytes = descriptor.centroid_code_bytes;
+        let rebuilt = Self::new(
             descriptor.quantizer,
             descriptor.coarse_quantizer,
             descriptor.vectors,
             descriptor.vector_element_type,
-            descriptor.location,
-            descriptor.chunks,
-        )
+            descriptor.cell_root,
+            descriptor.shard_table,
+            descriptor.bundle_table,
+            descriptor.cell_count,
+            descriptor.page_count,
+            descriptor.bundle_count,
+        )?;
+        if rebuilt.centroid_code_bytes != centroid_code_bytes {
+            return invalid("V10 descriptor centroid code width is invalid");
+        }
+        Ok(rebuilt)
     }
 
     pub(crate) fn vectors(&self) -> usize {
@@ -1772,89 +1605,52 @@ impl GlobalPqDescriptor {
     }
 
     pub(crate) fn subspaces(&self) -> usize {
-        match &self.quantizer {
-            GlobalScanQuantizerState::Pq(state) => state.subspaces,
-            GlobalScanQuantizerState::FastTurboQuantMse(state) => {
-                let quantizer = FastTurboQuantMseScanQuantizer::from_state(state.clone())
-                    .expect("validated TurboQuant descriptor state");
-                quantizer.packed_code_len()
-            }
-            GlobalScanQuantizerState::FastTurboQuantProd(state) => {
-                let quantizer = FastTurboQuantProdScanQuantizer::from_state(state.clone())
-                    .expect("validated production TurboQuant descriptor state");
-                quantizer.packed_code_len()
-            }
-        }
+        self.centroid_code_bytes
     }
 
-    pub(crate) fn chunks(&self) -> &[GlobalPqChunkRef] {
-        &self.chunks
+    pub(crate) fn code_bytes_per_vector(&self) -> usize {
+        self.centroid_code_bytes
     }
 
     pub(crate) fn vector_element_type(&self) -> VectorElementType {
         self.vector_element_type
     }
 
-    pub(crate) fn location_encoding(&self) -> LocationEncoding {
-        self.location
+    pub(crate) fn cell_count(&self) -> usize {
+        self.cell_count
     }
 
-    pub(crate) fn hierarchical_coarse(&self) -> bool {
-        matches!(
-            self.coarse_quantizer,
-            GlobalCoarseQuantizerState::Hierarchical(_)
-        )
+    pub(crate) fn page_count(&self) -> usize {
+        self.page_count
     }
 
-    /// Descriptor/codebook bytes kept in RAM. Code chunks deliberately stay in
-    /// object storage and the bounded disk cache, independent of corpus size.
+    pub(crate) fn bundle_count(&self) -> usize {
+        self.bundle_count
+    }
+
+    pub(crate) fn cell_root(&self) -> &crate::global_leaf::GlobalLeafTableRef {
+        &self.cell_root
+    }
+
+    pub(crate) fn shard_table(&self) -> &crate::global_leaf::GlobalLeafTableRef {
+        &self.shard_table
+    }
+
+    pub(crate) fn bundle_table(&self) -> &crate::global_leaf::GlobalLeafTableRef {
+        &self.bundle_table
+    }
+
     pub(crate) fn resident_bytes(&self) -> usize {
+        let scan = GlobalScanQuantizer::from_state(self.quantizer.clone())
+            .expect("validated V10 scan quantizer");
+        let coarse = GlobalCoarseQuantizer::from_state(self.coarse_quantizer.clone())
+            .expect("validated V10 coarse quantizer");
         size_of::<Self>()
-            + match &self.quantizer {
-                GlobalScanQuantizerState::Pq(state) => {
-                    state
-                        .codebooks
-                        .iter()
-                        .map(|values| values.capacity() * size_of::<f32>())
-                        .sum::<usize>()
-                        + state.subspace_offsets.capacity() * size_of::<usize>()
-                }
-                GlobalScanQuantizerState::FastTurboQuantMse(state) => {
-                    state.codebooks.capacity()
-                        * size_of::<crate::turboquant::TurboQuantCodebookState>()
-                        + state
-                            .codebooks
-                            .iter()
-                            .map(|codebook| {
-                                (codebook.boundaries.capacity() + codebook.centroids.capacity())
-                                    * size_of::<f32>()
-                            })
-                            .sum::<usize>()
-                }
-                GlobalScanQuantizerState::FastTurboQuantProd(state) => {
-                    size_of::<crate::turboquant::TurboQuantCodebookState>()
-                        + (state.codebook.boundaries.capacity()
-                            + state.codebook.centroids.capacity())
-                            * size_of::<f32>()
-                }
-            }
-            + self.coarse_quantizer.resident_bytes()
-            + self.chunks.capacity() * size_of::<GlobalPqChunkRef>()
-            + self
-                .chunks
-                .iter()
-                .map(|chunk| {
-                    chunk.path.len()
-                        + chunk.checksum.len()
-                        + chunk.identity_checksum.len()
-                        + chunk.exact_path.len()
-                        + chunk.exact_checksum.len()
-                        + chunk
-                            .graph
-                            .as_ref()
-                            .map_or(0, |graph| graph.path.len() + graph.checksum.len())
-                })
-                .sum::<usize>()
+            + scan.resident_bytes()
+            + coarse.resident_bytes()
+            + self.cell_root.path.len()
+            + self.shard_table.path.len()
+            + self.bundle_table.path.len()
     }
 }
 
@@ -1962,15 +1758,10 @@ pub(crate) struct ResidentGlobalPq {
 }
 
 impl ResidentGlobalPq {
-    pub(crate) fn load(descriptor: GlobalPqDescriptor) -> Result<Self> {
-        Ok(Self {
-            quantizer: GlobalScanQuantizer::from_state(descriptor.quantizer)?,
-            coarse_quantizer: GlobalCoarseQuantizer::from_state(descriptor.coarse_quantizer)?,
-            location: descriptor.location,
-            chunks: descriptor.chunks,
-            len: descriptor.vectors,
-            code_cache: Arc::new(Mutex::new(HashMap::new())),
-        })
+    pub(crate) fn load(_descriptor: GlobalPqDescriptor) -> Result<Self> {
+        invalid(
+            "bounded Arrow leaf descriptors require the V10 leaf router; V9 chunk scan is unavailable",
+        )
     }
 
     pub(crate) fn cached_code(&self, checksum: &str) -> Option<Bytes> {
@@ -2770,9 +2561,11 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
 }
 
 fn invalid<T>(message: &str) -> Result<T> {
-    Err(BorsukError::InvalidStorage(format!(
-        "invalid global PQ: {message}"
-    )))
+    Err(invalid_error(message))
+}
+
+fn invalid_error(message: &str) -> BorsukError {
+    BorsukError::InvalidStorage(format!("invalid global PQ: {message}"))
 }
 
 fn io_error(path: &Path, source: std::io::Error) -> BorsukError {
@@ -2976,347 +2769,41 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_is_small_when_vector_count_grows() {
-        let quantizer = RotatedProductQuantizer::fit(config(), &vectors(256, 64)).unwrap();
-        let location = LocationEncoding::for_layout(25_000, 4_096).unwrap();
-        let chunks = (0..25_000)
-            .map(|segment| {
-                GlobalPqChunkRef {
-                    path: format!("global-pq/chunks/{segment}.bin"),
-                    checksum: "ab".repeat(32),
-                    offset_bytes: 0,
-                    identity_checksum: "ef".repeat(32).into_boxed_str(),
-                    exact_path: format!("global-pq/exact/{segment}.arrow"),
-                    exact_checksum: "cd".repeat(32).into_boxed_str(),
-                    exact_offset_bytes: 192_028,
-                    exact_size_bytes: 1_024_000,
-                    cell_index: (segment % 16) as u16,
-                    ordinal_buffer_offsets: [0; 3],
-                    typed_buffer_offsets: [0; 6],
-                    identity_values_size_bytes: 0,
-                    row_start: segment as usize * 4_000,
-                    rows: 4_000,
-                    size_bytes: 144_024,
-                    graph: None,
-                }
-                .with_test_typed_identity_ranges()
-            })
-            .collect();
+    fn v10_descriptor_retains_only_quantizers_and_compact_leaf_table_roots() {
+        let fit = vectors(256, 64);
+        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let table = |name: &str, checksum: u8| crate::global_leaf::GlobalLeafTableRef {
+            path: format!("global-leaf/{name}.parquet"),
+            checksum: [checksum; 32],
+            encoded_bytes: 4096,
+        };
         let descriptor = GlobalPqDescriptor::new(
             quantizer.state(),
-            coarse_state(&vectors(256, 64)),
+            coarse_state(&fit),
             100_000_000,
             VectorElementType::Float32,
-            location,
-            chunks,
+            table("cells", 1),
+            table("shards", 2),
+            table("bundles", 3),
+            43_403,
+            3_125_000,
+            6_400,
         )
         .unwrap();
-        let resident_bytes = descriptor.resident_bytes();
-        // Six explicit standard-Arrow buffer starts, independently authenticated
-        // identity metadata, and the V7 exact-object path keep 100M-scale routing
-        // metadata below 12 MiB while accepting every legal inter-column padding
-        // layout.
-        assert!(
-            resident_bytes < 12 * 1024 * 1024,
-            "100M descriptor retains {resident_bytes} bytes"
-        );
+
         let encoded = descriptor.encode().unwrap();
-        assert!(encoded.starts_with(b"PAR1"));
-        assert!(encoded.ends_with(b"PAR1"));
         let decoded = GlobalPqDescriptor::decode(&encoded).unwrap();
+
+        assert!(encoded.starts_with(b"PAR1") && encoded.ends_with(b"PAR1"));
         assert_eq!(decoded.vectors(), 100_000_000);
-        assert_eq!(decoded.chunks().len(), 25_000);
-    }
-
-    #[test]
-    fn descriptor_append_reuses_old_chunks_and_extends_contiguous_rows() {
-        let fit = vectors(128, 64);
-        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
-        let location = LocationEncoding::for_layout(4, 64).unwrap();
-        let chunk = |path: &str, row_start: usize| {
-            GlobalPqChunkRef {
-                path: path.to_string(),
-                checksum: blake3::hash(path.as_bytes()).to_hex().to_string(),
-                offset_bytes: 0,
-                identity_checksum: "ef".repeat(32).into_boxed_str(),
-                exact_path: format!("exact-{path}"),
-                exact_checksum: blake3::hash(format!("exact-{path}").as_bytes())
-                    .to_hex()
-                    .to_string()
-                    .into_boxed_str(),
-                exact_offset_bytes: 8_192,
-                exact_size_bytes: 64 * 64 * size_of::<f32>(),
-                cell_index: 0,
-                ordinal_buffer_offsets: [0; 3],
-                typed_buffer_offsets: [0; 6],
-                identity_values_size_bytes: 0,
-                row_start,
-                rows: 64,
-                size_bytes: 4_096,
-                graph: None,
-            }
-            .with_test_typed_identity_ranges()
-        };
-        let old_chunk = chunk("old", 0);
-        let descriptor = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&fit),
-            64,
-            VectorElementType::Float32,
-            location,
-            vec![old_chunk.clone()],
-        )
-        .unwrap();
-        let appended = descriptor
-            .append_chunks(64, vec![chunk("new", 64)])
-            .unwrap();
-
-        assert_eq!(appended.vectors(), 128);
-        assert_eq!(appended.chunks()[0], old_chunk);
-        assert_eq!(appended.chunks()[1].path, "new");
-        assert_eq!(appended.chunks()[1].row_start, 64);
-        assert!(appended.encode().unwrap().starts_with(b"PAR1"));
-
-        let mut json = serde_json::to_value(&descriptor).unwrap();
-        json["chunks"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("identity_checksum");
-        let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
-        assert!(error.to_string().contains("identity_checksum"));
-
-        let mut json = serde_json::to_value(&descriptor).unwrap();
-        json["chunks"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("exact_path");
-        let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
-        assert!(error.to_string().contains("exact_path"));
-
-        let mut missing_exact_path = old_chunk.clone();
-        missing_exact_path.exact_path.clear();
-        let error = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&fit),
-            64,
-            VectorElementType::Float32,
-            location,
-            vec![missing_exact_path],
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("must be complete"));
-
-        let mut shared_path = old_chunk.clone();
-        shared_path.exact_path.clone_from(&shared_path.path);
-        let error = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&fit),
-            64,
-            VectorElementType::Float32,
-            location,
-            vec![shared_path],
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("must be distinct"));
-
-        let cross_scan_exact = chunk("object-a", 0);
-        let mut inconsistent_object = cross_scan_exact.clone();
-        inconsistent_object.path = "object-b".to_string();
-        inconsistent_object.row_start = 64;
-        inconsistent_object.exact_offset_bytes += 8;
-        let error = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&fit),
-            128,
-            VectorElementType::Float32,
-            location,
-            vec![cross_scan_exact, inconsistent_object],
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("sharing an exact object"));
-
-        let shared_exact = chunk("shared", 0);
-        let mut inconsistent_exact = chunk("shared", 64);
-        inconsistent_exact.exact_offset_bytes += 8;
-        let error = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&fit),
-            128,
-            VectorElementType::Float32,
-            location,
-            vec![shared_exact, inconsistent_exact],
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("sharing an exact object"));
-
-        let error = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&fit),
-            128,
-            VectorElementType::Float32,
-            location,
-            vec![chunk("undersized", 0), chunk("undersized", 64)],
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("aggregate chunk rows"));
-
-        let mut missing_checksum = old_chunk;
-        missing_checksum.identity_checksum = String::new().into_boxed_str();
-        let error = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&fit),
-            64,
-            VectorElementType::Float32,
-            location,
-            vec![missing_checksum],
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("must be complete"));
-    }
-
-    #[test]
-    fn descriptor_rejects_scan_ordinal_offsets_outside_the_chunk_envelope() {
-        let fit = vectors(128, 64);
-        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
-        let location = LocationEncoding::for_layout(1, 64).unwrap();
-        let mut chunk = GlobalPqChunkRef {
-            path: "typed.arrow".to_string(),
-            checksum: "ab".repeat(32),
-            offset_bytes: 1_024,
-            identity_checksum: "ef".repeat(32).into_boxed_str(),
-            exact_path: "typed-exact.arrow".to_string(),
-            exact_checksum: "cd".repeat(32).into_boxed_str(),
-            exact_offset_bytes: 16_384,
-            exact_size_bytes: 64 * 64 * size_of::<f32>(),
-            cell_index: 0,
-            ordinal_buffer_offsets: [0; 3],
-            typed_buffer_offsets: [0; 6],
-            identity_values_size_bytes: 0,
-            row_start: 0,
-            rows: 64,
-            size_bytes: 8_192,
-            graph: None,
-        }
-        .with_test_typed_identity_ranges();
-        chunk.ordinal_buffer_offsets[1] = chunk.offset_bytes + chunk.size_bytes + 8;
-
-        let error = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&fit),
-            64,
-            VectorElementType::Float32,
-            location,
-            vec![chunk],
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("ordinal"));
-    }
-
-    #[test]
-    fn descriptor_append_spool_reuses_quantizers_and_rejects_location_overflow() {
-        let fit = vectors(128, 64);
-        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
-        let coarse = RotatedProductQuantizer::fit(
-            ProductQuantizerConfig {
-                subspaces: 1,
-                ..config()
-            },
-            &fit,
-        )
-        .unwrap();
-        let descriptor = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse.state(),
-            0,
-            VectorElementType::Float32,
-            LocationEncoding::for_layout(4, 64).unwrap(),
-            Vec::new(),
-        )
-        .unwrap();
-
-        let spool = descriptor.append_spool(4_096, 64, 4, 64).unwrap();
-        let (cell, code) = spool.encode_vector(&fit[17]).unwrap();
-        assert_eq!(cell & 0xff, u16::from(coarse.encode(&fit[17]).unwrap()[0]));
-        assert_eq!(code, quantizer.encode(&fit[17]).unwrap());
-        assert!(descriptor.append_spool(4_096, 64, 4, 65).is_err());
-    }
-
-    #[test]
-    fn descriptor_rejects_invalid_turboquant_state_before_accessors_can_panic() {
-        let fit = vectors(32, 64);
-        let mut state = FastTurboQuantMseScanQuantizer::new(19, 64, 4, 1)
-            .unwrap()
-            .state();
-        state.bits = 0;
-        let location = LocationEncoding::for_layout(1, 1).unwrap();
-        let chunks = vec![GlobalPqChunkRef {
-            path: "chunk".to_string(),
-            checksum: "ab".repeat(32),
-            offset_bytes: 0,
-            identity_checksum: "ef".repeat(32).into_boxed_str(),
-            exact_path: "exact.arrow".to_string(),
-            exact_checksum: "cd".repeat(32).into_boxed_str(),
-            exact_offset_bytes: 80,
-            exact_size_bytes: 64 * size_of::<f32>(),
-            cell_index: 0,
-            ordinal_buffer_offsets: [0; 3],
-            typed_buffer_offsets: [0; 6],
-            identity_values_size_bytes: 0,
-            row_start: 0,
-            rows: 1,
-            size_bytes: 64,
-            graph: None,
-        }];
-
-        assert!(
-            GlobalPqDescriptor::new(
-                GlobalScanQuantizerState::FastTurboQuantMse(state),
-                coarse_state(&fit),
-                1,
-                VectorElementType::Float32,
-                location,
-                chunks,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn descriptor_rejects_pre_locality_bundle_layouts() {
-        let fit = vectors(32, 64);
-        let descriptor = GlobalPqDescriptor::new(
-            RotatedProductQuantizer::fit(config(), &fit)
-                .unwrap()
-                .state(),
-            coarse_state(&fit),
-            0,
-            VectorElementType::Float32,
-            LocationEncoding::for_layout(1, fit.len()).unwrap(),
-            Vec::new(),
-        )
-        .unwrap();
-        let mut json = serde_json::to_value(&descriptor).unwrap();
-        assert_eq!(
-            json["bundle_layout"],
-            "typed-columns-v9-cell-local-exact-arrow"
-        );
-        json.as_object_mut().unwrap().remove("bundle_layout");
-
-        let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
-        assert!(error.to_string().contains("bundle_layout"));
-
-        for stale in [
-            "typed-columns-v6-dual-arrow",
-            "typed-columns-v7-local-exact-arrow",
-            "typed-columns-v8-residual-pq-arrow",
-            "typed-columns-v9-local-exact-arrow",
-        ] {
-            let mut json = serde_json::to_value(&descriptor).unwrap();
-            json["bundle_layout"] = serde_json::Value::String(stale.to_string());
-            let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
-            assert!(error.to_string().contains(stale));
-        }
+        assert_eq!(decoded.code_bytes_per_vector(), 8);
+        assert_eq!(decoded.cell_count(), 43_403);
+        assert_eq!(decoded.page_count(), 3_125_000);
+        assert_eq!(decoded.bundle_count(), 6_400);
+        assert_eq!(decoded.cell_root().path, "global-leaf/cells.parquet");
+        assert_eq!(decoded.shard_table().checksum, [2; 32]);
+        assert_eq!(decoded.bundle_table().checksum, [3; 32]);
+        assert!(descriptor.resident_bytes() < 2 * 1024 * 1024);
     }
 
     #[test]
@@ -3339,486 +2826,6 @@ mod tests {
             .unwrap();
         assert!(near_distance < far_distance);
         assert_eq!(restored.code_bytes_per_vector(), 40);
-    }
-
-    #[test]
-    fn cell_graph_round_trips_without_retaining_exact_vectors() {
-        let vectors = vectors(128, 64);
-        let fitted = RotatedProductQuantizer::fit(config(), &vectors).unwrap();
-        let quantizer =
-            GlobalScanQuantizer::from_state(GlobalScanQuantizerState::Pq(fitted.state())).unwrap();
-        let location = LocationEncoding::for_layout(1, vectors.len()).unwrap();
-        let mut builder = ResidentGlobalPqBuilder::new(fitted, location, 16 * 1024).unwrap();
-        for (row, vector) in vectors.iter().enumerate() {
-            assert!(
-                builder
-                    .push(
-                        vector,
-                        GlobalPqRow {
-                            segment_index: 0,
-                            row_index: row as u32,
-                        },
-                    )
-                    .unwrap()
-                    .is_none()
-            );
-        }
-        let chunk = builder.flush().unwrap().unwrap();
-        let (mut scan, ordinal_buffer_offsets) = typed_scan_fixture(
-            &chunk.bytes,
-            chunk.rows,
-            quantizer.code_bytes_per_vector(),
-            location,
-        );
-        for row in 0..chunk.rows {
-            let start = ordinal_buffer_offsets[2] as usize + row * size_of::<u32>();
-            scan[start..start + size_of::<u32>()]
-                .copy_from_slice(&u32::try_from(chunk.rows - 1 - row).unwrap().to_le_bytes());
-        }
-        let reference = GlobalPqChunkRef {
-            path: "cell-7.bin".into(),
-            checksum: blake3::hash(&scan).to_hex().to_string(),
-            offset_bytes: 0,
-            identity_checksum: String::new().into_boxed_str(),
-            exact_path: String::new(),
-            exact_checksum: String::new().into_boxed_str(),
-            exact_offset_bytes: scan.len()
-                + (vectors.len() + 1) * size_of::<i32>()
-                + vectors.len() * size_of::<u64>(),
-            exact_size_bytes: vectors.len() * 64 * size_of::<f32>(),
-            cell_index: 7,
-            ordinal_buffer_offsets,
-            typed_buffer_offsets: [0; 6],
-            identity_values_size_bytes: 0,
-            row_start: 4_096,
-            rows: vectors.len(),
-            size_bytes: u32::try_from(scan.len()).unwrap(),
-            graph: None,
-        };
-        let exact = vectors
-            .iter()
-            .flatten()
-            .flat_map(|value| value.to_le_bytes())
-            .collect::<Vec<_>>();
-
-        let graph = GlobalCellGraph::build(
-            &reference,
-            scan,
-            &exact,
-            64,
-            VectorElementType::Float32,
-            quantizer.code_bytes_per_vector(),
-            location,
-            16,
-            64,
-            false,
-        )
-        .unwrap();
-        assert!(graph.resident_bytes() < exact.len());
-
-        let encoded = graph.encode().unwrap();
-        let decoded = GlobalCellGraph::decode(&encoded).unwrap();
-        decoded.validate_reference(&reference).unwrap();
-        let entry_layers = decoded.layer_count(decoded.entry);
-        assert!(entry_layers > 1);
-        assert!(
-            decoded.neighbours(decoded.entry, 0).len()
-                > decoded.neighbours(decoded.entry, entry_layers - 1).len(),
-            "layer zero must be the denser HNSW base layer"
-        );
-        let bounded = decoded
-            .candidates(&vectors[37], &quantizer, 16, 64)
-            .unwrap();
-        assert_eq!(bounded.len(), 16);
-        assert!(
-            bounded
-                .iter()
-                .any(|candidate| candidate.node == reference.row_start + 37),
-            "a bounded base-layer beam must recover the query's own node"
-        );
-        let candidates = decoded
-            .candidates(&vectors[37], &quantizer, vectors.len(), vectors.len())
-            .unwrap();
-        assert_eq!(candidates.len(), vectors.len());
-        assert!(candidates.iter().any(|candidate| {
-            candidate.node == reference.row_start + 37
-                && candidate.exact_ordinal == vectors.len() - 1 - 37
-                && candidate.code.as_ref() == quantizer.encode(&vectors[37]).unwrap()
-                && candidate.row
-                    == (GlobalPqRow {
-                        segment_index: 0,
-                        row_index: 37,
-                    })
-        }));
-
-        let mut mismatched_reference = reference.clone();
-        mismatched_reference.ordinal_buffer_offsets[2] += 8;
-        assert!(decoded.validate_reference(&mismatched_reference).is_err());
-
-        assert!(GlobalCellGraph::decode(&encoded[..encoded.len() - 1]).is_err());
-        let mut corrupted = encoded;
-        corrupted[0] ^= 0xff;
-        assert!(GlobalCellGraph::decode(&corrupted).is_err());
-    }
-
-    #[test]
-    fn selected_chunk_scan_recovers_rows_without_resident_codes() {
-        let vectors = vectors(256, 64);
-        let quantizer = RotatedProductQuantizer::fit(config(), &vectors).unwrap();
-        let location = LocationEncoding::for_layout(4, 64).unwrap();
-        let mut builder = ResidentGlobalPqBuilder::new(quantizer.clone(), location, 4_096).unwrap();
-        let mut refs = Vec::new();
-        let mut loaded = Vec::new();
-        let mut row_start = 0;
-        for segment in 0..4_u32 {
-            for row in 0..64_u32 {
-                builder
-                    .push(
-                        &vectors[(segment * 64 + row) as usize],
-                        GlobalPqRow {
-                            segment_index: segment,
-                            row_index: row,
-                        },
-                    )
-                    .unwrap();
-            }
-            let chunk = builder.flush().unwrap().unwrap();
-            let (scan, ordinal_buffer_offsets) = typed_scan_fixture(
-                &chunk.bytes,
-                chunk.rows,
-                quantizer.code_bytes_per_vector(),
-                location,
-            );
-            let reference = GlobalPqChunkRef {
-                path: format!("chunk-{segment}"),
-                checksum: blake3::hash(&scan).to_hex().to_string(),
-                offset_bytes: 0,
-                identity_checksum: "ef".repeat(32).into_boxed_str(),
-                exact_path: format!("exact-{segment}"),
-                exact_checksum: "cd".repeat(32).into_boxed_str(),
-                exact_offset_bytes: scan.len()
-                    + (chunk.rows + 1) * size_of::<i32>()
-                    + chunk.rows * size_of::<u64>(),
-                exact_size_bytes: 16_384,
-                cell_index: segment as u16,
-                ordinal_buffer_offsets,
-                typed_buffer_offsets: [0; 6],
-                identity_values_size_bytes: 0,
-                row_start,
-                rows: chunk.rows,
-                size_bytes: u32::try_from(scan.len()).unwrap(),
-                graph: None,
-            }
-            .with_test_typed_identity_ranges();
-            row_start += chunk.rows;
-            loaded.push((reference.clone(), Bytes::from(scan)));
-            refs.push(reference);
-        }
-        let descriptor = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&vectors),
-            vectors.len(),
-            VectorElementType::Float32,
-            location,
-            refs,
-        )
-        .unwrap();
-        let index = ResidentGlobalPq::load(descriptor).unwrap();
-        assert!(index.resident_bytes() < 64 * 1024);
-        let candidates = index
-            .candidates_in_chunks(&vectors[129], 32, &loaded[2..3], 8)
-            .unwrap();
-        assert_eq!(candidates.len(), 32);
-        assert!(
-            candidates
-                .iter()
-                .all(|candidate| candidate.row.segment_index == 2)
-        );
-        for candidate in &candidates {
-            assert_eq!(
-                candidate.code.as_ref(),
-                quantizer.encode(&vectors[candidate.node]).unwrap()
-            );
-        }
-    }
-
-    #[test]
-    fn coarse_cells_group_matching_regions_across_ingest_checkpoints() {
-        let vectors = vectors(256, 64);
-        let quantizer = RotatedProductQuantizer::fit(config(), &vectors).unwrap();
-        let location = LocationEncoding::for_layout(4, 64).unwrap();
-        let refs = (0..4_u32)
-            .map(|segment| {
-                GlobalPqChunkRef {
-                    path: format!("chunk-{segment}"),
-                    checksum: "ab".repeat(32),
-                    offset_bytes: 0,
-                    identity_checksum: "ef".repeat(32).into_boxed_str(),
-                    exact_path: format!("exact-{segment}"),
-                    exact_checksum: "cd".repeat(32).into_boxed_str(),
-                    exact_offset_bytes: 1_796,
-                    exact_size_bytes: 16_384,
-                    // Segments 0/2 and 1/3 represent the same two semantic
-                    // regions, produced by separate bounded ingest checkpoints.
-                    cell_index: (segment % 2) as u16,
-                    ordinal_buffer_offsets: [0; 3],
-                    typed_buffer_offsets: [0; 6],
-                    identity_values_size_bytes: 0,
-                    row_start: segment as usize * 64,
-                    rows: 64,
-                    size_bytes: 1_024,
-                    graph: None,
-                }
-                .with_test_typed_identity_ranges()
-            })
-            .collect();
-        let descriptor = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&vectors),
-            vectors.len(),
-            VectorElementType::Float32,
-            location,
-            refs,
-        )
-        .unwrap();
-        let index = ResidentGlobalPq::load(descriptor).unwrap();
-
-        let selected = index.chunks_for_cells(&[0]);
-        assert_eq!(
-            selected
-                .iter()
-                .map(|chunk| chunk.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["chunk-0", "chunk-2"],
-            "one coarse-cell probe must cover the matching region in every ingest checkpoint"
-        );
-    }
-
-    #[test]
-    fn disk_spool_assigns_vectors_globally_across_source_segments() {
-        let vectors = (0..256)
-            .map(|row| vec![if row % 2 == 0 { 0.0 } else { 10.0 }; 64])
-            .collect::<Vec<_>>();
-        let mut pq_config = config();
-        pq_config.centroids = 2;
-        let quantizer = RotatedProductQuantizer::fit(pq_config, &vectors).unwrap();
-        let mut coarse_config = pq_config;
-        coarse_config.subspaces = 1;
-        let coarse = RotatedProductQuantizer::fit(coarse_config, &vectors).unwrap();
-        let location = LocationEncoding::for_layout(4, 64).unwrap();
-        let mut spool = GlobalPqCellSpool::new(
-            quantizer.clone(),
-            coarse.clone(),
-            location,
-            4_096,
-            64,
-            VectorElementType::Float32,
-        )
-        .unwrap();
-        let (cell, code) = spool.encode_vector(&vectors[0]).unwrap();
-        assert_eq!(
-            cell & 0xff,
-            u16::from(coarse.encode(&vectors[0]).unwrap()[0])
-        );
-        assert_eq!(code.len(), quantizer.code_bytes_per_vector());
-        for segment in 0..4_u32 {
-            for row in 0..64_u32 {
-                spool
-                    .push(
-                        &vectors[(segment * 64 + row) as usize],
-                        GlobalPqRow {
-                            segment_index: segment,
-                            row_index: row,
-                        },
-                        &vectors[(segment * 64 + row) as usize],
-                        format!("row-{segment}-{row}").as_bytes(),
-                        u64::from(row),
-                    )
-                    .unwrap();
-            }
-        }
-        let mut refs = Vec::new();
-        let mut loaded = Vec::new();
-        let mut row_start = 0_usize;
-        let rows = spool
-            .finish(|cell, chunk| {
-                assert_eq!(chunk.exact_bytes.len(), chunk.rows * 64 * 4);
-                for local in 0..chunk.rows {
-                    let start = local * 64 * 4;
-                    let exact = chunk.exact_bytes[start..start + 64 * 4]
-                        .chunks_exact(4)
-                        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
-                        .collect::<Vec<_>>();
-                    assert_eq!(exact.len(), 64);
-                }
-                let (scan, ordinal_buffer_offsets) = typed_scan_fixture(
-                    &chunk.bytes,
-                    chunk.rows,
-                    quantizer.code_bytes_per_vector(),
-                    location,
-                );
-                let reference = GlobalPqChunkRef {
-                    path: format!("cell-{cell}"),
-                    checksum: blake3::hash(&scan).to_hex().to_string(),
-                    offset_bytes: 0,
-                    identity_checksum: "ef".repeat(32).into_boxed_str(),
-                    exact_path: format!("exact-{cell}"),
-                    exact_checksum: blake3::hash(&chunk.exact_bytes)
-                        .to_hex()
-                        .to_string()
-                        .into_boxed_str(),
-                    exact_offset_bytes: scan.len()
-                        + (chunk.rows + 1) * size_of::<i32>()
-                        + chunk.rows * size_of::<u64>(),
-                    exact_size_bytes: chunk.exact_bytes.len(),
-                    cell_index: cell,
-                    ordinal_buffer_offsets,
-                    typed_buffer_offsets: [0; 6],
-                    identity_values_size_bytes: 0,
-                    row_start,
-                    rows: chunk.rows,
-                    size_bytes: u32::try_from(scan.len()).unwrap(),
-                    graph: None,
-                }
-                .with_test_typed_identity_ranges();
-                row_start += chunk.rows;
-                loaded.push((reference.clone(), Bytes::from(scan)));
-                refs.push(reference);
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(rows, vectors.len());
-
-        let descriptor = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse.state(),
-            vectors.len(),
-            VectorElementType::Float32,
-            location,
-            refs,
-        )
-        .unwrap();
-        let index = ResidentGlobalPq::load(descriptor).unwrap();
-        let cells = index.nearest_cells(&vectors[0], 1).unwrap();
-        let selected = index.chunks_for_cells(&cells);
-        let selected_paths = selected
-            .iter()
-            .map(|chunk| chunk.path.as_str())
-            .collect::<std::collections::HashSet<_>>();
-        let selected_loaded = loaded
-            .iter()
-            .filter(|(chunk, _)| selected_paths.contains(chunk.path.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        let candidates = index
-            .candidates_in_chunks(&vectors[0], 256, &selected_loaded, 4)
-            .unwrap();
-        let source_segments = candidates
-            .iter()
-            .map(|candidate| candidate.row.segment_index)
-            .collect::<std::collections::HashSet<_>>();
-        assert_eq!(
-            source_segments,
-            std::collections::HashSet::from([0, 1, 2, 3])
-        );
-    }
-
-    #[test]
-    fn disk_spool_preserves_declared_exact_vector_width() {
-        let vectors = vectors(64, 64);
-        let quantizer = RotatedProductQuantizer::fit(config(), &vectors).unwrap();
-        let mut coarse_config = config();
-        coarse_config.subspaces = 1;
-        let coarse = RotatedProductQuantizer::fit(coarse_config, &vectors).unwrap();
-        let location = LocationEncoding::for_layout(1, vectors.len()).unwrap();
-        let mut spool = GlobalPqCellSpool::new(
-            quantizer,
-            coarse,
-            location,
-            64 * 1024,
-            64,
-            VectorElementType::Float16,
-        )
-        .unwrap();
-        for (row, vector) in vectors.iter().enumerate() {
-            spool
-                .push(
-                    vector,
-                    GlobalPqRow {
-                        segment_index: 0,
-                        row_index: row as u32,
-                    },
-                    vector,
-                    format!("row-{row}").as_bytes(),
-                    row as u64,
-                )
-                .unwrap();
-        }
-        let mut emitted_rows = 0;
-        spool
-            .finish(|_, chunk| {
-                assert_eq!(chunk.exact_bytes.len(), chunk.rows * 64 * 2);
-                for encoded in chunk.exact_bytes.chunks_exact(64 * 2) {
-                    assert_eq!(
-                        VectorElementType::Float16
-                            .decode_fixed_width(encoded, 64)
-                            .unwrap()
-                            .len(),
-                        64
-                    );
-                }
-                emitted_rows += chunk.rows;
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(emitted_rows, vectors.len());
-    }
-
-    #[test]
-    fn hierarchical_disk_spool_emits_the_same_semantic_cell_ids_it_encoded() {
-        let vectors = vectors(256, 64);
-        let quantizer = RotatedProductQuantizer::fit(config(), &vectors).unwrap();
-        let mut parent_config = config();
-        parent_config.subspaces = 1;
-        parent_config.centroids = 4;
-        let parent = RotatedProductQuantizer::fit(parent_config, &vectors).unwrap();
-        let coarse = HierarchicalCoarseQuantizer::fit(parent, &vectors, 4, 4).unwrap();
-        let expected = vectors
-            .iter()
-            .map(|vector| coarse.encode_cell(vector).unwrap())
-            .collect::<std::collections::HashSet<_>>();
-        let location = LocationEncoding::for_layout(1, vectors.len()).unwrap();
-        let mut spool = GlobalPqCellSpool::new(
-            quantizer,
-            GlobalCoarseQuantizer::Hierarchical(coarse),
-            location,
-            4_096,
-            64,
-            VectorElementType::Float32,
-        )
-        .unwrap();
-        for (row, vector) in vectors.iter().enumerate() {
-            spool
-                .push(
-                    vector,
-                    GlobalPqRow {
-                        segment_index: 0,
-                        row_index: row as u32,
-                    },
-                    vector,
-                    format!("row-{row}").as_bytes(),
-                    row as u64,
-                )
-                .unwrap();
-        }
-        let mut emitted = std::collections::HashSet::new();
-        spool
-            .finish(|cell, _chunk| {
-                emitted.insert(cell);
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(emitted, expected);
     }
 
     #[test]
