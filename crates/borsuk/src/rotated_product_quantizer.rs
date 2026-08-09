@@ -231,13 +231,20 @@ impl RotatedProductQuantizer {
                 residual_squared += (vector_value - f64::from(*center_value)).powi(2);
             }
         }
-        let scale = (self.padded_dimensions as f64).sqrt();
+        let scale = self.certificate_distance_scale();
         let center_distance = query_center_squared.sqrt() / scale;
         let residual = residual_squared.sqrt() / scale;
         let lower = (center_distance - residual).max(0.0);
         let upper = center_distance + residual;
         let rounding = f64::EPSILON * self.padded_dimensions as f64 * 16.0 * (upper + 1.0);
         Ok(((lower - rounding).max(0.0), upper + rounding))
+    }
+
+    fn certificate_distance_scale(&self) -> f64 {
+        match self.rotation_kind {
+            ProductRotation::Identity => 1.0,
+            ProductRotation::Srht => (self.padded_dimensions as f64).sqrt(),
+        }
     }
 
     fn certificate_transform(&self, vector: &[f32]) -> Vec<f64> {
@@ -809,6 +816,46 @@ mod tests {
         let exact = 3.0_f64.sqrt();
         assert!(lower <= exact, "lower={lower} exact={exact}");
         assert!(upper >= exact, "upper={upper} exact={exact}");
+    }
+
+    #[test]
+    fn identity_certificate_does_not_apply_srht_scale() {
+        let pq = RotatedProductQuantizer::from_state(ProductQuantizerState {
+            rotation: ProductRotation::Identity,
+            seed: 11,
+            dimensions: 4,
+            subspaces: 1,
+            centroids: 1,
+            subspace_offsets: vec![0, 4],
+            codebooks: vec![vec![0.0; 4]],
+        })
+        .unwrap();
+
+        let (lower, upper) = pq
+            .certificate_l2_interval(&[2.0, 0.0, 0.0, 0.0], &[1.0, 0.0, 0.0, 0.0], &[0])
+            .unwrap();
+
+        assert!((lower - 1.0).abs() <= 1e-12, "lower={lower}");
+        assert!((upper - 3.0).abs() <= 1e-12, "upper={upper}");
+    }
+
+    #[test]
+    fn certificate_geometry_rejects_an_absent_centroid() {
+        let pq = RotatedProductQuantizer::from_state(ProductQuantizerState {
+            rotation: ProductRotation::Identity,
+            seed: 11,
+            dimensions: 2,
+            subspaces: 1,
+            centroids: 1,
+            subspace_offsets: vec![0, 2],
+            codebooks: vec![vec![1.0, 2.0]],
+        })
+        .unwrap();
+
+        assert!(
+            pq.certificate_l2_interval(&[0.0, 0.0], &[0.0, 0.0], &[1])
+                .is_err()
+        );
     }
 
     #[test]
