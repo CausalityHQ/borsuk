@@ -2162,3 +2162,21 @@ baseline reads and bytes, requires every prediction to be no larger than that
 baseline, and continues accepting the already-terminal baseline-less smoke as
 historical evidence. No representative measurement was opened or claimed
 while this evidence gap remained.
+
+### Preregistered exact-bound Cohere local decision arm
+
+`group-commit-exact-bound-local-qualification.json` freezes one bounded local
+arm before execution: the checksum-pinned Cohere Medium 1M dataset, 768 cosine
+dimensions, 2,000 logical cells, 32 separately opened writer processes, 32
+operations per writer, 16 records per operation, eight worker lanes, and 20
+post-drain queries. This yields 16,384 inserted records and is explicitly
+ineligible for AWS, 100M-scale, or competitor claims.
+
+The runner requires a clean Git source archive identity, a fresh local index
+root, the complete dataset checksum check, no read cache, raw storage/resource
+telemetry, terminal per-cell validation, and root validation before the
+decision evaluator reads aggregate rows. The fixed evaluator accepts only
+zero containment failures, survivor p95 no greater than 12 of 16, pooled exact
+read and byte reductions of at least 30%, and certificate CPU p95 no greater
+than 2 ms or 5% of read p95. A valid rejection remains a terminal experiment,
+not a failed artifact campaign. No arm has been launched at this entry.

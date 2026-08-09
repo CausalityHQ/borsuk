@@ -1,19 +1,54 @@
 #!/usr/bin/env python3
 """Static fail-closed contract tests for the scalability runner."""
 
-from pathlib import Path
 import json
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = (ROOT / "scripts/bench_group_commit_scalability.sh").read_text()
 BENCH = (ROOT / "crates/borsuk/examples/group_commit_bench.rs").read_text()
 ROUTING_BENCH = (ROOT / "crates/borsuk/examples/logical_cell_routing_bench.rs").read_text()
 REALISTIC_MANIFEST = ROOT / "docs/research/realistic-group-commit-campaign.json"
+EXACT_BOUND_LOCAL_MANIFEST = (
+    ROOT / "docs/research/group-commit-exact-bound-local-qualification.json"
+)
 
 
 class GroupCommitScalabilityRunnerTest(unittest.TestCase):
+    def test_exact_bound_local_mode_is_single_arm_realistic_and_fail_closed(self) -> None:
+        manifest = json.loads(EXACT_BOUND_LOCAL_MANIFEST.read_text())
+        self.assertEqual(manifest["protocol_kind"], "local")
+        self.assertEqual(manifest["dataset"], "cohere-medium-1M")
+        self.assertEqual(manifest["dimensions"], 768)
+        self.assertEqual(manifest["cell_counts"], [2_000])
+        self.assertEqual(manifest["writers"], [32])
+        self.assertEqual(manifest["repetitions"], 1)
+        self.assertEqual(manifest["operations_per_writer"], 32)
+        self.assertEqual(manifest["records_per_operation"], 16)
+        self.assertEqual(manifest["read_queries_per_cell"], 20)
+        self.assertEqual(manifest["exact_bound_shadow"]["max_survivor_p95"], 12)
+        self.assertEqual(
+            manifest["exact_bound_shadow"]["min_read_reduction_fraction"], 0.30
+        )
+        self.assertEqual(
+            manifest["exact_bound_shadow"]["min_byte_reduction_fraction"], 0.30
+        )
+        self.assertIn("BORSUK_GROUP_COMMIT_EXACT_BOUND_LOCAL", RUNNER)
+        self.assertIn("group-commit-exact-bound-local-qualification.json", RUNNER)
+        self.assertIn("EXACT_BOUND_SHADOW=1", RUNNER)
+        self.assertIn(
+            'BORSUK_GROUP_COMMIT_EXACT_BOUND_SHADOW="$EXACT_BOUND_SHADOW"', RUNNER
+        )
+        self.assertIn("exact-bound local execution requires a clean tracked worktree", RUNNER)
+        self.assertIn("refusing to reuse local index root", RUNNER)
+        self.assertIn("evaluate_exact_bound_shadow.py", RUNNER)
+        self.assertIn("EXACT_BOUND_SHADOW_ACCEPTED", RUNNER)
+        self.assertIn("EXACT_BOUND_SHADOW_REJECTED", RUNNER)
+        self.assertIn('[[ -f "$decision" ]] || exit 1', RUNNER)
+        self.assertIn("cache_env=()", RUNNER)
+        self.assertIn('if [[ "$EXACT_BOUND_LOCAL" != "1" ]]; then', RUNNER)
+
     def test_production_uses_the_manifest_bound_and_library_default(self) -> None:
         self.assertIn(
             'MAX_RECORDS="$(python3 -c \'import json,sys; '

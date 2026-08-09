@@ -3,6 +3,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SMOKE="${BORSUK_GROUP_COMMIT_SCALABILITY_SMOKE:-0}"
+EXACT_BOUND_LOCAL="${BORSUK_GROUP_COMMIT_EXACT_BOUND_LOCAL:-0}"
+EXACT_BOUND_SHADOW=0
+[[ "$SMOKE" != "1" || "$EXACT_BOUND_LOCAL" != "1" ]] || {
+  echo "smoke and exact-bound local modes are mutually exclusive" >&2
+  exit 2
+}
 MAX_P95_MS=""
 MIN_RPS=""
 MIN_END_TO_END_RPS=""
@@ -35,6 +41,41 @@ if [[ "$SMOKE" == "1" ]]; then
   ARCHITECTURE=local
   INSTANCE_TYPE=local
   PROTOCOL=smoke
+elif [[ "$EXACT_BOUND_LOCAL" == "1" ]]; then
+  EXACT_BOUND_SHADOW=1
+  MANIFEST="$ROOT_DIR/docs/research/group-commit-exact-bound-local-qualification.json"
+  mapfile -t CELL_COUNTS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["cell_counts"], sep="\n")' "$MANIFEST")
+  mapfile -t WRITERS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["writers"], sep="\n")' "$MANIFEST")
+  REPETITIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["repetitions"])' "$MANIFEST")"
+  OPERATIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["operations_per_writer"])' "$MANIFEST")"
+  DIMENSIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dimensions"])' "$MANIFEST")"
+  MAX_DELAY_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_group_delay_ms"])' "$MANIFEST")"
+  MAX_RECORDS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_group_records"])' "$MANIFEST")"
+  PIPELINE_DEPTH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pipeline_depth_per_writer"])' "$MANIFEST")"
+  RECORDS_PER_OPERATION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["records_per_operation"])' "$MANIFEST")"
+  mapfile -t WORKER_LANES < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["worker_lanes"], sep="\n")' "$MANIFEST")
+  OUTPUT="${BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT:?set BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT}"
+  INDEX_ROOT="${BORSUK_GROUP_COMMIT_SCALABILITY_INDEX_ROOT:?set BORSUK_GROUP_COMMIT_SCALABILITY_INDEX_ROOT}"
+  ARCHITECTURE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["architecture"])' "$MANIFEST")"
+  INSTANCE_TYPE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["instance_type"])' "$MANIFEST")"
+  PROTOCOL=local
+  READ_QUERIES="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["read_queries_per_cell"])' "$MANIFEST")"
+  DATASET_DIR="${BORSUK_GROUP_COMMIT_DATASET:?set validated Cohere dataset directory}"
+  [[ -f "$DATASET_DIR/dataset.json" && -f "$DATASET_DIR/train.parquet" ]] || {
+    echo "missing group-commit dataset descriptor or train.parquet" >&2
+    exit 3
+  }
+  DATASET_SHA256="$(sha256sum "$DATASET_DIR/dataset.json" | awk '{print $1}')"
+  [[ "$DATASET_SHA256" == "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dataset_sha256"])' "$MANIFEST")" ]] || {
+    echo "group-commit dataset descriptor SHA-256 mismatch" >&2
+    exit 3
+  }
+  uv run --python 3.12 \
+    --with-requirements "$ROOT_DIR/scripts/requirements-format-bench.txt" \
+    python "$ROOT_DIR/scripts/fetch_vdbbench_dataset.py" \
+    --dataset "$(basename "$DATASET_DIR")" \
+    --output-root "$(dirname "$DATASET_DIR")" \
+    --check-existing >/dev/null
 else
   [[ "${BORSUK_RUN_GROUP_COMMIT_SCALABILITY:-0}" == "1" ]] || {
     echo "set BORSUK_RUN_GROUP_COMMIT_SCALABILITY=1 for production execution" >&2
@@ -82,6 +123,9 @@ else
 fi
 
 [[ ! -e "$OUTPUT" ]] || { echo "refusing to replace output $OUTPUT" >&2; exit 3; }
+if [[ "$INDEX_ROOT" != s3://* ]]; then
+  [[ ! -e "$INDEX_ROOT" ]] || { echo "refusing to reuse local index root $INDEX_ROOT" >&2; exit 3; }
+fi
 mkdir -p "$OUTPUT/cells"
 MANIFEST_SHA256="$(sha256sum "$MANIFEST" | awk '{print $1}')"
 SOURCE_FROM_GIT=0
@@ -108,6 +152,17 @@ ROUTING_BINARY="$TARGET_DIR/release/examples/logical_cell_routing_bench"
 GROUP_BINARY="$TARGET_DIR/release/examples/group_commit_bench"
 RESULT_URI="${BORSUK_GROUP_COMMIT_SCALABILITY_RESULT_URI:-}"
 CURRENT_CELL=""
+
+if [[ "$EXACT_BOUND_LOCAL" == "1" && "$SOURCE_FROM_GIT" == "1" ]]; then
+  [[ "$SOURCE_SHA256" == "$HEAD_SOURCE_SHA256" ]] || {
+    echo "exact-bound local source SHA-256 differs from checked-out HEAD archive" >&2
+    exit 3
+  }
+  [[ -z "$(git -C "$ROOT_DIR" status --porcelain)" ]] || {
+    echo "exact-bound local execution requires a clean tracked worktree" >&2
+    exit 3
+  }
+fi
 
 prefix_is_empty() {
   local uri="$1" location bucket prefix count
@@ -138,7 +193,7 @@ rotate_order() {
   done
 }
 
-if [[ "$SMOKE" != "1" ]]; then
+if [[ "$SMOKE" != "1" && "$EXACT_BOUND_LOCAL" != "1" ]]; then
   [[ "$INDEX_ROOT" == s3://* ]] || { echo "production index root must be s3://" >&2; exit 3; }
   [[ "$RESULT_URI" == s3://* ]] || { echo "production result root must be s3://" >&2; exit 3; }
   [[ "$SOURCE_SHA256" == "$HEAD_SOURCE_SHA256" ]] || {
@@ -257,8 +312,14 @@ for cells in "${CELL_COUNTS[@]}"; do
       # terminal cell after the process has created its result directory.
       benchmark_stdout="${cell_output}.benchmark.stdout.log"
       benchmark_stderr="${cell_output}.benchmark.stderr.log"
+      cache_env=()
+      if [[ "$EXACT_BOUND_LOCAL" != "1" ]]; then
+        cache_env=(BORSUK_GROUP_COMMIT_CACHE_DIR="$cell_output/cache")
+      fi
       set +e
       env \
+        "${cache_env[@]}" \
+        BORSUK_GROUP_COMMIT_EXACT_BOUND_SHADOW="$EXACT_BOUND_SHADOW" \
         BORSUK_GROUP_COMMIT_PROTOCOL="$PROTOCOL" \
         BORSUK_GROUP_COMMIT_INDEX_URI="$uri" \
         BORSUK_GROUP_COMMIT_OUTPUT="$cell_output" \
@@ -281,7 +342,6 @@ for cells in "${CELL_COUNTS[@]}"; do
         BORSUK_GROUP_COMMIT_MAX_READ_P95_MS="$MAX_READ_P95_MS" \
         BORSUK_GROUP_COMMIT_MIN_INSERTED_ID_RECALL_AT_10="$MIN_INSERTED_ID_RECALL_AT_10" \
         BORSUK_GROUP_COMMIT_READ_QUERIES="$READ_QUERIES" \
-        BORSUK_GROUP_COMMIT_CACHE_DIR="$cell_output/cache" \
         BORSUK_GROUP_COMMIT_PIPELINE_DEPTH="$PIPELINE_DEPTH" \
         BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION="$RECORDS_PER_OPERATION" \
         BORSUK_GROUP_COMMIT_WORKER_LANES="$worker_lanes" \
@@ -390,6 +450,24 @@ fi
 printf 'complete\n' > "$OUTPUT/GROUP_COMMIT_SCALABILITY_COMPLETE"
 python3 "$ROOT_DIR/scripts/validate_group_commit_scalability.py" \
   --manifest "$MANIFEST" "$OUTPUT"
+if [[ "$EXACT_BOUND_LOCAL" == "1" ]]; then
+  decision="$OUTPUT/exact-bound-shadow-decision.json"
+  set +e
+  python3 "$ROOT_DIR/scripts/evaluate_exact_bound_shadow.py" \
+    --manifest "$MANIFEST" \
+    --output "$decision" \
+    "$OUTPUT"
+  decision_status=$?
+  set -e
+  [[ -f "$decision" ]] || exit 1
+  if (( decision_status == 0 )); then
+    printf 'accepted\n' > "$OUTPUT/EXACT_BOUND_SHADOW_ACCEPTED"
+  elif (( decision_status == 1 )); then
+    printf 'rejected\n' > "$OUTPUT/EXACT_BOUND_SHADOW_REJECTED"
+  else
+    exit "$decision_status"
+  fi
+fi
 sync_results
 trap - EXIT
 printf '%s\n' "$OUTPUT"
