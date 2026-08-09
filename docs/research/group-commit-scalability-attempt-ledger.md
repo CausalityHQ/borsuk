@@ -1931,3 +1931,16 @@ numbers locate the next experiment but are not a validated performance claim.
 The instrumentation repair counts physical attempts locally inside each range
 operation, including hedge attempts, rather than weakening reconciliation or
 editing terminal artifacts.
+
+The terminal distributions preregister one follow-up rather than an open-ended
+sweep. Control pooled exact-rerank p50/p95 was 30.404/47.838 ms, while the 75 ms
+delay triggered only 13 extra GET attempts across 2,500 candidate queries and
+therefore usually fired after the relevant exact-range tail. The immutable
+follow-up contract in
+`docs/research/global-exact-rerank-hedge-35ms-qualification.json` moves only the
+candidate delay to 35 ms, retains the same base, five alternating pairs, exact
+result/byte checks, and every promotion threshold, and uses distinct root
+markers. Thirty-five milliseconds targets the observed exact p90-p95 interval
+without assuming a cache or changing candidate selection. It remains a
+preregistered hypothesis: no latency or amplification improvement is claimed
+before a fresh terminal run passes the repaired validator.

@@ -903,6 +903,10 @@ def assert_global_range_hedge_manifest(manifest: dict[str, object]) -> None:
 
 
 def assert_global_exact_rerank_hedge_manifest(manifest: dict[str, object]) -> None:
+    campaign_delays = {
+        "global-exact-rerank-hedge-qualification-v1": "75",
+        "global-exact-rerank-hedge-qualification-v2": "35",
+    }
     expected_orders = [
         ["control", "candidate"],
         ["candidate", "control"],
@@ -911,7 +915,7 @@ def assert_global_exact_rerank_hedge_manifest(manifest: dict[str, object]) -> No
         ["control", "candidate"],
     ]
     require(
-        manifest.get("campaign_id") == "global-exact-rerank-hedge-qualification-v1",
+        manifest.get("campaign_id") in campaign_delays,
         "global exact rerank hedge campaign id changed",
     )
     require(
@@ -939,7 +943,11 @@ def assert_global_exact_rerank_hedge_manifest(manifest: dict[str, object]) -> No
         "global exact rerank hedge must use writer zero",
     )
     require(
-        manifest.get("hedge_after_ms") == {"control": "none", "candidate": "75"},
+        manifest.get("hedge_after_ms")
+        == {
+            "control": "none",
+            "candidate": campaign_delays.get(manifest.get("campaign_id")),
+        },
         "global exact rerank hedge delay arms changed",
     )
     require(
@@ -989,6 +997,7 @@ def main() -> None:
     assert_tracked("scripts/test_check_repo_policy.py")
     assert_tracked("scripts/test_docs_web.mjs")
     for path in [
+        "docs/research/global-exact-rerank-hedge-35ms-qualification.json",
         "docs/research/global-exact-rerank-hedge-qualification.json",
         "docs/research/global-range-hedge-qualification.json",
         "scripts/bench_global_range_hedge_qualification.sh",
@@ -1006,10 +1015,17 @@ def main() -> None:
             ROOT / "docs/research/global-exact-rerank-hedge-qualification.json"
         ).read_text()
     )
+    exact_35ms_hedge_manifest = json.loads(
+        (
+            ROOT / "docs/research/global-exact-rerank-hedge-35ms-qualification.json"
+        ).read_text()
+    )
     assert_global_range_hedge_manifest(legacy_hedge_manifest)
     assert_global_exact_rerank_hedge_manifest(exact_hedge_manifest)
+    assert_global_exact_rerank_hedge_manifest(exact_35ms_hedge_manifest)
     hedge_validator.validate_manifest(legacy_hedge_manifest)
     hedge_validator.validate_manifest(exact_hedge_manifest)
+    hedge_validator.validate_manifest(exact_35ms_hedge_manifest)
     assert_no_files_matching(
         "python/src/borsuk",
         ["_borsuk*.so", "_borsuk*.pyd", "_borsuk*.dll", "_borsuk*.dylib"],

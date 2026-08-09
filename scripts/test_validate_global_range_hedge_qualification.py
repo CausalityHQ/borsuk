@@ -16,6 +16,9 @@ MANIFEST = ROOT / "docs" / "research" / "global-range-hedge-qualification.json"
 EXACT_MANIFEST = (
     ROOT / "docs" / "research" / "global-exact-rerank-hedge-qualification.json"
 )
+EXACT_35MS_MANIFEST = (
+    ROOT / "docs" / "research" / "global-exact-rerank-hedge-35ms-qualification.json"
+)
 
 
 class GlobalRangeHedgeValidatorTest(unittest.TestCase):
@@ -59,7 +62,7 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
     ):
         arm = self.arm_path(repetition, arm_name)
         arm.mkdir(parents=True, exist_ok=True)
-        hedge_after = "75" if arm_name == "candidate" else "none"
+        hedge_after = self.manifest["hedge_after_ms"][arm_name]
         protocol_kind = (
             "range-hedge-candidate"
             if arm_name == "candidate"
@@ -311,7 +314,10 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
         def wrong_hedge():
             path = self.arm_path(2, "candidate") / "environment.txt"
             path.write_text(
-                path.read_text().replace("hedge_after_ms=75", "hedge_after_ms=74")
+                path.read_text().replace(
+                    f"hedge_after_ms={self.manifest['hedge_after_ms']['candidate']}",
+                    "hedge_after_ms=unregistered",
+                )
             )
 
         def cache_enabled():
@@ -599,6 +605,36 @@ class GlobalExactRerankHedgeValidatorTest(GlobalRangeHedgeValidatorTest):
             check=False,
         )
         self.assertNotEqual(rejected.returncode, 0)
+
+    def test_manifest_only_preflight_accepts_frozen_35ms_followup(self):
+        accepted = subprocess.run(
+            [
+                "python3",
+                str(VALIDATOR),
+                "--manifest",
+                str(EXACT_35MS_MANIFEST),
+                "--validate-manifest-only",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_frozen_35ms_followup_validates_a_complete_structural_matrix(self):
+        self.manifest_path = EXACT_35MS_MANIFEST
+        self.manifest = json.loads(self.manifest_path.read_text())
+        self.manifest_sha = hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()
+        self.write_terminal_matrix()
+
+        result = self.run_validator()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(
+            report["campaign_id"], "global-exact-rerank-hedge-qualification-v2"
+        )
+        self.assertEqual(report["winner"], "candidate")
 
 
 if __name__ == "__main__":

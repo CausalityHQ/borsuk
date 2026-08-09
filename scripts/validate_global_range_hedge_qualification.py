@@ -13,6 +13,11 @@ from collections.abc import Iterable
 
 LEGACY_CAMPAIGN_ID = "global-range-hedge-qualification-v1"
 EXACT_RERANK_CAMPAIGN_ID = "global-exact-rerank-hedge-qualification-v1"
+EXACT_RERANK_35MS_CAMPAIGN_ID = "global-exact-rerank-hedge-qualification-v2"
+EXACT_RERANK_CAMPAIGN_IDS = {
+    EXACT_RERANK_CAMPAIGN_ID,
+    EXACT_RERANK_35MS_CAMPAIGN_ID,
+}
 ARM_NAMES = ("control", "candidate")
 
 
@@ -85,7 +90,6 @@ def validate_manifest(manifest: dict[str, object]) -> str:
         "queries_per_arm": 500,
         "max_read_segments": 4,
         "stripe_bytes": 1048576,
-        "hedge_after_ms": {"control": "none", "candidate": "75"},
         "repetitions": 5,
         "arm_orders": [
             ["control", "candidate"],
@@ -108,6 +112,7 @@ def validate_manifest(manifest: dict[str, object]) -> str:
     profiles = {
         LEGACY_CAMPAIGN_ID: {
             "campaign_id": LEGACY_CAMPAIGN_ID,
+            "hedge_after_ms": {"control": "none", "candidate": "75"},
             "base_run_id": "20260808T091300Z-v67-40911df",
             "base_index_uri": "s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260808T091300Z-v67-40911df/index/cells/c2000/r01/l1/w8",
             "base_samples_uri": "s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260808T091300Z-v67-40911df/results/cells/c2000/r01/l1/w8/samples.csv",
@@ -121,6 +126,7 @@ def validate_manifest(manifest: dict[str, object]) -> str:
         },
         EXACT_RERANK_CAMPAIGN_ID: {
             "campaign_id": EXACT_RERANK_CAMPAIGN_ID,
+            "hedge_after_ms": {"control": "none", "candidate": "75"},
             "base_run_id": "20260809T034709Z-v35-8e09070",
             "base_index_uri": "s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260809T034709Z-v35-8e09070/index/cells/c2000/r01/l1/w8",
             "base_samples_uri": "s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260809T034709Z-v35-8e09070/results/cells/c2000/r01/l1/w8/samples.csv",
@@ -131,6 +137,20 @@ def validate_manifest(manifest: dict[str, object]) -> str:
             "root_complete_marker": "GLOBAL_EXACT_RERANK_HEDGE_QUALIFICATION_COMPLETE",
             "root_failure_marker": "GLOBAL_EXACT_RERANK_HEDGE_QUALIFICATION_FAILED",
             "comparison_contract": "Five paired repetitions replay the same 500 deterministic writer-zero inserted-vector queries through public k=10 SrhtPqScan against one immutable terminal v35 S3 index. Every arm starts a fresh process with disk cache disabled. Control disables slow-read hedging; candidate permits exactly one duplicate immutable range GET after 75 ms in unbounded query-stage stripe and exact-rerank reads. Arm order alternates. Every terminal arm must retain inserted-ID recall@10 1.0, issue zero PUT/DELETE requests, record zero disk-cache bytes, preserve raw/resource/storage telemetry, and reconcile logical and physical bytes. Paired arms must preserve query IDs, ordered top-10 hit IDs, and per-query logical bytes; query-phase storage traces must reconcile backing GETs and bytes. Promotion requires candidate pooled and worst-repeat p95 below 200 ms, strictly better paired p95 in at least four of five repetitions, at least 5 ms pooled-p95 improvement, at most 5% pooled-p50 regression, and at most 20% GET and backing-byte amplification. Incomplete measurement CSV files are never eligible for inspection.",
+        },
+        EXACT_RERANK_35MS_CAMPAIGN_ID: {
+            "campaign_id": EXACT_RERANK_35MS_CAMPAIGN_ID,
+            "hedge_after_ms": {"control": "none", "candidate": "35"},
+            "base_run_id": "20260809T034709Z-v35-8e09070",
+            "base_index_uri": "s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260809T034709Z-v35-8e09070/index/cells/c2000/r01/l1/w8",
+            "base_samples_uri": "s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260809T034709Z-v35-8e09070/results/cells/c2000/r01/l1/w8/samples.csv",
+            "base_source_sha256": "e3e71fe81283277148f6bc6a47cd9072890ea0652136d2680dde1ebc879fa594",
+            "base_samples_sha256": "43828b0cba9db2fa915e131377b286e95d8079033535cc5fca3907160f8446e7",
+            "required_better_paired_repetitions": 4,
+            "minimum_pooled_p95_improvement_ms": 5.0,
+            "root_complete_marker": "GLOBAL_EXACT_RERANK_HEDGE_35MS_QUALIFICATION_COMPLETE",
+            "root_failure_marker": "GLOBAL_EXACT_RERANK_HEDGE_35MS_QUALIFICATION_FAILED",
+            "comparison_contract": "Five paired repetitions replay the same 500 deterministic writer-zero inserted-vector queries through public k=10 SrhtPqScan against one immutable terminal v35 S3 index. Every arm starts a fresh process with disk cache disabled. Control disables slow-read hedging; candidate permits exactly one duplicate immutable range GET after 35 ms in unbounded query-stage stripe and exact-rerank reads. Arm order alternates. Every terminal arm must retain inserted-ID recall@10 1.0, issue zero PUT/DELETE requests, record zero disk-cache bytes, preserve raw/resource/storage telemetry, and reconcile logical and physical bytes. Paired arms must preserve query IDs, ordered top-10 hit IDs, and per-query logical bytes; query-phase storage traces must reconcile backing GETs and bytes. Promotion requires candidate pooled and worst-repeat p95 below 200 ms, strictly better paired p95 in at least four of five repetitions, at least 5 ms pooled-p95 improvement, at most 5% pooled-p50 regression, and at most 20% GET and backing-byte amplification. Incomplete measurement CSV files are never eligible for inspection.",
         },
     }
     require(campaign_id in profiles, "manifest campaign_id changed")
@@ -322,7 +342,7 @@ def validate(
                 query_ids.append(record_id)
                 hit_ids.append(row.get("hit_id", ""))
                 ordered_hits = row.get("hit_ids", "")
-                if campaign_id == EXACT_RERANK_CAMPAIGN_ID:
+                if campaign_id in EXACT_RERANK_CAMPAIGN_IDS:
                     require(
                         len(ordered_hits.split("|")) == 10,
                         f"ordered top-10 hit IDs missing in {arm}",
@@ -398,7 +418,7 @@ def validate(
                     == aggregate[aggregate_key],
                     f"{summary_key} does not reconcile in {arm}",
                 )
-            if campaign_id == EXACT_RERANK_CAMPAIGN_ID:
+            if campaign_id in EXACT_RERANK_CAMPAIGN_IDS:
                 required_trace_fields = {
                     "operation",
                     "object_role",
@@ -457,7 +477,7 @@ def validate(
             totals[arm_name]["backing_bytes"] += aggregate["backing_bytes"]
             totals[arm_name]["hits"] += query_count
 
-    if campaign_id == EXACT_RERANK_CAMPAIGN_ID:
+    if campaign_id in EXACT_RERANK_CAMPAIGN_IDS:
         for repetition in range(1, int(manifest["repetitions"]) + 1):
             require(
                 repetition_hit_ids[(repetition, "candidate")]
@@ -524,12 +544,12 @@ def validate(
     )
     paired_criterion = (
         paired_better >= int(manifest["required_better_paired_repetitions"])
-        if campaign_id == EXACT_RERANK_CAMPAIGN_ID
+        if campaign_id in EXACT_RERANK_CAMPAIGN_IDS
         else paired_nonworse >= int(manifest["required_nonworse_paired_repetitions"])
     )
     improvement_criterion = (
         p95_improvement_ms >= float(manifest["minimum_pooled_p95_improvement_ms"])
-        if campaign_id == EXACT_RERANK_CAMPAIGN_ID
+        if campaign_id in EXACT_RERANK_CAMPAIGN_IDS
         else p95_improvement
         >= float(manifest["minimum_pooled_p95_improvement_fraction"])
     )
@@ -540,7 +560,7 @@ def validate(
         < float(manifest["max_worst_repetition_p95_ms"]),
         (
             "paired_better_repetitions"
-            if campaign_id == EXACT_RERANK_CAMPAIGN_ID
+            if campaign_id in EXACT_RERANK_CAMPAIGN_IDS
             else "paired_nonworse_repetitions"
         ): paired_criterion,
         "minimum_pooled_p95_improvement": improvement_criterion,
