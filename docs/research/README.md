@@ -116,6 +116,10 @@ all 42 cells and requires explicit flags before paid AWS execution. See
 - [WAL layout qualification v5 decision](wal-layout-qualification-v5-decision.json):
   exact source, protocol, schedule, environment, result, and independent
   reproduction hashes for the rejected compact-Vortex WAL promotion.
+- [Physical GET admission Cohere 1M decision](physical-get-admission-cohere1m-aws-v1-decision.json):
+  five paired AWS repetitions showing that process-wide admission protects
+  overload but V9's roughly 104 backing GETs/query still fails the 8- and
+  32-client latency gate, requiring the V10 bounded Arrow leaf layout.
 - [Parquet versus Vortex tables](table-format-ab.md): corrected
   materialized-Arrow real-segment replay, storage/resource evidence, and the
   end-to-end default-selection gate. Its checked aggregate evidence is

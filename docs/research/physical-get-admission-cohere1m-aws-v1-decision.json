@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "campaign_id": "cohere1m-ac4a68d-v1",
+  "status": "valid-rejected",
+  "accepted": false,
+  "validated_at_utc": "2026-08-09",
+  "source_commit": "ac4a68da5a19ead15f896d7225244cea457d73a4",
+  "source_archive_sha256": "78e62074a7868302cb8bd1fe6ae74814419be784c594fe2baea8bf71cd4b99c2",
+  "dataset": "cohere-medium-1M",
+  "dataset_descriptor_sha256": "54c733e39adfcaa9ee10f3ed8bd8e66ada9f8f9a1a73e9753f5c5c2044b79254",
+  "dimensions": 768,
+  "corpus_vectors": 1000000,
+  "query_samples": 30000,
+  "logical_cells": 30,
+  "repetitions": 5,
+  "workers": [1, 8, 32],
+  "s3_artifact_prefix": "s3://borsuk-bench-453182569524-euc1/research/physical-get-admission/results/cohere1m-ac4a68d-v1",
+  "build": {
+    "vector_element_type": "float32",
+    "total_active_index_bytes": 6914919321,
+    "bytes_per_vector": 6914.919321,
+    "ingest_ms": 531750.995,
+    "compaction_ms": 132662.513
+  },
+  "quality": {
+    "mean_recall_at_10": 0.9547,
+    "query_p05_recall_at_10": 0.8,
+    "paired_arm_recall_identity": true,
+    "paired_query_identity": true
+  },
+  "arms": [
+    {
+      "name": "production-cap-128",
+      "workers": 1,
+      "median_p50_ms": 87.448,
+      "median_p95_ms": 154.036,
+      "median_qps": 10.781,
+      "worst_repetition_p95_ms": 166.993,
+      "mean_backing_reads_per_query": 103.731,
+      "mean_backing_bytes_per_query": 2688014.356,
+      "mean_disk_cache_reads_per_query": 16.4162
+    },
+    {
+      "name": "production-cap-128",
+      "workers": 8,
+      "median_p50_ms": 209.743,
+      "median_p95_ms": 486.496,
+      "median_qps": 32.325,
+      "worst_repetition_p95_ms": 501.054,
+      "mean_backing_reads_per_query": 103.6674,
+      "mean_backing_bytes_per_query": 2625286.0784,
+      "mean_disk_cache_reads_per_query": 16.4698
+    },
+    {
+      "name": "production-cap-128",
+      "workers": 32,
+      "median_p50_ms": 510.516,
+      "median_p95_ms": 2098.017,
+      "median_qps": 39.686,
+      "worst_repetition_p95_ms": 2228.056,
+      "mean_backing_reads_per_query": 103.6854,
+      "mean_backing_bytes_per_query": 2639341.448,
+      "mean_disk_cache_reads_per_query": 16.4852
+    },
+    {
+      "name": "high-cap-control-1024",
+      "workers": 1,
+      "median_p50_ms": 87.679,
+      "median_p95_ms": 154.73,
+      "median_qps": 10.81,
+      "worst_repetition_p95_ms": 159.589,
+      "mean_backing_reads_per_query": 103.731,
+      "mean_backing_bytes_per_query": 2688014.356,
+      "mean_disk_cache_reads_per_query": 16.4182
+    },
+    {
+      "name": "high-cap-control-1024",
+      "workers": 8,
+      "median_p50_ms": 192.202,
+      "median_p95_ms": 449.729,
+      "median_qps": 35.488,
+      "worst_repetition_p95_ms": 453.839,
+      "mean_backing_reads_per_query": 103.6678,
+      "mean_backing_bytes_per_query": 2626558.8352,
+      "mean_disk_cache_reads_per_query": 16.49
+    },
+    {
+      "name": "high-cap-control-1024",
+      "workers": 32,
+      "median_p50_ms": 430.165,
+      "median_p95_ms": 1883.774,
+      "median_qps": 44.646,
+      "worst_repetition_p95_ms": 1974.295,
+      "mean_backing_reads_per_query": 103.6894,
+      "mean_backing_bytes_per_query": 2642192.2488,
+      "mean_disk_cache_reads_per_query": 16.4908
+    }
+  ],
+  "paired_production_minus_control": [
+    {
+      "workers": 1,
+      "p95_ms": [14.382, -3.769, 5.431, -5.553, -4.267],
+      "qps": [-0.423, 0.123, -0.029, 0.03, 0.069]
+    },
+    {
+      "workers": 8,
+      "p95_ms": [36.767, 35.761, 41.37, 47.215, 22.664],
+      "qps": [-3.802, -2.864, -2.588, -3.548, -2.957]
+    },
+    {
+      "workers": 32,
+      "p95_ms": [217.65, 365.813, 209.785, 138.021, 199.476],
+      "qps": [-4.827, -4.481, -4.309, -5.537, -5.314]
+    }
+  ],
+  "resource_envelope": {
+    "configured_ram_budget_bytes": 536870912,
+    "production_cap_peak_rss_bytes": 1203470336,
+    "high_cap_control_peak_rss_bytes": 1226489856
+  },
+  "accounting": {
+    "network_gets_equal_backing_reads_for_every_sample": true,
+    "decoded_cache_hits": 0,
+    "logical_bytes_were_not_equated_with_overlapping_physical_cache_and_backing_bytes": true
+  },
+  "latency_gate": {
+    "p95_must_be_below_ms": 200.0,
+    "failed_workers": [8, 32],
+    "failed_arm_repetition_cells": 20
+  },
+  "decision": "Reject V9 for production promotion. The process-wide cap is valid overload protection, but approximately 104 physical GETs per query dominate concurrency tails. Raising the cap is not a fix. Proceed with the V10 bounded Arrow leaf router and rerun fresh quality and latency qualification before AWS.",
+  "evidence_boundary": "This decision validates only V9 Cohere 1M read concurrency. It does not establish write performance, 100M scale, other vector types, sparse/text/late-interaction parity, or competitor parity."
+}
