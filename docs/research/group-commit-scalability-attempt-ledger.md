@@ -1955,3 +1955,16 @@ and manifest SHA-256
 `e2ca40ae70cc73456867216ff4677111c91e2f59d17bb296e50854e99e1f2892`.
 This is a launch receipt only; until a root terminal marker exists, measurement
 CSVs from this attempt remain ineligible for inspection.
+
+After the retained 15-minute interval, the root failure marker was terminal:
+`r01/control` completed, `r01/candidate` had `CELL_FAILED`, later arms had not
+started, and the pane exited 1. EC2 remained healthy with 62,563,748 KiB memory
+available and 114 GiB free disk. The fail-closed validator rejected the
+incomplete matrix before opening measurement CSVs. Candidate stderr contained
+the complete cause: `read hedge delay differs from the preregistration`; no
+candidate measurement CSV existed. The manifest and runner correctly supplied
+35 ms, but the benchmark executable admitted only the earlier 75 ms production
+profile. This is a harness admission failure with no eligible performance
+result. The TDD repair admits exactly the frozen 35 and 75 ms production
+profiles (plus the separate 5 ms structural smoke), while continuing to reject
+arbitrary delay text.

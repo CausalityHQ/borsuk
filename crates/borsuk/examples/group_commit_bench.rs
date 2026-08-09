@@ -540,7 +540,7 @@ fn validate_read_hedge_qualification_shape(
             && shape.read.dimensions == 768
             && shape.read.query_count == 500
             && (1..=5).contains(&shape.read.repetition)
-            && matches!(shape.hedge_after_ms, None | Some(75))
+            && matches!(shape.hedge_after_ms, None | Some(35) | Some(75))
     };
     if !common || !expected {
         return Err("read hedge qualification differs from the preregistered shape".into());
@@ -564,6 +564,7 @@ fn parse_read_hedge_after_ms(value: &str, structural_smoke: bool) -> BenchResult
     match (value, structural_smoke) {
         ("none", _) => Ok(None),
         ("5", true) => Ok(Some(5)),
+        ("35", false) => Ok(Some(35)),
         ("75", false) => Ok(Some(75)),
         _ => Err("read hedge delay differs from the preregistration".into()),
     }
@@ -574,13 +575,17 @@ fn read_hedge_order_position(
     hedge_after_ms: Option<u64>,
     structural_smoke: bool,
 ) -> BenchResult<usize> {
-    let candidate_ms = if structural_smoke { 5 } else { 75 };
     let repetition_is_valid = if structural_smoke {
         repetition == 1
     } else {
         (1..=5).contains(&repetition)
     };
-    if !repetition_is_valid || !hedge_after_ms.is_none_or(|value| value == candidate_ms) {
+    let registered_delay = if structural_smoke {
+        matches!(hedge_after_ms, None | Some(5))
+    } else {
+        matches!(hedge_after_ms, None | Some(35) | Some(75))
+    };
+    if !repetition_is_valid || !registered_delay {
         return Err("read hedge arm order differs from the preregistration".into());
     }
     let control_first = structural_smoke || repetition % 2 == 1;
@@ -1960,6 +1965,14 @@ mod tests {
             false,
         )
         .unwrap();
+        validate_read_hedge_qualification_shape(
+            ReadHedgeQualificationShape {
+                hedge_after_ms: Some(35),
+                ..shape
+            },
+            false,
+        )
+        .unwrap();
 
         for invalid in [
             ReadHedgeQualificationShape {
@@ -2029,6 +2042,7 @@ mod tests {
         validate_read_hedge_qualification_inputs(shape, false, false).unwrap();
         assert!(validate_read_hedge_qualification_inputs(shape, false, true).is_err());
         assert_eq!(parse_read_hedge_after_ms("none", false).unwrap(), None);
+        assert_eq!(parse_read_hedge_after_ms("35", false).unwrap(), Some(35));
         assert_eq!(parse_read_hedge_after_ms("75", false).unwrap(), Some(75));
         assert_eq!(parse_read_hedge_after_ms("5", true).unwrap(), Some(5));
         for invalid in ["", "0", "5", "74", "076", "75.0", "none "] {
@@ -2039,6 +2053,8 @@ mod tests {
     #[test]
     fn read_hedge_qualification_alternates_control_and_candidate_order() {
         assert_eq!(read_hedge_order_position(1, None, false).unwrap(), 0);
+        assert_eq!(read_hedge_order_position(1, Some(35), false).unwrap(), 1);
+        assert_eq!(read_hedge_order_position(2, Some(35), false).unwrap(), 0);
         assert_eq!(read_hedge_order_position(1, Some(75), false).unwrap(), 1);
         assert_eq!(read_hedge_order_position(2, Some(75), false).unwrap(), 0);
         assert_eq!(read_hedge_order_position(2, None, false).unwrap(), 1);
