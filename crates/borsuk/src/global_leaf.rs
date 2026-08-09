@@ -129,6 +129,55 @@ pub(crate) struct GlobalLeafDirectoryRoot {
     pub(crate) bundles: Vec<GlobalLeafBundleRef>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct GlobalLeafDirectory {
+    root: GlobalLeafDirectoryRoot,
+    code_width: usize,
+}
+
+impl GlobalLeafDirectory {
+    pub(crate) fn new(root: GlobalLeafDirectoryRoot, code_width: usize) -> Result<Self> {
+        if code_width == 0 {
+            return Err(invalid_leaf_directory(
+                "centroid code width must be positive",
+            ));
+        }
+        validate_global_leaf_directory_root(&root.cells, &root.shards, &root.bundles)?;
+        Ok(Self { root, code_width })
+    }
+
+    pub(crate) fn root(&self) -> &GlobalLeafDirectoryRoot {
+        &self.root
+    }
+
+    pub(crate) fn pages_for_cells(
+        &self,
+        selected_cells: &[u16],
+        load: impl FnMut(&GlobalLeafDirectoryShardRef) -> Result<Vec<u8>>,
+    ) -> Result<Vec<GlobalLeafPageRef>> {
+        load_global_leaf_pages_for_cells(&self.root, selected_cells, self.code_width, load)
+    }
+
+    pub(crate) fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.root.cells.capacity() * std::mem::size_of::<GlobalLeafCellRef>()
+            + self.root.shards.capacity() * std::mem::size_of::<GlobalLeafDirectoryShardRef>()
+            + self.root.bundles.capacity() * std::mem::size_of::<GlobalLeafBundleRef>()
+            + self
+                .root
+                .shards
+                .iter()
+                .map(|shard| shard.path.capacity())
+                .sum::<usize>()
+            + self
+                .root
+                .bundles
+                .iter()
+                .map(|bundle| bundle.path.capacity())
+                .sum::<usize>()
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct EncodedGlobalLeafDirectoryRoot {
     pub(crate) cells: Vec<u8>,
@@ -654,6 +703,101 @@ pub(crate) fn decode_global_leaf_page(
     }
     validate_global_leaf_row_integrity(&decoded, dimensions, element_type)?;
     Ok(decoded)
+}
+
+pub(crate) fn decode_global_leaf_page_ref(
+    page: &GlobalLeafPageRef,
+    stored: &[u8],
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<RecordBatch> {
+    decode_global_leaf_page(
+        &EncodedGlobalLeafPage {
+            cell_index: page.cell_index,
+            leaf_ordinal: page.leaf_ordinal,
+            batch_offset: page.batch_offset,
+            metadata_bytes: page.metadata_bytes,
+            body_bytes: page.body_bytes,
+            batch_bytes: page.batch_bytes,
+            rows: page.rows as usize,
+            checksum: page.checksum,
+            centroid_code: page.centroid_code.to_vec(),
+        },
+        stored,
+        dimensions,
+        element_type,
+    )
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DecodedGlobalLeafRow {
+    pub(crate) id: RecordId,
+    pub(crate) stamp: MutationStamp,
+    pub(crate) vector: Vec<f32>,
+}
+
+pub(crate) fn decode_global_leaf_rows(
+    batch: &RecordBatch,
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<Vec<DecodedGlobalLeafRow>> {
+    let ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf record_id is not Binary".to_string())
+        })?;
+    let hlcs = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf mutation_hlc is not UInt64".to_string())
+        })?;
+    let writers = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "global leaf mutation_writer is not FixedSizeBinary".to_string(),
+            )
+        })?;
+    let digests = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "global leaf mutation_digest is not FixedSizeBinary".to_string(),
+            )
+        })?;
+    let exact_rows = global_leaf_exact_rows(batch.column(5).as_ref(), dimensions, element_type)?;
+    exact_rows
+        .into_iter()
+        .enumerate()
+        .map(|(row, exact)| {
+            let writer: [u8; 16] = writers.value(row).try_into().map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "global leaf mutation writer width is invalid".to_string(),
+                )
+            })?;
+            let digest: [u8; 32] = digests.value(row).try_into().map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "global leaf mutation digest width is invalid".to_string(),
+                )
+            })?;
+            Ok(DecodedGlobalLeafRow {
+                id: RecordId::from_bytes(ids.value(row).to_vec()),
+                stamp: MutationStamp::new(
+                    crate::mutation::MutationVersion::from_parts(hlcs.value(row), writer),
+                    digest,
+                ),
+                vector: element_type.decode_fixed_width(&exact, dimensions)?,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn encode_global_leaf_directory_shard(
@@ -1856,7 +2000,7 @@ mod tests {
         GlobalLeafDirectoryRoot, GlobalLeafDirectoryShardBuilder, GlobalLeafDirectoryShardRef,
         GlobalLeafPageInput, GlobalLeafPageRef, GlobalLeafRowInput,
         decode_global_leaf_directory_root, decode_global_leaf_directory_shard,
-        decode_global_leaf_page, encode_global_leaf_bundle,
+        decode_global_leaf_page, decode_global_leaf_rows, encode_global_leaf_bundle,
         encode_global_leaf_bundle_with_max_bytes, encode_global_leaf_directory_root,
         encode_global_leaf_directory_shard, fit_global_leaf_page_ranges,
         load_global_leaf_pages_for_cells,
@@ -2146,6 +2290,45 @@ mod tests {
             .downcast_ref::<arrow_array::Float32Array>()
             .unwrap();
         assert_eq!(values.values(), &[3.0, 4.0]);
+    }
+
+    #[test]
+    fn decoded_leaf_rows_expose_authenticated_ids_stamps_and_canonical_vectors() {
+        let stamp = MutationStamp::new(MutationVersion::from_parts(17, [3; 16]), [4; 32]);
+        let encoded = encode_global_leaf_bundle(
+            &[GlobalLeafPageInput {
+                cell_index: 2,
+                leaf_ordinal: 0,
+                centroid_code: vec![1],
+                rows: vec![GlobalLeafRowInput {
+                    id: RecordId::from("typed-row"),
+                    stamp,
+                    exact: [1.5_f32, -2.25_f32]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                }],
+            }],
+            2,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        let reference = &encoded.pages[0];
+        let start = reference.batch_offset as usize;
+        let end = start + reference.batch_bytes as usize;
+        let batch = decode_global_leaf_page(
+            reference,
+            &encoded.bytes[start..end],
+            2,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+
+        let rows = decode_global_leaf_rows(&batch, 2, VectorElementType::Float32).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, RecordId::from("typed-row"));
+        assert_eq!(rows[0].stamp, stamp);
+        assert_eq!(rows[0].vector, vec![1.5, -2.25]);
     }
 
     #[test]

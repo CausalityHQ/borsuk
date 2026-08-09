@@ -43,10 +43,10 @@ use crate::{
         tombstone_ids_to_parquet, wal_records_from_table, wal_records_to_table,
     },
     global_pq_sidecar::{
-        DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCellGraph, GlobalCoarseQuantizer, GlobalPqCandidate,
-        GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalPqChunkRef, GlobalPqDescriptor,
-        GlobalPqRow, GlobalScanQuantizer, HierarchicalCoarseQuantizer, LocationEncoding,
-        ResidentGlobalPq,
+        DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCellGraph, GlobalCoarseQuantizer, GlobalLeafLayer,
+        GlobalPqCandidate, GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalPqChunkRef,
+        GlobalPqDescriptor, GlobalPqRow, GlobalScanQuantizer, HierarchicalCoarseQuantizer,
+        LocationEncoding, ResidentGlobalPq, RoutedGlobalLeafPage,
     },
     late_interaction::{LateInteractionSearchOptions, LateInteractionSearchReport},
     lexical_build::{
@@ -345,6 +345,28 @@ struct ResidentGlobalPqLayerScan {
 struct LayeredGlobalPqCandidate {
     layer: GlobalPqSearchLayer,
     candidate: GlobalPqCandidate,
+}
+
+#[derive(Debug)]
+struct GlobalLeafDirectoryLoad {
+    pages: Vec<crate::global_leaf::GlobalLeafPageRef>,
+    reads: usize,
+    bytes: u64,
+}
+
+#[derive(Debug)]
+struct GlobalLeafReadGroup {
+    layer: GlobalLeafLayer,
+    path: String,
+    start: u64,
+    end: u64,
+    pages: Vec<crate::global_leaf::GlobalLeafPageRef>,
+}
+
+#[derive(Debug)]
+struct RoutedDecodedGlobalLeafRow {
+    layer: GlobalLeafLayer,
+    row: crate::global_leaf::DecodedGlobalLeafRow,
 }
 
 enum MaterializedDeltaExecution {
@@ -7893,6 +7915,13 @@ impl BorsukIndex {
             global_scan_chunks_searched: 0,
             global_identity_rows_resolved: 0,
             global_exact_vectors_fetched: 0,
+            global_leaf_directory_reads: 0,
+            global_leaf_directory_bytes: 0,
+            global_leaf_pages_read: 0,
+            global_leaf_page_bytes: 0,
+            global_leaf_exact_scores: 0,
+            global_leaf_continuations: 0,
+            global_leaf_waves: 0,
             global_exact_bound_shadow: GlobalExactBoundShadow::default(),
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
@@ -12607,7 +12636,27 @@ impl BorsukIndex {
                     "resident global PQ reference does not match its descriptor".to_string(),
                 ));
             }
-            let index = Arc::new(ResidentGlobalPq::load(descriptor)?);
+            let read_table = |table: &crate::global_leaf::GlobalLeafTableRef| {
+                let checksum = blake3::Hash::from_bytes(table.checksum)
+                    .to_hex()
+                    .to_string();
+                self.storage
+                    .read_known_size_with_cache_status_and_checksum(
+                        &table.path,
+                        table.encoded_bytes,
+                        &checksum,
+                    )
+                    .map(|read| read.bytes)
+            };
+            let cell_bytes = read_table(descriptor.cell_root())?;
+            let shard_bytes = read_table(descriptor.shard_table())?;
+            let bundle_bytes = read_table(descriptor.bundle_table())?;
+            let root = crate::global_leaf::decode_global_leaf_directory_root(
+                &cell_bytes,
+                &shard_bytes,
+                &bundle_bytes,
+            )?;
+            let index = Arc::new(ResidentGlobalPq::load(descriptor, root)?);
             if index.len() != global_ref.vectors
                 || index.code_bytes_per_vector() != global_ref.subspaces
             {
@@ -13544,6 +13593,13 @@ impl BorsukIndex {
                 global_scan_chunks_searched: scan_chunks_used,
                 global_identity_rows_resolved,
                 global_exact_vectors_fetched,
+                global_leaf_directory_reads: 0,
+                global_leaf_directory_bytes: 0,
+                global_leaf_pages_read: 0,
+                global_leaf_page_bytes: 0,
+                global_leaf_exact_scores: 0,
+                global_leaf_continuations: 0,
+                global_leaf_waves: 0,
                 global_exact_bound_shadow,
                 global_base_approximate_us: layers[0].approximate_us,
                 global_base_exact_rerank_us: exact_us,
@@ -13573,7 +13629,559 @@ impl BorsukIndex {
         })
     }
 
+    fn load_selected_global_leaf_directory(
+        &self,
+        index: &ResidentGlobalPq,
+        selected_cells: &[u16],
+    ) -> Result<GlobalLeafDirectoryLoad> {
+        let mut reads = 0_usize;
+        let mut bytes = 0_u64;
+        let pages = index
+            .directory()
+            .pages_for_cells(selected_cells, |reference| {
+                let checksum = blake3::Hash::from_bytes(reference.checksum)
+                    .to_hex()
+                    .to_string();
+                let read = self
+                    .storage
+                    .read_known_size_with_cache_status_and_checksum(
+                        &reference.path,
+                        reference.encoded_bytes,
+                        &checksum,
+                    )?;
+                reads = reads.saturating_add(1);
+                bytes = bytes.saturating_add(read.bytes.len() as u64);
+                Ok(read.bytes)
+            })?;
+        Ok(GlobalLeafDirectoryLoad {
+            pages,
+            reads,
+            bytes,
+        })
+    }
+
+    fn global_leaf_read_groups(
+        &self,
+        pages: &[RoutedGlobalLeafPage],
+        base: &ResidentGlobalPq,
+        delta: Option<&ResidentGlobalPq>,
+    ) -> Result<Vec<GlobalLeafReadGroup>> {
+        let mut planned = Vec::with_capacity(pages.len());
+        for routed in pages {
+            let index = match routed.layer {
+                GlobalLeafLayer::Base => base,
+                GlobalLeafLayer::Delta => delta.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf route selected an unavailable delta layer".to_string(),
+                    )
+                })?,
+            };
+            let bundle = index
+                .directory()
+                .root()
+                .bundles
+                .get(routed.page.bundle_index as usize)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf page references a missing bundle".to_string(),
+                    )
+                })?;
+            let end = routed
+                .page
+                .batch_offset
+                .checked_add(u64::from(routed.page.batch_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("global leaf page range overflows".to_string())
+                })?;
+            if end > bundle.encoded_bytes
+                || u64::from(routed.page.batch_bytes)
+                    > crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf page range exceeds its authenticated bundle".to_string(),
+                ));
+            }
+            planned.push((
+                routed.layer,
+                bundle.path.clone(),
+                routed.page.batch_offset,
+                end,
+                routed.page.clone(),
+            ));
+        }
+        planned.sort_by(|left, right| {
+            let layer_order = |layer| match layer {
+                GlobalLeafLayer::Delta => 0_u8,
+                GlobalLeafLayer::Base => 1_u8,
+            };
+            layer_order(left.0)
+                .cmp(&layer_order(right.0))
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        let mut groups: Vec<GlobalLeafReadGroup> = Vec::new();
+        for (layer, path, start, end, page) in planned {
+            if let Some(group) = groups.last_mut()
+                && group.layer == layer
+                && group.path == path
+                && group.end == start
+            {
+                group.end = end;
+                group.pages.push(page);
+                continue;
+            }
+            groups.push(GlobalLeafReadGroup {
+                layer,
+                path,
+                start,
+                end,
+                pages: vec![page],
+            });
+        }
+        Ok(groups)
+    }
+
+    fn fetch_global_leaf_wave(
+        &self,
+        pages: &[RoutedGlobalLeafPage],
+        base: &ResidentGlobalPq,
+        delta: Option<&ResidentGlobalPq>,
+    ) -> Result<(Vec<RoutedDecodedGlobalLeafRow>, u64)> {
+        if pages.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let groups = self.global_leaf_read_groups(pages, base, delta)?;
+        let dimensions = self.manifest.config.dimensions;
+        let reads = bounded_io_map_with_gate(
+            &groups,
+            groups.len(),
+            Some(&self.global_pq_rerank_admission),
+            |group| {
+                let stored = self
+                    .storage
+                    .read_range(&group.path, group.start..group.end)?;
+                let index = match group.layer {
+                    GlobalLeafLayer::Base => base,
+                    GlobalLeafLayer::Delta => delta.ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global leaf fetch lost its delta layer".to_string(),
+                        )
+                    })?,
+                };
+                let mut decoded = Vec::new();
+                for page in &group.pages {
+                    let local_start =
+                        usize::try_from(page.batch_offset - group.start).map_err(|_| {
+                            BorsukError::InvalidStorage(
+                                "global leaf local page offset exceeds usize".to_string(),
+                            )
+                        })?;
+                    let local_end = local_start
+                        .checked_add(page.batch_bytes as usize)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global leaf local page range overflows".to_string(),
+                            )
+                        })?;
+                    let block = stored.get(local_start..local_end).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global leaf coalesced range is truncated".to_string(),
+                        )
+                    })?;
+                    let batch = crate::global_leaf::decode_global_leaf_page_ref(
+                        page,
+                        block,
+                        dimensions,
+                        index.vector_element_type(),
+                    )?;
+                    decoded.extend(
+                        crate::global_leaf::decode_global_leaf_rows(
+                            &batch,
+                            dimensions,
+                            index.vector_element_type(),
+                        )?
+                        .into_iter()
+                        .map(|row| RoutedDecodedGlobalLeafRow {
+                            layer: group.layer,
+                            row,
+                        }),
+                    );
+                }
+                Ok::<_, BorsukError>((decoded, stored.len() as u64))
+            },
+        );
+        let mut rows = Vec::new();
+        let mut bytes = 0_u64;
+        for read in reads {
+            let (mut decoded, read_bytes) = read?;
+            rows.append(&mut decoded);
+            bytes = bytes.saturating_add(read_bytes);
+        }
+        Ok((rows, bytes))
+    }
+
+    fn resolve_global_leaf_rows(
+        &self,
+        rows: &[RoutedDecodedGlobalLeafRow],
+    ) -> Result<Vec<RoutedDecodedGlobalLeafRow>> {
+        let mut winners = BTreeMap::<RecordId, &RoutedDecodedGlobalLeafRow>::new();
+        for candidate in rows {
+            match winners.entry(candidate.row.id.clone()) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(candidate);
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    let current = *entry.get();
+                    let greatest = current.row.stamp.greatest(candidate.row.stamp)?;
+                    let newer = greatest == candidate.row.stamp
+                        && candidate.row.stamp.version() > current.row.stamp.version();
+                    let delta_tie = candidate.row.stamp == current.row.stamp
+                        && candidate.layer == GlobalLeafLayer::Delta
+                        && current.layer == GlobalLeafLayer::Base;
+                    if newer || delta_tie {
+                        entry.insert(candidate);
+                    }
+                }
+            }
+        }
+        let mutation_states = self.mutation_states(winners.keys().map(RecordId::as_bytes))?;
+        winners
+            .into_iter()
+            .filter_map(|(id, candidate)| {
+                match Self::state_suppresses_stamp(
+                    mutation_states.get(id.as_bytes()).copied().flatten(),
+                    candidate.row.stamp,
+                ) {
+                    Ok(false) => Some(Ok(RoutedDecodedGlobalLeafRow {
+                        layer: candidate.layer,
+                        row: candidate.row.clone(),
+                    })),
+                    Ok(true) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            })
+            .collect()
+    }
+
     fn search_resident_global_pq(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        include_vectors: bool,
+        started: Instant,
+        requests_before: &RequestCounts,
+    ) -> Result<Option<SearchExecution>> {
+        let expected_leaf_mode = self.manifest.build_config.global_scan_codec.leaf_mode();
+        let eligible = matches!(options.mode, SearchMode::Approx { .. })
+            && options.mode.leaf_mode() == expected_leaf_mode
+            && options.global_exact_rerank
+            && !options.guaranteed_recall
+            && !options.disable_coarse_quantizer
+            && !matches!(
+                options.mode,
+                SearchMode::Approx {
+                    projected_reads: Some(true),
+                    ..
+                }
+            )
+            && options.filter.is_none()
+            && !options.include_metadata;
+        if !eligible {
+            return Ok(None);
+        }
+        let Some(global_ref) = self.manifest.global_pq_ref.clone() else {
+            return Ok(None);
+        };
+        let Some((_, exact_fringe)) = self.resolve_resident_global_pq_coverage(&global_ref)? else {
+            return Ok(None);
+        };
+        if !exact_fringe.is_empty() {
+            return Ok(None);
+        }
+        let routing_started = Instant::now();
+        let base = self.load_resident_global_pq_reference(&global_ref)?;
+        let delta_reference = global_ref.delta.as_deref();
+        let delta = delta_reference
+            .map(|reference| self.load_resident_global_pq_reference(reference))
+            .transpose()?;
+        let pq_query = if self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry()
+        {
+            crate::metric::unit_l2_normalized(query)
+        } else {
+            query.to_vec()
+        };
+        let base_cells =
+            base.nearest_cells(&pq_query, global_ref.probes.max(1).min(base.cell_count()))?;
+        let base_directory = self.load_selected_global_leaf_directory(&base, &base_cells)?;
+        let (delta_cells, delta_directory) =
+            if let (Some(reference), Some(index)) = (delta_reference, delta.as_deref()) {
+                let cells = index
+                    .nearest_cells(&pq_query, reference.probes.max(1).min(index.cell_count()))?;
+                let directory = self.load_selected_global_leaf_directory(index, &cells)?;
+                (cells, Some(directory))
+            } else {
+                (Vec::new(), None)
+            };
+        let page_budget = match options.mode {
+            SearchMode::Approx { max_segments, .. } => max_segments.unwrap_or(16).min(32),
+            SearchMode::Exact => unreachable!("V10 eligibility requires approximate mode"),
+        };
+        let mut routed = base.rank_fused_leaf_pages(
+            &pq_query,
+            &base_cells,
+            &base_directory.pages,
+            delta
+                .as_deref()
+                .zip(Some(delta_cells.as_slice()))
+                .zip(
+                    delta_directory
+                        .as_ref()
+                        .map(|directory| directory.pages.as_slice()),
+                )
+                .map(|((index, cells), pages)| (index, cells, pages)),
+            page_budget,
+        )?;
+        let directory_reads = base_directory.reads.saturating_add(
+            delta_directory
+                .as_ref()
+                .map_or(0, |directory| directory.reads),
+        );
+        let directory_bytes = base_directory.bytes.saturating_add(
+            delta_directory
+                .as_ref()
+                .map_or(0, |directory| directory.bytes),
+        );
+        let max_bytes = match options.mode {
+            SearchMode::Approx { max_bytes, .. } => max_bytes,
+            SearchMode::Exact => None,
+        };
+        let mut byte_budget_limited = false;
+        if let Some(limit) = max_bytes {
+            let mut planned = directory_bytes;
+            let available = routed.len();
+            let prefix_len = routed
+                .iter()
+                .take_while(|candidate| {
+                    let next = planned.saturating_add(u64::from(candidate.page.batch_bytes));
+                    if next > limit {
+                        return false;
+                    }
+                    planned = next;
+                    true
+                })
+                .count();
+            routed.truncate(prefix_len);
+            byte_budget_limited = prefix_len < available;
+        }
+        let global_approximate_us =
+            u64::try_from(routing_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let exact_started = Instant::now();
+        let has_base = routed
+            .iter()
+            .any(|candidate| candidate.layer == GlobalLeafLayer::Base);
+        let has_delta = routed
+            .iter()
+            .any(|candidate| candidate.layer == GlobalLeafLayer::Delta);
+        let mut initial_indices = BTreeSet::new();
+        if has_base && has_delta {
+            if let Some(index) = routed
+                .iter()
+                .position(|candidate| candidate.layer == GlobalLeafLayer::Base)
+            {
+                initial_indices.insert(index);
+            }
+            if let Some(index) = routed
+                .iter()
+                .position(|candidate| candidate.layer == GlobalLeafLayer::Delta)
+            {
+                initial_indices.insert(index);
+            }
+        }
+        let mut nominal_rows = initial_indices
+            .iter()
+            .map(|index| routed[*index].page.rows as usize)
+            .sum::<usize>();
+        for (index, candidate) in routed.iter().enumerate() {
+            if nominal_rows >= options.k && !initial_indices.is_empty() {
+                break;
+            }
+            if initial_indices.insert(index) {
+                nominal_rows = nominal_rows.saturating_add(candidate.page.rows as usize);
+            }
+        }
+        let mut remaining = routed
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !initial_indices.contains(index))
+            .map(|(_, candidate)| candidate.clone())
+            .collect::<VecDeque<_>>();
+        let initial = initial_indices
+            .into_iter()
+            .map(|index| routed[index].clone())
+            .collect::<Vec<_>>();
+        let mut fetched_pages = initial.len();
+        let mut logical_page_bytes = initial
+            .iter()
+            .map(|candidate| u64::from(candidate.page.batch_bytes))
+            .sum::<u64>();
+        let (mut decoded, initial_bytes) =
+            self.fetch_global_leaf_wave(&initial, &base, delta.as_deref())?;
+        if initial_bytes != logical_page_bytes {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf coalescing changed the logical encoded-byte budget".to_string(),
+            ));
+        }
+        let mut waves = usize::from(!initial.is_empty());
+        let mut continuations = 0_usize;
+        let mut live = self.resolve_global_leaf_rows(&decoded)?;
+        while live.len() < options.k && !remaining.is_empty() {
+            let missing = options.k - live.len();
+            let mut continuation = Vec::new();
+            let mut continuation_rows = 0_usize;
+            while continuation_rows < missing {
+                let Some(candidate) = remaining.pop_front() else {
+                    break;
+                };
+                continuation_rows = continuation_rows.saturating_add(candidate.page.rows as usize);
+                continuation.push(candidate);
+            }
+            let continuation_bytes = continuation
+                .iter()
+                .map(|candidate| u64::from(candidate.page.batch_bytes))
+                .sum::<u64>();
+            let (mut rows, fetched_bytes) =
+                self.fetch_global_leaf_wave(&continuation, &base, delta.as_deref())?;
+            if fetched_bytes != continuation_bytes {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf continuation changed its logical encoded-byte budget".to_string(),
+                ));
+            }
+            fetched_pages = fetched_pages.saturating_add(continuation.len());
+            logical_page_bytes = logical_page_bytes.saturating_add(continuation_bytes);
+            decoded.append(&mut rows);
+            continuations = continuations.saturating_add(1);
+            waves = waves.saturating_add(1);
+            live = self.resolve_global_leaf_rows(&decoded)?;
+        }
+        let records_considered = decoded.len();
+        let mut scored = live
+            .into_iter()
+            .map(|candidate| {
+                Ok((
+                    self.manifest
+                        .config
+                        .metric
+                        .distance_unchecked(query, &candidate.row.vector)?,
+                    candidate.row.id,
+                    candidate.row.vector,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        scored.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        let records_scored = scored.len();
+        scored.truncate(options.k);
+        let hits = scored
+            .iter()
+            .map(|(distance, id, _)| SearchHit {
+                id: id.clone(),
+                distance: *distance,
+                metadata: None,
+            })
+            .collect::<Vec<_>>();
+        let vectors = if include_vectors {
+            scored.into_iter().map(|(_, _, vector)| vector).collect()
+        } else {
+            Vec::new()
+        };
+        let termination_reason = if hits.len() < options.k && byte_budget_limited {
+            SearchTerminationReason::MaxBytes
+        } else if hits.len() < options.k {
+            SearchTerminationReason::MaxSegments
+        } else {
+            SearchTerminationReason::Complete
+        };
+        let segments_total = global_ref.segments.len()
+            + delta_reference.map_or(0, |reference| reference.segments.len());
+        Ok(Some(SearchExecution {
+            report: SearchReport {
+                hits,
+                leaf_mode: "bounded-arrow-leaf-v10".to_string(),
+                termination_reason,
+                recall_guarantee: RecallGuarantee::Degraded,
+                segments_total,
+                segments_searched: 0,
+                segments_skipped: segments_total,
+                routing_page_indexes_read: 0,
+                routing_pages_read: 0,
+                bytes_read: directory_bytes.saturating_add(logical_page_bytes),
+                prefetched_bytes_unused: 0,
+                graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
+                cache_repairs: 0,
+                records_considered,
+                records_scored,
+                graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
+                global_identity_rows_resolved: records_considered,
+                global_exact_vectors_fetched: records_considered,
+                global_leaf_directory_reads: directory_reads,
+                global_leaf_directory_bytes: directory_bytes,
+                global_leaf_pages_read: fetched_pages,
+                global_leaf_page_bytes: logical_page_bytes,
+                global_leaf_exact_scores: records_scored,
+                global_leaf_continuations: continuations,
+                global_leaf_waves: waves,
+                global_exact_bound_shadow: GlobalExactBoundShadow::default(),
+                global_base_approximate_us: global_approximate_us,
+                global_base_exact_rerank_us: u64::try_from(exact_started.elapsed().as_micros())
+                    .unwrap_or(u64::MAX),
+                global_delta_approximate_us: 0,
+                global_delta_exact_rerank_us: 0,
+                global_delta_wait_us: 0,
+                resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                collection_resident_bytes: 0,
+                retained_bytes: 0,
+                retained_capacity_bytes: 0,
+                retained_peak_bytes: 0,
+                transient_bytes: 0,
+                transient_capacity_bytes: 0,
+                transient_peak_bytes: 0,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                requests: self.storage.request_counts().delta(requests_before),
+                rows_evaluated: records_considered,
+                rows_passed_filter: records_considered,
+                segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
+            },
+            vectors,
+        }))
+    }
+
+    #[allow(
+        dead_code,
+        reason = "removed after the V10 production cutover in Task 4"
+    )]
+    fn search_resident_global_pq_v9(
         &self,
         query: &[f32],
         options: &SearchOptions,
@@ -14282,6 +14890,13 @@ impl BorsukIndex {
                 global_scan_chunks_searched: scan_chunks_used,
                 global_identity_rows_resolved,
                 global_exact_vectors_fetched,
+                global_leaf_directory_reads: 0,
+                global_leaf_directory_bytes: 0,
+                global_leaf_pages_read: 0,
+                global_leaf_page_bytes: 0,
+                global_leaf_exact_scores: 0,
+                global_leaf_continuations: 0,
+                global_leaf_waves: 0,
                 global_exact_bound_shadow,
                 global_base_approximate_us: global_approximate_us,
                 global_base_exact_rerank_us: global_exact_rerank_us,
@@ -14974,9 +15589,14 @@ impl BorsukIndex {
             artifacts.page_count,
             artifacts.bundle_count,
         )?;
-        let resident_bytes = u64::try_from(descriptor.resident_bytes()).map_err(|_| {
-            BorsukError::InvalidStorage("global PQ resident bytes exceed u64".to_string())
-        })?;
+        let resident_bytes = u64::try_from(descriptor.resident_bytes())
+            .map_err(|_| {
+                BorsukError::InvalidStorage("global PQ resident bytes exceed u64".to_string())
+            })?
+            .checked_add(artifacts.resident_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ resident bytes overflow".to_string())
+            })?;
         let code_bytes_per_vector = descriptor.code_bytes_per_vector();
         // Fixed-width cell-aligned exact vectors need no resident offset table
         // or compression dictionary: row byte ranges are computed directly.
@@ -15729,6 +16349,34 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_exact_vectors_fetched)
                 .sum(),
+            global_leaf_directory_reads: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_directory_reads)
+                .sum(),
+            global_leaf_directory_bytes: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_directory_bytes)
+                .sum(),
+            global_leaf_pages_read: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_pages_read)
+                .sum(),
+            global_leaf_page_bytes: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_page_bytes)
+                .sum(),
+            global_leaf_exact_scores: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_exact_scores)
+                .sum(),
+            global_leaf_continuations: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_continuations)
+                .sum(),
+            global_leaf_waves: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_waves)
+                .sum(),
             global_exact_bound_shadow: GlobalExactBoundShadow {
                 certificate_kind: reports
                     .iter()
@@ -15964,6 +16612,13 @@ impl BorsukIndex {
                 global_scan_chunks_searched: 0,
                 global_identity_rows_resolved: 0,
                 global_exact_vectors_fetched: 0,
+                global_leaf_directory_reads: 0,
+                global_leaf_directory_bytes: 0,
+                global_leaf_pages_read: 0,
+                global_leaf_page_bytes: 0,
+                global_leaf_exact_scores: 0,
+                global_leaf_continuations: 0,
+                global_leaf_waves: 0,
                 global_exact_bound_shadow: GlobalExactBoundShadow::default(),
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
@@ -16176,6 +16831,13 @@ impl BorsukIndex {
             global_scan_chunks_searched: 0,
             global_identity_rows_resolved: 0,
             global_exact_vectors_fetched: 0,
+            global_leaf_directory_reads: 0,
+            global_leaf_directory_bytes: 0,
+            global_leaf_pages_read: 0,
+            global_leaf_page_bytes: 0,
+            global_leaf_exact_scores: 0,
+            global_leaf_continuations: 0,
+            global_leaf_waves: 0,
             global_exact_bound_shadow: GlobalExactBoundShadow::default(),
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
@@ -16534,6 +17196,13 @@ impl BorsukIndex {
                     global_scan_chunks_searched: 0,
                     global_identity_rows_resolved: 0,
                     global_exact_vectors_fetched: 0,
+                    global_leaf_directory_reads: 0,
+                    global_leaf_directory_bytes: 0,
+                    global_leaf_pages_read: 0,
+                    global_leaf_page_bytes: 0,
+                    global_leaf_exact_scores: 0,
+                    global_leaf_continuations: 0,
+                    global_leaf_waves: 0,
                     global_exact_bound_shadow: GlobalExactBoundShadow::default(),
                     global_base_approximate_us: 0,
                     global_base_exact_rerank_us: 0,
@@ -17285,6 +17954,13 @@ impl BorsukIndex {
                 global_scan_chunks_searched: 0,
                 global_identity_rows_resolved: 0,
                 global_exact_vectors_fetched: 0,
+                global_leaf_directory_reads: 0,
+                global_leaf_directory_bytes: 0,
+                global_leaf_pages_read: 0,
+                global_leaf_page_bytes: 0,
+                global_leaf_exact_scores: 0,
+                global_leaf_continuations: 0,
+                global_leaf_waves: 0,
                 global_exact_bound_shadow: GlobalExactBoundShadow::default(),
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
@@ -17390,6 +18066,13 @@ impl BorsukIndex {
                 global_scan_chunks_searched: 0,
                 global_identity_rows_resolved: 0,
                 global_exact_vectors_fetched: 0,
+                global_leaf_directory_reads: 0,
+                global_leaf_directory_bytes: 0,
+                global_leaf_pages_read: 0,
+                global_leaf_page_bytes: 0,
+                global_leaf_exact_scores: 0,
+                global_leaf_continuations: 0,
+                global_leaf_waves: 0,
                 global_exact_bound_shadow: GlobalExactBoundShadow::default(),
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
@@ -21439,6 +22122,7 @@ struct PersistedGlobalLeafArtifacts {
     bundle_count: usize,
     rows: usize,
     storage_bytes: u64,
+    resident_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -21715,6 +22399,22 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
         let cell_root = persist_global_leaf_table(storage, "cells", &root.cells)?;
         let shard_table = persist_global_leaf_table(storage, "shards", &root.shards)?;
         let bundle_table = persist_global_leaf_table(storage, "bundles", &root.bundles)?;
+        let resident_bytes = u64::try_from(
+            crate::global_leaf::GlobalLeafDirectory::new(
+                crate::global_leaf::GlobalLeafDirectoryRoot {
+                    cells: cells.clone(),
+                    shards: shards.clone(),
+                    bundles: self.bundles.clone(),
+                },
+                1,
+            )?
+            .resident_bytes(),
+        )
+        .map_err(|_| {
+            BorsukError::InvalidStorage(
+                "global leaf directory resident bytes exceed u64".to_string(),
+            )
+        })?;
         for table in [&cell_root, &shard_table, &bundle_table] {
             self.storage_bytes = self
                 .storage_bytes
@@ -21734,6 +22434,7 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
             bundle_count: self.bundles.len(),
             rows: self.rows,
             storage_bytes: self.storage_bytes,
+            resident_bytes,
         })
     }
 }
@@ -25044,6 +25745,34 @@ fn merge_search_execution_hits(
         .report
         .global_exact_vectors_fetched
         .saturating_add(delta_report.global_exact_vectors_fetched);
+    base.report.global_leaf_directory_reads = base
+        .report
+        .global_leaf_directory_reads
+        .saturating_add(delta_report.global_leaf_directory_reads);
+    base.report.global_leaf_directory_bytes = base
+        .report
+        .global_leaf_directory_bytes
+        .saturating_add(delta_report.global_leaf_directory_bytes);
+    base.report.global_leaf_pages_read = base
+        .report
+        .global_leaf_pages_read
+        .saturating_add(delta_report.global_leaf_pages_read);
+    base.report.global_leaf_page_bytes = base
+        .report
+        .global_leaf_page_bytes
+        .saturating_add(delta_report.global_leaf_page_bytes);
+    base.report.global_leaf_exact_scores = base
+        .report
+        .global_leaf_exact_scores
+        .saturating_add(delta_report.global_leaf_exact_scores);
+    base.report.global_leaf_continuations = base
+        .report
+        .global_leaf_continuations
+        .saturating_add(delta_report.global_leaf_continuations);
+    base.report.global_leaf_waves = base
+        .report
+        .global_leaf_waves
+        .saturating_add(delta_report.global_leaf_waves);
     base.report.global_exact_bound_shadow.candidates = base
         .report
         .global_exact_bound_shadow
@@ -25655,17 +26384,19 @@ mod tests {
     use super::*;
     use std::sync::{Barrier, Mutex};
 
-    fn assert_v10_router_fail_closed(uri: &str) {
-        let error = match BorsukIndex::open(uri) {
-            Ok(_) => panic!("V10 artifact loaded before the V10 router existed"),
-            Err(error) => error,
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("bounded Arrow leaf descriptors require the V10 leaf router"),
-            "{error}"
-        );
+    fn assert_v10_leaf_hit(uri: &str, query: &[f32], expected: &str) -> SearchReport {
+        let report = BorsukIndex::open(uri)
+            .unwrap()
+            .search_with_report(
+                query,
+                SearchOptions::approx(3, LeafMode::SrhtPqScan).with_max_segments(32),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from(expected));
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+        assert!(report.global_leaf_pages_read > 0);
+        assert!(report.global_leaf_exact_scores <= report.records_scored);
+        report
     }
 
     #[test]
@@ -28805,7 +29536,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_pq_artifact_fails_closed_before_v10_identity_routing() {
+    fn resident_global_v10_routes_and_exact_scores_without_segment_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -28844,10 +29575,174 @@ mod tests {
         );
         drop(index);
         std::fs::remove_dir_all(dir.path().join("vectors")).unwrap();
-        assert_v10_router_fail_closed(&uri);
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &vectors[37],
+                SearchOptions::approx(3, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("row-37"));
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+        assert_eq!(report.segments_searched, 0);
+        assert_eq!(report.segments_skipped, report.segments_total);
+        assert_eq!(report.global_scan_chunks_searched, 0);
+        assert_eq!(report.global_graph_chunks_searched, 0);
+        assert!(report.global_leaf_pages_read <= 4);
+        assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
+        assert_eq!(report.global_leaf_exact_scores, report.records_scored);
+        assert_eq!(report.global_leaf_waves, 1);
+        assert_eq!(
+            report.bytes_read,
+            report.global_leaf_directory_bytes + report.global_leaf_page_bytes
+        );
+        assert!(
+            report.requests.gets
+                <= (report.global_leaf_directory_reads + report.global_leaf_pages_read) as u64,
+            "V10 issued a dependent identity/exact GET wave: {report:?}"
+        );
+    }
+
+    #[test]
+    fn resident_global_v10_continues_after_mvcc_suppresses_the_first_leaf() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let suffix = "x".repeat(100 * 1024);
+        let ids = (0..64)
+            .map(|row| format!("row-{row:02}-{suffix}"))
+            .collect::<Vec<_>>();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                ids.iter()
+                    .enumerate()
+                    .map(|(row, id)| VectorRecord::new(id.clone(), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index.delete([ids[0].as_str()]).unwrap();
+        drop(index);
+
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
+        assert_eq!(report.global_leaf_continuations, 1);
+        assert_eq!(report.global_leaf_waves, 2);
+        assert!(report.global_leaf_pages_read <= 4);
+        assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
+
+        let mut index = BorsukIndex::open(&uri).unwrap();
+        index
+            .delete(ids[1..].iter().map(String::as_str).collect::<Vec<_>>())
+            .unwrap();
+        drop(index);
+        let one_page_bytes = report
+            .global_leaf_page_bytes
+            .checked_div(report.global_leaf_pages_read as u64)
+            .unwrap();
+        let max_bytes = report
+            .global_leaf_directory_bytes
+            .saturating_add(one_page_bytes)
+            .saturating_add(1);
+        let byte_exhausted = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_bytes(max_bytes),
+            )
+            .unwrap();
+        assert!(byte_exhausted.hits.is_empty());
+        assert_eq!(
+            byte_exhausted.termination_reason,
+            SearchTerminationReason::MaxBytes
+        );
+        assert_eq!(byte_exhausted.global_leaf_pages_read, 1);
+        assert!(byte_exhausted.bytes_read <= max_bytes);
+
+        let exhausted = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        assert!(exhausted.hits.is_empty());
+        assert_eq!(
+            exhausted.termination_reason,
+            SearchTerminationReason::MaxSegments
+        );
+        assert_eq!(exhausted.global_leaf_pages_read, 4);
+        assert_eq!(exhausted.global_leaf_continuations, 3);
+        assert_eq!(exhausted.global_leaf_waves, 4);
+    }
+
+    #[test]
+    fn resident_global_v10_reports_filtered_and_nonmatching_dense_fallbacks_explicitly() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let filtered = index
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(3, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_filter(crate::Filter::Exists {
+                        path: "missing".to_string(),
+                        present: false,
+                    }),
+            )
+            .unwrap();
+        assert_eq!(filtered.leaf_mode, "srht-pq-scan");
+        assert_eq!(filtered.global_leaf_pages_read, 0);
+
+        let nonmatching = index
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(3, LeafMode::FlatScan).with_max_segments(4),
+            )
+            .unwrap();
+        assert_eq!(nonmatching.leaf_mode, "flat-scan");
+        assert_eq!(nonmatching.global_leaf_pages_read, 0);
     }
     #[test]
-    fn resident_global_pq_with_wal_tail_fails_closed_before_v10_routing() {
+    fn resident_global_pq_with_wal_tail_merges_v10_and_wal_results() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut writer = BorsukIndex::create(IndexConfig {
@@ -28890,10 +29785,11 @@ mod tests {
             stable_global_checksum
         );
 
-        assert_v10_router_fail_closed(&uri);
+        let report = assert_v10_leaf_hit(&uri, &tail_vector, "wal-tail");
+        assert!(report.wal_records_examined > 0);
     }
     #[test]
-    fn resident_global_materialized_delta_fails_closed_before_v10_routing() {
+    fn resident_global_exact_fringe_reports_explicit_segment_fallback() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -28926,10 +29822,19 @@ mod tests {
             index.flush().unwrap();
         }
 
-        assert_v10_router_fail_closed(&uri);
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &[11.0; 8],
+                SearchOptions::approx(3, LeafMode::SrhtPqScan).with_max_segments(32),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("delta-1"));
+        assert_eq!(report.leaf_mode, "srht-pq-scan");
+        assert_eq!(report.global_leaf_pages_read, 0);
     }
     #[test]
-    fn resident_global_base_and_delta_fail_closed_before_v10_routing() {
+    fn resident_global_base_and_delta_fuse_v10_leaves() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -28994,10 +29899,10 @@ mod tests {
         index.manifest = index
             .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))
             .unwrap();
-        assert_v10_router_fail_closed(&uri);
+        assert_v10_leaf_hit(&uri, &[10.0; 8], "delta-0-0");
     }
     #[test]
-    fn fused_resident_global_upsert_fails_closed_before_v10_routing() {
+    fn fused_resident_global_upsert_resolves_moved_generation() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -29045,7 +29950,7 @@ mod tests {
         assert!(global.delta.is_some());
         drop(index);
 
-        assert_v10_router_fail_closed(&uri);
+        assert_v10_leaf_hit(&uri, &moved, "base-0");
     }
     #[test]
     fn resident_global_delta_refresh_rebuilds_complete_v10_coverage() {
@@ -29256,7 +30161,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_delta_generations_fail_closed_before_v10_routing() {
+    fn resident_global_delta_generations_resolve_newest_v10_row() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -29296,7 +30201,7 @@ mod tests {
             index.flush().unwrap();
         }
 
-        assert_v10_router_fail_closed(&uri);
+        assert_v10_leaf_hit(&uri, &[1_000.0; 8], "repeated");
     }
     #[test]
     fn wal_materialization_waits_for_representative_delta_then_appends() {
@@ -29528,7 +30433,7 @@ mod tests {
     }
 
     #[test]
-    fn every_named_global_scan_codec_builds_v10_artifact_and_fails_closed_before_router() {
+    fn every_named_global_scan_codec_routes_its_v10_artifact() {
         let vectors = (0..128)
             .map(|row| {
                 (0..16)
@@ -29588,16 +30493,16 @@ mod tests {
             );
             drop(index);
 
-            let error = match BorsukIndex::open(&uri) {
-                Ok(_) => panic!("{codec} V10 artifact loaded before the V10 router existed"),
-                Err(error) => error,
-            };
-            assert!(
-                error
-                    .to_string()
-                    .contains("bounded Arrow leaf descriptors require the V10 leaf router"),
-                "{codec}: {error}"
-            );
+            let report = BorsukIndex::open(&uri)
+                .unwrap()
+                .search_with_report(
+                    &vectors[37],
+                    SearchOptions::approx(3, codec.leaf_mode()).with_max_segments(4),
+                )
+                .unwrap();
+            assert!(!report.hits.is_empty(), "{codec} returned no V10 hits");
+            assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+            assert!(report.global_leaf_pages_read <= 4);
         }
     }
 

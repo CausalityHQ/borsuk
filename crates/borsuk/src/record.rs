@@ -1077,6 +1077,27 @@ pub struct SearchReport {
     /// Logical lossless vector rows fetched and validated after MVCC.
     #[serde(default)]
     pub global_exact_vectors_fetched: usize,
+    /// Authenticated V10 leaf-directory shard objects read for selected cells.
+    #[serde(default)]
+    pub global_leaf_directory_reads: usize,
+    /// Encoded bytes read from authenticated V10 leaf-directory shards.
+    #[serde(default)]
+    pub global_leaf_directory_bytes: u64,
+    /// Logical V10 Arrow leaf pages read, independent of physical range coalescing.
+    #[serde(default)]
+    pub global_leaf_pages_read: usize,
+    /// Encoded V10 Arrow batch bytes read for selected logical leaf pages.
+    #[serde(default)]
+    pub global_leaf_page_bytes: u64,
+    /// Live canonical vectors exact-scored from V10 Arrow leaf pages.
+    #[serde(default)]
+    pub global_leaf_exact_scores: usize,
+    /// Additional ranked-page batches consumed after MVCC suppressed initial rows.
+    #[serde(default)]
+    pub global_leaf_continuations: usize,
+    /// Critical-path V10 Arrow page-fetch waves.
+    #[serde(default)]
+    pub global_leaf_waves: usize,
     /// Result-preserving counterfactual exact-rerank certificate evidence.
     #[serde(default)]
     pub global_exact_bound_shadow: GlobalExactBoundShadow,
