@@ -2097,3 +2097,30 @@ tmux session were confirmed. This is a launch receipt only. Until a root
 marker exists and the process has exited, monitoring is restricted to terminal
 markers and infrastructure/process health; no measurement CSV is eligible for
 inspection.
+
+After the retained 15-minute interval, marker-only monitoring found the root
+failure marker, a dead benchmark pane with exit status one, a complete
+one-writer cell, and a terminal eight-writer performance-gate failure. The
+ordinary validator rejected the incomplete campaign before opening aggregate
+measurements. An isolated copy of `c2000/r01/l1/w1` then passed the existing
+terminal-cell validator. A new explicit failed-cell recovery mode was exercised
+against the immutable `c2000/r01/l1/w8` tree: it required the root and cell
+failure markers, required exit one, reconciled every raw sample, receipt,
+storage request, percentile, recall result, throughput value, and resource
+sample, and proved the sole declared threshold failure was post-drain read p95.
+
+The structurally valid terminal eight-writer cell made all 128,000 records
+visible and retained inserted-ID recall@10 1.0. Write p95 was 87.614 ms,
+acknowledged throughput was 6,917.598 records/s, and active-tail read p95 was
+153.108 ms. Post-drain read p95 was 234.155 ms, above the strict 200 ms gate;
+drain-inclusive throughput was 1,830.740 records/s. Across 20 post-drain
+queries the raw rows reconciled 367 GETs and 13,483,968 bytes. The p95 phase
+intervals were 153.263 ms for the single fused exact rerank, 79.047 ms for
+delta approximation, and 57.356 ms waiting for delta after base work. Exact
+objects still required as many as 14--16 small range requests for individual
+queries, so high-dimensional Morton locality did not remove the real shortlist
+fanout. V36 is claim-ineligible and no later matrix cell ran. The next factor
+must reduce candidates that require exact S3 fetches with a conservative
+exact-top-k certificate, or otherwise change the core read architecture; cache
+warming, relaxed gates, and another locality-key sweep are not justified by
+this evidence.
