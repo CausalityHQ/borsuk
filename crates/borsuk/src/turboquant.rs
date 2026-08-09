@@ -204,6 +204,24 @@ pub(crate) fn fwht_in_place(data: &mut [f32]) {
     }
 }
 
+/// Closed f64 interval whose endpoints are rounded away from the represented
+/// real value. Certificate code uses these intervals; ranking code remains on
+/// the faster f32 transform.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct OutwardInterval {
+    pub(crate) lower: f64,
+    pub(crate) upper: f64,
+}
+
+impl OutwardInterval {
+    fn point(value: f64) -> Self {
+        Self {
+            lower: value,
+            upper: value,
+        }
+    }
+}
+
 /// A seeded structured randomized rotation `H D` (SRHT). Holds only the derived
 /// `±1` sign vector; the transform itself is computed on the fly.
 #[derive(Debug, Clone, PartialEq)]
@@ -306,6 +324,43 @@ impl StructuredRotation {
             width *= 2;
         }
         work
+    }
+
+    /// Apply the exact same SRHT while enclosing every real addition and
+    /// subtraction with directed f64 endpoints. This is intentionally scalar:
+    /// it runs only when constructing or evaluating exact-read certificates,
+    /// where one underestimated endpoint could prune a true neighbor.
+    /// Directed certificate transform using caller-owned storage.
+    pub(crate) fn rotate_outward_into(&self, vector: &[f32], work: &mut Vec<OutwardInterval>) {
+        debug_assert_eq!(vector.len(), self.dimensions);
+        work.resize(self.padded, OutwardInterval::point(0.0));
+        work.fill(OutwardInterval::point(0.0));
+        for (output, (value, sign)) in work.iter_mut().zip(vector.iter().zip(&self.signs)) {
+            let signed = if *sign > 0.0 {
+                f64::from(*value)
+            } else {
+                -f64::from(*value)
+            };
+            *output = OutwardInterval::point(signed);
+        }
+        let mut width = 1;
+        while width < work.len() {
+            for block in work.chunks_exact_mut(width * 2) {
+                for lane in 0..width {
+                    let left = block[lane];
+                    let right = block[lane + width];
+                    block[lane] = OutwardInterval {
+                        lower: (left.lower + right.lower).next_down(),
+                        upper: (left.upper + right.upper).next_up(),
+                    };
+                    block[lane + width] = OutwardInterval {
+                        lower: (left.lower - right.upper).next_down(),
+                        upper: (left.upper - right.lower).next_up(),
+                    };
+                }
+            }
+            width *= 2;
+        }
     }
 }
 
