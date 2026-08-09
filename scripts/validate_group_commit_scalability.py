@@ -116,6 +116,17 @@ def lane_receipt_evidence(sample: dict[str, str]) -> list[tuple[int | str, ...]]
     return evidence
 
 
+def direct_acknowledgement_request_contract(protocol_kind: str) -> tuple[int, ...]:
+    """Return the exact healthy request tuple for the frozen storage backend."""
+    if protocol_kind in {"smoke", "local", "bounded-diagnostic"}:
+        # The claim-ineligible local filesystem adapter verifies create-only
+        # extents with one HEAD and publishes via an extra staging PUT.
+        return (4, 0, 3, 0, 1, 0)
+    if protocol_kind in {"production", "architecture-qualification"}:
+        return (2, 0, 2, 0, 0, 0)
+    raise ValidationError(f"unknown group-commit protocol kind {protocol_kind!r}")
+
+
 def environment(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -138,6 +149,9 @@ def validate(
     copied = (root / "manifest.json").read_bytes()
     require(copied == frozen, "copied manifest differs from the frozen manifest")
     manifest = json.loads(frozen)
+    direct_request_contract = direct_acknowledgement_request_contract(
+        manifest["protocol_kind"]
+    )
     manifest_sha = hashlib.sha256(frozen).hexdigest()
     identity = environment(root / "environment.txt")
     require(identity.get("manifest_sha256") == manifest_sha, "manifest SHA-256 mismatch")
@@ -386,7 +400,7 @@ def validate(
                 group = (evidence[0], evidence[2], evidence[1])
                 normalized = evidence[3:]
                 require(
-                    normalized[2:8] == (2, 0, 2, 0, 0, 0),
+                    normalized[2:8] == direct_request_contract,
                     f"direct acknowledgement request contract drift in {cell}",
                 )
                 require(

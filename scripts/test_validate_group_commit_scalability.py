@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from validate_group_commit_scalability import (
     ValidationError,
+    direct_acknowledgement_request_contract,
     lane_receipt_evidence,
     validate,
     validate_process_identity,
@@ -18,6 +19,20 @@ from validate_group_commit_scalability import (
 
 
 class ValidatorTests(unittest.TestCase):
+    def test_request_contract_distinguishes_local_smoke_from_s3_evidence(self) -> None:
+        self.assertEqual(
+            direct_acknowledgement_request_contract("smoke"),
+            (4, 0, 3, 0, 1, 0),
+        )
+        self.assertEqual(
+            direct_acknowledgement_request_contract("production"),
+            (2, 0, 2, 0, 0, 0),
+        )
+        self.assertEqual(
+            direct_acknowledgement_request_contract("architecture-qualification"),
+            (2, 0, 2, 0, 0, 0),
+        )
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name) / "results"
