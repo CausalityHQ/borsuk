@@ -2010,3 +2010,13 @@ improved but the absolute effect was 1.749 ms short of the promotion gate while
 GET and backing-byte amplification retained 19.076 and 19.925 percentage points
 of headroom, respectively. Twenty milliseconds is a preregistered hypothesis,
 not a performance claim or a default change.
+
+Revision `dac98cb` froze and delivered v3 after strict workspace Clippy, all 21
+benchmark-example tests, a complete v3 structural matrix, 507 script tests, 31
+policy tests, and documentation, Ruff, shell syntax, and diff gates passed. The
+exclusive Causality attempt `20260809T071915Z` started with source archive
+SHA-256 `f44deb16d6f074fc8f795898c319f800b18ff62880e2a1e3f222a0d20738cd0f`
+and manifest SHA-256
+`219f3c2f64fe0f57d149bfe8deeaad80a6f82ee962ebd2f0b95cbd8901bd9cee`.
+This is a launch receipt only; measurement CSVs remain ineligible until root
+terminality.
