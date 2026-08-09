@@ -43,7 +43,7 @@ if [[ "$SMOKE" == "1" ]]; then
   PROTOCOL=smoke
 elif [[ "$EXACT_BOUND_LOCAL" == "1" ]]; then
   EXACT_BOUND_SHADOW=1
-  MANIFEST="$ROOT_DIR/docs/research/group-commit-exact-bound-local-qualification.json"
+  MANIFEST="$ROOT_DIR/docs/research/group-commit-exact-bound-local-qualification-v2.json"
   mapfile -t CELL_COUNTS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["cell_counts"], sep="\n")' "$MANIFEST")
   mapfile -t WRITERS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["writers"], sep="\n")' "$MANIFEST")
   REPETITIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["repetitions"])' "$MANIFEST")"

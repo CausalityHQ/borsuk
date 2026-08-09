@@ -2180,3 +2180,19 @@ zero containment failures, survivor p95 no greater than 12 of 16, pooled exact
 read and byte reductions of at least 30%, and certificate CPU p95 no greater
 than 2 ms or 5% of read p95. A valid rejection remains a terminal experiment,
 not a failed artifact campaign. No arm has been launched at this entry.
+
+Revision `43631f5` launched V1 from source archive SHA-256
+`cfab162c6f3792250775143a48cae086323401c23951d65ec3d4282a2cf40edc`
+and manifest SHA-256
+`5fa3028aa5be7a8aa5de82d3d827d541bf33457b560cb2441df0285f7e239798`.
+The release build completed, but the sole cell terminated before ingest or
+measurement with exit one: 32 writers times eight worker lanes required 256
+persisted writer stripes while the collection provides 64. The root and cell
+failure markers are present, storage telemetry is explicitly absent, and no
+measurement CSV was produced or inspected.
+
+V2 preserves every dataset, query, batching, writer, and certificate decision
+gate while changing worker lanes from eight to the production campaign's one.
+The resulting 32 stripes fit the fixed 64-stripe collection. This is a
+pre-measurement topology correction, not a result-driven threshold or workload
+change; V1 remains immutable and V2 receives a distinct manifest identity.
