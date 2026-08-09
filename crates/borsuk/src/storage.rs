@@ -3556,10 +3556,14 @@ impl Storage {
             });
         }
 
-        let requests_before = self.request_counts();
         let location = self.resolve(relative)?;
         let physical_bytes = Arc::new(AtomicU64::new(0));
         let object_bytes = Arc::new(AtomicU64::new(0));
+        // A query can overlap base, delta, and multiple object reads on one
+        // scoped store. Diffing that store's shared counters here attributes
+        // peer GETs to every overlapping trace event. Count this operation's
+        // primary and hedge attempts at the fetch boundary instead.
+        let request_attempts = Arc::new(AtomicU64::new(0));
         let fetched = self
             .runtime
             .block_on(async {
@@ -3570,6 +3574,7 @@ impl Storage {
                         let location = location.clone();
                         let physical_bytes = Arc::clone(&physical_bytes);
                         let object_bytes = Arc::clone(&object_bytes);
+                        let request_attempts = Arc::clone(&request_attempts);
                         async move {
                             fetch_with_optional_hedge(
                                 || {
@@ -3578,7 +3583,9 @@ impl Storage {
                                     let range = range.clone();
                                     let physical_bytes = Arc::clone(&physical_bytes);
                                     let object_bytes = Arc::clone(&object_bytes);
+                                    let request_attempts = Arc::clone(&request_attempts);
                                     async move {
+                                        request_attempts.fetch_add(1, Ordering::Relaxed);
                                         let result = store
                                             .get_opts(
                                                 &location,
@@ -3612,13 +3619,12 @@ impl Storage {
         if cacheable {
             self.write_cache_file(&bundle_key, &bundle)?;
         }
-        let request_count = self.request_counts().delta(&requests_before).gets;
         self.storage_trace
             .record(StorageAccessEvent::observed_read(
                 relative,
                 physical_format_for_path(relative),
                 object_bytes.load(Ordering::Relaxed),
-                request_count,
+                request_attempts.load(Ordering::Relaxed),
                 bytes_fetched,
             ))?;
         Ok(ReadRanges {
@@ -4636,7 +4642,7 @@ mod tests {
         path::{Path, PathBuf},
         process::Command,
         sync::{
-            Arc,
+            Arc, Barrier,
             atomic::{AtomicBool, AtomicUsize, Ordering},
             mpsc,
         },
@@ -4662,6 +4668,7 @@ mod tests {
         manifest::{DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest},
         metric::VectorMetric,
         record::{BuildConfig, LeafCapability},
+        storage_trace::StorageAccessTrace,
     };
     use object_store::{
         memory::InMemory,
@@ -5620,17 +5627,21 @@ mod tests {
                 ..ThrottleConfig::default()
             },
         );
-        let storage = Storage::from_object_store(
+        let trace_dir = tempfile::tempdir().unwrap();
+        let trace_path = trace_dir.path().join("storage-access.csv");
+        let mut storage = Storage::from_object_store(
             "memory:///hedged-global-rerank".to_string(),
             Arc::new(throttled),
         )
         .unwrap();
+        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
         let mut object = vec![0_u8; 512 * 1024 + 4];
         object[..4].copy_from_slice(b"left");
         object[512 * 1024..].copy_from_slice(b"righ");
         storage
             .write_bytes("global-pq/exact/hedged.arrow", &object)
             .unwrap();
+        storage.storage_trace.reset().unwrap();
         let ranges = [512 * 1024..512 * 1024 + 4, 0..4];
         let before = storage.request_counts();
 
@@ -5649,6 +5660,65 @@ mod tests {
             4,
             "two slow physical ranges should each issue one bounded hedge"
         );
+        let traced_gets = fs::read_to_string(trace_path)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .map(|line| line.split(',').nth(5).unwrap().parse::<u64>().unwrap())
+            .sum::<u64>();
+        assert_eq!(traced_gets, 4, "trace must retain every hedge attempt");
+    }
+
+    #[test]
+    fn concurrent_range_trace_counts_each_physical_get_once() {
+        let throttled = ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(50),
+                ..ThrottleConfig::default()
+            },
+        );
+        let trace_dir = tempfile::tempdir().unwrap();
+        let trace_path = trace_dir.path().join("storage-access.csv");
+        let mut storage = Storage::from_object_store(
+            "memory:///concurrent-range-trace".to_string(),
+            Arc::new(throttled),
+        )
+        .unwrap();
+        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
+        storage
+            .write_bytes("global-pq/exact/left.arrow", b"left")
+            .unwrap();
+        storage
+            .write_bytes("global-pq/exact/right.arrow", b"right")
+            .unwrap();
+        storage.storage_trace.reset().unwrap();
+        let before = storage.request_counts();
+        let barrier = Arc::new(Barrier::new(2));
+
+        std::thread::scope(|scope| {
+            for path in ["global-pq/exact/left.arrow", "global-pq/exact/right.arrow"] {
+                let storage = storage.clone();
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    let range = 0..4;
+                    storage
+                        .read_global_rerank_ranges(path, std::slice::from_ref(&range), None)
+                        .unwrap();
+                });
+            }
+        });
+
+        let physical_gets = storage.request_counts().delta(&before).gets;
+        let traced_gets = fs::read_to_string(trace_path)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .map(|line| line.split(',').nth(5).unwrap().parse::<u64>().unwrap())
+            .sum::<u64>();
+        assert_eq!(physical_gets, 2);
+        assert_eq!(traced_gets, physical_gets);
     }
 
     #[test]

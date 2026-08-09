@@ -101,7 +101,11 @@ fn open_global_hedge_reader(
 ) -> BorsukIndex {
     let slow: Arc<dyn ObjectStore> = Arc::new(
         common::FaultInjectingObjectStore::new(inner).with_get_latency_for(
-            Duration::from_millis(30),
+            // Keep the injected tail well above the 5 ms hedge timer even
+            // when the full parallel test binary temporarily delays Tokio's
+            // timer polling. The old 30 ms gap was not deterministic under
+            // a saturated assurance run.
+            Duration::from_millis(250),
             move |operation, path| {
                 operation == common::StoreOperation::Get
                     && path.as_ref().starts_with(slow_path_prefix)

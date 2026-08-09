@@ -1909,3 +1909,25 @@ and frozen manifest SHA-256
 This is a launch receipt only. Until a root terminal marker exists, monitoring
 is restricted to terminal markers and infrastructure/process health; no
 measurement CSV from this attempt is eligible for inspection.
+
+After one retained 15-minute interval, all ten arm completion markers were
+present and the root failure marker was terminal. EC2 system and instance
+checks remained healthy, SSM was online, 62,593,524 KiB memory was available,
+and 115 GiB disk was free. The ordinary validator rejected the failure-marked
+root before opening CSVs. Recovery validation then opened the terminal tree and
+failed on storage-trace request reconciliation in `r01/control`: raw query
+telemetry reported 6,493 GETs and 465,272,042 backing bytes, while the trace
+reported the same byte total but an impossible 16,116 requests. Investigation
+found overlapping range reads were diffing one shared request counter, so each
+trace row included requests issued by peer reads. This invalidates the attempt
+as qualification evidence; no default promotion is permitted.
+
+Terminal diagnostic-only rows retained recall@10 1.0, ordered top-10 equality,
+and per-query logical-byte equality in all five pairs. They also show why a
+rerun cannot be represented as a prior pass: the candidate strictly won only
+three of five repetition p95 comparisons and improved pooled p95 from 81.158 ms
+to 78.068 ms, below both the four-win and 5 ms preregistered gates. Those
+numbers locate the next experiment but are not a validated performance claim.
+The instrumentation repair counts physical attempts locally inside each range
+operation, including hedge attempts, rather than weakening reconciliation or
+editing terminal artifacts.
