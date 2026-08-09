@@ -239,7 +239,7 @@ pub(crate) struct QuantizerRef {
 }
 
 /// Content-addressed resident global product-code artifact for one manifest.
-pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 5;
+pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 6;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GlobalPqRef {

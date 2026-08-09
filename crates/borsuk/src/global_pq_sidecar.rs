@@ -23,6 +23,10 @@ use crate::{
     BorsukError, Result,
     mutation::{MutationStamp, MutationVersion},
     record::VectorElementType,
+    residual_pq_certificate::{
+        ResidualPqCertificate, ResidualPqCertificateState, ResidualPqEncodeScratch,
+        ResidualPqEncoded, ResidualPqIntervalScratch, ResidualPqPreparedQuery, ResidualPqRow,
+    },
     rotated_product_quantizer::{
         ProductQuantizerState, RotatedProductQuantizer, product_code_locality_key,
     },
@@ -37,8 +41,8 @@ use crate::{
 use crate::rotated_product_quantizer::ProductQuantizerConfig;
 
 const DESCRIPTOR_JSON_COLUMN: &str = "ann_descriptor_json";
-const CELL_GRAPH_MAGIC: &[u8; 8] = b"BRSGCG01";
-const CELL_GRAPH_VERSION: u32 = 3;
+const CELL_GRAPH_MAGIC: &[u8; 8] = b"BRSGCG02";
+const CELL_GRAPH_VERSION: u32 = 4;
 const CELL_GRAPH_HEADER_LEN: usize = 64;
 pub(crate) const DEFAULT_GLOBAL_PQ_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const DEFAULT_GLOBAL_EXACT_CHUNK_BYTES: usize = 16 * 1024 * 1024;
@@ -138,6 +142,13 @@ enum PreparedGlobalScan {
 }
 
 impl GlobalScanQuantizer {
+    pub(crate) fn primary_pq(&self) -> Option<&RotatedProductQuantizer> {
+        match self {
+            Self::Pq(quantizer) => Some(quantizer),
+            Self::FastTurboQuantMse(_) | Self::FastTurboQuantProd(_) => None,
+        }
+    }
+
     fn from_state(state: GlobalScanQuantizerState) -> Result<Self> {
         match state {
             GlobalScanQuantizerState::Pq(state) => {
@@ -161,20 +172,6 @@ impl GlobalScanQuantizer {
             Self::FastTurboQuantProd(quantizer) => {
                 GlobalScanQuantizerState::FastTurboQuantProd(quantizer.state())
             }
-        }
-    }
-
-    fn certificate_l2_interval(
-        &self,
-        query: &[f32],
-        vector: &[f32],
-        code: &[u8],
-    ) -> Result<Option<(f64, f64)>> {
-        match self {
-            Self::Pq(quantizer) => quantizer
-                .certificate_l2_interval(query, vector, code)
-                .map(Some),
-            Self::FastTurboQuantMse(_) | Self::FastTurboQuantProd(_) => Ok(None),
         }
     }
 
@@ -831,6 +828,9 @@ pub(crate) struct GlobalPqChunkRef {
     /// Absolute starts for the typed segment, row, and bundle-local exact-row
     /// ordinal buffers.
     pub(crate) ordinal_buffer_offsets: [u32; 3],
+    /// Absolute starts for the V8 residual-PQ64 values and f32 error-bound
+    /// buffers. They are part of the authenticated scan envelope.
+    pub(crate) residual_buffer_offsets: [u32; 2],
     /// Absolute starts for the identity offsets/values and four mutation
     /// buffers. Arrow permits implementation-defined padding between buffers,
     /// so every range start is persisted instead of deriving later columns
@@ -850,7 +850,7 @@ pub(crate) struct GlobalPqChunkRef {
 }
 
 impl GlobalPqChunkRef {
-    pub(crate) fn scan_buffer_ranges(&self, code_width: usize) -> Result<[Range<usize>; 4]> {
+    pub(crate) fn scan_buffer_ranges(&self, code_width: usize) -> Result<[Range<usize>; 6]> {
         let scan_start = self.offset_bytes as usize;
         let scan_end = scan_start
             .checked_add(self.size_bytes as usize)
@@ -878,10 +878,28 @@ impl GlobalPqChunkRef {
         let exact_end = exact_start.checked_add(ordinal_bytes).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ exact ordinal range overflows".to_string())
         })?;
+        let [residual_start, error_start] =
+            self.residual_buffer_offsets.map(|offset| offset as usize);
+        let residual_end = self
+            .rows
+            .checked_mul(64)
+            .and_then(|bytes| residual_start.checked_add(bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ residual code range overflows".to_string())
+            })?;
+        let error_end = self
+            .rows
+            .checked_mul(size_of::<f32>())
+            .and_then(|bytes| error_start.checked_add(bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global PQ residual error range overflows".to_string())
+            })?;
         if code_end > segment_start
             || segment_end > row_start
             || row_end > exact_start
-            || exact_end != scan_end
+            || exact_end > residual_start
+            || residual_end > error_start
+            || error_end != scan_end
         {
             return invalid("global PQ typed scan ordinal ranges are invalid");
         }
@@ -890,6 +908,8 @@ impl GlobalPqChunkRef {
             segment_start..segment_end,
             row_start..row_end,
             exact_start..exact_end,
+            residual_start..residual_end,
+            error_start..error_end,
         ])
     }
 
@@ -962,15 +982,19 @@ impl GlobalPqChunkRef {
     #[cfg(test)]
     fn with_test_typed_identity_ranges(mut self) -> Self {
         if self.ordinal_buffer_offsets == [0; 3] {
-            let minimum_scan_bytes = self.rows.saturating_mul(64 + 12);
+            let minimum_scan_bytes = self.rows.saturating_mul(64 + 12 + 64 + 4);
             self.size_bytes = u32::try_from((self.size_bytes as usize).max(minimum_scan_bytes))
                 .expect("test scan envelope fits u32");
             let scan_end = (self.offset_bytes as usize).saturating_add(self.size_bytes as usize);
-            let exact = scan_end.saturating_sub(self.rows.saturating_mul(4));
+            let error = scan_end.saturating_sub(self.rows.saturating_mul(4));
+            let residual = error.saturating_sub(self.rows.saturating_mul(64));
+            let exact = residual.saturating_sub(self.rows.saturating_mul(4));
             let row = exact.saturating_sub(self.rows.saturating_mul(4));
             let segment = row.saturating_sub(self.rows.saturating_mul(4));
             self.ordinal_buffer_offsets = [segment, row, exact]
                 .map(|offset| u32::try_from(offset).expect("test ordinal offset fits u32"));
+            self.residual_buffer_offsets = [residual, error]
+                .map(|offset| u32::try_from(offset).expect("test residual offset fits u32"));
         }
         let scan_end = (self.offset_bytes as usize).saturating_add(self.size_bytes as usize);
         let offsets =
@@ -1021,6 +1045,7 @@ fn next_arrow_column_values(offset: usize) -> Result<usize> {
 /// chunk plus small buffered writers.
 pub(crate) struct GlobalPqCellSpool {
     quantizer: GlobalScanQuantizer,
+    residual_certificate: Option<ResidualPqCertificate>,
     coarse_quantizer: GlobalCoarseQuantizer,
     location: LocationEncoding,
     directory: tempfile::TempDir,
@@ -1032,6 +1057,13 @@ pub(crate) struct GlobalPqCellSpool {
     vector_element_type: VectorElementType,
     exact_row_buffer: Vec<u8>,
     rows: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GlobalPqEncodedRow {
+    pub(crate) cell: u16,
+    pub(crate) primary_code: Vec<u8>,
+    pub(crate) residual: ResidualPqRow,
 }
 
 struct SpoolRow {
@@ -1093,6 +1125,7 @@ fn write_spool_row(writer: &mut BufWriter<File>, path: &Path, row: &SpoolRow) ->
 }
 
 impl GlobalPqCellSpool {
+    #[cfg(test)]
     pub(crate) fn new(
         quantizer: impl Into<GlobalScanQuantizer>,
         coarse_quantizer: impl Into<GlobalCoarseQuantizer>,
@@ -1101,8 +1134,31 @@ impl GlobalPqCellSpool {
         dimensions: usize,
         vector_element_type: VectorElementType,
     ) -> Result<Self> {
+        Self::new_with_residual(
+            quantizer,
+            coarse_quantizer,
+            None,
+            location,
+            max_chunk_bytes,
+            dimensions,
+            vector_element_type,
+        )
+    }
+
+    pub(crate) fn new_with_residual(
+        quantizer: impl Into<GlobalScanQuantizer>,
+        coarse_quantizer: impl Into<GlobalCoarseQuantizer>,
+        residual_certificate: Option<ResidualPqCertificate>,
+        location: LocationEncoding,
+        max_chunk_bytes: usize,
+        dimensions: usize,
+        vector_element_type: VectorElementType,
+    ) -> Result<Self> {
         let quantizer = quantizer.into();
         let coarse_quantizer = coarse_quantizer.into();
+        if residual_certificate.is_some() && quantizer.primary_pq().is_none() {
+            return invalid("residual certificate requires a PQ scan quantizer");
+        }
         let exact_row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
         let row_bytes = quantizer.code_bytes_per_vector() + usize::from(location.width);
         if max_chunk_bytes < row_bytes {
@@ -1127,6 +1183,7 @@ impl GlobalPqCellSpool {
         }
         Ok(Self {
             quantizer,
+            residual_certificate,
             coarse_quantizer,
             location,
             directory,
@@ -1185,6 +1242,32 @@ impl GlobalPqCellSpool {
         Ok((cell, code.to_vec()))
     }
 
+    pub(crate) fn encode_vector_with_residual_scratch(
+        &self,
+        vector: &[f32],
+        rotated: &mut Vec<f32>,
+        code: &mut Vec<u8>,
+        residual_scratch: &mut ResidualPqEncodeScratch,
+    ) -> Result<GlobalPqEncodedRow> {
+        let (cell, primary_code) = self.encode_vector_with_scratch(vector, rotated, code)?;
+        let residual = match (&self.residual_certificate, self.quantizer.primary_pq()) {
+            (Some(certificate), Some(primary)) => {
+                certificate.encode_with_scratch(primary, vector, &primary_code, residual_scratch)?
+            }
+            (None, None) => ResidualPqRow {
+                code: vec![0; 64].into_boxed_slice(),
+                error_upper: f32::INFINITY,
+            },
+            _ => return invalid("global PQ residual certificate state is inconsistent"),
+        };
+        Ok(GlobalPqEncodedRow {
+            cell,
+            primary_code,
+            residual,
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn push_encoded(
         &mut self,
         coarse: u16,
@@ -1194,14 +1277,45 @@ impl GlobalPqCellSpool {
         id: &[u8],
         stamp: MutationStamp,
     ) -> Result<()> {
+        self.push_encoded_with_residual(
+            &GlobalPqEncodedRow {
+                cell: coarse,
+                primary_code: code.to_vec(),
+                residual: ResidualPqRow {
+                    code: vec![0; 64].into_boxed_slice(),
+                    error_upper: f32::INFINITY,
+                },
+            },
+            row,
+            exact_vector,
+            id,
+            stamp,
+        )
+    }
+
+    pub(crate) fn push_encoded_with_residual(
+        &mut self,
+        encoded: &GlobalPqEncodedRow,
+        row: GlobalPqRow,
+        exact_vector: &[f32],
+        id: &[u8],
+        stamp: MutationStamp,
+    ) -> Result<()> {
         if exact_vector.len() != self.dimensions {
             return invalid("exact vector dimension does not match the spool");
         }
-        if code.len() != self.quantizer.code_bytes_per_vector() {
+        if encoded.primary_code.len() != self.quantizer.code_bytes_per_vector() {
             return invalid("encoded product code width does not match the spool");
         }
+        if encoded.residual.code.len() > 64
+            || (!encoded.residual.error_upper.is_finite()
+                && encoded.residual.error_upper != f32::INFINITY)
+            || encoded.residual.error_upper.is_sign_negative()
+        {
+            return invalid("encoded residual certificate row is invalid");
+        }
         let (primary, secondary) =
-            partition_spool_cell(coarse, self.coarse_quantizer.parent_is_high_byte());
+            partition_spool_cell(encoded.cell, self.coarse_quantizer.parent_is_high_byte());
         let writer = self
             .primary_writers
             .get_mut(primary)
@@ -1214,7 +1328,7 @@ impl GlobalPqCellSpool {
                 .map_err(|source| io_error(&self.primary_paths[primary], source))?;
         }
         writer
-            .write_all(code)
+            .write_all(&encoded.primary_code)
             .map_err(|source| io_error(&self.primary_paths[primary], source))?;
         let packed = self.location.pack(row)?;
         match self.location.width {
@@ -1226,6 +1340,12 @@ impl GlobalPqCellSpool {
                 .map_err(|source| io_error(&self.primary_paths[primary], source))?,
             _ => return invalid("location width is unsupported"),
         }
+        const RESIDUAL_PADDING: [u8; 64] = [0; 64];
+        writer
+            .write_all(&encoded.residual.code)
+            .and_then(|()| writer.write_all(&RESIDUAL_PADDING[..64 - encoded.residual.code.len()]))
+            .and_then(|()| writer.write_all(&encoded.residual.error_upper.to_le_bytes()))
+            .map_err(|source| io_error(&self.primary_paths[primary], source))?;
         self.vector_element_type
             .encode_canonical_fixed_width_into(exact_vector, &mut self.exact_row_buffer)?;
         writer
@@ -1305,6 +1425,8 @@ impl GlobalPqCellSpool {
     ) -> Result<()> {
         let fixed_width = self.quantizer.code_bytes_per_vector()
             + usize::from(self.location.width)
+            + 64
+            + size_of::<f32>()
             + self
                 .vector_element_type
                 .fixed_width_bytes(self.dimensions)?;
@@ -1343,10 +1465,12 @@ impl GlobalPqCellSpool {
         let code_width = self.quantizer.code_bytes_per_vector();
         let location_width = usize::from(self.location.width);
         let code_row_width = code_width + location_width;
+        let residual_row_width = 64 + size_of::<f32>();
+        let scan_row_width = code_row_width + residual_row_width;
         let exact_row_width = self
             .vector_element_type
             .fixed_width_bytes(self.dimensions)?;
-        let max_code_rows = self.max_chunk_bytes / code_row_width;
+        let max_code_rows = self.max_chunk_bytes / scan_row_width;
         let max_exact_rows = self.max_exact_chunk_bytes / exact_row_width.max(1);
         let max_rows = max_code_rows.min(max_exact_rows).max(1);
         let mut reader = BufReader::new(File::open(path).map_err(|source| io_error(path, source))?);
@@ -1358,7 +1482,7 @@ impl GlobalPqCellSpool {
                 let row = if let Some(row) = pending_row.take() {
                     row
                 } else if let Some(row) =
-                    read_spool_row(&mut reader, path, code_row_width + exact_row_width)?
+                    read_spool_row(&mut reader, path, scan_row_width + exact_row_width)?
                 {
                     row
                 } else {
@@ -1401,9 +1525,17 @@ impl GlobalPqCellSpool {
             for &(_, row) in &order {
                 bytes.extend_from_slice(&chunk_rows[row].fixed[..code_row_width]);
             }
+            let mut residual_codes = Vec::with_capacity(rows * 64);
+            let mut residual_error_upper = Vec::with_capacity(rows * size_of::<f32>());
+            for &(_, row) in &order {
+                residual_codes
+                    .extend_from_slice(&chunk_rows[row].fixed[code_row_width..code_row_width + 64]);
+                residual_error_upper
+                    .extend_from_slice(&chunk_rows[row].fixed[code_row_width + 64..scan_row_width]);
+            }
             let mut exact_bytes = Vec::with_capacity(rows * exact_row_width);
             for &(_, row) in &order {
-                exact_bytes.extend_from_slice(&chunk_rows[row].fixed[code_row_width..]);
+                exact_bytes.extend_from_slice(&chunk_rows[row].fixed[scan_row_width..]);
             }
             let identities = order
                 .iter()
@@ -1418,6 +1550,8 @@ impl GlobalPqCellSpool {
                 cell,
                 GlobalPqChunkBytes {
                     bytes,
+                    residual_codes,
+                    residual_error_upper,
                     exact_bytes,
                     identities,
                     rows,
@@ -1432,6 +1566,7 @@ impl GlobalPqCellSpool {
 pub(crate) struct GlobalPqDescriptor {
     bundle_layout: GlobalPqBundleLayout,
     quantizer: GlobalScanQuantizerState,
+    residual_certificate: Option<ResidualPqCertificateState>,
     coarse_quantizer: GlobalCoarseQuantizerState,
     vectors: usize,
     vector_element_type: VectorElementType,
@@ -1441,14 +1576,35 @@ pub(crate) struct GlobalPqDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum GlobalPqBundleLayout {
-    #[serde(rename = "typed-columns-v7-local-exact-arrow")]
-    TypedColumnsV7LocalExactArrow,
+    #[serde(rename = "typed-columns-v8-residual-pq-arrow")]
+    TypedColumnsV8ResidualExactArrow,
 }
 
 impl GlobalPqDescriptor {
+    #[cfg(test)]
     pub(crate) fn new(
         quantizer: impl Into<GlobalScanQuantizerState>,
         coarse_quantizer: impl Into<GlobalCoarseQuantizerState>,
+        vectors: usize,
+        vector_element_type: VectorElementType,
+        location: LocationEncoding,
+        chunks: Vec<GlobalPqChunkRef>,
+    ) -> Result<Self> {
+        Self::new_with_residual(
+            quantizer,
+            coarse_quantizer,
+            None,
+            vectors,
+            vector_element_type,
+            location,
+            chunks,
+        )
+    }
+
+    pub(crate) fn new_with_residual(
+        quantizer: impl Into<GlobalScanQuantizerState>,
+        coarse_quantizer: impl Into<GlobalCoarseQuantizerState>,
+        residual_certificate: Option<ResidualPqCertificateState>,
         vectors: usize,
         vector_element_type: VectorElementType,
         location: LocationEncoding,
@@ -1460,6 +1616,16 @@ impl GlobalPqDescriptor {
         // persisted codec states here so metadata accessors cannot encounter a
         // malformed state and panic before `ResidentGlobalPq::load` runs.
         let scan_quantizer = GlobalScanQuantizer::from_state(quantizer.clone())?;
+        match (scan_quantizer.primary_pq(), residual_certificate.clone()) {
+            (Some(primary), Some(state)) => {
+                let certificate = ResidualPqCertificate::from_state(primary, state)?;
+                if certificate.state().code_width > 64 {
+                    return invalid("residual PQ code exceeds the V8 physical width");
+                }
+            }
+            (None, Some(_)) => return invalid("residual certificate requires a PQ scan codec"),
+            _ => {}
+        }
         let _ = GlobalCoarseQuantizer::from_state(coarse_quantizer.clone())?;
         let quantizer_dimensions = match &quantizer {
             GlobalScanQuantizerState::Pq(state) => state.dimensions,
@@ -1575,8 +1741,9 @@ impl GlobalPqDescriptor {
             }
         }
         Ok(Self {
-            bundle_layout: GlobalPqBundleLayout::TypedColumnsV7LocalExactArrow,
+            bundle_layout: GlobalPqBundleLayout::TypedColumnsV8ResidualExactArrow,
             quantizer,
+            residual_certificate,
             coarse_quantizer,
             vectors,
             vector_element_type,
@@ -1598,9 +1765,10 @@ impl GlobalPqDescriptor {
         })?;
         let mut chunks = self.chunks.clone();
         chunks.extend(appended_chunks);
-        Self::new(
+        Self::new_with_residual(
             self.quantizer.clone(),
             self.coarse_quantizer.clone(),
+            self.residual_certificate.clone(),
             vectors,
             self.vector_element_type,
             self.location,
@@ -1625,13 +1793,15 @@ impl GlobalPqDescriptor {
     pub(crate) fn empty_with_quantizers_for_layout(
         quantizer: GlobalScanQuantizerState,
         coarse_quantizer: GlobalCoarseQuantizerState,
+        residual_certificate: Option<ResidualPqCertificateState>,
         vector_element_type: VectorElementType,
         segment_count: usize,
         max_rows_per_segment: usize,
     ) -> Result<Self> {
-        Self::new(
+        Self::new_with_residual(
             quantizer,
             coarse_quantizer,
+            residual_certificate,
             0,
             vector_element_type,
             LocationEncoding::for_layout(segment_count, max_rows_per_segment)?,
@@ -1661,9 +1831,19 @@ impl GlobalPqDescriptor {
             segment_index,
             row_index,
         })?;
-        GlobalPqCellSpool::new(
-            GlobalScanQuantizer::from_state(self.quantizer.clone())?,
+        let quantizer = GlobalScanQuantizer::from_state(self.quantizer.clone())?;
+        let residual_certificate = match (quantizer.primary_pq(), self.residual_certificate.clone())
+        {
+            (Some(primary), Some(state)) => {
+                Some(ResidualPqCertificate::from_state(primary, state)?)
+            }
+            (None, None) | (Some(_), None) => None,
+            (None, Some(_)) => return invalid("residual certificate requires a PQ scan codec"),
+        };
+        GlobalPqCellSpool::new_with_residual(
+            quantizer,
             GlobalCoarseQuantizer::from_state(self.coarse_quantizer.clone())?,
+            residual_certificate,
             self.location,
             max_chunk_bytes,
             dimensions,
@@ -1757,9 +1937,15 @@ impl GlobalPqDescriptor {
         let descriptor: Self = serde_json::from_str(&payload).map_err(|error| {
             BorsukError::InvalidStorage(format!("invalid global PQ descriptor: {error}"))
         })?;
-        Self::new(
+        if matches!(descriptor.quantizer, GlobalScanQuantizerState::Pq(_))
+            && descriptor.residual_certificate.is_none()
+        {
+            return invalid("V8 PQ descriptor is missing its residual certificate state");
+        }
+        Self::new_with_residual(
             descriptor.quantizer,
             descriptor.coarse_quantizer,
+            descriptor.residual_certificate,
             descriptor.vectors,
             descriptor.vector_element_type,
             descriptor.location,
@@ -1838,6 +2024,15 @@ impl GlobalPqDescriptor {
                             * size_of::<f32>()
                 }
             }
+            + self.residual_certificate.as_ref().map_or(0, |state| {
+                state
+                    .quantizer
+                    .codebooks
+                    .iter()
+                    .map(|values| values.capacity() * size_of::<f32>())
+                    .sum::<usize>()
+                    + state.quantizer.subspace_offsets.capacity() * size_of::<usize>()
+            })
             + self.coarse_quantizer.resident_bytes()
             + self.chunks.capacity() * size_of::<GlobalPqChunkRef>()
             + self
@@ -1861,6 +2056,11 @@ impl GlobalPqDescriptor {
 #[derive(Debug)]
 pub(crate) struct GlobalPqChunkBytes {
     pub(crate) bytes: Vec<u8>,
+    /// One fixed-width residual certificate code per row. V8 freezes this at
+    /// 64 bytes so the scan envelope remains directly range-addressable.
+    pub(crate) residual_codes: Vec<u8>,
+    /// Little-endian f32 upper error bounds, one per residual code.
+    pub(crate) residual_error_upper: Vec<u8>,
     pub(crate) exact_bytes: Vec<u8>,
     pub(crate) identities: Vec<(crate::RecordId, MutationStamp)>,
     pub(crate) rows: usize,
@@ -1944,6 +2144,10 @@ impl ResidentGlobalPqBuilder {
         self.rows = 0;
         Ok(Some(GlobalPqChunkBytes {
             bytes,
+            residual_codes: vec![0; rows * 64],
+            residual_error_upper: std::iter::repeat_n(f32::INFINITY.to_le_bytes(), rows)
+                .flatten()
+                .collect(),
             exact_bytes: Vec::new(),
             identities: Vec::new(),
             rows,
@@ -1954,6 +2158,7 @@ impl ResidentGlobalPqBuilder {
 #[derive(Debug, Clone)]
 pub(crate) struct ResidentGlobalPq {
     quantizer: GlobalScanQuantizer,
+    residual_certificate: Option<ResidualPqCertificate>,
     coarse_quantizer: GlobalCoarseQuantizer,
     location: LocationEncoding,
     chunks: Vec<GlobalPqChunkRef>,
@@ -1963,8 +2168,17 @@ pub(crate) struct ResidentGlobalPq {
 
 impl ResidentGlobalPq {
     pub(crate) fn load(descriptor: GlobalPqDescriptor) -> Result<Self> {
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer)?;
+        let residual_certificate = match (quantizer.primary_pq(), descriptor.residual_certificate) {
+            (Some(primary), Some(state)) => {
+                Some(ResidualPqCertificate::from_state(primary, state)?)
+            }
+            (Some(_), None) | (None, None) => None,
+            (None, Some(_)) => return invalid("residual certificate requires a PQ scan codec"),
+        };
         Ok(Self {
-            quantizer: GlobalScanQuantizer::from_state(descriptor.quantizer)?,
+            quantizer,
+            residual_certificate,
             coarse_quantizer: GlobalCoarseQuantizer::from_state(descriptor.coarse_quantizer)?,
             location: descriptor.location,
             chunks: descriptor.chunks,
@@ -2048,6 +2262,10 @@ impl ResidentGlobalPq {
     pub(crate) fn resident_bytes(&self) -> usize {
         size_of::<Self>()
             + self.quantizer.resident_bytes()
+            + self
+                .residual_certificate
+                .as_ref()
+                .map_or(0, ResidualPqCertificate::resident_bytes)
             + self.coarse_quantizer.resident_bytes()
             + self.chunks.capacity() * size_of::<GlobalPqChunkRef>()
             + self
@@ -2088,6 +2306,10 @@ impl ResidentGlobalPq {
                         let chunk = ParsedChunk::new(reference, bytes, code_width, self.location)?;
                         for local in 0..chunk.rows {
                             let code = chunk.code(local);
+                            self.validate_residual_row(
+                                chunk.residual_code(local),
+                                chunk.residual_error_upper(local)?,
+                            )?;
                             push_scanned_candidate(
                                 &mut heap,
                                 self.quantizer.distance(&prepared, code)?,
@@ -2097,6 +2319,8 @@ impl ResidentGlobalPq {
                                 chunk.exact_ordinal(local)?,
                                 chunk.row(local)?,
                                 code,
+                                chunk.residual_code(local),
+                                chunk.residual_error_upper(local)?,
                                 limit,
                             );
                         }
@@ -2118,16 +2342,70 @@ impl ResidentGlobalPq {
         limit: usize,
         ef: usize,
     ) -> Result<Vec<GlobalPqCandidate>> {
-        graph.candidates(query, &self.quantizer, limit, ef)
+        let candidates = graph.candidates(query, &self.quantizer, limit, ef)?;
+        for candidate in &candidates {
+            self.validate_residual_row(&candidate.residual_code, candidate.residual_error_upper)?;
+        }
+        Ok(candidates)
     }
 
-    pub(crate) fn certificate_l2_interval(
+    fn validate_residual_row(&self, code: &[u8], error_upper: f32) -> Result<()> {
+        if code.len() != 64 || error_upper.is_nan() || error_upper.is_sign_negative() {
+            return invalid("global PQ residual certificate row is invalid");
+        }
+        match &self.residual_certificate {
+            Some(certificate) => {
+                if code[certificate.code_width()..]
+                    .iter()
+                    .any(|byte| *byte != 0)
+                {
+                    return invalid("global PQ residual code padding is not zero");
+                }
+            }
+            None => {
+                if error_upper != f32::INFINITY || code.iter().any(|byte| *byte != 0) {
+                    return invalid("unsupported scan codec has a residual certificate row");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_residual_query(
         &self,
         query: &[f32],
-        vector: &[f32],
-        code: &[u8],
+    ) -> Result<Option<ResidualPqPreparedQuery>> {
+        match (&self.residual_certificate, self.quantizer.primary_pq()) {
+            (Some(certificate), Some(primary)) => {
+                certificate.prepare_query(primary, query).map(Some)
+            }
+            (None, _) => Ok(None),
+            _ => invalid("global PQ residual certificate state is inconsistent"),
+        }
+    }
+
+    pub(crate) fn residual_l2_interval_prepared(
+        &self,
+        prepared: &ResidualPqPreparedQuery,
+        primary_code: &[u8],
+        residual_code: &[u8],
+        residual_error_upper: f32,
+        scratch: &mut ResidualPqIntervalScratch,
     ) -> Result<Option<(f64, f64)>> {
-        self.quantizer.certificate_l2_interval(query, vector, code)
+        match (&self.residual_certificate, self.quantizer.primary_pq()) {
+            (Some(certificate), Some(primary)) => certificate.l2_interval_encoded_prepared(
+                primary,
+                prepared,
+                primary_code,
+                ResidualPqEncoded {
+                    code: &residual_code[..certificate.code_width().min(residual_code.len())],
+                    error_upper: residual_error_upper,
+                },
+                scratch,
+            ),
+            (None, _) => Ok(None),
+            _ => invalid("global PQ residual certificate state is inconsistent"),
+        }
     }
 }
 
@@ -2138,6 +2416,8 @@ struct ParsedChunk<'a> {
     segment_offset: usize,
     row_offset: usize,
     exact_ordinal_offset: usize,
+    residual_code_offset: usize,
+    residual_error_offset: usize,
 }
 
 impl<'a> ParsedChunk<'a> {
@@ -2151,8 +2431,14 @@ impl<'a> ParsedChunk<'a> {
             return invalid("Arrow scan buffer does not match its descriptor");
         }
         let base = reference.offset_bytes as usize;
-        let [_, segment_range, row_range, exact_ordinal_range] =
-            reference.scan_buffer_ranges(code_width)?;
+        let [
+            _,
+            segment_range,
+            row_range,
+            exact_ordinal_range,
+            residual_range,
+            error_range,
+        ] = reference.scan_buffer_ranges(code_width)?;
         let segment_start = segment_range.start.checked_sub(base).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ segment ordinal offset underflows".to_string())
         })?;
@@ -2162,6 +2448,12 @@ impl<'a> ParsedChunk<'a> {
         let exact_ordinal_start = exact_ordinal_range.start.checked_sub(base).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ exact ordinal offset underflows".to_string())
         })?;
+        let residual_code_offset = residual_range.start.checked_sub(base).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ residual code offset underflows".to_string())
+        })?;
+        let residual_error_offset = error_range.start.checked_sub(base).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ residual error offset underflows".to_string())
+        })?;
         Ok(Self {
             bytes,
             rows: reference.rows,
@@ -2169,6 +2461,8 @@ impl<'a> ParsedChunk<'a> {
             segment_offset: segment_start,
             row_offset: row_start,
             exact_ordinal_offset: exact_ordinal_start,
+            residual_code_offset,
+            residual_error_offset,
         })
     }
 
@@ -2189,6 +2483,30 @@ impl<'a> ParsedChunk<'a> {
     fn exact_ordinal(&self, local: usize) -> Result<usize> {
         let start = self.exact_ordinal_offset + local * size_of::<u32>();
         Ok(read_u32(self.bytes, start)? as usize)
+    }
+
+    fn residual_code(&self, local: usize) -> &[u8] {
+        let start = self.residual_code_offset + local * 64;
+        &self.bytes[start..start + 64]
+    }
+
+    fn residual_error_upper(&self, local: usize) -> Result<f32> {
+        let start = self.residual_error_offset + local * size_of::<f32>();
+        let error = f32::from_le_bytes(
+            self.bytes
+                .get(start..start + size_of::<f32>())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global PQ residual error row is truncated".to_string(),
+                    )
+                })?
+                .try_into()
+                .expect("four bytes"),
+        );
+        if error.is_nan() || error.is_sign_negative() {
+            return invalid("global PQ residual error row is invalid");
+        }
+        Ok(error)
     }
 }
 
@@ -2547,6 +2865,8 @@ impl GlobalCellGraph {
                     exact_ordinal: chunk.exact_ordinal(local)?,
                     row: chunk.row(local)?,
                     code: chunk.code(local).into(),
+                    residual_code: chunk.residual_code(local).into(),
+                    residual_error_upper: chunk.residual_error_upper(local)?,
                 })
             })
             .collect()
@@ -2587,6 +2907,9 @@ impl GlobalCellGraph {
     }
 
     fn chunk_reference(&self) -> GlobalPqChunkRef {
+        let scan_end = self.chunk.len();
+        let error = scan_end.saturating_sub(self.rows.saturating_mul(size_of::<f32>()));
+        let residual = error.saturating_sub(self.rows.saturating_mul(64));
         GlobalPqChunkRef {
             path: String::new(),
             checksum: blake3::hash(&self.chunk).to_hex().to_string(),
@@ -2598,6 +2921,8 @@ impl GlobalCellGraph {
             exact_size_bytes: 0,
             cell_index: self.cell_index,
             ordinal_buffer_offsets: self.ordinal_buffer_offsets,
+            residual_buffer_offsets: [residual, error]
+                .map(|offset| u32::try_from(offset).expect("graph residual offset fits u32")),
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start: self.row_start,
@@ -2674,6 +2999,8 @@ pub(crate) struct GlobalPqCandidate {
     pub(crate) exact_ordinal: usize,
     pub(crate) row: GlobalPqRow,
     pub(crate) code: Box<[u8]>,
+    pub(crate) residual_code: Box<[u8]>,
+    pub(crate) residual_error_upper: f32,
 }
 
 impl Eq for GlobalPqCandidate {}
@@ -2713,6 +3040,8 @@ fn push_scanned_candidate(
     exact_ordinal: usize,
     row: GlobalPqRow,
     code: &[u8],
+    residual_code: &[u8],
+    residual_error_upper: f32,
     limit: usize,
 ) {
     let should_insert = best.len() < limit
@@ -2736,6 +3065,8 @@ fn push_scanned_candidate(
         exact_ordinal,
         row,
         code: code.into(),
+        residual_code: residual_code.into(),
+        residual_error_upper,
     });
 }
 
@@ -2808,7 +3139,7 @@ mod tests {
         rows: usize,
         code_width: usize,
         location: LocationEncoding,
-    ) -> (Vec<u8>, [u32; 3]) {
+    ) -> (Vec<u8>, [u32; 3], [u32; 2]) {
         let row_width = code_width + location.width_bytes();
         assert_eq!(interleaved.len(), rows * row_width);
         let mut scan = Vec::with_capacity(rows * (code_width + 12));
@@ -2838,7 +3169,17 @@ mod tests {
         for row in 0..rows {
             scan.extend_from_slice(&u32::try_from(row).unwrap().to_le_bytes());
         }
-        (scan, [segment_offset, row_offset, exact_ordinal_offset])
+        let residual_code_offset = u32::try_from(scan.len()).unwrap();
+        scan.resize(scan.len() + rows * 64, 0);
+        let residual_error_offset = u32::try_from(scan.len()).unwrap();
+        for _ in 0..rows {
+            scan.extend_from_slice(&f32::INFINITY.to_le_bytes());
+        }
+        (
+            scan,
+            [segment_offset, row_offset, exact_ordinal_offset],
+            [residual_code_offset, residual_error_offset],
+        )
     }
 
     fn vectors(rows: usize, dimensions: usize) -> Vec<Vec<f32>> {
@@ -2977,7 +3318,20 @@ mod tests {
 
     #[test]
     fn descriptor_is_small_when_vector_count_grows() {
-        let quantizer = RotatedProductQuantizer::fit(config(), &vectors(256, 64)).unwrap();
+        let fit = vectors(256, 64);
+        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let residual = ResidualPqCertificate::fit(
+            &quantizer,
+            &fit,
+            crate::residual_pq_certificate::ResidualPqCertificateConfig {
+                seed: 97,
+                subspaces: 64,
+                centroids: 16,
+                sample_limit: fit.len(),
+                iterations: 2,
+            },
+        )
+        .unwrap();
         let location = LocationEncoding::for_layout(25_000, 4_096).unwrap();
         let chunks = (0..25_000)
             .map(|segment| {
@@ -2992,6 +3346,7 @@ mod tests {
                     exact_size_bytes: 1_024_000,
                     cell_index: (segment % 16) as u16,
                     ordinal_buffer_offsets: [0; 3],
+                    residual_buffer_offsets: [0; 2],
                     typed_buffer_offsets: [0; 6],
                     identity_values_size_bytes: 0,
                     row_start: segment as usize * 4_000,
@@ -3002,9 +3357,10 @@ mod tests {
                 .with_test_typed_identity_ranges()
             })
             .collect();
-        let descriptor = GlobalPqDescriptor::new(
+        let descriptor = GlobalPqDescriptor::new_with_residual(
             quantizer.state(),
-            coarse_state(&vectors(256, 64)),
+            coarse_state(&fit),
+            Some(residual.state()),
             100_000_000,
             VectorElementType::Float32,
             location,
@@ -3012,8 +3368,8 @@ mod tests {
         )
         .unwrap();
         let resident_bytes = descriptor.resident_bytes();
-        // Six explicit standard-Arrow buffer starts, independently authenticated
-        // identity metadata, and the V7 exact-object path keep 100M-scale routing
+        // Explicit standard-Arrow buffer starts, independently authenticated
+        // identity metadata, and the V8 exact-object path keep 100M-scale routing
         // metadata below 12 MiB while accepting every legal inter-column padding
         // layout.
         assert!(
@@ -3048,6 +3404,7 @@ mod tests {
                 exact_size_bytes: 64 * 64 * size_of::<f32>(),
                 cell_index: 0,
                 ordinal_buffer_offsets: [0; 3],
+                residual_buffer_offsets: [0; 2],
                 typed_buffer_offsets: [0; 6],
                 identity_values_size_bytes: 0,
                 row_start,
@@ -3190,6 +3547,7 @@ mod tests {
             exact_size_bytes: 64 * 64 * size_of::<f32>(),
             cell_index: 0,
             ordinal_buffer_offsets: [0; 3],
+            residual_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start: 0,
@@ -3261,6 +3619,7 @@ mod tests {
             exact_size_bytes: 64 * size_of::<f32>(),
             cell_index: 0,
             ordinal_buffer_offsets: [0; 3],
+            residual_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start: 0,
@@ -3297,7 +3656,7 @@ mod tests {
         )
         .unwrap();
         let mut json = serde_json::to_value(&descriptor).unwrap();
-        assert_eq!(json["bundle_layout"], "typed-columns-v7-local-exact-arrow");
+        assert_eq!(json["bundle_layout"], "typed-columns-v8-residual-pq-arrow");
         json.as_object_mut().unwrap().remove("bundle_layout");
 
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
@@ -3305,9 +3664,113 @@ mod tests {
 
         let mut json = serde_json::to_value(descriptor).unwrap();
         json["bundle_layout"] =
-            serde_json::Value::String("typed-columns-v6-dual-arrow".to_string());
+            serde_json::Value::String("typed-columns-v7-local-exact-arrow".to_string());
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
-        assert!(error.to_string().contains("typed-columns-v6-dual-arrow"));
+        assert!(
+            error
+                .to_string()
+                .contains("typed-columns-v7-local-exact-arrow")
+        );
+    }
+
+    #[test]
+    fn descriptor_rejects_residual_state_from_another_primary_quantizer() {
+        let fit = vectors(64, 64);
+        let primary = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let residual = ResidualPqCertificate::fit(
+            &primary,
+            &fit,
+            crate::residual_pq_certificate::ResidualPqCertificateConfig {
+                seed: 91,
+                subspaces: 64,
+                centroids: 16,
+                sample_limit: fit.len(),
+                iterations: 2,
+            },
+        )
+        .unwrap();
+        let mut other_config = config();
+        other_config.seed ^= 1;
+        let other = RotatedProductQuantizer::fit(other_config, &fit).unwrap();
+
+        let error = GlobalPqDescriptor::new_with_residual(
+            other.state(),
+            coarse_state(&fit),
+            Some(residual.state()),
+            0,
+            VectorElementType::Float32,
+            LocationEncoding::for_layout(1, fit.len()).unwrap(),
+            Vec::new(),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("different primary quantizer"));
+    }
+
+    #[test]
+    fn disk_spool_persists_finite_residual_certificate_rows() {
+        let fit = vectors(64, 64);
+        let primary = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let residual = ResidualPqCertificate::fit(
+            &primary,
+            &fit,
+            crate::residual_pq_certificate::ResidualPqCertificateConfig {
+                seed: 93,
+                subspaces: 64,
+                centroids: 16,
+                sample_limit: fit.len(),
+                iterations: 2,
+            },
+        )
+        .unwrap();
+        let coarse = GlobalCoarseQuantizer::from_state(GlobalCoarseQuantizerState::Product(
+            coarse_state(&fit),
+        ))
+        .unwrap();
+        let location = LocationEncoding::for_layout(1, fit.len()).unwrap();
+        let mut spool = GlobalPqCellSpool::new_with_residual(
+            primary,
+            coarse,
+            Some(residual),
+            location,
+            DEFAULT_GLOBAL_PQ_CHUNK_BYTES,
+            64,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        let mut rotated = Vec::new();
+        let mut code = Vec::new();
+        let mut residual_scratch = ResidualPqEncodeScratch::default();
+        let encoded = spool
+            .encode_vector_with_residual_scratch(
+                &fit[0],
+                &mut rotated,
+                &mut code,
+                &mut residual_scratch,
+            )
+            .unwrap();
+        spool
+            .push_encoded_with_residual(
+                &encoded,
+                GlobalPqRow {
+                    segment_index: 0,
+                    row_index: 0,
+                },
+                &fit[0],
+                b"row-0",
+                MutationStamp::new(MutationVersion::from_parts(1, [2; 16]), [3; 32]),
+            )
+            .unwrap();
+
+        let rows = spool
+            .finish(|_, chunk| {
+                assert_eq!(chunk.residual_codes.len(), 64);
+                let error = f32::from_le_bytes(chunk.residual_error_upper[..4].try_into().unwrap());
+                assert!(error.is_finite() && !error.is_sign_negative());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 
     #[test]
@@ -3355,7 +3818,7 @@ mod tests {
             );
         }
         let chunk = builder.flush().unwrap().unwrap();
-        let (mut scan, ordinal_buffer_offsets) = typed_scan_fixture(
+        let (mut scan, ordinal_buffer_offsets, residual_buffer_offsets) = typed_scan_fixture(
             &chunk.bytes,
             chunk.rows,
             quantizer.code_bytes_per_vector(),
@@ -3379,6 +3842,7 @@ mod tests {
             exact_size_bytes: vectors.len() * 64 * size_of::<f32>(),
             cell_index: 7,
             ordinal_buffer_offsets,
+            residual_buffer_offsets,
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start: 4_096,
@@ -3474,7 +3938,7 @@ mod tests {
                     .unwrap();
             }
             let chunk = builder.flush().unwrap().unwrap();
-            let (scan, ordinal_buffer_offsets) = typed_scan_fixture(
+            let (scan, ordinal_buffer_offsets, residual_buffer_offsets) = typed_scan_fixture(
                 &chunk.bytes,
                 chunk.rows,
                 quantizer.code_bytes_per_vector(),
@@ -3493,6 +3957,7 @@ mod tests {
                 exact_size_bytes: 16_384,
                 cell_index: segment as u16,
                 ordinal_buffer_offsets,
+                residual_buffer_offsets,
                 typed_buffer_offsets: [0; 6],
                 identity_values_size_bytes: 0,
                 row_start,
@@ -3553,6 +4018,7 @@ mod tests {
                     // regions, produced by separate bounded ingest checkpoints.
                     cell_index: (segment % 2) as u16,
                     ordinal_buffer_offsets: [0; 3],
+                    residual_buffer_offsets: [0; 2],
                     typed_buffer_offsets: [0; 6],
                     identity_values_size_bytes: 0,
                     row_start: segment as usize * 64,
@@ -3633,6 +4099,7 @@ mod tests {
         let mut row_start = 0_usize;
         let rows = spool
             .finish(|cell, chunk| {
+                let chunk_ordinal = refs.len();
                 assert_eq!(chunk.exact_bytes.len(), chunk.rows * 64 * 4);
                 for local in 0..chunk.rows {
                     let start = local * 64 * 4;
@@ -3642,18 +4109,18 @@ mod tests {
                         .collect::<Vec<_>>();
                     assert_eq!(exact.len(), 64);
                 }
-                let (scan, ordinal_buffer_offsets) = typed_scan_fixture(
+                let (scan, ordinal_buffer_offsets, residual_buffer_offsets) = typed_scan_fixture(
                     &chunk.bytes,
                     chunk.rows,
                     quantizer.code_bytes_per_vector(),
                     location,
                 );
                 let reference = GlobalPqChunkRef {
-                    path: format!("cell-{cell}"),
+                    path: format!("cell-{cell}-{chunk_ordinal}"),
                     checksum: blake3::hash(&scan).to_hex().to_string(),
                     offset_bytes: 0,
                     identity_checksum: "ef".repeat(32).into_boxed_str(),
-                    exact_path: format!("exact-{cell}"),
+                    exact_path: format!("exact-{cell}-{chunk_ordinal}"),
                     exact_checksum: blake3::hash(&chunk.exact_bytes)
                         .to_hex()
                         .to_string()
@@ -3664,6 +4131,7 @@ mod tests {
                     exact_size_bytes: chunk.exact_bytes.len(),
                     cell_index: cell,
                     ordinal_buffer_offsets,
+                    residual_buffer_offsets,
                     typed_buffer_offsets: [0; 6],
                     identity_values_size_bytes: 0,
                     row_start,
@@ -3828,6 +4296,8 @@ mod tests {
                     exact_ordinal: 7,
                     row: row(7),
                     code: vec![7].into_boxed_slice(),
+                    residual_code: vec![7; 64].into_boxed_slice(),
+                    residual_error_upper: 0.7,
                 },
                 GlobalPqCandidate {
                     distance: 0.1,
@@ -3837,6 +4307,8 @@ mod tests {
                     exact_ordinal: 1,
                     row: row(1),
                     code: vec![1].into_boxed_slice(),
+                    residual_code: vec![1; 64].into_boxed_slice(),
+                    residual_error_upper: 0.1,
                 },
             ],
             vec![
@@ -3848,6 +4320,8 @@ mod tests {
                     exact_ordinal: 2,
                     row: row(2),
                     code: vec![2].into_boxed_slice(),
+                    residual_code: vec![2; 64].into_boxed_slice(),
+                    residual_error_upper: 0.2,
                 },
                 GlobalPqCandidate {
                     distance: 0.3,
@@ -3857,6 +4331,8 @@ mod tests {
                     exact_ordinal: 3,
                     row: row(3),
                     code: vec![3].into_boxed_slice(),
+                    residual_code: vec![3; 64].into_boxed_slice(),
+                    residual_error_upper: 0.3,
                 },
             ],
         ];
@@ -3867,6 +4343,13 @@ mod tests {
                 .map(|candidate| candidate.node)
                 .collect::<Vec<_>>(),
             vec![1, 2, 3]
+        );
+        assert_eq!(
+            merged
+                .iter()
+                .map(|candidate| (candidate.residual_code[0], candidate.residual_error_upper))
+                .collect::<Vec<_>>(),
+            vec![(1, 0.1), (2, 0.2), (3, 0.3)]
         );
         assert_eq!(
             merged

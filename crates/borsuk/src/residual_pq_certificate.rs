@@ -243,6 +243,26 @@ impl ResidualPqCertificate {
         row: &ResidualPqRow,
         scratch: &mut ResidualPqIntervalScratch,
     ) -> Result<Option<(f64, f64)>> {
+        self.l2_interval_encoded_prepared(
+            primary,
+            prepared,
+            primary_code,
+            ResidualPqEncoded {
+                code: &row.code,
+                error_upper: row.error_upper,
+            },
+            scratch,
+        )
+    }
+
+    pub(crate) fn l2_interval_encoded_prepared(
+        &self,
+        primary: &RotatedProductQuantizer,
+        prepared: &ResidualPqPreparedQuery,
+        primary_code: &[u8],
+        row: ResidualPqEncoded<'_>,
+        scratch: &mut ResidualPqIntervalScratch,
+    ) -> Result<Option<(f64, f64)>> {
         self.validate_primary(primary)?;
         if prepared.primary_fingerprint != self.primary_fingerprint {
             return invalid("prepared query belongs to a different primary quantizer");
@@ -259,7 +279,7 @@ impl ResidualPqCertificate {
         primary.reconstruct_transformed_into(primary_code, &mut scratch.primary_center)?;
         if self
             .quantizer
-            .reconstruct_transformed_into(&row.code, &mut scratch.residual_center)
+            .reconstruct_transformed_into(row.code, &mut scratch.residual_center)
             .is_err()
         {
             return Ok(None);
@@ -287,6 +307,15 @@ impl ResidualPqCertificate {
             code_width: self.quantizer.code_bytes_per_vector(),
             primary_fingerprint: self.primary_fingerprint,
         }
+    }
+
+    pub(crate) fn code_width(&self) -> usize {
+        self.quantizer.code_bytes_per_vector()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + self.quantizer.resident_bytes()
     }
 
     fn validate_primary(&self, primary: &RotatedProductQuantizer) -> Result<()> {

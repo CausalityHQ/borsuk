@@ -2027,8 +2027,7 @@ pub struct SearchOptions {
     #[serde(default)]
     pub cache_execution: CacheExecutionPolicy,
     /// Enable result-preserving exact-bound qualification telemetry. This is
-    /// disabled by default because the V7 shadow recomputes residuals from
-    /// fetched exact rows.
+    /// disabled by default until the V8 physical-plan qualification gates pass.
     #[serde(default)]
     pub global_exact_bound_shadow: bool,
 }

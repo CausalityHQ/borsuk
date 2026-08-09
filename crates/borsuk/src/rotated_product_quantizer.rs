@@ -210,6 +210,7 @@ impl RotatedProductQuantizer {
     /// This is shadow evidence only: callers must additionally prove that a
     /// metric-specific interval encloses the exact f32 scorer before using it
     /// to suppress reads.
+    #[cfg(test)]
     pub(crate) fn certificate_l2_interval(
         &self,
         query: &[f32],
@@ -253,6 +254,7 @@ impl RotatedProductQuantizer {
         Ok(((lower - rounding).max(0.0), upper + rounding))
     }
 
+    #[cfg(test)]
     pub(crate) fn certificate_distance_scale(&self) -> f64 {
         match self.rotation_kind {
             ProductRotation::Identity => 1.0,
@@ -361,6 +363,7 @@ impl RotatedProductQuantizer {
         Ok(())
     }
 
+    #[cfg(test)]
     fn certificate_transform(&self, vector: &[f32]) -> Vec<f64> {
         self.rotation.as_ref().map_or_else(
             || vector.iter().map(|value| f64::from(*value)).collect(),

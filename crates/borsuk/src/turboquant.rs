@@ -305,6 +305,7 @@ impl StructuredRotation {
     /// Apply the same seeded SRHT in scalar f64 arithmetic. Certificate math
     /// uses this path so its geometry is not derived from the approximate f32
     /// SIMD accumulation used for ranking.
+    #[cfg(test)]
     pub(crate) fn rotate_f64(&self, vector: &[f32]) -> Vec<f64> {
         debug_assert_eq!(vector.len(), self.dimensions);
         let mut work = vec![0.0_f64; self.padded];
