@@ -4,8 +4,8 @@
   "status": "local-claim-ineligible",
   "architecture": "local",
   "instance_type": "local",
-  "cell_counts": [64],
-  "writers": [2],
+  "cell_counts": [2000],
+  "writers": [1, 8],
   "writer_instance_policy": "one-per-writer",
   "writer_process_policy": "one-process-per-writer",
   "repetitions": 1,
@@ -13,9 +13,9 @@
   "records_per_operation": 16,
   "pipeline_depth_per_writer": 1,
   "worker_lanes": [1],
-  "dimensions": 8,
-  "max_group_delay_ms": 1,
-  "max_group_records": 8,
+  "dimensions": 768,
+  "max_group_delay_ms": 5,
+  "max_group_records": 1024,
   "cell_timeout_seconds": 120,
   "master_seed": 76412031,
   "read_queries_per_cell": 1,
@@ -44,5 +44,5 @@
     "tail_backpressure",
     "delta_drain_frontier_safety"
   ],
-  "comparison_contract": "Structural bulk smoke only; ineligible for performance claims."
+  "comparison_contract": "Realistic-shape structural bulk smoke only; timings are ineligible for performance claims."
 }

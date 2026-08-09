@@ -215,7 +215,7 @@ fn build() -> BenchResult<()> {
         dimensions == 96
     };
     if (!smoke && (!matches!(cell_count, 2_000 | 16_000) || !production_dimensions))
-        || (smoke && (cell_count != 64 || dimensions != 8))
+        || (smoke && (cell_count != 2_000 || dimensions != 768))
     {
         return Err("build differs from its frozen logical-cell protocol".into());
     }

@@ -21,13 +21,15 @@ if [[ "$SMOKE" == "1" ]]; then
   else
     MANIFEST="$ROOT_DIR/docs/research/group-commit-scalability-smoke.json"
   fi
-  CELL_COUNTS=(64)
-  WRITERS=(2)
-  REPETITIONS=1
-  OPERATIONS=2
-  DIMENSIONS=8
-  MAX_DELAY_MS=1
-  MAX_RECORDS=8
+  mapfile -t CELL_COUNTS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["cell_counts"], sep="\n")' "$MANIFEST")
+  mapfile -t WRITERS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["writers"], sep="\n")' "$MANIFEST")
+  REPETITIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["repetitions"])' "$MANIFEST")"
+  OPERATIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["operations_per_writer"])' "$MANIFEST")"
+  DIMENSIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dimensions"])' "$MANIFEST")"
+  MAX_DELAY_MS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_group_delay_ms"])' "$MANIFEST")"
+  MAX_RECORDS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_group_records"])' "$MANIFEST")"
+  PIPELINE_DEPTH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pipeline_depth_per_writer"])' "$MANIFEST")"
+  mapfile -t WORKER_LANES < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["worker_lanes"], sep="\n")' "$MANIFEST")
   OUTPUT="${BORSUK_GROUP_COMMIT_SCALABILITY_OUTPUT_ROOT:-$(mktemp -d)/group-commit-scalability-smoke}"
   INDEX_ROOT="${BORSUK_GROUP_COMMIT_SCALABILITY_INDEX_ROOT:-$(mktemp -d)/indexes}"
   ARCHITECTURE=local
@@ -233,7 +235,6 @@ for cells in "${CELL_COUNTS[@]}"; do
     ORDER=("${ROTATED_ORDER[@]}")
     rotate_order "$lane_rotation" "${WORKER_LANES[@]}"
     LANE_ORDER=("${ROTATED_ORDER[@]}")
-    if [[ "$SMOKE" == "1" ]]; then ORDER=(2); LANE_ORDER=(1); fi
     for worker_lanes in "${LANE_ORDER[@]}"; do
     for writers in "${ORDER[@]}"; do
       cell_min_rps=0

@@ -34,10 +34,20 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("open_benchmark_index(&uri)?", BENCH)
         self.assertIn("writer_instance", BENCH)
 
-    def test_smoke_retains_its_small_independent_bound(self) -> None:
-        self.assertIn("MAX_RECORDS=8", RUNNER)
-        self.assertIn("max_records != 8", BENCH)
-        self.assertIn("WRITERS=(2)", RUNNER)
+    def test_smoke_uses_realistic_dimensions_and_one_or_eight_processes(self) -> None:
+        for name in (
+            "group-commit-scalability-smoke.json",
+            "group-commit-scalability-smoke-bulk.json",
+        ):
+            manifest = json.loads((ROOT / "docs/research" / name).read_text())
+            self.assertEqual(manifest["cell_counts"], [2_000])
+            self.assertEqual(manifest["writers"], [1, 8])
+            self.assertEqual(manifest["dimensions"], 768)
+            self.assertEqual(manifest["max_group_delay_ms"], 5)
+            self.assertEqual(manifest["max_group_records"], 1_024)
+        self.assertIn("mapfile -t WRITERS", RUNNER)
+        self.assertNotIn("WRITERS=(2)", RUNNER)
+        self.assertIn("dimensions != 768", BENCH)
 
     def test_point_visibility_uses_one_batched_routing_traversal(self) -> None:
         self.assertIn("let point_records = reopened.get_records(", BENCH)

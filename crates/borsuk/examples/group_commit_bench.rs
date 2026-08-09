@@ -1479,14 +1479,14 @@ fn main() -> BenchResult<()> {
         "smoke" => {
             let cell_count: usize = number("BORSUK_GROUP_COMMIT_CELL_COUNT")?;
             let repetition: usize = number("BORSUK_GROUP_COMMIT_REPETITION")?;
-            if cell_count != 64
-                || !matches!(writers, 1 | 2)
+            if cell_count != 2_000
+                || !matches!(writers, 1 | 8)
                 || writer_instance_count != writers
                 || repetition != 1
                 || operations != 2
-                || dimensions != 8
-                || max_delay_ms != 1
-                || max_records != 8
+                || dimensions != 768
+                || max_delay_ms != 5
+                || max_records != 1_024
                 || !matches!(records_per_operation, 1 | 16)
             {
                 return Err("group-commit cell differs from the structural smoke".into());
