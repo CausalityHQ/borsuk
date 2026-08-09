@@ -2468,3 +2468,25 @@ The evaluator now checks paired lengths explicitly and uses Python-portable
 exit one only with a nonempty decision file. A separate recovery mode requires
 both the completed-pairs and qualification-failure markers and leaves the
 immutable failed root unchanged while writing any recovered decision elsewhere.
+
+Recovery from revision `4902cd2` verified the preserved raw and identity hashes,
+required the failed-root and completed-pairs markers, and produced decision
+SHA-256 `21c7049419b5e671741953a805cff9195ab2f567e154b5d7522d84fa1ea1df47`
+outside the root. The treatment is a valid architectural rejection. At nprobe
+32/64/128/256, approximate-first mean recall@10 was respectively
+0.6284/0.6338/0.6357/0.6360 and per-query p05 recall was 0.30 throughout,
+far below 0.95/0.80. Treatment p95 was 26.578/40.311/67.534/117.798 ms,
+versus control 51.567/63.359/90.307/139.849 ms. All 1,000 treatment queries
+were faster at every point, with 91.0--97.1% fewer backing reads and
+46.6--85.6% fewer backing bytes, but speed cannot compensate for failed recall.
+
+The routing sweep isolates ranking distortion: treatment top-10 overlap with
+the nprobe-32 result remained 0.985/0.980/0.979 at nprobe 64/128/256, while
+recall did not materially improve. At nprobe 32 the exact control fetched all
+4,096 candidates using an average 1,213.073 backing reads and 131,366,843 bytes
+per query; its exact-phase p95 was 34.346 ms on local NVMe. Approximate-first
+used 35.529 reads and 18,976,431 bytes, but its top-10 overlap with the exact
+control averaged only 0.6352. Therefore neither higher nprobe nor unrefined ADC
+is a production solution. The next diagnostic must locate the minimum exact
+refinement width that reaches the frozen recall distribution, then redesign
+candidate representation/layout to make that refinement S3-efficient.
