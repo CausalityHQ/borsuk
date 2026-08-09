@@ -12936,34 +12936,33 @@ impl BorsukIndex {
         } else {
             query.to_vec()
         };
-        let (base_probes, delta_probes) = match &options.mode {
+        let probe_budget = match &options.mode {
             SearchMode::Approx {
                 max_segments: Some(value),
                 ..
-            } => {
-                let delta = if *value == 0 {
-                    0
-                } else {
-                    value
-                        .saturating_sub(1)
-                        .div_ceil(4)
-                        .max(1)
-                        .min(delta_ref.probes)
-                };
-                (value.saturating_sub(delta), delta)
-            }
-            _ => (global_ref.probes, delta_ref.probes),
+            } => *value,
+            _ => global_ref.probes.saturating_add(delta_ref.probes),
         };
         let base_route_started = Instant::now();
-        let base_cells =
-            base_index.nearest_cells(&pq_query, base_probes.min(base_index.cell_count()))?;
+        let base_ranked = base_index
+            .nearest_cells_with_distances(&pq_query, probe_budget.min(base_index.cell_count()))?;
         let base_route_us =
             u64::try_from(base_route_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let delta_route_started = Instant::now();
-        let delta_cells =
-            delta_index.nearest_cells(&pq_query, delta_probes.min(delta_index.cell_count()))?;
+        let delta_ranked = delta_index
+            .nearest_cells_with_distances(&pq_query, probe_budget.min(delta_index.cell_count()))?;
         let delta_route_us =
             u64::try_from(delta_route_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let selected_cells =
+            select_fused_global_pq_cells(&base_ranked, &delta_ranked, probe_budget);
+        let base_cells = selected_cells
+            .iter()
+            .filter_map(|(layer, cell)| (*layer == GlobalPqSearchLayer::Base).then_some(*cell))
+            .collect::<Vec<_>>();
+        let delta_cells = selected_cells
+            .iter()
+            .filter_map(|(layer, cell)| (*layer == GlobalPqSearchLayer::Delta).then_some(*cell))
+            .collect::<Vec<_>>();
         let base_chunks = base_index.chunks_for_cells(&base_cells);
         let delta_chunks = delta_index.chunks_for_cells(&delta_cells);
         let stripe_bytes = validated_global_pq_prefetch_stripe_bytes(
@@ -21916,6 +21915,76 @@ fn global_pq_code_read_wave_end(
     end.max(start + 1)
 }
 
+fn select_fused_global_pq_cells(
+    base: &[(f32, u16)],
+    delta: &[(f32, u16)],
+    limit: usize,
+) -> Vec<(GlobalPqSearchLayer, u16)> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut ranked = base
+        .iter()
+        .map(|(distance, cell)| (*distance, GlobalPqSearchLayer::Base, *cell))
+        .chain(
+            delta
+                .iter()
+                .map(|(distance, cell)| (*distance, GlobalPqSearchLayer::Delta, *cell)),
+        )
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    let mut selected = Vec::with_capacity(limit.min(ranked.len()));
+    if !base.is_empty() && !delta.is_empty() {
+        // Delta contains the newest generation of an upsert. With a single
+        // probe, searching only a nearer stale base cell would let MVCC
+        // suppress that row without ever discovering its current vector.
+        if let Some(candidate) = ranked
+            .iter()
+            .find(|(_, layer, _)| *layer == GlobalPqSearchLayer::Delta)
+        {
+            selected.push(*candidate);
+        }
+        // With two or more probes, retain one cell from each layer before
+        // spending the remainder by query-wide distance. This is the minimum
+        // anti-starvation coverage before identity/MVCC resolution without
+        // restoring the former fixed 75/25 quota. Approximate routing still
+        // cannot guarantee discovery of every arbitrarily moved generation.
+        if limit >= 2
+            && let Some(candidate) = ranked
+                .iter()
+                .find(|(_, layer, _)| *layer == GlobalPqSearchLayer::Base)
+        {
+            selected.push(*candidate);
+        }
+    }
+    for candidate in &ranked {
+        if selected.len() >= limit {
+            break;
+        }
+        if !selected
+            .iter()
+            .any(|selected| selected.1 == candidate.1 && selected.2 == candidate.2)
+        {
+            selected.push(*candidate);
+        }
+    }
+    selected.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    selected
+        .into_iter()
+        .map(|(_, layer, cell)| (layer, cell))
+        .collect()
+}
+
 fn global_pq_code_read_range(chunks: &[GlobalPqChunkRef]) -> Result<Range<usize>> {
     let start = chunks
         .iter()
@@ -27499,6 +27568,56 @@ mod tests {
     }
 
     #[test]
+    fn fused_global_pq_cells_share_one_distance_ranked_frontier() {
+        let selected = select_fused_global_pq_cells(
+            &[(100.0, 10), (101.0, 11), (102.0, 12)],
+            &[(1.0, 20), (2.0, 21), (3.0, 22)],
+            2,
+        );
+
+        assert_eq!(
+            selected,
+            vec![
+                (GlobalPqSearchLayer::Delta, 20),
+                (GlobalPqSearchLayer::Base, 10),
+            ],
+            "the frontier must reserve the minimum MVCC-safe layer coverage"
+        );
+        assert_eq!(
+            select_fused_global_pq_cells(
+                &[(100.0, 10), (101.0, 11), (102.0, 12)],
+                &[(1.0, 20), (2.0, 21), (3.0, 22)],
+                4,
+            ),
+            vec![
+                (GlobalPqSearchLayer::Delta, 20),
+                (GlobalPqSearchLayer::Delta, 21),
+                (GlobalPqSearchLayer::Delta, 22),
+                (GlobalPqSearchLayer::Base, 10),
+            ],
+            "only the two mandatory probes may override global distance order"
+        );
+        assert_eq!(
+            select_fused_global_pq_cells(&[(0.0, 10)], &[(100.0, 20)], 1),
+            vec![(GlobalPqSearchLayer::Delta, 20)],
+            "one probe must prefer the layer holding the newest generations"
+        );
+        assert_eq!(
+            select_fused_global_pq_cells(&[(1.0, 10)], &[(1.0, 20)], 2),
+            vec![
+                (GlobalPqSearchLayer::Delta, 20),
+                (GlobalPqSearchLayer::Base, 10),
+            ],
+            "equal-distance ordering must be deterministic across layers"
+        );
+        assert_eq!(
+            select_fused_global_pq_cells(&[], &[(1.0, 20)], 1),
+            vec![(GlobalPqSearchLayer::Delta, 20)]
+        );
+        assert!(select_fused_global_pq_cells(&[(1.0, 10)], &[], 0).is_empty());
+    }
+
+    #[test]
     fn global_pq_code_ranges_use_their_own_bounded_io_width() {
         assert_eq!(global_pq_code_read_parallelism(1), 1);
         assert_eq!(global_pq_code_read_parallelism(28), 28);
@@ -29206,6 +29325,19 @@ mod tests {
         drop(index);
 
         let reader = BorsukIndex::open(&uri).unwrap();
+        let one_probe = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(1)
+                    .with_max_candidates_per_segment(1),
+            )
+            .unwrap();
+        assert_eq!(
+            one_probe.hits[0].id,
+            RecordId::from("base-0"),
+            "a one-cell frontier must retain the newest delta generation"
+        );
         let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
             .with_max_segments(4)
             .with_max_candidates_per_segment(1);

@@ -395,12 +395,12 @@ impl HierarchicalCoarseQuantizer {
         encode_hierarchical_cell(best.1, best.2)
     }
 
-    pub(crate) fn nearest_cells(
+    fn nearest_cells_with_distances(
         &self,
         query: &[f32],
         nprobe: usize,
         cells: &[u16],
-    ) -> Result<Vec<u16>> {
+    ) -> Result<Vec<(f32, u16)>> {
         if query.len() != self.dimensions {
             return Err(BorsukError::DimensionMismatch {
                 expected: self.dimensions,
@@ -427,7 +427,7 @@ impl HierarchicalCoarseQuantizer {
                 .then_with(|| left.1.cmp(&right.1))
         });
         scored.truncate(nprobe.min(scored.len()));
-        Ok(scored.into_iter().map(|(_, cell)| cell).collect())
+        Ok(scored)
     }
 
     #[cfg(test)]
@@ -596,10 +596,16 @@ impl GlobalCoarseQuantizer {
         }
     }
 
-    fn nearest_cells(&self, query: &[f32], nprobe: usize, cells: &[u16]) -> Result<Vec<u16>> {
+    fn nearest_cells_with_distances(
+        &self,
+        query: &[f32],
+        nprobe: usize,
+        cells: &[u16],
+    ) -> Result<Vec<(f32, u16)>> {
         match self {
             Self::Product(quantizer) => {
                 let prepared = quantizer.prepare_query(query)?;
+                let distance_scale = quantizer.routing_distance_scale();
                 let width = quantizer.code_bytes_per_vector();
                 if width > 2 {
                     return invalid("coarse PQ cell code exceeds u16");
@@ -609,7 +615,7 @@ impl GlobalCoarseQuantizer {
                     .copied()
                     .map(|cell| {
                         let bytes = cell.to_le_bytes();
-                        Ok((prepared.distance(&bytes[..width])?, cell))
+                        Ok((prepared.distance(&bytes[..width])? * distance_scale, cell))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 scored.sort_by(|left, right| {
@@ -618,9 +624,11 @@ impl GlobalCoarseQuantizer {
                         .then_with(|| left.1.cmp(&right.1))
                 });
                 scored.truncate(nprobe.min(scored.len()));
-                Ok(scored.into_iter().map(|(_, cell)| cell).collect())
+                Ok(scored)
             }
-            Self::Hierarchical(quantizer) => quantizer.nearest_cells(query, nprobe, cells),
+            Self::Hierarchical(quantizer) => {
+                quantizer.nearest_cells_with_distances(query, nprobe, cells)
+            }
         }
     }
 
@@ -1935,6 +1943,18 @@ impl ResidentGlobalPq {
     }
 
     pub(crate) fn nearest_cells(&self, query: &[f32], nprobe: usize) -> Result<Vec<u16>> {
+        Ok(self
+            .nearest_cells_with_distances(query, nprobe)?
+            .into_iter()
+            .map(|(_, cell)| cell)
+            .collect())
+    }
+
+    pub(crate) fn nearest_cells_with_distances(
+        &self,
+        query: &[f32],
+        nprobe: usize,
+    ) -> Result<Vec<(f32, u16)>> {
         let mut cells = self
             .chunks
             .iter()
@@ -1942,7 +1962,8 @@ impl ResidentGlobalPq {
             .collect::<Vec<_>>();
         cells.sort_unstable();
         cells.dedup();
-        self.coarse_quantizer.nearest_cells(query, nprobe, &cells)
+        self.coarse_quantizer
+            .nearest_cells_with_distances(query, nprobe, &cells)
     }
 
     #[cfg(test)]
@@ -2741,8 +2762,11 @@ mod tests {
             "build assignment must examine neighbouring parents to avoid hard-boundary loss"
         );
         let encoded = coarse.encode_cell(&fit[35]).unwrap();
-        let nearest = coarse.nearest_cells(&fit[35], 1, &[encoded]).unwrap();
-        assert_eq!(nearest, vec![encoded]);
+        let nearest = coarse
+            .nearest_cells_with_distances(&fit[35], 1, &[encoded])
+            .unwrap();
+        assert_eq!(nearest.len(), 1);
+        assert_eq!(nearest[0].1, encoded);
 
         let restored = HierarchicalCoarseQuantizer::from_state(coarse.state()).unwrap();
         assert_eq!(restored.encode_cell(&fit[35]).unwrap(), encoded);

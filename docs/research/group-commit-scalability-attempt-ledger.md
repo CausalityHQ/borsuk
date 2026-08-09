@@ -1822,3 +1822,18 @@ bytes from 15,415,864 to 20,023,864. This is a measured partial improvement,
 not a qualification pass. The next read-path work must address the remaining
 base/delta execution latency without changing recall, candidate correctness,
 or the standard Arrow durable representation.
+
+The v34 telemetry also proves that the existing fused base/delta exact path ran:
+delta exact-rerank time was zero, while the base field contained the single
+shared exact phase. The remaining scheduler still assigned a fixed three of
+four production probes to base and one to delta before comparing routing
+distance. The next TDD candidate replaces only that fixed quota with a
+query-wide distance frontier. It retains minimum MVCC anti-starvation coverage:
+a one-probe search chooses delta, a larger search reserves one nearest cell from
+each nonempty layer, and only the remaining probes follow global distance. This
+prevents the base layer from consuming the complete budget before any current
+delta candidate can be discovered; approximate routing does not claim to find
+every arbitrarily moved generation. The total segment and candidate budgets,
+single exact/MVCC pass, strict byte/deadline fallback, and Arrow objects remain
+unchanged. This is structural quality and scheduling evidence only until a
+fresh paired AWS attempt measures recall, latency, requests, and bytes.

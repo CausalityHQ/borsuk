@@ -23,7 +23,7 @@ pub(crate) struct ProductQuantizerConfig {
 pub(crate) enum ProductRotation {
     /// Classical product quantization in the original coordinate system.
     Identity,
-    /// Seeded sign flip followed by a normalized fast Walsh-Hadamard transform.
+    /// Seeded sign flip followed by a fast Walsh-Hadamard transform.
     Srht,
 }
 
@@ -177,6 +177,19 @@ impl RotatedProductQuantizer {
 
     pub(crate) fn centroids(&self) -> usize {
         self.centroids
+    }
+
+    /// Convert squared distance in the encoded coordinate system back to the
+    /// original-space scale. The in-place SRHT intentionally omits the
+    /// `1/sqrt(padded_dimensions)` factor, so its squared distances carry one
+    /// factor of `padded_dimensions`. Within one codebook that constant does
+    /// not affect ranking; cross-artifact routing must remove it before
+    /// comparing independently trained layouts.
+    pub(crate) fn routing_distance_scale(&self) -> f32 {
+        match self.rotation_kind {
+            ProductRotation::Identity => 1.0,
+            ProductRotation::Srht => 1.0 / self.padded_dimensions as f32,
+        }
     }
 
     pub(crate) fn state(&self) -> ProductQuantizerState {
@@ -813,6 +826,34 @@ mod tests {
             .distance(&pq.encode(fit.last().unwrap()).unwrap())
             .unwrap();
         assert!(near < far, "near={near}, far={far}");
+    }
+
+    #[test]
+    fn srht_routing_distance_restores_original_space_scale() {
+        let centroid = vec![1.0, 2.0, 3.0];
+        let query = vec![4.0, 6.0, 8.0];
+        let quantizer = RotatedProductQuantizer::fit(
+            ProductQuantizerConfig {
+                rotation: ProductRotation::Srht,
+                seed: 7,
+                dimensions: 3,
+                subspaces: 1,
+                centroids: 1,
+                sample_limit: 1,
+                iterations: 1,
+            },
+            std::slice::from_ref(&centroid),
+        )
+        .unwrap();
+
+        let routed = quantizer
+            .prepare_query(&query)
+            .unwrap()
+            .distance(&[0])
+            .unwrap()
+            * quantizer.routing_distance_scale();
+        let exact = crate::metric::squared_euclidean_simd(&query, &centroid);
+        assert!((routed - exact).abs() < 1e-5, "{routed} != {exact}");
     }
 
     #[test]

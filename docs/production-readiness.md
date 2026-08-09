@@ -86,8 +86,11 @@ attempt's post-drain GETs from 225 to 174 and exact-rerank p95 from 167.789 to
 post-drain read p95 improved from 253.366 to 229.811 ms but still failed the
 200 ms production gate, so this is a partial result rather than a qualification
 pass. The next work targets remaining base/delta execution latency without
-changing recall, candidate correctness, or standard Arrow storage. Fresh AWS
-evidence is required before claiming the read-latency gap closed, and the full
+changing recall, candidate correctness, or standard Arrow storage. The first
+candidate removes the fixed three-base/one-delta cell quota while reserving the
+minimum per-layer coverage required for moved-generation MVCC correctness; it
+does not yet carry an AWS performance claim. Fresh AWS evidence is required
+before claiming the read-latency gap closed, and the full
 2K/16K by 1/8/32-writer, five-repetition matrix remains an open release gate.
 
 Ordinary upsert and delete use the same complete mutation state. Dense, named,
