@@ -17,11 +17,13 @@ use std::{
 
 use arrow_array::RecordBatch;
 use bytes::Bytes;
-use futures_util::{FutureExt, StreamExt, TryStreamExt, future::try_join_all, stream::BoxStream};
+use futures_util::{
+    FutureExt, Stream, StreamExt, TryStreamExt, future::try_join_all, stream::BoxStream,
+};
 use object_store::{
-    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    RenameOptions, UpdateVersion, parse_url_opts, path::Path as ObjectPath,
+    CopyOptions, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, RenameOptions, UpdateVersion, parse_url_opts, path::Path as ObjectPath,
 };
 use parquet::{
     arrow::{
@@ -35,7 +37,7 @@ use parquet::{
 use rayon::prelude::*;
 use tokio::{
     runtime::{Builder, Handle, Runtime, RuntimeFlavor},
-    sync::Semaphore,
+    sync::{OwnedSemaphorePermit, Semaphore},
     task::JoinHandle,
 };
 use url::Url;
@@ -461,6 +463,52 @@ struct CountingObjectStore {
     inner: Arc<dyn ObjectStore>,
     counters: Arc<RequestCounters>,
     cache_read_counters: Arc<CacheReadCounters>,
+    get_admission: Option<Arc<Semaphore>>,
+}
+
+struct AdmittedGetStream {
+    inner: BoxStream<'static, object_store::Result<Bytes>>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Stream for AdmittedGetStream {
+    type Item = object_store::Result<Bytes>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(context)
+    }
+}
+
+impl CountingObjectStore {
+    fn new(
+        inner: Arc<dyn ObjectStore>,
+        counters: Arc<RequestCounters>,
+        cache_read_counters: Arc<CacheReadCounters>,
+    ) -> Self {
+        Self {
+            inner,
+            counters,
+            cache_read_counters,
+            get_admission: None,
+        }
+    }
+
+    fn with_get_admission(
+        inner: Arc<dyn ObjectStore>,
+        counters: Arc<RequestCounters>,
+        cache_read_counters: Arc<CacheReadCounters>,
+        get_admission: Arc<Semaphore>,
+    ) -> Self {
+        Self {
+            inner,
+            counters,
+            cache_read_counters,
+            get_admission: Some(get_admission),
+        }
+    }
 }
 
 impl fmt::Debug for CountingObjectStore {
@@ -529,12 +577,44 @@ impl ObjectStore for CountingObjectStore {
                 self.counters.gets.fetch_add(1, Ordering::Relaxed);
             }
             let is_head = options.head;
+            let permit = if is_head {
+                None
+            } else if let Some(admission) = &self.get_admission {
+                Some(Arc::clone(admission).acquire_owned().await.map_err(|_| {
+                    object_store::Error::Generic {
+                        store: "borsuk",
+                        source: Box::new(io::Error::other("physical backing GET admission closed")),
+                    }
+                })?)
+            } else {
+                None
+            };
             let result = self.inner.get_opts(location, options).await;
             if !is_head && let Ok(read) = &result {
                 self.cache_read_counters
                     .record_backing(read.range.end.saturating_sub(read.range.start));
             }
-            result
+            match (result, permit) {
+                (Ok(read), Some(permit)) => {
+                    let meta = read.meta.clone();
+                    let range = read.range.clone();
+                    let attributes = read.attributes.clone();
+                    let extensions = read.extensions.clone();
+                    let inner = read.into_stream();
+                    Ok(GetResult {
+                        payload: GetResultPayload::Stream(Box::pin(AdmittedGetStream {
+                            inner,
+                            _permit: permit,
+                        })),
+                        meta,
+                        range,
+                        attributes,
+                        extensions,
+                    })
+                }
+                (Ok(read), None) => Ok(read),
+                (Err(error), _) => Err(error),
+            }
         })
     }
 
@@ -1377,11 +1457,11 @@ impl Storage {
         request_counters: Arc<RequestCounters>,
         cache_read_counters: Arc<CacheReadCounters>,
     ) -> Self {
-        let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore {
-            inner: Arc::clone(&self.store),
-            counters: Arc::clone(&request_counters),
-            cache_read_counters: Arc::clone(&cache_read_counters),
-        });
+        let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore::new(
+            Arc::clone(&self.store),
+            Arc::clone(&request_counters),
+            Arc::clone(&cache_read_counters),
+        ));
         Self {
             uri: self.uri.clone(),
             store,
@@ -1407,11 +1487,11 @@ impl Storage {
 
         let request_counters = Arc::new(RequestCounters::default());
         let cache_read_counters = Arc::new(CacheReadCounters::default());
-        let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore {
-            inner: store,
-            counters: Arc::clone(&request_counters),
-            cache_read_counters: Arc::clone(&cache_read_counters),
-        });
+        let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore::new(
+            store,
+            Arc::clone(&request_counters),
+            Arc::clone(&cache_read_counters),
+        ));
 
         Ok(Self {
             uri,
@@ -4684,9 +4764,10 @@ mod tests {
     };
 
     use super::{
-        CacheReadCounts, CreateOutcome, GLOBAL_RERANK_RANGE_MAX_PARALLEL, PrefetchedRead,
-        RangedColumns, ReadBytes, SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES,
-        Storage, coalesce_bounded_ranges, fetch_bounded_range_plan, plan_bounded_ranges,
+        CacheReadCounters, CacheReadCounts, CreateOutcome, GLOBAL_RERANK_RANGE_MAX_PARALLEL,
+        PrefetchedRead, RangedColumns, ReadBytes, RequestCounters,
+        SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
+        coalesce_bounded_ranges, fetch_bounded_range_plan, plan_bounded_ranges,
         plan_global_rerank_ranges,
     };
     use crate::{
@@ -4705,12 +4786,122 @@ mod tests {
         storage_trace::StorageAccessTrace,
     };
     use object_store::{
+        ObjectStoreExt,
         memory::InMemory,
         throttle::{ThrottleConfig, ThrottledStore},
     };
     use url::Url;
 
     struct DropFlag(Arc<AtomicBool>);
+
+    #[test]
+    fn physical_get_admission_permit_lives_until_response_body_is_dropped() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let inner = Arc::new(InMemory::new());
+            let path = object_store::path::Path::from("body-lifetime");
+            inner
+                .put(&path, bytes::Bytes::from_static(b"body").into())
+                .await
+                .unwrap();
+            let admission = Arc::new(tokio::sync::Semaphore::new(1));
+            let store = super::CountingObjectStore::with_get_admission(
+                inner,
+                Arc::new(RequestCounters::default()),
+                Arc::new(CacheReadCounters::default()),
+                Arc::clone(&admission),
+            );
+
+            let first = store.get(&path).await.unwrap();
+            assert_eq!(admission.available_permits(), 0);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), store.get(&path))
+                    .await
+                    .is_err()
+            );
+
+            drop(first);
+            let second = tokio::time::timeout(Duration::from_secs(1), store.get(&path))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                second.bytes().await.unwrap(),
+                bytes::Bytes::from_static(b"body")
+            );
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
+
+    #[test]
+    fn physical_get_admission_cancelled_waiter_does_not_leak_capacity() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let inner = Arc::new(InMemory::new());
+            let path = object_store::path::Path::from("cancelled-waiter");
+            inner
+                .put(&path, bytes::Bytes::from_static(b"body").into())
+                .await
+                .unwrap();
+            let admission = Arc::new(tokio::sync::Semaphore::new(1));
+            let store = Arc::new(super::CountingObjectStore::with_get_admission(
+                inner,
+                Arc::new(RequestCounters::default()),
+                Arc::new(CacheReadCounters::default()),
+                Arc::clone(&admission),
+            ));
+
+            let first = store.get(&path).await.unwrap();
+            let waiter = tokio::spawn({
+                let store = Arc::clone(&store);
+                let path = path.clone();
+                async move { store.get(&path).await }
+            });
+            tokio::task::yield_now().await;
+            assert_eq!(admission.available_permits(), 0);
+
+            waiter.abort();
+            assert!(waiter.await.unwrap_err().is_cancelled());
+            drop(first);
+
+            let later = tokio::time::timeout(Duration::from_secs(1), store.get(&path))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                later.bytes().await.unwrap(),
+                bytes::Bytes::from_static(b"body")
+            );
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
+
+    #[test]
+    fn physical_get_admission_forwarding_error_releases_permit() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let admission = Arc::new(tokio::sync::Semaphore::new(1));
+            let store = super::CountingObjectStore::with_get_admission(
+                Arc::new(InMemory::new()),
+                Arc::new(RequestCounters::default()),
+                Arc::new(CacheReadCounters::default()),
+                Arc::clone(&admission),
+            );
+
+            let missing = object_store::path::Path::from("missing");
+            assert!(store.get(&missing).await.is_err());
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
 
     #[test]
     fn slow_fetch_is_hedged_once_and_fast_fetch_is_not_hedged() {

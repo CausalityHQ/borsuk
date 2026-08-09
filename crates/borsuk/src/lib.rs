@@ -105,6 +105,8 @@ pub const CPU_THREADS_ENV: &str = "BORSUK_CPU_THREADS";
 pub const DEFAULT_IO_THREADS: usize = 24;
 /// Process-wide blocking-I/O waiter override. Values must be in `1..=128`.
 pub const IO_THREADS_ENV: &str = "BORSUK_IO_THREADS";
+pub const DEFAULT_BACKING_GET_CONCURRENCY: usize = 128;
+pub const BACKING_GET_CONCURRENCY_ENV: &str = "BORSUK_BACKING_GET_CONCURRENCY";
 
 /// Return the process-wide CPU worker budget used by build and query pools.
 #[must_use]
@@ -124,6 +126,31 @@ pub fn configured_io_threads() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|threads| (1..=128).contains(threads))
         .unwrap_or(DEFAULT_IO_THREADS)
+}
+
+#[must_use]
+pub fn configured_backing_get_concurrency() -> usize {
+    parse_backing_get_concurrency(std::env::var(BACKING_GET_CONCURRENCY_ENV).ok().as_deref())
+}
+
+fn parse_backing_get_concurrency(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| (1..=1024).contains(value))
+        .unwrap_or(DEFAULT_BACKING_GET_CONCURRENCY)
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    #[test]
+    fn physical_get_admission_configuration_is_fail_closed() {
+        assert_eq!(super::parse_backing_get_concurrency(None), 128);
+        assert_eq!(super::parse_backing_get_concurrency(Some("1")), 1);
+        assert_eq!(super::parse_backing_get_concurrency(Some("1024")), 1024);
+        for invalid in ["", "0", "1025", "many"] {
+            assert_eq!(super::parse_backing_get_concurrency(Some(invalid)), 128);
+        }
+    }
 }
 pub use late_interaction::{
     LateInteractionSearchOptions, LateInteractionSearchReport, LateInteractionVector,
