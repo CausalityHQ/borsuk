@@ -2073,3 +2073,27 @@ still reports the pre-existing absent archived matrix/resource assets and raw
 historical link targets already present at the parent revision; this V7 slice
 does not relabel, fabricate, or delete that historical evidence. That known
 repository baseline failure is not claimed green.
+
+### V36 local-exact V7 AWS qualification launch
+
+The clean, verified `17626e6` revision was the exact source of the exclusive
+Causality AWS attempt `20260809T091835Z-v36-local-exact-v7`. The launcher
+preserved source archive SHA-256
+`ef06ae98675e1e14d52e2cd9e4c52cbcbaf41dd43537cd5edd7af775ca8c5e51`
+and the unchanged frozen realistic group-commit manifest SHA-256
+`81c849548d9ef7300cffd88a0a13aca2023645ae0af40e66f0da5a60ad37408a`.
+The matrix uses the checksum-pinned Cohere Medium 1M 768-dimensional corpus,
+2,000 and 16,000 logical cells, 1/8/32 independent writer processes, and five
+cyclically ordered repetitions. Results and indexes use fresh disjoint prefixes
+under
+`s3://borsuk-bench-453182569524-euc1/research/group-commit-scalability/20260809T091835Z-v36-local-exact-v7/`.
+
+Immediately before launch the dedicated `c7g.8xlarge` reported healthy EC2
+system and instance checks, 62,521,336 KiB available memory, and 113 GiB free
+disk. No BORSUK benchmark process or non-shell live tmux pane existed; retained
+historical panes were dead or idle shells. The remote runner start sentinel and
+tmux session were confirmed. This is a launch receipt only. Until a root
+`GROUP_COMMIT_SCALABILITY_COMPLETE` or `GROUP_COMMIT_SCALABILITY_FAILED`
+marker exists and the process has exited, monitoring is restricted to terminal
+markers and infrastructure/process health; no measurement CSV is eligible for
+inspection.
