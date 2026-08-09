@@ -328,7 +328,7 @@ impl SidecarIndex {
     }
 }
 
-fn validate_record_batch_block(
+pub(crate) fn validate_record_batch_block(
     block: &Block,
     stored: &[u8],
     expected_rows: usize,
@@ -943,6 +943,102 @@ fn encode_vector_array(
         }
     };
     Ok(vectors)
+}
+
+pub(crate) fn fixed_width_vector_array(
+    bytes: &[u8],
+    rows: usize,
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<Arc<dyn Array>> {
+    let row_bytes = element_type.fixed_width_bytes(dimensions)?;
+    let expected = rows.checked_mul(row_bytes).ok_or_else(|| {
+        BorsukError::InvalidStorage("Arrow fixed-width vector size overflows".to_string())
+    })?;
+    if bytes.len() != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "Arrow fixed-width vector payload has {} bytes, expected {expected}",
+            bytes.len()
+        )));
+    }
+    let list_size = i32::try_from(dimensions).map_err(|_| {
+        BorsukError::InvalidStorage("Arrow fixed-width vector dimensions exceed i32".to_string())
+    })?;
+    let array: Arc<dyn Array> = match element_type {
+        VectorElementType::Float32 => {
+            Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                    bytes.chunks_exact(row_bytes).map(|row| {
+                        Some(
+                            row.chunks_exact(4)
+                                .map(|value| {
+                                    Some(f32::from_le_bytes(value.try_into().expect("four bytes")))
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    }),
+                    list_size,
+                ),
+            )
+        }
+        VectorElementType::Float16 => {
+            Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Float16Type, _, _>(
+                    bytes.chunks_exact(row_bytes).map(|row| {
+                        Some(
+                            row.chunks_exact(2)
+                                .map(|value| {
+                                    Some(half::f16::from_bits(u16::from_le_bytes(
+                                        value.try_into().expect("two bytes"),
+                                    )))
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    }),
+                    list_size,
+                ),
+            )
+        }
+        VectorElementType::BFloat16 => {
+            Arc::new(FixedSizeListArray::from_iter_primitive::<UInt16Type, _, _>(
+                bytes.chunks_exact(row_bytes).map(|row| {
+                    Some(
+                        row.chunks_exact(2)
+                            .map(|value| {
+                                Some(u16::from_le_bytes(value.try_into().expect("two bytes")))
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+                list_size,
+            ))
+        }
+        VectorElementType::Float8E4M3Fn | VectorElementType::Float8E5M2 => {
+            Arc::new(FixedSizeListArray::from_iter_primitive::<UInt8Type, _, _>(
+                bytes
+                    .chunks_exact(row_bytes)
+                    .map(|row| Some(row.iter().copied().map(Some).collect::<Vec<_>>())),
+                list_size,
+            ))
+        }
+        VectorElementType::Int8 => {
+            Arc::new(FixedSizeListArray::from_iter_primitive::<Int8Type, _, _>(
+                bytes.chunks_exact(row_bytes).map(|row| {
+                    Some(
+                        row.iter()
+                            .copied()
+                            .map(|value| Some(value as i8))
+                            .collect::<Vec<_>>(),
+                    )
+                }),
+                list_size,
+            ))
+        }
+        VectorElementType::Binary => Arc::new(FixedSizeBinaryArray::try_from_iter(
+            bytes.chunks_exact(row_bytes),
+        )?),
+    };
+    Ok(array)
 }
 
 pub(crate) fn decode_vector(

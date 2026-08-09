@@ -22007,7 +22007,7 @@ fn encode_global_pq_arrow_bundle(
             &exact_schema,
             arrow_ipc::writer::IpcWriteOptions::default(),
         )?;
-        let exact = global_pq_exact_arrow_array(
+        let exact = crate::arrow_vector_sidecar::fixed_width_vector_array(
             &locality_exact_bytes,
             total_rows,
             dimensions,
@@ -22334,121 +22334,6 @@ fn global_pq_chunk_reference(
         })?,
         graph: None,
     })
-}
-
-fn global_pq_exact_arrow_array(
-    bytes: &[u8],
-    rows: usize,
-    dimensions: usize,
-    element_type: crate::record::VectorElementType,
-) -> Result<Arc<dyn arrow_array::Array>> {
-    use arrow_array::types::{Float16Type, Float32Type, Int8Type, UInt8Type, UInt16Type};
-
-    let row_bytes = element_type.fixed_width_bytes(dimensions)?;
-    let expected = rows.checked_mul(row_bytes).ok_or_else(|| {
-        BorsukError::InvalidStorage("global PQ exact Arrow size overflows".to_string())
-    })?;
-    if bytes.len() != expected {
-        return Err(BorsukError::InvalidStorage(format!(
-            "global PQ exact payload has {} bytes, expected {expected}",
-            bytes.len()
-        )));
-    }
-    let list_size = i32::try_from(dimensions).map_err(|_| {
-        BorsukError::InvalidStorage("global PQ exact dimensions exceed i32".to_string())
-    })?;
-    let array: Arc<dyn arrow_array::Array> = match element_type {
-        crate::record::VectorElementType::Float32 => {
-            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
-                Float32Type,
-                _,
-                _,
-            >(
-                bytes.chunks_exact(row_bytes).map(|row| {
-                    Some(
-                        row.chunks_exact(4)
-                            .map(|value| {
-                                Some(f32::from_le_bytes(value.try_into().expect("four bytes")))
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                }),
-                list_size,
-            ))
-        }
-        crate::record::VectorElementType::Float16 => {
-            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
-                Float16Type,
-                _,
-                _,
-            >(
-                bytes.chunks_exact(row_bytes).map(|row| {
-                    Some(
-                        row.chunks_exact(2)
-                            .map(|value| {
-                                Some(half::f16::from_bits(u16::from_le_bytes(
-                                    value.try_into().expect("two bytes"),
-                                )))
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                }),
-                list_size,
-            ))
-        }
-        crate::record::VectorElementType::BFloat16 => {
-            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
-                UInt16Type,
-                _,
-                _,
-            >(
-                bytes.chunks_exact(row_bytes).map(|row| {
-                    Some(
-                        row.chunks_exact(2)
-                            .map(|value| {
-                                Some(u16::from_le_bytes(value.try_into().expect("two bytes")))
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                }),
-                list_size,
-            ))
-        }
-        crate::record::VectorElementType::Float8E4M3Fn
-        | crate::record::VectorElementType::Float8E5M2 => {
-            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
-                UInt8Type,
-                _,
-                _,
-            >(
-                bytes
-                    .chunks_exact(row_bytes)
-                    .map(|row| Some(row.iter().copied().map(Some).collect::<Vec<_>>())),
-                list_size,
-            ))
-        }
-        crate::record::VectorElementType::Int8 => {
-            Arc::new(arrow_array::FixedSizeListArray::from_iter_primitive::<
-                Int8Type,
-                _,
-                _,
-            >(
-                bytes.chunks_exact(row_bytes).map(|row| {
-                    Some(
-                        row.iter()
-                            .copied()
-                            .map(|value| Some(value as i8))
-                            .collect::<Vec<_>>(),
-                    )
-                }),
-                list_size,
-            ))
-        }
-        crate::record::VectorElementType::Binary => Arc::new(
-            arrow_array::FixedSizeBinaryArray::try_from_iter(bytes.chunks_exact(row_bytes))?,
-        ),
-    };
-    Ok(array)
 }
 
 fn global_pq_arrow_buffer_ranges(
