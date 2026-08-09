@@ -4752,6 +4752,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         fs::{self, OpenOptions},
+        future::Future,
         ops::Range,
         path::{Path, PathBuf},
         process::Command,
@@ -4858,12 +4859,30 @@ mod tests {
             ));
 
             let first = store.get(&path).await.unwrap();
+            let (pending_tx, pending_rx) = tokio::sync::oneshot::channel();
             let waiter = tokio::spawn({
                 let store = Arc::clone(&store);
                 let path = path.clone();
-                async move { store.get(&path).await }
+                async move {
+                    let mut get = Box::pin(store.get(&path));
+                    let mut pending_tx = Some(pending_tx);
+                    std::future::poll_fn(move |context| {
+                        let poll = get.as_mut().poll(context);
+                        if poll.is_pending() {
+                            pending_tx
+                                .take()
+                                .expect("pending signal is sent once")
+                                .send(())
+                                .expect("pending receiver remains alive");
+                        }
+                        poll
+                    })
+                    .await
+                }
             });
-            tokio::task::yield_now().await;
+            pending_rx
+                .await
+                .expect("waiter reaches the admission queue before cancellation");
             assert_eq!(admission.available_permits(), 0);
 
             waiter.abort();
