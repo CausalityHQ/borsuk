@@ -13277,29 +13277,12 @@ impl BorsukIndex {
                 .or_default()
                 .push(identity);
         }
-        let mut exact_groups = BTreeMap::<
-            (GlobalPqSearchLayer, String),
-            Vec<(GlobalPqChunkRef, Vec<GlobalPqIdentityCandidate>)>,
-        >::new();
-        for ((layer, chunk_row_start), identities) in exact_by_chunk {
-            let chunk = chunks_by_start
-                .get(&(layer, chunk_row_start))
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "resident global PQ exact chunk is missing".to_string(),
-                    )
-                })?;
-            exact_groups
-                .entry((layer, chunk.exact_path.clone()))
-                .or_default()
-                .push(((*chunk).clone(), identities));
-        }
-        let exact_groups = exact_groups.into_iter().collect::<Vec<_>>();
+        let exact_groups = global_pq_exact_read_groups(&chunks_by_start, exact_by_chunk)?;
         let fetched_exact = bounded_io_map_with_gate(
             &exact_groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
             Some(&self.global_pq_rerank_admission),
-            |((_layer, path), chunks)| self.global_exact_vectors_bundled(path, chunks),
+            |(path, chunks)| self.global_exact_vectors_bundled(path, chunks),
         );
         let mut exact_rows = Vec::new();
         for result in fetched_exact {
@@ -13860,25 +13843,19 @@ impl BorsukIndex {
                 .then_with(|| left.1.cmp(&right.1))
         });
         live_candidates.truncate(candidate_limit);
-        let mut exact_by_chunk = BTreeMap::<usize, Vec<GlobalPqIdentityCandidate>>::new();
+        let mut exact_by_chunk =
+            BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
         for (_, _, _, _, chunk_row_start, identity) in live_candidates {
             exact_by_chunk
-                .entry(chunk_row_start)
+                .entry((GlobalPqSearchLayer::Base, chunk_row_start))
                 .or_default()
                 .push(identity);
         }
-        let mut exact_groups =
-            BTreeMap::<String, Vec<(GlobalPqChunkRef, Vec<GlobalPqIdentityCandidate>)>>::new();
-        for (chunk_row_start, identities) in exact_by_chunk {
-            let chunk = chunks_by_start.get(&chunk_row_start).ok_or_else(|| {
-                BorsukError::InvalidStorage("resident global PQ exact chunk is missing".to_string())
-            })?;
-            exact_groups
-                .entry(chunk.exact_path.clone())
-                .or_default()
-                .push(((*chunk).clone(), identities));
-        }
-        let exact_groups = exact_groups.into_iter().collect::<Vec<_>>();
+        let tagged_chunks_by_start = chunks_by_start
+            .iter()
+            .map(|(row_start, chunk)| ((GlobalPqSearchLayer::Base, *row_start), *chunk))
+            .collect::<HashMap<_, _>>();
+        let exact_groups = global_pq_exact_read_groups(&tagged_chunks_by_start, exact_by_chunk)?;
         let fetched_exact = bounded_io_map_with_gate(
             &exact_groups,
             DEFAULT_GLOBAL_PQ_RERANK_READS,
@@ -22195,6 +22172,69 @@ fn global_pq_code_read_parallelism(read_groups: usize) -> usize {
     read_groups.clamp(1, DEFAULT_GLOBAL_PQ_CODE_READS)
 }
 
+type GlobalPqExactChunkCandidates = (GlobalPqChunkRef, Vec<GlobalPqIdentityCandidate>);
+type GlobalPqExactReadGroup = (String, Vec<GlobalPqExactChunkCandidates>);
+
+fn global_pq_exact_read_groups(
+    chunks_by_start: &HashMap<(GlobalPqSearchLayer, usize), &GlobalPqChunkRef>,
+    exact_by_chunk: BTreeMap<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>,
+) -> Result<Vec<GlobalPqExactReadGroup>> {
+    let mut chunks_by_path =
+        BTreeMap::<(GlobalPqSearchLayer, String), Vec<GlobalPqExactChunkCandidates>>::new();
+    for (key, identities) in exact_by_chunk {
+        let layer = key.0;
+        let chunk = chunks_by_start.get(&key).ok_or_else(|| {
+            BorsukError::InvalidStorage("resident global PQ exact chunk is missing".to_string())
+        })?;
+        chunks_by_path
+            .entry((layer, chunk.exact_path.clone()))
+            .or_default()
+            .push(((**chunk).clone(), identities));
+    }
+
+    let mut groups = Vec::new();
+    for ((_layer, path), mut chunks) in chunks_by_path {
+        chunks.sort_unstable_by_key(|(chunk, _)| (chunk.exact_offset_bytes, chunk.row_start));
+        let mut current = Vec::<GlobalPqExactChunkCandidates>::new();
+        let mut group_start = 0_usize;
+        let mut group_end = 0_usize;
+        for entry in chunks {
+            let chunk_start = entry.0.exact_offset_bytes;
+            let chunk_end = chunk_start
+                .checked_add(entry.0.exact_size_bytes)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global exact-vector chunk range overflows".to_string(),
+                    )
+                })?;
+            let candidate_start = if current.is_empty() {
+                chunk_start
+            } else {
+                group_start
+            };
+            let candidate_end = group_end.max(chunk_end);
+            if !current.is_empty()
+                && candidate_end.saturating_sub(candidate_start)
+                    > crate::storage::GLOBAL_RERANK_MAX_GROUP_SPAN_BYTES
+            {
+                groups.push((path.clone(), std::mem::take(&mut current)));
+                group_start = chunk_start;
+                group_end = chunk_end;
+            } else {
+                if current.is_empty() {
+                    group_start = chunk_start;
+                }
+                group_end = candidate_end;
+            }
+            current.push(entry);
+        }
+        if !current.is_empty() {
+            groups.push((path, current));
+        }
+    }
+    Ok(groups)
+}
+
 #[derive(Debug)]
 struct QueryLocalRange {
     path: String,
@@ -27596,6 +27636,172 @@ mod tests {
         assert_eq!(
             global_pq_code_read_range(std::slice::from_ref(&oversized)).unwrap(),
             1_024..1_024 + 32 * 1024,
+        );
+    }
+
+    #[test]
+    fn global_exact_rerank_splits_distant_chunks_without_splitting_cap_bounded_neighbors() {
+        let chunk = |row_start, exact_offset_bytes| GlobalPqChunkRef {
+            path: "scan.arrow".to_string(),
+            checksum: format!("scan-{row_start}"),
+            offset_bytes: 0,
+            identity_checksum: format!("identity-{row_start}").into(),
+            exact_path: "shared-exact.arrow".to_string(),
+            exact_checksum: format!("exact-{row_start}").into(),
+            exact_offset_bytes,
+            exact_size_bytes: 2 * 1024 * 1024,
+            cell_index: row_start as u16,
+            ordinal_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
+            identity_values_size_bytes: 0,
+            row_start,
+            rows: 512,
+            size_bytes: 32 * 1024,
+            graph: None,
+        };
+        let chunks = [
+            chunk(0, 0),
+            chunk(512, 2 * 1024 * 1024),
+            chunk(1_024, 8 * 1024 * 1024),
+        ];
+        let chunks_by_start = chunks
+            .iter()
+            .map(|chunk| ((GlobalPqSearchLayer::Delta, chunk.row_start), chunk))
+            .collect::<HashMap<_, _>>();
+        let exact_by_chunk = chunks
+            .iter()
+            .map(|chunk| {
+                (
+                    (GlobalPqSearchLayer::Delta, chunk.row_start),
+                    Vec::<GlobalPqIdentityCandidate>::new(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let groups = global_pq_exact_read_groups(&chunks_by_start, exact_by_chunk).unwrap();
+
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|(path, _)| path == "shared-exact.arrow"));
+        assert_eq!(groups[0].1.len(), 2);
+        assert_eq!(groups[1].1.len(), 1);
+        assert_eq!(groups[0].1[0].0.row_start, 0);
+        assert_eq!(groups[0].1[1].0.row_start, 512);
+        assert_eq!(groups[1].1[0].0.row_start, 1_024);
+    }
+
+    #[test]
+    fn global_exact_rerank_fetches_cap_bounded_chunk_groups_in_two_cold_gets() {
+        const DIMENSIONS: usize = 768;
+        const ROWS_PER_CHUNK: usize = 512;
+        const ROW_BYTES: usize = DIMENSIONS * size_of::<f32>();
+        const CHUNK_BYTES: usize = ROWS_PER_CHUNK * ROW_BYTES;
+        const CANDIDATES_PER_CHUNK: usize = 16;
+        const DISTANT_OFFSET: usize = 8 * 1024 * 1024;
+        const EXACT_PATH: &str = "global-pq/bundles/cold-exact.arrow";
+
+        let directory = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: DIMENSIONS,
+            segment_max_vectors: ROWS_PER_CHUNK,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let chunk = |row_start, exact_offset_bytes| GlobalPqChunkRef {
+            path: "scan.arrow".to_string(),
+            checksum: format!("scan-{row_start}"),
+            offset_bytes: 0,
+            identity_checksum: format!("identity-{row_start}").into(),
+            exact_path: EXACT_PATH.to_string(),
+            exact_checksum: format!("exact-{row_start}").into(),
+            exact_offset_bytes,
+            exact_size_bytes: CHUNK_BYTES,
+            cell_index: row_start as u16,
+            ordinal_buffer_offsets: [0; 2],
+            typed_buffer_offsets: [0; 6],
+            identity_values_size_bytes: 0,
+            row_start,
+            rows: ROWS_PER_CHUNK,
+            size_bytes: 32 * 1024,
+            graph: None,
+        };
+        let chunks = [
+            chunk(0, 0),
+            chunk(ROWS_PER_CHUNK, CHUNK_BYTES),
+            chunk(2 * ROWS_PER_CHUNK, DISTANT_OFFSET),
+        ];
+        let mut object = vec![0_u8; DISTANT_OFFSET + CHUNK_BYTES];
+        let mut exact_by_chunk = BTreeMap::new();
+        let mut expected = HashMap::<usize, f32>::new();
+        for (chunk_index, chunk) in chunks.iter().enumerate() {
+            let entries = (0..CANDIDATES_PER_CHUNK)
+                .map(|candidate_index| {
+                    let local_row = candidate_index * ROWS_PER_CHUNK / CANDIDATES_PER_CHUNK;
+                    let node = chunk_index * CANDIDATES_PER_CHUNK + candidate_index;
+                    let value = node as f32 + 0.25;
+                    let start = chunk.exact_offset_bytes + local_row * ROW_BYTES;
+                    let end = start + ROW_BYTES;
+                    for scalar in object[start..end].chunks_exact_mut(size_of::<f32>()) {
+                        scalar.copy_from_slice(&value.to_le_bytes());
+                    }
+                    let id = RecordId::from(format!("candidate-{node}"));
+                    let stamp = MutationStamp::new(
+                        MutationVersion::from_parts(node as u64 + 1, [chunk_index as u8; 16]),
+                        [candidate_index as u8; 32],
+                    );
+                    expected.insert(node, value);
+                    GlobalPqIdentityCandidate {
+                        node,
+                        local_row,
+                        row_integrity: global_pq_row_integrity(
+                            id.as_bytes(),
+                            stamp,
+                            &object[start..end],
+                        ),
+                        id,
+                        stamp,
+                    }
+                })
+                .collect::<Vec<_>>();
+            exact_by_chunk.insert((GlobalPqSearchLayer::Delta, chunk.row_start), entries);
+        }
+        index.storage.write_bytes(EXACT_PATH, &object).unwrap();
+        let chunks_by_start = chunks
+            .iter()
+            .map(|chunk| ((GlobalPqSearchLayer::Delta, chunk.row_start), chunk))
+            .collect::<HashMap<_, _>>();
+        let groups = global_pq_exact_read_groups(&chunks_by_start, exact_by_chunk).unwrap();
+        assert_eq!(groups.len(), 2);
+        let before = index.storage.request_counts();
+
+        let fetched = bounded_io_map_with_gate(
+            &groups,
+            DEFAULT_GLOBAL_PQ_RERANK_READS,
+            Some(&index.global_pq_rerank_admission),
+            |(path, chunks)| index.global_exact_vectors_bundled(path, chunks),
+        );
+        let requests = index.storage.request_counts().delta(&before);
+        let mut rows = Vec::new();
+        let mut bytes_fetched = 0_u64;
+        for result in fetched {
+            let (mut group_rows, group_bytes) = result.unwrap();
+            rows.append(&mut group_rows);
+            bytes_fetched += group_bytes;
+        }
+
+        assert_eq!(requests.gets, 2, "one cold range GET per emitted group");
+        assert_eq!(rows.len(), chunks.len() * CANDIDATES_PER_CHUNK);
+        for (node, vector, _, _) in rows {
+            assert_eq!(vector.len(), DIMENSIONS);
+            assert_eq!(vector[0], expected[&node]);
+            assert!(vector.iter().all(|value| *value == expected[&node]));
+        }
+        assert!(
+            bytes_fetched <= (3 * CHUNK_BYTES) as u64,
+            "cold rerank fetched {bytes_fetched} bytes outside the two chunk-group envelopes"
         );
     }
 

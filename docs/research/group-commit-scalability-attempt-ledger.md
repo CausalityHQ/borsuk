@@ -1710,3 +1710,45 @@ features and targets. The Rust gate reported 1,139 passed, 24 ignored, and
 failed five imports because that interpreter lacked the pinned NumPy/PyArrow
 dependencies; rerunning the unchanged suite through the declared requirements
 environment passed, so no test or product condition was relaxed.
+
+### Terminal AWS v32 direct-ingest attempt and exact-read fragmentation
+
+The immutable AWS attempt `20260809T005800Z-v32-e572621` used source archive
+SHA-256 `dd8dbfa509fe7da3d4e86e8668a9c119990bf2f3169d1b1022c1f2a847776435`
+and manifest SHA-256
+`81c849548d9ef7300cffd88a0a13aca2023645ae0af40e66f0da5a60ad37408a`.
+It reached a root failure marker with no competing workload and stopped at
+2,000 logical cells, repetition one, eight independent writers. The root
+fail-closed validator rejected the incomplete matrix as required. Only after
+terminality were the completed and failed-cell CSVs inspected.
+
+The one-writer cell passed: 16,000 records in 250 durable groups, 82.301 ms
+write p95, 928.19 ingest records/s, 410.78 drain-inclusive records/s, recall@10
+1.0, 50.068 ms post-drain read p95, and 119.662 ms active-tail read p95. Its
+500 acknowledgement PUTs and zero acknowledgement reads preserve the direct
+two-PUT group contract.
+
+The eight-writer cell preserved all 128,000 records, 2,000 durable groups,
+recall@10 1.0, 85.842 ms write p95, 6,978.43 ingest records/s, 2,125.95
+drain-inclusive records/s, and 149.982 ms active-tail read p95. It failed only
+the post-drain read gate at 244.098 ms. Its 4,000 acknowledgement PUTs and zero
+acknowledgement reads again preserve the two-PUT group contract. These are
+terminal failed-attempt diagnostics, not qualification or publication claims.
+
+The failed cell's 20 post-drain queries made 225 GETs. Exact reranking accounted
+for 183 of them (81.3%) while transferring only about 5.39 MiB total. The
+fused search path had flattened multiple cell chunks sharing one 22--48 MiB
+standard Arrow exact object into an object-wide range plan. Because the full
+envelope exceeded the independent 4 MiB physical span cap, the adaptive
+planner correctly reverted to the sparse 64 KiB policy, producing 7--14 tiny
+exact GETs for most queries despite good physical Morton locality.
+
+The current candidate retains standard Arrow objects, the same candidate
+budget, and the same exact/MVCC checks. It partitions exact reads at a shared
+4 MiB chunk-envelope boundary before invoking the existing adaptive physical
+range planner. Nearby chunks that fit the cap remain together; distant chunks
+become independently parallel read groups. A cold 768-dimensional regression
+uses nonempty authenticated candidates across two nearby chunks and one distant
+chunk and requires exactly two backing GETs, correct decoded vectors, and bytes
+bounded by the two emitted envelopes. This is structural evidence only until a
+fresh immutable AWS attempt measures the delivered revision.
