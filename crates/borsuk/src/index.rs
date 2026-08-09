@@ -12951,6 +12951,16 @@ impl BorsukIndex {
         base_index: Arc<ResidentGlobalPq>,
         delta_index: Arc<ResidentGlobalPq>,
     ) -> Result<SearchExecution> {
+        if !options.global_exact_rerank && include_vectors {
+            return Err(BorsukError::InvalidSearchOptions(
+                "approximate-first search cannot return lossless vectors".to_string(),
+            ));
+        }
+        if !options.global_exact_rerank && options.global_exact_bound_shadow {
+            return Err(BorsukError::InvalidSearchOptions(
+                "exact-bound shadow requires global exact reranking".to_string(),
+            ));
+        }
         let expected_leaf_mode = self.manifest.build_config.global_scan_codec.leaf_mode();
         let requested_candidates = match &options.mode {
             SearchMode::Approx {
@@ -13328,6 +13338,18 @@ impl BorsukIndex {
                 .then_with(|| left.1.cmp(&right.1))
         });
         live_candidates.truncate(candidate_limit);
+        let approximate_hits = (!options.global_exact_rerank).then(|| {
+            live_candidates
+                .iter()
+                .take(options.k)
+                .map(|(distance, id, ..)| SearchHit {
+                    id: id.clone(),
+                    distance: *distance,
+                    metadata: None,
+                })
+                .collect::<Vec<_>>()
+        });
+        let approximate_records_scored = live_candidates.len();
 
         let mut exact_by_chunk =
             BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
@@ -13336,10 +13358,12 @@ impl BorsukIndex {
             if options.global_exact_bound_shadow {
                 shadow_inputs.insert(id, (layer, chunk_row_start, code, identity.clone()));
             }
-            exact_by_chunk
-                .entry((layer, chunk_row_start))
-                .or_default()
-                .push(identity);
+            if options.global_exact_rerank {
+                exact_by_chunk
+                    .entry((layer, chunk_row_start))
+                    .or_default()
+                    .push(identity);
+            }
         }
         let exact_groups = global_pq_exact_read_groups(&chunks_by_start, exact_by_chunk)?;
         let fetched_exact = bounded_io_map_with_gate(
@@ -13375,49 +13399,56 @@ impl BorsukIndex {
             let distance = metric.distance_unchecked(query, &vector)?;
             scored_vectors.push((distance, vector, id));
         }
-        let global_exact_bound_shadow = if options.global_exact_bound_shadow {
-            let shadow_scored = scored_vectors
-                .iter()
-                .map(|(distance, vector, id)| GlobalExactBoundScored {
-                    distance: *distance,
-                    vector,
-                    id,
-                })
-                .collect::<Vec<_>>();
-            let layer_indexes = layers
-                .iter()
-                .map(|layer| (layer.layer, layer.index.as_ref()))
-                .collect::<Vec<_>>();
-            self.global_exact_bound_shadow(GlobalExactBoundContext {
-                query,
-                pq_query: &pq_query,
-                k: options.k,
-                layer_indexes: &layer_indexes,
-                chunks_by_start: &chunks_by_start,
-                inputs: &shadow_inputs,
-                scored: &shadow_scored,
-                exact_backing_reads,
-                exact_backing_bytes,
-                residual_scan_bytes: 0,
-            })?
-        } else {
-            GlobalExactBoundShadow::default()
-        };
+        let global_exact_bound_shadow =
+            if options.global_exact_bound_shadow && options.global_exact_rerank {
+                let shadow_scored = scored_vectors
+                    .iter()
+                    .map(|(distance, vector, id)| GlobalExactBoundScored {
+                        distance: *distance,
+                        vector,
+                        id,
+                    })
+                    .collect::<Vec<_>>();
+                let layer_indexes = layers
+                    .iter()
+                    .map(|layer| (layer.layer, layer.index.as_ref()))
+                    .collect::<Vec<_>>();
+                self.global_exact_bound_shadow(GlobalExactBoundContext {
+                    query,
+                    pq_query: &pq_query,
+                    k: options.k,
+                    layer_indexes: &layer_indexes,
+                    chunks_by_start: &chunks_by_start,
+                    inputs: &shadow_inputs,
+                    scored: &shadow_scored,
+                    exact_backing_reads,
+                    exact_backing_bytes,
+                    residual_scan_bytes: 0,
+                })?
+            } else {
+                GlobalExactBoundShadow::default()
+            };
         scored_vectors.sort_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
                 .then_with(|| left.2.cmp(&right.2))
         });
-        let records_scored = scored_vectors.len();
+        let records_scored = if options.global_exact_rerank {
+            scored_vectors.len()
+        } else {
+            approximate_records_scored
+        };
         scored_vectors.truncate(options.k);
-        let hits = scored_vectors
-            .iter()
-            .map(|(distance, _, id)| SearchHit {
-                id: id.clone(),
-                distance: *distance,
-                metadata: None,
-            })
-            .collect::<Vec<_>>();
+        let hits = approximate_hits.unwrap_or_else(|| {
+            scored_vectors
+                .iter()
+                .map(|(distance, _, id)| SearchHit {
+                    id: id.clone(),
+                    distance: *distance,
+                    metadata: None,
+                })
+                .collect::<Vec<_>>()
+        });
         let vectors = if include_vectors {
             scored_vectors
                 .into_iter()
@@ -13426,7 +13457,11 @@ impl BorsukIndex {
         } else {
             Vec::new()
         };
-        let exact_us = u64::try_from(exact_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let exact_us = if options.global_exact_rerank {
+            u64::try_from(exact_started.elapsed().as_micros()).unwrap_or(u64::MAX)
+        } else {
+            0
+        };
         let graph_chunks_used = layers.iter().map(|layer| layer.graph_chunks_used).sum();
         let scan_chunks_used = layers.iter().map(|layer| layer.scan_chunks_used).sum();
         let segments_total = global_ref
@@ -13438,6 +13473,11 @@ impl BorsukIndex {
             (0, _) => expected_leaf_mode.to_string(),
             (_, 0) => "global-cell-graph".to_string(),
             _ => format!("mixed-global-cell-graph+{expected_leaf_mode}"),
+        };
+        let execution_engine = if options.global_exact_rerank {
+            execution_engine
+        } else {
+            format!("{execution_engine}+approximate-first")
         };
         Ok(SearchExecution {
             report: SearchReport {
@@ -13512,6 +13552,16 @@ impl BorsukIndex {
         started: Instant,
         requests_before: &RequestCounts,
     ) -> Result<Option<SearchExecution>> {
+        if !options.global_exact_rerank && include_vectors {
+            return Err(BorsukError::InvalidSearchOptions(
+                "approximate-first search cannot return lossless vectors".to_string(),
+            ));
+        }
+        if !options.global_exact_rerank && options.global_exact_bound_shadow {
+            return Err(BorsukError::InvalidSearchOptions(
+                "exact-bound shadow requires global exact reranking".to_string(),
+            ));
+        }
         let expected_leaf_mode = self.manifest.build_config.global_scan_codec.leaf_mode();
         let eligible = matches!(options.mode, SearchMode::Approx { .. })
             && options.mode.leaf_mode() == expected_leaf_mode
@@ -13527,17 +13577,42 @@ impl BorsukIndex {
             && options.filter.is_none()
             && !options.include_metadata;
         if !eligible {
+            if !options.global_exact_rerank {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "approximate-first search requires the resident global scan path without filters or metadata"
+                        .to_string(),
+                ));
+            }
             return Ok(None);
         }
         let Some(global_ref) = self.manifest.global_pq_ref.clone() else {
+            if !options.global_exact_rerank {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "approximate-first search requires a resident global artifact".to_string(),
+                ));
+            }
             return Ok(None);
         };
         validate_global_whole_index_candidate_budget(options)?;
         let Some((base_segment_count, delta_summaries)) =
             self.resolve_resident_global_pq_coverage(&global_ref)?
         else {
+            if !options.global_exact_rerank {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "approximate-first search requires complete resident global coverage"
+                        .to_string(),
+                ));
+            }
             return Ok(None);
         };
+        if !options.global_exact_rerank
+            && (global_ref.covered_manifest_version != self.manifest.version
+                || !delta_summaries.is_empty())
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "approximate-first search requires current base/delta global coverage".to_string(),
+            ));
+        }
         if materialized_global_delta_runs_in_parallel(options)
             && global_ref.covered_manifest_version == self.manifest.version
             && delta_summaries.is_empty()
@@ -13982,6 +14057,18 @@ impl BorsukIndex {
                 .then_with(|| left.1.cmp(&right.1))
         });
         live_candidates.truncate(candidate_limit);
+        let approximate_hits = (!options.global_exact_rerank).then(|| {
+            live_candidates
+                .iter()
+                .take(options.k)
+                .map(|(distance, id, ..)| SearchHit {
+                    id: id.clone(),
+                    distance: *distance,
+                    metadata: None,
+                })
+                .collect::<Vec<_>>()
+        });
+        let approximate_records_scored = live_candidates.len();
         let mut exact_by_chunk =
             BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
         let mut shadow_inputs = HashMap::with_capacity(live_candidates.len());
@@ -13997,10 +14084,12 @@ impl BorsukIndex {
                     ),
                 );
             }
-            exact_by_chunk
-                .entry((GlobalPqSearchLayer::Base, chunk_row_start))
-                .or_default()
-                .push(identity);
+            if options.global_exact_rerank {
+                exact_by_chunk
+                    .entry((GlobalPqSearchLayer::Base, chunk_row_start))
+                    .or_default()
+                    .push(identity);
+            }
         }
         let tagged_chunks_by_start = chunks_by_start
             .iter()
@@ -14039,37 +14128,42 @@ impl BorsukIndex {
             let distance = metric.distance_unchecked(query, &vector)?;
             scored_vectors.push((distance, node, vector, id, stamp));
         }
-        let global_exact_bound_shadow = if options.global_exact_bound_shadow {
-            let shadow_scored = scored_vectors
-                .iter()
-                .map(|(distance, _, vector, id, _)| GlobalExactBoundScored {
-                    distance: *distance,
-                    vector,
-                    id,
-                })
-                .collect::<Vec<_>>();
-            let layer_indexes = [(GlobalPqSearchLayer::Base, index.as_ref())];
-            self.global_exact_bound_shadow(GlobalExactBoundContext {
-                query,
-                pq_query: &pq_query,
-                k: options.k,
-                layer_indexes: &layer_indexes,
-                chunks_by_start: &tagged_chunks_by_start,
-                inputs: &shadow_inputs,
-                scored: &shadow_scored,
-                exact_backing_reads,
-                exact_backing_bytes,
-                residual_scan_bytes: 0,
-            })?
-        } else {
-            GlobalExactBoundShadow::default()
-        };
+        let global_exact_bound_shadow =
+            if options.global_exact_bound_shadow && options.global_exact_rerank {
+                let shadow_scored = scored_vectors
+                    .iter()
+                    .map(|(distance, _, vector, id, _)| GlobalExactBoundScored {
+                        distance: *distance,
+                        vector,
+                        id,
+                    })
+                    .collect::<Vec<_>>();
+                let layer_indexes = [(GlobalPqSearchLayer::Base, index.as_ref())];
+                self.global_exact_bound_shadow(GlobalExactBoundContext {
+                    query,
+                    pq_query: &pq_query,
+                    k: options.k,
+                    layer_indexes: &layer_indexes,
+                    chunks_by_start: &tagged_chunks_by_start,
+                    inputs: &shadow_inputs,
+                    scored: &shadow_scored,
+                    exact_backing_reads,
+                    exact_backing_bytes,
+                    residual_scan_bytes: 0,
+                })?
+            } else {
+                GlobalExactBoundShadow::default()
+            };
         scored_vectors.sort_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
                 .then_with(|| left.1.cmp(&right.1))
         });
-        let records_scored = scored_vectors.len();
+        let records_scored = if options.global_exact_rerank {
+            scored_vectors.len()
+        } else {
+            approximate_records_scored
+        };
         let materialize = options.k.min(scored_vectors.len());
         let boundary = materialize
             .checked_sub(1)
@@ -14089,21 +14183,26 @@ impl BorsukIndex {
                 .then_with(|| left.1.cmp(&right.1))
         });
         scored.truncate(options.k);
-        let hits = scored
-            .iter()
-            .map(|(distance, id, _)| SearchHit {
-                id: id.clone(),
-                distance: *distance,
-                metadata: None,
-            })
-            .collect::<Vec<_>>();
+        let hits = approximate_hits.unwrap_or_else(|| {
+            scored
+                .iter()
+                .map(|(distance, id, _)| SearchHit {
+                    id: id.clone(),
+                    distance: *distance,
+                    metadata: None,
+                })
+                .collect::<Vec<_>>()
+        });
         let vectors = if include_vectors {
             scored.into_iter().map(|(_, _, vector)| vector).collect()
         } else {
             Vec::new()
         };
-        let global_exact_rerank_us =
-            u64::try_from(global_exact_rerank_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let global_exact_rerank_us = if options.global_exact_rerank {
+            u64::try_from(global_exact_rerank_started.elapsed().as_micros()).unwrap_or(u64::MAX)
+        } else {
+            0
+        };
         let segments_total = base_segment_count;
         let segments_searched = searched_chunks.len();
         let termination_reason = if max_bytes.is_some_and(|limit| bytes_read >= limit) {
@@ -14118,6 +14217,11 @@ impl BorsukIndex {
             (0, _) => expected_leaf_mode.to_string(),
             (_, 0) => "global-cell-graph".to_string(),
             _ => format!("mixed-global-cell-graph+{expected_leaf_mode}"),
+        };
+        let execution_engine = if options.global_exact_rerank {
+            execution_engine
+        } else {
+            format!("{execution_engine}+approximate-first")
         };
         let mut execution = SearchExecution {
             report: SearchReport {
@@ -29563,6 +29667,38 @@ mod tests {
             report.requests
         );
 
+        let approximate = index
+            .search_with_report(
+                &query,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_global_exact_rerank(false),
+            )
+            .unwrap();
+        assert_eq!(approximate.hits[0].id, RecordId::from("row-37"));
+        assert_eq!(approximate.global_exact_vectors_fetched, 0);
+        assert_eq!(approximate.global_base_exact_rerank_us, 0);
+        assert!(approximate.leaf_mode.contains("approximate-first"));
+        assert!(
+            approximate.requests.gets < report.requests.gets,
+            "approximate-first must remove the dependent exact-object GET: exact={:?}, approximate={:?}",
+            report.requests,
+            approximate.requests
+        );
+        let vector_error = index
+            .search_vectors(
+                &query,
+                SearchOptions::approx(5, LeafMode::SrhtPqScan)
+                    .with_max_segments(8)
+                    .with_global_exact_rerank(false),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            vector_error,
+            BorsukError::InvalidSearchOptions(message)
+                if message.contains("cannot return lossless vectors")
+        ));
+
         let limited = index
             .search_with_report(
                 &query,
@@ -30237,6 +30373,20 @@ mod tests {
             vec![moved],
             "winner vectors must remain aligned with their current logical identity"
         );
+        let approximate = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(1)
+                    .with_global_exact_rerank(false),
+            )
+            .unwrap();
+        assert_eq!(approximate.hits[0].id, RecordId::from("base-0"));
+        assert_eq!(approximate.global_identity_rows_resolved, 2);
+        assert_eq!(approximate.global_exact_vectors_fetched, 0);
+        assert_eq!(approximate.global_base_exact_rerank_us, 0);
+        assert!(approximate.leaf_mode.contains("approximate-first"));
         let scan_report = reader
             .search_with_report(
                 &[0.0; 8],

@@ -2342,3 +2342,27 @@ rollback passed strict workspace/all-feature/all-target Clippy and the complete
 workspace/all-feature/all-target matrix: 1,164 tests passed, 24 ignored across
 71 suites. This closes the residual-PQ branch without weakening its recorded
 rejection or creating an AWS claim.
+
+### Approximate-first ID-search foundation
+
+The next verified local code slice adds an explicit, initially non-default
+`SearchOptions::with_global_exact_rerank(false)` policy. It preserves global
+code scanning, authenticated identity reads, fused base/delta scheduling,
+newest-generation MVCC resolution, tombstone suppression, candidate limits,
+and deterministic ADC ordering, but does not issue the dependent lossless
+exact-vector request wave. The returned distance is therefore approximate and
+the execution-engine label includes `approximate-first`. Both base-only and
+fused base/delta regressions return the expected live ID with
+`global_exact_vectors_fetched = 0` and exact-rerank time zero. Vector-returning
+queries, exact-bound shadow requests, unsupported filtered/metadata paths, and
+incomplete global coverage fail explicitly rather than silently falling back to
+an exact read or returning incomplete vectors.
+
+This is an execution capability, not a quality or performance claim. Exact
+rerank remains the default. Fresh verification passed focused base and fused
+reader tests, strict locked workspace/all-feature/all-target Clippy, repository
+policy, formatting, and the complete locked workspace/all-feature/all-target
+matrix: 1,163 tests passed and 24 research tests were explicitly ignored across
+70 suites. The next admissible evidence is a paired full-corpus Cohere Medium 1M
+run against its shipped `neighbors.parquet` ground truth; inserted-ID recall is
+not an acceptable substitute.

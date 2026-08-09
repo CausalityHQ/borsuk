@@ -2041,6 +2041,11 @@ pub struct SearchOptions {
     /// graph policies require a separately built and validated local artifact.
     #[serde(default)]
     pub cache_execution: CacheExecutionPolicy,
+    /// Fetch and score lossless vectors after global approximate candidate
+    /// selection. Disable only for ID-only approximate-first queries whose
+    /// recall is acceptable to the caller; vector-returning APIs require this.
+    #[serde(default = "default_global_exact_rerank")]
+    pub global_exact_rerank: bool,
     /// Enable result-preserving exact-bound qualification telemetry. This is
     /// disabled by default because the V7 shadow recomputes residuals from
     /// fetched exact rows.
@@ -2062,6 +2067,7 @@ impl SearchOptions {
             vector_name: String::new(),
             disable_coarse_quantizer: false,
             cache_execution: CacheExecutionPolicy::Scan,
+            global_exact_rerank: true,
             global_exact_bound_shadow: false,
         }
     }
@@ -2089,6 +2095,7 @@ impl SearchOptions {
             vector_name: String::new(),
             disable_coarse_quantizer: false,
             cache_execution: CacheExecutionPolicy::Scan,
+            global_exact_rerank: true,
             global_exact_bound_shadow: false,
         }
     }
@@ -2264,6 +2271,13 @@ impl SearchOptions {
         self
     }
 
+    /// Enable or disable lossless global exact reranking for ID-only search.
+    #[must_use]
+    pub fn with_global_exact_rerank(mut self, enabled: bool) -> Self {
+        self.global_exact_rerank = enabled;
+        self
+    }
+
     /// Enable or disable result-preserving exact-bound qualification telemetry.
     #[must_use]
     pub fn with_global_exact_bound_shadow(mut self, enabled: bool) -> Self {
@@ -2397,6 +2411,10 @@ impl HybridOptions {
 
 const fn default_search_prefetch_depth() -> usize {
     DEFAULT_SEARCH_PREFETCH_DEPTH
+}
+
+const fn default_global_exact_rerank() -> bool {
+    true
 }
 
 /// Default bounded source-segment batch for incremental compaction.

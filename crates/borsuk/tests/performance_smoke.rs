@@ -221,6 +221,7 @@ fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
         vector_name: String::new(),
         disable_coarse_quantizer: false,
         cache_execution: borsuk::CacheExecutionPolicy::Scan,
+        global_exact_rerank: true,
         global_exact_bound_shadow: false,
     }
 }

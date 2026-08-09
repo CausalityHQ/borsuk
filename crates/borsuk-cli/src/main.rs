@@ -359,6 +359,7 @@ fn run() -> Result<()> {
                 vector_name: vector.unwrap_or_default(),
                 disable_coarse_quantizer: false,
                 cache_execution: cache_execution.into(),
+                global_exact_rerank: true,
                 global_exact_bound_shadow: false,
             };
             let search = index.search_with_report(&query, options)?;
@@ -412,6 +413,7 @@ fn run() -> Result<()> {
                 vector_name: vector.unwrap_or_default(),
                 disable_coarse_quantizer: false,
                 cache_execution: cache_execution.into(),
+                global_exact_rerank: true,
                 global_exact_bound_shadow: false,
             };
             let report = index.explain(

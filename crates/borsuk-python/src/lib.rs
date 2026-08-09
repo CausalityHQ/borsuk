@@ -1147,6 +1147,7 @@ impl PyIndex {
                         vector_name: vector,
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1201,6 +1202,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1256,6 +1258,7 @@ impl PyIndex {
                         vector_name: vector,
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1354,6 +1357,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1410,6 +1414,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1466,6 +1471,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1522,6 +1528,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1577,6 +1584,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1630,6 +1638,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1683,6 +1692,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1739,6 +1749,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1795,6 +1806,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1851,6 +1863,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1904,6 +1917,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -1965,6 +1979,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -2027,6 +2042,7 @@ impl PyIndex {
                         vector_name: vector,
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                 )
@@ -2069,6 +2085,7 @@ impl PyIndex {
                         vector_name: vector,
                         disable_coarse_quantizer: false,
                         cache_execution: borsuk::CacheExecutionPolicy::Scan,
+                        global_exact_rerank: true,
                         global_exact_bound_shadow: false,
                     },
                     borsuk::QueryCostModel {
