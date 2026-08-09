@@ -2018,5 +2018,20 @@ exclusive Causality attempt `20260809T071915Z` started with source archive
 SHA-256 `f44deb16d6f074fc8f795898c319f800b18ff62880e2a1e3f222a0d20738cd0f`
 and manifest SHA-256
 `219f3c2f64fe0f57d149bfe8deeaad80a6f82ee962ebd2f0b95cbd8901bd9cee`.
-This is a launch receipt only; measurement CSVs remain ineligible until root
-terminality.
+After the retained 15-minute interval, all ten arm completion markers and the
+root failure marker were terminal. EC2 system and instance checks remained
+healthy. The ordinary fail-closed validator rejected the failure-marked root
+as incomplete before opening measurements; explicit terminal-recovery
+validation then accepted every artifact and reconciliation check but selected
+no winner.
+
+Both arms retained recall@10 1.0, identical ordered results, and identical
+logical bytes. The 20 ms candidate won only two of five paired repetition
+p95s. Pooled p95 regressed from 79.805 ms to 79.864 ms (0.059 ms), pooled p50
+regressed from 60.954 ms to 64.103 ms (5.17%), GETs rose from 12.986 to 24.147
+per query (85.945%), and backing bytes rose 0.323%. It therefore failed the
+paired-win, pooled-p95, pooled-p50, and GET-amplification gates. The production
+default remains unhedged. This completes the single preregistered lower-delay
+follow-up; another delay sweep is not justified. The next latency work must
+reduce the core exact-rerank request/decode path rather than depend on duplicate
+S3 requests or cache warmth.
