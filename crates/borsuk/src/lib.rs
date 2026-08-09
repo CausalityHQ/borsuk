@@ -105,7 +105,9 @@ pub const CPU_THREADS_ENV: &str = "BORSUK_CPU_THREADS";
 pub const DEFAULT_IO_THREADS: usize = 24;
 /// Process-wide blocking-I/O waiter override. Values must be in `1..=128`.
 pub const IO_THREADS_ENV: &str = "BORSUK_IO_THREADS";
+/// Default process-wide concurrency limit for physical backing-store GETs.
 pub const DEFAULT_BACKING_GET_CONCURRENCY: usize = 128;
+/// Process-wide physical backing-store GET concurrency override.
 pub const BACKING_GET_CONCURRENCY_ENV: &str = "BORSUK_BACKING_GET_CONCURRENCY";
 
 /// Return the process-wide CPU worker budget used by build and query pools.
@@ -128,6 +130,7 @@ pub fn configured_io_threads() -> usize {
         .unwrap_or(DEFAULT_IO_THREADS)
 }
 
+/// Return the validated process-wide physical backing-store GET concurrency limit.
 #[must_use]
 pub fn configured_backing_get_concurrency() -> usize {
     parse_backing_get_concurrency(std::env::var(BACKING_GET_CONCURRENCY_ENV).ok().as_deref())
