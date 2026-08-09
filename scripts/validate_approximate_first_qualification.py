@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import traceback
 from collections import defaultdict
 from pathlib import Path
 
@@ -115,9 +116,10 @@ def evaluate_point(rows, manifest, nprobe, candidates):
     require(control_reads > 0 and control_bytes > 0, "control backing I/O must be positive")
     read_reduction = 1.0 - treatment_reads / control_reads
     byte_reduction = 1.0 - treatment_bytes / control_bytes
+    require(len(control_latency) == len(treatment_latency), "paired latency lengths differ")
     paired_differences = [
         control - treatment
-        for control, treatment in zip(control_latency, treatment_latency, strict=True)
+        for control, treatment in zip(control_latency, treatment_latency)  # noqa: B905
     ]
     wins = sum(value > 0 for value in paired_differences)
     losses = sum(value < 0 for value in paired_differences)
@@ -176,14 +178,21 @@ def evaluate_point(rows, manifest, nprobe, candidates):
     }
 
 
-def validate(root, manifest_path):
+def validate(root, manifest_path, *, completed_after_evaluator_failure=False):
     root = Path(root)
     manifest = json.loads(Path(manifest_path).read_text())
     complete = root / "APPROXIMATE_FIRST_PAIRS_COMPLETE"
     require(complete.is_file(), "completion marker is absent; measurement artifact is ineligible for inspection")
     require(not (root / "bench_approximate_first_pairs.jsonl.incomplete").exists(), "incomplete artifact is present")
     failures = list(root.glob("*FAILED*")) + list(root.glob("*FAILURE*"))
-    require(not failures, "campaign failure marker is present")
+    if completed_after_evaluator_failure:
+        require(failures, "recovery mode requires a campaign failure marker")
+        require(
+            (root / "APPROXIMATE_FIRST_QUALIFICATION_FAILED").is_file(),
+            "recovery mode requires the qualification failure marker",
+        )
+    else:
+        require(not failures, "campaign failure marker is present")
     identity_path = root / "qualification_identity.json"
     require(identity_path.is_file(), "qualification identity is absent")
     identity = json.loads(identity_path.read_text())
@@ -249,7 +258,14 @@ def validate(root, manifest_path):
         ),
         default=None,
     )
-    return {"protocol": manifest["protocol"], "identity": identity, "accepted": selected is not None, "selected": selected, "points": points}
+    return {
+        "protocol": manifest["protocol"],
+        "recovery_mode": completed_after_evaluator_failure,
+        "identity": identity,
+        "accepted": selected is not None,
+        "selected": selected,
+        "points": points,
+    }
 
 
 def main():
@@ -257,11 +273,19 @@ def main():
     parser.add_argument("root", type=Path)
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--decision", type=Path)
+    parser.add_argument("--completed-after-evaluator-failure", action="store_true")
     args = parser.parse_args()
     try:
-        decision = validate(args.root, args.manifest)
+        decision = validate(
+            args.root,
+            args.manifest,
+            completed_after_evaluator_failure=args.completed_after_evaluator_failure,
+        )
     except ValidationError as error:
         print(f"invalid: {error}")
+        return 2
+    except Exception:  # noqa: BLE001 - unexpected evaluator defects are infrastructure failures
+        traceback.print_exc()
         return 2
     encoded = json.dumps(decision, indent=2, sort_keys=True) + "\n"
     if args.decision:

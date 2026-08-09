@@ -37,6 +37,8 @@ class ApproximateFirstRunnerContractTest(unittest.TestCase):
     def test_valid_rejection_is_terminal_not_infrastructure_failure(self):
         self.assertIn("APPROXIMATE_FIRST_QUALIFICATION_REJECTED", RUNNER)
         self.assertIn("decision_status -eq 1", RUNNER)
+        self.assertIn('-s "$output/approximate-first-decision.json"', RUNNER)
+        self.assertIn("evaluator failed without a valid decision", RUNNER)
         self.assertIn("APPROXIMATE_FIRST_QUALIFICATION_FAILED", RUNNER)
 
     def test_interrupts_and_termination_are_failure_marked(self):

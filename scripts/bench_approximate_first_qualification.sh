@@ -112,10 +112,11 @@ decision_status=$?
 set -e
 if [[ $decision_status -eq 0 ]]; then
   printf 'complete\n' > "$output/APPROXIMATE_FIRST_QUALIFICATION_COMPLETE"
-elif [[ $decision_status -eq 1 ]]; then
+elif [[ $decision_status -eq 1 && -s "$output/approximate-first-decision.json" ]]; then
   printf 'rejected\n' > "$output/APPROXIMATE_FIRST_QUALIFICATION_REJECTED"
 else
-  exit "$decision_status"
+  echo "evaluator failed without a valid decision (exit $decision_status)" >&2
+  exit 2
 fi
 rm -f "$failure"
 trap - EXIT INT TERM

@@ -146,6 +146,25 @@ class ApproximateFirstQualificationTest(unittest.TestCase):
         self.assertFalse(decision["accepted"])
         self.assertIn("exact vectors", " ".join(decision["points"][0]["failures"]))
 
+    def test_validator_does_not_require_python_zip_strict(self):
+        source = Path(validator.__file__).read_text()
+        self.assertNotIn("zip(control_latency, treatment_latency, strict=True)", source)
+
+    def test_completed_measurement_can_be_recovered_after_evaluator_failure(self):
+        self.write_terminal()
+        (self.root / "APPROXIMATE_FIRST_QUALIFICATION_FAILED").write_text(
+            "exit=2\nreason=evaluator-error\n"
+        )
+        with self.assertRaisesRegex(validator.ValidationError, "failure marker"):
+            validator.validate(self.root, self.manifest_path)
+        decision = validator.validate(
+            self.root,
+            self.manifest_path,
+            completed_after_evaluator_failure=True,
+        )
+        self.assertTrue(decision["accepted"])
+        self.assertTrue(decision["recovery_mode"])
+
 
 if __name__ == "__main__":
     unittest.main()

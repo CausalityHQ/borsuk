@@ -2448,3 +2448,23 @@ only when the caller supplies a 40-hex pushed source commit, the immutable sourc
 archive path, and its 64-hex SHA-256; the runner recomputes and matches that hash
 before compiling and records it in qualification identity. Ordinary Git
 execution retains the clean-tree and `origin/main` ancestry checks.
+
+The first remote arm from revision `4f4a3de` completed the full build and all
+4,000 paired rows, then hit an evaluator-only compatibility defect: the host
+Python rejected `zip(..., strict=True)`. The runner compounded this by treating
+any evaluator exit one as a valid rejection even though no decision file had
+been written. No measurement numbers were read. The immutable root retains its
+erroneous rejection marker and now also carries
+`APPROXIMATE_FIRST_QUALIFICATION_FAILED` with the evaluator reason. The complete
+raw JSONL SHA-256 is
+`492e848310a8fe917addae75c606694efc1a2214382655ed523cfee4225e2208`; the
+identity SHA-256 is
+`afc06d39e67947119d063e2c6759a2bf5658cca2800a4cdeaff5758668c6b20d`.
+The root was preserved at
+`s3://borsuk-bench-453182569524-euc1/research/approximate-first/4f4a3de-r01/results/`.
+
+The evaluator now checks paired lengths explicitly and uses Python-portable
+`zip`; unexpected exceptions return infrastructure exit two. The runner accepts
+exit one only with a nonempty decision file. A separate recovery mode requires
+both the completed-pairs and qualification-failure markers and leaves the
+immutable failed root unchanged while writing any recovered decision elsewhere.
