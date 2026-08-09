@@ -178,13 +178,16 @@ class GroupCommitScalabilityRunnerTest(unittest.TestCase):
         self.assertIn("validation-error.txt", RUNNER)
 
     def test_correctness_gate_uses_current_epoch_lane_format_tests(self) -> None:
-        self.assertIn("lane_log::tests::v30_extent_put_is_the_acknowledgement_boundary", RUNNER)
+        self.assertIn(
+            "lane_log::tests::v30_extent_plus_conditional_head_are_the_acknowledgement_boundary",
+            RUNNER,
+        )
         self.assertIn(
             "lane_log::tests::v30_extent_completing_after_lease_guard_is_not_acknowledged",
             RUNNER,
         )
         self.assertIn(
-            "lane_log::tests::v30_linearizable_reader_recovers_extents_beyond_a_stale_watermark",
+            "lane_log::tests::v30_linearizable_reader_trusts_the_conditionally_published_head",
             RUNNER,
         )
         self.assertNotIn("lane_log::tests::v29_", RUNNER)

@@ -2215,3 +2215,34 @@ post-ingest read path keeps the normal library defaults. The coordinator also
 owns a fail-safe child guard that kills and reaps every remaining process on
 spawn, readiness, or execution failure. These are pre-measurement resource and
 cleanup corrections, not performance-driven workload changes.
+
+Revision `cd4a0c5` launched V3 from source archive SHA-256
+`b0011f90ce3df1d5f1cd29c4dacdd8ed148ee3cfbeae3c4dde0ce43f6e8de320`
+and manifest SHA-256
+`06dd7332bb4390f6ea50c9a609014df22b11a424b73576d7f6d541dc7ba3bfb4`.
+The sole 2,000-cell, 32-writer measurement completed and passed its per-cell
+validator. The root later failed after measurement because the correctness
+gate invoked two stale exact Rust test names, for which Cargo executed zero
+tests. An isolated recovery tree containing the immutable manifest, dataset
+descriptor, and completed cell passed the repository's
+terminal-cell validator before any measurement CSV was inspected. The runner
+now names the current conditional-head acknowledgement and linearizable-reader
+tests, and focused verification executes exactly one Rust test for each of the
+four V30 lane invariants.
+
+The terminal local cell made all 16,384 records visible with recall@10 1.0.
+Write p50/p95 was 24.038/62.200 ms and acknowledged throughput was 53,569.844
+records/s. Active-tail and post-drain read p95 were 6.079 and 2.683 ms. Drain
+took 15,769.122 ms, reducing drain-inclusive throughput to 1,019.225 records/s.
+These are four-vCPU, no-cache local decision-arm observations and are
+ineligible for AWS, 100M-scale, or competitor claims.
+
+The preregistered exact-bound evaluator rejected the scalar certificate. Across
+20 queries it had zero containment failures and 198 microseconds certificate
+CPU p95, but survivor p95 remained 16 of 16. The unchanged baseline and
+predicted plans both required 288 exact reads and 2,617,344 bytes, yielding
+zero read and byte reduction against the required 30%. This safely closes the
+scalar certificate hypothesis: do not weaken its thresholds or launch an AWS
+campaign from it. The next preregistered treatment must change the core exact
+read architecture and demonstrate real no-cache GET and byte reduction before
+AWS qualification.
