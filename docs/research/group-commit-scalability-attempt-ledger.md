@@ -1663,3 +1663,50 @@ cost, or scale evidence. No AWS workload was launched and no incomplete
 measurement CSV was inspected. The next evidence step remains the terminal
 local 768-dimensional independent-process smoke on the exact delivered
 revision, followed only on success by the preregistered AWS matrix.
+
+### Realistic-shape local direct-ingest smoke
+
+The first exact 2,000-cell/768-dimensional bulk smoke at revision `3e179e1`
+reached a terminal failed state in its one-writer cell. Its completed raw
+artifacts showed that the direct mutation itself was healthy, but exposed an
+evidence-contract error: the claim-ineligible local filesystem adapter reports
+three PUTs plus one verifying HEAD, whereas the S3 create/conditional path
+reports two PUTs with zero reads. The failed artifacts remain preserved under
+`/data/target/borsuk-local-smoke-3e179e1-results`; no value from that failed arm
+is used as benchmark evidence.
+
+Revision `a602bf2` made this distinction explicit and fail closed. Production
+and architecture-qualification evidence must still report exactly two PUTs and
+zero GET/HEAD/LIST/delete requests; local smoke evidence must report exactly
+three PUTs plus one HEAD. A fresh run under disjoint result and index paths then
+completed both the one- and eight-process cells and passed an independent final
+validator invocation. Each process owned a distinct writer instance over the
+same cloned base, each append carried 16 768-dimensional records, all point and
+reopen visibility markers were present, and inserted-ID recall@10 was 1.0 in
+both cells.
+
+The one-process cell wrote 32 records in two groups; its diagnostic write p95
+was 9.381 ms, ingest rate 1,158.6 records/s, drain-inclusive rate 36.7 records/s,
+post-drain read p95 4.253 ms, active-tail read p95 8.276 ms, and peak sampled RSS
+331,132,928 bytes. The eight-process cell wrote 256 records in 16 groups; its
+diagnostic write p95 was 12.739 ms, ingest rate 6,221.6 records/s,
+drain-inclusive rate 292.7 records/s, post-drain read p95 5.097 ms, active-tail
+read p95 3.754 ms, and peak sampled RSS 523,833,344 bytes. Both cells reported
+0.25 acknowledged storage requests per record under the local four-request
+group contract.
+
+These small local cells prove structural shape, independent-process execution,
+exact visibility, request reconciliation, telemetry completeness, and harness
+termination only. Their timings do not qualify S3 latency, throughput, cost,
+recall on a real corpus, or large-scale behavior. The successful artifacts are
+preserved under `/data/target/borsuk-local-smoke-a602bf2-results`.
+
+The exact post-smoke repository assurance passed formatting, diff hygiene,
+repository policy, documentation-web checks, strict locked workspace Clippy
+with all features and targets, all 490 Python tests in the pinned benchmark
+requirements environment, and the complete locked Rust workspace with all
+features and targets. The Rust gate reported 1,139 passed, 24 ignored, and
+1,104 filtered tests across 70 suites. An initial system-Python discovery run
+failed five imports because that interpreter lacked the pinned NumPy/PyArrow
+dependencies; rerunning the unchanged suite through the declared requirements
+environment passed, so no test or product condition was relaxed.

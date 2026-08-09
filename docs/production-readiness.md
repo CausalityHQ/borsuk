@@ -275,15 +275,17 @@ or unbounded-scalability claim.
 Every current per-lane acknowledgement receipt names its complete durable
 identity `(stripe, lease_epoch, sequence)` and carries separate BLAKE3
 checksums for the immutable Arrow extent and the exact conditionally published
-stripe-head successor. The campaign validator rejects scalar-only receipts,
-identity/checksum drift, and any healthy acknowledgement that is not exactly
-two PUTs with zero GET, HEAD, LIST, or delete requests.
+stripe-head successor. The campaign validator rejects scalar-only receipts and
+identity/checksum drift. It freezes the backend-specific healthy contract:
+exactly two PUTs with zero reads for S3 evidence, and exactly three PUTs plus
+one HEAD for the claim-ineligible local filesystem smoke.
 The benchmark contract now records producer writers and independently opened
 writer instances separately and rejects evidence unless each writer maps to a
-distinct instance. A two-instance terminal local smoke passes ingest,
+distinct instance. A terminal 2,000-cell/768D local smoke with separate 1- and
+8-writer process cells passes ingest,
 active-tail visibility, sequential collection-wide drains, reopen visibility,
 raw-sample reconciliation, resource telemetry, storage tracing, and the
-fail-closed validator. This is same-process structural evidence only. The
+fail-closed validator. This is local structural evidence only. The
 preregistered 1/8/32 AWS runner now launches one independent process per writer;
 current-revision AWS evidence is still required. The retirement, crash, fault,
 consistency, and targeted WAL-GC gates now pass locally.
