@@ -806,6 +806,14 @@ fn process_storage_runtime() -> Result<Arc<BlockingRuntime>> {
     Ok(created)
 }
 
+fn process_backing_get_admission() -> Arc<Semaphore> {
+    static ADMISSION: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    Arc::clone(
+        ADMISSION
+            .get_or_init(|| Arc::new(Semaphore::new(crate::configured_backing_get_concurrency()))),
+    )
+}
+
 #[derive(Clone)]
 pub(crate) struct Storage {
     uri: String,
@@ -1483,14 +1491,33 @@ impl Storage {
         cache_dir: Option<PathBuf>,
         cache_max_bytes: Option<u64>,
     ) -> Result<Self> {
+        Self::from_parts_with_get_admission(
+            uri,
+            store,
+            prefix,
+            cache_dir,
+            cache_max_bytes,
+            process_backing_get_admission(),
+        )
+    }
+
+    fn from_parts_with_get_admission(
+        uri: String,
+        store: Arc<dyn ObjectStore>,
+        prefix: ObjectPath,
+        cache_dir: Option<PathBuf>,
+        cache_max_bytes: Option<u64>,
+        get_admission: Arc<Semaphore>,
+    ) -> Result<Self> {
         let runtime = process_storage_runtime()?;
 
         let request_counters = Arc::new(RequestCounters::default());
         let cache_read_counters = Arc::new(CacheReadCounters::default());
-        let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore::new(
+        let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore::with_get_admission(
             store,
             Arc::clone(&request_counters),
             Arc::clone(&cache_read_counters),
+            get_admission,
         ));
 
         Ok(Self {
@@ -4794,6 +4821,49 @@ mod tests {
     use url::Url;
 
     struct DropFlag(Arc<AtomicBool>);
+
+    #[test]
+    fn storage_handles_share_one_process_backing_get_gate() {
+        let first = super::process_backing_get_admission();
+        let second = super::process_backing_get_admission();
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn physical_get_admission_is_applied_once_beneath_isolated_read_scope() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let inner = Arc::new(InMemory::new());
+            let path = object_store::path::Path::from("isolated-scope");
+            inner
+                .put(&path, bytes::Bytes::from_static(b"body").into())
+                .await
+                .unwrap();
+            let admission = Arc::new(tokio::sync::Semaphore::new(1));
+            let storage = Storage::from_parts_with_get_admission(
+                "memory:///isolated-scope".to_string(),
+                inner,
+                object_store::path::Path::from(""),
+                None,
+                None,
+                Arc::clone(&admission),
+            )
+            .unwrap();
+            let isolated = storage.isolated_read_scope();
+
+            let read = tokio::time::timeout(Duration::from_secs(1), isolated.store.get(&path))
+                .await
+                .expect("one physical admission beneath the read scope must not deadlock")
+                .unwrap();
+            assert_eq!(admission.available_permits(), 0);
+
+            drop(read);
+            assert_eq!(admission.available_permits(), 1);
+        });
+    }
 
     #[test]
     fn physical_get_admission_permit_lives_until_response_body_is_dropped() {
