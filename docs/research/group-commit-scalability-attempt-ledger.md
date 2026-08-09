@@ -2279,3 +2279,13 @@ events. A synthetic terminal root covering the exact 1,024-operation/16,384-
 record shape passes the validator and yields a provisional synthetic decision;
 it is structural evidence only and contains no performance claim. No V8 local
 measurement has been launched at this entry.
+
+Revision `efe35c7` froze and delivered this contract directly to `origin/main`
+by fast forward. Fresh assurance passed strict all-feature/all-target Clippy,
+the complete all-feature/all-target Rust matrix, repository policy, docs-web,
+Ruff, and 518 Python tests under the pinned format-benchmark requirements. The
+Rust gate found and fixed one real V8 integration defect before delivery: both
+global cell-graph builders sliced the standard Arrow scan envelope at the old
+V7 exact-ordinal boundary, omitting the V8 residual-code and error buffers that
+the descriptor authenticates. The isolated graph regression and final complete
+Rust matrix passed after changing both builders to the V8 residual-error end.
