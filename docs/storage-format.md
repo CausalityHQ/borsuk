@@ -180,6 +180,19 @@ does not match the manifest is rejected at open. This closes the previous
 footprint bug where a nominal f16 index still duplicated every global exact
 row as f32.
 
+Global-PQ reference layout 5 uses the `typed-columns-v7-local-exact-arrow`
+bundle schema. The scan Arrow object keeps each cell in an independent record
+batch and adds a non-null `UInt32 exact_ordinal` column. The separate exact
+Arrow object has one typed vector record batch. For the PQ scan codec, its rows
+are ordered by the full product-code locality key across all cells in that
+bundle. Packed TurboQuant codecs retain cell order because their QJL sign and
+norm payload bytes are not vector coordinates. Chunks sharing
+the object persist the same exact values-buffer range and checksum; the ordinal
+maps a scan row to its lossless value. The scan checksum authenticates the
+mapping, and the existing per-row digest authenticates record ID, mutation
+stamp, and exact bytes together. Unsupported experimental layouts are rejected
+with a rebuild error rather than read through a compatibility layer.
+
 Until that matrix is complete, standard Arrow IPC is the conservative exact
 sidecar default and Parquet remains the durable index-table default. This is a
 replaceable storage boundary; ANN routing, WAL/base/delta publication, and

@@ -2035,3 +2035,41 @@ default remains unhedged. This completes the single preregistered lower-delay
 follow-up; another delay sweep is not justified. The next latency work must
 reduce the core exact-rerank request/decode path rather than depend on duplicate
 S3 requests or cache warmth.
+
+The next local revision replaces the unreleased V6 global-PQ bundle with the
+standard-Arrow `typed-columns-v7-local-exact-arrow` layout. Terminal v3 control
+evidence across 2,500 queries showed that 128 lossless 768D candidates already
+used essentially their logical payload (391,472 exact backing bytes/query) but
+were scattered across 9.366 exact GETs/query and only 2.048 exact objects/query.
+V7 leaves scan, identity, mutation, MVCC, candidate, and exact-score semantics
+unchanged. It locality-orders the exact values across cells within a PQ bundle
+and authenticates a non-null `UInt32 exact_ordinal` mapping in every scan row.
+Packed TurboQuant codecs deliberately retain cell order because their QJL
+sign/norm suffix is not a coordinate code. This is a local structural candidate,
+not an AWS performance result.
+
+TDD first failed because V6 exposed `record_id` where `exact_ordinal` was
+required. Focused GREEN evidence covers standard Arrow decoding, deterministic
+cross-cell mapping, one cold GET for a constructed locality-clustered 48-row
+768D shortlist, out-of-range ordinal rejection, row-integrity preservation,
+all seven physical vector encodings, fused base/delta search, append validation,
+and cell-graph encode/decode with a non-identity ordinal permutation. An
+adversarial audit found and the implementation repaired three pre-delivery
+gaps: TurboQuant raw bytes are no longer Morton-sorted, cached graphs validate
+all three relative ordinal offsets, and every content-addressed exact object
+must agree on checksum and values-buffer range across scan bundles. Strict
+crate Clippy and the focused global-path suite pass. No AWS workload has been
+launched; promotion remains contingent on the complete repository gate and a
+fresh frozen paired qualification.
+
+The final local gate completed strict locked workspace Clippy with all features
+and targets and 1,155 Rust tests across 71 suites (24 explicit research-only
+ignores). The unpinned system Python attempt ran 494 tests and failed only five
+imports because NumPy/PyArrow were absent; rerunning the same complete layer in
+`scripts/requirements-format-bench.txt` passed all 501 tests. Repository policy,
+31 policy tests, 19 research-validator unit tests, web rendering, example-sync,
+formatting, and diff hygiene passed. The broad publication-document validator
+still reports the pre-existing absent archived matrix/resource assets and raw
+historical link targets already present at the parent revision; this V7 slice
+does not relabel, fabricate, or delete that historical evidence. That known
+repository baseline failure is not claimed green.

@@ -187,6 +187,12 @@ Persistent index data is binary and efficient:
   are versioned checked JSON control records; mutation extents, exact sidecars,
   and global scan bundles are standard Arrow IPC files. Other commit markers
   and `CURRENT` remain checked packed atomic records;
+- global-PQ layout 5 keeps scan rows cell-contiguous but, for the production PQ
+  codec, locality-orders the separate exact Arrow batch across every bundle.
+  Packed TurboQuant codecs retain deterministic cell order. An authenticated non-null
+  `UInt32 exact_ordinal` maps each scan row to its lossless vector. This changes
+  physical range locality only: the candidate count, MVCC resolution, exact
+  metric scoring, and per-row integrity verification remain unchanged;
 - manifests, segment summaries, routing bloom filters, pivot/routing tables,
   coarse codes, graph blocks, and normal segment records are Parquet. Exact
   dense vectors live only in the Arrow rerank sidecar, so the segment table

@@ -96,8 +96,6 @@ pub(crate) fn collection_wal_now_ms() -> Result<u64> {
 // cold handle, so only coalesce adjacent batches with a small IPC boundary.
 const SIDECAR_RANGE_COALESCE_BYTES: u64 = 64 * 1024;
 const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 4 * 1024 * 1024;
-pub(crate) const GLOBAL_RERANK_MAX_GROUP_SPAN_BYTES: usize =
-    SIDECAR_MAX_PHYSICAL_RANGE_BYTES as usize;
 const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
 // Global exact reranks commonly need 12-24 tiny, scattered rows from one
 // immutable bundle. Issue the complete bounded shortlist in one S3 wave

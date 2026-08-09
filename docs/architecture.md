@@ -200,10 +200,15 @@ The current implementation keeps these invariants:
   and 32 MiB/query. Combined with four-query production admission, retained
   code payload is capped at 128 MiB process-wide even at 100M vectors;
 - cell chunks are record batches in immutable standard Arrow IPC bundles capped
-  at 1 MiB of scan payload and 32 MiB total. The fixed-size scan and typed exact
-  value buffers remain independently range-addressable; adjacent selected scan
-  slices share one physical GET, while exact vectors are fetched only for the
-  bounded rerank shortlist;
+  at 2 MiB of scan payload and 48 MiB total. Code, identity, and mutation rows
+  remain cell-contiguous. For the production PQ scan codec, lossless exact rows
+  are independently locality-sorted across the bundle and addressed by an
+  authenticated `UInt32 exact_ordinal` scan column, so a shortlist spanning
+  neighboring cells can share bounded physical range GETs without fetching
+  extra candidates. Packed TurboQuant codecs retain deterministic cell order;
+  their sign/norm suffixes are not treated as coordinate codes. The fixed-size scan
+  and typed exact value buffers remain independently range-addressable, and
+  exact vectors are fetched only after MVCC for the bounded rerank shortlist;
 - build and query compute are capped at four threads by default
   (`BORSUK_CPU_THREADS` is the explicit process-wide override). Blocking
   object-store waits use a separate process-wide 24-thread small-stack pool
@@ -462,6 +467,14 @@ omit the text columns, so a dense primary-only index pays no segment-column
 overhead for sparse or BM25 features. (The rerank sidecar and the storage format
 tradeoff are detailed in
 [`storage-format.md`](storage-format.md#two-storage-formats).)
+
+The finalized global-PQ path uses two content-addressed standard Arrow IPC
+objects per bundle. One stores cell-contiguous scan codes, physical row ordinals,
+bundle-local exact ordinals, identities, mutation stamps, and row-integrity
+digests. For the PQ codec, the other stores one bundle-wide typed exact-vector
+batch ordered by the full product-code locality key across cells. Exact scoring still reads and
+authenticates every selected lossless vector; this is a physical request-
+locality layout, not approximate pruning or a cache-dependent result path.
 
 BM25 and named sparse retrieval use a hierarchical inverted index made entirely
 of typed Parquet tables. Open loads only small field roots. Query terms then

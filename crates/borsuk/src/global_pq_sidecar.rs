@@ -38,8 +38,8 @@ use crate::rotated_product_quantizer::ProductQuantizerConfig;
 
 const DESCRIPTOR_JSON_COLUMN: &str = "ann_descriptor_json";
 const CELL_GRAPH_MAGIC: &[u8; 8] = b"BRSGCG01";
-const CELL_GRAPH_VERSION: u32 = 2;
-const CELL_GRAPH_HEADER_LEN: usize = 60;
+const CELL_GRAPH_VERSION: u32 = 3;
+const CELL_GRAPH_HEADER_LEN: usize = 64;
 pub(crate) const DEFAULT_GLOBAL_PQ_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const DEFAULT_GLOBAL_EXACT_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -92,6 +92,12 @@ pub(crate) enum GlobalScanQuantizerState {
     Pq(ProductQuantizerState),
     FastTurboQuantMse(FastTurboQuantMseScanState),
     FastTurboQuantProd(FastTurboQuantProdScanState),
+}
+
+impl GlobalScanQuantizerState {
+    pub(crate) fn uses_product_code_locality(&self) -> bool {
+        matches!(self, Self::Pq(_))
+    }
 }
 
 impl From<ProductQuantizerState> for GlobalScanQuantizerState {
@@ -801,13 +807,16 @@ pub(crate) struct GlobalPqChunkRef {
     pub(crate) identity_checksum: Box<str>,
     /// Separate standard-Arrow IPC object containing only exact-vector batches.
     pub(crate) exact_path: String,
-    /// Checksum of this chunk's lossless-vector slice.
+    /// Checksum of the bundle-wide lossless-vector values buffer shared by all
+    /// chunks in the scan bundle.
     pub(crate) exact_checksum: Box<str>,
+    /// Absolute range of that shared typed values buffer in `exact_path`.
     pub(crate) exact_offset_bytes: usize,
     pub(crate) exact_size_bytes: usize,
     pub(crate) cell_index: u16,
-    /// Absolute starts for the typed segment and row ordinal buffers.
-    pub(crate) ordinal_buffer_offsets: [u32; 2],
+    /// Absolute starts for the typed segment, row, and bundle-local exact-row
+    /// ordinal buffers.
+    pub(crate) ordinal_buffer_offsets: [u32; 3],
     /// Absolute starts for the identity offsets/values and four mutation
     /// buffers. Arrow permits implementation-defined padding between buffers,
     /// so every range start is persisted instead of deriving later columns
@@ -827,7 +836,7 @@ pub(crate) struct GlobalPqChunkRef {
 }
 
 impl GlobalPqChunkRef {
-    pub(crate) fn scan_buffer_ranges(&self, code_width: usize) -> Result<[Range<usize>; 3]> {
+    pub(crate) fn scan_buffer_ranges(&self, code_width: usize) -> Result<[Range<usize>; 4]> {
         let scan_start = self.offset_bytes as usize;
         let scan_end = scan_start
             .checked_add(self.size_bytes as usize)
@@ -844,20 +853,29 @@ impl GlobalPqChunkRef {
         let ordinal_bytes = self.rows.checked_mul(size_of::<u32>()).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ ordinal buffer size overflows".to_string())
         })?;
-        let [segment_start, row_start] = self.ordinal_buffer_offsets.map(|offset| offset as usize);
+        let [segment_start, row_start, exact_start] =
+            self.ordinal_buffer_offsets.map(|offset| offset as usize);
         let segment_end = segment_start.checked_add(ordinal_bytes).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ segment ordinal range overflows".to_string())
         })?;
         let row_end = row_start.checked_add(ordinal_bytes).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ row ordinal range overflows".to_string())
         })?;
-        if code_end > segment_start || segment_end > row_start || row_end != scan_end {
+        let exact_end = exact_start.checked_add(ordinal_bytes).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ exact ordinal range overflows".to_string())
+        })?;
+        if code_end > segment_start
+            || segment_end > row_start
+            || row_end > exact_start
+            || exact_end != scan_end
+        {
             return invalid("global PQ typed scan ordinal ranges are invalid");
         }
         Ok([
             scan_start..code_end,
             segment_start..segment_end,
             row_start..row_end,
+            exact_start..exact_end,
         ])
     }
 
@@ -929,14 +947,15 @@ impl GlobalPqChunkRef {
 
     #[cfg(test)]
     fn with_test_typed_identity_ranges(mut self) -> Self {
-        if self.ordinal_buffer_offsets == [0; 2] {
-            let minimum_scan_bytes = self.rows.saturating_mul(64 + 8);
+        if self.ordinal_buffer_offsets == [0; 3] {
+            let minimum_scan_bytes = self.rows.saturating_mul(64 + 12);
             self.size_bytes = u32::try_from((self.size_bytes as usize).max(minimum_scan_bytes))
                 .expect("test scan envelope fits u32");
             let scan_end = (self.offset_bytes as usize).saturating_add(self.size_bytes as usize);
-            let row = scan_end.saturating_sub(self.rows.saturating_mul(4));
+            let exact = scan_end.saturating_sub(self.rows.saturating_mul(4));
+            let row = exact.saturating_sub(self.rows.saturating_mul(4));
             let segment = row.saturating_sub(self.rows.saturating_mul(4));
-            self.ordinal_buffer_offsets = [segment, row]
+            self.ordinal_buffer_offsets = [segment, row, exact]
                 .map(|offset| u32::try_from(offset).expect("test ordinal offset fits u32"));
         }
         let scan_end = (self.offset_bytes as usize).saturating_add(self.size_bytes as usize);
@@ -1408,8 +1427,8 @@ pub(crate) struct GlobalPqDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum GlobalPqBundleLayout {
-    #[serde(rename = "typed-columns-v6-dual-arrow")]
-    TypedColumnsV6DualArrow,
+    #[serde(rename = "typed-columns-v7-local-exact-arrow")]
+    TypedColumnsV7LocalExactArrow,
 }
 
 impl GlobalPqDescriptor {
@@ -1446,7 +1465,10 @@ impl GlobalPqDescriptor {
         {
             return invalid("global PQ location encoding is invalid");
         }
+        let exact_row_bytes = vector_element_type.fixed_width_bytes(quantizer_dimensions)?;
         let mut next = 0_usize;
+        let mut exact_bundles = HashMap::<(String, String), (Box<str>, usize, usize, usize)>::new();
+        let mut exact_objects = HashMap::<String, (Box<str>, usize, usize)>::new();
         for chunk in &chunks {
             if chunk.row_start != next || chunk.rows == 0 {
                 return invalid("chunk row ranges are not contiguous");
@@ -1464,6 +1486,43 @@ impl GlobalPqDescriptor {
             if chunk.path == chunk.exact_path {
                 return invalid("chunk scan and exact sidecar paths must be distinct");
             }
+            let exact_object = (
+                chunk.exact_checksum.clone(),
+                chunk.exact_offset_bytes,
+                chunk.exact_size_bytes,
+            );
+            if exact_objects
+                .insert(chunk.exact_path.clone(), exact_object.clone())
+                .is_some_and(|existing| existing != exact_object)
+            {
+                return invalid("chunks sharing an exact object disagree on its values buffer");
+            }
+            match exact_bundles.entry((chunk.path.clone(), chunk.exact_path.clone())) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert((
+                        chunk.exact_checksum.clone(),
+                        chunk.exact_offset_bytes,
+                        chunk.exact_size_bytes,
+                        chunk.rows,
+                    ));
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let layout = entry.get_mut();
+                    if layout.0 != chunk.exact_checksum
+                        || layout.1 != chunk.exact_offset_bytes
+                        || layout.2 != chunk.exact_size_bytes
+                    {
+                        return invalid(
+                            "chunks sharing an exact bundle disagree on its values buffer",
+                        );
+                    }
+                    layout.3 = layout.3.checked_add(chunk.rows).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global PQ exact bundle row count overflows".to_string(),
+                        )
+                    })?;
+                }
+            }
             chunk
                 .offset_bytes
                 .checked_add(chunk.size_bytes)
@@ -1479,14 +1538,10 @@ impl GlobalPqDescriptor {
             chunk.scan_buffer_ranges(scan_quantizer.code_bytes_per_vector())?;
             chunk.identity_ranges()?;
             chunk.mutation_ranges()?;
-            let expected_exact = chunk
-                .rows
-                .checked_mul(vector_element_type.fixed_width_bytes(quantizer_dimensions)?)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("global PQ exact-vector size overflows".to_string())
-                })?;
-            if chunk.exact_size_bytes != expected_exact {
-                return invalid("chunk exact-vector size does not match its rows");
+            if chunk.exact_size_bytes % exact_row_bytes != 0
+                || chunk.exact_size_bytes / exact_row_bytes < chunk.rows
+            {
+                return invalid("bundle exact-vector size cannot address its chunk rows");
             }
             if chunk.graph.as_ref().is_some_and(|graph| {
                 graph.path.is_empty() || graph.checksum.is_empty() || graph.size_bytes == 0
@@ -1500,8 +1555,13 @@ impl GlobalPqDescriptor {
         if next != vectors {
             return invalid("chunk rows do not match the vector count");
         }
+        for (_, _, exact_size_bytes, rows) in exact_bundles.into_values() {
+            if rows.checked_mul(exact_row_bytes) != Some(exact_size_bytes) {
+                return invalid("exact bundle size does not match its aggregate chunk rows");
+            }
+        }
         Ok(Self {
-            bundle_layout: GlobalPqBundleLayout::TypedColumnsV6DualArrow,
+            bundle_layout: GlobalPqBundleLayout::TypedColumnsV7LocalExactArrow,
             quantizer,
             coarse_quantizer,
             vectors,
@@ -1595,6 +1655,10 @@ impl GlobalPqDescriptor {
             dimensions,
             self.vector_element_type,
         )
+    }
+
+    pub(crate) fn uses_product_code_locality(&self) -> bool {
+        self.quantizer.uses_product_code_locality()
     }
 
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
@@ -2017,6 +2081,7 @@ impl ResidentGlobalPq {
                                     node: reference.row_start + local,
                                     chunk_row_start: reference.row_start,
                                     local_row: local,
+                                    exact_ordinal: chunk.exact_ordinal(local)?,
                                     row: chunk.row(local)?,
                                 },
                                 limit,
@@ -2050,6 +2115,7 @@ struct ParsedChunk<'a> {
     code_width: usize,
     segment_offset: usize,
     row_offset: usize,
+    exact_ordinal_offset: usize,
 }
 
 impl<'a> ParsedChunk<'a> {
@@ -2063,12 +2129,16 @@ impl<'a> ParsedChunk<'a> {
             return invalid("Arrow scan buffer does not match its descriptor");
         }
         let base = reference.offset_bytes as usize;
-        let [_, segment_range, row_range] = reference.scan_buffer_ranges(code_width)?;
+        let [_, segment_range, row_range, exact_ordinal_range] =
+            reference.scan_buffer_ranges(code_width)?;
         let segment_start = segment_range.start.checked_sub(base).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ segment ordinal offset underflows".to_string())
         })?;
         let row_start = row_range.start.checked_sub(base).ok_or_else(|| {
             BorsukError::InvalidStorage("global PQ row ordinal offset underflows".to_string())
+        })?;
+        let exact_ordinal_start = exact_ordinal_range.start.checked_sub(base).ok_or_else(|| {
+            BorsukError::InvalidStorage("global PQ exact ordinal offset underflows".to_string())
         })?;
         Ok(Self {
             bytes,
@@ -2076,6 +2146,7 @@ impl<'a> ParsedChunk<'a> {
             code_width,
             segment_offset: segment_start,
             row_offset: row_start,
+            exact_ordinal_offset: exact_ordinal_start,
         })
     }
 
@@ -2091,6 +2162,11 @@ impl<'a> ParsedChunk<'a> {
             segment_index: read_u32(self.bytes, segment_start)?,
             row_index: read_u32(self.bytes, row_start)?,
         })
+    }
+
+    fn exact_ordinal(&self, local: usize) -> Result<usize> {
+        let start = self.exact_ordinal_offset + local * size_of::<u32>();
+        Ok(read_u32(self.bytes, start)? as usize)
     }
 }
 
@@ -2126,7 +2202,7 @@ pub(crate) struct GlobalCellGraph {
     rows: usize,
     code_width: usize,
     location: LocationEncoding,
-    ordinal_buffer_offsets: [u32; 2],
+    ordinal_buffer_offsets: [u32; 3],
     entry: u32,
     node_layer_offsets: Vec<u32>,
     adjacency_offsets: Vec<u32>,
@@ -2216,7 +2292,7 @@ impl GlobalCellGraph {
             .into_iter()
             .collect::<Result<Vec<_>>>()?
             .try_into()
-            .expect("two graph ordinal offsets");
+            .expect("three graph ordinal offsets");
         let graph = Self {
             cell_index: reference.cell_index,
             row_start: reference.row_start,
@@ -2259,6 +2335,7 @@ impl GlobalCellGraph {
             self.code_width,
             self.ordinal_buffer_offsets[0] as usize,
             self.ordinal_buffer_offsets[1] as usize,
+            self.ordinal_buffer_offsets[2] as usize,
             self.entry as usize,
             self.node_layer_offsets.len(),
             self.adjacency_offsets.len(),
@@ -2302,7 +2379,7 @@ impl GlobalCellGraph {
         let row_start = usize::try_from(read_u64(bytes, 16)?).map_err(|_| {
             BorsukError::InvalidStorage("global cell graph row start exceeds usize".into())
         })?;
-        let fields = (0..9)
+        let fields = (0..10)
             .map(|index| read_u32(bytes, 24 + index * 4).map(|value| value as usize))
             .collect::<Result<Vec<_>>>()?;
         let [
@@ -2310,6 +2387,7 @@ impl GlobalCellGraph {
             code_width,
             segment_offset,
             row_offset,
+            exact_ordinal_offset,
             entry,
             node_len,
             adjacency_len,
@@ -2357,6 +2435,7 @@ impl GlobalCellGraph {
             ordinal_buffer_offsets: [
                 u32::try_from(*segment_offset).expect("decoded u32 segment offset"),
                 u32::try_from(*row_offset).expect("decoded u32 row offset"),
+                u32::try_from(*exact_ordinal_offset).expect("decoded u32 exact ordinal offset"),
             ],
             entry: u32::try_from(*entry).expect("decoded u32 entry"),
             node_layer_offsets,
@@ -2443,6 +2522,7 @@ impl GlobalCellGraph {
                     node: self.row_start + local,
                     chunk_row_start: self.row_start,
                     local_row: local,
+                    exact_ordinal: chunk.exact_ordinal(local)?,
                     row: chunk.row(local)?,
                 })
             })
@@ -2459,9 +2539,22 @@ impl GlobalCellGraph {
     }
 
     pub(crate) fn validate_reference(&self, reference: &GlobalPqChunkRef) -> Result<()> {
+        let relative_ordinals = reference.ordinal_buffer_offsets.map(|offset| {
+            offset.checked_sub(reference.offset_bytes).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global cell graph reference ordinal offset underflows".to_string(),
+                )
+            })
+        });
+        let relative_ordinals: [u32; 3] = relative_ordinals
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .expect("three graph ordinal offsets");
         if self.cell_index != reference.cell_index
             || self.row_start != reference.row_start
             || self.rows != reference.rows
+            || self.ordinal_buffer_offsets != relative_ordinals
             || self.chunk.len() != reference.size_bytes as usize
             || blake3::hash(&self.chunk).to_hex().as_str() != reference.checksum
         {
@@ -2555,6 +2648,7 @@ pub(crate) struct GlobalPqCandidate {
     pub(crate) node: usize,
     pub(crate) chunk_row_start: usize,
     pub(crate) local_row: usize,
+    pub(crate) exact_ordinal: usize,
     pub(crate) row: GlobalPqRow,
 }
 
@@ -2654,10 +2748,10 @@ mod tests {
         rows: usize,
         code_width: usize,
         location: LocationEncoding,
-    ) -> (Vec<u8>, [u32; 2]) {
+    ) -> (Vec<u8>, [u32; 3]) {
         let row_width = code_width + location.width_bytes();
         assert_eq!(interleaved.len(), rows * row_width);
-        let mut scan = Vec::with_capacity(rows * (code_width + 8));
+        let mut scan = Vec::with_capacity(rows * (code_width + 12));
         for row in interleaved.chunks_exact(row_width) {
             scan.extend_from_slice(&row[..code_width]);
         }
@@ -2680,7 +2774,11 @@ mod tests {
         for row in &decoded {
             scan.extend_from_slice(&row.row_index.to_le_bytes());
         }
-        (scan, [segment_offset, row_offset])
+        let exact_ordinal_offset = u32::try_from(scan.len()).unwrap();
+        for row in 0..rows {
+            scan.extend_from_slice(&u32::try_from(row).unwrap().to_le_bytes());
+        }
+        (scan, [segment_offset, row_offset, exact_ordinal_offset])
     }
 
     fn vectors(rows: usize, dimensions: usize) -> Vec<Vec<f32>> {
@@ -2833,7 +2931,7 @@ mod tests {
                     exact_offset_bytes: 192_028,
                     exact_size_bytes: 1_024_000,
                     cell_index: (segment % 16) as u16,
-                    ordinal_buffer_offsets: [0; 2],
+                    ordinal_buffer_offsets: [0; 3],
                     typed_buffer_offsets: [0; 6],
                     identity_values_size_bytes: 0,
                     row_start: segment as usize * 4_000,
@@ -2855,7 +2953,7 @@ mod tests {
         .unwrap();
         let resident_bytes = descriptor.resident_bytes();
         // Six explicit standard-Arrow buffer starts, independently authenticated
-        // identity metadata, and the V6 exact-object path keep 100M-scale routing
+        // identity metadata, and the V7 exact-object path keep 100M-scale routing
         // metadata below 12 MiB while accepting every legal inter-column padding
         // layout.
         assert!(
@@ -2889,7 +2987,7 @@ mod tests {
                 exact_offset_bytes: 8_192,
                 exact_size_bytes: 64 * 64 * size_of::<f32>(),
                 cell_index: 0,
-                ordinal_buffer_offsets: [0; 2],
+                ordinal_buffer_offsets: [0; 3],
                 typed_buffer_offsets: [0; 6],
                 identity_values_size_bytes: 0,
                 row_start,
@@ -2961,6 +3059,47 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("must be distinct"));
 
+        let cross_scan_exact = chunk("object-a", 0);
+        let mut inconsistent_object = cross_scan_exact.clone();
+        inconsistent_object.path = "object-b".to_string();
+        inconsistent_object.row_start = 64;
+        inconsistent_object.exact_offset_bytes += 8;
+        let error = GlobalPqDescriptor::new(
+            quantizer.state(),
+            coarse_state(&fit),
+            128,
+            VectorElementType::Float32,
+            location,
+            vec![cross_scan_exact, inconsistent_object],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("sharing an exact object"));
+
+        let shared_exact = chunk("shared", 0);
+        let mut inconsistent_exact = chunk("shared", 64);
+        inconsistent_exact.exact_offset_bytes += 8;
+        let error = GlobalPqDescriptor::new(
+            quantizer.state(),
+            coarse_state(&fit),
+            128,
+            VectorElementType::Float32,
+            location,
+            vec![shared_exact, inconsistent_exact],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("sharing an exact object"));
+
+        let error = GlobalPqDescriptor::new(
+            quantizer.state(),
+            coarse_state(&fit),
+            128,
+            VectorElementType::Float32,
+            location,
+            vec![chunk("undersized", 0), chunk("undersized", 64)],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("aggregate chunk rows"));
+
         let mut missing_checksum = old_chunk;
         missing_checksum.identity_checksum = String::new().into_boxed_str();
         let error = GlobalPqDescriptor::new(
@@ -2990,7 +3129,7 @@ mod tests {
             exact_offset_bytes: 16_384,
             exact_size_bytes: 64 * 64 * size_of::<f32>(),
             cell_index: 0,
-            ordinal_buffer_offsets: [0; 2],
+            ordinal_buffer_offsets: [0; 3],
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start: 0,
@@ -3061,7 +3200,7 @@ mod tests {
             exact_offset_bytes: 80,
             exact_size_bytes: 64 * size_of::<f32>(),
             cell_index: 0,
-            ordinal_buffer_offsets: [0; 2],
+            ordinal_buffer_offsets: [0; 3],
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start: 0,
@@ -3084,7 +3223,7 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_rejects_pre_identity_bundle_layouts() {
+    fn descriptor_rejects_pre_locality_bundle_layouts() {
         let fit = vectors(32, 64);
         let descriptor = GlobalPqDescriptor::new(
             RotatedProductQuantizer::fit(config(), &fit)
@@ -3098,22 +3237,24 @@ mod tests {
         )
         .unwrap();
         let mut json = serde_json::to_value(&descriptor).unwrap();
-        assert_eq!(json["bundle_layout"], "typed-columns-v6-dual-arrow");
+        assert_eq!(json["bundle_layout"], "typed-columns-v7-local-exact-arrow");
         json.as_object_mut().unwrap().remove("bundle_layout");
 
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
         assert!(error.to_string().contains("bundle_layout"));
 
         let mut json = serde_json::to_value(descriptor).unwrap();
-        json["bundle_layout"] = serde_json::Value::String("typed-columns-v5".to_string());
+        json["bundle_layout"] =
+            serde_json::Value::String("typed-columns-v6-dual-arrow".to_string());
         let error = serde_json::from_value::<GlobalPqDescriptor>(json).unwrap_err();
-        assert!(error.to_string().contains("typed-columns-v5"));
+        assert!(error.to_string().contains("typed-columns-v6-dual-arrow"));
     }
 
     #[test]
     fn production_turboquant_state_drives_global_scan_without_dense_state() {
         let quantizer = crate::turboquant::FastTurboQuantProdScanQuantizer::new(23, 64, 4).unwrap();
         let state = GlobalScanQuantizerState::FastTurboQuantProd(quantizer.state());
+        assert!(!state.uses_product_code_locality());
         let restored = GlobalScanQuantizer::from_state(state).unwrap();
         let mut query = vec![0.0_f32; 64];
         query[5] = 1.0;
@@ -3154,12 +3295,17 @@ mod tests {
             );
         }
         let chunk = builder.flush().unwrap().unwrap();
-        let (scan, ordinal_buffer_offsets) = typed_scan_fixture(
+        let (mut scan, ordinal_buffer_offsets) = typed_scan_fixture(
             &chunk.bytes,
             chunk.rows,
             quantizer.code_bytes_per_vector(),
             location,
         );
+        for row in 0..chunk.rows {
+            let start = ordinal_buffer_offsets[2] as usize + row * size_of::<u32>();
+            scan[start..start + size_of::<u32>()]
+                .copy_from_slice(&u32::try_from(chunk.rows - 1 - row).unwrap().to_le_bytes());
+        }
         let reference = GlobalPqChunkRef {
             path: "cell-7.bin".into(),
             checksum: blake3::hash(&scan).to_hex().to_string(),
@@ -3203,6 +3349,7 @@ mod tests {
 
         let encoded = graph.encode().unwrap();
         let decoded = GlobalCellGraph::decode(&encoded).unwrap();
+        decoded.validate_reference(&reference).unwrap();
         let entry_layers = decoded.layer_count(decoded.entry);
         assert!(entry_layers > 1);
         assert!(
@@ -3226,12 +3373,17 @@ mod tests {
         assert_eq!(candidates.len(), vectors.len());
         assert!(candidates.iter().any(|candidate| {
             candidate.node == reference.row_start + 37
+                && candidate.exact_ordinal == vectors.len() - 1 - 37
                 && candidate.row
                     == (GlobalPqRow {
                         segment_index: 0,
                         row_index: 37,
                     })
         }));
+
+        let mut mismatched_reference = reference.clone();
+        mismatched_reference.ordinal_buffer_offsets[2] += 8;
+        assert!(decoded.validate_reference(&mismatched_reference).is_err());
 
         assert!(GlobalCellGraph::decode(&encoded[..encoded.len() - 1]).is_err());
         let mut corrupted = encoded;
@@ -3333,7 +3485,7 @@ mod tests {
                     // Segments 0/2 and 1/3 represent the same two semantic
                     // regions, produced by separate bounded ingest checkpoints.
                     cell_index: (segment % 2) as u16,
-                    ordinal_buffer_offsets: [0; 2],
+                    ordinal_buffer_offsets: [0; 3],
                     typed_buffer_offsets: [0; 6],
                     identity_values_size_bytes: 0,
                     row_start: segment as usize * 64,
@@ -3606,6 +3758,7 @@ mod tests {
                     node: 7,
                     chunk_row_start: 0,
                     local_row: 7,
+                    exact_ordinal: 7,
                     row: row(7),
                 },
                 GlobalPqCandidate {
@@ -3613,6 +3766,7 @@ mod tests {
                     node: 1,
                     chunk_row_start: 0,
                     local_row: 1,
+                    exact_ordinal: 1,
                     row: row(1),
                 },
             ],
@@ -3622,6 +3776,7 @@ mod tests {
                     node: 2,
                     chunk_row_start: 0,
                     local_row: 2,
+                    exact_ordinal: 2,
                     row: row(2),
                 },
                 GlobalPqCandidate {
@@ -3629,6 +3784,7 @@ mod tests {
                     node: 3,
                     chunk_row_start: 0,
                     local_row: 3,
+                    exact_ordinal: 3,
                     row: row(3),
                 },
             ],
