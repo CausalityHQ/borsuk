@@ -2503,3 +2503,23 @@ runner now dispatches this protocol to its dedicated fail-closed evaluator.
 Fifteen focused runner/evaluator tests pass; the devbox swap hook forbids a new
 full suite while unrelated local processes retain swap, and no Rust source or
 dependency changed from the preceding complete Rust gate.
+
+The Causality diagnostic from source revision `18a2ce9` then completed on
+`i-0e73bacb470807838` with both terminal completion markers, no failure or
+rejection marker, no incomplete artifact, and a clean service exit. A second
+validator invocation reproduced the recorded decision byte-for-byte at SHA-256
+`54f203847213b94c1ab453ebc0145ac11c582c95041e60180011edb80b3ce66f`.
+The complete finalized root is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/exact-candidate-frontier/18a2ce9-r01/results/`.
+
+The first quality-passing width is 128 exact candidates: mean recall@10 is
+0.9547, per-query p05 recall is 0.80, p50 is 12.169 ms, and p95 is 13.965 ms
+over all 1,000 shipped queries. That point averages 128 exact vectors, 124.742
+backing reads, and 15,148,613 backing bytes per query. Width 64 remains below
+both quality gates at mean recall 0.9305 and p05 0.70; width 256 improves mean
+recall to 0.9682 but increases physical work to 206.838 reads and 19,221,207
+bytes per query. The 128-candidate point therefore establishes the progressive
+refinement quality knee, not a production S3 design: request count and bytes
+still require a coalesced standard-Arrow layout and independent uncached S3,
+concurrency, and multi-instance qualification before any default or competitor
+claim.
