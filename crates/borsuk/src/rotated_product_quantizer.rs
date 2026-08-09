@@ -3,7 +3,7 @@ use rayon::prelude::*;
 
 use crate::{
     error::{BorsukError, Result},
-    turboquant::{OutwardInterval, StructuredRotation},
+    turboquant::StructuredRotation,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,9 +39,6 @@ pub(crate) struct RotatedProductQuantizer {
     subspace_offsets: Vec<usize>,
     /// One flat `centroids * subspace_width` table per subspace.
     codebooks: Vec<Vec<f32>>,
-    /// Canonical identity of every persisted field that defines this codec.
-    /// Cached so certificate hot paths compare state in O(1).
-    certificate_fingerprint: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,7 +81,7 @@ impl RotatedProductQuantizer {
                 .map(|&index| transform_vector(rotation.as_ref(), &fit_vectors[index]))
                 .collect()
         });
-        let codebooks: Vec<Vec<f32>> = crate::parallel::install(|| {
+        let codebooks = crate::parallel::install(|| {
             (0..config.subspaces)
                 .into_par_iter()
                 .map(|subspace| {
@@ -102,15 +99,6 @@ impl RotatedProductQuantizer {
                 })
                 .collect()
         });
-        let certificate_fingerprint = product_quantizer_fingerprint(
-            config.rotation,
-            config.seed,
-            config.dimensions,
-            config.subspaces,
-            config.centroids,
-            &subspace_offsets,
-            &codebooks,
-        );
         Ok(Self {
             rotation_kind: config.rotation,
             seed: config.seed,
@@ -121,7 +109,6 @@ impl RotatedProductQuantizer {
             rotation,
             subspace_offsets,
             codebooks,
-            certificate_fingerprint,
         })
     }
 
@@ -210,7 +197,6 @@ impl RotatedProductQuantizer {
     /// This is shadow evidence only: callers must additionally prove that a
     /// metric-specific interval encloses the exact f32 scorer before using it
     /// to suppress reads.
-    #[cfg(test)]
     pub(crate) fn certificate_l2_interval(
         &self,
         query: &[f32],
@@ -254,116 +240,13 @@ impl RotatedProductQuantizer {
         Ok(((lower - rounding).max(0.0), upper + rounding))
     }
 
-    #[cfg(test)]
-    pub(crate) fn certificate_distance_scale(&self) -> f64 {
+    fn certificate_distance_scale(&self) -> f64 {
         match self.rotation_kind {
             ProductRotation::Identity => 1.0,
             ProductRotation::Srht => (self.padded_dimensions as f64).sqrt(),
         }
     }
 
-    pub(crate) fn certificate_distance_scale_interval(&self) -> OutwardInterval {
-        match self.rotation_kind {
-            ProductRotation::Identity => OutwardInterval {
-                lower: 1.0,
-                upper: 1.0,
-            },
-            ProductRotation::Srht => {
-                let squared = self.padded_dimensions as f64;
-                let rounded = squared.sqrt();
-                if rounded * rounded == squared {
-                    OutwardInterval {
-                        lower: rounded,
-                        upper: rounded,
-                    }
-                } else {
-                    OutwardInterval {
-                        lower: rounded.next_down(),
-                        upper: rounded.next_up(),
-                    }
-                }
-            }
-        }
-    }
-
-    pub(crate) fn transformed_dimensions(&self) -> usize {
-        self.padded_dimensions
-    }
-
-    pub(crate) fn certificate_fingerprint(&self) -> [u8; 32] {
-        self.certificate_fingerprint
-    }
-
-    pub(crate) fn transform_for_residual_encoding(&self, vector: &[f32]) -> Result<Vec<f32>> {
-        let mut transformed = Vec::new();
-        self.transform_for_residual_encoding_into(vector, &mut transformed)?;
-        Ok(transformed)
-    }
-
-    pub(crate) fn transform_for_residual_encoding_into(
-        &self,
-        vector: &[f32],
-        transformed: &mut Vec<f32>,
-    ) -> Result<()> {
-        self.validate_vector(vector)?;
-        if let Some(rotation) = self.rotation.as_ref() {
-            rotation.rotate_into(vector, transformed);
-        } else {
-            transformed.clear();
-            transformed.extend_from_slice(vector);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn transform_outward_for_certificate_into(
-        &self,
-        vector: &[f32],
-        transformed: &mut Vec<OutwardInterval>,
-    ) -> Result<()> {
-        self.validate_vector(vector)?;
-        if let Some(rotation) = self.rotation.as_ref() {
-            rotation.rotate_outward_into(vector, transformed);
-        } else {
-            transformed.clear();
-            transformed.extend(vector.iter().map(|value| OutwardInterval {
-                lower: f64::from(*value),
-                upper: f64::from(*value),
-            }));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn reconstruct_transformed(&self, code: &[u8]) -> Result<Vec<f32>> {
-        let mut reconstructed = Vec::new();
-        self.reconstruct_transformed_into(code, &mut reconstructed)?;
-        Ok(reconstructed)
-    }
-
-    pub(crate) fn reconstruct_transformed_into(
-        &self,
-        code: &[u8],
-        reconstructed: &mut Vec<f32>,
-    ) -> Result<()> {
-        if code.len() != self.subspaces {
-            return invalid_config("certificate code width does not match product quantizer");
-        }
-        reconstructed.clear();
-        reconstructed.reserve(self.padded_dimensions);
-        for (subspace, &encoded) in code.iter().enumerate() {
-            let centroid = usize::from(encoded);
-            if centroid >= self.centroids {
-                return invalid_config("certificate code selects an absent centroid");
-            }
-            let start = self.subspace_offsets[subspace];
-            let end = self.subspace_offsets[subspace + 1];
-            let width = end - start;
-            let codebook = &self.codebooks[subspace];
-            reconstructed.extend_from_slice(&codebook[centroid * width..(centroid + 1) * width]);
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
     fn certificate_transform(&self, vector: &[f32]) -> Vec<f64> {
         self.rotation.as_ref().map_or_else(
             || vector.iter().map(|value| f64::from(*value)).collect(),
@@ -419,15 +302,6 @@ impl RotatedProductQuantizer {
                 return invalid_config("persisted product codebook is invalid");
             }
         }
-        let certificate_fingerprint = product_quantizer_fingerprint(
-            state.rotation,
-            state.seed,
-            state.dimensions,
-            state.subspaces,
-            state.centroids,
-            &state.subspace_offsets,
-            &state.codebooks,
-        );
         Ok(Self {
             rotation_kind: state.rotation,
             seed: state.seed,
@@ -443,7 +317,6 @@ impl RotatedProductQuantizer {
             },
             subspace_offsets: state.subspace_offsets,
             codebooks: state.codebooks,
-            certificate_fingerprint,
         })
     }
 
@@ -482,44 +355,6 @@ impl RotatedProductQuantizer {
         }
         Ok(())
     }
-}
-
-fn product_quantizer_fingerprint(
-    rotation: ProductRotation,
-    seed: u64,
-    dimensions: usize,
-    subspaces: usize,
-    centroids: usize,
-    subspace_offsets: &[usize],
-    codebooks: &[Vec<f32>],
-) -> [u8; 32] {
-    fn update_usize(hasher: &mut blake3::Hasher, value: usize) {
-        let value = u64::try_from(value).expect("product quantizer sizes fit in u64");
-        hasher.update(&value.to_be_bytes());
-    }
-
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"borsuk.product-quantizer.certificate.v1\0");
-    hasher.update(&[match rotation {
-        ProductRotation::Identity => 0,
-        ProductRotation::Srht => 1,
-    }]);
-    hasher.update(&seed.to_be_bytes());
-    update_usize(&mut hasher, dimensions);
-    update_usize(&mut hasher, subspaces);
-    update_usize(&mut hasher, centroids);
-    update_usize(&mut hasher, subspace_offsets.len());
-    for &offset in subspace_offsets {
-        update_usize(&mut hasher, offset);
-    }
-    update_usize(&mut hasher, codebooks.len());
-    for codebook in codebooks {
-        update_usize(&mut hasher, codebook.len());
-        for value in codebook {
-            hasher.update(&value.to_bits().to_be_bytes());
-        }
-    }
-    *hasher.finalize().as_bytes()
 }
 
 fn transform_vector(rotation: Option<&StructuredRotation>, vector: &[f32]) -> Vec<f32> {
@@ -1134,53 +969,6 @@ mod tests {
             first.encode(&fit[17]).unwrap(),
             second.encode(&fit[17]).unwrap()
         );
-    }
-
-    #[test]
-    fn certificate_fingerprint_covers_every_codec_defining_field() {
-        let base = ProductQuantizerState {
-            rotation: ProductRotation::Identity,
-            seed: 7,
-            dimensions: 4,
-            subspaces: 2,
-            centroids: 1,
-            subspace_offsets: vec![0, 2, 4],
-            codebooks: vec![vec![1.0, 2.0], vec![3.0, 4.0]],
-        };
-        let fingerprint = |state| {
-            RotatedProductQuantizer::from_state(state)
-                .unwrap()
-                .certificate_fingerprint()
-        };
-        let expected = fingerprint(base.clone());
-
-        let mut changed = base.clone();
-        changed.rotation = ProductRotation::Srht;
-        assert_ne!(fingerprint(changed), expected);
-        let mut changed = base.clone();
-        changed.seed = 8;
-        assert_ne!(fingerprint(changed), expected);
-        let mut changed = base.clone();
-        changed.dimensions = 8;
-        changed.subspace_offsets = vec![0, 4, 8];
-        changed.codebooks = vec![vec![1.0, 2.0, 3.0, 4.0], vec![5.0, 6.0, 7.0, 8.0]];
-        assert_ne!(fingerprint(changed), expected);
-        let mut changed = base.clone();
-        changed.subspaces = 1;
-        changed.subspace_offsets = vec![0, 4];
-        changed.codebooks = vec![vec![1.0, 2.0, 3.0, 4.0]];
-        assert_ne!(fingerprint(changed), expected);
-        let mut changed = base.clone();
-        changed.subspace_offsets = vec![0, 1, 4];
-        changed.codebooks = vec![vec![1.0], vec![2.0, 3.0, 4.0]];
-        assert_ne!(fingerprint(changed), expected);
-        let mut changed = base.clone();
-        changed.centroids = 2;
-        changed.codebooks = vec![vec![1.0, 2.0, 5.0, 6.0], vec![3.0, 4.0, 7.0, 8.0]];
-        assert_ne!(fingerprint(changed), expected);
-        let mut changed = base;
-        changed.codebooks[1][1] = f32::from_bits(changed.codebooks[1][1].to_bits() + 1);
-        assert_ne!(fingerprint(changed), expected);
     }
 
     #[test]

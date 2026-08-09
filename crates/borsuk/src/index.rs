@@ -81,10 +81,6 @@ use crate::{
         RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
         SearchTerminationReason, StorageEncoding, VectorKind, VectorRecord, VectorSpec,
     },
-    residual_pq_certificate::{
-        ResidualPqCertificate, ResidualPqCertificateConfig, ResidualPqEncodeScratch,
-        ResidualPqIntervalScratch,
-    },
     rotated_product_quantizer::{
         ProductQuantizerConfig, RotatedProductQuantizer, product_code_locality_key,
     },
@@ -1256,8 +1252,6 @@ type GlobalExactBoundInput = (
     GlobalPqSearchLayer,
     usize,
     Box<[u8]>,
-    Box<[u8]>,
-    f32,
     GlobalPqIdentityCandidate,
 );
 
@@ -13225,8 +13219,6 @@ impl BorsukIndex {
                     entry.candidate.distance,
                     entry.candidate.chunk_row_start,
                     entry.candidate.code,
-                    entry.candidate.residual_code,
-                    entry.candidate.residual_error_upper,
                 ),
             );
         }
@@ -13272,16 +13264,10 @@ impl BorsukIndex {
                 usize,
                 GlobalPqRow,
                 Box<[u8]>,
-                Box<[u8]>,
-                f32,
                 GlobalPqIdentityCandidate,
             ),
         >::new();
-        for (
-            (layer, node),
-            (row, approximate_distance, chunk_row_start, code, residual_code, residual_error_upper),
-        ) in candidate_rows
-        {
+        for ((layer, node), (row, approximate_distance, chunk_row_start, code)) in candidate_rows {
             let identity = identity_by_node.remove(&(layer, node)).ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "resident global PQ candidate identity row is missing".to_string(),
@@ -13295,23 +13281,19 @@ impl BorsukIndex {
                         chunk_row_start,
                         row,
                         code,
-                        residual_code,
-                        residual_error_upper,
                         identity,
                     ));
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     let stamp = identity.stamp;
-                    let greatest = entry.get().7.stamp.greatest(stamp)?;
-                    if greatest == stamp && stamp.version() > entry.get().7.stamp.version() {
+                    let greatest = entry.get().5.stamp.greatest(stamp)?;
+                    if greatest == stamp && stamp.version() > entry.get().5.stamp.version() {
                         entry.insert((
                             approximate_distance,
                             layer,
                             chunk_row_start,
                             row,
                             code,
-                            residual_code,
-                            residual_error_upper,
                             identity,
                         ));
                     }
@@ -13321,19 +13303,8 @@ impl BorsukIndex {
         let mutation_states =
             self.mutation_states(winning_candidates.keys().map(|id| id.as_bytes()))?;
         let mut live_candidates = Vec::with_capacity(winning_candidates.len());
-        for (
-            id,
-            (
-                approximate_distance,
-                layer,
-                chunk_row_start,
-                row,
-                code,
-                residual_code,
-                residual_error_upper,
-                identity,
-            ),
-        ) in winning_candidates
+        for (id, (approximate_distance, layer, chunk_row_start, row, code, identity)) in
+            winning_candidates
         {
             if Self::state_suppresses_stamp(
                 mutation_states.get(id.as_bytes()).copied().flatten(),
@@ -13348,8 +13319,6 @@ impl BorsukIndex {
                 chunk_row_start,
                 row,
                 code,
-                residual_code,
-                residual_error_upper,
                 identity,
             ));
         }
@@ -13363,30 +13332,9 @@ impl BorsukIndex {
         let mut exact_by_chunk =
             BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
         let mut shadow_inputs = HashMap::with_capacity(live_candidates.len());
-        for (
-            _,
-            id,
-            layer,
-            chunk_row_start,
-            _,
-            code,
-            residual_code,
-            residual_error_upper,
-            identity,
-        ) in live_candidates
-        {
+        for (_, id, layer, chunk_row_start, _, code, identity) in live_candidates {
             if options.global_exact_bound_shadow {
-                shadow_inputs.insert(
-                    id,
-                    (
-                        layer,
-                        chunk_row_start,
-                        code,
-                        residual_code,
-                        residual_error_upper,
-                        identity.clone(),
-                    ),
-                );
+                shadow_inputs.insert(id, (layer, chunk_row_start, code, identity.clone()));
             }
             exact_by_chunk
                 .entry((layer, chunk_row_start))
@@ -13450,13 +13398,7 @@ impl BorsukIndex {
                 scored: &shadow_scored,
                 exact_backing_reads,
                 exact_backing_bytes,
-                residual_scan_bytes: u64::try_from(
-                    chunks_by_start
-                        .values()
-                        .map(|chunk| chunk.rows.saturating_mul(68))
-                        .sum::<usize>(),
-                )
-                .unwrap_or(u64::MAX),
+                residual_scan_bytes: 0,
             })?
         } else {
             GlobalExactBoundShadow::default()
@@ -13934,8 +13876,6 @@ impl BorsukIndex {
                     candidate.distance,
                     candidate.chunk_row_start,
                     candidate.code,
-                    candidate.residual_code,
-                    candidate.residual_error_upper,
                 ),
             );
         }
@@ -13978,16 +13918,10 @@ impl BorsukIndex {
                 GlobalPqRow,
                 usize,
                 Box<[u8]>,
-                Box<[u8]>,
-                f32,
                 GlobalPqIdentityCandidate,
             ),
         >::new();
-        for (
-            node,
-            (row, approximate_distance, chunk_row_start, code, residual_code, residual_error_upper),
-        ) in candidate_rows
-        {
+        for (node, (row, approximate_distance, chunk_row_start, code)) in candidate_rows {
             let identity = identity_by_node.remove(&node).ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "resident global PQ candidate identity row is missing".to_string(),
@@ -14001,23 +13935,19 @@ impl BorsukIndex {
                         row,
                         chunk_row_start,
                         code,
-                        residual_code,
-                        residual_error_upper,
                         identity,
                     ));
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     let stamp = identity.stamp;
-                    let greatest = entry.get().7.stamp.greatest(stamp)?;
-                    if greatest == stamp && stamp.version() > entry.get().7.stamp.version() {
+                    let greatest = entry.get().5.stamp.greatest(stamp)?;
+                    if greatest == stamp && stamp.version() > entry.get().5.stamp.version() {
                         entry.insert((
                             approximate_distance,
                             node,
                             row,
                             chunk_row_start,
                             code,
-                            residual_code,
-                            residual_error_upper,
                             identity,
                         ));
                     }
@@ -14027,19 +13957,8 @@ impl BorsukIndex {
         let mutation_states =
             self.mutation_states(winning_candidates.keys().map(|id| id.as_bytes()))?;
         let mut live_candidates = Vec::with_capacity(winning_candidates.len());
-        for (
-            id,
-            (
-                approximate_distance,
-                node,
-                row,
-                chunk_row_start,
-                code,
-                residual_code,
-                residual_error_upper,
-                identity,
-            ),
-        ) in winning_candidates
+        for (id, (approximate_distance, node, row, chunk_row_start, code, identity)) in
+            winning_candidates
         {
             if Self::state_suppresses_stamp(
                 mutation_states.get(id.as_bytes()).copied().flatten(),
@@ -14054,8 +13973,6 @@ impl BorsukIndex {
                 row,
                 chunk_row_start,
                 code,
-                residual_code,
-                residual_error_upper,
                 identity,
             ));
         }
@@ -14068,9 +13985,7 @@ impl BorsukIndex {
         let mut exact_by_chunk =
             BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
         let mut shadow_inputs = HashMap::with_capacity(live_candidates.len());
-        for (_, id, _, _, chunk_row_start, code, residual_code, residual_error_upper, identity) in
-            live_candidates
-        {
+        for (_, id, _, _, chunk_row_start, code, identity) in live_candidates {
             if options.global_exact_bound_shadow {
                 shadow_inputs.insert(
                     id,
@@ -14078,8 +13993,6 @@ impl BorsukIndex {
                         GlobalPqSearchLayer::Base,
                         chunk_row_start,
                         code,
-                        residual_code,
-                        residual_error_upper,
                         identity.clone(),
                     ),
                 );
@@ -14146,13 +14059,7 @@ impl BorsukIndex {
                 scored: &shadow_scored,
                 exact_backing_reads,
                 exact_backing_bytes,
-                residual_scan_bytes: u64::try_from(
-                    searched_chunks
-                        .iter()
-                        .map(|chunk| chunk.rows.saturating_mul(68))
-                        .sum::<usize>(),
-                )
-                .unwrap_or(u64::MAX),
+                residual_scan_bytes: 0,
             })?
         } else {
             GlobalExactBoundShadow::default()
@@ -14631,11 +14538,7 @@ impl BorsukIndex {
         &self,
         training_sample: &[Vec<f32>],
         vectors_seen: usize,
-    ) -> Result<(
-        GlobalScanQuantizer,
-        GlobalCoarseQuantizer,
-        Option<ResidualPqCertificate>,
-    )> {
+    ) -> Result<(GlobalScanQuantizer, GlobalCoarseQuantizer)> {
         const PQ_TRAINING_SAMPLE_LIMIT: usize = 4_096;
         debug_assert!(!training_sample.is_empty());
         let dimensions = self.manifest.config.dimensions;
@@ -14645,7 +14548,7 @@ impl BorsukIndex {
             vectors_seen,
             self.manifest.build_config.global_pq_code_bytes,
         );
-        let (quantizer, residual_certificate) = match self.manifest.build_config.global_scan_codec {
+        let quantizer = match self.manifest.build_config.global_scan_codec {
             GlobalScanCodec::Pq | GlobalScanCodec::SrhtPq => {
                 let rotation = match self.manifest.build_config.global_scan_codec {
                     GlobalScanCodec::Pq => {
@@ -14656,7 +14559,7 @@ impl BorsukIndex {
                     }
                     _ => unreachable!("matched above"),
                 };
-                let primary = RotatedProductQuantizer::fit(
+                GlobalScanQuantizer::from(RotatedProductQuantizer::fit(
                     ProductQuantizerConfig {
                         rotation,
                         seed: crate::DEFAULT_TURBOQUANT_SEED,
@@ -14667,37 +14570,23 @@ impl BorsukIndex {
                         iterations: 4,
                     },
                     training_sample,
-                )?;
-                let residual = ResidualPqCertificate::fit(
-                    &primary,
-                    training_sample,
-                    ResidualPqCertificateConfig {
-                        seed: crate::DEFAULT_TURBOQUANT_SEED ^ 0xE703_7ED1_A0B4_28DB,
-                        subspaces: primary.transformed_dimensions().min(64),
-                        centroids: training_sample.len().min(256),
-                        sample_limit: training_sample.len().min(PQ_TRAINING_SAMPLE_LIMIT),
-                        iterations: 4,
-                    },
-                )?;
-                (GlobalScanQuantizer::from(primary), Some(residual))
+                )?)
             }
-            GlobalScanCodec::FastTurboQuantMse => (
+            GlobalScanCodec::FastTurboQuantMse => {
                 GlobalScanQuantizer::from(crate::turboquant::FastTurboQuantMseScanQuantizer::new(
                     crate::DEFAULT_TURBOQUANT_SEED,
                     dimensions,
                     self.manifest.build_config.global_turboquant_bits,
                     self.manifest.build_config.global_turboquant_shards,
-                )?),
-                None,
-            ),
-            GlobalScanCodec::FastTurboQuantProd => (
+                )?)
+            }
+            GlobalScanCodec::FastTurboQuantProd => {
                 GlobalScanQuantizer::from(crate::turboquant::FastTurboQuantProdScanQuantizer::new(
                     crate::DEFAULT_TURBOQUANT_SEED,
                     dimensions,
                     self.manifest.build_config.global_turboquant_bits,
-                )?),
-                None,
-            ),
+                )?)
+            }
         };
 
         // The IVF layer is fitted from actual corpus vectors and every encoded
@@ -14741,7 +14630,7 @@ impl BorsukIndex {
                 6,
             )?),
         };
-        Ok((quantizer, coarse_quantizer, residual_certificate))
+        Ok((quantizer, coarse_quantizer))
     }
 
     fn persist_resident_global_pq(
@@ -14795,14 +14684,11 @@ impl BorsukIndex {
         if vectors_seen == 0 {
             return Ok(None);
         }
-        let (quantizer, coarse_quantizer, residual_certificate) =
+        let (quantizer, coarse_quantizer) =
             self.fit_resident_global_quantizers(&training_sample, vectors_seen)?;
         let coarse_quantizer_state = coarse_quantizer.state();
         let global_code_width = quantizer.code_bytes_per_vector();
         let quantizer_state = quantizer.state();
-        let residual_certificate_state = residual_certificate
-            .as_ref()
-            .map(ResidualPqCertificate::state);
         drop(training_sample);
 
         // The external cell spool writes compact PQ-code/location rows to local
@@ -14820,10 +14706,9 @@ impl BorsukIndex {
                 .max()
                 .unwrap_or(1),
         )?;
-        let mut spool = GlobalPqCellSpool::new_with_residual(
+        let mut spool = GlobalPqCellSpool::new(
             quantizer,
             coarse_quantizer,
-            residual_certificate,
             location,
             DEFAULT_GLOBAL_PQ_CHUNK_BYTES,
             dimensions,
@@ -14867,8 +14752,7 @@ impl BorsukIndex {
             self.storage
                 .write_bytes_content_addressed(&exact_path, &encoded.exact_bytes)?;
             for (entry, slice) in pending.iter().zip(&encoded.slices) {
-                let scan =
-                    &encoded.bytes[slice.code_range.start..slice.residual_error_upper_range.end];
+                let scan = &encoded.bytes[slice.code_range.start..slice.exact_ordinal_range.end];
                 let mut reference = global_pq_chunk_reference(
                     &path,
                     &exact_path,
@@ -14951,28 +14835,18 @@ impl BorsukIndex {
                     active
                         .par_iter()
                         .map_init(
-                            || {
-                                (
-                                    Vec::<f32>::new(),
-                                    Vec::<u8>::new(),
-                                    ResidualPqEncodeScratch::default(),
-                                )
-                            },
-                            |(rotated, code, residual_scratch), (_, vector)| {
-                                spool.encode_vector_with_residual_scratch(
-                                    vector,
-                                    rotated,
-                                    code,
-                                    residual_scratch,
-                                )
+                            || (Vec::<f32>::new(), Vec::<u8>::new()),
+                            |(rotated, code), (_, vector)| {
+                                spool.encode_vector_with_scratch(vector, rotated, code)
                             },
                         )
                         .collect::<Result<Vec<_>>>()
                 })?;
-                for ((row_index, _vector), encoded) in active.into_iter().zip(encoded) {
+                for ((row_index, _vector), (cell, code)) in active.into_iter().zip(encoded) {
                     let record = &segment.records[row_index];
-                    spool.push_encoded_with_residual(
-                        &encoded,
+                    spool.push_encoded(
+                        cell,
+                        &code,
                         GlobalPqRow {
                             segment_index: segment_ordinal,
                             row_index: u32::try_from(row_index).map_err(|_| {
@@ -15026,13 +14900,8 @@ impl BorsukIndex {
                 BorsukError::InvalidStorage("resident global PQ row count overflows".to_string())
             })?;
             pending_code_bytes = pending_code_bytes.saturating_add(chunk.bytes.len());
-            pending_code_bytes = pending_code_bytes
-                .saturating_add(chunk.residual_codes.len())
-                .saturating_add(chunk.residual_error_upper.len());
             pending_total_bytes = pending_total_bytes
                 .saturating_add(chunk.bytes.len())
-                .saturating_add(chunk.residual_codes.len())
-                .saturating_add(chunk.residual_error_upper.len())
                 .saturating_add(chunk.exact_bytes.len())
                 .saturating_add(identity_bytes);
             pending_chunks.push(PendingGlobalPqChunk {
@@ -15053,10 +14922,9 @@ impl BorsukIndex {
             .map(|chunk| chunk.cell_index)
             .collect::<HashSet<_>>()
             .len();
-        let descriptor = GlobalPqDescriptor::new_with_residual(
+        let descriptor = GlobalPqDescriptor::new(
             quantizer_state,
             coarse_quantizer_state,
-            residual_certificate_state,
             vectors_seen,
             self.manifest.build_config.vector_element_type,
             location,
@@ -15429,14 +15297,11 @@ impl BorsukIndex {
                 "resident global delta contains no visible vectors".to_string(),
             ));
         }
-        let (quantizer, coarse_quantizer, residual_certificate) =
+        let (quantizer, coarse_quantizer) =
             self.fit_resident_global_quantizers(&training_sample, vectors_seen)?;
         let empty = GlobalPqDescriptor::empty_with_quantizers_for_layout(
             quantizer.state(),
             coarse_quantizer.state(),
-            residual_certificate
-                .as_ref()
-                .map(ResidualPqCertificate::state),
             self.manifest.build_config.vector_element_type,
             fringe.len(),
             max_rows,
@@ -15549,28 +15414,18 @@ impl BorsukIndex {
                 active
                     .par_iter()
                     .map_init(
-                        || {
-                            (
-                                Vec::<f32>::new(),
-                                Vec::<u8>::new(),
-                                ResidualPqEncodeScratch::default(),
-                            )
-                        },
-                        |(rotated, code, residual_scratch), (_, vector)| {
-                            spool.encode_vector_with_residual_scratch(
-                                vector,
-                                rotated,
-                                code,
-                                residual_scratch,
-                            )
+                        || (Vec::<f32>::new(), Vec::<u8>::new()),
+                        |(rotated, code), (_, vector)| {
+                            spool.encode_vector_with_scratch(vector, rotated, code)
                         },
                     )
                     .collect::<Result<Vec<_>>>()
             })?;
-            for ((row_index, _), encoded) in active.into_iter().zip(encoded) {
+            for ((row_index, _), (cell, code)) in active.into_iter().zip(encoded) {
                 let record = &segment_records[row_index];
-                spool.push_encoded_with_residual(
-                    &encoded,
+                spool.push_encoded(
+                    cell,
+                    &code,
                     GlobalPqRow {
                         segment_index: segment_ordinal,
                         row_index: u32::try_from(row_index).map_err(|_| {
@@ -15678,8 +15533,7 @@ impl BorsukIndex {
             self.storage
                 .write_bytes_content_addressed(&exact_path, &encoded.exact_bytes)?;
             for (entry, slice) in pending.iter().zip(&encoded.slices) {
-                let scan =
-                    &encoded.bytes[slice.code_range.start..slice.residual_error_upper_range.end];
+                let scan = &encoded.bytes[slice.code_range.start..slice.exact_ordinal_range.end];
                 let mut reference = global_pq_chunk_reference(
                     &path,
                     &exact_path,
@@ -20617,18 +20471,8 @@ impl BorsukIndex {
                 <= f64::from(f32::EPSILON);
         let mut shadow_rows = Vec::with_capacity(context.scored.len());
         let mut containment_failures = 0_usize;
-        let prepared_by_layer = context
-            .layer_indexes
-            .iter()
-            .map(|(layer, index)| {
-                index
-                    .prepare_residual_query(context.pq_query)
-                    .map(|prepared| (*layer, *index, prepared))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let mut interval_scratch = ResidualPqIntervalScratch::default();
         for scored in context.scored {
-            let (layer, chunk_row_start, code, residual_code, residual_error_upper, identity) =
+            let (layer, chunk_row_start, code, identity) =
                 context.inputs.get(scored.id).ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "global exact-bound candidate metadata is missing".to_string(),
@@ -20644,28 +20488,24 @@ impl BorsukIndex {
             let interval = if zero_query || zero_vector {
                 None
             } else {
-                let (index, prepared) = prepared_by_layer
+                let certificate_vector = if normalized_geometry {
+                    crate::metric::unit_l2_normalized(scored.vector)
+                } else {
+                    scored.vector.to_vec()
+                };
+                let index = context
+                    .layer_indexes
                     .iter()
                     .find(|candidate| candidate.0 == *layer)
-                    .map(|candidate| (candidate.1, candidate.2.as_ref()))
+                    .map(|candidate| candidate.1)
                     .ok_or_else(|| {
                         BorsukError::InvalidStorage(
                             "global exact-bound quantizer layer is missing".to_string(),
                         )
                     })?;
-                prepared
-                    .map(|prepared| {
-                        index.residual_l2_interval_prepared(
-                            prepared,
-                            code,
-                            residual_code,
-                            *residual_error_upper,
-                            &mut interval_scratch,
-                        )
-                    })
-                    .transpose()
+                index
+                    .certificate_l2_interval(context.pq_query, &certificate_vector, code)
                     .ok()
-                    .flatten()
                     .flatten()
                     .and_then(|l2| {
                         global_exact_bound_metric_interval(
@@ -20724,14 +20564,8 @@ impl BorsukIndex {
             global_pq_exact_read_groups(context.chunks_by_start, predicted_by_chunk)?;
         let (predicted_reads, predicted_bytes, predicted_waves) =
             global_exact_bound_plan_stats(&predicted_groups, row_bytes)?;
-        let certificate_scratch_allocations = prepared_by_layer
-            .iter()
-            .filter_map(|(_, _, prepared)| prepared.as_ref())
-            .map(|prepared| prepared.heap_buffer_allocations())
-            .sum::<usize>()
-            .saturating_add(interval_scratch.heap_buffer_allocations());
         Ok(GlobalExactBoundShadow {
-            certificate_kind: "residual-pq-v8".to_string(),
+            certificate_kind: "scalar-pq-shadow".to_string(),
             candidates: shadow_rows.len(),
             survivors: survivors.iter().filter(|value| **value).count(),
             fail_open: intervals
@@ -20746,10 +20580,10 @@ impl BorsukIndex {
             predicted_bytes,
             exact_backing_reads: context.exact_backing_reads,
             exact_backing_bytes: context.exact_backing_bytes,
-            residual_bytes: u64::try_from(shadow_rows.len().saturating_mul(68)).unwrap_or(u64::MAX),
+            residual_bytes: 0,
             residual_scan_bytes: context.residual_scan_bytes,
             cpu_us: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
-            certificate_scratch_allocations,
+            certificate_scratch_allocations: 0,
         })
     }
 
@@ -21773,8 +21607,6 @@ struct GlobalPqBundleSlice {
     segment_ordinal_range: Range<usize>,
     row_ordinal_range: Range<usize>,
     exact_ordinal_range: Range<usize>,
-    residual_code_range: Range<usize>,
-    residual_error_upper_range: Range<usize>,
     identity_offsets_range: Range<usize>,
     identity_values_range: Range<usize>,
     mutation_hlc_range: Range<usize>,
@@ -21835,27 +21667,10 @@ fn encode_global_pq_arrow_bundle(
     ]);
     let schema = Arc::new(arrow_schema::Schema::new_with_metadata(
         vec![
-            arrow_schema::Field::new("code", code_type, false),
+            arrow_schema::Field::new("pq_code", code_type, false),
             arrow_schema::Field::new("segment_ordinal", arrow_schema::DataType::UInt32, false),
             arrow_schema::Field::new("row_ordinal", arrow_schema::DataType::UInt32, false),
             arrow_schema::Field::new("exact_ordinal", arrow_schema::DataType::UInt32, false),
-            arrow_schema::Field::new(
-                "rerank_residual_code",
-                arrow_schema::DataType::FixedSizeList(
-                    Arc::new(arrow_schema::Field::new(
-                        "item",
-                        arrow_schema::DataType::UInt8,
-                        false,
-                    )),
-                    64,
-                ),
-                false,
-            ),
-            arrow_schema::Field::new(
-                "rerank_residual_error_upper",
-                arrow_schema::DataType::Float32,
-                false,
-            ),
             arrow_schema::Field::new("record_id", arrow_schema::DataType::Binary, false),
             arrow_schema::Field::new("mutation_hlc", arrow_schema::DataType::UInt64, false),
             arrow_schema::Field::new(
@@ -21920,27 +21735,6 @@ fn encode_global_pq_arrow_bundle(
         if entry.chunk.identities.len() != entry.chunk.rows {
             return Err(BorsukError::InvalidStorage(
                 "global PQ identity count does not match its rows".to_string(),
-            ));
-        }
-        if entry.chunk.residual_codes.len() != entry.chunk.rows * 64 {
-            return Err(BorsukError::InvalidStorage(
-                "global PQ residual code payload has an invalid size".to_string(),
-            ));
-        }
-        if entry.chunk.residual_error_upper.len() != entry.chunk.rows * size_of::<f32>() {
-            return Err(BorsukError::InvalidStorage(
-                "global PQ residual error payload has an invalid size".to_string(),
-            ));
-        }
-        if entry
-            .chunk
-            .residual_error_upper
-            .chunks_exact(4)
-            .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("four bytes")))
-            .any(|error| error.is_nan() || error.is_sign_negative())
-        {
-            return Err(BorsukError::InvalidStorage(
-                "global PQ residual error payload contains an invalid bound".to_string(),
             ));
         }
         for local_row in 0..entry.chunk.rows {
@@ -22036,26 +21830,6 @@ fn encode_global_pq_arrow_bundle(
             let row_ordinals = arrow_array::UInt32Array::from(row_ordinals);
             let exact_ordinals =
                 arrow_array::UInt32Array::from(exact_ordinals[chunk_index].clone());
-            let residual_codes = arrow_array::FixedSizeListArray::try_new(
-                Arc::new(arrow_schema::Field::new(
-                    "item",
-                    arrow_schema::DataType::UInt8,
-                    false,
-                )),
-                64,
-                Arc::new(arrow_array::UInt8Array::from(
-                    entry.chunk.residual_codes.clone(),
-                )),
-                None,
-            )?;
-            let residual_error_upper = arrow_array::Float32Array::from(
-                entry
-                    .chunk
-                    .residual_error_upper
-                    .chunks_exact(4)
-                    .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("four bytes")))
-                    .collect::<Vec<_>>(),
-            );
             let identities = arrow_array::BinaryArray::from_iter_values(
                 entry.chunk.identities.iter().map(|(id, _)| id.as_bytes()),
             );
@@ -22104,8 +21878,6 @@ fn encode_global_pq_arrow_bundle(
                     Arc::new(segment_ordinals),
                     Arc::new(row_ordinals),
                     Arc::new(exact_ordinals),
-                    Arc::new(residual_codes),
-                    Arc::new(residual_error_upper),
                     Arc::new(identities),
                     Arc::new(mutation_hlc),
                     Arc::new(mutation_writer),
@@ -22276,7 +22048,7 @@ fn global_pq_chunk_reference(
     bundle: &[u8],
     exact_bundle: &[u8],
 ) -> Result<GlobalPqChunkRef> {
-    let scan_range = slice.code_range.start..slice.residual_error_upper_range.end;
+    let scan_range = slice.code_range.start..slice.exact_ordinal_range.end;
     let scan = bundle.get(scan_range.clone()).ok_or_else(|| {
         BorsukError::InvalidStorage("global PQ scan range is outside its bundle".to_string())
     })?;
@@ -22294,21 +22066,6 @@ fn global_pq_chunk_reference(
         slice.mutation_digest_range.start,
         slice.row_integrity_range.start,
     ];
-    let residual_buffer_offsets = [
-        slice.residual_code_range.start,
-        slice.residual_error_upper_range.start,
-    ]
-    .map(|offset| {
-        u32::try_from(offset).map_err(|_| {
-            BorsukError::InvalidStorage(
-                "global PQ residual Arrow buffer offset exceeds the 4 GiB bundle limit".to_string(),
-            )
-        })
-    })
-    .into_iter()
-    .collect::<Result<Vec<_>>>()?
-    .try_into()
-    .expect("two residual offsets");
     if all_typed_buffer_offsets
         .iter()
         .any(|offset| offset % 8 != 0)
@@ -22346,7 +22103,6 @@ fn global_pq_chunk_reference(
         exact_size_bytes: exact.len(),
         cell_index: entry.cell_index,
         ordinal_buffer_offsets,
-        residual_buffer_offsets,
         typed_buffer_offsets,
         identity_values_size_bytes: u32::try_from(slice.identity_values_range.len()).map_err(
             |_| {
@@ -22499,11 +22255,10 @@ fn global_pq_arrow_buffer_ranges(
     })?;
     scan.into_iter()
         .map(|buffers| {
-            if buffers.len() != 25 {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "global PQ Arrow record batch has {} buffers, expected the V8 residual layout",
-                    buffers.len()
-                )));
+            if buffers.len() != 20 {
+                return Err(BorsukError::InvalidStorage(
+                    "global PQ Arrow record batch has an invalid V7 locality layout".to_string(),
+                ));
             }
             let range = |index: usize| {
                 buffers.get(index).cloned().ok_or_else(|| {
@@ -22517,14 +22272,12 @@ fn global_pq_arrow_buffer_ranges(
                 segment_ordinal_range: range(4)?,
                 row_ordinal_range: range(6)?,
                 exact_ordinal_range: range(8)?,
-                residual_code_range: range(11)?,
-                residual_error_upper_range: range(13)?,
-                identity_offsets_range: range(15)?,
-                identity_values_range: range(16)?,
-                mutation_hlc_range: range(18)?,
-                mutation_writer_range: range(20)?,
-                mutation_digest_range: range(22)?,
-                row_integrity_range: range(24)?,
+                identity_offsets_range: range(10)?,
+                identity_values_range: range(11)?,
+                mutation_hlc_range: range(13)?,
+                mutation_writer_range: range(15)?,
+                mutation_digest_range: range(17)?,
+                row_integrity_range: range(19)?,
                 exact_range: exact_range.clone(),
             })
         })
@@ -28505,7 +28258,6 @@ mod tests {
             exact_size_bytes: 0,
             cell_index: 0,
             ordinal_buffer_offsets: [0; 3],
-            residual_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start: 0,
@@ -28611,7 +28363,6 @@ mod tests {
             exact_size_bytes: 0,
             cell_index,
             ordinal_buffer_offsets: [0; 3],
-            residual_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start: 0,
@@ -28641,7 +28392,6 @@ mod tests {
             exact_size_bytes: 4,
             cell_index,
             ordinal_buffer_offsets: [0; 3],
-            residual_buffer_offsets: [0; 2],
             typed_buffer_offsets: [
                 offset_bytes + 128,
                 offset_bytes + 136,
@@ -28687,7 +28437,6 @@ mod tests {
             exact_size_bytes: 512 * 768 * size_of::<f32>(),
             cell_index: 7,
             ordinal_buffer_offsets: [0; 3],
-            residual_buffer_offsets: [0; 2],
             typed_buffer_offsets: [
                 identity_start,
                 identity_start + 2_056,
@@ -28731,7 +28480,6 @@ mod tests {
             exact_size_bytes: 8 * 1024 * 1024,
             cell_index: row_start as u16,
             ordinal_buffer_offsets: [0; 3],
-            residual_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start,
@@ -28822,7 +28570,6 @@ mod tests {
             exact_size_bytes: BUNDLE_BYTES,
             cell_index: row_start as u16,
             ordinal_buffer_offsets: [0; 3],
-            residual_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start,
@@ -28934,7 +28681,6 @@ mod tests {
             exact_size_bytes: 8,
             cell_index: 0,
             ordinal_buffer_offsets: [0; 3],
-            residual_buffer_offsets: [0; 2],
             typed_buffer_offsets: [0; 6],
             identity_values_size_bytes: 0,
             row_start: 0,
@@ -29019,7 +28765,6 @@ mod tests {
                     exact_size_bytes: 4,
                     cell_index,
                     ordinal_buffer_offsets: [0; 3],
-                    residual_buffer_offsets: [0; 2],
                     typed_buffer_offsets: [
                         65_536,
                         65_544,
@@ -29090,7 +28835,6 @@ mod tests {
                 exact_size_bytes: 4,
                 cell_index: 1,
                 ordinal_buffer_offsets: [0; 3],
-                residual_buffer_offsets: [0; 2],
                 typed_buffer_offsets: [
                     65_536,
                     65_544,
@@ -29142,7 +28886,6 @@ mod tests {
                     exact_size_bytes: 4,
                     cell_index,
                     ordinal_buffer_offsets: [0; 3],
-                    residual_buffer_offsets: [0; 2],
                     typed_buffer_offsets: [
                         65_536,
                         65_544,
@@ -29194,15 +28937,13 @@ mod tests {
     }
 
     #[test]
-    fn global_pq_v8_bundle_uses_residual_certificate_arrow_columns() {
+    fn global_pq_bundle_uses_typed_code_and_row_columns_with_independent_ranges() {
         let chunk = |codes: &[u8], locations: &[u8], exact_bytes: Vec<u8>| {
             let mut bytes = Vec::new();
             bytes.extend_from_slice(codes);
             bytes.extend_from_slice(locations);
             crate::global_pq_sidecar::GlobalPqChunkBytes {
                 bytes,
-                residual_codes: vec![3; 64],
-                residual_error_upper: 1.25_f32.to_le_bytes().to_vec(),
                 exact_bytes,
                 identities: vec![(
                     RecordId::from(format!(
@@ -29265,8 +29006,7 @@ mod tests {
         .collect::<std::result::Result<Vec<_>, _>>()
         .unwrap();
         assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].schema().fields().len(), 11);
-        assert_eq!(batches[0].schema().field(0).name(), "code");
+        assert_eq!(batches[0].schema().field(0).name(), "pq_code");
         assert_eq!(
             batches[0].schema().field(0).data_type(),
             &arrow_schema::DataType::FixedSizeList(
@@ -29293,31 +29033,11 @@ mod tests {
             batches[0].schema().field(3).data_type(),
             &arrow_schema::DataType::UInt32
         );
-        assert_eq!(batches[0].schema().field(4).name(), "rerank_residual_code");
-        assert_eq!(
-            batches[0].schema().field(4).data_type(),
-            &arrow_schema::DataType::FixedSizeList(
-                Arc::new(arrow_schema::Field::new(
-                    "item",
-                    arrow_schema::DataType::UInt8,
-                    false,
-                )),
-                64,
-            )
-        );
-        assert_eq!(
-            batches[0].schema().field(5).name(),
-            "rerank_residual_error_upper"
-        );
-        assert_eq!(
-            batches[0].schema().field(5).data_type(),
-            &arrow_schema::DataType::Float32
-        );
-        assert_eq!(batches[0].schema().field(6).name(), "record_id");
-        assert_eq!(batches[0].schema().field(7).name(), "mutation_hlc");
-        assert_eq!(batches[0].schema().field(8).name(), "mutation_writer");
-        assert_eq!(batches[0].schema().field(9).name(), "mutation_digest");
-        assert_eq!(batches[0].schema().field(10).name(), "row_integrity");
+        assert_eq!(batches[0].schema().field(4).name(), "record_id");
+        assert_eq!(batches[0].schema().field(5).name(), "mutation_hlc");
+        assert_eq!(batches[0].schema().field(6).name(), "mutation_writer");
+        assert_eq!(batches[0].schema().field(7).name(), "mutation_digest");
+        assert_eq!(batches[0].schema().field(8).name(), "row_integrity");
         assert!(encoded.exact_bytes.starts_with(b"ARROW1"));
         assert!(encoded.exact_bytes.ends_with(b"ARROW1"));
         let exact_batches = arrow_ipc::reader::FileReader::try_new(
@@ -29385,14 +29105,6 @@ mod tests {
             &encoded.bytes[encoded.slices[1].code_range.clone()],
             &[0, 0]
         );
-        assert_eq!(
-            &encoded.bytes[encoded.slices[0].residual_code_range.clone()],
-            &[3; 64]
-        );
-        assert_eq!(
-            &encoded.bytes[encoded.slices[0].residual_error_upper_range.clone()],
-            1.25_f32.to_le_bytes()
-        );
         assert_eq!(encoded.slices[0].exact_range, encoded.slices[1].exact_range);
         assert_eq!(
             &encoded.exact_bytes[encoded.slices[0].exact_range.clone()],
@@ -29410,44 +29122,6 @@ mod tests {
             &encoded.exact_bytes,
         )
         .unwrap();
-        let scan_ranges = reference.scan_buffer_ranges(2).unwrap();
-        assert_eq!(
-            &encoded.bytes[scan_ranges[4].clone()],
-            &[3; 64],
-            "residual code must be authenticated inside the scan envelope"
-        );
-        assert_eq!(
-            &encoded.bytes[scan_ranges[5].clone()],
-            1.25_f32.to_le_bytes(),
-            "certificate error must be authenticated inside the scan envelope"
-        );
-        let mut corrupted_residual = encoded.bytes.clone();
-        corrupted_residual[encoded.slices[0].residual_code_range.start] ^= 1;
-        let corrupted_reference = global_pq_chunk_reference(
-            "bundle.arrow",
-            "exact.arrow",
-            &pending[0],
-            &encoded.slices[0],
-            &corrupted_residual,
-            &encoded.exact_bytes,
-        )
-        .unwrap();
-        assert_ne!(corrupted_reference.checksum, reference.checksum);
-        let mut corrupted_error = encoded.bytes.clone();
-        corrupted_error[encoded.slices[0].residual_error_upper_range.start] ^= 1;
-        let corrupted_reference = global_pq_chunk_reference(
-            "bundle.arrow",
-            "exact.arrow",
-            &pending[0],
-            &encoded.slices[0],
-            &corrupted_error,
-            &encoded.exact_bytes,
-        )
-        .unwrap();
-        assert_ne!(corrupted_reference.checksum, reference.checksum);
-        let mut invalid_offsets = reference.clone();
-        invalid_offsets.residual_buffer_offsets[0] = invalid_offsets.ordinal_buffer_offsets[2];
-        assert!(invalid_offsets.scan_buffer_ranges(2).is_err());
         assert_eq!(
             reference.identity_values_size_bytes as usize,
             encoded.slices[0].identity_values_range.len()
@@ -29508,8 +29182,6 @@ mod tests {
             row_start: 0,
             chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
                 bytes: [1_u8, 2, 7, 0, 0, 0].to_vec(),
-                residual_codes: vec![0; 64],
-                residual_error_upper: f32::INFINITY.to_le_bytes().to_vec(),
                 exact_bytes: vec![0b0000_0101],
                 identities: vec![(
                     RecordId::from("binary-row"),
@@ -29555,8 +29227,6 @@ mod tests {
                     row_start: 0,
                     chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
                         bytes: [255_u8, 255, 0, 0, 0, 0].to_vec(),
-                        residual_codes: vec![0; 64],
-                        residual_error_upper: f32::INFINITY.to_le_bytes().to_vec(),
                         exact_bytes: exact_high.clone(),
                         identities: vec![(
                             RecordId::from("high"),
@@ -29570,8 +29240,6 @@ mod tests {
                     row_start: 1,
                     chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
                         bytes: [0_u8; 6].to_vec(),
-                        residual_codes: vec![0; 64],
-                        residual_error_upper: f32::INFINITY.to_le_bytes().to_vec(),
                         exact_bytes: exact_low.clone(),
                         identities: vec![(
                             RecordId::from("low"),
@@ -29623,10 +29291,6 @@ mod tests {
             row_start: 0,
             chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
                 bytes: vec![0; ROWS * scan_row_width],
-                residual_codes: vec![0; ROWS * 64],
-                residual_error_upper: std::iter::repeat_n(f32::INFINITY.to_le_bytes(), ROWS)
-                    .flatten()
-                    .collect(),
                 exact_bytes: vec![0; ROWS * DIMENSIONS * size_of::<f32>()],
                 identities,
                 rows: ROWS,
@@ -29678,13 +29342,6 @@ mod tests {
                     row_start,
                     chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
                         bytes: vec![0; rows * scan_row_width],
-                        residual_codes: vec![0; rows * 64],
-                        residual_error_upper: std::iter::repeat_n(
-                            f32::INFINITY.to_le_bytes(),
-                            rows,
-                        )
-                        .flatten()
-                        .collect(),
                         exact_bytes: vec![0; rows * DIMENSIONS * size_of::<f32>()],
                         identities,
                         rows,
@@ -29921,13 +29578,10 @@ mod tests {
         assert_eq!(limited.global_exact_bound_shadow.candidates, 7);
         assert_eq!(
             limited.global_exact_bound_shadow.certificate_kind,
-            "residual-pq-v8"
+            "scalar-pq-shadow"
         );
-        assert_eq!(limited.global_exact_bound_shadow.residual_bytes, 7 * 68);
-        assert!(
-            limited.global_exact_bound_shadow.residual_scan_bytes
-                >= limited.global_exact_bound_shadow.residual_bytes
-        );
+        assert_eq!(limited.global_exact_bound_shadow.residual_bytes, 0);
+        assert_eq!(limited.global_exact_bound_shadow.residual_scan_bytes, 0);
         assert!(limited.global_exact_bound_shadow.exact_backing_reads > 0);
         assert!(limited.global_exact_bound_shadow.exact_backing_bytes > 0);
         assert!(
@@ -30595,10 +30249,10 @@ mod tests {
         assert_eq!(scan_report.global_exact_bound_shadow.candidates, 1);
         assert_eq!(
             scan_report.global_exact_bound_shadow.certificate_kind,
-            "residual-pq-v8"
+            "scalar-pq-shadow"
         );
-        assert_eq!(scan_report.global_exact_bound_shadow.residual_bytes, 68);
-        assert!(scan_report.global_exact_bound_shadow.residual_scan_bytes >= 68);
+        assert_eq!(scan_report.global_exact_bound_shadow.residual_bytes, 0);
+        assert_eq!(scan_report.global_exact_bound_shadow.residual_scan_bytes, 0);
         assert_eq!(scan_report.global_exact_bound_shadow.survivors, 1);
         assert_eq!(scan_report.global_exact_bound_shadow.fail_open, 0);
         assert_eq!(
@@ -30611,8 +30265,7 @@ mod tests {
             scan_report
                 .global_exact_bound_shadow
                 .certificate_scratch_allocations,
-            4,
-            "two fused-layer prepared-query buffers plus two reusable interval buffers"
+            0
         );
         assert_eq!(scan_report.global_exact_bound_shadow.baseline_reads, 1);
         assert_eq!(

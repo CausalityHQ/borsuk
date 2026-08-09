@@ -998,7 +998,7 @@ pub struct GlobalExactBoundShadow {
     pub exact_backing_bytes: u64,
     /// Certificate payload bytes retained for evaluated candidates.
     pub residual_bytes: u64,
-    /// Residual-column bytes present in the scanned V8 chunk envelopes.
+    /// Residual-column scan bytes; always zero for the V9 scalar shadow.
     pub residual_scan_bytes: u64,
     /// Shadow calculation wall time; no I/O is included.
     pub cpu_us: u64,
@@ -2042,7 +2042,8 @@ pub struct SearchOptions {
     #[serde(default)]
     pub cache_execution: CacheExecutionPolicy,
     /// Enable result-preserving exact-bound qualification telemetry. This is
-    /// disabled by default until the V8 physical-plan qualification gates pass.
+    /// disabled by default because the V7 shadow recomputes residuals from
+    /// fetched exact rows.
     #[serde(default)]
     pub global_exact_bound_shadow: bool,
 }

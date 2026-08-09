@@ -239,7 +239,7 @@ pub(crate) struct QuantizerRef {
 }
 
 /// Content-addressed resident global product-code artifact for one manifest.
-pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 6;
+pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 7;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GlobalPqRef {
@@ -257,7 +257,7 @@ pub(crate) struct GlobalPqRef {
     /// Exact bytes retained for product codes, packed row locations, and the
     /// codebook after the descriptor is loaded.
     pub(crate) resident_bytes: u64,
-    /// Bytes retained by global exact-page indexes. Fixed-width v8 exact pages
+    /// Bytes retained by global exact-page indexes. Fixed-width V9 exact pages
     /// need no index, so newly built references store zero.
     pub(crate) sidecar_index_bytes: u64,
     /// Physical bytes occupied by the Parquet descriptor, Arrow IPC ANN

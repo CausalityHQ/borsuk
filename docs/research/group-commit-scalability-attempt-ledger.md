@@ -2326,3 +2326,19 @@ backing bytes, above the 2x cap. The failures are `survivors`, `reads`, `bytes`,
 and `total_backing_bytes`. Passing a 200 ms ceiling is irrelevant when the
 certificate removes no physical I/O; the V8 residual treatment cannot advance
 to enforcement, AWS, 100M scale, a production default, or a competitor claim.
+
+The rejected implementation was subsequently removed instead of being retained
+as a dormant production branch. The residual certificate module, persisted
+quantizer state, 64-byte codes, Float32 error bounds, V8 Arrow columns, scan
+envelope accounting, and search-time residual decode path no longer exist.
+Current builds use the standard typed Arrow code/ordinal/identity bundle and
+lossless Arrow exact-vector bundle under the new
+`typed-columns-v9-local-exact-arrow` marker. Global references use layout version
+7 and cell graphs version 5, deliberately skipping the experimental V7/V8
+identities so neither historical layout can be loaded accidentally. The generic
+non-enforcing scalar shadow remains research telemetry with zero residual bytes;
+it is not a production read-suppression mechanism. Fresh assurance for the
+rollback passed strict workspace/all-feature/all-target Clippy and the complete
+workspace/all-feature/all-target matrix: 1,164 tests passed, 24 ignored across
+71 suites. This closes the residual-PQ branch without weakening its recorded
+rejection or creating an AWS claim.

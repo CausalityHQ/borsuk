@@ -51,14 +51,6 @@ mod parallel;
 mod physical_layout;
 mod quantizer_sidecar;
 mod record;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the verified primitive is wired into the V8 Arrow layout in the next planned slice"
-    )
-)]
-mod residual_pq_certificate;
 mod rotated_product_quantizer;
 mod scalar_decode;
 mod segment;
