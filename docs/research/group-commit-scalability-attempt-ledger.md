@@ -2490,3 +2490,16 @@ control averaged only 0.6352. Therefore neither higher nprobe nor unrefined ADC
 is a production solution. The next diagnostic must locate the minimum exact
 refinement width that reaches the frozen recall distribution, then redesign
 candidate representation/layout to make that refinement S3-efficient.
+
+`exact-candidate-frontier-cohere-1m.json` preregisters that diagnostic on a
+fresh full 1M-vector index. It fixes nprobe at 32 and sweeps exact refinement
+widths 16, 32, 64, 128, 256, 512, 1,024, 2,048, and 4,096 over the same 1,000
+seeded queries. The evaluator selects the smallest width with control mean
+recall@10 at least 0.95, query p05 at least 0.80, p95 at most 200 ms, exact
+candidate counts matching the declared width, and zero decoded/disk-cache use;
+it reports backing reads, bytes, vectors, p50, and p95 at every point. This is a
+quality/I/O knee diagnostic, not a production promotion. The shared paired
+runner now dispatches this protocol to its dedicated fail-closed evaluator.
+Fifteen focused runner/evaluator tests pass; the devbox swap hook forbids a new
+full suite while unrelated local processes retain swap, and no Rust source or
+dependency changed from the preceding complete Rust gate.

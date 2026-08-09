@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import validate_approximate_first_qualification as validator
+import validate_exact_candidate_frontier as candidate_validator
 
 
 class ApproximateFirstQualificationTest(unittest.TestCase):
@@ -68,10 +69,16 @@ class ApproximateFirstQualificationTest(unittest.TestCase):
                 "arm_order": "control,treatment" if sample % 2 == 0 else "treatment,control",
                 "scan_codec": "srht-pq-scan",
                 "cache_execution": "scan",
-                "nprobe": 32,
-                "max_candidates": 4096,
+                "nprobe": self.manifest["nprobes"][0],
+                "max_candidates": self.manifest["max_candidates"][0],
                 "ground_truth_ids": truth,
-                "control": self.arm("exact-rerank-control", 100.0, 20, 2000, 10),
+                "control": self.arm(
+                    "exact-rerank-control",
+                    100.0,
+                    20,
+                    2000,
+                    self.manifest["max_candidates"][0],
+                ),
                 "treatment": self.arm("approximate-first", 50.0, 5, 1000, 0),
             }
             if mutate:
@@ -164,6 +171,44 @@ class ApproximateFirstQualificationTest(unittest.TestCase):
         )
         self.assertTrue(decision["accepted"])
         self.assertTrue(decision["recovery_mode"])
+
+    def test_exact_candidate_frontier_selects_quality_width(self):
+        self.manifest["maximum_control_p95_ms"] = 200.0
+        self.manifest_path.write_text(json.dumps(self.manifest))
+        identity_path = self.root / "qualification_identity.json"
+        identity = json.loads(identity_path.read_text())
+        identity["manifest_sha256"] = hashlib.sha256(
+            self.manifest_path.read_bytes()
+        ).hexdigest()
+        identity_path.write_text(json.dumps(identity))
+        self.write_terminal()
+        decision = candidate_validator.validate(self.root, self.manifest_path)
+        self.assertTrue(decision["accepted"])
+        self.assertEqual(decision["selected"]["max_candidates"], 4096)
+
+    def test_exact_candidate_frontier_rejects_bad_query_tail(self):
+        self.manifest["maximum_control_p95_ms"] = 200.0
+        self.manifest_path.write_text(json.dumps(self.manifest))
+        identity_path = self.root / "qualification_identity.json"
+        identity = json.loads(identity_path.read_text())
+        identity["manifest_sha256"] = hashlib.sha256(
+            self.manifest_path.read_bytes()
+        ).hexdigest()
+        identity_path.write_text(json.dumps(identity))
+
+        def lower_control_recall(row, sample):
+            if sample == 0:
+                row["control"]["ordered_ids"] = [str(value) for value in range(7)] + [
+                    "x",
+                    "y",
+                    "z",
+                ]
+                row["control"]["recall_at_10"] = 0.7
+
+        self.write_terminal(lower_control_recall)
+        decision = candidate_validator.validate(self.root, self.manifest_path)
+        self.assertFalse(decision["accepted"])
+        self.assertIn("control p05 recall", decision["points"][0]["failures"])
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ class ApproximateFirstRunnerContractTest(unittest.TestCase):
     def test_valid_rejection_is_terminal_not_infrastructure_failure(self):
         self.assertIn("APPROXIMATE_FIRST_QUALIFICATION_REJECTED", RUNNER)
         self.assertIn("decision_status -eq 1", RUNNER)
-        self.assertIn('-s "$output/approximate-first-decision.json"', RUNNER)
+        self.assertIn('-s "$decision"', RUNNER)
         self.assertIn("evaluator failed without a valid decision", RUNNER)
         self.assertIn("APPROXIMATE_FIRST_QUALIFICATION_FAILED", RUNNER)
 
@@ -56,6 +56,11 @@ class ApproximateFirstRunnerContractTest(unittest.TestCase):
             'RUSTC_WRAPPER="${RUSTC_WRAPPER:-/usr/local/libexec/devbox-rustc-wrapper}"',
             RUNNER,
         )
+
+    def test_runner_dispatches_the_exact_candidate_frontier(self):
+        self.assertIn("exact-candidate-frontier-cohere-1m-v1", RUNNER)
+        self.assertIn("validate_exact_candidate_frontier.py", RUNNER)
+        self.assertIn("EXACT_CANDIDATE_FRONTIER_COMPLETE", RUNNER)
 
 
 if __name__ == "__main__":

@@ -164,6 +164,14 @@ def evaluate_point(rows, manifest, nprobe, candidates):
         "treatment_mean_recall_at_10": mean_treatment_recall,
         "treatment_p05_recall_at_10": p05_treatment_recall,
         "control_p95_ms": control_p95,
+        "control_p50_ms": percentile(control_latency, 0.50),
+        "control_p05_recall_at_10": percentile(control_recall, 0.05),
+        "control_average_backing_reads": control_reads / len(control_values),
+        "control_average_backing_bytes": control_bytes / len(control_values),
+        "control_average_exact_vectors": sum(
+            value["global_exact_vectors_fetched"] for value in control_values
+        )
+        / len(control_values),
         "treatment_p50_ms": percentile(treatment_latency, 0.50),
         "treatment_p95_ms": treatment_p95,
         "p95_improvement_ms": p95_improvement,

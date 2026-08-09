@@ -57,6 +57,7 @@ print(value["query_seed"])
 print(",".join(map(str, value["nprobes"])))
 print(",".join(map(str, value["max_candidates"])))
 print(value["scan_codec"])
+print(value["protocol"])
 PY
 )
 dataset_sha="$(sha256sum "$dataset/dataset.json" | awk '{print $1}')"
@@ -105,15 +106,32 @@ env \
   BORSUK_BENCH_REPETITION_ID=local-r01 \
   "$binary"
 
+case "${protocol[6]}" in
+  approximate-first-cohere-1m-local-v1)
+    evaluator="$repo_root/scripts/validate_approximate_first_qualification.py"
+    decision="$output/approximate-first-decision.json"
+    success_marker="$output/APPROXIMATE_FIRST_QUALIFICATION_COMPLETE"
+    rejection_marker="$output/APPROXIMATE_FIRST_QUALIFICATION_REJECTED"
+    ;;
+  exact-candidate-frontier-cohere-1m-v1)
+    evaluator="$repo_root/scripts/validate_exact_candidate_frontier.py"
+    decision="$output/exact-candidate-frontier-decision.json"
+    success_marker="$output/EXACT_CANDIDATE_FRONTIER_COMPLETE"
+    rejection_marker="$output/EXACT_CANDIDATE_FRONTIER_REJECTED"
+    ;;
+  *)
+    echo "unsupported qualification protocol ${protocol[6]}" >&2
+    exit 2
+    ;;
+esac
 set +e
-python3 "$repo_root/scripts/validate_approximate_first_qualification.py" \
-  "$output" "$manifest" --decision "$output/approximate-first-decision.json"
+python3 "$evaluator" "$output" "$manifest" --decision "$decision"
 decision_status=$?
 set -e
 if [[ $decision_status -eq 0 ]]; then
-  printf 'complete\n' > "$output/APPROXIMATE_FIRST_QUALIFICATION_COMPLETE"
-elif [[ $decision_status -eq 1 && -s "$output/approximate-first-decision.json" ]]; then
-  printf 'rejected\n' > "$output/APPROXIMATE_FIRST_QUALIFICATION_REJECTED"
+  printf 'complete\n' > "$success_marker"
+elif [[ $decision_status -eq 1 && -s "$decision" ]]; then
+  printf 'rejected\n' > "$rejection_marker"
 else
   echo "evaluator failed without a valid decision (exit $decision_status)" >&2
   exit 2
