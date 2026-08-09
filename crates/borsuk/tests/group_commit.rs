@@ -611,6 +611,21 @@ fn lane_log_ack_persists_a_stock_readable_arrow_mutation_extent() {
     let bytes = runtime
         .block_on(async { inner.get(&extent.location).await?.bytes().await })
         .unwrap();
+    let lane_receipt = &receipt.lane_receipts[0];
+    assert_eq!(
+        blake3::hash(&bytes).as_bytes(),
+        &lane_receipt.extent_checksum,
+        "receipt must authenticate the exact immutable extent"
+    );
+    let head_path = format!("lane-log/lanes/{:04}/HEAD", lane_receipt.commit_lane);
+    let head_bytes = runtime
+        .block_on(async { inner.get(&head_path.into()).await?.bytes().await })
+        .unwrap();
+    assert_eq!(
+        blake3::hash(&head_bytes).as_bytes(),
+        &lane_receipt.published_head_checksum,
+        "receipt must authenticate the exact published stripe head"
+    );
     let mut reader = StreamReader::try_new(Cursor::new(bytes), None).unwrap();
     let schema = reader.schema();
 

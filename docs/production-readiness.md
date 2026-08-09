@@ -272,14 +272,20 @@ only threads sharing one writer—and reports caller p50/p95, records/s, request
 per record, batch fill, conflicts, post-reopen visibility, and unchanged search
 recall. Local multi-instance coverage is correctness evidence, not a performance
 or unbounded-scalability claim.
+Every current per-lane acknowledgement receipt names its complete durable
+identity `(stripe, lease_epoch, sequence)` and carries separate BLAKE3
+checksums for the immutable Arrow extent and the exact conditionally published
+stripe-head successor. The campaign validator rejects scalar-only receipts,
+identity/checksum drift, and any healthy acknowledgement that is not exactly
+two PUTs with zero GET, HEAD, LIST, or delete requests.
 The benchmark contract now records producer writers and independently opened
 writer instances separately and rejects evidence unless each writer maps to a
 distinct instance. A two-instance terminal local smoke passes ingest,
 active-tail visibility, sequential collection-wide drains, reopen visibility,
 raw-sample reconciliation, resource telemetry, storage tracing, and the
 fail-closed validator. This is same-process structural evidence only. The
-preregistered 1/8/32 AWS matrix still cannot launch honestly until the runner
-launches separate processes or hosts. The retirement, crash, fault,
+preregistered 1/8/32 AWS runner now launches one independent process per writer;
+current-revision AWS evidence is still required. The retirement, crash, fault,
 consistency, and targeted WAL-GC gates now pass locally.
 The ignored large-scale test publishes `large-scale.csv` with million-vector
 tie-aware recall, strict id recall, termination reason, routing overfetch,

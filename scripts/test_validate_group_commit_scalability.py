@@ -96,9 +96,9 @@ class ValidatorTests(unittest.TestCase):
             "source_sha256": source_sha, "dataset_sha256": manifest["dataset_sha256"], "manifest_sha256": manifest_sha,
             "writers": "1", "writer_instances": "1", "operations": "2", "pipeline_depth": "1", "worker_lanes": "1", "records": "2", "groups": "1",
             "mean_group_records": "2", "elapsed_ms": "10", "drain_ms": "10", "end_to_end_records_per_second": "100", "p50_ms": "6",
-            "p95_ms": "6", "records_per_second": "200", "vector_mib_per_second": "0.006103515625", "storage_requests": "5",
-            "storage_gets": "1", "storage_puts": "4", "storage_heads": "0",
-            "requests_per_record": "2.5", "total_acknowledgement_bytes": "2048",
+            "p95_ms": "6", "records_per_second": "200", "vector_mib_per_second": "0.006103515625", "storage_requests": "2",
+            "storage_gets": "0", "storage_puts": "2", "storage_heads": "0",
+            "requests_per_record": "1", "total_acknowledgement_bytes": "2048",
             "max_acknowledgement_bytes": "2048", "visible_records": "2",
             "recall_queries": "1", "max_read_segments": "4", "inserted_id_recall_at_10": "1",
             "read_p50_ms": "6", "read_p95_ms": "6",
@@ -112,14 +112,15 @@ class ValidatorTests(unittest.TestCase):
         sample_fields = [
             "writer", "writer_instance", "process_id", "operation", "record_id", "latency_ms", "commit_lane", "commit_sequence",
             "committed_records", "acknowledgement_bytes", "group_requests", "group_gets",
-            "group_puts", "group_heads",
+            "group_puts", "group_heads", "lane_receipts",
         ]
         samples = [
             {"writer": "0", "writer_instance": "0", "process_id": "1234", "operation": str(operation), "record_id": f"id-{operation}",
              "latency_ms": str(5 + operation), "commit_lane": "0", "commit_sequence": "1",
              "committed_records": "2", "acknowledgement_bytes": "2048",
-             "group_requests": "5", "group_gets": "1",
-             "group_puts": "4", "group_heads": "0"}
+             "group_requests": "2", "group_gets": "0",
+             "group_puts": "2", "group_heads": "0",
+             "lane_receipts": f"0:1:3:2:2048:2:0:2:0:0:0:{'c' * 64}:{'d' * 64}"}
             for operation in range(2)
         ]
         self._write_csv(cell / "samples.csv", sample_fields, samples)
@@ -244,15 +245,17 @@ class ValidatorTests(unittest.TestCase):
     def test_bulk_samples_preserve_every_lane_receipt(self) -> None:
         evidence = lane_receipt_evidence(
             {
-                "lane_receipts": "0:7:3:2:100:5:1:2:0:2:0;1:9:3:1:60:4:1:1:0:2:0"
+                "lane_receipts": f"0:7:3:2:100:2:0:2:0:0:0:{'a' * 64}:{'b' * 64};"
+                f"1:9:3:1:60:2:0:2:0:0:0:{'c' * 64}:{'d' * 64}"
             }
         )
         self.assertEqual(len(evidence), 2)
         self.assertEqual(evidence[0][:5], (0, 7, 3, 2, 100))
-        self.assertEqual(evidence[1][5:], (4, 1, 1, 0, 2, 0))
+        self.assertEqual(evidence[1][5:11], (2, 0, 2, 0, 0, 0))
+        self.assertEqual(evidence[1][11:], ("c" * 64, "d" * 64))
         normalized = evidence[0][3:]
         self.assertEqual(normalized[5], 0, "delete requests occupy normalized slot five")
-        self.assertEqual(normalized[6], 2, "HEAD requests occupy normalized slot six")
+        self.assertEqual(normalized[6], 0, "HEAD requests occupy normalized slot six")
 
     def test_incomplete_campaign_fails_before_csv_use(self) -> None:
         (self.root / "GROUP_COMMIT_SCALABILITY_COMPLETE").unlink()
@@ -314,8 +317,51 @@ class ValidatorTests(unittest.TestCase):
             records = list(reader)
         for record in records:
             record["acknowledgement_bytes"] = "4097"
+            receipt = record["lane_receipts"].split(":")
+            receipt[4] = "4097"
+            record["lane_receipts"] = ":".join(receipt)
         self._write_csv(sample_path, fields, records)
         with self.assertRaisesRegex(ValidationError, "acknowledgement byte bound"):
+            validate(self.root, self.manifest_path)
+
+    def test_missing_authenticated_lane_receipt_fails_closed(self) -> None:
+        sample_path = self.root / "cells/c64/r01/l1/w1/samples.csv"
+        with sample_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            records = list(reader)
+        fields = [field for field in reader.fieldnames if field != "lane_receipts"]
+        for record in records:
+            record.pop("lane_receipts")
+        self._write_csv(sample_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "authenticated lane receipt"):
+            validate(self.root, self.manifest_path)
+
+    def test_invalid_extent_checksum_fails_closed(self) -> None:
+        sample_path = self.root / "cells/c64/r01/l1/w1/samples.csv"
+        with sample_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        receipt = records[0]["lane_receipts"].split(":")
+        receipt[11] = "not-a-checksum"
+        records[0]["lane_receipts"] = ":".join(receipt)
+        self._write_csv(sample_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "extent checksum"):
+            validate(self.root, self.manifest_path)
+
+    def test_direct_acknowledgement_request_drift_fails_closed(self) -> None:
+        sample_path = self.root / "cells/c64/r01/l1/w1/samples.csv"
+        with sample_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            records = list(reader)
+        for record in records:
+            receipt = record["lane_receipts"].split(":")
+            receipt[5] = "3"
+            receipt[6] = "1"
+            record["lane_receipts"] = ":".join(receipt)
+        self._write_csv(sample_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "direct acknowledgement request contract"):
             validate(self.root, self.manifest_path)
 
     def test_physical_write_amplification_fails_closed(self) -> None:

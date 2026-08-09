@@ -93,37 +93,26 @@ def require_close(observed: float, expected: float, message: str) -> None:
     )
 
 
-def lane_receipt_evidence(sample: dict[str, str]) -> list[tuple[int, ...]]:
-    """Return per-lane durable evidence, including bulk multi-lane appends.
-
-    Older scalar artifacts expose only the first lane identity and aggregate
-    receipt fields. New bulk artifacts serialize every lane receipt so shared
-    group reconciliation cannot conflate two callers that touched different
-    ownership lanes.
-    """
+def lane_receipt_evidence(sample: dict[str, str]) -> list[tuple[int | str, ...]]:
+    """Return authenticated per-lane direct-mutation evidence."""
     encoded = sample.get("lane_receipts")
-    if encoded is None:
-        return [
-            (
-                integer(sample["commit_lane"], "commit lane"),
-                integer(sample["commit_sequence"], "commit sequence"),
-                0,
-                integer(sample["committed_records"], "committed records"),
-                integer(sample["acknowledgement_bytes"], "acknowledgement bytes"),
-                integer(sample["group_requests"], "group requests"),
-                integer(sample["group_gets"], "group gets"),
-                integer(sample["group_puts"], "group puts"),
-                0,
-                integer(sample["group_heads"], "group heads"),
-                0,
-            )
-        ]
+    require(encoded is not None, "missing authenticated lane receipt evidence")
     require(bool(encoded), "empty lane receipt evidence")
     evidence = []
     for item in encoded.split(";"):
         fields = item.split(":")
-        require(len(fields) == 11, "invalid lane receipt evidence")
-        evidence.append(tuple(integer(value, "lane receipt field") for value in fields))
+        require(len(fields) == 13, "invalid lane receipt evidence")
+        numeric = tuple(integer(value, "lane receipt field") for value in fields[:11])
+        extent_checksum, published_head_checksum = fields[11:]
+        require(
+            re.fullmatch(r"[0-9a-f]{64}", extent_checksum) is not None,
+            "invalid extent checksum evidence",
+        )
+        require(
+            re.fullmatch(r"[0-9a-f]{64}", published_head_checksum) is not None,
+            "invalid published-head checksum evidence",
+        )
+        evidence.append((*numeric, extent_checksum, published_head_checksum))
     return evidence
 
 
@@ -394,13 +383,25 @@ def validate(
             require(sample_latency >= 0.0, f"negative sample latency in {cell}")
             write_latencies.append(sample_latency)
             for evidence in lane_receipt_evidence(sample):
-                group = (evidence[0], evidence[1])
+                group = (evidence[0], evidence[2], evidence[1])
                 normalized = evidence[3:]
+                require(
+                    normalized[2:8] == (2, 0, 2, 0, 0, 0),
+                    f"direct acknowledgement request contract drift in {cell}",
+                )
                 require(
                     group not in groups or groups[group] == normalized,
                     f"inconsistent shared group evidence in {cell}",
                 )
                 groups[group] = normalized
+        require(
+            len({evidence[8] for evidence in groups.values()}) == len(groups),
+            f"extent checksum identity collision in {cell}",
+        )
+        require(
+            len({evidence[9] for evidence in groups.values()}) == len(groups),
+            f"published-head checksum identity collision in {cell}",
+        )
         require(sum(evidence[0] for evidence in groups.values()) == expected_records, f"group record reconciliation failed in {cell}")
         total_acknowledgement_bytes = sum(evidence[1] for evidence in groups.values())
         max_acknowledgement_bytes = max(evidence[1] for evidence in groups.values())

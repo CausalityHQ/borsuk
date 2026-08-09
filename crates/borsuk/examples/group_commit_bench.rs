@@ -184,7 +184,7 @@ fn lane_receipts_field(receipts: &[GroupCommitLaneReceipt]) -> String {
         .iter()
         .map(|receipt| {
             format!(
-                "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+                "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
                 receipt.commit_lane,
                 receipt.commit_sequence,
                 receipt.lease_epoch,
@@ -196,6 +196,8 @@ fn lane_receipts_field(receipts: &[GroupCommitLaneReceipt]) -> String {
                 receipt.requests.deletes,
                 receipt.requests.heads,
                 receipt.requests.lists,
+                blake3::Hash::from_bytes(receipt.extent_checksum).to_hex(),
+                blake3::Hash::from_bytes(receipt.published_head_checksum).to_hex(),
             )
         })
         .collect::<Vec<_>>()
@@ -318,26 +320,31 @@ fn parse_lane_receipts(encoded: &str) -> BenchResult<Vec<GroupCommitLaneReceipt>
     encoded
         .split(';')
         .map(|entry| {
-            let fields = entry
-                .split(':')
-                .map(str::parse::<u64>)
-                .collect::<Result<Vec<_>, _>>()?;
-            if fields.len() != 11 {
+            let fields = entry.split(':').collect::<Vec<_>>();
+            if fields.len() != 13 {
                 return Err("invalid child lane receipt evidence".into());
             }
+            let numbers = fields[..11]
+                .iter()
+                .map(|field| field.parse::<u64>())
+                .collect::<Result<Vec<_>, _>>()?;
+            let extent_checksum = *blake3::Hash::from_hex(fields[11])?.as_bytes();
+            let published_head_checksum = *blake3::Hash::from_hex(fields[12])?.as_bytes();
             Ok(GroupCommitLaneReceipt {
-                commit_lane: usize::try_from(fields[0])?,
-                commit_sequence: fields[1],
-                lease_epoch: fields[2],
-                records: usize::try_from(fields[3])?,
-                committed_records: usize::try_from(fields[3])?,
-                acknowledgement_bytes: fields[4],
+                commit_lane: usize::try_from(numbers[0])?,
+                commit_sequence: numbers[1],
+                lease_epoch: numbers[2],
+                records: usize::try_from(numbers[3])?,
+                committed_records: usize::try_from(numbers[3])?,
+                acknowledgement_bytes: numbers[4],
+                extent_checksum,
+                published_head_checksum,
                 requests: RequestCounts {
-                    gets: fields[6],
-                    puts: fields[7],
-                    deletes: fields[8],
-                    heads: fields[9],
-                    lists: fields[10],
+                    gets: numbers[6],
+                    puts: numbers[7],
+                    deletes: numbers[8],
+                    heads: numbers[9],
+                    lists: numbers[10],
                 },
             })
         })
@@ -2302,6 +2309,31 @@ mod tests {
     #[test]
     fn percentile_is_deterministic() {
         assert_eq!(percentile(&[4.0, 1.0, 3.0, 2.0], 0.95), 4.0);
+    }
+
+    #[test]
+    fn lane_receipt_evidence_round_trips_authenticated_object_checksums() {
+        let receipt = GroupCommitLaneReceipt {
+            commit_lane: 7,
+            commit_sequence: 11,
+            lease_epoch: 13,
+            records: 17,
+            committed_records: 17,
+            acknowledgement_bytes: 19,
+            extent_checksum: [0xab; 32],
+            published_head_checksum: [0xcd; 32],
+            requests: RequestCounts {
+                gets: 0,
+                puts: 2,
+                deletes: 0,
+                heads: 0,
+                lists: 0,
+            },
+        };
+
+        let encoded = lane_receipts_field(&[receipt]);
+        assert_eq!(encoded.split(':').count(), 13);
+        assert_eq!(parse_lane_receipts(&encoded).unwrap(), vec![receipt]);
     }
 
     #[test]

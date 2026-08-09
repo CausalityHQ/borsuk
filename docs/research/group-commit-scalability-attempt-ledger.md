@@ -1634,3 +1634,32 @@ targets, the complete locked Rust workspace with all features and targets, and
 all 486 pinned Python tests. These are functional, structural, and bounded-I/O
 results only; they are not AWS latency, throughput, cost, or recall evidence.
 No AWS workload was launched and no incomplete measurement CSV was inspected.
+
+### Authenticated direct-mutation receipts
+
+The current dense group-commit acknowledgement now carries the complete
+durable mutation identity `(stripe, lease_epoch, sequence)` plus independent
+BLAKE3 checksums of the exact immutable Arrow extent and the conditionally
+published stripe-head successor. The benchmark raw-row encoding carries both
+checksums for every child lane receipt. Its validator has no scalar or
+historical fallback: it rejects missing or malformed authenticated receipts,
+reconciles shared commits by the complete identity, requires distinct extent
+and head evidence per durable group, and requires the current healthy
+acknowledgement contract of exactly two PUTs with zero GET, HEAD, LIST, or
+delete requests.
+
+The storage integration regression independently reads the acknowledged Arrow
+extent and published HEAD and verifies both receipt checksums. The runner has a
+separate encoding/decoding round-trip regression, and all 34 validator tests
+plus the 57-test grouped runner/diagnostic validator layer pass. Fault-injection
+and consistency tests, research-artifact and documentation validation,
+repository policy, documentation-web checks, formatting, diff hygiene, strict
+locked workspace Clippy with all features and targets, and the complete locked
+Rust workspace with all features and targets also pass. The final Rust gate
+reported 1,139 passed, 24 ignored, and 1,104 filtered tests across 70 suites.
+
+This is authenticated structural evidence, not latency, throughput, recall,
+cost, or scale evidence. No AWS workload was launched and no incomplete
+measurement CSV was inspected. The next evidence step remains the terminal
+local 768-dimensional independent-process smoke on the exact delivered
+revision, followed only on success by the preregistered AWS matrix.

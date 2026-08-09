@@ -49,6 +49,8 @@ pub(crate) struct LaneLogReceipt {
     pub(crate) sequence: u64,
     pub(crate) records: u64,
     pub(crate) acknowledgement_bytes: u64,
+    pub(crate) extent_checksum: [u8; 32],
+    pub(crate) published_head_checksum: [u8; 32],
     pub(crate) requests: RequestCounts,
 }
 
@@ -1480,7 +1482,10 @@ impl LaneEpochWriter {
             &mutations,
         )?;
         let bytes = extent_bytes(&extent)?;
-        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let extent_checksum = *blake3::hash(&bytes).as_bytes();
+        let checksum = blake3::Hash::from_bytes(extent_checksum)
+            .to_hex()
+            .to_string();
         let path = extent_path(self.head.lane, self.head.lease_epoch, sequence)?;
         self.storage
             .create_bytes_verified(&path, &bytes, &checksum)?;
@@ -1497,6 +1502,7 @@ impl LaneEpochWriter {
             .stamp()
             .version()
             .hlc();
+        let published_head_checksum = *blake3::hash(&epoch_head_bytes(&next)?).as_bytes();
         self.publish_head(next)?;
         Ok(LaneLogReceipt {
             lane: self.head.lane,
@@ -1504,6 +1510,8 @@ impl LaneEpochWriter {
             sequence,
             records,
             acknowledgement_bytes: bytes.len() as u64,
+            extent_checksum,
+            published_head_checksum,
             requests: self.storage.request_counts().delta(&before),
         })
     }
@@ -1573,7 +1581,10 @@ impl LaneEpochWriter {
             &id_states,
         )?;
         let bytes = extent_bytes(&extent)?;
-        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let extent_checksum = *blake3::hash(&bytes).as_bytes();
+        let checksum = blake3::Hash::from_bytes(extent_checksum)
+            .to_hex()
+            .to_string();
         let path = extent_path(self.head.lane, self.head.lease_epoch, sequence)?;
         self.storage
             .create_bytes_verified(&path, &bytes, &checksum)?;
@@ -1593,6 +1604,7 @@ impl LaneEpochWriter {
         let mut next = self.head.clone();
         next.durable_sequence = sequence;
         next.max_mutation_hlc = max_mutation_hlc;
+        let published_head_checksum = *blake3::hash(&epoch_head_bytes(&next)?).as_bytes();
         self.publish_head(next)?;
         if let (Some(authority), Some((ids, resident_bytes))) =
             (self.id_authority.as_mut(), prepared)
@@ -1605,6 +1617,8 @@ impl LaneEpochWriter {
             sequence,
             records,
             acknowledgement_bytes: bytes.len() as u64,
+            extent_checksum,
+            published_head_checksum,
             requests: self.storage.request_counts().delta(&before),
         })
     }
@@ -3098,6 +3112,7 @@ impl LaneLogWriter {
             BorsukError::InvalidStorage("lane-log generation exceeds u64".to_string())
         })?;
         let block = self.stage_block_with_deltas(sequence, generation, payload, records, deltas)?;
+        let extent_checksum = block.checksum;
         self.publish_staged_with_lease_expiry(block, lease_expires_at_ms)?;
         let acknowledgement_bytes = u64::try_from(head_bytes(&self.head)?.len()).map_err(|_| {
             BorsukError::InvalidStorage("lane-log HEAD length exceeds u64".to_string())
@@ -3108,6 +3123,8 @@ impl LaneLogWriter {
             sequence,
             records,
             acknowledgement_bytes,
+            extent_checksum,
+            published_head_checksum: *blake3::hash(&head_bytes(&self.head)?).as_bytes(),
             requests: self.request_counts().delta(&before),
         })
     }

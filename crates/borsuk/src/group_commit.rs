@@ -126,11 +126,17 @@ pub struct GroupCommitLaneReceipt {
     pub commit_sequence: u64,
     /// Fencing epoch that owns this durable sequence.
     pub lease_epoch: u64,
-    /// Persisted writer-stripe ordinal; paired with `commit_sequence`, this
-    /// uniquely identifies the durable group.
+    /// Persisted writer-stripe ordinal. Together with `lease_epoch` and
+    /// `commit_sequence`, this uniquely identifies the durable group and its
+    /// deterministic Arrow extent path.
     pub commit_lane: usize,
     /// Bytes in the immutable extent created by this receipt.
     pub acknowledgement_bytes: u64,
+    /// BLAKE3 checksum of the exact immutable Arrow extent acknowledged.
+    pub extent_checksum: [u8; 32],
+    /// BLAKE3 checksum of the exact writer-stripe HEAD successor published
+    /// before acknowledgement.
+    pub published_head_checksum: [u8; 32],
     /// Physical requests issued by the whole shared commit.
     pub requests: RequestCounts,
 }
@@ -830,6 +836,8 @@ fn run_worker(
                                 lease_epoch: receipt.lease_epoch,
                                 commit_lane: usize::from(receipt.lane),
                                 acknowledgement_bytes: receipt.acknowledgement_bytes,
+                                extent_checksum: receipt.extent_checksum,
+                                published_head_checksum: receipt.published_head_checksum,
                                 requests: receipt.requests,
                             })
                         },
@@ -861,6 +869,8 @@ mod tests {
                 lease_epoch: 3,
                 commit_lane: 1,
                 acknowledgement_bytes: 4096,
+                extent_checksum: [1; 32],
+                published_head_checksum: [2; 32],
                 requests: RequestCounts {
                     puts: 1,
                     ..RequestCounts::default()
