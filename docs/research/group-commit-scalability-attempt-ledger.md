@@ -1968,3 +1968,12 @@ profile. This is a harness admission failure with no eligible performance
 result. The TDD repair admits exactly the frozen 35 and 75 ms production
 profiles (plus the separate 5 ms structural smoke), while continuing to reject
 arbitrary delay text.
+
+Revision `1f5a1d5` delivered that admission repair after strict workspace
+Clippy, all 21 benchmark-example tests, 21 runner/validator tests, 31 policy
+tests, and documentation, shell syntax, and diff gates passed. The fresh
+exclusive attempt `20260809T063557Z` started with unchanged manifest SHA-256
+`e2ca40ae70cc73456867216ff4677111c91e2f59d17bb296e50854e99e1f2892`
+and source archive SHA-256
+`ce7b60ba3a4aa0729f6ea4aa899717e7869921b6570b59cfa8eddb2e64a4f938`.
+This is a launch receipt only; its CSVs remain ineligible until root terminality.
