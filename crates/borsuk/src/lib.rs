@@ -143,18 +143,6 @@ fn parse_backing_get_concurrency(value: Option<&str>) -> usize {
         .unwrap_or(DEFAULT_BACKING_GET_CONCURRENCY)
 }
 
-#[cfg(test)]
-mod configuration_tests {
-    #[test]
-    fn physical_get_admission_configuration_is_fail_closed() {
-        assert_eq!(super::parse_backing_get_concurrency(None), 128);
-        assert_eq!(super::parse_backing_get_concurrency(Some("1")), 1);
-        assert_eq!(super::parse_backing_get_concurrency(Some("1024")), 1024);
-        for invalid in ["", "0", "1025", "many"] {
-            assert_eq!(super::parse_backing_get_concurrency(Some(invalid)), 128);
-        }
-    }
-}
 pub use late_interaction::{
     LateInteractionSearchOptions, LateInteractionSearchReport, LateInteractionVector,
     late_interaction_maxsim,
@@ -204,3 +192,16 @@ pub use storage_trace::{
     physical_object_role_for_path,
 };
 pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_frequencies, term_id};
+
+#[cfg(test)]
+mod configuration_tests {
+    #[test]
+    fn physical_get_admission_configuration_is_fail_closed() {
+        assert_eq!(super::parse_backing_get_concurrency(None), 128);
+        assert_eq!(super::parse_backing_get_concurrency(Some("1")), 1);
+        assert_eq!(super::parse_backing_get_concurrency(Some("1024")), 1024);
+        for invalid in ["", "0", "1025", "many"] {
+            assert_eq!(super::parse_backing_get_concurrency(Some(invalid)), 128);
+        }
+    }
+}
