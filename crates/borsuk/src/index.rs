@@ -44,8 +44,9 @@ use crate::{
     },
     global_pq_sidecar::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCellGraph, GlobalCoarseQuantizer, GlobalPqCandidate,
-        GlobalPqCellSpool, GlobalPqChunkRef, GlobalPqDescriptor, GlobalPqRow, GlobalScanQuantizer,
-        HierarchicalCoarseQuantizer, LocationEncoding, ResidentGlobalPq,
+        GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalPqChunkRef, GlobalPqDescriptor,
+        GlobalPqRow, GlobalScanQuantizer, HierarchicalCoarseQuantizer, LocationEncoding,
+        ResidentGlobalPq,
     },
     late_interaction::{LateInteractionSearchOptions, LateInteractionSearchReport},
     lexical_build::{
@@ -11819,7 +11820,7 @@ impl BorsukIndex {
                 &mut scan,
             )?;
             self.collect_gc_candidates(
-                "global-pq",
+                "global-leaf",
                 is_global_pq_path,
                 GarbageCollectionObjectKind::SegmentOrGraph,
                 &mut scan,
@@ -14851,7 +14852,6 @@ impl BorsukIndex {
             global_code_width,
         )?;
         let mut row_start = 0_usize;
-        let mut pending_cell_chunks = Vec::<PendingGlobalPqChunk>::new();
         let mut segment_index = 0_usize;
         for_each_bounded_io_wave(
             summaries,
@@ -14917,48 +14917,36 @@ impl BorsukIndex {
                 Ok(())
             },
         )?;
-        let spooled_rows = spool.finish(|cell_index, chunk| {
-            if pending_cell_chunks
-                .last()
-                .is_some_and(|entry| entry.cell_index != cell_index)
-            {
-                let pages = build_global_leaf_pages(
-                    &pending_cell_chunks,
-                    global_code_width,
-                    location,
-                    quantizer_state.uses_product_code_locality(),
-                    dimensions,
-                    self.manifest.build_config.vector_element_type,
-                    normalize,
-                    quantizer_state.clone(),
-                )?;
-                leaf_writer.push_cell(pages)?;
-                pending_cell_chunks.clear();
+        let spooled_rows = spool.finish(|event| {
+            match event {
+                GlobalPqCellSpoolEvent::Chunk { cell, chunk } => {
+                    row_start = row_start.checked_add(chunk.rows).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "resident global PQ row count overflows".to_string(),
+                        )
+                    })?;
+                    let source = PendingGlobalPqChunk {
+                        cell_index: cell,
+                        chunk,
+                    };
+                    let pages = build_global_leaf_pages(
+                        std::slice::from_ref(&source),
+                        global_code_width,
+                        location,
+                        quantizer_state.uses_product_code_locality(),
+                        dimensions,
+                        self.manifest.build_config.vector_element_type,
+                        normalize,
+                        quantizer_state.clone(),
+                    )?;
+                    leaf_writer.push_cell_chunk(pages)?;
+                }
+                GlobalPqCellSpoolEvent::FinalizeCell { cell } => {
+                    leaf_writer.finalize_cell(cell)?;
+                }
             }
-            let chunk_row_start = row_start;
-            row_start = row_start.checked_add(chunk.rows).ok_or_else(|| {
-                BorsukError::InvalidStorage("resident global PQ row count overflows".to_string())
-            })?;
-            pending_cell_chunks.push(PendingGlobalPqChunk {
-                cell_index,
-                row_start: chunk_row_start,
-                chunk,
-            });
             Ok(())
         })?;
-        if !pending_cell_chunks.is_empty() {
-            let pages = build_global_leaf_pages(
-                &pending_cell_chunks,
-                global_code_width,
-                location,
-                quantizer_state.uses_product_code_locality(),
-                dimensions,
-                self.manifest.build_config.vector_element_type,
-                normalize,
-                quantizer_state.clone(),
-            )?;
-            leaf_writer.push_cell(pages)?;
-        }
         let artifacts = leaf_writer.finish()?;
         if spooled_rows != vectors_seen || row_start != vectors_seen {
             return Err(BorsukError::InvalidStorage(format!(
@@ -15000,7 +14988,7 @@ impl BorsukIndex {
             })?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = format!(
-            "global-pq/descriptors/{}/descriptor-{checksum}.parquet",
+            "global-leaf/descriptors/{}/descriptor-{checksum}.parquet",
             &checksum[..2]
         );
         self.storage.write_bytes_content_addressed(&path, &bytes)?;
@@ -21210,7 +21198,6 @@ fn splitmix_index(state: &mut u64, len: usize) -> usize {
 
 struct PendingGlobalPqChunk {
     cell_index: u16,
-    row_start: usize,
     chunk: crate::global_pq_sidecar::GlobalPqChunkBytes,
 }
 
@@ -21238,12 +21225,17 @@ fn global_leaf_partition_order(
             "global leaf exact-row width must be positive".to_string(),
         ));
     }
+    if exact_row_bytes > GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf exact row exceeds the 96 KiB payload ceiling".to_string(),
+        ));
+    }
     if rows.iter().any(|row| row.code.len() != code_width) {
         return Err(BorsukError::InvalidStorage(
             "global leaf rows disagree on code width".to_string(),
         ));
     }
-    let max_rows = (GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / exact_row_bytes).max(1);
+    let max_rows = GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / exact_row_bytes;
     let mut by_cell = BTreeMap::<u16, Vec<usize>>::new();
     for (index, row) in rows.iter().enumerate() {
         by_cell.entry(row.cell_index).or_default().push(index);
@@ -21447,6 +21439,12 @@ struct PersistedGlobalLeafArtifacts {
     storage_bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GlobalLeafRetentionHighWatermarks {
+    source_rows: usize,
+    page_refs: usize,
+}
+
 struct GlobalLeafPersistenceWriter<'a> {
     storage: &'a Storage,
     dimensions: usize,
@@ -21454,9 +21452,10 @@ struct GlobalLeafPersistenceWriter<'a> {
     code_width: usize,
     bundle_pages: Vec<crate::global_leaf::GlobalLeafPageInput>,
     bundles: Vec<crate::global_leaf::GlobalLeafBundleRef>,
-    completed_cells: VecDeque<(u16, usize)>,
-    unrouted_pages: Vec<crate::global_leaf::GlobalLeafPageRef>,
     directory_builder: Option<crate::global_leaf::GlobalLeafDirectoryShardBuilder>,
+    active_cell: Option<(u16, u32)>,
+    last_finalized_cell: Option<u16>,
+    retention_high_watermarks: GlobalLeafRetentionHighWatermarks,
     page_count: usize,
     rows: usize,
     storage_bytes: u64,
@@ -21476,49 +21475,90 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
             code_width,
             bundle_pages: Vec::with_capacity(crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_PAGES),
             bundles: Vec::new(),
-            completed_cells: VecDeque::new(),
-            unrouted_pages: Vec::new(),
             directory_builder: Some(crate::global_leaf::GlobalLeafDirectoryShardBuilder::new(
                 code_width,
             )?),
+            active_cell: None,
+            last_finalized_cell: None,
+            retention_high_watermarks: GlobalLeafRetentionHighWatermarks::default(),
             page_count: 0,
             rows: 0,
             storage_bytes: 0,
         })
     }
 
-    fn push_cell(&mut self, pages: Vec<crate::global_leaf::GlobalLeafPageInput>) -> Result<()> {
+    fn push_cell_chunk(
+        &mut self,
+        mut pages: Vec<crate::global_leaf::GlobalLeafPageInput>,
+    ) -> Result<()> {
         let cell_index = pages
             .first()
             .map(|page| page.cell_index)
             .ok_or_else(|| BorsukError::InvalidStorage("global leaf cell is empty".to_string()))?;
-        if pages.iter().enumerate().any(|(ordinal, page)| {
+        if pages.iter().enumerate().any(|(local_ordinal, page)| {
             page.cell_index != cell_index
-                || usize::try_from(page.leaf_ordinal).ok() != Some(ordinal)
+                || usize::try_from(page.leaf_ordinal).ok() != Some(local_ordinal)
                 || page.rows.is_empty()
         }) {
             return Err(BorsukError::InvalidStorage(
-                "global leaf cell pages are not complete and canonical".to_string(),
+                "global leaf cell continuation is not locally canonical".to_string(),
             ));
         }
-        if self
-            .completed_cells
-            .back()
-            .is_some_and(|(prior, _)| *prior >= cell_index)
-        {
-            return Err(BorsukError::InvalidStorage(
-                "global leaf cells are not strictly ordered".to_string(),
-            ));
+        let first_leaf = match self.active_cell {
+            Some((active_cell, next_leaf)) if active_cell == cell_index => next_leaf,
+            Some(_) => {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf cell changed before explicit finalization".to_string(),
+                ));
+            }
+            None if self
+                .last_finalized_cell
+                .is_some_and(|prior| prior >= cell_index) =>
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf cells are not strictly ordered".to_string(),
+                ));
+            }
+            None => 0,
+        };
+        for (local_ordinal, page) in pages.iter_mut().enumerate() {
+            page.leaf_ordinal = first_leaf
+                .checked_add(u32::try_from(local_ordinal).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "global leaf continuation ordinal exceeds u32".to_string(),
+                    )
+                })?)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf continuation ordinal overflows".to_string(),
+                    )
+                })?;
         }
+        let next_leaf = first_leaf
+            .checked_add(u32::try_from(pages.len()).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "global leaf continuation page count exceeds u32".to_string(),
+                )
+            })?)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global leaf continuation page count overflows".to_string(),
+                )
+            })?;
+        self.active_cell = Some((cell_index, next_leaf));
         self.page_count = self.page_count.checked_add(pages.len()).ok_or_else(|| {
             BorsukError::InvalidStorage("global leaf page count overflows".to_string())
         })?;
-        self.rows = pages.iter().try_fold(self.rows, |rows, page| {
+        let source_rows = pages.iter().try_fold(0_usize, |rows, page| {
             rows.checked_add(page.rows.len()).ok_or_else(|| {
                 BorsukError::InvalidStorage("global leaf row count overflows".to_string())
             })
         })?;
-        self.completed_cells.push_back((cell_index, pages.len()));
+        self.rows = self.rows.checked_add(source_rows).ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf row count overflows".to_string())
+        })?;
+        self.retention_high_watermarks.source_rows =
+            self.retention_high_watermarks.source_rows.max(source_rows);
 
         for page in pages {
             if self.bundle_pages.len() == crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_PAGES {
@@ -21526,7 +21566,30 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
             }
             self.bundle_pages.push(page);
         }
+        self.flush_bundle()?;
         Ok(())
+    }
+
+    fn finalize_cell(&mut self, cell_index: u16) -> Result<()> {
+        if self.active_cell.map(|(active, _)| active) != Some(cell_index)
+            || !self.bundle_pages.is_empty()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf finalization does not match its active cell".to_string(),
+            ));
+        }
+        self.directory_builder
+            .as_mut()
+            .expect("global leaf directory builder is present until finish")
+            .finalize_cell(cell_index)?;
+        self.active_cell = None;
+        self.last_finalized_cell = Some(cell_index);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn retention_high_watermarks(&self) -> GlobalLeafRetentionHighWatermarks {
+        self.retention_high_watermarks
     }
 
     fn flush_bundle(&mut self) -> Result<()> {
@@ -21564,9 +21627,11 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
             checksum,
             encoded_bytes,
         });
-        for page in encoded.pages {
-            self.unrouted_pages
-                .push(crate::global_leaf::GlobalLeafPageRef {
+        let page_refs = encoded
+            .pages
+            .into_iter()
+            .map(|page| {
+                Ok(crate::global_leaf::GlobalLeafPageRef {
                     cell_index: page.cell_index,
                     leaf_ordinal: page.leaf_ordinal,
                     bundle_index,
@@ -21581,59 +21646,44 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
                     })?,
                     checksum: page.checksum,
                     centroid_code: page.centroid_code.into_boxed_slice(),
-                });
-        }
-        self.drain_completed_cells()
-    }
-
-    fn drain_completed_cells(&mut self) -> Result<()> {
-        while let Some(&(cell_index, pages)) = self.completed_cells.front() {
-            if self.unrouted_pages.len() < pages {
-                break;
-            }
-            if self.unrouted_pages[..pages]
-                .iter()
-                .any(|page| page.cell_index != cell_index)
-            {
-                return Err(BorsukError::InvalidStorage(
-                    "global leaf bundle rows crossed a completed cell boundary".to_string(),
-                ));
-            }
-            let cell_pages = self.unrouted_pages.drain(..pages).collect::<Vec<_>>();
-            let storage = self.storage;
-            let storage_bytes = &mut self.storage_bytes;
-            self.directory_builder
-                .as_mut()
-                .expect("global leaf directory builder is present until finish")
-                .push_cell(&cell_pages, &self.bundles, &mut |shard| {
-                    let checksum_hex = blake3::Hash::from_bytes(shard.checksum)
-                        .to_hex()
-                        .to_string();
-                    let path = format!(
-                        "global-leaf/directories/{}/directory-{checksum_hex}.parquet",
-                        &checksum_hex[..2]
-                    );
-                    storage.write_bytes_content_addressed(&path, &shard.bytes)?;
-                    *storage_bytes = storage_bytes
-                        .checked_add(shard.bytes.len() as u64)
-                        .ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "global leaf storage byte count overflows".to_string(),
-                            )
-                        })?;
-                    Ok(path)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let storage = self.storage;
+        let storage_bytes = &mut self.storage_bytes;
+        let directory_builder = self
+            .directory_builder
+            .as_mut()
+            .expect("global leaf directory builder is present until finish");
+        directory_builder.push_cell_chunk(&page_refs, &self.bundles, &mut |shard| {
+            let checksum_hex = blake3::Hash::from_bytes(shard.checksum)
+                .to_hex()
+                .to_string();
+            let path = format!(
+                "global-leaf/directories/{}/directory-{checksum_hex}.parquet",
+                &checksum_hex[..2]
+            );
+            storage.write_bytes_content_addressed(&path, &shard.bytes)?;
+            *storage_bytes = storage_bytes
+                .checked_add(shard.bytes.len() as u64)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf storage byte count overflows".to_string(),
+                    )
                 })?;
-            self.completed_cells.pop_front();
-        }
+            Ok(path)
+        })?;
+        self.retention_high_watermarks.page_refs = self
+            .retention_high_watermarks
+            .page_refs
+            .max(page_refs.len() + directory_builder.retained_page_refs());
         Ok(())
     }
 
     fn finish(mut self) -> Result<PersistedGlobalLeafArtifacts> {
-        self.flush_bundle()?;
-        self.drain_completed_cells()?;
-        if !self.completed_cells.is_empty() || !self.unrouted_pages.is_empty() {
+        if self.active_cell.is_some() || !self.bundle_pages.is_empty() {
             return Err(BorsukError::InvalidStorage(
-                "global leaf writer did not route every completed page".to_string(),
+                "global leaf writer has an unfinalized cell continuation".to_string(),
             ));
         }
         let storage = self.storage;
@@ -23283,7 +23333,8 @@ fn is_vector_sidecar_path(path: &str) -> bool {
 fn is_global_pq_path(path: &str) -> bool {
     (path.starts_with("global-leaf/bundles/") && path.ends_with(".arrow"))
         || ((path.starts_with("global-leaf/directories/")
-            || path.starts_with("global-leaf/roots/"))
+            || path.starts_with("global-leaf/roots/")
+            || path.starts_with("global-leaf/descriptors/"))
             && path.ends_with(".parquet"))
 }
 
@@ -25603,6 +25654,19 @@ mod tests {
 
     use super::*;
     use std::sync::{Barrier, Mutex};
+
+    fn assert_v10_router_fail_closed(uri: &str) {
+        let error = match BorsukIndex::open(uri) {
+            Ok(_) => panic!("V10 artifact loaded before the V10 router existed"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("bounded Arrow leaf descriptors require the V10 leaf router"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn exact_rerank_hedging_is_disabled_by_strict_search_budgets() {
@@ -28419,6 +28483,27 @@ mod tests {
     }
 
     #[test]
+    fn global_leaf_partition_rejects_one_exact_row_above_payload_ceiling() {
+        let error = global_leaf_partition_order(
+            &[GlobalLeafPartitionRow {
+                cell_index: 0,
+                code: &[0],
+                record_id: b"too-wide",
+                source_ordinal: 0,
+            }],
+            1,
+            crate::global_leaf::GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES + 1,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("96 KiB payload ceiling"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn global_leaf_pages_encode_the_stored_physical_centroid_after_final_fitting() {
         let training = vec![
             vec![0.0, 0.0],
@@ -28448,7 +28533,6 @@ mod tests {
         }
         let pending = vec![PendingGlobalPqChunk {
             cell_index: 9,
-            row_start: 0,
             chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
                 bytes,
                 exact_bytes: exact_rows
@@ -28502,6 +28586,69 @@ mod tests {
                 .flat_map(f32::to_le_bytes)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn single_cell_continuations_bound_retained_rows_and_page_refs_independently_of_total_rows() {
+        const CHUNK_PAGES: usize = 64;
+        const TOTAL_PAGES: usize = crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES * 2 + 17;
+        let dir = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 1,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let mut writer = GlobalLeafPersistenceWriter::new(
+            &index.storage,
+            1,
+            crate::VectorElementType::Float32,
+            1,
+        )
+        .unwrap();
+
+        for chunk_start in (0..TOTAL_PAGES).step_by(CHUNK_PAGES) {
+            let chunk_end = (chunk_start + CHUNK_PAGES).min(TOTAL_PAGES);
+            let pages = (chunk_start..chunk_end)
+                .enumerate()
+                .map(
+                    |(local_ordinal, global_ordinal)| crate::global_leaf::GlobalLeafPageInput {
+                        cell_index: 7,
+                        leaf_ordinal: local_ordinal as u32,
+                        centroid_code: vec![global_ordinal as u8],
+                        rows: vec![crate::global_leaf::GlobalLeafRowInput {
+                            id: RecordId::from(format!("skew-{global_ordinal}")),
+                            stamp: MutationStamp::new(
+                                MutationVersion::from_parts(global_ordinal as u64, [7; 16]),
+                                [9; 32],
+                            ),
+                            exact: (global_ordinal as f32).to_le_bytes().to_vec(),
+                        }],
+                    },
+                )
+                .collect();
+            writer.push_cell_chunk(pages).unwrap();
+            if chunk_end == TOTAL_PAGES {
+                writer.finalize_cell(7).unwrap();
+            }
+        }
+
+        let retained = writer.retention_high_watermarks();
+        assert_eq!(retained.source_rows, CHUNK_PAGES);
+        assert!(
+            retained.page_refs
+                <= crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES + CHUNK_PAGES,
+            "retained {} page refs for {TOTAL_PAGES} pages",
+            retained.page_refs
+        );
+        let artifacts = writer.finish().unwrap();
+        assert_eq!(artifacts.rows, TOTAL_PAGES);
+        assert_eq!(artifacts.page_count, TOTAL_PAGES);
+        assert_eq!(artifacts.cell_count, 1);
     }
 
     #[test]
@@ -28658,7 +28805,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_pq_search_returns_identity_without_physical_vector_sidecars() {
+    fn resident_global_pq_artifact_fails_closed_before_v10_identity_routing() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -28697,144 +28844,10 @@ mod tests {
         );
         drop(index);
         std::fs::remove_dir_all(dir.path().join("vectors")).unwrap();
-        let index = BorsukIndex::open(&uri).unwrap();
-
-        let query = vectors[37]
-            .iter()
-            .map(|value| value * 3.0)
-            .collect::<Vec<_>>();
-        let report = index
-            .search_with_report(
-                &query,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan).with_max_segments(8),
-            )
-            .unwrap();
-
-        assert_eq!(report.hits[0].id, RecordId::from("row-37"));
-        assert_eq!(report.routing_page_indexes_read, 0);
-        assert_eq!(report.routing_pages_read, 0);
-        assert!(report.records_scored <= 64);
-        assert!(report.bytes_read > 0);
-        assert_eq!(
-            report.global_exact_bound_shadow,
-            GlobalExactBoundShadow::default(),
-            "production-default queries must not run qualification math"
-        );
-        assert!(
-            report.requests.gets <= 4,
-            "a current global artifact must not scan routing pages to rediscover its own segment coverage: {:?}, manifest={}, covered={}",
-            report.requests,
-            index.manifest.version,
-            index
-                .manifest
-                .global_pq_ref
-                .as_ref()
-                .unwrap()
-                .covered_manifest_version
-        );
-        assert!(
-            report.requests.gets
-                <= (report.segments_searched as u64)
-                    .saturating_mul(3)
-                    .saturating_add(8),
-            "exact reads must scale with selected chunks, not exact-scored candidates: {:?}",
-            report.requests
-        );
-
-        let approximate = index
-            .search_with_report(
-                &query,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_global_exact_rerank(false),
-            )
-            .unwrap();
-        assert_eq!(approximate.hits[0].id, RecordId::from("row-37"));
-        assert_eq!(approximate.global_exact_vectors_fetched, 0);
-        assert_eq!(approximate.global_base_exact_rerank_us, 0);
-        assert!(approximate.leaf_mode.contains("approximate-first"));
-        assert!(
-            approximate.requests.gets < report.requests.gets,
-            "approximate-first must remove the dependent exact-object GET: exact={:?}, approximate={:?}",
-            report.requests,
-            approximate.requests
-        );
-        let vector_error = index
-            .search_vectors(
-                &query,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_global_exact_rerank(false),
-            )
-            .unwrap_err();
-        assert!(matches!(
-            vector_error,
-            BorsukError::InvalidSearchOptions(message)
-                if message.contains("cannot return lossless vectors")
-        ));
-
-        let limited = index
-            .search_with_report(
-                &query,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(7)
-                    .with_global_exact_bound_shadow(true),
-            )
-            .unwrap();
-        assert!(limited.records_considered >= 7);
-        assert!(limited.records_considered < vectors.len());
-        assert_eq!(limited.records_scored, 7);
-        assert_eq!(limited.global_exact_bound_shadow.candidates, 7);
-        assert_eq!(
-            limited.global_exact_bound_shadow.certificate_kind,
-            "scalar-pq-shadow"
-        );
-        assert_eq!(limited.global_exact_bound_shadow.residual_bytes, 0);
-        assert_eq!(limited.global_exact_bound_shadow.residual_scan_bytes, 0);
-        assert!(limited.global_exact_bound_shadow.exact_backing_reads > 0);
-        assert!(limited.global_exact_bound_shadow.exact_backing_bytes > 0);
-        assert!(
-            limited.global_exact_bound_shadow.containment_failures > 0,
-            "this adversarial Angular fixture must exercise query-wide fail-open"
-        );
-        assert_eq!(limited.global_exact_bound_shadow.survivors, 7);
-        assert_eq!(limited.global_exact_bound_shadow.fail_open, 7);
-        assert_eq!(
-            limited.global_exact_bound_shadow.baseline_reads,
-            limited.global_exact_bound_shadow.predicted_reads,
-            "query-wide fail-open must preserve the complete exact-read plan"
-        );
-        assert_eq!(
-            limited.global_exact_bound_shadow.baseline_bytes,
-            limited.global_exact_bound_shadow.predicted_bytes,
-            "query-wide fail-open must preserve every exact byte"
-        );
-        assert!(limited.global_exact_bound_shadow.predicted_reads > 0);
-        assert!(limited.global_exact_bound_shadow.predicted_bytes > 0);
-
-        let byte_limited = index
-            .search_with_report(
-                &query,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(7)
-                    .with_max_bytes(1),
-            )
-            .unwrap();
-        assert!(!byte_limited.hits.is_empty());
-        assert_eq!(
-            byte_limited.termination_reason,
-            SearchTerminationReason::MaxBytes
-        );
-        assert_eq!(
-            byte_limited.global_scan_chunks_searched, 1,
-            "a tiny best-effort byte budget may overshoot one useful global chunk, not the full probe set"
-        );
+        assert_v10_router_fail_closed(&uri);
     }
-
     #[test]
-    fn resident_global_pq_remains_the_base_when_a_published_wal_tail_is_visible() {
+    fn resident_global_pq_with_wal_tail_fails_closed_before_v10_routing() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut writer = BorsukIndex::create(IndexConfig {
@@ -28877,219 +28890,10 @@ mod tests {
             stable_global_checksum
         );
 
-        // A separately opened node must use the immutable global artifact for
-        // the stable corpus and exact-score the manifest-selected WAL overlay.
-        let reader = BorsukIndex::open(&uri).unwrap();
-        let report = reader
-            .search_with_report(
-                &tail_vector,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(64),
-            )
-            .unwrap();
-        assert_eq!(report.hits[0].id, RecordId::from("wal-tail"));
-        assert_eq!(report.routing_page_indexes_read, 0);
-        assert_eq!(report.routing_pages_read, 0);
-        assert!(
-            report.global_scan_chunks_searched > 0,
-            "the WAL overlay must not disable the immutable global PQ base: {report:?}"
-        );
-
-        let wal_limited = reader
-            .search_with_report(
-                &[9.9; 8],
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(64)
-                    .with_max_bytes(1),
-            )
-            .unwrap();
-        assert_eq!(wal_limited.hits[0].id, RecordId::from("wal-tail"));
-        assert_eq!(
-            wal_limited.termination_reason,
-            SearchTerminationReason::MaxBytes
-        );
-        assert_eq!(
-            wal_limited.global_scan_chunks_searched, 0,
-            "WAL accounting exhausted the request before immutable search: {wal_limited:?}"
-        );
-
-        drop(reader);
-        writer.flush().unwrap();
-        assert!(writer.manifest.wal_frontier_is_empty());
-        assert_eq!(
-            writer
-                .manifest
-                .global_pq_ref
-                .as_ref()
-                .map(|reference| reference.checksum.as_str()),
-            Some(stable_global_checksum.as_str()),
-            "flushing a bounded delta must not retrain or discard the stable base"
-        );
-
-        let reader = BorsukIndex::open(&uri).unwrap();
-        let report = reader
-            .search_with_report(
-                &tail_vector,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(64),
-            )
-            .unwrap();
-        assert_eq!(report.hits[0].id, RecordId::from("wal-tail"));
-        assert_eq!(report.routing_page_indexes_read, 0);
-        assert_eq!(report.routing_pages_read, 0);
-        assert!(
-            report.requests.heads <= 2,
-            "post-drain global search must not rediscover paged routing coverage: {report:?}"
-        );
-        assert!(
-            report.global_scan_chunks_searched > 0,
-            "the materialized delta must be merged without abandoning the stable base: {report:?}"
-        );
-
-        let second_tail_vector = vec![20.0; 8];
-        let before_second_tail = reader
-            .search_with_report(
-                &second_tail_vector,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(64),
-            )
-            .unwrap();
-        drop(reader);
-        writer
-            .add(vec![VectorRecord::new(
-                "wal-tail-2",
-                second_tail_vector.clone(),
-            )])
-            .unwrap();
-        let reader = BorsukIndex::open(&uri).unwrap();
-        let with_second_tail = reader
-            .search_with_report(
-                &second_tail_vector,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(64),
-            )
-            .unwrap();
-        assert_eq!(with_second_tail.hits[0].id, RecordId::from("wal-tail-2"));
-        assert_eq!(
-            with_second_tail.records_scored,
-            before_second_tail.records_scored + 1,
-            "one live WAL record must be exact-scored once across base and materialized delta"
-        );
-        drop(reader);
-        writer.flush().unwrap();
-        let compaction = writer.compact(CompactionOptions::default()).unwrap();
-        assert!(compaction.compacted);
-        assert_eq!(compaction.segments_read, 2);
-        assert_eq!(
-            writer
-                .manifest
-                .global_pq_ref
-                .as_ref()
-                .map(|reference| reference.checksum.as_str()),
-            Some(stable_global_checksum.as_str()),
-            "bounded online compaction must rewrite only delta cells"
-        );
-
-        let reader = BorsukIndex::open(&uri).unwrap();
-        let report = reader
-            .search_with_report(
-                &second_tail_vector,
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(64),
-            )
-            .unwrap();
-        assert_eq!(report.hits[0].id, RecordId::from("wal-tail-2"));
-        assert!(report.global_scan_chunks_searched > 0);
-
-        let mut pinned_reader = reader;
-        let old_base_zero = (0..8)
-            .map(|dimension| ((dimension * 11) % 101) as f32 / 101.0)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            pinned_reader
-                .search_ids(&old_base_zero, SearchOptions::exact(1))
-                .unwrap(),
-            ["base-0"]
-        );
-        let updated_base_zero = vec![30.0; 8];
-        writer
-            .upsert(vec![VectorRecord::new("base-0", updated_base_zero.clone())])
-            .unwrap();
-        writer.delete(["base-1"]).unwrap();
-
-        assert!(
-            pinned_reader.get_vector("base-1").unwrap().is_some(),
-            "an already-open reader must remain pinned until refresh"
-        );
-        assert!(pinned_reader.refresh().unwrap());
-        assert!(pinned_reader.get_vector("base-1").unwrap().is_none());
-        let report = pinned_reader
-            .search_with_report(
-                &updated_base_zero,
-                SearchOptions::approx(3, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(64),
-            )
-            .unwrap();
-        assert_eq!(report.hits[0].id, RecordId::from("base-0"));
-        assert!(
-            report.global_scan_chunks_searched > 0,
-            "upsert/delete overlays observed after refresh must retain the global base: {report:?}"
-        );
+        assert_v10_router_fail_closed(&uri);
     }
-
     #[test]
-    fn suppressed_wal_rows_still_charge_the_request_budget() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = dir.path().to_string_lossy().into_owned();
-        let mut writer = BorsukIndex::create(IndexConfig {
-            uri: uri.clone(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 256,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        })
-        .unwrap();
-        writer
-            .add(
-                (0..128)
-                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
-                    .collect(),
-            )
-            .unwrap();
-        writer.finish_bulk_load().unwrap();
-        writer
-            .add(vec![VectorRecord::new("suppressed-tail", vec![1_000.0; 8])])
-            .unwrap();
-        writer.delete(["suppressed-tail"]).unwrap();
-
-        let report = BorsukIndex::open(&uri)
-            .unwrap()
-            .search_with_report(
-                &[1_000.0; 8],
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(64)
-                    .with_max_bytes(1),
-            )
-            .unwrap();
-        assert!(report.hits.is_empty());
-        assert_eq!(report.termination_reason, SearchTerminationReason::MaxBytes);
-        assert_eq!(report.global_scan_chunks_searched, 0);
-        assert!(report.bytes_read > 0);
-        assert!(report.wal_runs_examined > 0);
-    }
-
-    #[test]
-    fn resident_global_search_charges_materialized_delta_to_one_segment_budget() {
+    fn resident_global_materialized_delta_fails_closed_before_v10_routing() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -29122,25 +28926,10 @@ mod tests {
             index.flush().unwrap();
         }
 
-        let report = BorsukIndex::open(&uri)
-            .unwrap()
-            .search_with_report(
-                &[11.0; 8],
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(4)
-                    .with_max_candidates_per_segment(64),
-            )
-            .unwrap();
-
-        assert_eq!(report.hits[0].id, RecordId::from("delta-1"));
-        assert!(
-            report.segments_searched <= 4,
-            "base and materialized delta must share one segment budget: {report:?}"
-        );
+        assert_v10_router_fail_closed(&uri);
     }
-
     #[test]
-    fn resident_global_search_uses_base_and_delta_artifacts_with_one_budget() {
+    fn resident_global_base_and_delta_fail_closed_before_v10_routing() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -29205,160 +28994,10 @@ mod tests {
         index.manifest = index
             .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))
             .unwrap();
-        let cold_bounded = BorsukIndex::open(&uri).unwrap();
-        let cold_bounded_report = cold_bounded
-            .search_with_report(
-                &[11.0; 8],
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(4)
-                    .with_max_candidates_per_segment(64)
-                    .with_max_bytes(1),
-            )
-            .unwrap();
-        assert_eq!(
-            cold_bounded_report.termination_reason,
-            SearchTerminationReason::MaxBytes
-        );
-        assert_eq!(
-            cold_bounded
-                .resident_global_pq
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .len(),
-            1,
-            "a cold byte-limited base query must not load the skipped delta descriptor"
-        );
-        drop(cold_bounded);
-
-        let reader = BorsukIndex::open(&uri).unwrap();
-        let report = reader
-            .search_with_report(
-                &[11.0; 8],
-                SearchOptions::approx(1, LeafMode::SrhtPqScan)
-                    .with_max_segments(4)
-                    .with_max_candidates_per_segment(1),
-            )
-            .unwrap();
-
-        assert!(
-            report.hits[0].id.as_bytes().starts_with(b"delta-1-"),
-            "delta artifact must win exact rerank: {report:?}"
-        );
-        assert_eq!(report.routing_page_indexes_read, 0);
-        assert_eq!(report.routing_pages_read, 0);
-        assert!(report.requests.heads <= 1, "{report:?}");
-        assert!(
-            report.requests.gets
-                <= 2 + (report.global_scan_chunks_searched as u64).saturating_mul(2),
-            "base+delta reads must scale with searched chunks, not exact candidates: {report:?}"
-        );
-        assert!(
-            report.segments_searched <= 4,
-            "base and delta ANN layers must share one segment budget: {report:?}"
-        );
-        assert!(
-            report.records_scored <= 1,
-            "base and delta ANN layers must share one whole-index exact-score budget: {report:?}"
-        );
-        let invalid_budget = reader
-            .search_with_report(
-                &[11.0; 8],
-                SearchOptions::approx(2, LeafMode::SrhtPqScan)
-                    .with_max_segments(4)
-                    .with_max_candidates_per_segment(1)
-                    .with_max_bytes(1),
-            )
-            .expect_err("a fixed-budget whole-index candidate cap below k must fail closed");
-        assert!(
-            invalid_budget
-                .to_string()
-                .contains("whole-index candidate budget 1 is smaller than requested k 2"),
-            "{invalid_budget}"
-        );
-        assert!(
-            report.global_scan_chunks_searched >= 2,
-            "both ANN layers must execute: {report:?}"
-        );
-        assert_eq!(
-            reader
-                .resident_global_pq
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .len(),
-            2,
-            "base and delta descriptors must both remain cached"
-        );
-        assert!(
-            reader
-                .read_runtime
-                .decoded_global_identity_ranges
-                .resident_bytes()
-                > 0,
-            "global rerank identity ranges should be retained for repeated queries"
-        );
-
-        let byte_limited = reader
-            .search_with_report(
-                &[11.0; 8],
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(4)
-                    .with_max_candidates_per_segment(64)
-                    .with_max_bytes(1),
-            )
-            .unwrap();
-        assert_eq!(
-            byte_limited.termination_reason,
-            SearchTerminationReason::MaxBytes
-        );
-        assert_eq!(
-            byte_limited.global_scan_chunks_searched, 1,
-            "base and delta must share one best-effort byte budget: {byte_limited:?}"
-        );
-
-        let delta_exhausted = reader
-            .search_with_report(
-                &[11.0; 8],
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(4)
-                    .with_max_candidates_per_segment(64)
-                    .with_max_bytes(1_500),
-            )
-            .unwrap();
-        assert!(
-            delta_exhausted.global_scan_chunks_searched >= 2,
-            "both ANN layers must execute before exhausting 1,500 bytes: {delta_exhausted:?}"
-        );
-        assert_eq!(
-            delta_exhausted.termination_reason,
-            SearchTerminationReason::MaxBytes,
-            "the merged report must retain delta budget exhaustion: {delta_exhausted:?}"
-        );
-
-        drop(reader);
-        index
-            .add(vec![VectorRecord::new("wal-after-delta", vec![1_000.0; 8])])
-            .unwrap();
-        let reader = BorsukIndex::open(&uri).unwrap();
-        let wal_only = reader
-            .search_with_report(
-                &[999.9; 8],
-                SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                    .with_max_segments(4)
-                    .with_max_candidates_per_segment(64)
-                    .with_max_bytes(1),
-            )
-            .unwrap();
-        assert_eq!(wal_only.hits[0].id, RecordId::from("wal-after-delta"));
-        assert_eq!(wal_only.global_scan_chunks_searched, 0);
-        assert_eq!(
-            wal_only.segments_total, 10,
-            "WAL-only telemetry must include stable base and materialized delta segments"
-        );
-        assert_eq!(wal_only.segments_skipped, 10);
+        assert_v10_router_fail_closed(&uri);
     }
-
     #[test]
-    fn fused_resident_global_search_keeps_a_moved_upsert_visible() {
+    fn fused_resident_global_upsert_fails_closed_before_v10_routing() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -29406,99 +29045,8 @@ mod tests {
         assert!(global.delta.is_some());
         drop(index);
 
-        let reader = BorsukIndex::open(&uri).unwrap();
-        let one_probe = reader
-            .search_with_report(
-                &[0.0; 8],
-                SearchOptions::approx(1, LeafMode::SrhtPqScan)
-                    .with_max_segments(1)
-                    .with_max_candidates_per_segment(1),
-            )
-            .unwrap();
-        assert_eq!(
-            one_probe.hits[0].id,
-            RecordId::from("base-0"),
-            "a one-cell frontier must retain the newest delta generation"
-        );
-        let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
-            .with_max_segments(4)
-            .with_max_candidates_per_segment(1)
-            .with_global_exact_bound_shadow(true);
-        let report = reader
-            .search_with_report(&[0.0; 8], options.clone())
-            .unwrap();
-        assert_eq!(report.hits[0].id, RecordId::from("base-0"));
-        assert!(
-            report.leaf_mode.contains("fused-materialized-delta"),
-            "current base+delta coverage must use the fused path: {report:?}"
-        );
-        assert!(report.records_scored <= 1, "{report:?}");
-        let telemetry = serde_json::to_value(&report).unwrap();
-        assert_eq!(
-            telemetry["global_identity_rows_resolved"], 2,
-            "the stale base row and current delta row must both reach MVCC resolution"
-        );
-        assert_eq!(
-            telemetry["global_exact_vectors_fetched"], 1,
-            "only the post-MVCC winner may fetch its lossless vector"
-        );
-        assert_eq!(
-            reader.search_vectors(&[0.0; 8], options.clone()).unwrap(),
-            vec![moved],
-            "winner vectors must remain aligned with their current logical identity"
-        );
-        let approximate = reader
-            .search_with_report(
-                &[0.0; 8],
-                SearchOptions::approx(1, LeafMode::SrhtPqScan)
-                    .with_max_segments(4)
-                    .with_max_candidates_per_segment(1)
-                    .with_global_exact_rerank(false),
-            )
-            .unwrap();
-        assert_eq!(approximate.hits[0].id, RecordId::from("base-0"));
-        assert_eq!(approximate.global_identity_rows_resolved, 2);
-        assert_eq!(approximate.global_exact_vectors_fetched, 0);
-        assert_eq!(approximate.global_base_exact_rerank_us, 0);
-        assert!(approximate.leaf_mode.contains("approximate-first"));
-        let scan_report = reader
-            .search_with_report(
-                &[0.0; 8],
-                options.with_cache_execution(crate::CacheExecutionPolicy::Scan),
-            )
-            .unwrap();
-        assert_eq!(scan_report.hits[0].id, RecordId::from("base-0"));
-        assert_eq!(scan_report.global_identity_rows_resolved, 2);
-        assert_eq!(scan_report.global_exact_vectors_fetched, 1);
-        assert_eq!(scan_report.global_exact_bound_shadow.candidates, 1);
-        assert_eq!(
-            scan_report.global_exact_bound_shadow.certificate_kind,
-            "scalar-pq-shadow"
-        );
-        assert_eq!(scan_report.global_exact_bound_shadow.residual_bytes, 0);
-        assert_eq!(scan_report.global_exact_bound_shadow.residual_scan_bytes, 0);
-        assert_eq!(scan_report.global_exact_bound_shadow.survivors, 1);
-        assert_eq!(scan_report.global_exact_bound_shadow.fail_open, 0);
-        assert_eq!(
-            scan_report.global_exact_bound_shadow.containment_failures,
-            0
-        );
-        assert_eq!(scan_report.global_exact_bound_shadow.predicted_reads, 1);
-        assert_eq!(scan_report.global_exact_bound_shadow.predicted_waves, 1);
-        assert_eq!(
-            scan_report
-                .global_exact_bound_shadow
-                .certificate_scratch_allocations,
-            0
-        );
-        assert_eq!(scan_report.global_exact_bound_shadow.baseline_reads, 1);
-        assert_eq!(
-            scan_report.global_exact_bound_shadow.baseline_bytes,
-            scan_report.global_exact_bound_shadow.predicted_bytes
-        );
-        assert!(scan_report.global_exact_bound_shadow.predicted_bytes > 0);
+        assert_v10_router_fail_closed(&uri);
     }
-
     #[test]
     fn resident_global_delta_refresh_rebuilds_complete_v10_coverage() {
         let dir = tempfile::tempdir().unwrap();
@@ -29708,7 +29256,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_delta_filters_stale_generations_before_top_k() {
+    fn resident_global_delta_generations_fail_closed_before_v10_routing() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -29748,20 +29296,8 @@ mod tests {
             index.flush().unwrap();
         }
 
-        let report = BorsukIndex::open(&uri)
-            .unwrap()
-            .search_with_report(
-                &[1_000.0; 8],
-                SearchOptions::approx(2, LeafMode::SrhtPqScan)
-                    .with_max_segments(8)
-                    .with_max_candidates_per_segment(64),
-            )
-            .unwrap();
-        assert_eq!(report.hits.len(), 2, "stale generations consumed top-k");
-        assert_eq!(report.hits[0].id, RecordId::from("repeated"));
-        assert_eq!(report.hits[1].id, RecordId::from("live-neighbour"));
+        assert_v10_router_fail_closed(&uri);
     }
-
     #[test]
     fn wal_materialization_waits_for_representative_delta_then_appends() {
         let dir = tempfile::tempdir().unwrap();
@@ -29992,7 +29528,7 @@ mod tests {
     }
 
     #[test]
-    fn every_named_global_scan_codec_builds_loads_and_searches_its_own_artifact() {
+    fn every_named_global_scan_codec_builds_v10_artifact_and_fails_closed_before_router() {
         let vectors = (0..128)
             .map(|row| {
                 (0..16)
@@ -30041,18 +29577,27 @@ mod tests {
                 )
                 .unwrap();
             index.finish_bulk_load().unwrap();
+            assert!(
+                index
+                    .manifest
+                    .global_pq_ref
+                    .as_ref()
+                    .unwrap()
+                    .path
+                    .starts_with("global-leaf/descriptors/")
+            );
             drop(index);
 
-            let index = BorsukIndex::open(&uri).unwrap();
-            let report = index
-                .search_with_report(
-                    &vectors[37],
-                    SearchOptions::approx(5, codec.leaf_mode()).with_max_segments(8),
-                )
-                .unwrap();
-            assert_eq!(report.leaf_mode, codec.to_string());
-            assert_eq!(report.hits[0].id, RecordId::from(format!("{codec}-37")));
-            assert_eq!(report.routing_pages_read, 0);
+            let error = match BorsukIndex::open(&uri) {
+                Ok(_) => panic!("{codec} V10 artifact loaded before the V10 router existed"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("bounded Arrow leaf descriptors require the V10 leaf router"),
+                "{codec}: {error}"
+            );
         }
     }
 
@@ -31875,6 +31420,9 @@ mod tests {
         assert!(is_global_pq_path("global-leaf/bundles/ab/a.arrow"));
         assert!(is_global_pq_path("global-leaf/directories/ab/a.parquet"));
         assert!(is_global_pq_path("global-leaf/roots/ab/cells-a.parquet"));
+        assert!(is_global_pq_path(
+            "global-leaf/descriptors/ab/descriptor-a.parquet"
+        ));
         assert!(!is_global_pq_path("global-pq/cell-graphs/a.bin"));
         assert!(!is_global_pq_path("global-pq/bundles/a.arrow"));
         assert!(!is_global_pq_path("vectors/a.arrow"));
@@ -31884,5 +31432,54 @@ mod tests {
         assert!(is_cell_wal_transaction_path(
             "transactions/tx/descriptors/abc.bin"
         ));
+    }
+
+    #[test]
+    fn gc_reclaims_unreferenced_v10_leaf_objects_from_every_leaf_namespace() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let paths = [
+            "global-leaf/bundles/aa/orphan.arrow",
+            "global-leaf/directories/aa/orphan.parquet",
+            "global-leaf/roots/aa/orphan.parquet",
+            "global-leaf/descriptors/aa/orphan.parquet",
+        ];
+        for path in paths {
+            index
+                .storage
+                .write_bytes_content_addressed(path, b"orphan-v10")
+                .unwrap();
+        }
+        index
+            .add(vec![VectorRecord::new("publication-fence", vec![0.0, 0.0])])
+            .unwrap();
+        index.flush().unwrap();
+
+        index
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+
+        let remaining = index
+            .storage
+            .list_objects("global-leaf")
+            .unwrap()
+            .into_iter()
+            .map(|object| object.path)
+            .collect::<HashSet<_>>();
+        for path in paths {
+            assert!(!remaining.contains(path), "GC did not reclaim {path}");
+        }
     }
 }

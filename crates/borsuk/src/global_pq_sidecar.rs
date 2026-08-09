@@ -1248,7 +1248,7 @@ impl GlobalPqCellSpool {
 
     pub(crate) fn finish(
         mut self,
-        mut emit: impl FnMut(u16, GlobalPqChunkBytes) -> Result<()>,
+        mut emit: impl FnMut(GlobalPqCellSpoolEvent) -> Result<()>,
     ) -> Result<usize> {
         for (path, writer) in self.primary_paths.iter().zip(&mut self.primary_writers) {
             writer.flush().map_err(|source| io_error(path, source))?;
@@ -1337,7 +1337,7 @@ impl GlobalPqCellSpool {
         &self,
         path: &Path,
         cell: u16,
-        emit: &mut impl FnMut(u16, GlobalPqChunkBytes) -> Result<()>,
+        emit: &mut impl FnMut(GlobalPqCellSpoolEvent) -> Result<()>,
     ) -> Result<()> {
         let code_width = self.quantizer.code_bytes_per_vector();
         let location_width = usize::from(self.location.width);
@@ -1350,6 +1350,7 @@ impl GlobalPqCellSpool {
         let max_rows = max_code_rows.min(max_exact_rows).max(1);
         let mut reader = BufReader::new(File::open(path).map_err(|source| io_error(path, source))?);
         let mut pending_row = None;
+        let mut emitted = false;
         loop {
             let mut chunk_rows = Vec::with_capacity(max_rows);
             let mut identity_bytes = 0_usize;
@@ -1413,15 +1414,19 @@ impl GlobalPqCellSpool {
                     )
                 })
                 .collect();
-            emit(
+            emit(GlobalPqCellSpoolEvent::Chunk {
                 cell,
-                GlobalPqChunkBytes {
+                chunk: GlobalPqChunkBytes {
                     bytes,
                     exact_bytes,
                     identities,
                     rows,
                 },
-            )?;
+            })?;
+            emitted = true;
+        }
+        if emitted {
+            emit(GlobalPqCellSpoolEvent::FinalizeCell { cell })?;
         }
         Ok(())
     }
@@ -1660,6 +1665,16 @@ pub(crate) struct GlobalPqChunkBytes {
     pub(crate) exact_bytes: Vec<u8>,
     pub(crate) identities: Vec<(crate::RecordId, MutationStamp)>,
     pub(crate) rows: usize,
+}
+
+pub(crate) enum GlobalPqCellSpoolEvent {
+    Chunk {
+        cell: u16,
+        chunk: GlobalPqChunkBytes,
+    },
+    FinalizeCell {
+        cell: u16,
+    },
 }
 
 #[cfg(test)]

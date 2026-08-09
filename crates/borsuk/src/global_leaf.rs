@@ -152,7 +152,8 @@ pub(crate) struct GlobalLeafDirectoryShardBuilder {
     pending: Vec<GlobalLeafPageRef>,
     cells: Vec<GlobalLeafCellRef>,
     shards: Vec<GlobalLeafDirectoryShardRef>,
-    last_cell: Option<u16>,
+    active_cell: Option<(u16, u32)>,
+    last_finalized_cell: Option<u16>,
 }
 
 impl GlobalLeafDirectoryShardBuilder {
@@ -167,7 +168,8 @@ impl GlobalLeafDirectoryShardBuilder {
             pending: Vec::with_capacity(GLOBAL_LEAF_DIRECTORY_SHARD_PAGES),
             cells: Vec::new(),
             shards: Vec::new(),
-            last_cell: None,
+            active_cell: None,
+            last_finalized_cell: None,
         })
     }
 
@@ -181,34 +183,83 @@ impl GlobalLeafDirectoryShardBuilder {
             .first()
             .map(|page| page.cell_index)
             .ok_or_else(|| invalid_leaf_directory("cannot append an empty cell"))?;
-        if self.last_cell.is_some_and(|prior| prior >= cell_index)
-            || pages.iter().enumerate().any(|(leaf, page)| {
-                page.cell_index != cell_index
-                    || usize::try_from(page.leaf_ordinal).ok() != Some(leaf)
-            })
-        {
+        self.push_cell_chunk(pages, bundles, emit)?;
+        self.finalize_cell(cell_index)
+    }
+
+    pub(crate) fn push_cell_chunk(
+        &mut self,
+        pages: &[GlobalLeafPageRef],
+        bundles: &[GlobalLeafBundleRef],
+        emit: &mut impl FnMut(EncodedGlobalLeafDirectoryShard) -> Result<String>,
+    ) -> Result<()> {
+        let cell_index = pages
+            .first()
+            .map(|page| page.cell_index)
+            .ok_or_else(|| invalid_leaf_directory("cannot append an empty cell"))?;
+        let first_leaf = match self.active_cell {
+            Some((active_cell, next_leaf)) if active_cell == cell_index => next_leaf,
+            Some(_) => {
+                return Err(invalid_leaf_directory(
+                    "cannot start a new cell before finalizing its predecessor",
+                ));
+            }
+            None if self
+                .last_finalized_cell
+                .is_some_and(|prior| prior >= cell_index) =>
+            {
+                return Err(invalid_leaf_directory(
+                    "builder cells must be strictly ordered",
+                ));
+            }
+            None => 0,
+        };
+        if pages.iter().enumerate().any(|(leaf, page)| {
+            page.cell_index != cell_index
+                || first_leaf.checked_add(leaf as u32) != Some(page.leaf_ordinal)
+        }) {
             return Err(invalid_leaf_directory(
                 "builder cells and leaf ordinals must be strictly canonical",
             ));
         }
-        self.last_cell = Some(cell_index);
+        let next_leaf =
+            first_leaf
+                .checked_add(u32::try_from(pages.len()).map_err(|_| {
+                    invalid_leaf_directory("cell continuation page count exceeds u32")
+                })?)
+                .ok_or_else(|| invalid_leaf_directory("cell leaf ordinal overflows"))?;
+        self.active_cell = Some((cell_index, next_leaf));
 
         if pages.len() <= GLOBAL_LEAF_DIRECTORY_SHARD_PAGES {
             if self.pending.len() + pages.len() > GLOBAL_LEAF_DIRECTORY_SHARD_PAGES {
                 self.flush(bundles, emit)?;
             }
             self.pending.extend_from_slice(pages);
-            return Ok(());
-        }
-
-        self.flush(bundles, emit)?;
-        for chunk in pages.chunks(GLOBAL_LEAF_DIRECTORY_SHARD_PAGES) {
-            self.pending.extend_from_slice(chunk);
-            if self.pending.len() == GLOBAL_LEAF_DIRECTORY_SHARD_PAGES {
-                self.flush(bundles, emit)?;
+        } else {
+            self.flush(bundles, emit)?;
+            for chunk in pages.chunks(GLOBAL_LEAF_DIRECTORY_SHARD_PAGES) {
+                self.pending.extend_from_slice(chunk);
+                if self.pending.len() == GLOBAL_LEAF_DIRECTORY_SHARD_PAGES {
+                    self.flush(bundles, emit)?;
+                }
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn finalize_cell(&mut self, cell_index: u16) -> Result<()> {
+        if self.active_cell.map(|(active, _)| active) != Some(cell_index) {
+            return Err(invalid_leaf_directory(
+                "finalization does not match the active cell continuation",
+            ));
+        }
+        self.active_cell = None;
+        self.last_finalized_cell = Some(cell_index);
+        Ok(())
+    }
+
+    pub(crate) fn retained_page_refs(&self) -> usize {
+        self.pending.len()
     }
 
     pub(crate) fn finish(
@@ -216,6 +267,11 @@ impl GlobalLeafDirectoryShardBuilder {
         bundles: &[GlobalLeafBundleRef],
         emit: &mut impl FnMut(EncodedGlobalLeafDirectoryShard) -> Result<String>,
     ) -> Result<(Vec<GlobalLeafCellRef>, Vec<GlobalLeafDirectoryShardRef>)> {
+        if self.active_cell.is_some() {
+            return Err(invalid_leaf_directory(
+                "cannot finish with an unfinalized cell continuation",
+            ));
+        }
         self.flush(bundles, emit)?;
         if self.cells.is_empty() || self.shards.is_empty() {
             return Err(invalid_leaf_directory(
@@ -348,12 +404,17 @@ pub(crate) fn fit_global_leaf_page_ranges(
             "global leaf vector row must not be empty".to_string(),
         ));
     }
+    if row_bytes > GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf exact row exceeds the 96 KiB payload ceiling".to_string(),
+        ));
+    }
     if rows.iter().any(|row| row.exact.len() != row_bytes) {
         return Err(BorsukError::InvalidStorage(
             "global leaf row does not match its fixed vector width".to_string(),
         ));
     }
-    let maximum_rows = (GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / row_bytes).max(1);
+    let maximum_rows = GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / row_bytes;
     let mut ranges = Vec::new();
     let mut start = 0;
     while start < rows.len() {
@@ -717,6 +778,7 @@ pub(crate) fn load_global_leaf_pages_for_cells(
             "selected cells do not have exact authenticated page coverage",
         ));
     }
+    validate_global_leaf_directory(&pages, &root.bundles, code_width)?;
     Ok(pages)
 }
 
@@ -737,6 +799,11 @@ fn validate_global_leaf_directory(
     }
     let mut paths = BTreeSet::new();
     for bundle in bundles {
+        if bundle.encoded_bytes > GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf bundle reference exceeds the complete bundle object cap".to_string(),
+            ));
+        }
         if bundle.path.is_empty() || bundle.encoded_bytes == 0 || !paths.insert(&bundle.path) {
             return Err(BorsukError::InvalidStorage(
                 "global leaf bundle references must have unique paths and positive sizes"
@@ -854,6 +921,14 @@ fn validate_global_leaf_directory_root(
         }
     }
     let mut bundle_paths = BTreeSet::new();
+    if bundles
+        .iter()
+        .any(|bundle| bundle.encoded_bytes > GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES)
+    {
+        return Err(invalid_leaf_directory(
+            "bundle reference exceeds the complete bundle object cap",
+        ));
+    }
     if bundles.iter().any(|bundle| {
         bundle.path.is_empty()
             || bundle.encoded_bytes == 0
@@ -1974,6 +2049,26 @@ mod tests {
     }
 
     #[test]
+    fn leaf_page_fitter_rejects_one_exact_row_above_the_96_kib_payload_ceiling() {
+        const DIMENSIONS: usize = super::GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / 4 + 1;
+        let error = fit_global_leaf_page_ranges(
+            &[GlobalLeafRowInput {
+                id: RecordId::from("too-wide"),
+                stamp: MutationStamp::new(MutationVersion::from_parts(1, [1; 16]), [2; 32]),
+                exact: vec![0; DIMENSIONS * 4],
+            }],
+            DIMENSIONS,
+            VectorElementType::Float32,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("96 KiB payload ceiling"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn leaf_page_fitter_splits_rows_that_exceed_the_complete_arrow_block_cap() {
         let rows = (0..2)
             .map(|ordinal| GlobalLeafRowInput {
@@ -2281,6 +2376,78 @@ mod tests {
     }
 
     #[test]
+    fn selected_directory_loading_rejects_cross_shard_bundle_range_overlap() {
+        let page = |leaf_ordinal, batch_offset| GlobalLeafPageRef {
+            cell_index: 7,
+            leaf_ordinal,
+            bundle_index: 0,
+            batch_offset,
+            metadata_bytes: 512,
+            body_bytes: 1024,
+            batch_bytes: 1536,
+            rows: 1,
+            checksum: [leaf_ordinal as u8; 32],
+            centroid_code: vec![7, leaf_ordinal as u8].into_boxed_slice(),
+        };
+        let bundles = vec![GlobalLeafBundleRef {
+            path: "global-leaf/bundles/overlap.arrow".to_string(),
+            checksum: [0xcc; 32],
+            encoded_bytes: 8192,
+        }];
+        let first_page = page(0, 64);
+        let second_page = page(1, 512);
+        let first =
+            encode_global_leaf_directory_shard(std::slice::from_ref(&first_page), &bundles, 2)
+                .unwrap();
+        let second =
+            encode_global_leaf_directory_shard(std::slice::from_ref(&second_page), &bundles, 2)
+                .unwrap();
+        let root = GlobalLeafDirectoryRoot {
+            cells: vec![GlobalLeafCellRef {
+                cell_index: 7,
+                first_shard_index: 0,
+                shard_count: 2,
+                first_row_offset: 0,
+                pages: 2,
+            }],
+            shards: vec![
+                GlobalLeafDirectoryShardRef {
+                    path: "global-leaf/directories/overlap-0.parquet".to_string(),
+                    checksum: *blake3::hash(&first).as_bytes(),
+                    encoded_bytes: first.len() as u64,
+                    first_cell: 7,
+                    last_cell: 7,
+                    first_leaf_ordinal: 0,
+                    last_leaf_ordinal: 0,
+                    pages: 1,
+                },
+                GlobalLeafDirectoryShardRef {
+                    path: "global-leaf/directories/overlap-1.parquet".to_string(),
+                    checksum: *blake3::hash(&second).as_bytes(),
+                    encoded_bytes: second.len() as u64,
+                    first_cell: 7,
+                    last_cell: 7,
+                    first_leaf_ordinal: 1,
+                    last_leaf_ordinal: 1,
+                    pages: 1,
+                },
+            ],
+            bundles,
+        };
+
+        let error = load_global_leaf_pages_for_cells(&root, &[7], 2, |reference| {
+            Ok(if reference.path.ends_with("0.parquet") {
+                first.clone()
+            } else {
+                second.clone()
+            })
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("ranges overlap"), "{error}");
+    }
+
+    #[test]
     fn directory_root_rejects_missing_page_coverage() {
         let error = encode_global_leaf_directory_root(
             &[GlobalLeafCellRef {
@@ -2312,11 +2479,68 @@ mod tests {
     }
 
     #[test]
+    fn directory_rejects_bundle_references_over_complete_object_cap() {
+        let oversized_bundle = GlobalLeafBundleRef {
+            path: "global-leaf/bundles/oversized.arrow".to_string(),
+            checksum: [0xbb; 32],
+            encoded_bytes: super::GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES + 1,
+        };
+        let page = GlobalLeafPageRef {
+            cell_index: 7,
+            leaf_ordinal: 0,
+            bundle_index: 0,
+            batch_offset: 64,
+            metadata_bytes: 512,
+            body_bytes: 1024,
+            batch_bytes: 1536,
+            rows: 1,
+            checksum: [0xcc; 32],
+            centroid_code: vec![7, 0].into_boxed_slice(),
+        };
+        let shard_error = encode_global_leaf_directory_shard(
+            std::slice::from_ref(&page),
+            std::slice::from_ref(&oversized_bundle),
+            2,
+        )
+        .unwrap_err();
+        assert!(
+            shard_error.to_string().contains("bundle object cap"),
+            "{shard_error}"
+        );
+
+        let root_error = encode_global_leaf_directory_root(
+            &[GlobalLeafCellRef {
+                cell_index: 7,
+                first_shard_index: 0,
+                shard_count: 1,
+                first_row_offset: 0,
+                pages: 1,
+            }],
+            &[GlobalLeafDirectoryShardRef {
+                path: "global-leaf/directories/oversized.parquet".to_string(),
+                checksum: [0xaa; 32],
+                encoded_bytes: 4096,
+                first_cell: 7,
+                last_cell: 7,
+                first_leaf_ordinal: 0,
+                last_leaf_ordinal: 0,
+                pages: 1,
+            }],
+            &[oversized_bundle],
+        )
+        .unwrap_err();
+        assert!(
+            root_error.to_string().contains("bundle object cap"),
+            "{root_error}"
+        );
+    }
+
+    #[test]
     fn directory_shard_builder_bounds_state_without_splitting_a_fitting_cell() {
         let bundle = GlobalLeafBundleRef {
             path: "global-leaf/bounded.arrow".to_string(),
             checksum: [0xdd; 32],
-            encoded_bytes: 64 * 1024 * 1024,
+            encoded_bytes: super::GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES,
         };
         let pages = |cell_index: u16, rows: usize, first_offset: u64| {
             (0..rows)
