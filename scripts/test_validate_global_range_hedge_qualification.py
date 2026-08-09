@@ -19,6 +19,9 @@ EXACT_MANIFEST = (
 EXACT_35MS_MANIFEST = (
     ROOT / "docs" / "research" / "global-exact-rerank-hedge-35ms-qualification.json"
 )
+EXACT_20MS_MANIFEST = (
+    ROOT / "docs" / "research" / "global-exact-rerank-hedge-20ms-qualification.json"
+)
 
 
 class GlobalRangeHedgeValidatorTest(unittest.TestCase):
@@ -633,6 +636,36 @@ class GlobalExactRerankHedgeValidatorTest(GlobalRangeHedgeValidatorTest):
         report = json.loads(result.stdout)
         self.assertEqual(
             report["campaign_id"], "global-exact-rerank-hedge-qualification-v2"
+        )
+        self.assertEqual(report["winner"], "candidate")
+
+    def test_manifest_only_preflight_accepts_frozen_20ms_followup(self):
+        accepted = subprocess.run(
+            [
+                "python3",
+                str(VALIDATOR),
+                "--manifest",
+                str(EXACT_20MS_MANIFEST),
+                "--validate-manifest-only",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_frozen_20ms_followup_validates_a_complete_structural_matrix(self):
+        self.manifest_path = EXACT_20MS_MANIFEST
+        self.manifest = json.loads(self.manifest_path.read_text())
+        self.manifest_sha = hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()
+        self.write_terminal_matrix()
+
+        result = self.run_validator()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(
+            report["campaign_id"], "global-exact-rerank-hedge-qualification-v3"
         )
         self.assertEqual(report["winner"], "candidate")
 

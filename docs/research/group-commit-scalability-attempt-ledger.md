@@ -1999,3 +1999,14 @@ improved only 3.251 ms, from 81.051 to 77.799 ms, below the frozen 5 ms gate.
 Thus even after evidence repair this attempt cannot be promoted or relabeled as
 a pass. The low amplification leaves room for one lower-delay hypothesis; it
 must be frozen separately and rerun with the repaired trace.
+
+The one allowed follow-up is frozen in
+`docs/research/global-exact-rerank-hedge-20ms-qualification.json`. It changes
+only the candidate delay from 35 to 20 ms and uses distinct v3 root markers;
+the immutable base, five alternating pairs, exact result/byte equivalence,
+cache prohibition, and every latency and amplification threshold remain
+unchanged. This is supported by the terminal 35 ms evidence: every p95 pair
+improved but the absolute effect was 1.749 ms short of the promotion gate while
+GET and backing-byte amplification retained 19.076 and 19.925 percentage points
+of headroom, respectively. Twenty milliseconds is a preregistered hypothesis,
+not a performance claim or a default change.

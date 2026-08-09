@@ -906,6 +906,7 @@ def assert_global_exact_rerank_hedge_manifest(manifest: dict[str, object]) -> No
     campaign_delays = {
         "global-exact-rerank-hedge-qualification-v1": "75",
         "global-exact-rerank-hedge-qualification-v2": "35",
+        "global-exact-rerank-hedge-qualification-v3": "20",
     }
     expected_orders = [
         ["control", "candidate"],
@@ -997,6 +998,7 @@ def main() -> None:
     assert_tracked("scripts/test_check_repo_policy.py")
     assert_tracked("scripts/test_docs_web.mjs")
     for path in [
+        "docs/research/global-exact-rerank-hedge-20ms-qualification.json",
         "docs/research/global-exact-rerank-hedge-35ms-qualification.json",
         "docs/research/global-exact-rerank-hedge-qualification.json",
         "docs/research/global-range-hedge-qualification.json",
@@ -1020,12 +1022,19 @@ def main() -> None:
             ROOT / "docs/research/global-exact-rerank-hedge-35ms-qualification.json"
         ).read_text()
     )
+    exact_20ms_hedge_manifest = json.loads(
+        (
+            ROOT / "docs/research/global-exact-rerank-hedge-20ms-qualification.json"
+        ).read_text()
+    )
     assert_global_range_hedge_manifest(legacy_hedge_manifest)
     assert_global_exact_rerank_hedge_manifest(exact_hedge_manifest)
     assert_global_exact_rerank_hedge_manifest(exact_35ms_hedge_manifest)
+    assert_global_exact_rerank_hedge_manifest(exact_20ms_hedge_manifest)
     hedge_validator.validate_manifest(legacy_hedge_manifest)
     hedge_validator.validate_manifest(exact_hedge_manifest)
     hedge_validator.validate_manifest(exact_35ms_hedge_manifest)
+    hedge_validator.validate_manifest(exact_20ms_hedge_manifest)
     assert_no_files_matching(
         "python/src/borsuk",
         ["_borsuk*.so", "_borsuk*.pyd", "_borsuk*.dll", "_borsuk*.dylib"],
