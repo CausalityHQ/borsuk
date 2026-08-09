@@ -2393,3 +2393,32 @@ Fresh assurance for the paired harness passed formatting, strict locked
 workspace/all-feature/all-target Clippy, diff hygiene, repository policy, and
 the complete locked workspace/all-feature/all-target matrix: 1,167 tests passed
 and 24 research tests were explicitly ignored across 71 suites.
+
+### Preregistered full-corpus approximate-first decision
+
+`approximate-first-cohere-1m-local-qualification.json` freezes the first honest
+quality decision over all 1,000 checksum-pinned Cohere Medium 1M test queries
+and their shipped top-10 neighbours. One immutable 1M-vector, 768-dimensional
+index is measured at nprobe 32, 64, 128, and 256 with a 4,096-candidate budget.
+Every query alternates the order of an exact-rerank control and otherwise
+identical approximate-first treatment under uncached scan execution.
+
+Admission requires mean recall@10 at least 0.95, nearest-rank per-query p05
+recall at least 0.80, zero treatment exact vectors or exact-rerank time, zero
+disk-cache reads, at least 50% backing-read and 25% backing-byte reduction, at
+least 5 ms p95 improvement, and a one-sided paired sign-test p-value no greater
+than 0.01. Treatment p95 above 200 ms is rejected, but passing that ceiling is
+not sufficient: among fully eligible points the evaluator selects lowest p95,
+then p50, I/O, transient memory, and recall. This makes 200 ms a hard ceiling
+rather than an optimization target.
+
+The launch wrapper requires a clean revision based on `origin/main`, validates
+the dataset descriptor checksum, records source commit plus manifest, dataset,
+and release-binary SHA-256 identities before measurement, and uses a fresh
+output root. The evaluator refuses to open JSONL without the benchmark's
+terminal marker, rejects incomplete/failure-marked trees, reconciles every
+stored recall and byte count, requires a complete unique query permutation at
+every search point, and distinguishes a structurally valid architectural
+rejection from infrastructure failure. Synthetic evaluator fixtures are
+structural evidence only. No local or AWS measurement has been launched at this
+entry.
