@@ -565,7 +565,9 @@ const DEFAULT_GLOBAL_PQ_CODE_WAVE_BYTES: usize = 32 * 1024 * 1024;
 /// 48 MiB total cap stays below storage's 64 MiB multipart threshold, bounds
 /// the pending/Arrow/encoded build assembly to roughly 144 MiB, and lets a
 /// normal single PUT carry the accompanying fixed-width exact pages.
+#[cfg(test)]
 const DEFAULT_GLOBAL_PQ_BUNDLE_CODE_BYTES: usize = 2 * 1024 * 1024;
+#[cfg(test)]
 const DEFAULT_GLOBAL_PQ_BUNDLE_BYTES: usize = 48 * 1024 * 1024;
 const GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES: usize = 96 * 1024;
 const DEFAULT_SIDECAR_INDEX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
@@ -21449,7 +21451,6 @@ struct GlobalLeafPersistenceWriter<'a> {
     storage: &'a Storage,
     dimensions: usize,
     element_type: crate::record::VectorElementType,
-    code_width: usize,
     bundle_pages: Vec<crate::global_leaf::GlobalLeafPageInput>,
     bundles: Vec<crate::global_leaf::GlobalLeafBundleRef>,
     directory_builder: Option<crate::global_leaf::GlobalLeafDirectoryShardBuilder>,
@@ -21472,7 +21473,6 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
             storage,
             dimensions,
             element_type,
-            code_width,
             bundle_pages: Vec::with_capacity(crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_PAGES),
             bundles: Vec::new(),
             directory_builder: Some(crate::global_leaf::GlobalLeafDirectoryShardBuilder::new(

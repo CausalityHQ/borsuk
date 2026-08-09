@@ -234,6 +234,7 @@ impl CentroidHnsw {
     /// Consume a built graph and detach its adjacency from the full centroid
     /// vectors. Each returned tower remains in top-layer-to-base-layer order.
     /// Callers can compact them while `self.vectors` is dropped here.
+    #[cfg(test)]
     pub(crate) fn into_adjacency(self) -> (u32, Vec<Vec<Vec<u32>>>) {
         (self.entry, self.neighbours)
     }

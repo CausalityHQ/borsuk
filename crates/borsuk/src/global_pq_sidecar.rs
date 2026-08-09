@@ -29,7 +29,7 @@ use crate::{
     turboquant::{
         FastTurboQuantMseScanQuantizer, FastTurboQuantMseScanState,
         FastTurboQuantProdScanQuantizer, FastTurboQuantProdScanState,
-        PreparedFastTurboQuantMseScan, PreparedFastTurboQuantProdScan,
+        PreparedFastTurboQuantMseScan, PreparedFastTurboQuantProdScan, TurboQuantCodebookState,
     },
 };
 
@@ -98,6 +98,37 @@ impl GlobalScanQuantizerState {
     pub(crate) fn uses_product_code_locality(&self) -> bool {
         matches!(self, Self::Pq(_))
     }
+
+    fn heap_bytes(&self) -> usize {
+        match self {
+            Self::Pq(state) => product_quantizer_state_heap_bytes(state),
+            Self::FastTurboQuantMse(state) => {
+                state.codebooks.capacity() * size_of::<TurboQuantCodebookState>()
+                    + state
+                        .codebooks
+                        .iter()
+                        .map(turboquant_codebook_state_heap_bytes)
+                        .sum::<usize>()
+            }
+            Self::FastTurboQuantProd(state) => {
+                turboquant_codebook_state_heap_bytes(&state.codebook)
+            }
+        }
+    }
+}
+
+fn product_quantizer_state_heap_bytes(state: &ProductQuantizerState) -> usize {
+    state.subspace_offsets.capacity() * size_of::<usize>()
+        + state.codebooks.capacity() * size_of::<Vec<f32>>()
+        + state
+            .codebooks
+            .iter()
+            .map(|values| values.capacity() * size_of::<f32>())
+            .sum::<usize>()
+}
+
+fn turboquant_codebook_state_heap_bytes(state: &TurboQuantCodebookState) -> usize {
+    (state.boundaries.capacity() + state.centroids.capacity()) * size_of::<f32>()
 }
 
 impl From<ProductQuantizerState> for GlobalScanQuantizerState {
@@ -661,19 +692,11 @@ impl GlobalCoarseQuantizer {
 }
 
 impl GlobalCoarseQuantizerState {
-    fn resident_bytes(&self) -> usize {
-        let product_bytes = |state: &ProductQuantizerState| {
-            state
-                .codebooks
-                .iter()
-                .map(|values| values.capacity() * size_of::<f32>())
-                .sum::<usize>()
-                + state.subspace_offsets.capacity() * size_of::<usize>()
-        };
+    fn heap_bytes(&self) -> usize {
         match self {
-            Self::Product(state) => product_bytes(state),
+            Self::Product(state) => product_quantizer_state_heap_bytes(state),
             Self::Hierarchical(state) => {
-                product_bytes(&state.parent)
+                product_quantizer_state_heap_bytes(&state.parent)
                     + state.child_offsets.capacity() * size_of::<u16>()
                     + state.child_centroids.capacity() * size_of::<f32>()
             }
@@ -791,6 +814,7 @@ impl LocationEncoding {
         Ok(packed)
     }
 
+    #[cfg(test)]
     pub(crate) fn unpack(self, packed: u64) -> GlobalPqRow {
         let mask = 1_u64
             .checked_shl(self.row_bits as u32)
@@ -1621,14 +1645,17 @@ impl GlobalPqDescriptor {
         self.vector_element_type
     }
 
+    #[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
     pub(crate) fn cell_count(&self) -> usize {
         self.cell_count
     }
 
+    #[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
     pub(crate) fn page_count(&self) -> usize {
         self.page_count
     }
 
+    #[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
     pub(crate) fn bundle_count(&self) -> usize {
         self.bundle_count
     }
@@ -1646,16 +1673,13 @@ impl GlobalPqDescriptor {
     }
 
     pub(crate) fn resident_bytes(&self) -> usize {
-        let scan = GlobalScanQuantizer::from_state(self.quantizer.clone())
-            .expect("validated V10 scan quantizer");
-        let coarse = GlobalCoarseQuantizer::from_state(self.coarse_quantizer.clone())
-            .expect("validated V10 coarse quantizer");
         size_of::<Self>()
-            + scan.resident_bytes()
-            + coarse.resident_bytes()
-            + self.cell_root.path.len()
-            + self.shard_table.path.len()
-            + self.bundle_table.path.len()
+            + self.layout.capacity()
+            + self.quantizer.heap_bytes()
+            + self.coarse_quantizer.heap_bytes()
+            + self.cell_root.path.capacity()
+            + self.shard_table.path.capacity()
+            + self.bundle_table.path.capacity()
     }
 }
 
@@ -2040,6 +2064,7 @@ pub(crate) struct GlobalCellGraph {
 
 impl GlobalCellGraph {
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub(crate) fn build(
         reference: &GlobalPqChunkRef,
         chunk: Vec<u8>,
@@ -2138,6 +2163,7 @@ impl GlobalCellGraph {
         Ok(graph)
     }
 
+    #[cfg(test)]
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
         self.validate()?;
         let total = CELL_GRAPH_HEADER_LEN
@@ -2818,6 +2844,16 @@ mod tests {
         assert_eq!(decoded.cell_root().path, "global-leaf/cells.parquet");
         assert_eq!(decoded.shard_table().checksum, [2; 32]);
         assert_eq!(decoded.bundle_table().checksum, [3; 32]);
+        assert_eq!(
+            descriptor.resident_bytes(),
+            size_of::<GlobalPqDescriptor>()
+                + descriptor.layout.capacity()
+                + descriptor.quantizer.heap_bytes()
+                + descriptor.coarse_quantizer.heap_bytes()
+                + descriptor.cell_root.path.capacity()
+                + descriptor.shard_table.path.capacity()
+                + descriptor.bundle_table.path.capacity()
+        );
         assert!(descriptor.resident_bytes() < 2 * 1024 * 1024);
     }
 

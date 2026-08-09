@@ -173,6 +173,7 @@ impl GlobalLeafDirectoryShardBuilder {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn push_cell(
         &mut self,
         pages: &[GlobalLeafPageRef],
@@ -587,6 +588,7 @@ fn encode_global_leaf_bundle_with_max_bytes(
     })
 }
 
+#[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
 pub(crate) fn decode_global_leaf_page(
     page: &EncodedGlobalLeafPage,
     stored: &[u8],
@@ -665,6 +667,7 @@ pub(crate) fn encode_global_leaf_directory_shard(
     encode_global_leaf_page_table(&pages, code_width)
 }
 
+#[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
 pub(crate) fn decode_global_leaf_directory_shard(
     bytes: &[u8],
     root: &GlobalLeafDirectoryRoot,
@@ -729,6 +732,7 @@ pub(crate) fn decode_global_leaf_directory_root(
     })
 }
 
+#[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
 pub(crate) fn load_global_leaf_pages_for_cells(
     root: &GlobalLeafDirectoryRoot,
     selected_cells: &[u16],
@@ -1299,6 +1303,7 @@ fn decode_global_leaf_shard_table(bytes: &[u8]) -> Result<Vec<GlobalLeafDirector
     Ok(shards)
 }
 
+#[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
 fn decode_global_leaf_page_table(
     bytes: &[u8],
     code_width: usize,
@@ -1486,6 +1491,7 @@ fn invalid_leaf_directory(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(format!("global leaf directory {message}"))
 }
 
+#[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
 fn validate_global_leaf_row_integrity(
     batch: &RecordBatch,
     dimensions: usize,
@@ -1533,7 +1539,7 @@ fn validate_global_leaf_row_integrity(
             )
         })?;
     let exact_rows = global_leaf_exact_rows(batch.column(5).as_ref(), dimensions, element_type)?;
-    for row in 0..batch.num_rows() {
+    for (row, exact_row) in exact_rows.iter().enumerate() {
         let writer: [u8; 16] = writers.value(row).try_into().map_err(|_| {
             BorsukError::InvalidStorage("global leaf mutation writer width is invalid".to_string())
         })?;
@@ -1544,9 +1550,7 @@ fn validate_global_leaf_row_integrity(
             crate::mutation::MutationVersion::from_parts(hlcs.value(row), writer),
             digest,
         );
-        if global_leaf_row_integrity(ids.value(row), stamp, &exact_rows[row])
-            != integrities.value(row)
-        {
+        if global_leaf_row_integrity(ids.value(row), stamp, exact_row) != integrities.value(row) {
             return Err(BorsukError::InvalidStorage(format!(
                 "global leaf row {row} integrity mismatch"
             )));
@@ -1555,6 +1559,7 @@ fn validate_global_leaf_row_integrity(
     Ok(())
 }
 
+#[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
 fn global_leaf_exact_rows(
     array: &dyn Array,
     dimensions: usize,
