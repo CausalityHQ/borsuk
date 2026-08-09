@@ -57,6 +57,19 @@ pub(crate) struct ResidualPqIntervalScratch {
     residual_center: Vec<f32>,
 }
 
+impl ResidualPqPreparedQuery {
+    pub(crate) fn heap_buffer_allocations(&self) -> usize {
+        usize::from(self.transformed.capacity() > 0)
+    }
+}
+
+impl ResidualPqIntervalScratch {
+    pub(crate) fn heap_buffer_allocations(&self) -> usize {
+        usize::from(self.primary_center.capacity() > 0)
+            + usize::from(self.residual_center.capacity() > 0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResidualPqCertificate {
     quantizer: RotatedProductQuantizer,

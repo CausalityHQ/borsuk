@@ -48,11 +48,129 @@ EXACT_BOUND_SHADOW_V8_FIELDS = (
     "global_exact_bound_residual_bytes",
     "global_exact_bound_residual_scan_bytes",
 )
+EXACT_BOUND_SHADOW_RESIDUAL_PQ_FIELDS = (
+    "global_exact_bound_predicted_waves",
+    "global_exact_bound_certificate_scratch_allocations",
+)
+
+RESIDUAL_PQ_CAMPAIGN_ID = "group-commit-residual-pq-local-v1"
+RESIDUAL_PQ_REPORTING_FIELDS = [
+    "scan_waves",
+    "dynamic_program_minimum_exact_ranges",
+    "dynamic_program_minimum_exact_bytes",
+    "certificate_decode_cpu_p50_p95_p99_us",
+    "certificate_allocation_count",
+    "read_latency_p50_p95_p99_ms",
+    "structural_and_empirical_floor_gaps",
+]
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValidationError(message)
+
+
+def validate_residual_pq_manifest(manifest: dict[str, object]) -> None:
+    """Validate the exact preregistered V8 local decision contract."""
+    require(
+        manifest.get("campaign_id") == RESIDUAL_PQ_CAMPAIGN_ID,
+        "residual-PQ campaign identity drift",
+    )
+    exact = manifest.get("exact_bound_shadow")
+    require(isinstance(exact, dict), "missing residual-PQ exact-bound contract")
+    optimization = manifest.get("optimization_contract")
+    require(isinstance(optimization, dict), "missing latency optimization contract")
+    requirements = (
+        (manifest.get("protocol_kind") == "local", "protocol kind"),
+        (manifest.get("dataset") == "cohere-medium-1M", "dataset"),
+        (manifest.get("dimensions") == 768, "dimensions"),
+        (manifest.get("metric") == "cosine", "metric"),
+        (manifest.get("cell_counts") == [2_000], "cell count"),
+        (manifest.get("writers") == [32], "writer count"),
+        (manifest.get("worker_lanes") == [1], "worker lane"),
+        (manifest.get("repetitions") == 1, "repetition count"),
+        (manifest.get("operations_per_writer") == 32, "operation count"),
+        (manifest.get("records_per_operation") == 16, "records per operation"),
+        (manifest.get("writer_process_cpu_threads") == 1, "writer CPU threads"),
+        (manifest.get("writer_process_io_threads") == 2, "writer I/O threads"),
+        (manifest.get("read_queries_per_cell") == 20, "read query count"),
+        (manifest.get("min_inserted_id_recall_at_10") == 1.0, "recall gate"),
+        (
+            exact.get("candidate_configuration")
+            == "residual-pq64-f32-error-shadow",
+            "candidate configuration",
+        ),
+        (exact.get("residual_code_bytes") == 64, "residual code width"),
+        (exact.get("residual_error_bytes") == 4, "residual error width"),
+        (exact.get("exact_vector_bytes") == 3_072, "exact vector width"),
+        (exact.get("require_zero_containment_failures") is True, "containment gate"),
+        (exact.get("max_survivor_p95") == 11, "survivor gate"),
+        (exact.get("min_read_reduction_fraction") == 0.30, "read reduction gate"),
+        (exact.get("min_byte_reduction_fraction") == 0.30, "byte reduction gate"),
+        (exact.get("max_cpu_p95_us") == 2_000, "CPU gate"),
+        (exact.get("max_cpu_fraction_of_read_p95") == 0.05, "CPU fraction gate"),
+        (exact.get("max_residual_bytes_per_vector") == 68, "residual byte gate"),
+        (exact.get("max_total_backing_byte_ratio") == 2.0, "backing byte gate"),
+        (exact.get("max_drain_regression_fraction") == 0.10, "drain regression gate"),
+        (
+            exact.get("max_physical_write_amplification_regression_fraction")
+            == 0.10,
+            "physical write amplification regression gate",
+        ),
+        (
+            exact.get("non_read_regression_control")
+            == "same-cell-shared-ingest-and-drain",
+            "non-read regression control",
+        ),
+        (
+            exact.get("mandatory_reporting") == RESIDUAL_PQ_REPORTING_FIELDS,
+            "mandatory reporting contract",
+        ),
+        (optimization.get("hard_read_p95_ms") == 200, "latency optimization contract"),
+        (
+            optimization.get("selection_rule")
+            == "pareto-minimize-latency-requests-bytes-cpu-allocations-at-fixed-correctness-recall",
+            "Pareto selection contract",
+        ),
+        (
+            optimization.get("gate_passing_freezes_production_default") is False,
+            "production freeze contract",
+        ),
+    )
+    for valid, label in requirements:
+        require(valid, f"residual-PQ {label} drift")
+    total_records = (
+        int(manifest["writers"][0])
+        * int(manifest["operations_per_writer"])
+        * int(manifest["records_per_operation"])
+    )
+    require(total_records == 16_384, "residual-PQ total record count drift")
+
+
+def validate_residual_pq_storage_trace(
+    events: list[dict[str, str]], context: str
+) -> None:
+    exact_reads = [
+        event
+        for event in events
+        if event.get("operation") == "read"
+        and event.get("object_role") == "exact_vectors"
+        and event.get("status") == "ok"
+    ]
+    require(bool(exact_reads), f"missing exact-path trace in {context}")
+    require(
+        all(event.get("cache_state") != "hit" for event in exact_reads),
+        f"exact-path trace contains a cache hit in {context}",
+    )
+    require(
+        all(
+            event.get("cache_state") == "backing"
+            and integer(event["request_count"], "exact trace request count") > 0
+            and integer(event["bytes_fetched"], "exact trace bytes fetched") > 0
+            for event in exact_reads
+        ),
+        f"exact-path trace lacks uncached backing evidence in {context}",
+    )
 
 
 def rows(path: Path) -> list[dict[str, str]]:
@@ -61,6 +179,32 @@ def rows(path: Path) -> list[dict[str, str]]:
         reader = csv.DictReader(handle)
         require(reader.fieldnames is not None, f"missing CSV header in {path}")
         return list(reader)
+
+
+def expected_aggregate_rows(
+    root: Path,
+    cells: set[tuple[int, int, int, int]],
+    name: str,
+) -> list[dict[str, str]]:
+    expected: list[dict[str, str]] = []
+    for cell_count, repetition, lanes, writers in sorted(cells):
+        cell = (
+            root
+            / "cells"
+            / f"c{cell_count}"
+            / f"r{repetition:02d}"
+            / f"l{lanes}"
+            / f"w{writers}"
+        )
+        for row in rows(cell / name):
+            identity = {
+                "cell_count": str(cell_count),
+                "repetition": str(repetition),
+            }
+            if name != "summary.csv":
+                identity["worker_lanes"] = str(lanes)
+            expected.append({**identity, **row})
+    return expected
 
 
 def finite(value: str, label: str) -> float:
@@ -98,7 +242,10 @@ def exact_bound_shadow_has_baseline(
 
 
 def validate_exact_bound_shadow_row(
-    read: dict[str, str], context: str, has_baseline: bool
+    read: dict[str, str],
+    context: str,
+    has_baseline: bool,
+    require_residual_pq: bool = False,
 ) -> None:
     fields = (
         EXACT_BOUND_SHADOW_FIELDS if has_baseline else EXACT_BOUND_SHADOW_V1_FIELDS
@@ -179,6 +326,40 @@ def validate_exact_bound_shadow_row(
                 and v8_values["global_exact_bound_exact_backing_bytes"] > 0
             ),
             f"V8 uncached exact backing evidence is empty in {context}",
+        )
+    residual_count = sum(
+        field in read for field in EXACT_BOUND_SHADOW_RESIDUAL_PQ_FIELDS
+    )
+    require(
+        residual_count in {0, len(EXACT_BOUND_SHADOW_RESIDUAL_PQ_FIELDS)},
+        f"incomplete residual-PQ telemetry in {context}",
+    )
+    if require_residual_pq:
+        require(
+            v8_count == len(EXACT_BOUND_SHADOW_V8_FIELDS)
+            and residual_count == len(EXACT_BOUND_SHADOW_RESIDUAL_PQ_FIELDS),
+            f"incomplete residual-PQ telemetry in {context}",
+        )
+    if residual_count:
+        predicted_waves = integer(
+            read["global_exact_bound_predicted_waves"],
+            f"{context} global_exact_bound_predicted_waves",
+        )
+        scratch_allocations = integer(
+            read["global_exact_bound_certificate_scratch_allocations"],
+            f"{context} global_exact_bound_certificate_scratch_allocations",
+        )
+        require(
+            predicted_waves >= 0 and scratch_allocations >= 0,
+            f"negative residual-PQ physical telemetry in {context}",
+        )
+        require(
+            survivors == 0 or predicted_waves > 0,
+            f"residual-PQ request-wave evidence is empty in {context}",
+        )
+        require(
+            predicted_waves <= predicted_reads,
+            f"residual-PQ request waves exceed requests in {context}",
         )
 
 
@@ -273,12 +454,24 @@ def validate(
     manifest_path: Path,
     terminal_cell: tuple[int, int, int, int] | None = None,
     failed_terminal_cell: tuple[int, int, int, int] | None = None,
+    preterminal_root: bool = False,
 ) -> None:
     require(
         terminal_cell is None or failed_terminal_cell is None,
         "completed and failed terminal-cell modes are mutually exclusive",
     )
-    if failed_terminal_cell is not None:
+    require(
+        not preterminal_root
+        or (terminal_cell is None and failed_terminal_cell is None),
+        "preterminal root and terminal-cell modes are mutually exclusive",
+    )
+    if preterminal_root:
+        require(
+            not (root / "GROUP_COMMIT_SCALABILITY_COMPLETE").exists()
+            and not (root / "GROUP_COMMIT_SCALABILITY_FAILED").exists(),
+            "preterminal root must not have a terminal marker",
+        )
+    elif failed_terminal_cell is not None:
         require(
             not (root / "GROUP_COMMIT_SCALABILITY_COMPLETE").exists(),
             "failed-cell recovery requires no completion marker",
@@ -292,7 +485,7 @@ def validate(
             (root / "GROUP_COMMIT_SCALABILITY_COMPLETE").is_file(),
             "campaign is incomplete",
         )
-    if failed_terminal_cell is None:
+    if failed_terminal_cell is None and not preterminal_root:
         require(
             not (root / "GROUP_COMMIT_SCALABILITY_FAILED").exists(),
             "campaign has a failure marker",
@@ -302,6 +495,14 @@ def validate(
     copied = (root / "manifest.json").read_bytes()
     require(copied == frozen, "copied manifest differs from the frozen manifest")
     manifest = json.loads(frozen)
+    exact_contract = manifest.get("exact_bound_shadow")
+    require_residual_pq = manifest.get("campaign_id") == RESIDUAL_PQ_CAMPAIGN_ID or (
+        isinstance(exact_contract, dict)
+        and exact_contract.get("candidate_configuration")
+        == "residual-pq64-f32-error-shadow"
+    )
+    if require_residual_pq:
+        validate_residual_pq_manifest(manifest)
     direct_request_contract = direct_acknowledgement_request_contract(
         manifest["protocol_kind"]
     )
@@ -710,6 +911,8 @@ def validate(
         )
         storage_events = rows(cell / "storage-access.csv")
         require(bool(storage_events), f"missing physical storage evidence in {cell}")
+        if require_residual_pq:
+            validate_residual_pq_storage_trace(storage_events, str(cell))
         physical_write_bytes = 0
         for event in storage_events:
             object_bytes = integer(event["object_bytes"], "physical object bytes")
@@ -879,7 +1082,10 @@ def validate(
                     f"exact-bound shadow schema drift in {cell}",
                 )
                 validate_exact_bound_shadow_row(
-                    read, f"{cell} read {query}", exact_bound_has_baseline
+                    read,
+                    f"{cell} read {query}",
+                    exact_bound_has_baseline,
+                    require_residual_pq=require_residual_pq,
                 )
         require(
             observed_read_requests == read_request_total,
@@ -938,6 +1144,7 @@ def validate(
                     read,
                     f"{cell} active-tail read {query}",
                     active_exact_bound_has_baseline,
+                    require_residual_pq=require_residual_pq,
                 )
         require_close(
             finite(summary["active_tail_read_p50_ms"], "active_tail_read_p50_ms"),
@@ -1020,6 +1227,18 @@ def validate(
         for row in aggregate_summary
     }
     require(aggregate_keys == expected_cells, "aggregate matrix coverage mismatch")
+    aggregate_contracts = (
+        ("summary.csv", aggregate_summary, "aggregate summary content mismatch"),
+        ("samples.csv", aggregate_samples, "aggregate samples content mismatch"),
+        ("reads.csv", aggregate_reads, "aggregate reads content mismatch"),
+        (
+            "active-tail-reads.csv",
+            aggregate_active_tail_reads,
+            "aggregate active-tail reads content mismatch",
+        ),
+    )
+    for name, observed, message in aggregate_contracts:
+        require(observed == expected_aggregate_rows(root, expected_cells, name), message)
 
     correctness = rows(root / "correctness.csv")
     expected_gates = set(manifest["correctness_gates"])
@@ -1047,6 +1266,11 @@ def main() -> int:
         metavar="cCELLS/rREPETITION/lLANES/wWRITERS",
         help="reconcile one terminal production-gate failure after root failure",
     )
+    parser.add_argument(
+        "--preterminal-root",
+        action="store_true",
+        help="validate a complete root before writing its terminal marker",
+    )
     args = parser.parse_args()
     terminal_cell = None
     failed_terminal_cell = None
@@ -1070,6 +1294,7 @@ def main() -> int:
             args.manifest,
             terminal_cell=terminal_cell,
             failed_terminal_cell=failed_terminal_cell,
+            preterminal_root=args.preterminal_root,
         )
     except (
         OSError,

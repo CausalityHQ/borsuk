@@ -2246,3 +2246,36 @@ scalar certificate hypothesis: do not weaken its thresholds or launch an AWS
 campaign from it. The next preregistered treatment must change the core exact
 read architecture and demonstrate real no-cache GET and byte reduction before
 AWS qualification.
+
+### Preregistered V8 residual-PQ local decision arm
+
+`group-commit-residual-pq-local-qualification.json` replaces the exhausted
+scalar hypothesis with campaign `group-commit-residual-pq-local-v1`. It freezes
+the same checksum-pinned 16,384-vector, 2,000-cell, 32-process, one-lane Cohere
+Medium 1M local workload, but requires the persisted
+`residual-pq64-f32-error-shadow` certificate, survivor p95 no greater than 11
+of 16, zero containment failures, and at least 30% reductions in both the
+request-weighted dynamic-program exact plan's requests and bytes. The format
+cost is bounded at 68 bytes per vector and total no-cache query backing bytes
+at twice the unchanged exact-vector backing bytes.
+
+The decision contract treats 200 ms read p95 only as a rejection ceiling. An
+accepted arm remains provisional and cannot freeze a production default: the
+artifact must also report read and certificate p50/p95/p99, DP-optimal exact
+ranges and bytes under the frozen 128 KiB request-weighted objective, remote
+request waves, prepared-query and interval-scratch heap-buffer counts, and
+gaps above request, byte, and observed latency/CPU floors. The shared ingest
+and drain are the exact zero-difference control for the read-only shadow;
+absolute physical write amplification and the 68-byte V8 payload bound govern
+storage cost separately.
+
+The runner uses the new explicit `BORSUK_GROUP_COMMIT_RESIDUAL_PQ_LOCAL` mode,
+requires a clean source identity and fresh no-cache roots, and writes the root
+completion marker only after preterminal validation and decision generation.
+Malformed or incomplete evidence exits above one; exit one is reserved for a
+structurally valid rejection. The validator now reconciles aggregate rows
+byte-for-byte with terminal cell rows and requires uncached exact-vector trace
+events. A synthetic terminal root covering the exact 1,024-operation/16,384-
+record shape passes the validator and yields a provisional synthetic decision;
+it is structural evidence only and contains no performance claim. No V8 local
+measurement has been launched at this entry.

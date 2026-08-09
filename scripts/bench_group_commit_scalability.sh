@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SMOKE="${BORSUK_GROUP_COMMIT_SCALABILITY_SMOKE:-0}"
-EXACT_BOUND_LOCAL="${BORSUK_GROUP_COMMIT_EXACT_BOUND_LOCAL:-0}"
+RESIDUAL_PQ_LOCAL="${BORSUK_GROUP_COMMIT_RESIDUAL_PQ_LOCAL:-0}"
 EXACT_BOUND_SHADOW=0
-[[ "$SMOKE" != "1" || "$EXACT_BOUND_LOCAL" != "1" ]] || {
+[[ "$SMOKE" != "1" || "$RESIDUAL_PQ_LOCAL" != "1" ]] || {
   echo "smoke and exact-bound local modes are mutually exclusive" >&2
   exit 2
 }
@@ -43,9 +43,9 @@ if [[ "$SMOKE" == "1" ]]; then
   ARCHITECTURE=local
   INSTANCE_TYPE=local
   PROTOCOL=smoke
-elif [[ "$EXACT_BOUND_LOCAL" == "1" ]]; then
+elif [[ "$RESIDUAL_PQ_LOCAL" == "1" ]]; then
   EXACT_BOUND_SHADOW=1
-  MANIFEST="$ROOT_DIR/docs/research/group-commit-exact-bound-local-qualification-v3.json"
+  MANIFEST="$ROOT_DIR/docs/research/group-commit-residual-pq-local-qualification.json"
   mapfile -t CELL_COUNTS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["cell_counts"], sep="\n")' "$MANIFEST")
   mapfile -t WRITERS < <(python3 -c 'import json,sys; print(*json.load(open(sys.argv[1]))["writers"], sep="\n")' "$MANIFEST")
   REPETITIONS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["repetitions"])' "$MANIFEST")"
@@ -157,7 +157,7 @@ GROUP_BINARY="$TARGET_DIR/release/examples/group_commit_bench"
 RESULT_URI="${BORSUK_GROUP_COMMIT_SCALABILITY_RESULT_URI:-}"
 CURRENT_CELL=""
 
-if [[ "$EXACT_BOUND_LOCAL" == "1" && "$SOURCE_FROM_GIT" == "1" ]]; then
+if [[ "$RESIDUAL_PQ_LOCAL" == "1" && "$SOURCE_FROM_GIT" == "1" ]]; then
   [[ "$SOURCE_SHA256" == "$HEAD_SOURCE_SHA256" ]] || {
     echo "exact-bound local source SHA-256 differs from checked-out HEAD archive" >&2
     exit 3
@@ -197,7 +197,7 @@ rotate_order() {
   done
 }
 
-if [[ "$SMOKE" != "1" && "$EXACT_BOUND_LOCAL" != "1" ]]; then
+if [[ "$SMOKE" != "1" && "$RESIDUAL_PQ_LOCAL" != "1" ]]; then
   [[ "$INDEX_ROOT" == s3://* ]] || { echo "production index root must be s3://" >&2; exit 3; }
   [[ "$RESULT_URI" == s3://* ]] || { echo "production result root must be s3://" >&2; exit 3; }
   [[ "$SOURCE_SHA256" == "$HEAD_SOURCE_SHA256" ]] || {
@@ -317,7 +317,7 @@ for cells in "${CELL_COUNTS[@]}"; do
       benchmark_stdout="${cell_output}.benchmark.stdout.log"
       benchmark_stderr="${cell_output}.benchmark.stderr.log"
       cache_env=()
-      if [[ "$EXACT_BOUND_LOCAL" != "1" ]]; then
+      if [[ "$RESIDUAL_PQ_LOCAL" != "1" ]]; then
         cache_env=(BORSUK_GROUP_COMMIT_CACHE_DIR="$cell_output/cache")
       fi
       set +e
@@ -453,15 +453,15 @@ else
   printf 'gate,status\ngrouped_durable_ack,pass\nindependent_writer_instances,pass\nextent_idempotency,pass\npost_completion_lease_fencing,pass\nstale_watermark_reopen,pass\nepoch_zombie_exclusion,pass\nowner_only_head_mutation,pass\nsequential_last_write_wins,pass\ntail_backpressure,pass\ndelta_drain_frontier_safety,pass\n' > "$OUTPUT/correctness.csv"
 fi
 
-printf 'complete\n' > "$OUTPUT/GROUP_COMMIT_SCALABILITY_COMPLETE"
 python3 "$ROOT_DIR/scripts/validate_group_commit_scalability.py" \
-  --manifest "$MANIFEST" "$OUTPUT"
-if [[ "$EXACT_BOUND_LOCAL" == "1" ]]; then
+  --manifest "$MANIFEST" --preterminal-root "$OUTPUT"
+if [[ "$RESIDUAL_PQ_LOCAL" == "1" ]]; then
   decision="$OUTPUT/exact-bound-shadow-decision.json"
   set +e
   python3 "$ROOT_DIR/scripts/evaluate_exact_bound_shadow.py" \
     --manifest "$MANIFEST" \
     --output "$decision" \
+    --preterminal-root \
     "$OUTPUT"
   decision_status=$?
   set -e
@@ -474,6 +474,9 @@ if [[ "$EXACT_BOUND_LOCAL" == "1" ]]; then
     exit "$decision_status"
   fi
 fi
+printf 'complete\n' > "$OUTPUT/GROUP_COMMIT_SCALABILITY_COMPLETE"
+python3 "$ROOT_DIR/scripts/validate_group_commit_scalability.py" \
+  --manifest "$MANIFEST" "$OUTPUT"
 sync_results
 trap - EXIT
 printf '%s\n' "$OUTPUT"

@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import validate_group_commit_scalability as validator
+from evaluate_exact_bound_shadow import evaluate
 from validate_group_commit_scalability import (
     ValidationError,
     direct_acknowledgement_request_contract,
@@ -20,6 +22,105 @@ from validate_group_commit_scalability import (
 
 
 class ValidatorTests(unittest.TestCase):
+    def test_residual_pq_manifest_contract_rejects_any_shape_or_gate_drift(self) -> None:
+        self.assertTrue(hasattr(validator, "validate_residual_pq_manifest"))
+        manifest = json.loads(
+            (
+                Path(__file__).parent.parent
+                / "docs/research/group-commit-residual-pq-local-qualification.json"
+            ).read_text()
+        )
+        validator.validate_residual_pq_manifest(manifest)
+        mutations = (
+            ("cell count", lambda value: value.update(cell_counts=[1999])),
+            ("writer count", lambda value: value.update(writers=[31])),
+            ("dimensions", lambda value: value.update(dimensions=96)),
+            (
+                "residual code width",
+                lambda value: value["exact_bound_shadow"].update(
+                    residual_code_bytes=63
+                ),
+            ),
+            (
+                "survivor gate",
+                lambda value: value["exact_bound_shadow"].update(
+                    max_survivor_p95=12
+                ),
+            ),
+            (
+                "latency optimization contract",
+                lambda value: value["optimization_contract"].update(
+                    hard_read_p95_ms=201
+                ),
+            ),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                candidate = json.loads(json.dumps(manifest))
+                mutate(candidate)
+                with self.assertRaisesRegex(ValidationError, label):
+                    validator.validate_residual_pq_manifest(candidate)
+
+    def test_residual_pq_rows_require_physical_waves_and_allocation_evidence(self) -> None:
+        shadow = {
+            "global_exact_bound_candidates": "16",
+            "global_exact_bound_survivors": "11",
+            "global_exact_bound_fail_open": "0",
+            "global_exact_bound_containment_failures": "0",
+            "global_exact_bound_baseline_reads": "9",
+            "global_exact_bound_baseline_bytes": "49152",
+            "global_exact_bound_predicted_reads": "7",
+            "global_exact_bound_predicted_bytes": "33792",
+            "global_exact_bound_cpu_us": "91",
+            "global_exact_bound_certificate_kind": "residual-pq-v8",
+            "global_exact_bound_exact_backing_reads": "9",
+            "global_exact_bound_exact_backing_bytes": "49152",
+            "global_exact_bound_residual_bytes": "1088",
+            "global_exact_bound_residual_scan_bytes": "69632",
+        }
+        with self.assertRaisesRegex(ValidationError, "incomplete residual-PQ telemetry"):
+            validator.validate_exact_bound_shadow_row(
+                shadow, "query", True, require_residual_pq=True
+            )
+        shadow.update(
+            global_exact_bound_predicted_waves="1",
+            global_exact_bound_certificate_scratch_allocations="3",
+        )
+        validator.validate_exact_bound_shadow_row(
+            shadow, "query", True, require_residual_pq=True
+        )
+        shadow["global_exact_bound_predicted_waves"] = "0"
+        with self.assertRaisesRegex(ValidationError, "request-wave evidence is empty"):
+            validator.validate_exact_bound_shadow_row(
+                shadow, "query", True, require_residual_pq=True
+            )
+
+    def test_residual_pq_storage_trace_requires_uncached_exact_reads(self) -> None:
+        write_only = [
+            {
+                "operation": "write",
+                "object_role": "lane_head",
+                "status": "ok",
+                "cache_state": "backing",
+                "request_count": "1",
+                "bytes_fetched": "0",
+            }
+        ]
+        with self.assertRaisesRegex(ValidationError, "missing exact-path trace"):
+            validator.validate_residual_pq_storage_trace(write_only, "cell")
+        exact = {
+            "operation": "read",
+            "object_role": "exact_vectors",
+            "status": "ok",
+            "cache_state": "backing",
+            "request_count": "1",
+            "bytes_fetched": "3072",
+        }
+        validator.validate_residual_pq_storage_trace([*write_only, exact], "cell")
+        exact["cache_state"] = "hit"
+        with self.assertRaisesRegex(ValidationError, "cache hit"):
+            validator.validate_residual_pq_storage_trace([*write_only, exact], "cell")
+
     def test_request_contract_distinguishes_local_smoke_from_s3_evidence(self) -> None:
         self.assertEqual(
             direct_acknowledgement_request_contract("smoke"),
@@ -363,6 +464,24 @@ class ValidatorTests(unittest.TestCase):
             writer.writeheader()
             writer.writerows(records)
 
+    def _rebuild_single_cell_aggregate(self, name: str) -> None:
+        source = self.root / "cells/c64/r01/l1/w1" / name
+        with source.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            source_fields = list(reader.fieldnames or [])
+            records = list(reader)
+        prefix = ["cell_count", "repetition"]
+        if name != "summary.csv":
+            prefix.append("worker_lanes")
+        identity = {"cell_count": "64", "repetition": "1"}
+        if name != "summary.csv":
+            identity["worker_lanes"] = "1"
+        self._write_csv(
+            self.root / name,
+            prefix + source_fields,
+            [{**identity, **record} for record in records],
+        )
+
     def _mark_read_performance_failure(self) -> None:
         cell = self.root / "cells/c64/r01/l1/w1"
         (self.root / "GROUP_COMMIT_SCALABILITY_COMPLETE").unlink()
@@ -393,6 +512,12 @@ class ValidatorTests(unittest.TestCase):
 
     def test_valid_terminal_campaign_passes(self) -> None:
         validate(self.root, self.manifest_path)
+
+    def test_preterminal_root_validates_complete_artifacts_before_marker(self) -> None:
+        (self.root / "GROUP_COMMIT_SCALABILITY_COMPLETE").unlink()
+        with self.assertRaisesRegex(ValidationError, "campaign is incomplete"):
+            validate(self.root, self.manifest_path)
+        validate(self.root, self.manifest_path, preterminal_root=True)
 
     def test_thread_only_evidence_cannot_claim_independent_writers(self) -> None:
         cell = self.root / "cells/c64/r01/l1/w1/summary.csv"
@@ -790,6 +915,17 @@ class ValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "incomplete exact-bound shadow"):
             validate(self.root, self.manifest_path)
 
+    def test_aggregate_read_rows_must_match_terminal_cell_rows(self) -> None:
+        aggregate = self.root / "reads.csv"
+        with aggregate.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = list(reader.fieldnames or [])
+            records = list(reader)
+        records[0]["latency_ms"] = "999"
+        self._write_csv(aggregate, fields, records)
+        with self.assertRaisesRegex(ValidationError, "aggregate reads content mismatch"):
+            validate(self.root, self.manifest_path)
+
     def test_exact_bound_containment_failure_must_fail_the_query_open(self) -> None:
         reads_path = self.root / "cells/c64/r01/l1/w1/reads.csv"
         with reads_path.open(newline="", encoding="utf-8") as handle:
@@ -886,6 +1022,7 @@ class ValidatorTests(unittest.TestCase):
             fields.extend(shadow)
             records[0].update(shadow)
             self._write_csv(reads_path, fields, records)
+            self._rebuild_single_cell_aggregate(name)
         validate(self.root, self.manifest_path)
 
     def test_legacy_exact_bound_shadow_without_baseline_remains_valid(self) -> None:
@@ -907,7 +1044,329 @@ class ValidatorTests(unittest.TestCase):
             fields.extend(shadow)
             records[0].update(shadow)
             self._write_csv(reads_path, fields, records)
+            self._rebuild_single_cell_aggregate(name)
         validate(self.root, self.manifest_path)
+
+
+class ResidualPqTerminalRootTests(unittest.TestCase):
+    @staticmethod
+    def _write_csv(
+        path: Path, fields: list[str], records: list[dict[str, str]]
+    ) -> None:
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(records)
+
+    def test_structurally_valid_terminal_residual_pq_root(self) -> None:
+        repository = Path(__file__).parent.parent
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "results"
+            cell = root / "cells/c2000/r01/l1/w32"
+            cell.mkdir(parents=True)
+            manifest_path = (
+                repository
+                / "docs/research/group-commit-residual-pq-local-qualification.json"
+            )
+            frozen = manifest_path.read_bytes()
+            (root / "manifest.json").write_bytes(frozen)
+            (root / "dataset.json").write_bytes(
+                (
+                    repository
+                    / "scripts/fixtures/cohere-medium-1M-dataset.json"
+                ).read_bytes()
+            )
+            manifest = json.loads(frozen)
+            manifest_sha = hashlib.sha256(frozen).hexdigest()
+            source_sha = "a" * 64
+            (root / "environment.txt").write_text(
+                f"source_sha256={source_sha}\n"
+                f"dataset_sha256={manifest['dataset_sha256']}\n"
+                f"manifest_sha256={manifest_sha}\n"
+                "architecture=aarch64\ninstance_type=devbox-local\n",
+                encoding="utf-8",
+            )
+
+            sample_fields = [
+                "writer",
+                "writer_instance",
+                "process_id",
+                "operation",
+                "batch_records",
+                "record_ids",
+                "first_record_id",
+                "latency_ms",
+                "commit_lane",
+                "commit_sequence",
+                "committed_records",
+                "acknowledgement_bytes",
+                "group_requests",
+                "group_gets",
+                "group_puts",
+                "group_heads",
+                "lane_receipts",
+            ]
+            samples = []
+            for writer in range(32):
+                for operation in range(32):
+                    record_ids = [
+                        f"id-{writer}-{operation}-{record}" for record in range(16)
+                    ]
+                    extent = hashlib.sha256(
+                        f"extent-{writer}-{operation}".encode()
+                    ).hexdigest()
+                    head = hashlib.sha256(
+                        f"head-{writer}-{operation}".encode()
+                    ).hexdigest()
+                    samples.append(
+                        {
+                            "writer": str(writer),
+                            "writer_instance": str(writer),
+                            "process_id": str(10_000 + writer),
+                            "operation": str(operation),
+                            "batch_records": "16",
+                            "record_ids": "|".join(record_ids),
+                            "first_record_id": record_ids[0],
+                            "latency_ms": "1",
+                            "commit_lane": str(writer),
+                            "commit_sequence": str(operation + 1),
+                            "committed_records": "16",
+                            "acknowledgement_bytes": "4096",
+                            "group_requests": "4",
+                            "group_gets": "0",
+                            "group_puts": "3",
+                            "group_heads": "1",
+                            "lane_receipts": (
+                                f"{writer}:{operation + 1}:{operation + 1}:"
+                                f"16:4096:4:0:3:0:1:0:{extent}:{head}"
+                            ),
+                        }
+                    )
+            self._write_csv(cell / "samples.csv", sample_fields, samples)
+
+            exact = {
+                "global_exact_bound_candidates": "16",
+                "global_exact_bound_survivors": "11",
+                "global_exact_bound_fail_open": "0",
+                "global_exact_bound_containment_failures": "0",
+                "global_exact_bound_baseline_reads": "10",
+                "global_exact_bound_baseline_bytes": "100000",
+                "global_exact_bound_predicted_reads": "7",
+                "global_exact_bound_predicted_waves": "1",
+                "global_exact_bound_predicted_bytes": "70000",
+                "global_exact_bound_certificate_kind": "residual-pq-v8",
+                "global_exact_bound_exact_backing_reads": "10",
+                "global_exact_bound_exact_backing_bytes": "100000",
+                "global_exact_bound_residual_bytes": "1088",
+                "global_exact_bound_residual_scan_bytes": "4096",
+                "global_exact_bound_cpu_us": "1000",
+                "global_exact_bound_certificate_scratch_allocations": "3",
+            }
+            read_fields = [
+                "query",
+                "record_id",
+                "hit_id",
+                "contains_record_id",
+                "latency_ms",
+                "requests",
+                "gets",
+                "puts",
+                "deletes",
+                "heads",
+                "lists",
+                "bytes_read",
+                "backing_bytes_read",
+                "segments_searched",
+                "global_base_approximate_us",
+                "global_base_exact_rerank_us",
+                "global_delta_approximate_us",
+                "global_delta_exact_rerank_us",
+                "global_delta_wait_us",
+                *exact.keys(),
+            ]
+            reads = [
+                {
+                    "query": str(query),
+                    "record_id": f"id-0-0-{query % 16}",
+                    "hit_id": f"id-0-0-{query % 16}",
+                    "contains_record_id": "true",
+                    "latency_ms": "40",
+                    "requests": "5",
+                    "gets": "5",
+                    "puts": "0",
+                    "deletes": "0",
+                    "heads": "0",
+                    "lists": "0",
+                    "bytes_read": "180000",
+                    "backing_bytes_read": "180000",
+                    "segments_searched": "4",
+                    "global_base_approximate_us": "100",
+                    "global_base_exact_rerank_us": "1000",
+                    "global_delta_approximate_us": "0",
+                    "global_delta_exact_rerank_us": "0",
+                    "global_delta_wait_us": "0",
+                    **exact,
+                }
+                for query in range(20)
+            ]
+            self._write_csv(cell / "reads.csv", read_fields, reads)
+            active_reads = [
+                {**read, "latency_ms": "42"} for read in reads
+            ]
+            self._write_csv(cell / "active-tail-reads.csv", read_fields, active_reads)
+
+            total_records = 16_384
+            elapsed_ms = 1_000.0
+            drain_ms = 1_000.0
+            records_per_second = total_records / (elapsed_ms / 1_000.0)
+            summary = {
+                "source_sha256": source_sha,
+                "dataset_sha256": manifest["dataset_sha256"],
+                "manifest_sha256": manifest_sha,
+                "writers": "32",
+                "writer_instances": "32",
+                "operations": "32",
+                "records_per_operation": "16",
+                "pipeline_depth": "4",
+                "worker_lanes": "1",
+                "records": str(total_records),
+                "groups": "1024",
+                "mean_group_records": "16",
+                "elapsed_ms": str(elapsed_ms),
+                "drain_ms": str(drain_ms),
+                "end_to_end_records_per_second": str(
+                    total_records / ((elapsed_ms + drain_ms) / 1_000.0)
+                ),
+                "p50_ms": "1",
+                "p95_ms": "1",
+                "records_per_second": str(records_per_second),
+                "vector_mib_per_second": str(
+                    records_per_second * 768 * 4 / (1024 * 1024)
+                ),
+                "storage_requests": "4096",
+                "storage_gets": "0",
+                "storage_puts": "3072",
+                "storage_heads": "1024",
+                "requests_per_record": "0.25",
+                "total_acknowledgement_bytes": str(1024 * 4096),
+                "max_acknowledgement_bytes": "4096",
+                "visible_records": str(total_records),
+                "recall_queries": "20",
+                "max_read_segments": "4",
+                "inserted_id_recall_at_10": "1",
+                "active_tail_read_p50_ms": "42",
+                "active_tail_read_p95_ms": "42",
+                "read_p50_ms": "40",
+                "read_p95_ms": "40",
+                "read_storage_requests": "100",
+                "read_storage_gets": "100",
+                "read_storage_puts": "0",
+                "read_storage_deletes": "0",
+                "read_storage_heads": "0",
+                "read_storage_lists": "0",
+                "read_bytes": str(20 * 180_000),
+                "read_segments_searched": "80",
+            }
+            self._write_csv(cell / "summary.csv", list(summary), [summary])
+
+            trace_fields = [
+                "operation",
+                "object_role",
+                "path",
+                "physical_format",
+                "object_bytes",
+                "request_count",
+                "bytes_fetched",
+                "logical_projection",
+                "row_selection",
+                "logical_rows_requested",
+                "logical_rows_decoded",
+                "decode_cpu_ns",
+                "cache_state",
+                "status",
+            ]
+            trace = [
+                {
+                    "operation": "write",
+                    "object_role": "lane_head",
+                    "path": "lane-log/lanes/0000/HEAD",
+                    "physical_format": "packed",
+                    "object_bytes": "1048576",
+                    "request_count": "1",
+                    "bytes_fetched": "0",
+                    "logical_projection": "",
+                    "row_selection": "",
+                    "logical_rows_requested": "",
+                    "logical_rows_decoded": "",
+                    "decode_cpu_ns": "",
+                    "cache_state": "backing",
+                    "status": "ok",
+                },
+                {
+                    "operation": "read",
+                    "object_role": "exact_vectors",
+                    "path": "global-pq/exact/bundle.arrow",
+                    "physical_format": "arrow_ipc",
+                    "object_bytes": "100000",
+                    "request_count": "200",
+                    "bytes_fetched": "2000000",
+                    "logical_projection": "exact",
+                    "row_selection": "ranges",
+                    "logical_rows_requested": "320",
+                    "logical_rows_decoded": "320",
+                    "decode_cpu_ns": "1000",
+                    "cache_state": "backing",
+                    "status": "ok",
+                },
+            ]
+            self._write_csv(cell / "storage-access.csv", trace_fields, trace)
+            self._write_csv(
+                cell / "resources.csv",
+                ["elapsed_ms", "cpu_percent", "rss_bytes"],
+                [
+                    {"elapsed_ms": "0", "cpu_percent": "1", "rss_bytes": "1024"},
+                    {"elapsed_ms": "2100", "cpu_percent": "1", "rss_bytes": "1024"},
+                ],
+            )
+            (cell / "process_exit.txt").write_text("0\n", encoding="utf-8")
+            for marker in (*validator.PHASE_MARKERS, "CELL_COMPLETE"):
+                (cell / marker).touch()
+
+            def aggregate(name: str, records: list[dict[str, str]]) -> None:
+                prefix = ["cell_count", "repetition"]
+                identity = {"cell_count": "2000", "repetition": "1"}
+                if name != "summary.csv":
+                    prefix.append("worker_lanes")
+                    identity["worker_lanes"] = "1"
+                self._write_csv(
+                    root / name,
+                    prefix + list(records[0]),
+                    [{**identity, **record} for record in records],
+                )
+
+            aggregate("summary.csv", [summary])
+            aggregate("samples.csv", samples)
+            aggregate("reads.csv", reads)
+            aggregate("active-tail-reads.csv", active_reads)
+            self._write_csv(
+                root / "correctness.csv",
+                ["gate", "status"],
+                [
+                    {"gate": gate, "status": "pass"}
+                    for gate in manifest["correctness_gates"]
+                ],
+            )
+            (root / "GROUP_COMMIT_SCALABILITY_COMPLETE").touch()
+
+            validate(root, manifest_path)
+            decision = evaluate(
+                reads,
+                manifest["exact_bound_shadow"],
+                manifest["optimization_contract"],
+            )
+            self.assertTrue(decision["accepted"])
+            self.assertTrue(decision["provisional_only"])
+            self.assertFalse(decision["production_default_eligible"])
 
 
 if __name__ == "__main__":

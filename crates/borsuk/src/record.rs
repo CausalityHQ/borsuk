@@ -988,6 +988,8 @@ pub struct GlobalExactBoundShadow {
     pub baseline_bytes: u64,
     /// Counterfactual physical exact-range requests after survivor filtering.
     pub predicted_reads: usize,
+    /// Counterfactual remote request waves at the production parallelism cap.
+    pub predicted_waves: usize,
     /// Counterfactual physical exact-range bytes after survivor filtering.
     pub predicted_bytes: u64,
     /// Physical backing GET attempts made by the unchanged exact fetch.
@@ -1000,6 +1002,9 @@ pub struct GlobalExactBoundShadow {
     pub residual_scan_bytes: u64,
     /// Shadow calculation wall time; no I/O is included.
     pub cpu_us: u64,
+    /// Heap buffers allocated for prepared certificate queries and reusable
+    /// interval scratch. This excludes benchmark and exact-fetch allocations.
+    pub certificate_scratch_allocations: usize,
 }
 
 /// Search hits plus execution measurements useful for performance smoke tests and tuning.

@@ -1,0 +1,35 @@
+{
+  "adapter": "borsuk_dense_ann",
+  "dataset": "cohere-medium-1M",
+  "dimensions": 768,
+  "files": [
+    {
+      "bytes": 3704127,
+      "path": "neighbors.parquet",
+      "sha256": "30e7467766be3e2a6b167df16388a4a35e38fa6cc9e593fb659cce81ffde0940"
+    },
+    {
+      "bytes": 3133165,
+      "path": "test.parquet",
+      "sha256": "a2ec76c907da22e5533ce31c1105e4fd4d3c4597915a7771d5e41897a95ecbed"
+    },
+    {
+      "bytes": 3131995162,
+      "path": "train.parquet",
+      "sha256": "de6b84eb08fc5203a56eef619970a14f5cae08d0a0ae0bcd23b8058d7045f381"
+    },
+    {
+      "bytes": 122,
+      "path": "meta.json",
+      "sha256": "163fe4cc28d67f95975b1db489a7576e34491926eee30e6e4d25e32c8a1cc078"
+    }
+  ],
+  "license": "benchmark-use; Wikipedia/Cohere embedding provenance",
+  "license_source": "https://docs.cohere.com/v2/page/wikipedia-semantic-search",
+  "physical_format": "Parquet",
+  "scale": "1000000",
+  "schema_version": 1,
+  "source": "s3://assets.zilliz.com/benchmark/cohere_medium_1m",
+  "source_sha256": "c0c572f0265181a182ae904383f97d0e3137521eb52bd3c05d1a3935bab0273b",
+  "workload": "dense_ann"
+}

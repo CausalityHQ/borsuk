@@ -14867,7 +14867,8 @@ impl BorsukIndex {
             self.storage
                 .write_bytes_content_addressed(&exact_path, &encoded.exact_bytes)?;
             for (entry, slice) in pending.iter().zip(&encoded.slices) {
-                let scan = &encoded.bytes[slice.code_range.start..slice.exact_ordinal_range.end];
+                let scan =
+                    &encoded.bytes[slice.code_range.start..slice.residual_error_upper_range.end];
                 let mut reference = global_pq_chunk_reference(
                     &path,
                     &exact_path,
@@ -15677,7 +15678,8 @@ impl BorsukIndex {
             self.storage
                 .write_bytes_content_addressed(&exact_path, &encoded.exact_bytes)?;
             for (entry, slice) in pending.iter().zip(&encoded.slices) {
-                let scan = &encoded.bytes[slice.code_range.start..slice.exact_ordinal_range.end];
+                let scan =
+                    &encoded.bytes[slice.code_range.start..slice.residual_error_upper_range.end];
                 let mut reference = global_pq_chunk_reference(
                     &path,
                     &exact_path,
@@ -16306,6 +16308,10 @@ impl BorsukIndex {
                     .iter()
                     .map(|(_, report)| report.global_exact_bound_shadow.predicted_reads)
                     .sum(),
+                predicted_waves: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.predicted_waves)
+                    .sum(),
                 predicted_bytes: reports
                     .iter()
                     .map(|(_, report)| report.global_exact_bound_shadow.predicted_bytes)
@@ -16329,6 +16335,14 @@ impl BorsukIndex {
                 cpu_us: reports
                     .iter()
                     .map(|(_, report)| report.global_exact_bound_shadow.cpu_us)
+                    .sum(),
+                certificate_scratch_allocations: reports
+                    .iter()
+                    .map(|(_, report)| {
+                        report
+                            .global_exact_bound_shadow
+                            .certificate_scratch_allocations
+                    })
                     .sum(),
             },
             global_base_approximate_us: reports
@@ -20704,12 +20718,18 @@ impl BorsukIndex {
             .fixed_width_bytes(self.manifest.config.dimensions)?;
         let baseline_groups =
             global_pq_exact_read_groups(context.chunks_by_start, baseline_by_chunk)?;
-        let (baseline_reads, baseline_bytes) =
+        let (baseline_reads, baseline_bytes, _) =
             global_exact_bound_plan_stats(&baseline_groups, row_bytes)?;
         let predicted_groups =
             global_pq_exact_read_groups(context.chunks_by_start, predicted_by_chunk)?;
-        let (predicted_reads, predicted_bytes) =
+        let (predicted_reads, predicted_bytes, predicted_waves) =
             global_exact_bound_plan_stats(&predicted_groups, row_bytes)?;
+        let certificate_scratch_allocations = prepared_by_layer
+            .iter()
+            .filter_map(|(_, _, prepared)| prepared.as_ref())
+            .map(|prepared| prepared.heap_buffer_allocations())
+            .sum::<usize>()
+            .saturating_add(interval_scratch.heap_buffer_allocations());
         Ok(GlobalExactBoundShadow {
             certificate_kind: "residual-pq-v8".to_string(),
             candidates: shadow_rows.len(),
@@ -20722,12 +20742,14 @@ impl BorsukIndex {
             baseline_reads,
             baseline_bytes,
             predicted_reads,
+            predicted_waves,
             predicted_bytes,
             exact_backing_reads: context.exact_backing_reads,
             exact_backing_bytes: context.exact_backing_bytes,
             residual_bytes: u64::try_from(shadow_rows.len().saturating_mul(68)).unwrap_or(u64::MAX),
             residual_scan_bytes: context.residual_scan_bytes,
             cpu_us: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+            certificate_scratch_allocations,
         })
     }
 
@@ -23077,9 +23099,10 @@ fn global_exact_bound_metric_interval(
 fn global_exact_bound_plan_stats(
     groups: &[GlobalPqExactReadGroup],
     row_bytes: usize,
-) -> Result<(usize, u64)> {
+) -> Result<(usize, u64, usize)> {
     let mut reads = 0_usize;
     let mut bytes = 0_u64;
+    let mut waves = 0_usize;
     for (_, chunks) in groups {
         let mut ranges = Vec::new();
         for (chunk, identities) in chunks {
@@ -23101,11 +23124,13 @@ fn global_exact_bound_plan_stats(
                 ranges.push(start as u64..end as u64);
             }
         }
-        let (group_reads, group_bytes) = crate::storage::global_rerank_plan_stats(&ranges)?;
+        let (group_reads, group_bytes, group_waves) =
+            crate::storage::global_rerank_plan_stats(&ranges)?;
         reads = reads.saturating_add(group_reads);
         bytes = bytes.saturating_add(group_bytes);
+        waves = waves.saturating_add(group_waves);
     }
-    Ok((reads, bytes))
+    Ok((reads, bytes, waves))
 }
 
 #[derive(Debug)]
@@ -25842,6 +25867,11 @@ fn merge_search_execution_hits(
         .global_exact_bound_shadow
         .predicted_reads
         .saturating_add(delta_report.global_exact_bound_shadow.predicted_reads);
+    base.report.global_exact_bound_shadow.predicted_waves = base
+        .report
+        .global_exact_bound_shadow
+        .predicted_waves
+        .saturating_add(delta_report.global_exact_bound_shadow.predicted_waves);
     base.report.global_exact_bound_shadow.predicted_bytes = base
         .report
         .global_exact_bound_shadow
@@ -25872,6 +25902,17 @@ fn merge_search_execution_hits(
         .global_exact_bound_shadow
         .cpu_us
         .saturating_add(delta_report.global_exact_bound_shadow.cpu_us);
+    base.report
+        .global_exact_bound_shadow
+        .certificate_scratch_allocations = base
+        .report
+        .global_exact_bound_shadow
+        .certificate_scratch_allocations
+        .saturating_add(
+            delta_report
+                .global_exact_bound_shadow
+                .certificate_scratch_allocations,
+        );
     base.report.global_base_approximate_us = base
         .report
         .global_base_approximate_us
@@ -30565,6 +30606,14 @@ mod tests {
             0
         );
         assert_eq!(scan_report.global_exact_bound_shadow.predicted_reads, 1);
+        assert_eq!(scan_report.global_exact_bound_shadow.predicted_waves, 1);
+        assert_eq!(
+            scan_report
+                .global_exact_bound_shadow
+                .certificate_scratch_allocations,
+            4,
+            "two fused-layer prepared-query buffers plus two reusable interval buffers"
+        );
         assert_eq!(scan_report.global_exact_bound_shadow.baseline_reads, 1);
         assert_eq!(
             scan_report.global_exact_bound_shadow.baseline_bytes,

@@ -64,6 +64,7 @@ struct ReadSample {
     global_exact_bound_baseline_reads: usize,
     global_exact_bound_baseline_bytes: u64,
     global_exact_bound_predicted_reads: usize,
+    global_exact_bound_predicted_waves: usize,
     global_exact_bound_predicted_bytes: u64,
     global_exact_bound_certificate_kind: String,
     global_exact_bound_exact_backing_reads: u64,
@@ -71,6 +72,7 @@ struct ReadSample {
     global_exact_bound_residual_bytes: u64,
     global_exact_bound_residual_scan_bytes: u64,
     global_exact_bound_cpu_us: u64,
+    global_exact_bound_certificate_scratch_allocations: usize,
 }
 
 struct ReadMeasurement {
@@ -786,6 +788,7 @@ fn measure_reads(
             global_exact_bound_baseline_reads: report.global_exact_bound_shadow.baseline_reads,
             global_exact_bound_baseline_bytes: report.global_exact_bound_shadow.baseline_bytes,
             global_exact_bound_predicted_reads: report.global_exact_bound_shadow.predicted_reads,
+            global_exact_bound_predicted_waves: report.global_exact_bound_shadow.predicted_waves,
             global_exact_bound_predicted_bytes: report.global_exact_bound_shadow.predicted_bytes,
             global_exact_bound_certificate_kind: report.global_exact_bound_shadow.certificate_kind,
             global_exact_bound_exact_backing_reads: report
@@ -799,6 +802,9 @@ fn measure_reads(
                 .global_exact_bound_shadow
                 .residual_scan_bytes,
             global_exact_bound_cpu_us: report.global_exact_bound_shadow.cpu_us,
+            global_exact_bound_certificate_scratch_allocations: report
+                .global_exact_bound_shadow
+                .certificate_scratch_allocations,
         });
         measurement.hits += usize::from(contains_record_id);
     }
@@ -809,12 +815,12 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
     let mut reads = BufWriter::new(File::create(path)?);
     writeln!(
         reads,
-        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us,global_exact_bound_candidates,global_exact_bound_survivors,global_exact_bound_fail_open,global_exact_bound_containment_failures,global_exact_bound_baseline_reads,global_exact_bound_baseline_bytes,global_exact_bound_predicted_reads,global_exact_bound_predicted_bytes,global_exact_bound_certificate_kind,global_exact_bound_exact_backing_reads,global_exact_bound_exact_backing_bytes,global_exact_bound_residual_bytes,global_exact_bound_residual_scan_bytes,global_exact_bound_cpu_us"
+        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us,global_exact_bound_candidates,global_exact_bound_survivors,global_exact_bound_fail_open,global_exact_bound_containment_failures,global_exact_bound_baseline_reads,global_exact_bound_baseline_bytes,global_exact_bound_predicted_reads,global_exact_bound_predicted_waves,global_exact_bound_predicted_bytes,global_exact_bound_certificate_kind,global_exact_bound_exact_backing_reads,global_exact_bound_exact_backing_bytes,global_exact_bound_residual_bytes,global_exact_bound_residual_scan_bytes,global_exact_bound_cpu_us,global_exact_bound_certificate_scratch_allocations"
     )?;
     for sample in samples {
         writeln!(
             reads,
-            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             sample.query,
             sample.record_id,
             sample.hit_id,
@@ -840,6 +846,7 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
             sample.global_exact_bound_baseline_reads,
             sample.global_exact_bound_baseline_bytes,
             sample.global_exact_bound_predicted_reads,
+            sample.global_exact_bound_predicted_waves,
             sample.global_exact_bound_predicted_bytes,
             sample.global_exact_bound_certificate_kind,
             sample.global_exact_bound_exact_backing_reads,
@@ -847,6 +854,7 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
             sample.global_exact_bound_residual_bytes,
             sample.global_exact_bound_residual_scan_bytes,
             sample.global_exact_bound_cpu_us,
+            sample.global_exact_bound_certificate_scratch_allocations,
         )?;
     }
     reads.flush()?;
@@ -857,12 +865,12 @@ fn write_read_hedge_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<
     let mut reads = BufWriter::new(File::create(path)?);
     writeln!(
         reads,
-        "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us,global_exact_bound_candidates,global_exact_bound_survivors,global_exact_bound_fail_open,global_exact_bound_containment_failures,global_exact_bound_baseline_reads,global_exact_bound_baseline_bytes,global_exact_bound_predicted_reads,global_exact_bound_predicted_bytes,global_exact_bound_certificate_kind,global_exact_bound_exact_backing_reads,global_exact_bound_exact_backing_bytes,global_exact_bound_residual_bytes,global_exact_bound_residual_scan_bytes,global_exact_bound_cpu_us"
+        "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us,global_exact_bound_candidates,global_exact_bound_survivors,global_exact_bound_fail_open,global_exact_bound_containment_failures,global_exact_bound_baseline_reads,global_exact_bound_baseline_bytes,global_exact_bound_predicted_reads,global_exact_bound_predicted_waves,global_exact_bound_predicted_bytes,global_exact_bound_certificate_kind,global_exact_bound_exact_backing_reads,global_exact_bound_exact_backing_bytes,global_exact_bound_residual_bytes,global_exact_bound_residual_scan_bytes,global_exact_bound_cpu_us,global_exact_bound_certificate_scratch_allocations"
     )?;
     for sample in samples {
         writeln!(
             reads,
-            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             sample.query,
             sample.record_id,
             sample.hit_id,
@@ -891,6 +899,7 @@ fn write_read_hedge_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<
             sample.global_exact_bound_baseline_reads,
             sample.global_exact_bound_baseline_bytes,
             sample.global_exact_bound_predicted_reads,
+            sample.global_exact_bound_predicted_waves,
             sample.global_exact_bound_predicted_bytes,
             sample.global_exact_bound_certificate_kind,
             sample.global_exact_bound_exact_backing_reads,
@@ -898,6 +907,7 @@ fn write_read_hedge_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<
             sample.global_exact_bound_residual_bytes,
             sample.global_exact_bound_residual_scan_bytes,
             sample.global_exact_bound_cpu_us,
+            sample.global_exact_bound_certificate_scratch_allocations,
         )?;
     }
     reads.flush()?;
@@ -2270,6 +2280,7 @@ mod tests {
             global_exact_bound_baseline_reads: 9,
             global_exact_bound_baseline_bytes: 49_152,
             global_exact_bound_predicted_reads: 7,
+            global_exact_bound_predicted_waves: 2,
             global_exact_bound_predicted_bytes: 33_792,
             global_exact_bound_certificate_kind: "residual-pq-v8".to_string(),
             global_exact_bound_exact_backing_reads: 9,
@@ -2277,6 +2288,7 @@ mod tests {
             global_exact_bound_residual_bytes: 1_088,
             global_exact_bound_residual_scan_bytes: 69_632,
             global_exact_bound_cpu_us: 91,
+            global_exact_bound_certificate_scratch_allocations: 4,
         };
 
         write_read_hedge_samples(&path, &[sample]).unwrap();
@@ -2286,7 +2298,7 @@ mod tests {
             "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,"
         ));
         assert!(csv.contains(
-            ",100,123,456,4,1,2,3,4,5,16,11,0,0,9,49152,7,33792,residual-pq-v8,9,49152,1088,69632,91\n"
+            ",100,123,456,4,1,2,3,4,5,16,11,0,0,9,49152,7,2,33792,residual-pq-v8,9,49152,1088,69632,91,4\n"
         ));
     }
 
