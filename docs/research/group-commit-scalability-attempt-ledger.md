@@ -1944,3 +1944,14 @@ markers. Thirty-five milliseconds targets the observed exact p90-p95 interval
 without assuming a cache or changing candidate selection. It remains a
 preregistered hypothesis: no latency or amplification improvement is claimed
 before a fresh terminal run passes the repaired validator.
+
+Revision `847b8a2` froze and delivered the follow-up after 505 script tests, 31
+policy tests, complete v2 synthetic terminal validation, and documentation,
+Ruff, shell syntax, and diff gates passed; the preceding full Rust workspace
+gate remained applicable because this slice changed no Rust. The exclusive
+Causality attempt `20260809T061652Z` started with source archive SHA-256
+`1c032f9e0a14318cc2e0a8e1d2467d8778e284ed29eae67d22c9202ad5023d99`
+and manifest SHA-256
+`e2ca40ae70cc73456867216ff4677111c91e2f59d17bb296e50854e99e1f2892`.
+This is a launch receipt only; until a root terminal marker exists, measurement
+CSVs from this attempt remain ineligible for inspection.
