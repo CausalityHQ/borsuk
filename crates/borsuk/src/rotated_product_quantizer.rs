@@ -192,6 +192,61 @@ impl RotatedProductQuantizer {
         }
     }
 
+    /// Return a conservative ideal-L2 interval around the PQ reconstruction.
+    ///
+    /// This is shadow evidence only: callers must additionally prove that a
+    /// metric-specific interval encloses the exact f32 scorer before using it
+    /// to suppress reads.
+    pub(crate) fn certificate_l2_interval(
+        &self,
+        query: &[f32],
+        vector: &[f32],
+        code: &[u8],
+    ) -> Result<(f64, f64)> {
+        self.validate_vector(query)?;
+        self.validate_vector(vector)?;
+        if code.len() != self.subspaces {
+            return invalid_config("certificate code width does not match product quantizer");
+        }
+        let query = self.certificate_transform(query);
+        let vector = self.certificate_transform(vector);
+        let mut query_center_squared = 0.0_f64;
+        let mut residual_squared = 0.0_f64;
+        for (subspace, &encoded) in code.iter().enumerate() {
+            let centroid = usize::from(encoded);
+            if centroid >= self.centroids {
+                return invalid_config("certificate code selects an absent centroid");
+            }
+            let start = self.subspace_offsets[subspace];
+            let end = self.subspace_offsets[subspace + 1];
+            let width = end - start;
+            let codebook = &self.codebooks[subspace];
+            let center = &codebook[centroid * width..(centroid + 1) * width];
+            for ((query_value, vector_value), center_value) in query[start..end]
+                .iter()
+                .zip(&vector[start..end])
+                .zip(center)
+            {
+                query_center_squared += (query_value - f64::from(*center_value)).powi(2);
+                residual_squared += (vector_value - f64::from(*center_value)).powi(2);
+            }
+        }
+        let scale = (self.padded_dimensions as f64).sqrt();
+        let center_distance = query_center_squared.sqrt() / scale;
+        let residual = residual_squared.sqrt() / scale;
+        let lower = (center_distance - residual).max(0.0);
+        let upper = center_distance + residual;
+        let rounding = f64::EPSILON * self.padded_dimensions as f64 * 16.0 * (upper + 1.0);
+        Ok(((lower - rounding).max(0.0), upper + rounding))
+    }
+
+    fn certificate_transform(&self, vector: &[f32]) -> Vec<f64> {
+        self.rotation.as_ref().map_or_else(
+            || vector.iter().map(|value| f64::from(*value)).collect(),
+            |rotation| rotation.rotate_f64(vector),
+        )
+    }
+
     pub(crate) fn state(&self) -> ProductQuantizerState {
         ProductQuantizerState {
             rotation: self.rotation_kind,
@@ -732,6 +787,59 @@ mod tests {
         assert_eq!(pq.encode(&fit[0]).unwrap().len(), 4);
         assert_eq!(pq.code_bytes_per_vector(), 4);
         assert_eq!(pq.codebook_bytes(), 4 * 8 * 4 * size_of::<f32>());
+    }
+
+    #[test]
+    fn identity_certificate_interval_contains_original_l2_distance() {
+        let pq = RotatedProductQuantizer::from_state(ProductQuantizerState {
+            rotation: ProductRotation::Identity,
+            seed: 11,
+            dimensions: 3,
+            subspaces: 3,
+            centroids: 1,
+            subspace_offsets: vec![0, 1, 2, 3],
+            codebooks: vec![vec![1.0], vec![-2.0], vec![0.5]],
+        })
+        .unwrap();
+        let query = [2.0, -1.0, 0.25];
+        let vector = [0.0, -3.0, 1.25];
+        let (lower, upper) = pq
+            .certificate_l2_interval(&query, &vector, &[0, 0, 0])
+            .unwrap();
+        let exact = 3.0_f64.sqrt();
+        assert!(lower <= exact, "lower={lower} exact={exact}");
+        assert!(upper >= exact, "upper={upper} exact={exact}");
+    }
+
+    #[test]
+    fn srht_certificate_interval_restores_padded_transform_scale() {
+        let fit = fixture_vectors(64, 3);
+        let pq = RotatedProductQuantizer::fit(
+            ProductQuantizerConfig {
+                rotation: ProductRotation::Srht,
+                seed: 29,
+                dimensions: 3,
+                subspaces: 2,
+                centroids: 8,
+                sample_limit: 64,
+                iterations: 4,
+            },
+            &fit,
+        )
+        .unwrap();
+        let query = [0.25, -1.5, 2.0];
+        let vector = [-0.75, 0.5, 1.0];
+        let code = pq.encode(&vector).unwrap();
+        let (lower, upper) = pq.certificate_l2_interval(&query, &vector, &code).unwrap();
+        let exact = query
+            .iter()
+            .zip(vector)
+            .map(|(left, right)| f64::from(*left - right).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        assert!(lower <= exact, "lower={lower} exact={exact}");
+        assert!(upper >= exact, "upper={upper} exact={exact}");
+        assert!(upper < exact + 10.0, "SRHT scale was not removed: {upper}");
     }
 
     #[test]

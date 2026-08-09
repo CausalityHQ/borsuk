@@ -268,6 +268,16 @@ fn plan_global_rerank_ranges(ranges: &[Range<u64>]) -> Result<BoundedRangePlan> 
     Ok(BoundedRangePlan { physical, slices })
 }
 
+pub(crate) fn global_rerank_plan_stats(ranges: &[Range<u64>]) -> Result<(usize, u64)> {
+    let plan = plan_global_rerank_ranges(ranges)?;
+    let bytes = plan
+        .physical
+        .iter()
+        .map(|range| range.end.saturating_sub(range.start))
+        .sum();
+    Ok((plan.physical.len(), bytes))
+}
+
 async fn fetch_with_optional_hedge<F, Fut, T, E>(
     mut fetch: F,
     hedge_after: Option<Duration>,

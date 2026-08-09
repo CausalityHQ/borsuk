@@ -75,11 +75,11 @@ use crate::{
     record::{
         AddReport, BuildConfig, CompactionOptions, CompactionReport, DEFAULT_SEARCH_PREFETCH_DEPTH,
         DeleteReport, ExplainReport, Fusion, GarbageCollectionOptions, GarbageCollectionReport,
-        GlobalScanCodec, HybridOptions, HybridQuery, IncrementalMaintenanceOptions,
-        IncrementalReport, IndexStats, LeafCapability, LeafMode, PurgeReport, QuantizerKind,
-        QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee, RecordId, RequestCounts,
-        SearchHit, SearchMode, SearchOptions, SearchReport, SearchTerminationReason,
-        StorageEncoding, VectorKind, VectorRecord, VectorSpec,
+        GlobalExactBoundShadow, GlobalScanCodec, HybridOptions, HybridQuery,
+        IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafCapability, LeafMode,
+        PurgeReport, QuantizerKind, QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee,
+        RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
+        SearchTerminationReason, StorageEncoding, VectorKind, VectorRecord, VectorSpec,
     },
     rotated_product_quantizer::{
         ProductQuantizerConfig, RotatedProductQuantizer, product_code_locality_key,
@@ -1247,6 +1247,27 @@ struct GlobalPqIdentityCandidate {
     id: RecordId,
     stamp: MutationStamp,
     row_integrity: [u8; 32],
+}
+type GlobalExactBoundInput = (
+    GlobalPqSearchLayer,
+    usize,
+    Box<[u8]>,
+    GlobalPqIdentityCandidate,
+);
+
+struct GlobalExactBoundScored<'a> {
+    distance: f32,
+    vector: &'a [f32],
+    id: &'a RecordId,
+}
+struct GlobalExactBoundContext<'a> {
+    query: &'a [f32],
+    pq_query: &'a [f32],
+    k: usize,
+    layer_indexes: &'a [(GlobalPqSearchLayer, &'a ResidentGlobalPq)],
+    chunks_by_start: &'a HashMap<(GlobalPqSearchLayer, usize), &'a GlobalPqChunkRef>,
+    inputs: &'a HashMap<RecordId, GlobalExactBoundInput>,
+    scored: &'a [GlobalExactBoundScored<'a>],
 }
 type GlobalPqIdentityLookup = (usize, usize, usize);
 type GlobalPqIdentityChunkCandidates = (GlobalPqChunkRef, Vec<GlobalPqIdentityLookup>);
@@ -7867,6 +7888,7 @@ impl BorsukIndex {
             global_scan_chunks_searched: 0,
             global_identity_rows_resolved: 0,
             global_exact_vectors_fetched: 0,
+            global_exact_bound_shadow: GlobalExactBoundShadow::default(),
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
             global_delta_approximate_us: 0,
@@ -13193,6 +13215,7 @@ impl BorsukIndex {
                     entry.candidate.row,
                     entry.candidate.distance,
                     entry.candidate.chunk_row_start,
+                    entry.candidate.code,
                 ),
             );
         }
@@ -13237,10 +13260,11 @@ impl BorsukIndex {
                 GlobalPqSearchLayer,
                 usize,
                 GlobalPqRow,
+                Box<[u8]>,
                 GlobalPqIdentityCandidate,
             ),
         >::new();
-        for ((layer, node), (row, approximate_distance, chunk_row_start)) in candidate_rows {
+        for ((layer, node), (row, approximate_distance, chunk_row_start, code)) in candidate_rows {
             let identity = identity_by_node.remove(&(layer, node)).ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "resident global PQ candidate identity row is missing".to_string(),
@@ -13248,13 +13272,27 @@ impl BorsukIndex {
             })?;
             match winning_candidates.entry(identity.id.clone()) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((approximate_distance, layer, chunk_row_start, row, identity));
+                    entry.insert((
+                        approximate_distance,
+                        layer,
+                        chunk_row_start,
+                        row,
+                        code,
+                        identity,
+                    ));
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     let stamp = identity.stamp;
-                    let greatest = entry.get().4.stamp.greatest(stamp)?;
-                    if greatest == stamp && stamp.version() > entry.get().4.stamp.version() {
-                        entry.insert((approximate_distance, layer, chunk_row_start, row, identity));
+                    let greatest = entry.get().5.stamp.greatest(stamp)?;
+                    if greatest == stamp && stamp.version() > entry.get().5.stamp.version() {
+                        entry.insert((
+                            approximate_distance,
+                            layer,
+                            chunk_row_start,
+                            row,
+                            code,
+                            identity,
+                        ));
                     }
                 }
             }
@@ -13262,7 +13300,7 @@ impl BorsukIndex {
         let mutation_states =
             self.mutation_states(winning_candidates.keys().map(|id| id.as_bytes()))?;
         let mut live_candidates = Vec::with_capacity(winning_candidates.len());
-        for (id, (approximate_distance, layer, chunk_row_start, row, identity)) in
+        for (id, (approximate_distance, layer, chunk_row_start, row, code, identity)) in
             winning_candidates
         {
             if Self::state_suppresses_stamp(
@@ -13277,6 +13315,7 @@ impl BorsukIndex {
                 layer,
                 chunk_row_start,
                 row,
+                code,
                 identity,
             ));
         }
@@ -13289,7 +13328,11 @@ impl BorsukIndex {
 
         let mut exact_by_chunk =
             BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
-        for (_, _, layer, chunk_row_start, _, identity) in live_candidates {
+        let mut shadow_inputs = HashMap::with_capacity(live_candidates.len());
+        for (_, id, layer, chunk_row_start, _, code, identity) in live_candidates {
+            if options.global_exact_bound_shadow {
+                shadow_inputs.insert(id, (layer, chunk_row_start, code, identity.clone()));
+            }
             exact_by_chunk
                 .entry((layer, chunk_row_start))
                 .or_default()
@@ -13325,6 +13368,31 @@ impl BorsukIndex {
             let distance = metric.distance_unchecked(query, &vector)?;
             scored_vectors.push((distance, vector, id));
         }
+        let global_exact_bound_shadow = if options.global_exact_bound_shadow {
+            let shadow_scored = scored_vectors
+                .iter()
+                .map(|(distance, vector, id)| GlobalExactBoundScored {
+                    distance: *distance,
+                    vector,
+                    id,
+                })
+                .collect::<Vec<_>>();
+            let layer_indexes = layers
+                .iter()
+                .map(|layer| (layer.layer, layer.index.as_ref()))
+                .collect::<Vec<_>>();
+            self.global_exact_bound_shadow(GlobalExactBoundContext {
+                query,
+                pq_query: &pq_query,
+                k: options.k,
+                layer_indexes: &layer_indexes,
+                chunks_by_start: &chunks_by_start,
+                inputs: &shadow_inputs,
+                scored: &shadow_scored,
+            })?
+        } else {
+            GlobalExactBoundShadow::default()
+        };
         scored_vectors.sort_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
@@ -13397,6 +13465,7 @@ impl BorsukIndex {
                 global_scan_chunks_searched: scan_chunks_used,
                 global_identity_rows_resolved,
                 global_exact_vectors_fetched,
+                global_exact_bound_shadow,
                 global_base_approximate_us: layers[0].approximate_us,
                 global_base_exact_rerank_us: exact_us,
                 global_delta_approximate_us: layers[1].approximate_us,
@@ -13792,7 +13861,12 @@ impl BorsukIndex {
             ));
             candidate_rows.insert(
                 candidate.node,
-                (candidate.row, candidate.distance, candidate.chunk_row_start),
+                (
+                    candidate.row,
+                    candidate.distance,
+                    candidate.chunk_row_start,
+                    candidate.code,
+                ),
             );
         }
         let mut bundled_groups =
@@ -13826,10 +13900,18 @@ impl BorsukIndex {
             bytes_read = bytes_read.saturating_add(bytes);
         }
 
-        let mut winning_candidates =
-            BTreeMap::<RecordId, (f32, usize, GlobalPqRow, usize, GlobalPqIdentityCandidate)>::new(
-            );
-        for (node, (row, approximate_distance, chunk_row_start)) in candidate_rows {
+        let mut winning_candidates = BTreeMap::<
+            RecordId,
+            (
+                f32,
+                usize,
+                GlobalPqRow,
+                usize,
+                Box<[u8]>,
+                GlobalPqIdentityCandidate,
+            ),
+        >::new();
+        for (node, (row, approximate_distance, chunk_row_start, code)) in candidate_rows {
             let identity = identity_by_node.remove(&node).ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "resident global PQ candidate identity row is missing".to_string(),
@@ -13837,13 +13919,27 @@ impl BorsukIndex {
             })?;
             match winning_candidates.entry(identity.id.clone()) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((approximate_distance, node, row, chunk_row_start, identity));
+                    entry.insert((
+                        approximate_distance,
+                        node,
+                        row,
+                        chunk_row_start,
+                        code,
+                        identity,
+                    ));
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     let stamp = identity.stamp;
-                    let greatest = entry.get().4.stamp.greatest(stamp)?;
-                    if greatest == stamp && stamp.version() > entry.get().4.stamp.version() {
-                        entry.insert((approximate_distance, node, row, chunk_row_start, identity));
+                    let greatest = entry.get().5.stamp.greatest(stamp)?;
+                    if greatest == stamp && stamp.version() > entry.get().5.stamp.version() {
+                        entry.insert((
+                            approximate_distance,
+                            node,
+                            row,
+                            chunk_row_start,
+                            code,
+                            identity,
+                        ));
                     }
                 }
             }
@@ -13851,7 +13947,8 @@ impl BorsukIndex {
         let mutation_states =
             self.mutation_states(winning_candidates.keys().map(|id| id.as_bytes()))?;
         let mut live_candidates = Vec::with_capacity(winning_candidates.len());
-        for (id, (approximate_distance, node, row, chunk_row_start, identity)) in winning_candidates
+        for (id, (approximate_distance, node, row, chunk_row_start, code, identity)) in
+            winning_candidates
         {
             if Self::state_suppresses_stamp(
                 mutation_states.get(id.as_bytes()).copied().flatten(),
@@ -13865,6 +13962,7 @@ impl BorsukIndex {
                 node,
                 row,
                 chunk_row_start,
+                code,
                 identity,
             ));
         }
@@ -13876,7 +13974,19 @@ impl BorsukIndex {
         live_candidates.truncate(candidate_limit);
         let mut exact_by_chunk =
             BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
-        for (_, _, _, _, chunk_row_start, identity) in live_candidates {
+        let mut shadow_inputs = HashMap::with_capacity(live_candidates.len());
+        for (_, id, _, _, chunk_row_start, code, identity) in live_candidates {
+            if options.global_exact_bound_shadow {
+                shadow_inputs.insert(
+                    id,
+                    (
+                        GlobalPqSearchLayer::Base,
+                        chunk_row_start,
+                        code,
+                        identity.clone(),
+                    ),
+                );
+            }
             exact_by_chunk
                 .entry((GlobalPqSearchLayer::Base, chunk_row_start))
                 .or_default()
@@ -13915,6 +14025,28 @@ impl BorsukIndex {
             let distance = metric.distance_unchecked(query, &vector)?;
             scored_vectors.push((distance, node, vector, id, stamp));
         }
+        let global_exact_bound_shadow = if options.global_exact_bound_shadow {
+            let shadow_scored = scored_vectors
+                .iter()
+                .map(|(distance, _, vector, id, _)| GlobalExactBoundScored {
+                    distance: *distance,
+                    vector,
+                    id,
+                })
+                .collect::<Vec<_>>();
+            let layer_indexes = [(GlobalPqSearchLayer::Base, index.as_ref())];
+            self.global_exact_bound_shadow(GlobalExactBoundContext {
+                query,
+                pq_query: &pq_query,
+                k: options.k,
+                layer_indexes: &layer_indexes,
+                chunks_by_start: &tagged_chunks_by_start,
+                inputs: &shadow_inputs,
+                scored: &shadow_scored,
+            })?
+        } else {
+            GlobalExactBoundShadow::default()
+        };
         scored_vectors.sort_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
@@ -14000,6 +14132,7 @@ impl BorsukIndex {
                 global_scan_chunks_searched: scan_chunks_used,
                 global_identity_rows_resolved,
                 global_exact_vectors_fetched,
+                global_exact_bound_shadow,
                 global_base_approximate_us: global_approximate_us,
                 global_base_exact_rerank_us: global_exact_rerank_us,
                 global_delta_approximate_us: 0,
@@ -15976,6 +16109,36 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_exact_vectors_fetched)
                 .sum(),
+            global_exact_bound_shadow: GlobalExactBoundShadow {
+                candidates: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.candidates)
+                    .sum(),
+                survivors: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.survivors)
+                    .sum(),
+                fail_open: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.fail_open)
+                    .sum(),
+                containment_failures: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.containment_failures)
+                    .sum(),
+                predicted_reads: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.predicted_reads)
+                    .sum(),
+                predicted_bytes: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.predicted_bytes)
+                    .sum(),
+                cpu_us: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.cpu_us)
+                    .sum(),
+            },
             global_base_approximate_us: reports
                 .iter()
                 .map(|(_, report)| report.global_base_approximate_us)
@@ -16138,6 +16301,7 @@ impl BorsukIndex {
                 global_scan_chunks_searched: 0,
                 global_identity_rows_resolved: 0,
                 global_exact_vectors_fetched: 0,
+                global_exact_bound_shadow: GlobalExactBoundShadow::default(),
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
                 global_delta_approximate_us: 0,
@@ -16349,6 +16513,7 @@ impl BorsukIndex {
             global_scan_chunks_searched: 0,
             global_identity_rows_resolved: 0,
             global_exact_vectors_fetched: 0,
+            global_exact_bound_shadow: GlobalExactBoundShadow::default(),
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
             global_delta_approximate_us: 0,
@@ -16706,6 +16871,7 @@ impl BorsukIndex {
                     global_scan_chunks_searched: 0,
                     global_identity_rows_resolved: 0,
                     global_exact_vectors_fetched: 0,
+                    global_exact_bound_shadow: GlobalExactBoundShadow::default(),
                     global_base_approximate_us: 0,
                     global_base_exact_rerank_us: 0,
                     global_delta_approximate_us: 0,
@@ -17456,6 +17622,7 @@ impl BorsukIndex {
                 global_scan_chunks_searched: 0,
                 global_identity_rows_resolved: 0,
                 global_exact_vectors_fetched: 0,
+                global_exact_bound_shadow: GlobalExactBoundShadow::default(),
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
                 global_delta_approximate_us: 0,
@@ -17560,6 +17727,7 @@ impl BorsukIndex {
                 global_scan_chunks_searched: 0,
                 global_identity_rows_resolved: 0,
                 global_exact_vectors_fetched: 0,
+                global_exact_bound_shadow: GlobalExactBoundShadow::default(),
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
                 global_delta_approximate_us: 0,
@@ -20227,6 +20395,117 @@ impl BorsukIndex {
         Ok((rows, rerank_bytes_fetched))
     }
 
+    fn global_exact_bound_shadow(
+        &self,
+        context: GlobalExactBoundContext<'_>,
+    ) -> Result<GlobalExactBoundShadow> {
+        let started = Instant::now();
+        let metric = &self.manifest.config.metric;
+        let normalized_geometry = metric.uses_normalized_euclidean_geometry();
+        let zero_query = normalized_geometry
+            && context
+                .query
+                .iter()
+                .map(|value| f64::from(*value).powi(2))
+                .sum::<f64>()
+                <= f64::from(f32::EPSILON);
+        let mut shadow_rows = Vec::with_capacity(context.scored.len());
+        let mut containment_failures = 0_usize;
+        for scored in context.scored {
+            let (layer, chunk_row_start, code, identity) =
+                context.inputs.get(scored.id).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global exact-bound candidate metadata is missing".to_string(),
+                    )
+                })?;
+            let zero_vector = normalized_geometry
+                && scored
+                    .vector
+                    .iter()
+                    .map(|value| f64::from(*value).powi(2))
+                    .sum::<f64>()
+                    <= f64::from(f32::EPSILON);
+            let interval = if zero_query || zero_vector {
+                None
+            } else {
+                let certificate_vector = if normalized_geometry {
+                    crate::metric::unit_l2_normalized(scored.vector)
+                } else {
+                    scored.vector.to_vec()
+                };
+                let index = context
+                    .layer_indexes
+                    .iter()
+                    .find(|candidate| candidate.0 == *layer)
+                    .map(|candidate| candidate.1)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global exact-bound quantizer layer is missing".to_string(),
+                        )
+                    })?;
+                index
+                    .certificate_l2_interval(context.pq_query, &certificate_vector, code)
+                    .ok()
+                    .flatten()
+                    .and_then(|l2| {
+                        global_exact_bound_metric_interval(
+                            metric,
+                            l2,
+                            self.manifest.config.dimensions,
+                        )
+                    })
+            };
+            if interval.is_some_and(|(lower, upper)| {
+                f64::from(scored.distance) < lower || f64::from(scored.distance) > upper
+            }) {
+                containment_failures = containment_failures.saturating_add(1);
+            }
+            shadow_rows.push((*layer, *chunk_row_start, identity.clone(), interval));
+        }
+        if containment_failures > 0 {
+            for (_, _, _, interval) in &mut shadow_rows {
+                *interval = None;
+            }
+        }
+        let intervals = shadow_rows
+            .iter()
+            .map(|(_, _, _, interval)| *interval)
+            .collect::<Vec<_>>();
+        let survivors = certificate_survivor_mask(&intervals, context.k);
+        let mut predicted_by_chunk =
+            BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
+        for ((layer, chunk_row_start, identity, _), survives) in shadow_rows.iter().zip(&survivors)
+        {
+            if *survives {
+                predicted_by_chunk
+                    .entry((*layer, *chunk_row_start))
+                    .or_default()
+                    .push(identity.clone());
+            }
+        }
+        let predicted_groups =
+            global_pq_exact_read_groups(context.chunks_by_start, predicted_by_chunk)?;
+        let row_bytes = self
+            .manifest
+            .build_config
+            .vector_element_type
+            .fixed_width_bytes(self.manifest.config.dimensions)?;
+        let (predicted_reads, predicted_bytes) =
+            global_exact_bound_plan_stats(&predicted_groups, row_bytes)?;
+        Ok(GlobalExactBoundShadow {
+            candidates: shadow_rows.len(),
+            survivors: survivors.iter().filter(|value| **value).count(),
+            fail_open: intervals
+                .iter()
+                .filter(|interval| interval.is_none())
+                .count(),
+            containment_failures,
+            predicted_reads,
+            predicted_bytes,
+            cpu_us: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+        })
+    }
+
     #[allow(clippy::type_complexity)]
     fn global_exact_vectors_bundled(
         &self,
@@ -22413,6 +22692,104 @@ fn global_pq_exact_read_groups(
         groups.push((path, chunks));
     }
     Ok(groups)
+}
+
+fn certificate_survivor_mask(intervals: &[Option<(f64, f64)>], k: usize) -> Vec<bool> {
+    if intervals.len() <= k {
+        return vec![true; intervals.len()];
+    }
+    if k == 0 {
+        return vec![false; intervals.len()];
+    }
+    let valid = |interval: &(f64, f64)| {
+        interval.0.is_finite()
+            && interval.1.is_finite()
+            && interval.0 >= 0.0
+            && interval.0 <= interval.1
+    };
+    let mut upper_bounds = intervals
+        .iter()
+        .map(|interval| {
+            interval
+                .filter(valid)
+                .map_or(f64::INFINITY, |(_, upper)| upper)
+        })
+        .collect::<Vec<_>>();
+    upper_bounds.sort_by(f64::total_cmp);
+    let threshold = upper_bounds[k - 1];
+    intervals
+        .iter()
+        .map(|interval| {
+            interval
+                .filter(valid)
+                .is_none_or(|(lower, _)| lower <= threshold)
+        })
+        .collect()
+}
+
+fn global_exact_bound_metric_interval(
+    metric: &VectorMetric,
+    l2: (f64, f64),
+    dimensions: usize,
+) -> Option<(f64, f64)> {
+    let (mut lower, mut upper) = match metric {
+        VectorMetric::Euclidean => l2,
+        VectorMetric::SquaredEuclidean => (l2.0 * l2.0, l2.1 * l2.1),
+        VectorMetric::Cosine => (
+            (l2.0.clamp(0.0, 2.0).powi(2) * 0.5).clamp(0.0, 2.0),
+            (l2.1.clamp(0.0, 2.0).powi(2) * 0.5).clamp(0.0, 2.0),
+        ),
+        VectorMetric::Angular => (
+            2.0 * (l2.0.clamp(0.0, 2.0) * 0.5).asin() / std::f64::consts::PI,
+            2.0 * (l2.1.clamp(0.0, 2.0) * 0.5).asin() / std::f64::consts::PI,
+        ),
+        _ => return None,
+    };
+    if !lower.is_finite() || !upper.is_finite() || lower < 0.0 || lower > upper {
+        return None;
+    }
+    // The geometric calculation is f64, while the observed scorer uses f32
+    // SIMD reductions. This deliberately conservative shadow margin is not an
+    // enforcement proof; containment telemetry decides whether the design can
+    // proceed to a formal forward-error derivation.
+    let rounding = f64::from(f32::EPSILON) * dimensions as f64 * 64.0 * (upper.abs() + 1.0);
+    lower = (lower - rounding).max(0.0);
+    upper += rounding;
+    Some((lower, upper))
+}
+
+fn global_exact_bound_plan_stats(
+    groups: &[GlobalPqExactReadGroup],
+    row_bytes: usize,
+) -> Result<(usize, u64)> {
+    let mut reads = 0_usize;
+    let mut bytes = 0_u64;
+    for (_, chunks) in groups {
+        let mut ranges = Vec::new();
+        for (chunk, identities) in chunks {
+            for identity in identities {
+                let start = identity
+                    .exact_ordinal
+                    .checked_mul(row_bytes)
+                    .and_then(|offset| chunk.exact_offset_bytes.checked_add(offset))
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global exact-bound range offset overflows".to_string(),
+                        )
+                    })?;
+                let end = start.checked_add(row_bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global exact-bound range end overflows".to_string(),
+                    )
+                })?;
+                ranges.push(start as u64..end as u64);
+            }
+        }
+        let (group_reads, group_bytes) = crate::storage::global_rerank_plan_stats(&ranges)?;
+        reads = reads.saturating_add(group_reads);
+        bytes = bytes.saturating_add(group_bytes);
+    }
+    Ok((reads, bytes))
 }
 
 #[derive(Debug)]
@@ -25103,6 +25480,41 @@ fn merge_search_execution_hits(
         .report
         .global_exact_vectors_fetched
         .saturating_add(delta_report.global_exact_vectors_fetched);
+    base.report.global_exact_bound_shadow.candidates = base
+        .report
+        .global_exact_bound_shadow
+        .candidates
+        .saturating_add(delta_report.global_exact_bound_shadow.candidates);
+    base.report.global_exact_bound_shadow.survivors = base
+        .report
+        .global_exact_bound_shadow
+        .survivors
+        .saturating_add(delta_report.global_exact_bound_shadow.survivors);
+    base.report.global_exact_bound_shadow.fail_open = base
+        .report
+        .global_exact_bound_shadow
+        .fail_open
+        .saturating_add(delta_report.global_exact_bound_shadow.fail_open);
+    base.report.global_exact_bound_shadow.containment_failures = base
+        .report
+        .global_exact_bound_shadow
+        .containment_failures
+        .saturating_add(delta_report.global_exact_bound_shadow.containment_failures);
+    base.report.global_exact_bound_shadow.predicted_reads = base
+        .report
+        .global_exact_bound_shadow
+        .predicted_reads
+        .saturating_add(delta_report.global_exact_bound_shadow.predicted_reads);
+    base.report.global_exact_bound_shadow.predicted_bytes = base
+        .report
+        .global_exact_bound_shadow
+        .predicted_bytes
+        .saturating_add(delta_report.global_exact_bound_shadow.predicted_bytes);
+    base.report.global_exact_bound_shadow.cpu_us = base
+        .report
+        .global_exact_bound_shadow
+        .cpu_us
+        .saturating_add(delta_report.global_exact_bound_shadow.cpu_us);
     base.report.global_base_approximate_us = base
         .report
         .global_base_approximate_us
@@ -27950,6 +28362,32 @@ mod tests {
     }
 
     #[test]
+    fn certificate_survivors_keep_ties_and_fail_open_rows() {
+        let intervals = [
+            Some((0.05, 0.10)),
+            Some((0.10, 0.20)),
+            Some((0.20, 0.30)),
+            Some((0.31, 0.40)),
+            Some((0.20, 0.80)),
+            None,
+            Some((f64::NAN, 0.01)),
+        ];
+        assert_eq!(
+            certificate_survivor_mask(&intervals, 3),
+            vec![true, true, true, false, true, true, true],
+            "the lower==tau tie and unsupported row must survive"
+        );
+    }
+
+    #[test]
+    fn certificate_survivors_fetch_every_row_when_candidate_count_is_at_most_k() {
+        assert_eq!(
+            certificate_survivor_mask(&[Some((0.9, 1.0)), None], 2),
+            vec![true, true]
+        );
+    }
+
+    #[test]
     fn global_exact_rerank_fetches_cross_cell_locality_rows_in_one_cold_get() {
         const DIMENSIONS: usize = 768;
         const ROWS_PER_CHUNK: usize = 512;
@@ -28942,6 +29380,11 @@ mod tests {
         assert_eq!(report.routing_pages_read, 0);
         assert!(report.records_scored <= 64);
         assert!(report.bytes_read > 0);
+        assert_eq!(
+            report.global_exact_bound_shadow,
+            GlobalExactBoundShadow::default(),
+            "production-default queries must not run qualification math"
+        );
         assert!(
             report.requests.gets <= 4,
             "a current global artifact must not scan routing pages to rediscover its own segment coverage: {:?}, manifest={}, covered={}",
@@ -28968,12 +29411,22 @@ mod tests {
                 &query,
                 SearchOptions::approx(5, LeafMode::SrhtPqScan)
                     .with_max_segments(8)
-                    .with_max_candidates_per_segment(7),
+                    .with_max_candidates_per_segment(7)
+                    .with_global_exact_bound_shadow(true),
             )
             .unwrap();
         assert!(limited.records_considered >= 7);
         assert!(limited.records_considered < vectors.len());
         assert_eq!(limited.records_scored, 7);
+        assert_eq!(limited.global_exact_bound_shadow.candidates, 7);
+        assert!(
+            limited.global_exact_bound_shadow.containment_failures > 0,
+            "this adversarial Angular fixture must exercise query-wide fail-open"
+        );
+        assert_eq!(limited.global_exact_bound_shadow.survivors, 7);
+        assert_eq!(limited.global_exact_bound_shadow.fail_open, 7);
+        assert!(limited.global_exact_bound_shadow.predicted_reads > 0);
+        assert!(limited.global_exact_bound_shadow.predicted_bytes > 0);
 
         let byte_limited = index
             .search_with_report(
@@ -29584,7 +30037,8 @@ mod tests {
         );
         let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
             .with_max_segments(4)
-            .with_max_candidates_per_segment(1);
+            .with_max_candidates_per_segment(1)
+            .with_global_exact_bound_shadow(true);
         let report = reader
             .search_with_report(&[0.0; 8], options.clone())
             .unwrap();
@@ -29617,6 +30071,15 @@ mod tests {
         assert_eq!(scan_report.hits[0].id, RecordId::from("base-0"));
         assert_eq!(scan_report.global_identity_rows_resolved, 2);
         assert_eq!(scan_report.global_exact_vectors_fetched, 1);
+        assert_eq!(scan_report.global_exact_bound_shadow.candidates, 1);
+        assert_eq!(scan_report.global_exact_bound_shadow.survivors, 1);
+        assert_eq!(scan_report.global_exact_bound_shadow.fail_open, 0);
+        assert_eq!(
+            scan_report.global_exact_bound_shadow.containment_failures,
+            0
+        );
+        assert_eq!(scan_report.global_exact_bound_shadow.predicted_reads, 1);
+        assert!(scan_report.global_exact_bound_shadow.predicted_bytes > 0);
     }
 
     #[test]

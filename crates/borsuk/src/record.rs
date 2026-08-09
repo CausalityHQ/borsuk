@@ -970,6 +970,25 @@ pub struct AddReport {
 }
 
 /// Search hits plus execution measurements useful for performance smoke tests and tuning.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GlobalExactBoundShadow {
+    /// Live post-MVCC candidates evaluated by the shadow certificate.
+    pub candidates: usize,
+    /// Candidates the counterfactual certificate would still exact-fetch.
+    pub survivors: usize,
+    /// Candidates retained because their interval was unsupported or invalid.
+    pub fail_open: usize,
+    /// Exact f32 scores found outside their predicted interval.
+    pub containment_failures: usize,
+    /// Counterfactual physical exact-range requests after survivor filtering.
+    pub predicted_reads: usize,
+    /// Counterfactual physical exact-range bytes after survivor filtering.
+    pub predicted_bytes: u64,
+    /// Shadow calculation wall time; no I/O is included.
+    pub cpu_us: u64,
+}
+
+/// Search hits plus execution measurements useful for performance smoke tests and tuning.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SearchReport {
     /// Top-k hits returned by the search.
@@ -1039,6 +1058,9 @@ pub struct SearchReport {
     /// Logical lossless vector rows fetched and validated after MVCC.
     #[serde(default)]
     pub global_exact_vectors_fetched: usize,
+    /// Result-preserving counterfactual exact-rerank certificate evidence.
+    #[serde(default)]
+    pub global_exact_bound_shadow: GlobalExactBoundShadow,
     /// Microseconds spent routing and producing approximate candidates in the
     /// stable global ANN base. Base and delta work may overlap.
     #[serde(default)]
@@ -2000,6 +2022,11 @@ pub struct SearchOptions {
     /// graph policies require a separately built and validated local artifact.
     #[serde(default)]
     pub cache_execution: CacheExecutionPolicy,
+    /// Enable result-preserving exact-bound qualification telemetry. This is
+    /// disabled by default because the V7 shadow recomputes residuals from
+    /// fetched exact rows.
+    #[serde(default)]
+    pub global_exact_bound_shadow: bool,
 }
 
 impl SearchOptions {
@@ -2016,6 +2043,7 @@ impl SearchOptions {
             vector_name: String::new(),
             disable_coarse_quantizer: false,
             cache_execution: CacheExecutionPolicy::Scan,
+            global_exact_bound_shadow: false,
         }
     }
 
@@ -2042,6 +2070,7 @@ impl SearchOptions {
             vector_name: String::new(),
             disable_coarse_quantizer: false,
             cache_execution: CacheExecutionPolicy::Scan,
+            global_exact_bound_shadow: false,
         }
     }
 
@@ -2213,6 +2242,13 @@ impl SearchOptions {
     #[must_use]
     pub fn with_cache_execution(mut self, policy: CacheExecutionPolicy) -> Self {
         self.cache_execution = policy;
+        self
+    }
+
+    /// Enable or disable result-preserving exact-bound qualification telemetry.
+    #[must_use]
+    pub fn with_global_exact_bound_shadow(mut self, enabled: bool) -> Self {
+        self.global_exact_bound_shadow = enabled;
         self
     }
 }

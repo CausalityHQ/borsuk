@@ -164,6 +164,20 @@ impl GlobalScanQuantizer {
         }
     }
 
+    fn certificate_l2_interval(
+        &self,
+        query: &[f32],
+        vector: &[f32],
+        code: &[u8],
+    ) -> Result<Option<(f64, f64)>> {
+        match self {
+            Self::Pq(quantizer) => quantizer
+                .certificate_l2_interval(query, vector, code)
+                .map(Some),
+            Self::FastTurboQuantMse(_) | Self::FastTurboQuantProd(_) => Ok(None),
+        }
+    }
+
     #[cfg(test)]
     fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
         match self {
@@ -2105,6 +2119,15 @@ impl ResidentGlobalPq {
         ef: usize,
     ) -> Result<Vec<GlobalPqCandidate>> {
         graph.candidates(query, &self.quantizer, limit, ef)
+    }
+
+    pub(crate) fn certificate_l2_interval(
+        &self,
+        query: &[f32],
+        vector: &[f32],
+        code: &[u8],
+    ) -> Result<Option<(f64, f64)>> {
+        self.quantizer.certificate_l2_interval(query, vector, code)
     }
 }
 

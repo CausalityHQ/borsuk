@@ -1147,6 +1147,7 @@ impl PyIndex {
                         vector_name: vector,
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1200,6 +1201,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1254,6 +1256,7 @@ impl PyIndex {
                         vector_name: vector,
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1351,6 +1354,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1406,6 +1410,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1461,6 +1466,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1516,6 +1522,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)?;
@@ -1570,6 +1577,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1622,6 +1630,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1674,6 +1683,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1729,6 +1739,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1784,6 +1795,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1839,6 +1851,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)
@@ -1891,6 +1904,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)?;
@@ -1951,6 +1965,7 @@ impl PyIndex {
                         vector_name: String::new(),
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)?;
@@ -2012,6 +2027,7 @@ impl PyIndex {
                         vector_name: vector,
                         disable_coarse_quantizer: false,
                         cache_execution,
+                        global_exact_bound_shadow: false,
                     },
                 )
                 .map_err(to_py_error)?;
@@ -2053,6 +2069,7 @@ impl PyIndex {
                         vector_name: vector,
                         disable_coarse_quantizer: false,
                         cache_execution: borsuk::CacheExecutionPolicy::Scan,
+                        global_exact_bound_shadow: false,
                     },
                     borsuk::QueryCostModel {
                         request_price_per_million,
