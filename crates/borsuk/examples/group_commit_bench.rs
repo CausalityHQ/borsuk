@@ -17,7 +17,7 @@ use arrow_array::{Array, FixedSizeListArray, Float32Array, LargeListArray, ListA
 use borsuk::{
     BorsukIndex, GROUP_COMMIT_STRIPE_COUNT, GroupCommitConfig, GroupCommitLaneReceipt,
     GroupCommitTicket, GroupCommitWriter, LeafMode, OpenOptions, RequestCounts, SearchOptions,
-    VectorRecord,
+    StorageAccessTrace, VectorRecord, install_storage_access_trace,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -44,6 +44,7 @@ struct ReadSample {
     query: usize,
     record_id: String,
     hit_id: String,
+    hit_ids: String,
     contains_record_id: bool,
     latency_ms: f64,
     requests: RequestCounts,
@@ -727,11 +728,19 @@ fn measure_reads(
             .hits
             .first()
             .map_or_else(String::new, |hit| hit.id.as_str().to_string());
+        let hit_ids = report
+            .hits
+            .iter()
+            .take(10)
+            .map(|hit| hit.id.as_str())
+            .collect::<Vec<_>>()
+            .join("|");
         let contains_record_id = report.hits.iter().any(|hit| hit.id.as_str() == record_id);
         measurement.samples.push(ReadSample {
             query: query_index,
             record_id: record_id.clone(),
             hit_id,
+            hit_ids,
             contains_record_id,
             latency_ms,
             requests: report.requests,
@@ -788,15 +797,16 @@ fn write_read_hedge_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<
     let mut reads = BufWriter::new(File::create(path)?);
     writeln!(
         reads,
-        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us"
+        "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us"
     )?;
     for sample in samples {
         writeln!(
             reads,
-            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             sample.query,
             sample.record_id,
             sample.hit_id,
+            sample.hit_ids,
             sample.contains_record_id,
             sample.latency_ms,
             sample.requests.total(),
@@ -1206,11 +1216,24 @@ fn run_read_qualification(protocol: &str) -> BenchResult<()> {
     };
 
     fs::create_dir_all(&output)?;
+    let query_trace = if hedge_qualification {
+        env::var_os("BORSUK_GROUP_COMMIT_READ_STORAGE_TRACE")
+            .map(StorageAccessTrace::create)
+            .transpose()?
+    } else {
+        None
+    };
+    if let Some(trace) = query_trace.as_ref() {
+        install_storage_access_trace(trace.clone())?;
+    }
     let mut index = if hedge_qualification {
         open_read_hedge_index(&uri, shape.stripe_bytes, hedge_after_ms)?
     } else {
         open_benchmark_index_with_stripe(&uri, shape.stripe_bytes)?
     };
+    if let Some(trace) = query_trace.as_ref() {
+        trace.reset()?;
+    }
     let reads = measure_reads(
         &mut index,
         &query_samples,
@@ -2050,6 +2073,7 @@ mod tests {
             query: 0,
             record_id: "group-o00000000".to_string(),
             hit_id: "group-o00000000".to_string(),
+            hit_ids: "group-o00000000|neighbor-1|neighbor-2".to_string(),
             contains_record_id: true,
             latency_ms: 12.5,
             requests: RequestCounts {
@@ -2071,7 +2095,7 @@ mod tests {
         let csv = fs::read_to_string(&path).unwrap();
         fs::remove_file(&path).unwrap();
         assert!(csv.starts_with(
-            "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,"
+            "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,"
         ));
         assert!(csv.contains(",100,123,456,4,1,2,3,4,5\n"));
     }

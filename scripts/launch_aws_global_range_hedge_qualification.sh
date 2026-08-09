@@ -8,18 +8,30 @@ PROFILE="${AWS_PROFILE:-causality}"
   echo "global range hedge qualification requires AWS profile causality" >&2
   exit 2
 }
+CAMPAIGN="${BORSUK_GLOBAL_RANGE_HEDGE_CAMPAIGN:?set BORSUK_GLOBAL_RANGE_HEDGE_CAMPAIGN explicitly}"
 REGION="${AWS_REGION:-eu-central-1}"
 INSTANCE_ID="${BORSUK_BENCH_INSTANCE_ID:-i-0e73bacb470807838}"
 BUCKET="${BORSUK_GROUP_COMMIT_BUCKET:-borsuk-bench-453182569524-euc1}"
 RUN_ID="${BORSUK_GLOBAL_RANGE_HEDGE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CAMPAIGN="${BORSUK_GLOBAL_RANGE_HEDGE_CAMPAIGN:-$ROOT_DIR/docs/research/global-range-hedge-qualification.json}"
 NAMESPACE="${BORSUK_GLOBAL_RANGE_HEDGE_NAMESPACE:-global-range-hedge}"
 SESSION_PREFIX="${BORSUK_GLOBAL_RANGE_HEDGE_SESSION_PREFIX:-borsuk-global-range-hedge}"
 RESULT_URI="s3://${BUCKET}/research/${NAMESPACE}/${RUN_ID}/results"
 SESSION="${SESSION_PREFIX}-${RUN_ID}"
 
 cd "$ROOT_DIR"
+campaign_abs="$(realpath -e "$CAMPAIGN")"
+case "$campaign_abs" in
+  "$ROOT_DIR"/*) ;;
+  *) echo "campaign manifest must be inside the repository" >&2; exit 2 ;;
+esac
+campaign_rel="${campaign_abs#"$ROOT_DIR"/}"
+git ls-files --error-unmatch "$campaign_rel" >/dev/null || {
+  echo "campaign manifest must be tracked" >&2
+  exit 2
+}
+python3 scripts/validate_global_range_hedge_qualification.py \
+  --manifest "$campaign_abs" --validate-manifest-only >/dev/null
 account="$(aws --profile "$PROFILE" --region "$REGION" sts get-caller-identity --query Account --output text)"
 [[ "$account" == "453182569524" ]] || { echo "AWS account mismatch: $account" >&2; exit 2; }
 state="$(aws --profile "$PROFILE" --region "$REGION" ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)"
@@ -76,7 +88,7 @@ sudo -iu ec2-user bash -lc "cd \"\$workspace\" && uv run --python 3.12 --with-re
 sudo -iu ec2-user tmux new-session -d -s "\$session" -c "\$workspace"
 sudo -iu ec2-user tmux set-option -t "\$session" remain-on-exit on
 sentinel="/home/ec2-user/borsuk-${NAMESPACE}-started-${RUN_ID}"
-cmd="printf 'started\\n' > \"\$sentinel\" && exec env AWS_REGION='${REGION}' AWS_DEFAULT_REGION='${REGION}' BORSUK_SOURCE_ARCHIVE='/tmp/borsuk-${NAMESPACE}-source.tar' BORSUK_GLOBAL_RANGE_HEDGE_OUTPUT_ROOT='\$remote_output' BORSUK_GLOBAL_RANGE_HEDGE_RESULT_URI='\$result_uri' BORSUK_GROUP_COMMIT_DATASET='\$dataset_dir' BORSUK_RUN_GLOBAL_RANGE_HEDGE=1 bash scripts/bench_global_range_hedge_qualification.sh"
+cmd="printf 'started\\n' > \"\$sentinel\" && exec env AWS_REGION='${REGION}' AWS_DEFAULT_REGION='${REGION}' BORSUK_SOURCE_ARCHIVE='/tmp/borsuk-${NAMESPACE}-source.tar' BORSUK_GLOBAL_RANGE_HEDGE_MANIFEST='\$workspace/${campaign_rel}' BORSUK_GLOBAL_RANGE_HEDGE_OUTPUT_ROOT='\$remote_output' BORSUK_GLOBAL_RANGE_HEDGE_RESULT_URI='\$result_uri' BORSUK_GROUP_COMMIT_DATASET='\$dataset_dir' BORSUK_RUN_GLOBAL_RANGE_HEDGE=1 bash scripts/bench_global_range_hedge_qualification.sh"
 sudo -iu ec2-user tmux send-keys -t "\$session" -l -- "\$cmd"
 sudo -iu ec2-user tmux send-keys -t "\$session" Enter
 for _ in \$(seq 1 120); do

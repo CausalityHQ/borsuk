@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import validate_global_range_hedge_qualification as hedge_validator
+
 ROOT = Path(__file__).resolve().parents[1]
 MIN_HIGH_RECALL_TIE_AWARE_RECALL_AT_10 = 0.95
 
@@ -874,14 +876,79 @@ def assert_global_range_hedge_manifest(manifest: dict[str, object]) -> None:
         manifest.get("disk_cache_enabled") is False,
         "global range hedge qualification must disable disk cache",
     )
-    require(manifest.get("repetitions") == 5, "global range hedge campaign must use five repetitions")
-    require(manifest.get("arm_orders") == expected_orders, "global range hedge arms must alternate")
-    require(manifest.get("queries_per_arm") == 500, "global range hedge arms must use 500 queries")
-    require(manifest.get("read_writer") == 0, "global range hedge cohort must use writer zero")
-    require(manifest.get("stripe_bytes") == 1024 * 1024, "global range hedge stripe width changed")
+    require(
+        manifest.get("repetitions") == 5,
+        "global range hedge campaign must use five repetitions",
+    )
+    require(
+        manifest.get("arm_orders") == expected_orders,
+        "global range hedge arms must alternate",
+    )
+    require(
+        manifest.get("queries_per_arm") == 500,
+        "global range hedge arms must use 500 queries",
+    )
+    require(
+        manifest.get("read_writer") == 0,
+        "global range hedge cohort must use writer zero",
+    )
+    require(
+        manifest.get("stripe_bytes") == 1024 * 1024,
+        "global range hedge stripe width changed",
+    )
     require(
         manifest.get("hedge_after_ms") == {"control": "none", "candidate": "75"},
         "global range hedge delay arms changed",
+    )
+
+
+def assert_global_exact_rerank_hedge_manifest(manifest: dict[str, object]) -> None:
+    expected_orders = [
+        ["control", "candidate"],
+        ["candidate", "control"],
+        ["control", "candidate"],
+        ["candidate", "control"],
+        ["control", "candidate"],
+    ]
+    require(
+        manifest.get("campaign_id") == "global-exact-rerank-hedge-qualification-v1",
+        "global exact rerank hedge campaign id changed",
+    )
+    require(
+        manifest.get("base_run_id") == "20260809T034709Z-v35-8e09070",
+        "global exact rerank hedge base run changed",
+    )
+    require(
+        manifest.get("disk_cache_enabled") is False,
+        "global exact rerank hedge qualification must disable disk cache",
+    )
+    require(
+        manifest.get("repetitions") == 5,
+        "global exact rerank hedge must use five repetitions",
+    )
+    require(
+        manifest.get("arm_orders") == expected_orders,
+        "global exact rerank hedge arms must alternate",
+    )
+    require(
+        manifest.get("queries_per_arm") == 500,
+        "global exact rerank hedge arms must use 500 queries",
+    )
+    require(
+        manifest.get("read_writer") == 0,
+        "global exact rerank hedge must use writer zero",
+    )
+    require(
+        manifest.get("hedge_after_ms") == {"control": "none", "candidate": "75"},
+        "global exact rerank hedge delay arms changed",
+    )
+    require(
+        manifest.get("required_better_paired_repetitions") == 4,
+        "global exact rerank hedge paired win gate changed",
+    )
+    require(
+        manifest.get("minimum_pooled_p95_improvement_ms") == 5.0,
+        "global exact rerank hedge absolute p95 gate changed",
     )
 
 
@@ -922,6 +989,7 @@ def main() -> None:
     assert_tracked("scripts/test_check_repo_policy.py")
     assert_tracked("scripts/test_docs_web.mjs")
     for path in [
+        "docs/research/global-exact-rerank-hedge-qualification.json",
         "docs/research/global-range-hedge-qualification.json",
         "scripts/bench_global_range_hedge_qualification.sh",
         "scripts/launch_aws_global_range_hedge_qualification.sh",
@@ -930,9 +998,18 @@ def main() -> None:
         "scripts/test_validate_global_range_hedge_qualification.py",
     ]:
         assert_tracked(path)
-    assert_global_range_hedge_manifest(
-        json.loads((ROOT / "docs/research/global-range-hedge-qualification.json").read_text())
+    legacy_hedge_manifest = json.loads(
+        (ROOT / "docs/research/global-range-hedge-qualification.json").read_text()
     )
+    exact_hedge_manifest = json.loads(
+        (
+            ROOT / "docs/research/global-exact-rerank-hedge-qualification.json"
+        ).read_text()
+    )
+    assert_global_range_hedge_manifest(legacy_hedge_manifest)
+    assert_global_exact_rerank_hedge_manifest(exact_hedge_manifest)
+    hedge_validator.validate_manifest(legacy_hedge_manifest)
+    hedge_validator.validate_manifest(exact_hedge_manifest)
     assert_no_files_matching(
         "python/src/borsuk",
         ["_borsuk*.so", "_borsuk*.pyd", "_borsuk*.dll", "_borsuk*.dylib"],

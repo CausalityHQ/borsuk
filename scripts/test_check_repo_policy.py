@@ -9,7 +9,47 @@ import check_repo_policy
 
 
 class BenchmarkArtifactPolicyTests(unittest.TestCase):
-    def test_global_range_hedge_policy_rejects_cached_or_unpaired_campaign(self) -> None:
+    def test_global_exact_rerank_hedge_policy_freezes_the_paired_v35_contract(
+        self,
+    ) -> None:
+        manifest = {
+            "campaign_id": "global-exact-rerank-hedge-qualification-v1",
+            "base_run_id": "20260809T034709Z-v35-8e09070",
+            "disk_cache_enabled": False,
+            "repetitions": 5,
+            "arm_orders": [
+                ["control", "candidate"],
+                ["candidate", "control"],
+                ["control", "candidate"],
+                ["candidate", "control"],
+                ["control", "candidate"],
+            ],
+            "queries_per_arm": 500,
+            "read_writer": 0,
+            "hedge_after_ms": {"control": "none", "candidate": "75"},
+            "required_better_paired_repetitions": 4,
+            "minimum_pooled_p95_improvement_ms": 5.0,
+        }
+        check_repo_policy.assert_global_exact_rerank_hedge_manifest(manifest)
+
+        for key, invalid in [
+            ("base_run_id", "wrong"),
+            ("disk_cache_enabled", True),
+            ("repetitions", 4),
+            ("required_better_paired_repetitions", 3),
+            ("minimum_pooled_p95_improvement_ms", 4.9),
+        ]:
+            broken = {**manifest, key: invalid}
+            with (
+                self.subTest(key=key),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                check_repo_policy.assert_global_exact_rerank_hedge_manifest(broken)
+
+    def test_global_range_hedge_policy_rejects_cached_or_unpaired_campaign(
+        self,
+    ) -> None:
         manifest = {
             "campaign_id": "global-range-hedge-qualification-v1",
             "disk_cache_enabled": False,

@@ -143,6 +143,36 @@ record_id|pq_codes,rows:3|9,2,128,42000,memory,ok"
 }
 
 #[test]
+fn trace_sink_reset_discards_startup_events_and_preserves_the_schema() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("query-phase.csv");
+    let trace = StorageAccessTrace::create(&output).unwrap();
+    trace
+        .record(StorageAccessEvent::read(
+            "metadata/open.bin",
+            "packed",
+            64,
+            64,
+        ))
+        .unwrap();
+    trace.reset().unwrap();
+    trace
+        .record(StorageAccessEvent::read(
+            "global-pq/exact-bundles/query.arrow",
+            "arrow",
+            128,
+            32,
+        ))
+        .unwrap();
+
+    let csv = std::fs::read_to_string(output).unwrap();
+    assert!(!csv.contains("metadata/open.bin"));
+    assert!(csv.contains("global-pq/exact-bundles/query.arrow"));
+    assert_eq!(csv.lines().count(), 2);
+    assert!(csv.lines().all(|line| line.split(',').count() == 14));
+}
+
+#[test]
 fn real_index_writes_are_traced_at_the_common_storage_boundary() {
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("storage-access.csv");

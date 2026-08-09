@@ -9,6 +9,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "bench_global_range_hedge_qualification.sh"
 LAUNCHER = ROOT / "scripts" / "launch_aws_global_range_hedge_qualification.sh"
 MANIFEST = ROOT / "docs" / "research" / "global-range-hedge-qualification.json"
+EXACT_MANIFEST = (
+    ROOT / "docs" / "research" / "global-exact-rerank-hedge-qualification.json"
+)
 
 
 class GlobalRangeHedgeHarnessTest(unittest.TestCase):
@@ -58,6 +61,24 @@ class GlobalRangeHedgeHarnessTest(unittest.TestCase):
         )
         self.assertEqual(launcher.returncode, 2)
         self.assertIn("causality", launcher.stderr)
+
+    def test_exact_rerank_manifest_freezes_v35_and_absolute_latency_gate(self):
+        manifest = json.loads(EXACT_MANIFEST.read_text())
+        self.assertEqual(manifest["base_run_id"], "20260809T034709Z-v35-8e09070")
+        self.assertEqual(manifest["repetitions"], 5)
+        self.assertEqual(manifest["required_better_paired_repetitions"], 4)
+        self.assertEqual(manifest["minimum_pooled_p95_improvement_ms"], 5.0)
+        self.assertFalse(manifest["disk_cache_enabled"])
+
+    def test_launcher_forwards_the_selected_manifest_to_the_remote_runner(self):
+        launcher = LAUNCHER.read_text()
+        runner = RUNNER.read_text()
+        self.assertIn("campaign_rel=", launcher)
+        self.assertIn("BORSUK_GLOBAL_RANGE_HEDGE_MANIFEST=", launcher)
+        self.assertIn("BORSUK_GLOBAL_RANGE_HEDGE_CAMPAIGN:?set", launcher)
+        self.assertIn("BORSUK_GLOBAL_RANGE_HEDGE_MANIFEST:?set", runner)
+        self.assertIn("--validate-manifest-only", launcher)
+        self.assertIn("--validate-manifest-only", runner)
 
 
 if __name__ == "__main__":

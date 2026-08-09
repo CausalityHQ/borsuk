@@ -2,12 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MANIFEST="${BORSUK_GLOBAL_RANGE_HEDGE_MANIFEST:-$ROOT_DIR/docs/research/global-range-hedge-qualification.json}"
 
 [[ "${BORSUK_RUN_GLOBAL_RANGE_HEDGE:-0}" == "1" ]] || {
   echo "set BORSUK_RUN_GLOBAL_RANGE_HEDGE=1 for production execution" >&2
   exit 2
 }
+MANIFEST="${BORSUK_GLOBAL_RANGE_HEDGE_MANIFEST:?set BORSUK_GLOBAL_RANGE_HEDGE_MANIFEST explicitly}"
+python3 "$ROOT_DIR/scripts/validate_global_range_hedge_qualification.py" \
+  --manifest "$MANIFEST" --validate-manifest-only >/dev/null
 
 OUTPUT="${BORSUK_GLOBAL_RANGE_HEDGE_OUTPUT_ROOT:?set BORSUK_GLOBAL_RANGE_HEDGE_OUTPUT_ROOT}"
 RESULT_URI="${BORSUK_GLOBAL_RANGE_HEDGE_RESULT_URI:?set BORSUK_GLOBAL_RANGE_HEDGE_RESULT_URI}"
@@ -74,7 +76,7 @@ prefix_is_empty "$RESULT_URI" || { echo "refusing to reuse non-empty result pref
 base_result_root="${BASE_SAMPLES_URI%/samples.csv}"
 for marker in READ_QUALIFICATION_COMPLETE DRAIN_COMPLETE POINT_VISIBILITY_COMPLETE CELL_FAILED; do
   s3_marker_exists "$base_result_root/$marker" || {
-    echo "base v67 cell lacks terminal marker $marker" >&2
+    echo "base cell lacks terminal marker $marker" >&2
     exit 3
   }
 done
@@ -176,7 +178,7 @@ while IFS=$'\t' read -r repetition order_position arm_name hedge_after; do
     BORSUK_GROUP_COMMIT_HEDGE_AFTER_MS="$hedge_after" \
     BORSUK_GROUP_COMMIT_READ_REPETITION="$repetition" \
     BORSUK_GROUP_COMMIT_READ_ORDER_POSITION="$order_position" \
-    BORSUK_STORAGE_TRACE="$storage_trace_output" \
+    BORSUK_GROUP_COMMIT_READ_STORAGE_TRACE="$storage_trace_output" \
     python3 "$ROOT_DIR/scripts/benchmark_with_resources.py" \
       --output "$resource_output" \
       --interval-ms "$RESOURCE_INTERVAL_MS" \

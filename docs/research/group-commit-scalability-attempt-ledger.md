@@ -1871,3 +1871,29 @@ improved, so this is a useful directional result rather than a general latency
 claim or qualification pass. Exact rerank remains the largest tail component;
 the next candidate must reduce its physical read/decode work without relying
 on a cache or weakening recall and MVCC correctness.
+
+### Preregistered v35 exact-rerank hedge qualification
+
+The optional unbounded-read hedge capability was delivered in revision
+`23d7cba` with its production default still disabled. Local storage evidence
+proves one primary plus at most one duplicate per slow physical range while
+preserving bytes and ordering. Production-path integration tests prove the
+setting reaches exact Arrow bundle ranges and that strict byte/deadline budgets
+retain the unhedged request shape across both approximate stripes and exact
+rerank. This is structural evidence, not a latency claim.
+
+The next paired contract is frozen in
+`docs/research/global-exact-rerank-hedge-qualification.json` against the
+immutable terminal v35 `c2000/r01/l1/w8` index. It uses five alternating fresh
+control/candidate process pairs, 500 identical writer-zero queries per arm,
+disabled disk cache, and a 75 ms candidate delay. A candidate promotion
+requires recall@10 1.0, paired hit identity and logical-byte equality, p95 below
+200 ms in every candidate repetition, at least four strict paired p95 wins, at
+least 5 ms pooled-p95 improvement, no more than 5% pooled-p50 regression, and
+no more than 20% GET or backing-byte amplification. The fail-closed validator
+must establish root and all-arm terminality before opening measurement CSVs.
+The explicit-manifest preflight validates the complete frozen contract before
+any AWS call or benchmark work. Each arm resets its raw storage trace after
+index open so query-phase physical request and fetched-byte totals reconcile
+with the raw read rows; paired validation compares the complete ordered top-10
+IDs and per-query logical bytes rather than only the first hit or pooled totals.

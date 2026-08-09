@@ -7,28 +7,31 @@ import sys
 import tempfile
 import unittest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-import validate_global_range_hedge_qualification as validator
 
 
 VALIDATOR = ROOT / "scripts" / "validate_global_range_hedge_qualification.py"
 MANIFEST = ROOT / "docs" / "research" / "global-range-hedge-qualification.json"
+EXACT_MANIFEST = (
+    ROOT / "docs" / "research" / "global-exact-rerank-hedge-qualification.json"
+)
 
 
 class GlobalRangeHedgeValidatorTest(unittest.TestCase):
+    manifest_path = MANIFEST
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.temp.name)
-        self.manifest = json.loads(MANIFEST.read_text())
-        self.manifest_sha = hashlib.sha256(MANIFEST.read_bytes()).hexdigest()
+        self.manifest = json.loads(self.manifest_path.read_text())
+        self.manifest_sha = hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()
 
     def tearDown(self):
         self.temp.cleanup()
 
     def run_validator(self, recover=False):
-        command = ["python3", str(VALIDATOR), "--manifest", str(MANIFEST)]
+        command = ["python3", str(VALIDATOR), "--manifest", str(self.manifest_path)]
         if recover:
             command.append("--recover-terminal-validator-failure")
         command.append(str(self.root))
@@ -58,7 +61,9 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
         arm.mkdir(parents=True, exist_ok=True)
         hedge_after = "75" if arm_name == "candidate" else "none"
         protocol_kind = (
-            "range-hedge-candidate" if arm_name == "candidate" else "range-hedge-control"
+            "range-hedge-candidate"
+            if arm_name == "candidate"
+            else "range-hedge-control"
         )
         if latencies is None:
             latency = (100.0 if arm_name == "candidate" else 120.0) + repetition
@@ -71,7 +76,6 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
         (arm / "CELL_COMPLETE").touch()
         (arm / "process_exit.txt").write_text("0\n")
         (arm / "resources.csv").write_text("timestamp_ms,rss_bytes\n0,1024\n")
-        (arm / "storage-access.csv").write_text("operation,path\nget,x\n")
         (arm / "environment.txt").write_text(
             f"source_sha256={'a' * 64}\n"
             f"manifest_sha256={self.manifest_sha}\n"
@@ -108,6 +112,7 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
                     "query",
                     "record_id",
                     "hit_id",
+                    "hit_ids",
                     "contains_record_id",
                     "latency_ms",
                     "requests",
@@ -136,6 +141,10 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
                         query,
                         record_id,
                         record_id,
+                        "|".join(
+                            [record_id]
+                            + [f"neighbor-{query}-{rank}" for rank in range(1, 10)]
+                        ),
                         "true",
                         latency,
                         requests,
@@ -160,6 +169,14 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
                 total_puts += puts
                 total_logical_bytes += logical_bytes
                 total_backing_bytes += backing_bytes
+
+        (arm / "storage-access.csv").write_text(
+            "operation,object_role,path,physical_format,object_bytes,request_count,"
+            "bytes_fetched,logical_projection,row_selection,logical_rows_requested,"
+            "logical_rows_decoded,decode_cpu_ns,cache_state,status\n"
+            f"read,exact_vectors,global-pq/exact-bundles/test.arrow,arrow,4096,"
+            f"{total_gets},{total_backing_bytes},,,,,,backing,ok\n"
+        )
 
         ordered = sorted(latencies)
         p50 = ordered[int((len(ordered) - 1) * 0.50 + 0.5)]
@@ -244,7 +261,7 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
 
     def write_terminal_matrix(self):
         (self.root / self.manifest["root_complete_marker"]).touch()
-        (self.root / "manifest.json").write_text(MANIFEST.read_text())
+        (self.root / "manifest.json").write_text(self.manifest_path.read_text())
         for repetition, order in enumerate(self.manifest["arm_orders"], 1):
             for order_position, arm_name in enumerate(order):
                 self.write_arm(
@@ -281,7 +298,9 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
 
         recovered = self.run_validator(recover=True)
         self.assertEqual(recovered.returncode, 0, recovered.stderr)
-        self.assertEqual(json.loads(recovered.stdout)["terminal_mode"], "validator-failure-recovery")
+        self.assertEqual(
+            json.loads(recovered.stdout)["terminal_mode"], "validator-failure-recovery"
+        )
 
     def test_rejects_missing_markers_wrong_hedge_cache_queries_recall_and_writes(self):
         mutations = []
@@ -291,11 +310,15 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
 
         def wrong_hedge():
             path = self.arm_path(2, "candidate") / "environment.txt"
-            path.write_text(path.read_text().replace("hedge_after_ms=75", "hedge_after_ms=74"))
+            path.write_text(
+                path.read_text().replace("hedge_after_ms=75", "hedge_after_ms=74")
+            )
 
         def cache_enabled():
             path = self.arm_path(1, "control") / "environment.txt"
-            path.write_text(path.read_text().replace("cache_enabled=false", "cache_enabled=true"))
+            path.write_text(
+                path.read_text().replace("cache_enabled=false", "cache_enabled=true")
+            )
 
         def query_mismatch():
             path = self.arm_path(3, "control") / "reads.csv"
@@ -311,7 +334,14 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
             self.write_arm(1, "candidate", order, candidate_gets=True, puts=1)
 
         mutations.extend(
-            [missing_marker, wrong_hedge, cache_enabled, query_mismatch, recall_miss, write_request]
+            [
+                missing_marker,
+                wrong_hedge,
+                cache_enabled,
+                query_mismatch,
+                recall_miss,
+                write_request,
+            ]
         )
         for mutation in mutations:
             with self.subTest(mutation=mutation.__name__):
@@ -333,14 +363,26 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
         def logical_bytes():
             for repetition, order in enumerate(self.manifest["arm_orders"], 1):
                 position = order.index("candidate")
-                self.write_arm(repetition, "candidate", position, logical_bytes=1025, candidate_gets=True)
+                self.write_arm(
+                    repetition,
+                    "candidate",
+                    position,
+                    logical_bytes=1025,
+                    candidate_gets=True,
+                )
 
         cases["identical_logical_bytes"] = logical_bytes
 
         def p95_and_worst():
             for repetition, order in enumerate(self.manifest["arm_orders"], 1):
                 position = order.index("candidate")
-                self.write_arm(repetition, "candidate", position, latencies=[210.0] * 500, candidate_gets=True)
+                self.write_arm(
+                    repetition,
+                    "candidate",
+                    position,
+                    latencies=[210.0] * 500,
+                    candidate_gets=True,
+                )
 
         cases["pooled_p95_below_limit"] = p95_and_worst
 
@@ -355,7 +397,12 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
                     candidate_gets=True,
                 )
 
-        cases["paired_nonworse_repetitions"] = paired_repetitions
+        paired_key = (
+            "paired_better_repetitions"
+            if "required_better_paired_repetitions" in self.manifest
+            else "paired_nonworse_repetitions"
+        )
+        cases[paired_key] = paired_repetitions
 
         def p50_regression():
             for repetition, order in enumerate(self.manifest["arm_orders"], 1):
@@ -402,6 +449,16 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
                     writer = csv.DictWriter(handle, fieldnames=summary.keys())
                     writer.writeheader()
                     writer.writerow(summary)
+                trace_path = (
+                    self.arm_path(repetition, "candidate") / "storage-access.csv"
+                )
+                with trace_path.open(newline="") as handle:
+                    trace = list(csv.DictReader(handle))[0]
+                trace["request_count"] = "1500"
+                with trace_path.open("w", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=trace.keys())
+                    writer.writeheader()
+                    writer.writerow(trace)
 
         cases["maximum_get_amplification"] = get_amplification
 
@@ -429,6 +486,13 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
                 self.write_terminal_matrix()
                 mutation()
                 result = self.run_validator()
+                if (
+                    criterion == "identical_logical_bytes"
+                    and "required_better_paired_repetitions" in self.manifest
+                ):
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("paired logical bytes", result.stderr)
+                    continue
                 self.assertEqual(result.returncode, 0, result.stderr)
                 report = json.loads(result.stdout)
                 self.assertIsNone(report["winner"])
@@ -437,6 +501,104 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
                     self.assertFalse(
                         report["selection_criteria"]["worst_repetition_p95_below_limit"]
                     )
+
+
+class GlobalExactRerankHedgeValidatorTest(GlobalRangeHedgeValidatorTest):
+    manifest_path = EXACT_MANIFEST
+
+    def test_rejects_paired_logical_byte_redistribution(self):
+        self.write_terminal_matrix()
+        path = self.arm_path(2, "candidate") / "reads.csv"
+        with path.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        rows[0]["bytes_read"] = str(int(rows[0]["bytes_read"]) + 1)
+        rows[1]["bytes_read"] = str(int(rows[1]["bytes_read"]) - 1)
+        with path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+        result = self.run_validator()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("paired logical bytes", result.stderr)
+
+    def test_rejects_a_paired_hit_identity_change(self):
+        self.write_terminal_matrix()
+        path = self.arm_path(2, "candidate") / "reads.csv"
+        with path.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        rows[0]["hit_id"] = "other-id"
+        with path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+        result = self.run_validator()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("hit IDs", result.stderr)
+
+    def test_rejects_a_nonfirst_paired_hit_identity_change(self):
+        self.write_terminal_matrix()
+        path = self.arm_path(2, "candidate") / "reads.csv"
+        path.write_text(
+            path.read_text().replace("|neighbor-0-1|", "|different-second|", 1)
+        )
+        result = self.run_validator()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ordered top-10", result.stderr)
+
+    def test_rejects_storage_trace_request_or_byte_drift(self):
+        for field in ("request_count", "bytes_fetched"):
+            with self.subTest(field=field):
+                self.write_terminal_matrix()
+                path = self.arm_path(1, "control") / "storage-access.csv"
+                with path.open(newline="") as handle:
+                    row = list(csv.DictReader(handle))[0]
+                row[field] = str(int(row[field]) + 1)
+                with path.open("w", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=row.keys())
+                    writer.writeheader()
+                    writer.writerow(row)
+                result = self.run_validator()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("storage trace", result.stderr)
+                for child in self.root.iterdir():
+                    if child.is_dir():
+                        import shutil
+
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+
+    def test_manifest_only_preflight_accepts_frozen_exact_and_rejects_drift(self):
+        accepted = subprocess.run(
+            [
+                "python3",
+                str(VALIDATOR),
+                "--manifest",
+                str(EXACT_MANIFEST),
+                "--validate-manifest-only",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        changed = self.root / "changed-manifest.json"
+        manifest = {**self.manifest, "comparison_contract": "weakened"}
+        changed.write_text(json.dumps(manifest))
+        rejected = subprocess.run(
+            [
+                "python3",
+                str(VALIDATOR),
+                "--manifest",
+                str(changed),
+                "--validate-manifest-only",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
 
 
 if __name__ == "__main__":

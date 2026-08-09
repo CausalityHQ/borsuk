@@ -2,12 +2,14 @@
 
 use std::{
     fs::File,
-    io::{BufWriter, Write},
+    io::{BufWriter, Seek, SeekFrom, Write},
     path::Path,
     sync::{Arc, Mutex, OnceLock},
 };
 
 use crate::{BorsukError, Result};
+
+const TRACE_HEADER: &str = "operation,object_role,path,physical_format,object_bytes,request_count,bytes_fetched,logical_projection,row_selection,logical_rows_requested,logical_rows_decoded,decode_cpu_ns,cache_state,status";
 
 /// Logical role of one persisted object, independent of its physical codec.
 #[derive(
@@ -314,15 +316,31 @@ impl StorageAccessTrace {
             ))
         })?;
         let mut writer = BufWriter::new(file);
-        writeln!(
-            writer,
-            "operation,object_role,path,physical_format,object_bytes,request_count,bytes_fetched,logical_projection,row_selection,logical_rows_requested,logical_rows_decoded,decode_cpu_ns,cache_state,status"
-        )
-        .map_err(trace_write_error)?;
+        writeln!(writer, "{TRACE_HEADER}").map_err(trace_write_error)?;
         writer.flush().map_err(trace_write_error)?;
         Ok(Self {
             writer: Arc::new(Mutex::new(Some(writer))),
         })
+    }
+
+    /// Discard earlier events while retaining this sink for a new measured
+    /// phase. The stable header is rewritten before the method returns.
+    pub fn reset(&self) -> Result<()> {
+        let mut guard = self
+            .writer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(writer) = guard.as_mut() else {
+            return Ok(());
+        };
+        writer.flush().map_err(trace_write_error)?;
+        writer.get_mut().set_len(0).map_err(trace_write_error)?;
+        writer
+            .get_mut()
+            .seek(SeekFrom::Start(0))
+            .map_err(trace_write_error)?;
+        writeln!(writer, "{TRACE_HEADER}").map_err(trace_write_error)?;
+        writer.flush().map_err(trace_write_error)
     }
 
     /// Append one raw event, or return immediately when disabled.
