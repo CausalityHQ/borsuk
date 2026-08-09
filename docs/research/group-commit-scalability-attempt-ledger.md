@@ -1897,3 +1897,15 @@ any AWS call or benchmark work. Each arm resets its raw storage trace after
 index open so query-phase physical request and fetched-byte totals reconcile
 with the raw read rows; paired validation compares the complete ordered top-10
 IDs and per-query logical bytes rather than only the first hit or pooled totals.
+
+Revision `59d46ba` froze and delivered that harness after the full workspace
+format, strict all-feature/all-target Clippy, complete Rust test, 503-test
+Python, 31-test policy, documentation, targeted Ruff, shell syntax, and staged
+diff gates passed. The exclusive Causality AWS attempt `20260809T051820Z`
+started on the dedicated `c7g.8xlarge` with source archive SHA-256
+`c9ecd293b166d1d71c39c2787d9c6cbc9bd9d18ef0398dcdd9db3427338175a2`
+and frozen manifest SHA-256
+`88af7ab2be7b76474ea49d704b829a76d303c4088d8e37eee82d440336378d9a`.
+This is a launch receipt only. Until a root terminal marker exists, monitoring
+is restricted to terminal markers and infrastructure/process health; no
+measurement CSV from this attempt is eligible for inspection.
