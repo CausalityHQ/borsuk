@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -618,6 +618,34 @@ impl Drop for BlockingRuntime {
             drop(runtime);
         }
     }
+}
+
+/// Share one bounded object-store executor across every index in the process.
+/// Per-index runtimes multiply native workers under multi-tenant bindings and
+/// eventually prevent Tokio (and the host) from creating required threads.
+/// A failed construction is intentionally retryable on the next index open.
+fn process_storage_runtime() -> Result<Arc<BlockingRuntime>> {
+    static RUNTIME: OnceLock<Mutex<Option<Arc<BlockingRuntime>>>> = OnceLock::new();
+    let mut runtime = RUNTIME
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| BorsukError::InvalidStorage("storage runtime lock poisoned".to_string()))?;
+    if let Some(runtime) = runtime.as_ref() {
+        return Ok(Arc::clone(runtime));
+    }
+    let cpu_threads = crate::configured_cpu_threads();
+    let created = Arc::new(BlockingRuntime::new(
+        Builder::new_multi_thread()
+            .worker_threads(cpu_threads)
+            .max_blocking_threads(cpu_threads)
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                BorsukError::InvalidStorage(format!("failed to create storage runtime: {error}"))
+            })?,
+    ));
+    *runtime = Some(Arc::clone(&created));
+    Ok(created)
 }
 
 #[derive(Clone)]
@@ -1293,15 +1321,7 @@ impl Storage {
         cache_dir: Option<PathBuf>,
         cache_max_bytes: Option<u64>,
     ) -> Result<Self> {
-        let cpu_threads = crate::configured_cpu_threads();
-        let runtime = Builder::new_multi_thread()
-            .worker_threads(cpu_threads)
-            .max_blocking_threads(cpu_threads)
-            .enable_all()
-            .build()
-            .map_err(|err| {
-                BorsukError::InvalidStorage(format!("failed to create storage runtime: {err}"))
-            })?;
+        let runtime = process_storage_runtime()?;
 
         let request_counters = Arc::new(RequestCounters::default());
         let cache_read_counters = Arc::new(CacheReadCounters::default());
@@ -1317,7 +1337,7 @@ impl Storage {
             prefix,
             cache_dir,
             cache_max_bytes,
-            runtime: Arc::new(BlockingRuntime::new(runtime)),
+            runtime,
             request_counters,
             cache_read_counters,
             storage_trace: configured_storage_access_trace()?,
@@ -5378,6 +5398,19 @@ mod tests {
             storage.runtime.runtime().metrics().num_workers(),
             crate::configured_cpu_threads(),
             "object-store I/O workers must not silently scale to every host CPU"
+        );
+    }
+
+    #[test]
+    fn storage_handles_share_one_process_runtime() {
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let first = Storage::from_uri(&file_uri(first_dir.path())).unwrap();
+        let second = Storage::from_uri(&file_uri(second_dir.path())).unwrap();
+
+        assert!(
+            Arc::ptr_eq(&first.runtime, &second.runtime),
+            "opening another index must not allocate another Tokio worker pool"
         );
     }
 
