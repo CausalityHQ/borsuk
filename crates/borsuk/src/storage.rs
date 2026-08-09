@@ -3557,7 +3557,12 @@ impl Storage {
         }
 
         let location = self.resolve(relative)?;
+        // `physical_bytes` is useful payload completed by winning reads and is
+        // returned to the query planner. A hedge loser can receive its response
+        // range before cancellation without completing the body; the common
+        // backing counter charges that response, so the trace must do likewise.
         let physical_bytes = Arc::new(AtomicU64::new(0));
+        let backing_response_bytes = Arc::new(AtomicU64::new(0));
         let object_bytes = Arc::new(AtomicU64::new(0));
         // A query can overlap base, delta, and multiple object reads on one
         // scoped store. Diffing that store's shared counters here attributes
@@ -3573,6 +3578,7 @@ impl Storage {
                         let store = Arc::clone(&self.store);
                         let location = location.clone();
                         let physical_bytes = Arc::clone(&physical_bytes);
+                        let backing_response_bytes = Arc::clone(&backing_response_bytes);
                         let object_bytes = Arc::clone(&object_bytes);
                         let request_attempts = Arc::clone(&request_attempts);
                         async move {
@@ -3582,6 +3588,8 @@ impl Storage {
                                     let location = location.clone();
                                     let range = range.clone();
                                     let physical_bytes = Arc::clone(&physical_bytes);
+                                    let backing_response_bytes =
+                                        Arc::clone(&backing_response_bytes);
                                     let object_bytes = Arc::clone(&object_bytes);
                                     let request_attempts = Arc::clone(&request_attempts);
                                     async move {
@@ -3594,6 +3602,10 @@ impl Storage {
                                             )
                                             .await?;
                                         object_bytes.fetch_max(result.meta.size, Ordering::Relaxed);
+                                        backing_response_bytes.fetch_add(
+                                            result.range.end.saturating_sub(result.range.start),
+                                            Ordering::Relaxed,
+                                        );
                                         let bytes = result.bytes().await?;
                                         physical_bytes
                                             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
@@ -3625,7 +3637,7 @@ impl Storage {
                 physical_format_for_path(relative),
                 object_bytes.load(Ordering::Relaxed),
                 request_attempts.load(Ordering::Relaxed),
-                bytes_fetched,
+                backing_response_bytes.load(Ordering::Relaxed),
             ))?;
         Ok(ReadRanges {
             chunks,

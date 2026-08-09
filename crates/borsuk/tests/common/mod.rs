@@ -18,8 +18,8 @@ use futures_util::{
     stream::{self, BoxStream},
 };
 use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
     path::Path as ObjectPath,
 };
 
@@ -90,6 +90,7 @@ pub struct FaultInjectingObjectStore {
     fault: Option<Arc<FaultRule>>,
     latency: Duration,
     get_latency: Option<(Duration, Arc<PathPredicate>)>,
+    get_payload_latency: Option<(Duration, Arc<PathPredicate>)>,
     operation_log: Option<Arc<OperationLog>>,
     put_barrier: Option<Arc<PutBarrier>>,
     put_concurrency: Option<Arc<PutConcurrencyProbe>>,
@@ -229,6 +230,7 @@ impl FaultInjectingObjectStore {
             fault: None,
             latency: Duration::ZERO,
             get_latency: None,
+            get_payload_latency: None,
             operation_log: None,
             put_barrier: None,
             put_concurrency: None,
@@ -277,6 +279,7 @@ impl FaultInjectingObjectStore {
             })),
             latency: Duration::ZERO,
             get_latency: None,
+            get_payload_latency: None,
             operation_log: None,
             put_barrier: None,
             put_concurrency: None,
@@ -308,6 +311,14 @@ impl FaultInjectingObjectStore {
         F: Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync + 'static,
     {
         self.get_latency = Some((latency, Arc::new(predicate)));
+        self
+    }
+
+    pub fn with_get_payload_latency_for<F>(mut self, latency: Duration, predicate: F) -> Self
+    where
+        F: Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync + 'static,
+    {
+        self.get_payload_latency = Some((latency, Arc::new(predicate)));
         self
     }
 
@@ -502,7 +513,39 @@ impl ObjectStore for FaultInjectingObjectStore {
             self.maybe_sleep_get(operation, location).await;
             self.maybe_fail(operation, location)?;
             self.record_operation(operation, location);
-            self.inner.get_opts(location, options).await
+            let result = self.inner.get_opts(location, options).await?;
+            let Some((latency, predicate)) = &self.get_payload_latency else {
+                return Ok(result);
+            };
+            if !predicate(operation, location) || latency.is_zero() {
+                return Ok(result);
+            }
+            let GetResult {
+                payload,
+                meta,
+                range,
+                attributes,
+                extensions,
+            } = result;
+            let latency = *latency;
+            let payload = match payload {
+                GetResultPayload::Stream(stream) => GetResultPayload::Stream(
+                    stream
+                        .then(move |item| async move {
+                            tokio::time::sleep(latency).await;
+                            item
+                        })
+                        .boxed(),
+                ),
+                other => other,
+            };
+            Ok(GetResult {
+                payload,
+                meta,
+                range,
+                attributes,
+                extensions,
+            })
         })
     }
 

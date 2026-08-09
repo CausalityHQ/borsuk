@@ -1977,3 +1977,25 @@ exclusive attempt `20260809T063557Z` started with unchanged manifest SHA-256
 and source archive SHA-256
 `ce7b60ba3a4aa0729f6ea4aa899717e7869921b6570b59cfa8eddb2e64a4f938`.
 This is a launch receipt only; its CSVs remain ineligible until root terminality.
+
+After the retained 15-minute interval all ten arm completion markers were
+present and the root failure marker was terminal. EC2 stayed healthy with
+62,548,044 KiB memory available and 114 GiB free disk. The ordinary validator
+rejected the failure-marked root before opening CSVs; recovery validation then
+found storage-trace byte drift in `r02/candidate`. Request counts now reconciled
+exactly. The missing trace bytes came from hedge losers that received an S3
+range response, causing the common backing counter to charge that response,
+then were cancelled before completing their bodies. Trace events counted only
+completed bodies. A deterministic payload-delay regression reproduced the
+failure at 1,024 traced versus 1,056 query-reported backing bytes. The repair
+tracks charged response bytes separately from useful completed bytes, so query
+planner accounting remains unchanged while trace evidence reconciles.
+
+The terminal raw rows are diagnostic only because the validator did not pass.
+They retained recall@10 1.0, ordered top-10 equality, and per-query logical-byte
+equality in all pairs. The 35 ms candidate won all five repetition p95s and
+kept amplification small (0.924% GET, 0.075% backing bytes), but pooled p95
+improved only 3.251 ms, from 81.051 to 77.799 ms, below the frozen 5 ms gate.
+Thus even after evidence repair this attempt cannot be promoted or relabeled as
+a pass. The low amplification leaves room for one lower-delay hypothesis; it
+must be frozen separately and rerun with the repaired trace.
