@@ -24,7 +24,15 @@ git -C "$repo_root" merge-base --is-ancestor origin/main HEAD || {
 
 mkdir -p "$output" "$cache_dir"
 failure="$output/APPROXIMATE_FIRST_QUALIFICATION_FAILED"
-trap 'status=$?; if [[ $status -ne 0 ]]; then printf "exit=%s\n" "$status" > "$failure"; fi' EXIT
+mark_failure() {
+  local status="$1"
+  if [[ "$status" -ne 0 ]]; then
+    printf 'exit=%s\n' "$status" > "$failure"
+  fi
+}
+trap 'mark_failure $?' EXIT
+trap 'mark_failure 130; exit 130' INT
+trap 'mark_failure 143; exit 143' TERM
 
 readarray -t protocol < <(python3 - "$manifest" <<'PY'
 import json, sys
@@ -91,5 +99,5 @@ else
   exit "$decision_status"
 fi
 rm -f "$failure"
-trap - EXIT
+trap - EXIT INT TERM
 exit "$decision_status"

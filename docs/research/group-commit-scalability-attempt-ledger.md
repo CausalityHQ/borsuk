@@ -2422,3 +2422,22 @@ every search point, and distinguishes a structurally valid architectural
 rejection from infrastructure failure. Synthetic evaluator fixtures are
 structural evidence only. No local or AWS measurement has been launched at this
 entry.
+
+Revision `c2420d3` launched the frozen local arm at
+`/data/home/rb/borsuk-approximate-first-local-c2420d3`. The full 1M-vector build
+completed (171.138 seconds ingest and 155.687 seconds finalization), then paired
+measurement began. The devbox swap-pressure hook subsequently reported 724 MiB
+swap in use. Process attribution showed about 3.43 GiB RSS in an older Codex
+process, 1.46 GiB in `production_bench`, and a separate concurrent
+`devbox-main` Cargo/rustc test using roughly 0.5 GiB. Although instantaneous
+memory PSI had recovered, swap and the competing build invalidate latency
+evidence, so the benchmark was stopped rather than allowed to produce a claim.
+The incomplete JSONL was not opened. The root is explicitly marked
+`APPROXIMATE_FIRST_QUALIFICATION_FAILED` with exit 130 and the swap-pressure
+reason; its partial artifact remains ineligible.
+
+The stop exposed a runner defect: PTY SIGINT exited 130 without firing the EXIT
+trap, leaving no automatic failure marker. The runner now has explicit INT and
+TERM handlers that persist exit 130/143 before termination, with a focused
+regression. Remote relaunch must use a fresh root from the fixed revision; the
+failed local root will not be repaired or resumed.

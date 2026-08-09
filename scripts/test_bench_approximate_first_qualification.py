@@ -38,6 +38,10 @@ class ApproximateFirstRunnerContractTest(unittest.TestCase):
         self.assertIn("decision_status -eq 1", RUNNER)
         self.assertIn("APPROXIMATE_FIRST_QUALIFICATION_FAILED", RUNNER)
 
+    def test_interrupts_and_termination_are_failure_marked(self):
+        self.assertIn("trap 'mark_failure 130; exit 130' INT", RUNNER)
+        self.assertIn("trap 'mark_failure 143; exit 143' TERM", RUNNER)
+
 
 if __name__ == "__main__":
     unittest.main()
