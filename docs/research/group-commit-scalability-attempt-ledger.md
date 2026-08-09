@@ -2124,3 +2124,25 @@ must reduce candidates that require exact S3 fetches with a conservative
 exact-top-k certificate, or otherwise change the core read architecture; cache
 warming, relaxed gates, and another locality-key sweep are not justified by
 this evidence.
+
+### Exact-rerank certificate shadow harness
+
+Revision `b11b228` introduced an opt-in, result-preserving shadow for a
+conservative SRHT-PQ exact-rerank certificate. It computes counterfactual
+candidate survivors and replays the existing exact-range planner only after the
+unchanged exact rows and scores are available. Unsupported or numerically
+unsafe cases fail open, and any observed containment failure makes the whole
+query retain every candidate. No durable layout, returned hit, exact S3 read,
+or production default changed.
+
+The follow-up benchmark-harness slice records per-query candidate, survivor,
+fail-open, containment-failure, predicted-read, predicted-byte, and CPU
+telemetry when explicitly enabled. The fail-closed validator accepts immutable
+historical artifacts without these optional fields, rejects partial new
+telemetry, enforces nonnegative and top-k invariants, and requires query-wide
+fail-open behavior after a containment failure. Fresh local evidence before
+delivery comprised 21 Rust benchmark-example tests, strict example Clippy, 39
+Python validator tests, Ruff, repository policy, formatting, and diff hygiene.
+This is harness evidence only: no 768-dimensional qualification result or AWS
+performance claim exists yet. The preregistered local gate remains the next
+step, and AWS remains prohibited unless every local certificate gate passes.

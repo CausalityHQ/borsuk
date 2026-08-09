@@ -57,6 +57,13 @@ struct ReadSample {
     global_delta_approximate_us: u64,
     global_delta_exact_rerank_us: u64,
     global_delta_wait_us: u64,
+    global_exact_bound_candidates: usize,
+    global_exact_bound_survivors: usize,
+    global_exact_bound_fail_open: usize,
+    global_exact_bound_containment_failures: usize,
+    global_exact_bound_predicted_reads: usize,
+    global_exact_bound_predicted_bytes: u64,
+    global_exact_bound_cpu_us: u64,
 }
 
 struct ReadMeasurement {
@@ -78,6 +85,7 @@ struct ReadConfig {
     diagnostic_protocol: bool,
     max_read_segments: usize,
     refresh_before_each: bool,
+    exact_bound_shadow: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -108,6 +116,10 @@ struct PendingAppend {
 
 fn required(name: &str) -> BenchResult<String> {
     env::var(name).map_err(|_| format!("missing required environment variable {name}").into())
+}
+
+fn exact_bound_shadow_enabled() -> bool {
+    env::var("BORSUK_GROUP_COMMIT_EXACT_BOUND_SHADOW").as_deref() == Ok("1")
 }
 
 fn open_benchmark_index_with_stripe(
@@ -700,19 +712,18 @@ fn measure_reads(
         if config.refresh_before_each {
             index.refresh_wal_tail()?;
         }
-        let report = index.search_with_report(
-            &input_vectors[ordinal],
-            if config.diagnostic_protocol {
-                SearchOptions::exact(1)
-            } else {
-                SearchOptions::approx(10, LeafMode::SrhtPqScan)
-                    .with_max_segments(config.max_read_segments)
-                    // The production gate is k=10; a 16-candidate rerank
-                    // budget preserves headroom while avoiding needless
-                    // object-store vector fetches on the post-drain path.
-                    .with_max_candidates_per_segment(16)
-            },
-        )?;
+        let options = if config.diagnostic_protocol {
+            SearchOptions::exact(1)
+        } else {
+            SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                .with_max_segments(config.max_read_segments)
+                // The production gate is k=10; a 16-candidate rerank
+                // budget preserves headroom while avoiding needless
+                // object-store vector fetches on the post-drain path.
+                .with_max_candidates_per_segment(16)
+                .with_global_exact_bound_shadow(config.exact_bound_shadow)
+        };
+        let report = index.search_with_report(&input_vectors[ordinal], options)?;
         let latency_ms = read_started.elapsed().as_secs_f64() * 1_000.0;
         measurement.latencies.push(latency_ms);
         measurement.requests.gets += report.requests.gets;
@@ -759,6 +770,15 @@ fn measure_reads(
             global_delta_approximate_us: report.global_delta_approximate_us,
             global_delta_exact_rerank_us: report.global_delta_exact_rerank_us,
             global_delta_wait_us: report.global_delta_wait_us,
+            global_exact_bound_candidates: report.global_exact_bound_shadow.candidates,
+            global_exact_bound_survivors: report.global_exact_bound_shadow.survivors,
+            global_exact_bound_fail_open: report.global_exact_bound_shadow.fail_open,
+            global_exact_bound_containment_failures: report
+                .global_exact_bound_shadow
+                .containment_failures,
+            global_exact_bound_predicted_reads: report.global_exact_bound_shadow.predicted_reads,
+            global_exact_bound_predicted_bytes: report.global_exact_bound_shadow.predicted_bytes,
+            global_exact_bound_cpu_us: report.global_exact_bound_shadow.cpu_us,
         });
         measurement.hits += usize::from(contains_record_id);
     }
@@ -769,12 +789,12 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
     let mut reads = BufWriter::new(File::create(path)?);
     writeln!(
         reads,
-        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us"
+        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us,global_exact_bound_candidates,global_exact_bound_survivors,global_exact_bound_fail_open,global_exact_bound_containment_failures,global_exact_bound_predicted_reads,global_exact_bound_predicted_bytes,global_exact_bound_cpu_us"
     )?;
     for sample in samples {
         writeln!(
             reads,
-            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             sample.query,
             sample.record_id,
             sample.hit_id,
@@ -793,6 +813,13 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
             sample.global_delta_approximate_us,
             sample.global_delta_exact_rerank_us,
             sample.global_delta_wait_us,
+            sample.global_exact_bound_candidates,
+            sample.global_exact_bound_survivors,
+            sample.global_exact_bound_fail_open,
+            sample.global_exact_bound_containment_failures,
+            sample.global_exact_bound_predicted_reads,
+            sample.global_exact_bound_predicted_bytes,
+            sample.global_exact_bound_cpu_us,
         )?;
     }
     reads.flush()?;
@@ -803,12 +830,12 @@ fn write_read_hedge_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<
     let mut reads = BufWriter::new(File::create(path)?);
     writeln!(
         reads,
-        "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us"
+        "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us,global_exact_bound_candidates,global_exact_bound_survivors,global_exact_bound_fail_open,global_exact_bound_containment_failures,global_exact_bound_predicted_reads,global_exact_bound_predicted_bytes,global_exact_bound_cpu_us"
     )?;
     for sample in samples {
         writeln!(
             reads,
-            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             sample.query,
             sample.record_id,
             sample.hit_id,
@@ -830,6 +857,13 @@ fn write_read_hedge_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<
             sample.global_delta_approximate_us,
             sample.global_delta_exact_rerank_us,
             sample.global_delta_wait_us,
+            sample.global_exact_bound_candidates,
+            sample.global_exact_bound_survivors,
+            sample.global_exact_bound_fail_open,
+            sample.global_exact_bound_containment_failures,
+            sample.global_exact_bound_predicted_reads,
+            sample.global_exact_bound_predicted_bytes,
+            sample.global_exact_bound_cpu_us,
         )?;
     }
     reads.flush()?;
@@ -1251,6 +1285,7 @@ fn run_read_qualification(protocol: &str) -> BenchResult<()> {
             diagnostic_protocol: false,
             max_read_segments: shape.max_read_segments,
             refresh_before_each: false,
+            exact_bound_shadow: exact_bound_shadow_enabled(),
         },
     )?;
     if reads.hits != shape.query_count {
@@ -1687,6 +1722,7 @@ fn main() -> BenchResult<()> {
             diagnostic_protocol,
             max_read_segments,
             refresh_before_each: true,
+            exact_bound_shadow: exact_bound_shadow_enabled(),
         },
     )?;
     if active_tail_reads.hits != recall_queries {
@@ -1844,6 +1880,7 @@ fn main() -> BenchResult<()> {
             diagnostic_protocol,
             max_read_segments,
             refresh_before_each: false,
+            exact_bound_shadow: exact_bound_shadow_enabled(),
         },
     )?;
     if reads.hits != recall_queries {
@@ -2117,6 +2154,13 @@ mod tests {
             global_delta_approximate_us: 3,
             global_delta_exact_rerank_us: 4,
             global_delta_wait_us: 5,
+            global_exact_bound_candidates: 16,
+            global_exact_bound_survivors: 11,
+            global_exact_bound_fail_open: 0,
+            global_exact_bound_containment_failures: 0,
+            global_exact_bound_predicted_reads: 7,
+            global_exact_bound_predicted_bytes: 33_792,
+            global_exact_bound_cpu_us: 91,
         };
 
         write_read_hedge_samples(&path, &[sample]).unwrap();
@@ -2125,7 +2169,7 @@ mod tests {
         assert!(csv.starts_with(
             "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,"
         ));
-        assert!(csv.contains(",100,123,456,4,1,2,3,4,5\n"));
+        assert!(csv.contains(",100,123,456,4,1,2,3,4,5,16,11,0,0,7,33792,91\n"));
     }
 
     #[test]

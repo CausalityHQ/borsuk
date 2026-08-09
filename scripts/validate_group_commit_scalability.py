@@ -24,6 +24,16 @@ PHASE_MARKERS = (
     "READ_QUALIFICATION_COMPLETE",
 )
 
+EXACT_BOUND_SHADOW_FIELDS = (
+    "global_exact_bound_candidates",
+    "global_exact_bound_survivors",
+    "global_exact_bound_fail_open",
+    "global_exact_bound_containment_failures",
+    "global_exact_bound_predicted_reads",
+    "global_exact_bound_predicted_bytes",
+    "global_exact_bound_cpu_us",
+)
+
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -52,6 +62,39 @@ def integer(value: str, label: str) -> int:
         return int(value)
     except ValueError as error:
         raise ValidationError(f"invalid {label}: {value!r}") from error
+
+
+def validate_exact_bound_shadow_row(read: dict[str, str], context: str) -> None:
+    values = {
+        field: integer(read[field], f"{context} {field}")
+        for field in EXACT_BOUND_SHADOW_FIELDS
+    }
+    require(
+        all(value >= 0 for value in values.values()),
+        f"negative exact-bound shadow telemetry in {context}",
+    )
+    candidates = values["global_exact_bound_candidates"]
+    survivors = values["global_exact_bound_survivors"]
+    fail_open = values["global_exact_bound_fail_open"]
+    failures = values["global_exact_bound_containment_failures"]
+    predicted_reads = values["global_exact_bound_predicted_reads"]
+    predicted_bytes = values["global_exact_bound_predicted_bytes"]
+    require(survivors <= candidates, f"exact-bound survivors exceed candidates in {context}")
+    require(fail_open <= survivors, f"exact-bound fail-open rows exceed survivors in {context}")
+    require(failures <= candidates, f"exact-bound failures exceed candidates in {context}")
+    require(
+        survivors >= min(10, candidates),
+        f"exact-bound shadow retained fewer than top-k candidates in {context}",
+    )
+    require(
+        survivors == 0 or (predicted_reads > 0 and predicted_bytes > 0),
+        f"exact-bound physical prediction is empty in {context}",
+    )
+    if failures > 0:
+        require(
+            survivors == candidates and fail_open == candidates,
+            f"containment failure did not fail open in {context}",
+        )
 
 
 def validate_process_identity(
@@ -703,6 +746,14 @@ def validate(
             or all(field in read_samples[0] for field in global_phase_fields),
             f"incomplete global phase telemetry in {cell}",
         )
+        emits_exact_bound_shadow = any(
+            field in read_samples[0] for field in EXACT_BOUND_SHADOW_FIELDS
+        )
+        require(
+            not emits_exact_bound_shadow
+            or all(field in read_samples[0] for field in EXACT_BOUND_SHADOW_FIELDS),
+            f"incomplete exact-bound shadow telemetry in {cell}",
+        )
         observed_read_requests = 0
         observed_read_bytes = 0
         observed_read_segments = 0
@@ -741,6 +792,8 @@ def validate(
                     ),
                     f"negative global phase telemetry in {cell}",
                 )
+            if emits_exact_bound_shadow:
+                validate_exact_bound_shadow_row(read, f"{cell} read {query}")
         require(
             observed_read_requests == read_request_total,
             f"read request total drift in {cell}",
@@ -771,6 +824,17 @@ def validate(
             f"active-tail raw read sample count mismatch in {cell}",
         )
         active_tail_latencies: list[float] = []
+        active_emits_exact_bound_shadow = any(
+            field in active_tail_reads[0] for field in EXACT_BOUND_SHADOW_FIELDS
+        )
+        require(
+            not active_emits_exact_bound_shadow
+            or all(
+                field in active_tail_reads[0]
+                for field in EXACT_BOUND_SHADOW_FIELDS
+            ),
+            f"incomplete exact-bound shadow telemetry in {cell} active-tail reads",
+        )
         for query, read in enumerate(active_tail_reads):
             require(
                 integer(read["query"], "active-tail read query") == query,
@@ -783,6 +847,10 @@ def validate(
             active_tail_latencies.append(
                 finite(read["latency_ms"], "active-tail read latency")
             )
+            if active_emits_exact_bound_shadow:
+                validate_exact_bound_shadow_row(
+                    read, f"{cell} active-tail read {query}"
+                )
         require_close(
             finite(summary["active_tail_read_p50_ms"], "active_tail_read_p50_ms"),
             percentile(active_tail_latencies, 0.50),
