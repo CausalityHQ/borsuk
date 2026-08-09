@@ -31,6 +31,13 @@ first release, schema stability and backward compatibility are non-goals.
 - Continue production research, implementation, and benchmark work from
   `main`.
 - Use AWS profile `causality` for BORSUK research infrastructure.
+- Use EC2 Spot capacity by default for every new interruptible benchmark
+  campaign. Preregister interruption handling, sync terminal repetitions to
+  S3, discard and restart an interrupted measurement cell, and record every
+  instance identity. Use On-Demand only when Spot is unavailable or a
+  non-resumable method requires it, and document that exception before launch.
+- Stop or terminate benchmark compute immediately after its terminal marker;
+  never retain an idle experiment instance for convenience.
 - Preserve frozen campaign methodology and immutable historical artifacts.
   Monitor incomplete campaigns by terminal markers and infrastructure health
   only; never inspect incomplete measurement CSV files.
