@@ -2146,3 +2146,19 @@ Python validator tests, Ruff, repository policy, formatting, and diff hygiene.
 This is harness evidence only: no 768-dimensional qualification result or AWS
 performance claim exists yet. The preregistered local gate remains the next
 step, and AWS remains prohibited unless every local certificate gate passes.
+
+The terminal 768-dimensional structural smoke tied to `f37f0d1` passed its
+ordinary fail-closed validator with both one and eight independent writers,
+recall@10 1.0, and zero interval-containment failures. Its two synthetic
+post-drain queries each retained all 16 candidates; shadow CPU was 208 and 188
+microseconds. This smoke is explicitly performance-ineligible and does not
+accept or reject the certificate on representative data.
+
+Review before the Cohere arm found that the first telemetry schema reported
+the filtered physical plan without recording the unchanged all-candidate exact
+plan. Total query GETs are not a defensible substitute because they include
+routing and approximate reads. The next source revision therefore adds exact
+baseline reads and bytes, requires every prediction to be no larger than that
+baseline, and continues accepting the already-terminal baseline-less smoke as
+historical evidence. No representative measurement was opened or claimed
+while this evidence gap remained.

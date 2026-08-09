@@ -24,7 +24,7 @@ PHASE_MARKERS = (
     "READ_QUALIFICATION_COMPLETE",
 )
 
-EXACT_BOUND_SHADOW_FIELDS = (
+EXACT_BOUND_SHADOW_V1_FIELDS = (
     "global_exact_bound_candidates",
     "global_exact_bound_survivors",
     "global_exact_bound_fail_open",
@@ -32,6 +32,14 @@ EXACT_BOUND_SHADOW_FIELDS = (
     "global_exact_bound_predicted_reads",
     "global_exact_bound_predicted_bytes",
     "global_exact_bound_cpu_us",
+)
+EXACT_BOUND_SHADOW_BASELINE_FIELDS = (
+    "global_exact_bound_baseline_reads",
+    "global_exact_bound_baseline_bytes",
+)
+EXACT_BOUND_SHADOW_FIELDS = (
+    *EXACT_BOUND_SHADOW_V1_FIELDS,
+    *EXACT_BOUND_SHADOW_BASELINE_FIELDS,
 )
 
 
@@ -64,10 +72,33 @@ def integer(value: str, label: str) -> int:
         raise ValidationError(f"invalid {label}: {value!r}") from error
 
 
-def validate_exact_bound_shadow_row(read: dict[str, str], context: str) -> None:
+def exact_bound_shadow_has_baseline(
+    read: dict[str, str], context: str
+) -> bool | None:
+    v1_count = sum(field in read for field in EXACT_BOUND_SHADOW_V1_FIELDS)
+    baseline_count = sum(field in read for field in EXACT_BOUND_SHADOW_BASELINE_FIELDS)
+    if v1_count == 0 and baseline_count == 0:
+        return None
+    require(
+        v1_count == len(EXACT_BOUND_SHADOW_V1_FIELDS),
+        f"incomplete exact-bound shadow telemetry in {context}",
+    )
+    require(
+        baseline_count in {0, len(EXACT_BOUND_SHADOW_BASELINE_FIELDS)},
+        f"incomplete exact-bound shadow baseline in {context}",
+    )
+    return baseline_count > 0
+
+
+def validate_exact_bound_shadow_row(
+    read: dict[str, str], context: str, has_baseline: bool
+) -> None:
+    fields = (
+        EXACT_BOUND_SHADOW_FIELDS if has_baseline else EXACT_BOUND_SHADOW_V1_FIELDS
+    )
     values = {
         field: integer(read[field], f"{context} {field}")
-        for field in EXACT_BOUND_SHADOW_FIELDS
+        for field in fields
     }
     require(
         all(value >= 0 for value in values.values()),
@@ -90,6 +121,17 @@ def validate_exact_bound_shadow_row(read: dict[str, str], context: str) -> None:
         survivors == 0 or (predicted_reads > 0 and predicted_bytes > 0),
         f"exact-bound physical prediction is empty in {context}",
     )
+    if has_baseline:
+        baseline_reads = values["global_exact_bound_baseline_reads"]
+        baseline_bytes = values["global_exact_bound_baseline_bytes"]
+        require(
+            candidates == 0 or (baseline_reads > 0 and baseline_bytes > 0),
+            f"exact-bound physical baseline is empty in {context}",
+        )
+        require(
+            predicted_reads <= baseline_reads and predicted_bytes <= baseline_bytes,
+            f"exact-bound prediction exceeds exact-plan baseline in {context}",
+        )
     if failures > 0:
         require(
             survivors == candidates and fail_open == candidates,
@@ -746,13 +788,8 @@ def validate(
             or all(field in read_samples[0] for field in global_phase_fields),
             f"incomplete global phase telemetry in {cell}",
         )
-        emits_exact_bound_shadow = any(
-            field in read_samples[0] for field in EXACT_BOUND_SHADOW_FIELDS
-        )
-        require(
-            not emits_exact_bound_shadow
-            or all(field in read_samples[0] for field in EXACT_BOUND_SHADOW_FIELDS),
-            f"incomplete exact-bound shadow telemetry in {cell}",
+        exact_bound_has_baseline = exact_bound_shadow_has_baseline(
+            read_samples[0], str(cell)
         )
         observed_read_requests = 0
         observed_read_bytes = 0
@@ -792,8 +829,15 @@ def validate(
                     ),
                     f"negative global phase telemetry in {cell}",
                 )
-            if emits_exact_bound_shadow:
-                validate_exact_bound_shadow_row(read, f"{cell} read {query}")
+            if exact_bound_has_baseline is not None:
+                require(
+                    exact_bound_shadow_has_baseline(read, f"{cell} read {query}")
+                    == exact_bound_has_baseline,
+                    f"exact-bound shadow schema drift in {cell}",
+                )
+                validate_exact_bound_shadow_row(
+                    read, f"{cell} read {query}", exact_bound_has_baseline
+                )
         require(
             observed_read_requests == read_request_total,
             f"read request total drift in {cell}",
@@ -824,16 +868,8 @@ def validate(
             f"active-tail raw read sample count mismatch in {cell}",
         )
         active_tail_latencies: list[float] = []
-        active_emits_exact_bound_shadow = any(
-            field in active_tail_reads[0] for field in EXACT_BOUND_SHADOW_FIELDS
-        )
-        require(
-            not active_emits_exact_bound_shadow
-            or all(
-                field in active_tail_reads[0]
-                for field in EXACT_BOUND_SHADOW_FIELDS
-            ),
-            f"incomplete exact-bound shadow telemetry in {cell} active-tail reads",
+        active_exact_bound_has_baseline = exact_bound_shadow_has_baseline(
+            active_tail_reads[0], f"{cell} active-tail reads"
         )
         for query, read in enumerate(active_tail_reads):
             require(
@@ -847,9 +883,18 @@ def validate(
             active_tail_latencies.append(
                 finite(read["latency_ms"], "active-tail read latency")
             )
-            if active_emits_exact_bound_shadow:
+            if active_exact_bound_has_baseline is not None:
+                require(
+                    exact_bound_shadow_has_baseline(
+                        read, f"{cell} active-tail read {query}"
+                    )
+                    == active_exact_bound_has_baseline,
+                    f"exact-bound shadow schema drift in {cell} active-tail reads",
+                )
                 validate_exact_bound_shadow_row(
-                    read, f"{cell} active-tail read {query}"
+                    read,
+                    f"{cell} active-tail read {query}",
+                    active_exact_bound_has_baseline,
                 )
         require_close(
             finite(summary["active_tail_read_p50_ms"], "active_tail_read_p50_ms"),

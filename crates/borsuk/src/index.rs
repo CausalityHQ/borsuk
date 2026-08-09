@@ -16126,6 +16126,14 @@ impl BorsukIndex {
                     .iter()
                     .map(|(_, report)| report.global_exact_bound_shadow.containment_failures)
                     .sum(),
+                baseline_reads: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.baseline_reads)
+                    .sum(),
+                baseline_bytes: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.baseline_bytes)
+                    .sum(),
                 predicted_reads: reports
                     .iter()
                     .map(|(_, report)| report.global_exact_bound_shadow.predicted_reads)
@@ -20471,6 +20479,14 @@ impl BorsukIndex {
             .iter()
             .map(|(_, _, _, interval)| *interval)
             .collect::<Vec<_>>();
+        let mut baseline_by_chunk =
+            BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
+        for (layer, chunk_row_start, identity, _) in &shadow_rows {
+            baseline_by_chunk
+                .entry((*layer, *chunk_row_start))
+                .or_default()
+                .push(identity.clone());
+        }
         let survivors = certificate_survivor_mask(&intervals, context.k);
         let mut predicted_by_chunk =
             BTreeMap::<(GlobalPqSearchLayer, usize), Vec<GlobalPqIdentityCandidate>>::new();
@@ -20483,13 +20499,17 @@ impl BorsukIndex {
                     .push(identity.clone());
             }
         }
-        let predicted_groups =
-            global_pq_exact_read_groups(context.chunks_by_start, predicted_by_chunk)?;
         let row_bytes = self
             .manifest
             .build_config
             .vector_element_type
             .fixed_width_bytes(self.manifest.config.dimensions)?;
+        let baseline_groups =
+            global_pq_exact_read_groups(context.chunks_by_start, baseline_by_chunk)?;
+        let (baseline_reads, baseline_bytes) =
+            global_exact_bound_plan_stats(&baseline_groups, row_bytes)?;
+        let predicted_groups =
+            global_pq_exact_read_groups(context.chunks_by_start, predicted_by_chunk)?;
         let (predicted_reads, predicted_bytes) =
             global_exact_bound_plan_stats(&predicted_groups, row_bytes)?;
         Ok(GlobalExactBoundShadow {
@@ -20500,6 +20520,8 @@ impl BorsukIndex {
                 .filter(|interval| interval.is_none())
                 .count(),
             containment_failures,
+            baseline_reads,
+            baseline_bytes,
             predicted_reads,
             predicted_bytes,
             cpu_us: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
@@ -25500,6 +25522,16 @@ fn merge_search_execution_hits(
         .global_exact_bound_shadow
         .containment_failures
         .saturating_add(delta_report.global_exact_bound_shadow.containment_failures);
+    base.report.global_exact_bound_shadow.baseline_reads = base
+        .report
+        .global_exact_bound_shadow
+        .baseline_reads
+        .saturating_add(delta_report.global_exact_bound_shadow.baseline_reads);
+    base.report.global_exact_bound_shadow.baseline_bytes = base
+        .report
+        .global_exact_bound_shadow
+        .baseline_bytes
+        .saturating_add(delta_report.global_exact_bound_shadow.baseline_bytes);
     base.report.global_exact_bound_shadow.predicted_reads = base
         .report
         .global_exact_bound_shadow
@@ -29425,6 +29457,16 @@ mod tests {
         );
         assert_eq!(limited.global_exact_bound_shadow.survivors, 7);
         assert_eq!(limited.global_exact_bound_shadow.fail_open, 7);
+        assert_eq!(
+            limited.global_exact_bound_shadow.baseline_reads,
+            limited.global_exact_bound_shadow.predicted_reads,
+            "query-wide fail-open must preserve the complete exact-read plan"
+        );
+        assert_eq!(
+            limited.global_exact_bound_shadow.baseline_bytes,
+            limited.global_exact_bound_shadow.predicted_bytes,
+            "query-wide fail-open must preserve every exact byte"
+        );
         assert!(limited.global_exact_bound_shadow.predicted_reads > 0);
         assert!(limited.global_exact_bound_shadow.predicted_bytes > 0);
 
@@ -30079,6 +30121,11 @@ mod tests {
             0
         );
         assert_eq!(scan_report.global_exact_bound_shadow.predicted_reads, 1);
+        assert_eq!(scan_report.global_exact_bound_shadow.baseline_reads, 1);
+        assert_eq!(
+            scan_report.global_exact_bound_shadow.baseline_bytes,
+            scan_report.global_exact_bound_shadow.predicted_bytes
+        );
         assert!(scan_report.global_exact_bound_shadow.predicted_bytes > 0);
     }
 

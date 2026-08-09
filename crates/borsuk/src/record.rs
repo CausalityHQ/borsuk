@@ -980,6 +980,10 @@ pub struct GlobalExactBoundShadow {
     pub fail_open: usize,
     /// Exact f32 scores found outside their predicted interval.
     pub containment_failures: usize,
+    /// Physical exact-range requests for the unchanged all-candidate plan.
+    pub baseline_reads: usize,
+    /// Physical exact-range bytes for the unchanged all-candidate plan.
+    pub baseline_bytes: u64,
     /// Counterfactual physical exact-range requests after survivor filtering.
     pub predicted_reads: usize,
     /// Counterfactual physical exact-range bytes after survivor filtering.
