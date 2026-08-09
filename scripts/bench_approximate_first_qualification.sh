@@ -62,8 +62,12 @@ PY
 dataset_sha="$(sha256sum "$dataset/dataset.json" | awk '{print $1}')"
 [[ "$dataset_sha" == "${protocol[0]}" ]] || { echo "dataset descriptor SHA-256 mismatch" >&2; exit 2; }
 
-export RUSTC_WRAPPER="${RUSTC_WRAPPER:-/usr/local/libexec/devbox-rustc-wrapper}"
-export SCCACHE_DIR="${SCCACHE_DIR:-/data/cache/sccache}"
+if [[ -z "${RUSTC_WRAPPER+x}" && -x /usr/local/libexec/devbox-rustc-wrapper ]]; then
+  export RUSTC_WRAPPER=/usr/local/libexec/devbox-rustc-wrapper
+fi
+if [[ -z "${SCCACHE_DIR+x}" && -d /data/cache/sccache ]]; then
+  export SCCACHE_DIR=/data/cache/sccache
+fi
 cargo build --locked --release -p borsuk --example production_bench
 target_dir="$(cargo metadata --locked --no-deps --format-version=1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 binary="$target_dir/release/examples/production_bench"

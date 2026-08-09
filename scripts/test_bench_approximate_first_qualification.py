@@ -48,6 +48,13 @@ class ApproximateFirstRunnerContractTest(unittest.TestCase):
         self.assertIn("gitless execution requires BORSUK_SOURCE_ARCHIVE", RUNNER)
         self.assertIn("source archive SHA-256 mismatch", RUNNER)
 
+    def test_devbox_compiler_wrapper_is_only_enabled_when_installed(self):
+        self.assertIn("-x /usr/local/libexec/devbox-rustc-wrapper", RUNNER)
+        self.assertNotIn(
+            'RUSTC_WRAPPER="${RUSTC_WRAPPER:-/usr/local/libexec/devbox-rustc-wrapper}"',
+            RUNNER,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
