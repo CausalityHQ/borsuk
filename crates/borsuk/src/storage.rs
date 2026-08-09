@@ -771,6 +771,10 @@ pub(crate) struct ReadRanges {
     pub chunks: Vec<Vec<u8>>,
     pub cache_hit: bool,
     pub bytes_fetched: u64,
+    /// Backing object-store attempts owned by this operation, including hedges.
+    pub backing_reads: u64,
+    /// Response-range bytes charged to those attempts, including hedge losers.
+    pub backing_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -3547,6 +3551,8 @@ impl Storage {
                 chunks: out,
                 cache_hit: true,
                 bytes_fetched: 0,
+                backing_reads: 0,
+                backing_bytes: 0,
             });
         }
 
@@ -3561,6 +3567,8 @@ impl Storage {
                 chunks: split_range_bundle(relative, ranges, &bytes)?,
                 cache_hit: true,
                 bytes_fetched: 0,
+                backing_reads: 0,
+                backing_bytes: 0,
             });
         }
 
@@ -3651,6 +3659,8 @@ impl Storage {
             chunks,
             cache_hit: false,
             bytes_fetched,
+            backing_reads: request_attempts.load(Ordering::Relaxed),
+            backing_bytes: backing_response_bytes.load(Ordering::Relaxed),
         })
     }
 
@@ -5680,13 +5690,21 @@ mod tests {
             4,
             "two slow physical ranges should each issue one bounded hedge"
         );
-        let traced_gets = fs::read_to_string(trace_path)
+        let traced_gets = fs::read_to_string(&trace_path)
             .unwrap()
             .lines()
             .skip(1)
             .map(|line| line.split(',').nth(5).unwrap().parse::<u64>().unwrap())
             .sum::<u64>();
         assert_eq!(traced_gets, 4, "trace must retain every hedge attempt");
+        let traced_bytes = fs::read_to_string(&trace_path)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .map(|line| line.split(',').nth(6).unwrap().parse::<u64>().unwrap())
+            .sum::<u64>();
+        assert_eq!(read.backing_reads, traced_gets);
+        assert_eq!(read.backing_bytes, traced_bytes);
     }
 
     #[test]
@@ -5716,18 +5734,24 @@ mod tests {
         let before = storage.request_counts();
         let barrier = Arc::new(Barrier::new(2));
 
-        std::thread::scope(|scope| {
-            for path in ["global-pq/exact/left.arrow", "global-pq/exact/right.arrow"] {
-                let storage = storage.clone();
-                let barrier = Arc::clone(&barrier);
-                scope.spawn(move || {
-                    barrier.wait();
-                    let range = 0..4;
-                    storage
-                        .read_global_rerank_ranges(path, std::slice::from_ref(&range), None)
-                        .unwrap();
-                });
-            }
+        let reads = std::thread::scope(|scope| {
+            ["global-pq/exact/left.arrow", "global-pq/exact/right.arrow"]
+                .into_iter()
+                .map(|path| {
+                    let storage = storage.clone();
+                    let barrier = Arc::clone(&barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        let range = 0..4;
+                        storage
+                            .read_global_rerank_ranges(path, std::slice::from_ref(&range), None)
+                            .unwrap()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
         });
 
         let physical_gets = storage.request_counts().delta(&before).gets;
@@ -5739,6 +5763,12 @@ mod tests {
             .sum::<u64>();
         assert_eq!(physical_gets, 2);
         assert_eq!(traced_gets, physical_gets);
+        assert!(
+            reads
+                .iter()
+                .all(|read| read.backing_reads == 1 && read.backing_bytes == 4),
+            "each operation must report only its own backing I/O: {reads:?}"
+        );
     }
 
     #[test]
@@ -5762,6 +5792,8 @@ mod tests {
         let second = storage.read_ranges("vectors/sidecar.bin", &ranges).unwrap();
         assert!(second.cache_hit);
         assert_eq!(second.bytes_fetched, 0);
+        assert_eq!(second.backing_reads, 0);
+        assert_eq!(second.backing_bytes, 0);
         assert_eq!(second.chunks, first.chunks);
         assert_eq!(
             storage.request_counts().delta(&requests_after_first).gets,

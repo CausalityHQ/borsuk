@@ -102,6 +102,8 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         PhysicalObjectRole::GraphIndex
     } else if path.starts_with("segments/") {
         PhysicalObjectRole::NormalSegment
+    } else if path.starts_with("global-pq/exact/") || path.starts_with("global-pq/exact-bundles/") {
+        PhysicalObjectRole::ExactVectors
     } else if path.starts_with("global-pq/") {
         PhysicalObjectRole::ProductCodes
     } else if path.starts_with("vectors/") {
@@ -118,6 +120,27 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         PhysicalObjectRole::IdDirectory
     } else {
         PhysicalObjectRole::Unknown
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_pq_exact_objects_are_not_classified_as_product_codes() {
+        assert_eq!(
+            physical_object_role_for_path("global-pq/exact/bundle.arrow"),
+            PhysicalObjectRole::ExactVectors
+        );
+        assert_eq!(
+            physical_object_role_for_path("global-pq/exact-bundles/bundle.arrow"),
+            PhysicalObjectRole::ExactVectors
+        );
+        assert_eq!(
+            physical_object_role_for_path("global-pq/bundles/scan.arrow"),
+            PhysicalObjectRole::ProductCodes
+        );
     }
 }
 

@@ -41,6 +41,13 @@ EXACT_BOUND_SHADOW_FIELDS = (
     *EXACT_BOUND_SHADOW_V1_FIELDS,
     *EXACT_BOUND_SHADOW_BASELINE_FIELDS,
 )
+EXACT_BOUND_SHADOW_V8_FIELDS = (
+    "global_exact_bound_certificate_kind",
+    "global_exact_bound_exact_backing_reads",
+    "global_exact_bound_exact_backing_bytes",
+    "global_exact_bound_residual_bytes",
+    "global_exact_bound_residual_scan_bytes",
+)
 
 
 def require(condition: bool, message: str) -> None:
@@ -136,6 +143,42 @@ def validate_exact_bound_shadow_row(
         require(
             survivors == candidates and fail_open == candidates,
             f"containment failure did not fail open in {context}",
+        )
+    v8_count = sum(field in read for field in EXACT_BOUND_SHADOW_V8_FIELDS)
+    require(
+        v8_count in {0, len(EXACT_BOUND_SHADOW_V8_FIELDS)},
+        f"incomplete V8 exact-bound telemetry in {context}",
+    )
+    if v8_count:
+        require(
+            read["global_exact_bound_certificate_kind"] == "residual-pq-v8",
+            f"unexpected exact-bound certificate kind in {context}",
+        )
+        v8_values = {
+            field: integer(read[field], f"{context} {field}")
+            for field in EXACT_BOUND_SHADOW_V8_FIELDS
+            if field != "global_exact_bound_certificate_kind"
+        }
+        require(
+            all(value >= 0 for value in v8_values.values()),
+            f"negative V8 exact-bound telemetry in {context}",
+        )
+        require(
+            v8_values["global_exact_bound_residual_bytes"] == candidates * 68,
+            f"V8 residual candidate bytes disagree with the frozen width in {context}",
+        )
+        require(
+            v8_values["global_exact_bound_residual_scan_bytes"]
+            >= v8_values["global_exact_bound_residual_bytes"],
+            f"V8 residual scan bytes are smaller than retained bytes in {context}",
+        )
+        require(
+            candidates == 0
+            or (
+                v8_values["global_exact_bound_exact_backing_reads"] > 0
+                and v8_values["global_exact_bound_exact_backing_bytes"] > 0
+            ),
+            f"V8 uncached exact backing evidence is empty in {context}",
         )
 
 

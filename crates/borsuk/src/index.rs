@@ -1274,6 +1274,9 @@ struct GlobalExactBoundContext<'a> {
     chunks_by_start: &'a HashMap<(GlobalPqSearchLayer, usize), &'a GlobalPqChunkRef>,
     inputs: &'a HashMap<RecordId, GlobalExactBoundInput>,
     scored: &'a [GlobalExactBoundScored<'a>],
+    exact_backing_reads: u64,
+    exact_backing_bytes: u64,
+    residual_scan_bytes: u64,
 }
 type GlobalPqIdentityLookup = (usize, usize, usize);
 type GlobalPqIdentityChunkCandidates = (GlobalPqChunkRef, Vec<GlobalPqIdentityLookup>);
@@ -13407,9 +13410,13 @@ impl BorsukIndex {
             },
         );
         let mut exact_rows = Vec::new();
+        let mut exact_backing_reads = 0_u64;
+        let mut exact_backing_bytes = 0_u64;
         for result in fetched_exact {
-            let (mut rows, bytes) = result?;
+            let (mut rows, bytes, backing_reads, backing_bytes) = result?;
             bytes_read = bytes_read.saturating_add(bytes);
+            exact_backing_reads = exact_backing_reads.saturating_add(backing_reads);
+            exact_backing_bytes = exact_backing_bytes.saturating_add(backing_bytes);
             exact_rows.append(&mut rows);
         }
         let global_exact_vectors_fetched = exact_rows.len();
@@ -13441,6 +13448,15 @@ impl BorsukIndex {
                 chunks_by_start: &chunks_by_start,
                 inputs: &shadow_inputs,
                 scored: &shadow_scored,
+                exact_backing_reads,
+                exact_backing_bytes,
+                residual_scan_bytes: u64::try_from(
+                    chunks_by_start
+                        .values()
+                        .map(|chunk| chunk.rows.saturating_mul(68))
+                        .sum::<usize>(),
+                )
+                .unwrap_or(u64::MAX),
             })?
         } else {
             GlobalExactBoundShadow::default()
@@ -14094,9 +14110,13 @@ impl BorsukIndex {
             },
         );
         let mut exact_rows = Vec::new();
+        let mut exact_backing_reads = 0_u64;
+        let mut exact_backing_bytes = 0_u64;
         for result in fetched_exact {
-            let (mut rows, bytes) = result?;
+            let (mut rows, bytes, backing_reads, backing_bytes) = result?;
             bytes_read = bytes_read.saturating_add(bytes);
+            exact_backing_reads = exact_backing_reads.saturating_add(backing_reads);
+            exact_backing_bytes = exact_backing_bytes.saturating_add(backing_bytes);
             exact_rows.append(&mut rows);
         }
         let global_exact_vectors_fetched = exact_rows.len();
@@ -14124,6 +14144,15 @@ impl BorsukIndex {
                 chunks_by_start: &tagged_chunks_by_start,
                 inputs: &shadow_inputs,
                 scored: &shadow_scored,
+                exact_backing_reads,
+                exact_backing_bytes,
+                residual_scan_bytes: u64::try_from(
+                    searched_chunks
+                        .iter()
+                        .map(|chunk| chunk.rows.saturating_mul(68))
+                        .sum::<usize>(),
+                )
+                .unwrap_or(u64::MAX),
             })?
         } else {
             GlobalExactBoundShadow::default()
@@ -16242,6 +16271,13 @@ impl BorsukIndex {
                 .map(|(_, report)| report.global_exact_vectors_fetched)
                 .sum(),
             global_exact_bound_shadow: GlobalExactBoundShadow {
+                certificate_kind: reports
+                    .iter()
+                    .find_map(|(_, report)| {
+                        (!report.global_exact_bound_shadow.certificate_kind.is_empty())
+                            .then(|| report.global_exact_bound_shadow.certificate_kind.clone())
+                    })
+                    .unwrap_or_default(),
                 candidates: reports
                     .iter()
                     .map(|(_, report)| report.global_exact_bound_shadow.candidates)
@@ -16273,6 +16309,22 @@ impl BorsukIndex {
                 predicted_bytes: reports
                     .iter()
                     .map(|(_, report)| report.global_exact_bound_shadow.predicted_bytes)
+                    .sum(),
+                exact_backing_reads: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.exact_backing_reads)
+                    .sum(),
+                exact_backing_bytes: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.exact_backing_bytes)
+                    .sum(),
+                residual_bytes: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.residual_bytes)
+                    .sum(),
+                residual_scan_bytes: reports
+                    .iter()
+                    .map(|(_, report)| report.global_exact_bound_shadow.residual_scan_bytes)
                     .sum(),
                 cpu_us: reports
                     .iter()
@@ -20659,6 +20711,7 @@ impl BorsukIndex {
         let (predicted_reads, predicted_bytes) =
             global_exact_bound_plan_stats(&predicted_groups, row_bytes)?;
         Ok(GlobalExactBoundShadow {
+            certificate_kind: "residual-pq-v8".to_string(),
             candidates: shadow_rows.len(),
             survivors: survivors.iter().filter(|value| **value).count(),
             fail_open: intervals
@@ -20670,6 +20723,10 @@ impl BorsukIndex {
             baseline_bytes,
             predicted_reads,
             predicted_bytes,
+            exact_backing_reads: context.exact_backing_reads,
+            exact_backing_bytes: context.exact_backing_bytes,
+            residual_bytes: u64::try_from(shadow_rows.len().saturating_mul(68)).unwrap_or(u64::MAX),
+            residual_scan_bytes: context.residual_scan_bytes,
             cpu_us: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
         })
     }
@@ -20680,7 +20737,12 @@ impl BorsukIndex {
         path: &str,
         chunks: &[(GlobalPqChunkRef, Vec<GlobalPqIdentityCandidate>)],
         hedge_after: Option<Duration>,
-    ) -> Result<(Vec<(usize, Vec<f32>, RecordId, MutationStamp)>, u64)> {
+    ) -> Result<(
+        Vec<(usize, Vec<f32>, RecordId, MutationStamp)>,
+        u64,
+        u64,
+        u64,
+    )> {
         let dimensions = self.manifest.config.dimensions;
         let vector_element_type = self.manifest.build_config.vector_element_type;
         let row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
@@ -20748,7 +20810,12 @@ impl BorsukIndex {
                 entry.stamp,
             ));
         }
-        Ok((rows, fetched.bytes_fetched))
+        Ok((
+            rows,
+            fetched.bytes_fetched,
+            fetched.backing_reads,
+            fetched.backing_bytes,
+        ))
     }
 
     fn read_prefetched_segment(
@@ -25601,6 +25668,17 @@ fn merge_search_execution_hits(
         report: mut delta_report,
         vectors: delta_vectors,
     } = delta;
+    if base
+        .report
+        .global_exact_bound_shadow
+        .certificate_kind
+        .is_empty()
+    {
+        base.report.global_exact_bound_shadow.certificate_kind = delta_report
+            .global_exact_bound_shadow
+            .certificate_kind
+            .clone();
+    }
     base.report.termination_reason = merged_search_termination_reason(
         base.report.termination_reason,
         delta_report.termination_reason,
@@ -25769,6 +25847,26 @@ fn merge_search_execution_hits(
         .global_exact_bound_shadow
         .predicted_bytes
         .saturating_add(delta_report.global_exact_bound_shadow.predicted_bytes);
+    base.report.global_exact_bound_shadow.exact_backing_reads = base
+        .report
+        .global_exact_bound_shadow
+        .exact_backing_reads
+        .saturating_add(delta_report.global_exact_bound_shadow.exact_backing_reads);
+    base.report.global_exact_bound_shadow.exact_backing_bytes = base
+        .report
+        .global_exact_bound_shadow
+        .exact_backing_bytes
+        .saturating_add(delta_report.global_exact_bound_shadow.exact_backing_bytes);
+    base.report.global_exact_bound_shadow.residual_bytes = base
+        .report
+        .global_exact_bound_shadow
+        .residual_bytes
+        .saturating_add(delta_report.global_exact_bound_shadow.residual_bytes);
+    base.report.global_exact_bound_shadow.residual_scan_bytes = base
+        .report
+        .global_exact_bound_shadow
+        .residual_scan_bytes
+        .saturating_add(delta_report.global_exact_bound_shadow.residual_scan_bytes);
     base.report.global_exact_bound_shadow.cpu_us = base
         .report
         .global_exact_bound_shadow
@@ -28747,10 +28845,14 @@ mod tests {
         let requests = index.storage.request_counts().delta(&before);
         let mut rows = Vec::new();
         let mut bytes_fetched = 0_u64;
+        let mut backing_reads = 0_u64;
+        let mut backing_bytes = 0_u64;
         for result in fetched {
-            let (mut group_rows, group_bytes) = result.unwrap();
+            let (mut group_rows, group_bytes, group_reads, group_backing_bytes) = result.unwrap();
             rows.append(&mut group_rows);
             bytes_fetched += group_bytes;
+            backing_reads += group_reads;
+            backing_bytes += group_backing_bytes;
         }
 
         assert_eq!(
@@ -28758,6 +28860,8 @@ mod tests {
             "one cold range GET for locality-ordered rows"
         );
         assert_eq!(rows.len(), chunks.len() * CANDIDATES_PER_CHUNK);
+        assert_eq!(backing_reads, 1);
+        assert_eq!(backing_bytes, bytes_fetched);
         for (node, vector, _, _) in rows {
             assert_eq!(vector.len(), DIMENSIONS);
             assert_eq!(vector[0], expected[&node]);
@@ -29774,6 +29878,17 @@ mod tests {
         assert!(limited.records_considered < vectors.len());
         assert_eq!(limited.records_scored, 7);
         assert_eq!(limited.global_exact_bound_shadow.candidates, 7);
+        assert_eq!(
+            limited.global_exact_bound_shadow.certificate_kind,
+            "residual-pq-v8"
+        );
+        assert_eq!(limited.global_exact_bound_shadow.residual_bytes, 7 * 68);
+        assert!(
+            limited.global_exact_bound_shadow.residual_scan_bytes
+                >= limited.global_exact_bound_shadow.residual_bytes
+        );
+        assert!(limited.global_exact_bound_shadow.exact_backing_reads > 0);
+        assert!(limited.global_exact_bound_shadow.exact_backing_bytes > 0);
         assert!(
             limited.global_exact_bound_shadow.containment_failures > 0,
             "this adversarial Angular fixture must exercise query-wide fail-open"
@@ -30437,6 +30552,12 @@ mod tests {
         assert_eq!(scan_report.global_identity_rows_resolved, 2);
         assert_eq!(scan_report.global_exact_vectors_fetched, 1);
         assert_eq!(scan_report.global_exact_bound_shadow.candidates, 1);
+        assert_eq!(
+            scan_report.global_exact_bound_shadow.certificate_kind,
+            "residual-pq-v8"
+        );
+        assert_eq!(scan_report.global_exact_bound_shadow.residual_bytes, 68);
+        assert!(scan_report.global_exact_bound_shadow.residual_scan_bytes >= 68);
         assert_eq!(scan_report.global_exact_bound_shadow.survivors, 1);
         assert_eq!(scan_report.global_exact_bound_shadow.fail_open, 0);
         assert_eq!(

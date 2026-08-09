@@ -836,6 +836,58 @@ class ValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "prediction exceeds exact-plan baseline"):
             validate(self.root, self.manifest_path)
 
+    def test_partial_v8_exact_bound_telemetry_fails(self) -> None:
+        reads_path = self.root / "cells/c64/r01/l1/w1/reads.csv"
+        with reads_path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields = list(reader.fieldnames or [])
+            records = list(reader)
+        shadow = {
+            "global_exact_bound_candidates": "16",
+            "global_exact_bound_survivors": "11",
+            "global_exact_bound_fail_open": "0",
+            "global_exact_bound_containment_failures": "0",
+            "global_exact_bound_baseline_reads": "7",
+            "global_exact_bound_baseline_bytes": "33792",
+            "global_exact_bound_predicted_reads": "7",
+            "global_exact_bound_predicted_bytes": "33792",
+            "global_exact_bound_cpu_us": "91",
+            "global_exact_bound_certificate_kind": "residual-pq-v8",
+        }
+        fields.extend(shadow)
+        records[0].update(shadow)
+        self._write_csv(reads_path, fields, records)
+        with self.assertRaisesRegex(ValidationError, "incomplete V8 exact-bound telemetry"):
+            validate(self.root, self.manifest_path)
+
+    def test_complete_v8_exact_bound_telemetry_is_valid(self) -> None:
+        for name in ("reads.csv", "active-tail-reads.csv"):
+            reads_path = self.root / "cells/c64/r01/l1/w1" / name
+            with reads_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                fields = list(reader.fieldnames or [])
+                records = list(reader)
+            shadow = {
+                "global_exact_bound_candidates": "16",
+                "global_exact_bound_survivors": "11",
+                "global_exact_bound_fail_open": "0",
+                "global_exact_bound_containment_failures": "0",
+                "global_exact_bound_baseline_reads": "7",
+                "global_exact_bound_baseline_bytes": "33792",
+                "global_exact_bound_predicted_reads": "7",
+                "global_exact_bound_predicted_bytes": "33792",
+                "global_exact_bound_cpu_us": "91",
+                "global_exact_bound_certificate_kind": "residual-pq-v8",
+                "global_exact_bound_exact_backing_reads": "7",
+                "global_exact_bound_exact_backing_bytes": "33792",
+                "global_exact_bound_residual_bytes": "1088",
+                "global_exact_bound_residual_scan_bytes": "69632",
+            }
+            fields.extend(shadow)
+            records[0].update(shadow)
+            self._write_csv(reads_path, fields, records)
+        validate(self.root, self.manifest_path)
+
     def test_legacy_exact_bound_shadow_without_baseline_remains_valid(self) -> None:
         for name in ("reads.csv", "active-tail-reads.csv"):
             reads_path = self.root / "cells/c64/r01/l1/w1" / name

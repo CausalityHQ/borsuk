@@ -972,6 +972,8 @@ pub struct AddReport {
 /// Search hits plus execution measurements useful for performance smoke tests and tuning.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GlobalExactBoundShadow {
+    /// Persisted certificate implementation evaluated by this shadow.
+    pub certificate_kind: String,
     /// Live post-MVCC candidates evaluated by the shadow certificate.
     pub candidates: usize,
     /// Candidates the counterfactual certificate would still exact-fetch.
@@ -988,6 +990,14 @@ pub struct GlobalExactBoundShadow {
     pub predicted_reads: usize,
     /// Counterfactual physical exact-range bytes after survivor filtering.
     pub predicted_bytes: u64,
+    /// Physical backing GET attempts made by the unchanged exact fetch.
+    pub exact_backing_reads: u64,
+    /// Object-store response-range bytes charged to those exact attempts.
+    pub exact_backing_bytes: u64,
+    /// Certificate payload bytes retained for evaluated candidates.
+    pub residual_bytes: u64,
+    /// Residual-column bytes present in the scanned V8 chunk envelopes.
+    pub residual_scan_bytes: u64,
     /// Shadow calculation wall time; no I/O is included.
     pub cpu_us: u64,
 }
