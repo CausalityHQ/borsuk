@@ -1837,3 +1837,37 @@ every arbitrarily moved generation. The total segment and candidate budgets,
 single exact/MVCC pass, strict byte/deadline fallback, and Arrow objects remain
 unchanged. This is structural quality and scheduling evidence only until a
 fresh paired AWS attempt measures recall, latency, requests, and bytes.
+
+### Terminal AWS v35 fused-frontier result
+
+Revision `8e09070` was fast-forwarded to `origin/main` after the focused
+global-PQ and group-commit suites, strict all-feature/all-target Clippy, the
+complete Rust and 490-test Python assurance layers, policy and documentation
+checks, and an independent read-only review passed. A broad Ruff formatting
+check also reported 33 pre-existing Python files outside this Rust-and-docs
+slice; they were not mechanically rewritten or represented as a product
+failure. The exclusive AWS attempt
+`20260809T034709Z-v35-8e09070` used source archive SHA-256
+`e3e71fe81283277148f6bc6a47cd9072890ea0652136d2680dde1ebc879fa594`
+and unchanged manifest SHA-256
+`81c849548d9ef7300cffd88a0a13aca2023645ae0af40e66f0da5a60ad37408a`.
+After the retained 15-minute observation interval, marker-only monitoring found
+a terminal root failure at the eight-writer cell, a dead benchmark pane, no
+benchmark process, 62,620,488 KiB available memory, and 116 GiB free disk. The
+root validator rejected the incomplete campaign and both terminal-cell
+validations rejected the failure-marked tree before any CSV was opened.
+
+The one-writer cell retained recall@10 1.0, measured 104.353 ms write p95,
+865.82 ingest records/s, 404.44 drain-inclusive records/s, 116.307 ms
+active-tail read p95, and 53.670 ms post-drain read p95. The eight-writer cell
+retained 128,000 visible records, 2,000 groups, and recall@10 1.0. It measured
+80.207 ms write p95, 7,187.39 ingest records/s, 2,128.14 drain-inclusive
+records/s, and 128.585 ms active-tail read p95. Post-drain read p95 fell from
+v34's 229.811 ms to 203.722 ms, but still failed the 200 ms production gate.
+The post-drain approximate p95 fell from 104.258 to 90.730 ms and exact-rerank
+p95 fell from 148.691 to 144.321 ms. GETs rose from 174 to 257 while transferred
+bytes fell from 20,023,864 to 18,938,368. Only 12 of 20 paired query latencies
+improved, so this is a useful directional result rather than a general latency
+claim or qualification pass. Exact rerank remains the largest tail component;
+the next candidate must reduce its physical read/decode work without relying
+on a cache or weakening recall and MVCC correctness.
