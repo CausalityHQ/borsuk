@@ -12,8 +12,9 @@ use std::{
 use arrow_ipc::reader::StreamReader;
 use arrow_schema::DataType;
 use borsuk::{
-    BorsukIndex, GROUP_COMMIT_STRIPE_COUNT, GroupCommitConfig, GroupCommitWriter, IndexConfig,
-    LeafMode, SearchOptions, SearchTerminationReason, VectorMetric, VectorRecord,
+    BorsukIndex, GROUP_COMMIT_STRIPE_COUNT, GroupCommitConfig, GroupCommitWriter,
+    IncrementalMaintenanceOptions, IndexConfig, LeafMode, SearchOptions, SearchTerminationReason,
+    VectorMetric, VectorRecord,
 };
 use bytes::Bytes;
 use futures_util::TryStreamExt;
@@ -2233,4 +2234,141 @@ fn refresh_preloads_v10_once_before_concurrent_queries_and_preserves_old_snapsho
         )
         .unwrap();
     assert_eq!(old_report.hits[0].id.as_str(), "base-0");
+}
+
+#[test]
+fn maintenance_setup_read_failure_does_not_publish_or_advance_the_handle() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///maintenance-prepare-resident-pins-failure";
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    writer
+        .add(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    writer.finish_bulk_load().unwrap();
+    writer
+        .add(
+            (0..64)
+                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![1_000.0 + row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    writer.flush().unwrap();
+    writer
+        .delete(
+            (0..64)
+                .filter(|row| row % 8 != 0)
+                .map(|row| format!("delta-{row}"))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+    writer.flush().unwrap();
+    let old_version = writer.manifest().version;
+    drop(writer);
+
+    let faulted = common::FaultInjectingObjectStore::fail_nth_matching(
+        Arc::clone(&inner),
+        3,
+        true,
+        |operation, path| {
+            operation == common::StoreOperation::Get
+                && path.as_ref().contains("global-leaf/descriptors/")
+        },
+    );
+    let mut maintainer = BorsukIndex::open_with_object_store(Arc::new(faulted), uri).unwrap();
+
+    let error = maintainer
+        .run_incremental_maintenance(IncrementalMaintenanceOptions {
+            max_segment_vectors: usize::MAX,
+            max_segment_radius: None,
+            min_segment_vectors: 15,
+            max_operations: 1,
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("injected Get failure"));
+    assert_eq!(
+        maintainer.manifest().version,
+        old_version,
+        "failed setup advanced the publishing handle"
+    );
+    let current = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(
+        current.manifest().version,
+        old_version,
+        "failed setup advanced CURRENT"
+    );
+}
+
+#[test]
+fn successful_purge_installs_prepared_pins_without_post_publish_setup_gets() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///purge-installs-prepared-resident-pins";
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::new(traced),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    index
+        .add(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    index.delete(["row-0"]).unwrap();
+
+    operations.clear();
+    index.purge_with_report().unwrap();
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get
+                && (path.contains("global-leaf/descriptors/")
+                    || path.contains("global-leaf/roots/"))
+        }),
+        4,
+        "purge must validate exactly one descriptor and three roots before publication"
+    );
+    operations.clear();
+    let report = index
+        .search_with_report(
+            &[1.0; 8],
+            SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+        )
+        .unwrap();
+    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get
+                && (path.contains("global-leaf/descriptors/")
+                    || path.contains("global-leaf/roots/"))
+        }),
+        0,
+        "first post-purge query repeated setup reads"
+    );
 }

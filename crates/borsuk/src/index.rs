@@ -2374,6 +2374,10 @@ impl BorsukIndex {
             global_delta_updated = true;
         }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let prepared_global_pq_pins = global_delta_updated
+            .then(|| self.preload_resident_global_pq_for_manifest(&manifest))
+            .transpose()?
+            .flatten();
         self.manifest = if paged_manifest {
             self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
                 manifest,
@@ -2384,8 +2388,7 @@ impl BorsukIndex {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
         };
         if global_delta_updated {
-            self.resident_global_pq.clear();
-            self.repin_current_resident_global_pq()?;
+            self.resident_global_pq_pins = prepared_global_pq_pins;
         }
         Ok((committed_sequences, self.manifest.version))
     }
@@ -4100,6 +4103,13 @@ impl BorsukIndex {
             && !lane_log_advanced
             && !named_advanced
         {
+            self.resident_global_pq_pins = latest_global_pq_pins;
+            for (name, (_, _, _, global_pq_pins)) in prepared_named {
+                self.named
+                    .get_mut(&name)
+                    .expect("prepared named modality belongs to the current schema")
+                    .resident_global_pq_pins = global_pq_pins;
+            }
             return Ok(false);
         }
 
@@ -5756,14 +5766,14 @@ impl BorsukIndex {
         let global_pq_summaries = manifest.segments.clone();
         manifest.global_pq_ref = self.persist_resident_global_pq(&global_pq_summaries)?;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let prepared_global_pq_pins = self.preload_resident_global_pq_for_manifest(&manifest)?;
         // Generation shard counters are shared monotonic allocators and must
         // survive purge. They contain no record ownership or visibility state;
         // retaining them prevents a later upsert from reusing a generation that
         // a concurrent or delayed reader may already have observed.
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        self.resident_global_pq.clear();
-        self.repin_current_resident_global_pq()?;
+        self.resident_global_pq_pins = prepared_global_pq_pins;
         // Purge rebuilt the cell layout; refresh the persisted cold quantizer.
         self.refresh_persisted_quantizer()?;
 
@@ -6178,12 +6188,15 @@ impl BorsukIndex {
             }
             self.rebuild_lexical_roots(&mut manifest)?;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+            let prepared_global_pq_pins =
+                self.preload_resident_global_pq_for_manifest(&manifest)?;
             match self.publish_manifest_reusing_routing_pages_with_recovery_report(
                 manifest,
                 Some(&previous),
             ) {
                 Ok((published, _report)) => {
                     self.manifest = published;
+                    self.resident_global_pq_pins = prepared_global_pq_pins;
                     return Ok(true);
                 }
                 Err(BorsukError::ConcurrentModification { .. }) => continue,
@@ -11073,11 +11086,11 @@ impl BorsukIndex {
             manifest.routing_page_fanout,
         );
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let prepared_global_pq_pins = self.preload_resident_global_pq_for_manifest(&manifest)?;
         let previous = self.manifest.clone();
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        self.resident_global_pq.clear();
-        self.repin_current_resident_global_pq()?;
+        self.resident_global_pq_pins = prepared_global_pq_pins;
         // Frontier just changed (tail folded in and cleared). Immutable decoded
         // runs can remain in the bounded collection cache and age out by LRU.
         if clear_frontier {
@@ -12801,12 +12814,6 @@ impl BorsukIndex {
         }))
     }
 
-    fn repin_current_resident_global_pq(&mut self) -> Result<()> {
-        let manifest = self.manifest.clone();
-        self.resident_global_pq_pins = self.preload_resident_global_pq_for_manifest(&manifest)?;
-        Ok(())
-    }
-
     fn load_resident_global_pq_reference_for_element_type(
         &self,
         global_ref: &GlobalPqRef,
@@ -14144,11 +14151,11 @@ impl BorsukIndex {
             promote,
         )?;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let prepared_global_pq_pins = self.preload_resident_global_pq_for_manifest(&manifest)?;
         self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
             manifest, &previous,
         )?;
-        self.resident_global_pq.clear();
-        self.repin_current_resident_global_pq()?;
+        self.resident_global_pq_pins = prepared_global_pq_pins;
         Ok(true)
     }
 
@@ -14226,9 +14233,11 @@ impl BorsukIndex {
         let mut manifest = self.manifest.next_version();
         manifest.global_pq_ref = Some(desired);
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let prepared_global_pq_pins = self.preload_resident_global_pq_for_manifest(&manifest)?;
         self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
             manifest, &previous,
         )?;
+        self.resident_global_pq_pins = prepared_global_pq_pins;
         Ok(true)
     }
 
@@ -14238,12 +14247,16 @@ impl BorsukIndex {
     ) -> Result<()> {
         let desired = self.persist_resident_global_pq(summaries)?;
         if desired == self.manifest.global_pq_ref {
+            let manifest = self.manifest.clone();
+            self.resident_global_pq_pins =
+                self.preload_resident_global_pq_for_manifest(&manifest)?;
             return Ok(());
         }
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.global_pq_ref = desired;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let prepared_global_pq_pins = self.preload_resident_global_pq_for_manifest(&manifest)?;
         if manifest.segments.is_empty() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 previous.version,
@@ -14265,8 +14278,7 @@ impl BorsukIndex {
             self.manifest = self
                 .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         }
-        self.resident_global_pq.clear();
-        self.repin_current_resident_global_pq()?;
+        self.resident_global_pq_pins = prepared_global_pq_pins;
         Ok(())
     }
 
@@ -15374,6 +15386,12 @@ impl BorsukIndex {
                 started,
                 &requests_before,
             );
+            self.finalize_public_search_execution(
+                &mut execution,
+                &options,
+                started,
+                &requests_before,
+            );
             observability::record_search_report(&span, &execution.report);
             return Ok(execution);
         }
@@ -15393,6 +15411,12 @@ impl BorsukIndex {
                     Some(count) => count,
                     None => self.active_segment_summaries()?.len(),
                 },
+                started,
+                &requests_before,
+            );
+            self.finalize_public_search_execution(
+                &mut execution,
+                &options,
                 started,
                 &requests_before,
             );
@@ -15417,9 +15441,13 @@ impl BorsukIndex {
                     include_vectors,
                 );
                 self.apply_wal_search_observation(&mut execution.report, wal_query_cells.as_ref());
-                execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
-                execution.report.requests = self.storage.request_counts().delta(&requests_before);
             }
+            self.finalize_public_search_execution(
+                &mut execution,
+                &options,
+                started,
+                &requests_before,
+            );
             observability::record_search_report(&span, &execution.report);
             return Ok(execution);
         }
@@ -15436,7 +15464,7 @@ impl BorsukIndex {
         let resident_bytes_estimate = self.manifest.resident_bytes_estimate();
 
         if options.k == 0 {
-            let execution = SearchExecution {
+            let mut execution = SearchExecution {
                 report: SearchReport {
                     hits: Vec::new(),
                     leaf_mode: options.mode.leaf_mode().to_string(),
@@ -15504,6 +15532,12 @@ impl BorsukIndex {
                 },
                 vectors: Vec::new(),
             };
+            self.finalize_public_search_execution(
+                &mut execution,
+                &options,
+                started,
+                &requests_before,
+            );
             observability::record_search_report(&span, &execution.report);
             return Ok(execution);
         }
@@ -16263,10 +16297,9 @@ impl BorsukIndex {
         };
         if let Some(wal_execution) = prescored_wal_execution {
             merge_search_execution_hits(&mut execution, wal_execution, options.k, include_vectors);
-            execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
-            execution.report.requests = self.storage.request_counts().delta(&requests_before);
         }
         self.apply_wal_search_observation(&mut execution.report, wal_query_cells.as_ref());
+        self.finalize_public_search_execution(&mut execution, &options, started, &requests_before);
         observability::record_search_report(&span, &execution.report);
         Ok(execution)
     }
@@ -16389,6 +16422,21 @@ impl BorsukIndex {
         execution.report.recall_guarantee = recall_guarantee;
         execution.report.segments_total = segments_total;
         execution.report.segments_skipped = segments_total;
+        execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
+        execution.report.requests = self.storage.request_counts().delta(requests_before);
+    }
+
+    fn finalize_public_search_execution(
+        &self,
+        execution: &mut SearchExecution,
+        options: &SearchOptions,
+        started: Instant,
+        requests_before: &RequestCounts,
+    ) {
+        if resident_v10_latency_expired(options, started) {
+            execution.report.termination_reason = SearchTerminationReason::MaxLatency;
+            execution.report.recall_guarantee = RecallGuarantee::Degraded;
+        }
         execution.report.elapsed_ms = started.elapsed().as_millis() as u64;
         execution.report.requests = self.storage.request_counts().delta(requests_before);
     }
@@ -22725,6 +22773,12 @@ fn merge_search_execution_hits(
     k: usize,
     include_vectors: bool,
 ) {
+    #[cfg(test)]
+    TEST_PUBLIC_RESULT_MERGE_DELAY.with(|delay| {
+        if let Some(delay) = delay.take() {
+            std::thread::sleep(delay);
+        }
+    });
     let SearchExecution {
         report: mut delta_report,
         vectors: delta_vectors,
@@ -22921,6 +22975,13 @@ fn merge_search_execution_hits(
         .report
         .segments_pruned_by_filter
         .saturating_add(delta_report.segments_pruned_by_filter);
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PUBLIC_RESULT_MERGE_DELAY: std::cell::Cell<Option<Duration>> = const {
+        std::cell::Cell::new(None)
+    };
 }
 
 fn wal_execution_is_exact_top_k(execution: &SearchExecution, k: usize) -> bool {
@@ -23783,6 +23844,142 @@ mod tests {
     }
 
     #[test]
+    fn incremental_maintenance_installs_new_delta_pins_before_cache_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![0.0; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index
+            .add(
+                (0..64)
+                    .map(|row| {
+                        VectorRecord::new(format!("delta-{row}"), vec![1_000.0 + row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.flush().unwrap();
+        index
+            .delete(
+                (0..64)
+                    .filter(|row| row % 8 != 0)
+                    .map(|row| format!("delta-{row}"))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let old_snapshot = index.clone();
+        let old_reference = old_snapshot.manifest.global_pq_ref.clone().unwrap();
+
+        let maintenance = index
+            .run_incremental_maintenance(IncrementalMaintenanceOptions {
+                max_segment_vectors: usize::MAX,
+                max_segment_radius: None,
+                min_segment_vectors: 15,
+                max_operations: 1,
+            })
+            .unwrap();
+        assert!(maintenance.published, "fixture did not publish maintenance");
+        let new_reference = index.manifest.global_pq_ref.clone().unwrap();
+        assert_ne!(
+            new_reference.delta.as_deref().map(|delta| &delta.checksum),
+            old_reference.delta.as_deref().map(|delta| &delta.checksum),
+            "fixture did not replace the resident delta"
+        );
+
+        index.resident_global_pq.clear();
+        let requests_before = index.storage.request_counts();
+        let _ = index.load_resident_global_pq().unwrap().unwrap();
+        assert_eq!(
+            index.storage.request_counts().delta(&requests_before).gets,
+            0,
+            "maintenance snapshot repeated setup GETs after cache eviction"
+        );
+
+        let old_requests = old_snapshot.storage.request_counts();
+        let _ = old_snapshot
+            .load_resident_global_pq_reference(&old_reference)
+            .unwrap();
+        assert_eq!(
+            old_snapshot
+                .storage
+                .request_counts()
+                .delta(&old_requests)
+                .gets,
+            0,
+            "maintenance invalidated the old snapshot's resident pin"
+        );
+        let current_report = index
+            .search_with_report(
+                &[1_000.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        let old_report = old_snapshot
+            .search_with_report(
+                &[1_000.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        assert!(!current_report.hits.is_empty());
+        assert!(!old_report.hits.is_empty());
+    }
+
+    #[test]
+    fn unchanged_refresh_repairs_missing_snapshot_pins() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        writer
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        writer.finish_bulk_load().unwrap();
+        let mut reader = BorsukIndex::open(&uri).unwrap();
+        reader.resident_global_pq_pins = None;
+        reader.resident_global_pq.clear();
+
+        assert!(
+            !reader.refresh().unwrap(),
+            "unchanged refresh unexpectedly advanced"
+        );
+        reader.resident_global_pq.clear();
+        let requests_before = reader.storage.request_counts();
+        let _ = reader.load_resident_global_pq().unwrap().unwrap();
+        assert_eq!(
+            reader.storage.request_counts().delta(&requests_before).gets,
+            0,
+            "no-op refresh discarded the repaired snapshot pins"
+        );
+    }
+
+    #[test]
     fn resident_v10_deadline_stops_before_descriptor_and_root_setup() {
         let dir = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -23844,6 +24041,60 @@ mod tests {
 
         assert_eq!(
             resident_v10_termination_reason(&options, started, false, 1, 1, false),
+            SearchTerminationReason::MaxLatency
+        );
+    }
+
+    #[test]
+    fn public_resident_v10_deadline_is_resampled_after_live_wal_result_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index.manifest.wal_config = WalConfig {
+            enabled: true,
+            flush_threshold_runs: usize::MAX,
+            flush_threshold_records: usize::MAX,
+            flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
+        };
+        index
+            .add(vec![VectorRecord::new("wal", vec![1_000.0; 8])])
+            .unwrap();
+
+        TEST_PUBLIC_RESULT_MERGE_DELAY.with(|delay| {
+            delay.set(Some(Duration::from_millis(150)));
+        });
+        let report = index
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(2, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_latency_ms(100),
+            )
+            .unwrap();
+
+        assert_eq!(report.hits.len(), 2);
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+        assert!(report.wal_records_examined > 0);
+        assert!(report.elapsed_ms >= 100);
+        assert_eq!(
+            report.termination_reason,
             SearchTerminationReason::MaxLatency
         );
     }

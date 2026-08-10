@@ -289,3 +289,78 @@ The exact V10 schema requirement is intentionally incompatible with historical
 V9/unversioned query samples. Those artifacts remain immutable, but current
 assemblers and publication validators will reject them rather than silently
 mix architectures.
+
+## Fix round 3/5 — public finalization and transactional resident pins
+
+### Root causes and repairs
+
+1. Resident V10 correctly sampled its own work, but the public search path could
+   subsequently merge and re-sort a live-WAL execution, construct replacement
+   hits/vectors, and return after the deadline while retaining `Complete`.
+   Every public vector-search return now passes through one authoritative final
+   sample after all result construction and WAL observation. Expiration changes
+   the terminal reason to `MaxLatency` and recall to degraded; storage/decode
+   errors still return as errors before a report exists. Named-vector routing
+   recursively invokes this same finalizer.
+2. Incremental maintenance published a rebuilt delta without installing its
+   pins. In addition, an unchanged refresh preloaded primary/named candidates
+   but returned before assigning them. Maintenance now installs the prepared
+   base/delta pair after its CAS, and a no-op refresh repairs pins for every
+   modality before returning `false`.
+3. Purge, compaction, lane drain, delta refresh, exact-fringe publication, and
+   full resident rebuild published first and then performed a fallible preload.
+   Candidate manifests now preload and validate descriptor plus roots before
+   any publish. After a successful publish the prepared `Arc`s are installed
+   without I/O. A failed preparation leaves both the handle and `CURRENT`
+   unchanged; a concurrent maintenance loser discards its candidates and
+   retries from refreshed state.
+
+### Strict TDD evidence
+
+- Public deadline fixture exploration first exposed two invalid segment-path
+  fixtures (each 0 passed / 1 failed / 559 filtered). After keeping the V10
+  artifact current and appending a true live-WAL record, the accepted RED was
+  0 passed / 1 failed / 559 filtered: the report was V10, contained two merged
+  hits, observed WAL records, exceeded 100 ms at the controlled merge boundary,
+  and failed only because it returned `Complete` instead of `MaxLatency`.
+  GREEN: 1 passed / 561 filtered. The complete resident-deadline family then
+  passed 3 / 559.
+- No-op refresh RED repeated four descriptor/root GETs after candidate preload
+  and cache eviction. The first maintenance fixture changed segment topology
+  without changing deterministic descriptor content, so it was rejected as a
+  pin-generation test. The corrected delete-driven maintenance RED changed the
+  delta checksum and failed 0 passed / 1 failed / 561 filtered with four setup
+  GETs after eviction. Combined GREEN: 2 passed / 560; the current maintenance
+  snapshot and its old clone both remained zero-GET queryable.
+- Transaction RED injected the setup GET after purge construction and failed
+  0 passed / 1 failed / 47 filtered: the error was returned after the handle had
+  already advanced from version 5 to 10. The final isolated maintenance fault
+  fixture fails descriptor GET three (after opening the current base and delta)
+  before the CAS. GREEN: 1 passed / 47 filtered, with both the handle and a
+  clean reopen of `CURRENT` retaining the pre-maintenance version.
+- Successful purge pin installation passed 1 / 47 before and after the repair:
+  exactly one descriptor plus three roots are validated during the operation,
+  and the first post-publish V10 query performs zero setup GETs.
+
+### Focused verification
+
+- Lane-drain base/delta publication: 1 passed / 47 filtered.
+- Invalid-next refresh rejection: 1 passed / 47 filtered.
+- Refresh preload, concurrent queries, and old snapshot: 1 passed / 47 filtered.
+- Full paged-compaction resident rebuild: 1 passed / 561 filtered.
+- Cached-reference metadata validation: 1 passed / 561 filtered.
+- `cargo fmt --all -- --check`: passed after applying its reported formatting
+  delta.
+- `git diff --check`: passed.
+
+Every Cargo launch after the required process and memory-pressure guard ran
+alone in `target-task4-fix3`. Per controller instruction, no broad workspace
+suite, Clippy, no-run gate, AWS operation, or benchmark CSV inspection ran.
+
+### Remaining concern
+
+The final deadline sample is intentionally terminal reporting, not
+preemptive cancellation of CPU work already in progress. It prevents a late
+result from being mislabeled and does not start any new work after observing
+expiration; hard CPU cancellation would require a separate cooperative scoring
+design.
