@@ -216,3 +216,98 @@ no code-review result.
 
 No full workspace suite, AWS operation, benchmark artifact access, push, or PR
 was performed in this fix round.
+
+## Post-Task-3 independent review fix round 2/5
+
+### Root cause and dataflow correction
+
+The first fix made fetched-leaf MVCC resident-only, but dense search still
+resolved the live WAL before V10 dispatch. On a cache miss,
+`dense_live_wal_records` built `live_wal_snapshot`, whose per-record suppression
+called the ordinary query-paged `mutation_state`. A V10 query with a non-empty
+cell WAL could therefore cold-read the stable page and the visible cell-WAL
+tombstone run before reading its leaf. WAL telemetry counted only record-run
+bytes, so both MVCC reads were unreported.
+
+The corrected dataflow computes the side-effect-free V10 context before WAL
+resolution. A statically supported V10 query obtains the exact-key frozen
+mutation view or has no V10 context at all. With a context, both WAL record
+suppression and leaf-row suppression use the same resident lookup. Missing,
+stale, oversized, or unreserved views use the ordinary paged WAL resolver and
+segment engine; the later V10 dispatch sees the same missing context and returns
+before directory or leaf reads. Unrelated engines are not made dependent on the
+view.
+
+The ordinary complete-WAL snapshot builder also uses an exact resident view
+opportunistically when one is available. This matters because its cache and
+single-flight are shared: for a key eligible for V10, an overlapping unrelated
+query cannot start a paged-MVCC snapshot build that the V10 query then joins.
+Selected-cell V10 WAL resolution has its own explicitly resident-only wrapper.
+The resident call chain is therefore:
+
+`resident_global_v10_context -> dense_live_wal_records_with_resident_mutations -> live_wal_snapshot_with_resident_mutations -> live_wal_tail_records_for_cells_with_resident_mutations -> state_suppresses_record`.
+
+Neither that chain nor `resolve_global_leaf_rows` calls `mutation_state` or
+`mutation_states`; the only storage work on the branch is the explicitly
+reported WAL record run, selected directory shards, and selected leaf pages.
+
+### Honest frozen heap representation
+
+The retained view no longer stores a `HashMap`. It consumes the temporary merge
+map into an immutable sorted boxed slice. Each entry contains a 64-bit BLAKE3
+routing key, an exact boxed record ID, and `MutationState`. Lookup binary-searches
+the numeric routing key first and always verifies the complete ID, including on
+numeric-key collisions.
+
+Post-decode admission uses checked arithmetic over every requested retained
+allocation: the outer `Arc` payload and two reference counters, the exact boxed
+entry slice, and every exact boxed-ID length. There is no spare hash capacity or
+arbitrary bytes-per-bucket estimate. The full 32 MiB retained-pool permit remains
+pinned for the view lifetime, while the existing count-derived lower bound still
+rejects a 100M-ID view before loading any tombstone object.
+
+The separate paged tombstone-cache estimator now also charges conservatively
+for hash-table load-factor slack, control bytes, and each ID buffer's capacity;
+that cache is not part of the retained V10 view.
+
+### RED evidence
+
+All Rust commands used the isolated round-2 target and required wrapper/cache:
+
+`CARGO_TARGET_DIR=/home/rb/worktrees/borsuk-prod-ready-v9/target-task3-fix2 RUSTC_WRAPPER=/usr/local/libexec/devbox-rustc-wrapper SCCACHE_DIR=/data/cache/sccache CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 RUSTFLAGS='-C codegen-units=8' rtk cargo ...`
+
+`resident_global_v10_cold_nonempty_wal_uses_only_reported_gets_and_bytes` uses a
+shared real `object_store::memory::InMemory`, no disk cache, zero tombstone-page
+retention, zero WAL-run retention, a flushed stable tombstone page, and a live
+record+tombstone cell-WAL transaction for the same ID. Mutation-testing the old
+pre-dispatch paged resolver produced `backing_bytes_read=19252` versus reported
+`bytes_read=15988`, and 7 physical GETs versus the 5 explicitly represented by
+one WAL record run, one directory read, and three leaf pages. The extra 3,264
+bytes and two GETs were the stable and cell-WAL tombstone objects.
+
+### GREEN and focused verification
+
+- Cold non-empty-WAL exact byte/GET regression: 1 passed, 597 filtered out.
+- Frozen exact-heap/collision-safe lookup regression: 1 passed, 597 filtered
+  out.
+- Cold empty-WAL stable-tombstone regression: 1 passed, 597 filtered out.
+- Refresh/replacement/lane-tail invalidation regression: 1 passed, 597 filtered
+  out.
+- 100M pre-read refusal regression: 1 passed, 597 filtered out.
+- Qualified/unsupported page-budget matrix: 1 passed, 597 filtered out.
+- `cargo test --locked -p borsuk resident_global_ --lib`: 16 passed, 582
+  filtered out.
+- `cargo test --locked -p borsuk leaf_ranking --lib`: 3 passed, 595 filtered
+  out.
+- `cargo test --locked -p borsuk global_leaf::tests --lib`: 16 passed, 582
+  filtered out.
+- Every named global scan codec through V10: 1 passed, 597 filtered out.
+- `cargo test --locked -p borsuk physical_get_admission_ --lib`: 11 passed,
+  587 filtered out.
+- Focused performance-smoke report regression: 1 passed, 2 filtered out.
+- `cargo check --locked -p borsuk --lib`: exit 0.
+- `cargo clippy --locked -p borsuk --lib -- -D warnings`: no issues.
+- `cargo fmt --all -- --check` and `git diff --check`: exit 0.
+
+No full workspace suite, AWS operation, benchmark artifact access, push, or PR
+was performed in this fix round.
