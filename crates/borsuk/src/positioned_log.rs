@@ -1018,9 +1018,11 @@ impl PositionedLogWriter {
                     );
                 }
                 Err(
-                    BorsukError::ConcurrentModification { .. }
-                    | BorsukError::ObjectStoreRetryable { .. },
+                    error @ (BorsukError::ConcurrentModification { .. }
+                    | BorsukError::ObjectStoreRetryable { .. }),
                 ) => {
+                    let ambiguous_write =
+                        matches!(&error, BorsukError::ObjectStoreRetryable { .. });
                     let stored = storage
                         .read_coordination_object(&shard_head_path(shard))?
                         .ok_or_else(|| {
@@ -1033,7 +1035,7 @@ impl PositionedLogWriter {
                         find_transaction(&observed, &prepared.transaction_digest).cloned()
                     {
                         if existing.request_digest != prepared.request_digest
-                            || existing.envelope_checksum != envelope_checksum
+                            || (ambiguous_write && existing.envelope_checksum != envelope_checksum)
                         {
                             return invalid(
                                 "positioned transaction receipt conflicts with the retried request",

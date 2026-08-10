@@ -5758,15 +5758,15 @@ fn summarize_positioned_payload_batches(
             ));
         }
         for row in 0..batch.num_rows() {
-            let stamp = mutation_stamp_value(&batch, Some(columns), row)?.ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "positioned payload mutation stamp is unexpectedly absent".to_owned(),
-                )
-            })?;
             let stamp = PositionedMutationStamp {
-                hlc: stamp.version().hlc(),
-                writer: stamp.version().writer(),
-                digest: stamp.digest(),
+                hlc: required_primitive_value::<UInt64Type>(
+                    &batch,
+                    columns.0,
+                    row,
+                    "mutation_hlc",
+                )?,
+                writer: fixed_size_binary_value::<16>(&batch, columns.1, row, "mutation_writer")?,
+                digest: fixed_size_binary_value::<32>(&batch, columns.2, row, "mutation_digest")?,
             };
             if let Some(existing) = version_digests.insert((stamp.hlc, stamp.writer), stamp.digest)
                 && existing != stamp.digest
@@ -5941,6 +5941,16 @@ fn positioned_envelope_from_parquet_inner(bytes: &[u8]) -> Result<DecodedPositio
         ));
     }
     let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    let row_count = builder.metadata().file_metadata().num_rows();
+    if row_count <= 0
+        || row_count
+            > i64::try_from(crate::positioned_log::MAX_PAYLOADS_PER_TRANSACTION)
+                .expect("positioned payload bound fits i64")
+    {
+        return Err(BorsukError::InvalidStorage(
+            "positioned envelope row count is outside 1..=64".to_owned(),
+        ));
+    }
     if builder.schema().as_ref() != positioned_envelope_schema().as_ref() {
         return Err(BorsukError::InvalidStorage(
             "positioned envelope schema is not the exact V12 schema".to_owned(),
@@ -5986,6 +5996,11 @@ fn positioned_envelope_from_parquet_inner(bytes: &[u8]) -> Result<DecodedPositio
                     "positioned envelope payload ordinal overflow".to_owned(),
                 )
             })?;
+            if payloads.len() == crate::positioned_log::MAX_PAYLOADS_PER_TRANSACTION {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned envelope row count is outside 1..=64".to_owned(),
+                ));
+            }
             payloads.push(decoded.payload.clone());
             first.get_or_insert(decoded);
         }
@@ -6301,6 +6316,28 @@ where
         .downcast_ref::<arrow_array::PrimitiveArray<T>>()
         .map(|array| array.value(row))
         .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))
+}
+
+fn required_primitive_value<T>(
+    batch: &RecordBatch,
+    column: usize,
+    row: usize,
+    name: &str,
+) -> Result<T::Native>
+where
+    T: arrow_array::ArrowPrimitiveType,
+{
+    let array = batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<arrow_array::PrimitiveArray<T>>()
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("column `{name}` has wrong type")))?;
+    if array.is_null(row) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "column `{name}` contains a null value"
+        )));
+    }
+    Ok(array.value(row))
 }
 
 fn column_index(batch: &RecordBatch, name: &str) -> Result<usize> {
@@ -6997,6 +7034,109 @@ mod tests {
             validate_positioned_envelope_schema_and_columns(batch.schema().as_ref(), &columns)
                 .is_err()
         );
+    }
+
+    fn positioned_payload_with_null_hlc_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("mutation_hlc", DataType::UInt64, true),
+            Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+            Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                array(UInt64Array::from(vec![None])),
+                array(FixedSizeBinaryArray::try_from_iter([[7_u8; 16]].into_iter()).unwrap()),
+                array(FixedSizeBinaryArray::try_from_iter([[9_u8; 32]].into_iter()).unwrap()),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn positioned_arrow_payload_decoder_rejects_null_mutation_hlc() {
+        let batch = positioned_payload_with_null_hlc_batch();
+        let mut bytes = Vec::new();
+        let mut writer =
+            arrow_ipc::writer::StreamWriter::try_new(&mut bytes, batch.schema().as_ref()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        assert!(positioned_payload_metadata(&bytes, PositionedPayloadFormat::ArrowIpc, 1).is_err());
+    }
+
+    #[test]
+    fn positioned_parquet_payload_decoder_rejects_null_mutation_hlc() {
+        let bytes = write_batch(positioned_payload_with_null_hlc_batch()).unwrap();
+        assert!(positioned_payload_metadata(&bytes, PositionedPayloadFormat::Parquet, 1).is_err());
+    }
+
+    #[test]
+    fn positioned_envelope_rejects_compressed_parquet_above_sixty_four_rows_from_metadata() {
+        let one = positioned_envelope_batch();
+        let rows = crate::positioned_log::MAX_PAYLOADS_PER_TRANSACTION + 1;
+        let columns = one
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(index, column)| match column.data_type() {
+                DataType::UInt8 => {
+                    let values = column.as_any().downcast_ref::<UInt8Array>().unwrap();
+                    array(UInt8Array::from_iter_values(
+                        (0..rows).map(|_| values.value(0)),
+                    ))
+                }
+                DataType::UInt16 => {
+                    let values = column.as_any().downcast_ref::<UInt16Array>().unwrap();
+                    array(UInt16Array::from_iter_values(
+                        (0..rows).map(|_| values.value(0)),
+                    ))
+                }
+                DataType::UInt32 => {
+                    let values = column.as_any().downcast_ref::<UInt32Array>().unwrap();
+                    if index == 14 {
+                        array(UInt32Array::from_iter_values(
+                            (0..rows).map(|ordinal| u32::try_from(ordinal).unwrap()),
+                        ))
+                    } else {
+                        array(UInt32Array::from_iter_values(
+                            (0..rows).map(|_| values.value(0)),
+                        ))
+                    }
+                }
+                DataType::UInt64 => {
+                    let values = column.as_any().downcast_ref::<UInt64Array>().unwrap();
+                    array(UInt64Array::from_iter_values(
+                        (0..rows).map(|_| values.value(0)),
+                    ))
+                }
+                DataType::Utf8 => {
+                    let values = column.as_any().downcast_ref::<StringArray>().unwrap();
+                    array(StringArray::from_iter_values(
+                        (0..rows).map(|_| values.value(0)),
+                    ))
+                }
+                DataType::FixedSizeBinary(_) => {
+                    let values = column
+                        .as_any()
+                        .downcast_ref::<FixedSizeBinaryArray>()
+                        .unwrap();
+                    array(
+                        FixedSizeBinaryArray::try_from_iter((0..rows).map(|_| values.value(0)))
+                            .unwrap(),
+                    )
+                }
+                data_type => panic!("unexpected positioned envelope type {data_type:?}"),
+            })
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_new(one.schema(), columns).unwrap();
+        let bytes = write_batch(batch).unwrap();
+        assert!(bytes.len() < MAX_POSITIONED_ENVELOPE_BYTES);
+        let error = match positioned_envelope_from_parquet(&bytes) {
+            Ok(_) => panic!("oversized positioned envelope unexpectedly decoded"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("row count"), "{error}");
     }
 
     fn lexical_run_fixture() -> LexicalRunRef {

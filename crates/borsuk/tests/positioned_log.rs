@@ -287,6 +287,55 @@ fn two_writers_rebase_one_shard_without_duplicate_visibility() {
 }
 
 #[test]
+fn stale_writer_accepts_same_request_committed_at_rebased_position_after_cas_loss() {
+    let base: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    create_writer(Arc::clone(&base), 7);
+    let shard = 21;
+    let ids = transaction_ids_for_shard(shard, 2);
+    let intervening_id = ids[0].clone();
+    let target_id = ids[1].clone();
+    let barrier = Arc::new(Barrier::new(2));
+    let stale_store = common::FaultInjectingObjectStore::new(Arc::clone(&base)).with_put_barrier(
+        Arc::clone(&barrier),
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/heads/")
+        },
+    );
+    let stale =
+        PositionedLogWriter::open("memory:///positioned-log", Arc::new(stale_store), 7).unwrap();
+    let stale_target = target_id.clone();
+    let stale_thread = std::thread::spawn(move || {
+        stale.append(
+            &stale_target,
+            SCHEMA_FINGERPRINT,
+            vec![payload("primary", 2)],
+        )
+    });
+
+    let winner =
+        PositionedLogWriter::open("memory:///positioned-log", Arc::clone(&base), 7).unwrap();
+    let intervening = winner
+        .append(
+            &intervening_id,
+            SCHEMA_FINGERPRINT,
+            vec![payload("primary", 1)],
+        )
+        .unwrap();
+    let committed = winner
+        .append(&target_id, SCHEMA_FINGERPRINT, vec![payload("primary", 2)])
+        .unwrap();
+    assert_eq!(intervening.position.sequence, 1);
+    assert_eq!(committed.position.sequence, 2);
+    barrier.wait();
+
+    let reconciled = stale_thread.join().unwrap().unwrap();
+    assert_eq!(reconciled.position, committed.position);
+    assert_eq!(reconciled.request_digest, committed.request_digest);
+    assert_eq!(reconciled.envelope_checksum, committed.envelope_checksum);
+}
+
+#[test]
 fn append_uses_parallel_payload_wave_then_one_conditional_head_cas() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
