@@ -1259,20 +1259,8 @@ impl GlobalPqDescriptor {
         Ok(rebuilt)
     }
 
-    pub(crate) fn vectors(&self) -> usize {
-        self.vectors
-    }
-
-    pub(crate) fn subspaces(&self) -> usize {
-        self.centroid_code_bytes
-    }
-
     pub(crate) fn code_bytes_per_vector(&self) -> usize {
         self.centroid_code_bytes
-    }
-
-    pub(crate) fn vector_element_type(&self) -> VectorElementType {
-        self.vector_element_type
     }
 
     #[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
@@ -1950,7 +1938,7 @@ mod tests {
         let decoded = GlobalPqDescriptor::decode(&encoded).unwrap();
 
         assert!(encoded.starts_with(b"PAR1") && encoded.ends_with(b"PAR1"));
-        assert_eq!(decoded.vectors(), 100_000_000);
+        assert_eq!(decoded.vectors, 100_000_000);
         assert_eq!(decoded.code_bytes_per_vector(), 8);
         assert_eq!(decoded.cell_count(), 43_403);
         assert_eq!(decoded.page_count(), 3_125_000);

@@ -1782,12 +1782,6 @@ impl<T> BoundedResidentCache<T> {
         Ok(loaded)
     }
 
-    fn clear(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.entries.clear();
-        state.order.clear();
-    }
-
     #[cfg(test)]
     fn len(&self) -> usize {
         self.state
@@ -23462,6 +23456,16 @@ mod tests {
     use super::*;
     use std::sync::{Barrier, Mutex};
 
+    fn evict_resident_global_pq_cache(index: &BorsukIndex) {
+        let mut state = index
+            .resident_global_pq
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.entries.clear();
+        state.order.clear();
+    }
+
     fn assert_v10_leaf_hit(uri: &str, query: &[f32], expected: &str) -> SearchReport {
         let report = BorsukIndex::open(uri)
             .unwrap()
@@ -23785,7 +23789,7 @@ mod tests {
             .resident_global_pq
             .get(&primary_reference.checksum)
             .unwrap();
-        old_snapshot.resident_global_pq.clear();
+        evict_resident_global_pq_cache(&old_snapshot);
         drop(primary);
         let named_snapshot = old_snapshot.named.get("named").unwrap();
         let named_reference = named_snapshot.manifest.global_pq_ref.clone().unwrap();
@@ -23793,7 +23797,7 @@ mod tests {
             .resident_global_pq
             .get(&named_reference.checksum)
             .unwrap();
-        named_snapshot.resident_global_pq.clear();
+        evict_resident_global_pq_cache(named_snapshot);
         drop(named);
 
         let primary_requests = old_snapshot.storage.request_counts();
@@ -23901,7 +23905,7 @@ mod tests {
             "fixture did not replace the resident delta"
         );
 
-        index.resident_global_pq.clear();
+        evict_resident_global_pq_cache(&index);
         let requests_before = index.storage.request_counts();
         let _ = index.load_resident_global_pq().unwrap().unwrap();
         assert_eq!(
@@ -23963,13 +23967,13 @@ mod tests {
         writer.finish_bulk_load().unwrap();
         let mut reader = BorsukIndex::open(&uri).unwrap();
         reader.resident_global_pq_pins = None;
-        reader.resident_global_pq.clear();
+        evict_resident_global_pq_cache(&reader);
 
         assert!(
             !reader.refresh().unwrap(),
             "unchanged refresh unexpectedly advanced"
         );
-        reader.resident_global_pq.clear();
+        evict_resident_global_pq_cache(&reader);
         let requests_before = reader.storage.request_counts();
         let _ = reader.load_resident_global_pq().unwrap().unwrap();
         assert_eq!(
@@ -24000,7 +24004,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
-        index.resident_global_pq.clear();
+        evict_resident_global_pq_cache(&index);
         let requests_before = index.storage.request_counts();
         let started = Instant::now()
             .checked_sub(Duration::from_millis(10))
@@ -27230,7 +27234,6 @@ mod tests {
             .unwrap()
             .bytes;
         let descriptor = GlobalPqDescriptor::decode(&descriptor_bytes).unwrap();
-        assert_eq!(descriptor.vectors(), second_reference.vectors);
         let table = |reference: &crate::global_leaf::GlobalLeafTableRef| {
             let bytes = index
                 .storage
@@ -27248,6 +27251,8 @@ mod tests {
         .unwrap();
         assert_eq!(root.cells.len(), descriptor.cell_count());
         assert_eq!(root.bundles.len(), descriptor.bundle_count());
+        let resident = ResidentGlobalPq::load(descriptor, root).unwrap();
+        assert_eq!(resident.len(), second_reference.vectors);
 
         let stale_delta_segments = second_reference.segments.clone();
         let compaction = index.compact(CompactionOptions::default()).unwrap();
