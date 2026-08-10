@@ -563,6 +563,53 @@ pub(crate) struct GlobalLeafRunDirectoryRoot {
 }
 
 impl GlobalLeafRunDirectoryRoot {
+    pub(crate) fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(
+                self.cells
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<V11CellBounds>()),
+            )
+            .saturating_add(
+                self.pages
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<GlobalLeafPageRef>()),
+            )
+            .saturating_add(
+                self.pages
+                    .iter()
+                    .map(|page| page.centroid_code.len())
+                    .sum::<usize>(),
+            )
+            .saturating_add(
+                self.bundles
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<GlobalLeafBundleRef>()),
+            )
+            .saturating_add(
+                self.bundles
+                    .iter()
+                    .map(|bundle| bundle.path.capacity())
+                    .sum::<usize>(),
+            )
+            .saturating_add(
+                self.shards
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<GlobalLeafDirectoryShardRef>()),
+            )
+            .saturating_add(
+                self.shards
+                    .iter()
+                    .map(|shard| {
+                        shard
+                            .path
+                            .capacity()
+                            .saturating_add(shard.checksum.capacity())
+                    })
+                    .sum::<usize>(),
+            )
+    }
+
     pub(crate) fn inline_pages(&self) -> &[GlobalLeafPageRef] {
         &self.pages
     }
@@ -578,7 +625,7 @@ impl GlobalLeafRunDirectoryRoot {
     pub(crate) fn selected_shards(
         &self,
         selected_cells: &[u16],
-    ) -> Result<Vec<&GlobalLeafDirectoryShardRef>> {
+    ) -> Result<Vec<(usize, &GlobalLeafDirectoryShardRef)>> {
         let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
         let present = self
             .cells
@@ -589,7 +636,8 @@ impl GlobalLeafRunDirectoryRoot {
         Ok(self
             .shards
             .iter()
-            .filter(|shard| {
+            .enumerate()
+            .filter(|(_, shard)| {
                 present
                     .range(shard.first_cell..=shard.last_cell)
                     .next()
@@ -2454,7 +2502,8 @@ mod tests {
 
         assert_eq!(encoded.shards.len(), 2);
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].path, encoded.shards[1].reference.path);
+        assert_eq!(selected[0].0, 1);
+        assert_eq!(selected[0].1.path, encoded.shards[1].reference.path);
     }
 
     #[test]

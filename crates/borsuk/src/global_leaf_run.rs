@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::{
     BorsukError, Result,
@@ -410,8 +410,7 @@ pub(crate) struct GlobalLeafRunRef {
 #[derive(Debug)]
 pub(crate) struct ResidentGlobalLeafRun {
     root: crate::global_leaf::GlobalLeafRunDirectoryRoot,
-    decoded_shards:
-        std::sync::Mutex<HashMap<String, Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>>>,
+    decoded_shards: Vec<ResidentGlobalLeafShardSlot>,
     level: Option<u8>,
     rows: usize,
     pages: u64,
@@ -420,6 +419,20 @@ pub(crate) struct ResidentGlobalLeafRun {
     partial_pages: u64,
     encoded_bytes: u64,
     resident_bytes: usize,
+}
+
+#[derive(Debug, Default)]
+struct ResidentGlobalLeafShardSlot {
+    state: Mutex<ResidentGlobalLeafShardState>,
+    ready: Condvar,
+}
+
+#[derive(Debug, Default)]
+enum ResidentGlobalLeafShardState {
+    #[default]
+    Empty,
+    Loading,
+    Ready(Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>),
 }
 
 impl ResidentGlobalLeafRun {
@@ -461,10 +474,34 @@ impl ResidentGlobalLeafRun {
                     BorsukError::InvalidStorage("V11 leaf-run encoded bytes overflow".to_owned())
                 })
             })?;
-        let resident_bytes = validated_directory.resident_bytes();
+        let decoded_shards = (0..root.shards().len())
+            .map(|_| ResidentGlobalLeafShardSlot::default())
+            .collect::<Vec<_>>();
+        // The persisted reservation is deliberately conservative: it covers
+        // the complete decoded directory page set, the retained authenticated
+        // root, every fixed slot, and the maximum Arc control/allocation
+        // overhead when all shard slots are populated.
+        let resident_bytes = validated_directory
+            .resident_bytes()
+            .saturating_add(root.resident_bytes())
+            .saturating_add(std::mem::size_of::<Self>())
+            .saturating_add(
+                decoded_shards
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<ResidentGlobalLeafShardSlot>()),
+            )
+            .saturating_add(
+                root.shards().len().saturating_mul(
+                    std::mem::size_of::<Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>>()
+                        .saturating_add(2 * std::mem::size_of::<usize>())
+                        .saturating_add(std::mem::size_of::<
+                            Vec<crate::global_leaf::GlobalLeafPageRef>,
+                        >()),
+                ),
+            );
         Ok(Self {
             root,
-            decoded_shards: std::sync::Mutex::new(HashMap::new()),
+            decoded_shards,
             level,
             rows,
             pages,
@@ -504,31 +541,105 @@ impl ResidentGlobalLeafRun {
         self.encoded_bytes
     }
 
+    pub(crate) fn load_shard<F>(
+        &self,
+        ordinal: usize,
+        loader: F,
+    ) -> Result<(Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>, u64, bool)>
+    where
+        F: FnOnce() -> Result<(Vec<crate::global_leaf::GlobalLeafPageRef>, u64)>,
+    {
+        let slot = self.decoded_shards.get(ordinal).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V11 directory shard ordinal exceeds its authenticated root".to_owned(),
+            )
+        })?;
+        let mut loader = Some(loader);
+        loop {
+            let mut state = slot.state.lock().map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "V11 decoded directory shard slot lock is poisoned".to_owned(),
+                )
+            })?;
+            match &*state {
+                ResidentGlobalLeafShardState::Ready(pages) => {
+                    return Ok((Arc::clone(pages), 0, true));
+                }
+                ResidentGlobalLeafShardState::Loading => {
+                    state = slot.ready.wait(state).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "V11 decoded directory shard slot lock is poisoned".to_owned(),
+                        )
+                    })?;
+                    drop(state);
+                }
+                ResidentGlobalLeafShardState::Empty => {
+                    *state = ResidentGlobalLeafShardState::Loading;
+                    drop(state);
+                    let result = loader
+                        .take()
+                        .expect("V11 shard-slot leader owns one loader")(
+                    );
+                    match result {
+                        Ok((pages, physical_bytes)) => {
+                            let pages = Arc::new(pages);
+                            let mut state = slot.state.lock().map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "V11 decoded directory shard slot lock is poisoned".to_owned(),
+                                )
+                            })?;
+                            *state = ResidentGlobalLeafShardState::Ready(Arc::clone(&pages));
+                            drop(state);
+                            slot.ready.notify_all();
+                            return Ok((pages, physical_bytes, false));
+                        }
+                        Err(error) => {
+                            let mut state = slot.state.lock().map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "V11 decoded directory shard slot lock is poisoned".to_owned(),
+                                )
+                            })?;
+                            *state = ResidentGlobalLeafShardState::Empty;
+                            drop(state);
+                            slot.ready.notify_all();
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn cached_shard(
         &self,
-        path: &str,
+        ordinal: usize,
     ) -> Result<Option<Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>>> {
-        self.decoded_shards
+        let slot = self.decoded_shards.get(ordinal).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V11 directory shard ordinal exceeds its authenticated root".to_owned(),
+            )
+        })?;
+        slot.state
             .lock()
-            .map(|cache| cache.get(path).cloned())
+            .map(|state| match &*state {
+                ResidentGlobalLeafShardState::Ready(pages) => Some(Arc::clone(pages)),
+                ResidentGlobalLeafShardState::Empty | ResidentGlobalLeafShardState::Loading => None,
+            })
             .map_err(|_| {
                 BorsukError::InvalidStorage(
-                    "V11 decoded directory shard cache lock is poisoned".to_owned(),
+                    "V11 decoded directory shard slot lock is poisoned".to_owned(),
                 )
             })
     }
 
-    pub(crate) fn cache_shard(
-        &self,
-        path: String,
-        pages: Vec<crate::global_leaf::GlobalLeafPageRef>,
-    ) -> Result<Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>> {
-        let mut cache = self.decoded_shards.lock().map_err(|_| {
-            BorsukError::InvalidStorage(
-                "V11 decoded directory shard cache lock is poisoned".to_owned(),
-            )
-        })?;
-        Ok(cache.entry(path).or_insert_with(|| Arc::new(pages)).clone())
+    #[cfg(test)]
+    pub(crate) fn shard_slot_count(&self) -> usize {
+        self.decoded_shards.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shard_is_loaded(&self, ordinal: usize) -> Result<bool> {
+        self.cached_shard(ordinal).map(|pages| pages.is_some())
     }
 
     pub(crate) fn level(&self) -> Option<u8> {
@@ -1395,6 +1506,10 @@ fn persist_directory_artifacts(
     storage_bytes = storage_bytes.checked_add(root_bytes).ok_or_else(|| {
         BorsukError::InvalidStorage("global leaf storage byte count overflows".to_owned())
     })?;
+    let root = crate::global_leaf::decode_global_leaf_run_directory_root(
+        codebook_checksum,
+        &encoded.root,
+    )?;
     let directory = crate::global_leaf::decode_global_leaf_run_directory(
         codebook_checksum,
         &encoded.root,
@@ -1411,9 +1526,13 @@ fn persist_directory_artifacts(
                 })
         },
     )?;
-    let resident_bytes = u64::try_from(directory.resident_bytes()).map_err(|_| {
-        BorsukError::InvalidStorage("global leaf directory resident bytes exceed u64".to_owned())
-    })?;
+    let resident_bytes =
+        u64::try_from(ResidentGlobalLeafRun::new(root, directory, None)?.resident_bytes())
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "global leaf directory resident bytes exceed u64".to_owned(),
+                )
+            })?;
     Ok(PersistedDirectoryArtifacts {
         directory: GlobalLeafDirectoryRef::new(
             root_path,
@@ -1681,7 +1800,14 @@ fn invalid(message: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+        time::Duration,
+    };
 
     use futures_util::TryStreamExt;
     use object_store::{ObjectStore, memory::InMemory};
@@ -1863,6 +1989,107 @@ mod tests {
             1,
         );
         (resident, reference)
+    }
+
+    #[test]
+    fn concurrent_selected_cell_loads_share_one_fixed_accounted_shard_slot() {
+        let page_count = crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES + 1;
+        let pages = (0..crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES)
+            .map(|ordinal| crate::global_leaf::GlobalLeafPageRef {
+                cell_index: 7,
+                leaf_ordinal: ordinal as u32,
+                bundle_index: 0,
+                batch_offset: 64 + ordinal as u64 * 1536,
+                metadata_bytes: 512,
+                body_bytes: 1024,
+                batch_bytes: 1536,
+                rows: 1,
+                partial_run_count: 0,
+                checksum: [(ordinal % 251) as u8; 32],
+                centroid_code: vec![7, (ordinal % 251) as u8].into_boxed_slice(),
+            })
+            .chain(std::iter::once(crate::global_leaf::GlobalLeafPageRef {
+                cell_index: 9,
+                leaf_ordinal: 0,
+                bundle_index: 0,
+                batch_offset: 64
+                    + crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES as u64 * 1536,
+                metadata_bytes: 512,
+                body_bytes: 1024,
+                batch_bytes: 1536,
+                rows: 1,
+                partial_run_count: 0,
+                checksum: [9; 32],
+                centroid_code: vec![9, 0].into_boxed_slice(),
+            }))
+            .collect::<Vec<_>>();
+        let bundles = vec![crate::global_leaf::GlobalLeafBundleRef {
+            path: "global-leaf/bundles/fixed-slots.arrow".to_owned(),
+            checksum: [9; 32],
+            encoded_bytes: 16 * 1024 * 1024,
+        }];
+        let encoded =
+            crate::global_leaf::encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
+        let root = crate::global_leaf::decode_global_leaf_run_directory_root("11aa", &encoded.root)
+            .unwrap();
+        let selected_shards = root.selected_shards(&[9]).unwrap();
+        assert_eq!(selected_shards.len(), 1);
+        let selected_shard_ordinal = selected_shards[0].0;
+        let directory = crate::global_leaf::decode_global_leaf_run_directory(
+            "11aa",
+            &encoded.root,
+            |reference| {
+                Ok(encoded
+                    .shards
+                    .iter()
+                    .find(|shard| shard.reference == *reference)
+                    .unwrap()
+                    .bytes
+                    .clone())
+            },
+        )
+        .unwrap();
+        let decoded_directory_bytes = directory.resident_bytes();
+        let resident = Arc::new(ResidentGlobalLeafRun::new(root, directory, None).unwrap());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(Barrier::new(2));
+        let last_page = Arc::new(pages[page_count - 1].clone());
+
+        thread::scope(|scope| {
+            for _ in 0..2 {
+                let resident = Arc::clone(&resident);
+                let calls = Arc::clone(&calls);
+                let start = Arc::clone(&start);
+                let last_page = Arc::clone(&last_page);
+                scope.spawn(move || {
+                    start.wait();
+                    let (loaded, _, _) = resident
+                        .load_shard(selected_shard_ordinal, || {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            thread::sleep(Duration::from_millis(30));
+                            Ok((vec![last_page.as_ref().clone()], 17))
+                        })
+                        .unwrap();
+                    assert_eq!(loaded.len(), 1);
+                });
+            }
+        });
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(resident.shard_slot_count(), 2);
+        assert!(
+            resident.resident_bytes()
+                >= decoded_directory_bytes
+                    + 2 * std::mem::size_of::<Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>>(),
+            "resident reservation omitted fixed slot/Arc overhead"
+        );
+        let (_, physical_bytes, shared) = resident
+            .load_shard(selected_shard_ordinal, || {
+                panic!("warm fixed slot reloaded its shard")
+            })
+            .unwrap();
+        assert_eq!(physical_bytes, 0);
+        assert!(shared);
     }
 
     #[test]

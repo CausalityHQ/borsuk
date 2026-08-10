@@ -474,6 +474,10 @@ fn cold_search_fuses_v11_base_and_incremental_run() {
         .with_latency(std::time::Duration::from_millis(25));
     let (delayed, gets) = delayed.with_get_group_concurrency_probe(base_paths, delta_paths);
     let reader = BorsukIndex::open_with_object_store(Arc::new(delayed), uri).unwrap();
+    assert!(
+        gets.overlapped(),
+        "manifest preload serialized the base and incremental run roots"
+    );
     let report = reader
         .search_with_report(
             &[27.0; 8],
