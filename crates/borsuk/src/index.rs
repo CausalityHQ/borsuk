@@ -343,9 +343,25 @@ struct GlobalLeafReadGroup {
 #[derive(Debug)]
 struct GlobalLeafDirectoryLoad {
     pages: Vec<RoutedGlobalLeafPage>,
-    objects_read: usize,
-    encoded_bytes: u64,
+    admission_bytes: u64,
+    physical_reads: usize,
+    physical_bytes: u64,
 }
+
+#[derive(Debug)]
+struct GlobalLeafDirectoryLoads {
+    runs: Vec<Arc<ResidentGlobalLeafRun>>,
+    directories: Vec<GlobalLeafDirectoryLoad>,
+    latency_limited: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PendingGlobalLeafDirectoryShard {
+    run_ordinal: usize,
+    reference: crate::global_leaf::GlobalLeafDirectoryShardRef,
+}
+
+const GLOBAL_LEAF_DIRECTORY_READ_WIDTH: usize = 8;
 
 #[derive(Debug)]
 struct RoutedDecodedGlobalLeafRow {
@@ -12903,9 +12919,14 @@ impl BorsukIndex {
                 directory_ref.encoded_bytes(),
                 directory_ref.checksum(),
             )?;
-        let directory = crate::global_leaf::decode_global_leaf_run_directory(
+        let root = crate::global_leaf::decode_global_leaf_run_directory_root(
             reference.codebook_checksum(),
             &root.bytes,
+        )?;
+        let shard_reads = bounded_io_map_with_gate(
+            root.shards(),
+            GLOBAL_LEAF_DIRECTORY_READ_WIDTH,
+            None,
             |shard| {
                 self.storage
                     .read_known_size_with_cache_status_and_checksum(
@@ -12913,13 +12934,22 @@ impl BorsukIndex {
                         shard.encoded_bytes,
                         &shard.checksum,
                     )
-                    .map(|read| read.bytes)
+                    .and_then(|read| {
+                        crate::global_leaf::decode_global_leaf_run_directory_shard(
+                            reference.codebook_checksum(),
+                            &root,
+                            shard,
+                            &read.bytes,
+                        )
+                    })
             },
-        )?;
-        let rows = usize::try_from(reference.rows()).map_err(|_| {
-            BorsukError::InvalidStorage("V11 leaf-run row count exceeds usize".to_owned())
-        })?;
-        let resident = ResidentGlobalLeafRun::new(directory, level, rows);
+        );
+        let mut pages = Vec::new();
+        for read in shard_reads {
+            pages.extend(read?);
+        }
+        let directory = root.complete_directory(pages)?;
+        let resident = ResidentGlobalLeafRun::new(root, directory, level)?;
         self.validate_resident_global_leaf_run(reference, &resident)?;
         Ok(resident)
     }
@@ -12935,9 +12965,14 @@ impl BorsukIndex {
             directory_ref.encoded_bytes(),
             directory_ref.checksum(),
         )?;
-        let directory = crate::global_leaf::decode_global_leaf_run_directory(
+        let root = crate::global_leaf::decode_global_leaf_run_directory_root(
             reference.codebook_checksum(),
             &root.bytes,
+        )?;
+        let shard_reads = bounded_io_map_with_gate(
+            root.shards(),
+            GLOBAL_LEAF_DIRECTORY_READ_WIDTH,
+            None,
             |shard| {
                 self.storage
                     .read_known_size_from_backing_with_checksum(
@@ -12945,13 +12980,22 @@ impl BorsukIndex {
                         shard.encoded_bytes,
                         &shard.checksum,
                     )
-                    .map(|read| read.bytes)
+                    .and_then(|read| {
+                        crate::global_leaf::decode_global_leaf_run_directory_shard(
+                            reference.codebook_checksum(),
+                            &root,
+                            shard,
+                            &read.bytes,
+                        )
+                    })
             },
-        )?;
-        let rows = usize::try_from(reference.rows()).map_err(|_| {
-            BorsukError::InvalidStorage("V11 leaf-run row count exceeds usize".to_owned())
-        })?;
-        let resident = ResidentGlobalLeafRun::new(directory, level, rows);
+        );
+        let mut pages = Vec::new();
+        for read in shard_reads {
+            pages.extend(read?);
+        }
+        let directory = root.complete_directory(pages)?;
+        let resident = ResidentGlobalLeafRun::new(root, directory, level)?;
         self.validate_resident_global_leaf_run(reference, &resident)?;
         Ok(resident)
     }
@@ -12961,48 +13005,26 @@ impl BorsukIndex {
         reference: &GlobalLeafRunRef,
         loaded: &ResidentGlobalLeafRun,
     ) -> Result<()> {
-        let directory = loaded.directory();
-        let directory_objects = u32::try_from(directory.shards.len())
+        let root = loaded.root();
+        let directory_objects = u32::try_from(root.shards().len())
             .ok()
             .and_then(|shards| shards.checked_add(1))
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("V11 directory object count exceeds u32".into())
             })?;
-        let encoded_bytes = directory
-            .bundles
-            .iter()
-            .map(|bundle| bundle.encoded_bytes)
-            .chain(directory.shards.iter().map(|shard| shard.encoded_bytes))
-            .chain(std::iter::once(reference.directory().encoded_bytes()))
-            .try_fold(0_u64, |total, bytes| {
-                total.checked_add(bytes).ok_or_else(|| {
-                    BorsukError::InvalidStorage("V11 leaf-run encoded bytes overflow".into())
-                })
+        let encoded_bytes = loaded
+            .encoded_bytes()
+            .checked_add(reference.directory().encoded_bytes())
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V11 leaf-run encoded bytes overflow".into())
             })?;
-        let rows = directory.pages.iter().try_fold(0_u64, |total, page| {
-            total.checked_add(u64::from(page.rows)).ok_or_else(|| {
-                BorsukError::InvalidStorage("V11 leaf-run row count overflows".into())
-            })
-        })?;
-        let pages = u64::try_from(directory.pages.len()).unwrap_or(u64::MAX);
-        let bundles = u64::try_from(directory.bundles.len()).unwrap_or(u64::MAX);
-        let sealed_pages = u64::try_from(
-            directory
-                .pages
-                .iter()
-                .filter(|page| page.partial_run_count == 0)
-                .count(),
-        )
-        .unwrap_or(u64::MAX);
-        let partial_pages = pages.saturating_sub(sealed_pages);
         if directory_objects != reference.directory().object_count()
-            || rows != reference.rows()
-            || pages != reference.pages()
-            || bundles != reference.bundles()
-            || sealed_pages != reference.sealed_pages()
-            || partial_pages != reference.partial_pages()
-            || encoded_bytes != reference.encoded_bytes()
             || u64::try_from(loaded.rows()).ok() != Some(reference.rows())
+            || loaded.pages() != reference.pages()
+            || loaded.bundles() != reference.bundles()
+            || loaded.sealed_pages() != reference.sealed_pages()
+            || loaded.partial_pages() != reference.partial_pages()
+            || encoded_bytes != reference.encoded_bytes()
             || u64::try_from(loaded.resident_bytes()).ok() != Some(reference.resident_bytes())
         {
             return Err(BorsukError::InvalidStorage(
@@ -13065,73 +13087,186 @@ impl BorsukIndex {
     fn load_selected_global_leaf_directories(
         &self,
         codebook: &GlobalCodebookRef,
-        runs: &[(Option<u8>, &GlobalLeafRunRef, Arc<ResidentGlobalLeafRun>)],
+        runs: &[(Option<u8>, &GlobalLeafRunRef)],
         selected_cells: &[u16],
-    ) -> Result<Vec<GlobalLeafDirectoryLoad>> {
+        options: &SearchOptions,
+        started: Instant,
+    ) -> Result<GlobalLeafDirectoryLoads> {
         let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
-        runs.iter()
-            .enumerate()
-            .map(|(run_ordinal, (level, reference, resident))| {
-                if reference.codebook_checksum() != codebook.descriptor_checksum()
-                    || resident.level() != *level
-                {
-                    return Err(BorsukError::InvalidStorage(
-                        "V11 routed leaf run is not bound to the shared codebook and level"
-                            .to_owned(),
-                    ));
-                }
-                self.validate_resident_global_leaf_run(reference, resident)?;
-                let directory = resident.directory();
-                let objects_read = directory.shards.len().checked_add(1).ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "V11 directory object count exceeds usize".to_owned(),
-                    )
-                })?;
-                if u32::try_from(objects_read).ok() != Some(reference.directory().object_count()) {
-                    return Err(BorsukError::InvalidStorage(
-                        "V11 directory object count does not match its reference".to_owned(),
-                    ));
-                }
-                let encoded_bytes = directory
-                    .shards
-                    .iter()
-                    .map(|shard| shard.encoded_bytes)
-                    .try_fold(reference.directory().encoded_bytes(), |total, bytes| {
-                        total.checked_add(bytes).ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "V11 directory byte count overflows".to_owned(),
-                            )
-                        })
+        let mut resident_runs = Vec::with_capacity(runs.len());
+        let mut directories = Vec::with_capacity(runs.len());
+        let mut pending = Vec::new();
+        let mut latency_limited = false;
+        for (level, reference) in runs {
+            if resident_global_latency_expired(options, started) {
+                latency_limited = true;
+                break;
+            }
+            let resident = self.load_resident_global_leaf_run(reference, *level)?;
+            if reference.codebook_checksum() != codebook.descriptor_checksum()
+                || resident.level() != *level
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "V11 routed leaf run is not bound to the shared codebook and level".to_owned(),
+                ));
+            }
+            self.validate_resident_global_leaf_run(reference, &resident)?;
+            let run_ordinal = resident_runs.len();
+            let root = resident.root();
+            let mut load = GlobalLeafDirectoryLoad {
+                pages: Vec::new(),
+                admission_bytes: reference.directory().encoded_bytes(),
+                physical_reads: 0,
+                physical_bytes: 0,
+            };
+            for page in root
+                .inline_pages()
+                .iter()
+                .filter(|page| selected.contains(&page.cell_index))
+            {
+                let bundle = root
+                    .bundles()
+                    .get(page.bundle_index as usize)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V11 directory page references a missing bundle".to_owned(),
+                        )
                     })?;
-                let pages = directory
-                    .pages
-                    .iter()
-                    .filter(|page| selected.contains(&page.cell_index))
-                    .map(|page| {
-                        let bundle = directory
-                            .bundles
-                            .get(page.bundle_index as usize)
-                            .ok_or_else(|| {
-                                BorsukError::InvalidStorage(
-                                    "V11 directory page references a missing bundle".to_owned(),
-                                )
-                            })?;
-                        Ok(RoutedGlobalLeafPage {
+                load.pages.push(RoutedGlobalLeafPage {
+                    run_ordinal,
+                    level: *level,
+                    distance: f32::NAN,
+                    bundle_path: bundle.path.clone(),
+                    page: page.clone(),
+                });
+            }
+            for shard in root.selected_shards(selected_cells)? {
+                load.admission_bytes = load
+                    .admission_bytes
+                    .checked_add(shard.encoded_bytes)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V11 directory admission byte count overflows".to_owned(),
+                        )
+                    })?;
+                if let Some(pages) = resident.cached_shard(&shard.path)? {
+                    for page in pages
+                        .iter()
+                        .filter(|page| selected.contains(&page.cell_index))
+                    {
+                        let bundle =
+                            root.bundles()
+                                .get(page.bundle_index as usize)
+                                .ok_or_else(|| {
+                                    BorsukError::InvalidStorage(
+                                        "V11 directory page references a missing bundle".to_owned(),
+                                    )
+                                })?;
+                        load.pages.push(RoutedGlobalLeafPage {
                             run_ordinal,
                             level: *level,
                             distance: f32::NAN,
                             bundle_path: bundle.path.clone(),
                             page: page.clone(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(GlobalLeafDirectoryLoad {
-                    pages,
-                    objects_read,
-                    encoded_bytes,
-                })
-            })
-            .collect()
+                        });
+                    }
+                } else {
+                    pending.push(PendingGlobalLeafDirectoryShard {
+                        run_ordinal,
+                        reference: shard.clone(),
+                    });
+                }
+            }
+            resident_runs.push(resident);
+            directories.push(load);
+        }
+
+        if !latency_limited {
+            latency_limited = for_each_bounded_io_wave_until(
+                &pending,
+                GLOBAL_LEAF_DIRECTORY_READ_WIDTH,
+                || resident_global_latency_expired(options, started),
+                |request| {
+                    let run = resident_runs.get(request.run_ordinal).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V11 directory shard references a missing resident run".to_owned(),
+                        )
+                    })?;
+                    let read = self
+                        .storage
+                        .read_known_size_with_cache_status_and_checksum(
+                            &request.reference.path,
+                            request.reference.encoded_bytes,
+                            &request.reference.checksum,
+                        )?;
+                    let physical_bytes = u64::try_from(read.bytes.len()).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "V11 physical directory bytes exceed u64".to_owned(),
+                        )
+                    })?;
+                    let pages = crate::global_leaf::decode_global_leaf_run_directory_shard(
+                        codebook.descriptor_checksum(),
+                        run.root(),
+                        &request.reference,
+                        &read.bytes,
+                    )?;
+                    Ok::<_, BorsukError>((pages, physical_bytes))
+                },
+                |request, (pages, physical_bytes)| {
+                    let run = resident_runs.get(request.run_ordinal).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V11 directory shard references a missing resident run".to_owned(),
+                        )
+                    })?;
+                    let pages = run.cache_shard(request.reference.path.clone(), pages)?;
+                    let load = directories.get_mut(request.run_ordinal).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V11 directory shard references a missing load".to_owned(),
+                        )
+                    })?;
+                    load.physical_reads = load.physical_reads.checked_add(1).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V11 physical directory read count overflows".to_owned(),
+                        )
+                    })?;
+                    load.physical_bytes = load
+                        .physical_bytes
+                        .checked_add(physical_bytes)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V11 physical directory byte count overflows".to_owned(),
+                            )
+                        })?;
+                    let root = run.root();
+                    for page in pages
+                        .iter()
+                        .filter(|page| selected.contains(&page.cell_index))
+                    {
+                        let bundle =
+                            root.bundles()
+                                .get(page.bundle_index as usize)
+                                .ok_or_else(|| {
+                                    BorsukError::InvalidStorage(
+                                        "V11 directory page references a missing bundle".to_owned(),
+                                    )
+                                })?;
+                        load.pages.push(RoutedGlobalLeafPage {
+                            run_ordinal: request.run_ordinal,
+                            level: run.level(),
+                            distance: f32::NAN,
+                            bundle_path: bundle.path.clone(),
+                            page: page.clone(),
+                        });
+                    }
+                    Ok::<_, BorsukError>(())
+                },
+            )?;
+        }
+        Ok(GlobalLeafDirectoryLoads {
+            runs: resident_runs,
+            directories,
+            latency_limited,
+        })
     }
 
     fn global_leaf_read_groups(
@@ -13150,8 +13285,8 @@ impl BorsukIndex {
                 ));
             }
             let bundle = run
-                .directory()
-                .bundles
+                .root()
+                .bundles()
                 .get(routed.page.bundle_index as usize)
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage(
@@ -13465,42 +13600,58 @@ impl BorsukIndex {
                     .map(|run| (Some(run.level()), run)),
             )
             .collect::<Vec<_>>();
-        let (resident_runs, directory_loads) = if latency_limited {
-            (Vec::new(), Vec::new())
+        let directory_loads = if latency_limited {
+            GlobalLeafDirectoryLoads {
+                runs: Vec::new(),
+                directories: Vec::new(),
+                latency_limited: true,
+            }
         } else {
-            let loaded = run_references
-                .iter()
-                .map(|(level, reference)| {
-                    self.load_resident_global_leaf_run(reference, *level)
-                        .map(|resident| (*level, *reference, resident))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let directory_loads = self.load_selected_global_leaf_directories(
+            self.load_selected_global_leaf_directories(
                 global_ref.codebook(),
-                &loaded,
+                &run_references,
                 &selected_cells,
-            )?;
-            let resident_runs = loaded
-                .into_iter()
-                .map(|(_, _, resident)| resident)
-                .collect::<Vec<_>>();
-            (resident_runs, directory_loads)
+                options,
+                started,
+            )?
         };
+        latency_limited |= directory_loads.latency_limited;
         latency_limited |= resident_global_latency_expired(options, started);
-        let directory_reads = directory_loads.iter().try_fold(0_usize, |total, load| {
-            total.checked_add(load.objects_read).ok_or_else(|| {
-                BorsukError::InvalidStorage("V11 directory read count overflows".to_owned())
-            })
-        })?;
-        let directory_bytes = directory_loads.iter().try_fold(0_u64, |total, load| {
-            total.checked_add(load.encoded_bytes).ok_or_else(|| {
-                BorsukError::InvalidStorage("V11 directory byte count overflows".to_owned())
-            })
-        })?;
+        let directory_reads =
+            directory_loads
+                .directories
+                .iter()
+                .try_fold(0_usize, |total, load| {
+                    total.checked_add(load.physical_reads).ok_or_else(|| {
+                        BorsukError::InvalidStorage("V11 directory read count overflows".to_owned())
+                    })
+                })?;
+        let directory_bytes =
+            directory_loads
+                .directories
+                .iter()
+                .try_fold(0_u64, |total, load| {
+                    total.checked_add(load.physical_bytes).ok_or_else(|| {
+                        BorsukError::InvalidStorage("V11 directory byte count overflows".to_owned())
+                    })
+                })?;
+        let directory_admission_bytes =
+            directory_loads
+                .directories
+                .iter()
+                .try_fold(0_u64, |total, load| {
+                    total.checked_add(load.admission_bytes).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V11 directory admission byte count overflows".to_owned(),
+                        )
+                    })
+                })?;
         let pages = directory_loads
-            .into_iter()
-            .flat_map(|load| load.pages)
+            .directories
+            .iter()
+            .flat_map(|load| load.pages.iter().cloned())
             .collect::<Vec<_>>();
+        let resident_runs = directory_loads.runs;
         let mut routed = codebook.rank_pages(&pq_query, &selected_cells, pages, page_budget)?;
         let max_bytes = match options.mode {
             SearchMode::Approx { max_bytes, .. } => max_bytes,
@@ -13508,7 +13659,7 @@ impl BorsukIndex {
         };
         let mut byte_budget_limited = false;
         if let Some(limit) = max_bytes {
-            let mut planned = directory_bytes;
+            let mut planned = directory_admission_bytes;
             let available = routed.len();
             let mut prefix_len = 0_usize;
             if planned <= limit {
@@ -13525,7 +13676,7 @@ impl BorsukIndex {
                 }
             }
             routed.truncate(prefix_len);
-            byte_budget_limited = directory_bytes > limit || prefix_len < available;
+            byte_budget_limited = directory_admission_bytes > limit || prefix_len < available;
         }
         let global_approximate_us =
             u64::try_from(routing_started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -21509,6 +21660,37 @@ where
     output
 }
 
+/// Execute bounded I/O waves while a query still owns latency budget.
+///
+/// The deadline is checked before every wave, so a slow completed wave cannot
+/// cause more directory objects to be fetched after the budget has expired.
+fn for_each_bounded_io_wave_until<T, U, E, Expired, Map, Consume>(
+    values: &[T],
+    width: usize,
+    mut expired: Expired,
+    map: Map,
+    mut consume: Consume,
+) -> std::result::Result<bool, E>
+where
+    T: Sync,
+    U: Send,
+    E: Send,
+    Expired: FnMut() -> bool,
+    Map: Fn(&T) -> std::result::Result<U, E> + Sync,
+    Consume: FnMut(&T, U) -> std::result::Result<(), E>,
+{
+    for wave in values.chunks(width.max(1)) {
+        if expired() {
+            return Ok(true);
+        }
+        let mapped = crate::parallel::install_io(|| wave.par_iter().map(&map).collect::<Vec<_>>());
+        for (input, result) in wave.iter().zip(mapped) {
+            consume(input, result?)?;
+        }
+    }
+    Ok(false)
+}
+
 /// Map one bounded I/O wave at a time and consume its results in input order.
 /// Unlike [`bounded_io_map_with_gate`], completed values from earlier waves are
 /// released before the next wave starts, which bounds decoded segment memory
@@ -25596,6 +25778,103 @@ mod tests {
     }
 
     #[test]
+    fn resident_global_v11_preload_authenticates_every_shard_before_retaining_root_only() {
+        let (_directory, index) = build_finished_resident_global_v11_index();
+        let page_count = crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES + 1;
+        let pages = (0..page_count)
+            .map(|ordinal| crate::global_leaf::GlobalLeafPageRef {
+                cell_index: 7,
+                leaf_ordinal: ordinal as u32,
+                bundle_index: 0,
+                batch_offset: 64 + ordinal as u64 * 1536,
+                metadata_bytes: 512,
+                body_bytes: 1024,
+                batch_bytes: 1536,
+                rows: 1,
+                partial_run_count: 0,
+                checksum: [(ordinal % 251) as u8; 32],
+                centroid_code: vec![7, (ordinal % 251) as u8].into_boxed_slice(),
+            })
+            .collect::<Vec<_>>();
+        let bundles = vec![crate::global_leaf::GlobalLeafBundleRef {
+            path: "global-leaf/bundles/preload-auth.arrow".to_owned(),
+            checksum: [9; 32],
+            encoded_bytes: 16 * 1024 * 1024,
+        }];
+        let encoded =
+            crate::global_leaf::encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
+        assert_eq!(encoded.shards.len(), 2);
+        let decoded = crate::global_leaf::decode_global_leaf_run_directory(
+            "11aa",
+            &encoded.root,
+            |reference| {
+                Ok(encoded
+                    .shards
+                    .iter()
+                    .find(|shard| shard.reference.path == reference.path)
+                    .unwrap()
+                    .bytes
+                    .clone())
+            },
+        )
+        .unwrap();
+        let root_path = "global-leaf/v11/directories/preload-auth-root.parquet";
+        index.storage.write_bytes(root_path, &encoded.root).unwrap();
+        for shard in &encoded.shards {
+            index
+                .storage
+                .write_bytes(&shard.reference.path, &shard.bytes)
+                .unwrap();
+        }
+        let root_checksum = blake3::hash(&encoded.root).to_hex().to_string();
+        let directory = crate::global_leaf_run::GlobalLeafDirectoryRef::new(
+            root_path.to_owned(),
+            root_checksum,
+            encoded.root.len() as u64,
+            encoded.directory_object_count().unwrap(),
+        );
+        let encoded_bytes = bundles[0]
+            .encoded_bytes
+            .saturating_add(encoded.root.len() as u64)
+            .saturating_add(
+                encoded
+                    .shards
+                    .iter()
+                    .map(|shard| shard.bytes.len() as u64)
+                    .sum::<u64>(),
+            );
+        let stamp = MutationStamp::new(MutationVersion::from_parts(1, [7; 16]), [9; 32]);
+        let reference = GlobalLeafRunRef::new_base(
+            "11aa".to_owned(),
+            directory,
+            page_count as u64,
+            page_count as u64,
+            1,
+            page_count as u64,
+            0,
+            encoded_bytes,
+            decoded.resident_bytes() as u64,
+            stamp,
+            stamp,
+        );
+        let before = index.storage.request_counts();
+
+        let resident = index
+            .read_resident_global_leaf_run_from_backing(&reference, None)
+            .unwrap();
+
+        assert_eq!(
+            index.storage.request_counts().delta(&before).gets,
+            3,
+            "preload must authenticate one root plus both directory shards from backing"
+        );
+        assert_eq!(resident.root().shards().len(), 2);
+        for shard in resident.root().shards() {
+            assert!(resident.cached_shard(&shard.path).unwrap().is_none());
+        }
+    }
+
+    #[test]
     fn resident_global_v11_warm_cache_cannot_substitute_missing_durable_paths() {
         let (_directory, index) = build_finished_resident_global_v11_index();
 
@@ -26439,6 +26718,34 @@ mod tests {
                 "blocking I/O must not be serialized by the CPU compute cap"
             );
         }
+    }
+
+    #[test]
+    fn global_leaf_directory_deadline_stops_before_the_next_shard_wave() {
+        let values = [0_u8, 1, 2];
+        let calls = AtomicUsize::new(0);
+        let started = Instant::now();
+        let mut consumed = Vec::new();
+
+        let deadline_hit = for_each_bounded_io_wave_until(
+            &values,
+            1,
+            || started.elapsed() >= Duration::from_millis(15),
+            |value| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(30));
+                Ok::<_, ()>(*value)
+            },
+            |_, value| {
+                consumed.push(value);
+                Ok::<_, ()>(())
+            },
+        )
+        .unwrap();
+
+        assert!(deadline_hit);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(consumed, vec![0]);
     }
 
     #[test]

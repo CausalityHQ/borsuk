@@ -553,6 +553,96 @@ struct V11CellBounds {
     page_count: u32,
 }
 
+#[derive(Debug)]
+pub(crate) struct GlobalLeafRunDirectoryRoot {
+    code_width: usize,
+    cells: Vec<V11CellBounds>,
+    pages: Vec<GlobalLeafPageRef>,
+    bundles: Vec<GlobalLeafBundleRef>,
+    shards: Vec<GlobalLeafDirectoryShardRef>,
+}
+
+impl GlobalLeafRunDirectoryRoot {
+    pub(crate) fn inline_pages(&self) -> &[GlobalLeafPageRef] {
+        &self.pages
+    }
+
+    pub(crate) fn bundles(&self) -> &[GlobalLeafBundleRef] {
+        &self.bundles
+    }
+
+    pub(crate) fn shards(&self) -> &[GlobalLeafDirectoryShardRef] {
+        &self.shards
+    }
+
+    pub(crate) fn selected_shards(
+        &self,
+        selected_cells: &[u16],
+    ) -> Result<Vec<&GlobalLeafDirectoryShardRef>> {
+        let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
+        let present = self
+            .cells
+            .iter()
+            .filter(|cell| selected.contains(&cell.cell_index))
+            .map(|cell| cell.cell_index)
+            .collect::<BTreeSet<_>>();
+        Ok(self
+            .shards
+            .iter()
+            .filter(|shard| {
+                present
+                    .range(shard.first_cell..=shard.last_cell)
+                    .next()
+                    .is_some()
+            })
+            .collect())
+    }
+
+    pub(crate) fn complete_directory(
+        &self,
+        pages: Vec<GlobalLeafPageRef>,
+    ) -> Result<GlobalLeafRunDirectory> {
+        if self.pages.is_empty()
+            && self.bundles.is_empty()
+            && self.cells.is_empty()
+            && self.shards.is_empty()
+        {
+            if !pages.is_empty() {
+                return Err(invalid_leaf_directory(
+                    "V11 empty root cannot complete with shard pages",
+                ));
+            }
+            return Ok(GlobalLeafRunDirectory {
+                pages: Vec::new(),
+                bundles: Vec::new(),
+                shards: Vec::new(),
+            });
+        }
+        let pages = if self.shards.is_empty() {
+            if !pages.is_empty() {
+                return Err(invalid_leaf_directory(
+                    "V11 inline root cannot complete with shard pages",
+                ));
+            }
+            self.pages.clone()
+        } else {
+            if !self.pages.is_empty() {
+                return Err(invalid_leaf_directory(
+                    "V11 sharded root contains inline pages",
+                ));
+            }
+            pages
+        };
+        validate_v11_pages(&pages, &self.bundles, self.code_width)?;
+        validate_v11_cell_bounds(&self.cells, &pages)?;
+        Ok(GlobalLeafRunDirectory {
+            pages,
+            bundles: self.bundles.clone(),
+            shards: self.shards.clone(),
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 struct V11DirectoryTable {
     cells: Vec<V11CellBounds>,
@@ -665,6 +755,24 @@ pub(crate) fn decode_global_leaf_run_directory(
     root_bytes: &[u8],
     mut load_shard: impl FnMut(&GlobalLeafDirectoryShardRef) -> Result<Vec<u8>>,
 ) -> Result<GlobalLeafRunDirectory> {
+    let root = decode_global_leaf_run_directory_root(codebook_checksum, root_bytes)?;
+    let mut pages = Vec::new();
+    for reference in root.shards() {
+        let bytes = load_shard(reference)?;
+        pages.extend(decode_global_leaf_run_directory_shard(
+            codebook_checksum,
+            &root,
+            reference,
+            &bytes,
+        )?);
+    }
+    root.complete_directory(pages)
+}
+
+pub(crate) fn decode_global_leaf_run_directory_root(
+    codebook_checksum: &str,
+    root_bytes: &[u8],
+) -> Result<GlobalLeafRunDirectoryRoot> {
     validate_v11_checksum(codebook_checksum)?;
     validate_v11_directory_object_size(root_bytes.len(), "root")?;
     let (code_width, root) =
@@ -674,7 +782,9 @@ pub(crate) fn decode_global_leaf_run_directory(
         && root.cells.is_empty()
         && root.shards.is_empty()
     {
-        return Ok(GlobalLeafRunDirectory {
+        return Ok(GlobalLeafRunDirectoryRoot {
+            code_width,
+            cells: Vec::new(),
             pages: Vec::new(),
             bundles: Vec::new(),
             shards: Vec::new(),
@@ -688,7 +798,9 @@ pub(crate) fn decode_global_leaf_run_directory(
         }
         validate_v11_pages(&root.pages, &root.bundles, code_width)?;
         validate_v11_cell_bounds(&root.cells, &root.pages)?;
-        return Ok(GlobalLeafRunDirectory {
+        return Ok(GlobalLeafRunDirectoryRoot {
+            code_width,
+            cells: root.cells,
             pages: root.pages,
             bundles: root.bundles,
             shards: Vec::new(),
@@ -700,41 +812,87 @@ pub(crate) fn decode_global_leaf_run_directory(
         ));
     }
     validate_v11_shard_refs(&root.shards)?;
-    let mut pages = Vec::new();
-    for reference in &root.shards {
-        let bytes = load_shard(reference)?;
-        validate_v11_directory_object_size(bytes.len(), "shard")?;
-        if u64::try_from(bytes.len()).ok() != Some(reference.encoded_bytes)
-            || blake3::hash(&bytes).to_hex().as_str() != reference.checksum
-        {
-            return Err(invalid_leaf_directory(
-                "V11 shard bytes do not match their authenticated root reference",
-            ));
-        }
-        let (shard_width, payload) =
-            decode_v11_directory_table(codebook_checksum, "leaf-run-directory-shard", &bytes)?;
-        if shard_width != code_width
-            || !payload.bundles.is_empty()
-            || !payload.shards.is_empty()
-            || payload.pages.is_empty()
-            || payload.pages.len() > GLOBAL_LEAF_DIRECTORY_SHARD_PAGES
-            || payload.pages.first().map(|page| page.cell_index) != Some(reference.first_cell)
-            || payload.pages.last().map(|page| page.cell_index) != Some(reference.last_cell)
-            || payload.pages.len() != reference.page_count as usize
-        {
-            return Err(invalid_leaf_directory(
-                "V11 shard rows do not match root bounds",
-            ));
-        }
-        pages.extend(payload.pages);
-    }
-    validate_v11_pages(&pages, &root.bundles, code_width)?;
-    validate_v11_cell_bounds(&root.cells, &pages)?;
-    Ok(GlobalLeafRunDirectory {
-        pages,
+    validate_v11_root_cell_bounds(&root.cells, &root.shards)?;
+    Ok(GlobalLeafRunDirectoryRoot {
+        code_width,
+        cells: root.cells,
+        pages: Vec::new(),
         bundles: root.bundles,
         shards: root.shards,
     })
+}
+
+pub(crate) fn decode_global_leaf_run_directory_shard(
+    codebook_checksum: &str,
+    root: &GlobalLeafRunDirectoryRoot,
+    reference: &GlobalLeafDirectoryShardRef,
+    bytes: &[u8],
+) -> Result<Vec<GlobalLeafPageRef>> {
+    validate_v11_directory_object_size(bytes.len(), "shard")?;
+    if u64::try_from(bytes.len()).ok() != Some(reference.encoded_bytes)
+        || blake3::hash(bytes).to_hex().as_str() != reference.checksum
+        || !root.shards.iter().any(|shard| shard == reference)
+    {
+        return Err(invalid_leaf_directory(
+            "V11 shard bytes do not match their authenticated root reference",
+        ));
+    }
+    let (shard_width, payload) =
+        decode_v11_directory_table(codebook_checksum, "leaf-run-directory-shard", bytes)?;
+    if shard_width != root.code_width
+        || !payload.cells.is_empty()
+        || !payload.bundles.is_empty()
+        || !payload.shards.is_empty()
+        || payload.pages.is_empty()
+        || payload.pages.len() > GLOBAL_LEAF_DIRECTORY_SHARD_PAGES
+        || payload.pages.first().map(|page| page.cell_index) != Some(reference.first_cell)
+        || payload.pages.last().map(|page| page.cell_index) != Some(reference.last_cell)
+        || payload.pages.len() != reference.page_count as usize
+    {
+        return Err(invalid_leaf_directory(
+            "V11 shard rows do not match root bounds",
+        ));
+    }
+    validate_global_leaf_directory(&payload.pages, &root.bundles, root.code_width)?;
+    if payload.pages.iter().any(|page| page.partial_run_count > 4) {
+        return Err(invalid_leaf_directory(
+            "V11 partial page run count must be zero or in 1..=4",
+        ));
+    }
+    Ok(payload.pages)
+}
+
+fn validate_v11_root_cell_bounds(
+    cells: &[V11CellBounds],
+    shards: &[GlobalLeafDirectoryShardRef],
+) -> Result<()> {
+    let total_pages = shards.iter().try_fold(0_u64, |total, shard| {
+        total
+            .checked_add(u64::from(shard.page_count))
+            .ok_or_else(|| invalid_leaf_directory("V11 root page count overflows"))
+    })?;
+    let mut next_page = 0_u64;
+    let mut prior_cell = None;
+    for cell in cells {
+        if cell.page_count == 0
+            || cell.first_page != next_page
+            || prior_cell.is_some_and(|prior| prior >= cell.cell_index)
+        {
+            return Err(invalid_leaf_directory(
+                "V11 root cell bounds are not canonical",
+            ));
+        }
+        next_page = next_page
+            .checked_add(u64::from(cell.page_count))
+            .ok_or_else(|| invalid_leaf_directory("V11 root cell page count overflows"))?;
+        prior_cell = Some(cell.cell_index);
+    }
+    if cells.is_empty() || next_page != total_pages {
+        return Err(invalid_leaf_directory(
+            "V11 root cell bounds do not cover its shard pages",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_v11_directory_object_size(encoded_bytes: usize, kind: &str) -> Result<()> {
@@ -2020,9 +2178,9 @@ mod tests {
     use super::{
         GLOBAL_LEAF_DIRECTORY_SHARD_PAGES, GlobalLeafBundleRef, GlobalLeafPageInput,
         GlobalLeafPageRef, GlobalLeafRowInput, decode_global_leaf_page, decode_global_leaf_rows,
-        decode_global_leaf_run_directory, encode_global_leaf_bundle,
-        encode_global_leaf_bundle_with_max_bytes, encode_global_leaf_run_directory,
-        fit_global_leaf_page_ranges,
+        decode_global_leaf_run_directory, decode_global_leaf_run_directory_root,
+        encode_global_leaf_bundle, encode_global_leaf_bundle_with_max_bytes,
+        encode_global_leaf_run_directory, fit_global_leaf_page_ranges,
     };
     use crate::{
         VectorElementType,
@@ -2252,6 +2410,51 @@ mod tests {
         assert_eq!(decoded.pages, sharded_pages);
         assert_eq!(decoded.bundles, sharded_bundles);
         assert_eq!(decoded.shards.len(), 2);
+    }
+
+    #[test]
+    fn v11_root_selects_only_shards_covering_requested_cells() {
+        let pages = (0..GLOBAL_LEAF_DIRECTORY_SHARD_PAGES)
+            .map(|ordinal| GlobalLeafPageRef {
+                cell_index: 7,
+                leaf_ordinal: ordinal as u32,
+                bundle_index: 0,
+                batch_offset: 64 + ordinal as u64 * 1536,
+                metadata_bytes: 512,
+                body_bytes: 1024,
+                batch_bytes: 1536,
+                rows: 1,
+                partial_run_count: 0,
+                checksum: [(ordinal % 251) as u8; 32],
+                centroid_code: vec![7, (ordinal % 251) as u8].into_boxed_slice(),
+            })
+            .chain(std::iter::once(GlobalLeafPageRef {
+                cell_index: 9,
+                leaf_ordinal: 0,
+                bundle_index: 0,
+                batch_offset: 64 + GLOBAL_LEAF_DIRECTORY_SHARD_PAGES as u64 * 1536,
+                metadata_bytes: 512,
+                body_bytes: 1024,
+                batch_bytes: 1536,
+                rows: 1,
+                partial_run_count: 0,
+                checksum: [9; 32],
+                centroid_code: vec![9, 0].into_boxed_slice(),
+            }))
+            .collect::<Vec<_>>();
+        let bundles = vec![GlobalLeafBundleRef {
+            path: "global-leaf/bundles/shard-routing.arrow".to_owned(),
+            checksum: [9; 32],
+            encoded_bytes: 16 * 1024 * 1024,
+        }];
+        let encoded = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
+        let root = decode_global_leaf_run_directory_root("11aa", &encoded.root).unwrap();
+
+        let selected = root.selected_shards(&[9]).unwrap();
+
+        assert_eq!(encoded.shards.len(), 2);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].path, encoded.shards[1].reference.path);
     }
 
     #[test]

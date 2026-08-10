@@ -1,3 +1,5 @@
+use std::{collections::HashMap, sync::Arc};
+
 use crate::{
     BorsukError, Result,
     global_pq_sidecar::ResidentGlobalCodebook,
@@ -405,32 +407,128 @@ pub(crate) struct GlobalLeafRunRef {
     source_ranges: SourceRangeSet,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct ResidentGlobalLeafRun {
-    directory: crate::global_leaf::GlobalLeafRunDirectory,
+    root: crate::global_leaf::GlobalLeafRunDirectoryRoot,
+    decoded_shards:
+        std::sync::Mutex<HashMap<String, Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>>>,
     level: Option<u8>,
     rows: usize,
+    pages: u64,
+    bundles: u64,
+    sealed_pages: u64,
+    partial_pages: u64,
+    encoded_bytes: u64,
+    resident_bytes: usize,
 }
 
 impl ResidentGlobalLeafRun {
     pub(crate) fn new(
-        directory: crate::global_leaf::GlobalLeafRunDirectory,
+        root: crate::global_leaf::GlobalLeafRunDirectoryRoot,
+        validated_directory: crate::global_leaf::GlobalLeafRunDirectory,
         level: Option<u8>,
-        rows: usize,
-    ) -> Self {
-        Self {
-            directory,
+    ) -> Result<Self> {
+        let rows = validated_directory
+            .pages
+            .iter()
+            .try_fold(0_usize, |total, page| {
+                total.checked_add(page.rows as usize).ok_or_else(|| {
+                    BorsukError::InvalidStorage("V11 leaf-run row count exceeds usize".to_owned())
+                })
+            })?;
+        let pages = u64::try_from(validated_directory.pages.len()).unwrap_or(u64::MAX);
+        let bundles = u64::try_from(validated_directory.bundles.len()).unwrap_or(u64::MAX);
+        let sealed_pages = u64::try_from(
+            validated_directory
+                .pages
+                .iter()
+                .filter(|page| page.partial_run_count == 0)
+                .count(),
+        )
+        .unwrap_or(u64::MAX);
+        let encoded_bytes = validated_directory
+            .bundles
+            .iter()
+            .map(|bundle| bundle.encoded_bytes)
+            .chain(
+                validated_directory
+                    .shards
+                    .iter()
+                    .map(|shard| shard.encoded_bytes),
+            )
+            .try_fold(0_u64, |total, bytes| {
+                total.checked_add(bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage("V11 leaf-run encoded bytes overflow".to_owned())
+                })
+            })?;
+        let resident_bytes = validated_directory.resident_bytes();
+        Ok(Self {
+            root,
+            decoded_shards: std::sync::Mutex::new(HashMap::new()),
             level,
             rows,
-        }
+            pages,
+            bundles,
+            sealed_pages,
+            partial_pages: pages.saturating_sub(sealed_pages),
+            encoded_bytes,
+            resident_bytes,
+        })
     }
 
-    pub(crate) fn directory(&self) -> &crate::global_leaf::GlobalLeafRunDirectory {
-        &self.directory
+    pub(crate) fn root(&self) -> &crate::global_leaf::GlobalLeafRunDirectoryRoot {
+        &self.root
     }
 
     pub(crate) fn resident_bytes(&self) -> usize {
-        self.directory.resident_bytes()
+        self.resident_bytes
+    }
+
+    pub(crate) fn pages(&self) -> u64 {
+        self.pages
+    }
+
+    pub(crate) fn bundles(&self) -> u64 {
+        self.bundles
+    }
+
+    pub(crate) fn sealed_pages(&self) -> u64 {
+        self.sealed_pages
+    }
+
+    pub(crate) fn partial_pages(&self) -> u64 {
+        self.partial_pages
+    }
+
+    pub(crate) fn encoded_bytes(&self) -> u64 {
+        self.encoded_bytes
+    }
+
+    pub(crate) fn cached_shard(
+        &self,
+        path: &str,
+    ) -> Result<Option<Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>>> {
+        self.decoded_shards
+            .lock()
+            .map(|cache| cache.get(path).cloned())
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "V11 decoded directory shard cache lock is poisoned".to_owned(),
+                )
+            })
+    }
+
+    pub(crate) fn cache_shard(
+        &self,
+        path: String,
+        pages: Vec<crate::global_leaf::GlobalLeafPageRef>,
+    ) -> Result<Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>> {
+        let mut cache = self.decoded_shards.lock().map_err(|_| {
+            BorsukError::InvalidStorage(
+                "V11 decoded directory shard cache lock is poisoned".to_owned(),
+            )
+        })?;
+        Ok(cache.entry(path).or_insert_with(|| Arc::new(pages)).clone())
     }
 
     pub(crate) fn level(&self) -> Option<u8> {

@@ -135,8 +135,8 @@ fn drain_materializes_one_record_directly_into_v11() {
     assert_eq!(report.hits[0].distance, 0.0);
     assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
     assert_eq!(report.segments_searched, 0);
-    assert!(report.global_leaf_directory_reads >= 2, "{report:?}");
-    assert!(report.global_leaf_directory_bytes > 0, "{report:?}");
+    assert_eq!(report.global_leaf_directory_reads, 0, "{report:?}");
+    assert_eq!(report.global_leaf_directory_bytes, 0, "{report:?}");
     assert!(report.global_leaf_pages_read > 0, "{report:?}");
     assert!(report.global_leaf_page_bytes > 0, "{report:?}");
     assert!(report.global_leaf_exact_scores > 0, "{report:?}");
@@ -156,7 +156,7 @@ fn drain_materializes_one_record_directly_into_v11() {
         byte_limited.termination_reason,
         SearchTerminationReason::MaxBytes
     );
-    assert!(byte_limited.global_leaf_directory_bytes > 1);
+    assert_eq!(byte_limited.global_leaf_directory_bytes, 0);
     assert_eq!(byte_limited.global_leaf_pages_read, 0);
 }
 
@@ -234,8 +234,8 @@ fn drains_one_through_fifteen_rows_without_segment_fallback() {
             "rows={rows}: {report:?}"
         );
         assert_eq!(report.segments_searched, 0, "rows={rows}: {report:?}");
-        assert!(
-            report.global_leaf_directory_reads >= 2,
+        assert_eq!(
+            report.global_leaf_directory_reads, 0,
             "rows={rows}: {report:?}"
         );
         assert!(report.global_leaf_pages_read > 0, "rows={rows}: {report:?}");
@@ -485,8 +485,8 @@ fn cold_search_fuses_v11_base_and_incremental_run() {
 
     assert_eq!(report.hits[0].id.as_str(), "delta-17");
     assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
-    assert!(report.global_leaf_directory_reads >= 2);
-    assert!(report.global_leaf_directory_bytes > 0);
+    assert_eq!(report.global_leaf_directory_reads, 0);
+    assert_eq!(report.global_leaf_directory_bytes, 0);
     assert!(report.global_leaf_pages_read >= 2);
     assert!(report.global_leaf_pages_read <= 4);
     assert_eq!(report.segments_searched, 0);
