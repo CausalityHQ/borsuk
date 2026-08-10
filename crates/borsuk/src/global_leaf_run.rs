@@ -92,6 +92,8 @@ impl SourceRangeSet {
     }
 
     pub(crate) fn subtract(&self, covered: &Self) -> Result<CoverageDifference> {
+        self.validate_canonical()?;
+        covered.validate_canonical()?;
         let mut any_overlap = false;
         let mut remaining = Vec::new();
         for candidate in &self.ranges {
@@ -418,8 +420,8 @@ fn validate_codebook(codebook: &GlobalCodebookRef) -> Result<()> {
     if codebook.code_width == 0 {
         return invalid("V11 global codebook code width must be positive");
     }
-    if codebook.cell_count == 0 {
-        return invalid("V11 global codebook cell count must be positive");
+    if codebook.cell_count == 0 || codebook.cell_count > u32::from(u16::MAX) + 1 {
+        return invalid("V11 global codebook cell count must fit the u16 identity space");
     }
     if codebook.candidates == 0 || codebook.candidates > codebook.cell_count {
         return invalid("V11 global codebook candidates must be within the cell count");
@@ -608,6 +610,21 @@ mod tests {
     }
 
     #[test]
+    fn source_range_subtraction_rejects_malformed_deserialized_operands() {
+        let malformed: SourceRangeSet = serde_json::from_str(
+            r#"{"ranges":[
+                {"lane":3,"lease_epoch":7,"first_sequence":1,"last_sequence":4},
+                {"lane":3,"lease_epoch":7,"first_sequence":4,"last_sequence":5}
+            ]}"#,
+        )
+        .unwrap();
+        let canonical = SourceRangeSet::new(vec![range(3, 7, 1, 5)]).unwrap();
+
+        assert!(malformed.subtract(&canonical).is_err());
+        assert!(canonical.subtract(&malformed).is_err());
+    }
+
+    #[test]
     fn global_ann_rejects_duplicate_levels_mixed_codebooks_and_bad_totals() {
         let mut ann = valid_ann_ref();
         ann.incremental_runs.push(ann.incremental_runs[0].clone());
@@ -634,6 +651,21 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("row total")
+        );
+    }
+
+    #[test]
+    fn global_ann_rejects_cell_count_beyond_u16_identity_space() {
+        let mut ann = valid_ann_ref();
+        ann.codebook.cell_count = 65_536;
+        ann.validate().unwrap();
+
+        ann.codebook.cell_count = 65_537;
+        assert!(
+            ann.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("cell count")
         );
     }
 }
