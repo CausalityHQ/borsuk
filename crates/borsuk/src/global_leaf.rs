@@ -456,6 +456,7 @@ pub(crate) fn decode_global_leaf_rows(
 }
 
 const GLOBAL_LEAF_V11_LAYOUT: &str = "bounded-arrow-leaf-v11";
+const V11_ROW_EMPTY: u8 = 0;
 const V11_ROW_CELL: u8 = 1;
 const V11_ROW_BUNDLE: u8 = 2;
 const V11_ROW_PAGE: u8 = 3;
@@ -571,8 +572,20 @@ pub(crate) fn encode_global_leaf_run_directory(
     validate_v11_checksum(codebook_checksum)?;
     let mut pages = pages.to_vec();
     pages.sort_unstable_by_key(|page| (page.cell_index, page.leaf_ordinal));
-    let code_width = v11_code_width(&pages)?;
-    validate_v11_pages(&pages, bundles, code_width)?;
+    let code_width = if pages.is_empty() {
+        if !bundles.is_empty() {
+            return Err(invalid_leaf_directory(
+                "V11 empty directory must not reference bundles",
+            ));
+        }
+        // A coverage-only deletion run has no page code whose width could be
+        // inferred. Keep positive typed metadata while carrying no code bytes.
+        1
+    } else {
+        let code_width = v11_code_width(&pages)?;
+        validate_v11_pages(&pages, bundles, code_width)?;
+        code_width
+    };
     if pages.len() <= GLOBAL_LEAF_DIRECTORY_SHARD_PAGES {
         let root = encode_v11_directory_table(
             codebook_checksum,
@@ -656,6 +669,17 @@ pub(crate) fn decode_global_leaf_run_directory(
     validate_v11_directory_object_size(root_bytes.len(), "root")?;
     let (code_width, root) =
         decode_v11_directory_table(codebook_checksum, "leaf-run-directory-root", root_bytes)?;
+    if root.pages.is_empty()
+        && root.bundles.is_empty()
+        && root.cells.is_empty()
+        && root.shards.is_empty()
+    {
+        return Ok(GlobalLeafRunDirectory {
+            pages: Vec::new(),
+            bundles: Vec::new(),
+            shards: Vec::new(),
+        });
+    }
     if !root.pages.is_empty() {
         if !root.shards.is_empty() || root.pages.len() > GLOBAL_LEAF_DIRECTORY_SHARD_PAGES {
             return Err(invalid_leaf_directory(
@@ -747,9 +771,7 @@ fn encode_v11_directory_table(
         rows.push(V11TypedRow::shard(shard));
     }
     if rows.is_empty() {
-        return Err(invalid_leaf_directory(
-            "V11 directory table contains no rows",
-        ));
+        rows.push(V11TypedRow::default());
     }
     let columns: Vec<Arc<dyn Array>> = vec![
         Arc::new(UInt8Array::from_iter_values(
@@ -1106,6 +1128,7 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
         shards: Vec::new(),
     };
     let mut prior_kind = 0_u8;
+    let mut empty_rows = 0_usize;
     for row in rows {
         if row.kind < prior_kind {
             return Err(invalid_leaf_directory(
@@ -1114,6 +1137,36 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
         }
         prior_kind = row.kind;
         match row.kind {
+            V11_ROW_EMPTY => {
+                if row.cell_index.is_some()
+                    || row.cell_first_page.is_some()
+                    || row.cell_page_count.is_some()
+                    || row.leaf_ordinal.is_some()
+                    || row.bundle_index.is_some()
+                    || row.batch_offset.is_some()
+                    || row.metadata_bytes.is_some()
+                    || row.body_bytes.is_some()
+                    || row.batch_bytes.is_some()
+                    || row.rows.is_some()
+                    || row.partial_run_count.is_some()
+                    || row.page_checksum.is_some()
+                    || row.centroid_code.is_some()
+                    || row.bundle_path.is_some()
+                    || row.bundle_checksum.is_some()
+                    || row.bundle_encoded_bytes.is_some()
+                    || row.shard_path.is_some()
+                    || row.shard_checksum.is_some()
+                    || row.shard_encoded_bytes.is_some()
+                    || row.shard_first_cell.is_some()
+                    || row.shard_last_cell.is_some()
+                    || row.shard_page_count.is_some()
+                {
+                    return Err(invalid_leaf_directory(
+                        "V11 empty directory row contains values",
+                    ));
+                }
+                empty_rows = empty_rows.saturating_add(1);
+            }
             V11_ROW_CELL => {
                 let (Some(cell_index), Some(first_page), Some(page_count)) =
                     (row.cell_index, row.cell_first_page, row.cell_page_count)
@@ -1299,7 +1352,14 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
         }
     }
     let invalid_role = if table == "leaf-run-directory-shard" {
-        result.pages.is_empty()
+        empty_rows != 0
+            || result.pages.is_empty()
+            || !result.cells.is_empty()
+            || !result.bundles.is_empty()
+            || !result.shards.is_empty()
+    } else if empty_rows != 0 {
+        empty_rows != 1
+            || !result.pages.is_empty()
             || !result.cells.is_empty()
             || !result.bundles.is_empty()
             || !result.shards.is_empty()

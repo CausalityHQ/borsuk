@@ -143,11 +143,11 @@ fn drain_keeps_global_base_and_searches_materialized_delta_without_rebuild() {
 }
 
 #[test]
-fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_base() {
+fn drain_encodes_one_record_without_segment_get_or_codebook_put() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
         common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///group-drain-indexed-global-delta";
+    let uri = "memory:///group-drain-direct-v11-record";
     let mut index = BorsukIndex::create_with_object_store(
         Arc::new(traced),
         IndexConfig {
@@ -178,58 +178,55 @@ fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_bas
     index.finish_bulk_load().unwrap();
     operations.clear();
 
-    let delta = (0..32)
-        .map(|row| VectorRecord::new(format!("delta-{row}"), vec![10.0 + row as f32; 8]))
-        .collect::<Vec<_>>();
-    let query = delta[17].vector.clone();
+    let delta = VectorRecord::new("delta", vec![10.0; 8]);
     let writer = GroupCommitWriter::new(
         index,
         GroupCommitConfig {
             max_delay: std::time::Duration::ZERO,
-            max_records: 32,
+            max_records: 1,
             worker_lanes: 1,
         },
     )
     .unwrap();
-    writer.append(delta).unwrap();
+    writer.append(vec![delta]).unwrap();
     writer.drain().unwrap();
 
+    let new_segment_paths = operations
+        .matching_paths(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("segments/")
+        })
+        .into_iter()
+        .collect::<HashSet<_>>();
+    assert!(!new_segment_paths.is_empty());
     assert_eq!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put && path.starts_with("manifests/")
         }),
         1,
-        "the materialized exact fringe must publish atomically in one manifest"
+        "segments and the level-zero V11 run must publish atomically in one manifest"
     );
-    assert!(
+    assert_eq!(
         operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put && path.starts_with("global-leaf/")
-        }) > 0,
-        "a threshold-sized drain must publish authenticated V11 leaf artifacts"
+            operation == common::StoreOperation::Get && new_segment_paths.contains(path)
+        }),
+        0,
+        "direct leaf encoding must consume resident records without rereading new segments"
     );
-    let report = BorsukIndex::open_with_object_store(inner, uri)
-        .unwrap()
-        .search_with_report(
-            &query,
-            SearchOptions::approx(1, LeafMode::SrhtPqScan)
-                .with_max_segments(4)
-                .with_max_candidates_per_segment(16),
-        )
-        .unwrap();
-    assert_eq!(report.hits[0].id.as_str(), "delta-17");
-    assert_eq!(report.hits[0].distance, 0.0);
-    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
-    assert_eq!(report.segments_searched, 0);
-    assert_eq!(report.backing_bytes_read, report.bytes_read);
-    assert!(report.global_leaf_directory_reads >= 2);
-    assert!(report.global_leaf_directory_bytes > 0);
-    assert!(report.global_leaf_pages_read >= 2);
-    assert!(report.global_leaf_page_bytes > 0);
-    assert!(report.global_leaf_exact_scores > 0);
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.contains("/codebooks/")
+        }),
+        0,
+        "a direct drain must reuse the leaf epoch's resident codebook"
+    );
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(reopened.stats().global_ann_layout_version, Some(11));
+    assert_eq!(reopened.stats().global_leaf_runs, 2);
+    assert_eq!(reopened.stats().global_leaf_max_level, Some(0));
 }
 
 #[test]
-fn drain_fails_closed_when_the_exact_fringe_manifest_cannot_be_published() {
+fn drain_fails_closed_when_the_incremental_run_manifest_cannot_be_published() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///group-drain-global-delta-fail-closed";
     let mut index = BorsukIndex::create_with_object_store(
@@ -285,7 +282,7 @@ fn drain_fails_closed_when_the_exact_fringe_manifest_cannot_be_published() {
 
     let error = writer
         .drain()
-        .expect_err("drain must not expose an exact fringe without its manifest");
+        .expect_err("drain must not expose an incremental run without its manifest");
     assert!(
         error.to_string().contains("injected Put failure"),
         "{error}"

@@ -65,9 +65,22 @@ pub(crate) struct LaneLogSnapshot {
 pub(crate) struct LaneLogRecordBlock {
     key: String,
     pub(crate) lane: u16,
+    pub(crate) lease_epoch: u64,
+    pub(crate) sequence: u64,
     pub(crate) bytes: u64,
     pub(crate) records: Arc<Vec<VectorRecord>>,
     pub(crate) generation_fence_ids: Arc<HashSet<Vec<u8>>>,
+}
+
+impl LaneLogRecordBlock {
+    pub(crate) fn source_range(&self) -> Result<crate::global_leaf_run::LaneSourceRange> {
+        crate::global_leaf_run::LaneSourceRange::new(
+            self.lane,
+            self.lease_epoch,
+            self.sequence,
+            self.sequence,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2455,6 +2468,8 @@ impl LaneLogReader {
                     Ok(LaneLogRecordBlock {
                         key,
                         lane: extent.lane,
+                        lease_epoch: extent.lease_epoch,
+                        sequence: extent.sequence,
                         bytes: u64::try_from(extent.payload.len()).map_err(|_| {
                             BorsukError::InvalidStorage(
                                 "epoch lane-log payload length exceeds u64".to_string(),
@@ -2517,6 +2532,7 @@ impl LaneLogReader {
                     head.blocks.iter().map(move |block| {
                         (
                             u16::try_from(lane).expect("validated lane count fits in u16"),
+                            block.lease_epoch,
                             block,
                         )
                     })
@@ -2530,13 +2546,15 @@ impl LaneLogReader {
         let decoded = crate::parallel::install_io(|| {
             blocks
                 .par_iter()
-                .map(|(lane, block)| {
+                .map(|(lane, lease_epoch, block)| {
                     let path = block.path(*lane);
                     let key = format!("lane-log:{path}:generation-{}", block.generation);
                     if let Some(records) = current_blocks.get(key.as_str()) {
                         return Ok(LaneLogRecordBlock {
                             key,
                             lane: *lane,
+                            lease_epoch: *lease_epoch,
+                            sequence: block.sequence,
                             bytes: block.bytes,
                             records: Arc::clone(records),
                             generation_fence_ids: Arc::new(HashSet::new()),
@@ -2575,6 +2593,8 @@ impl LaneLogReader {
                     Ok(LaneLogRecordBlock {
                         key,
                         lane: *lane,
+                        lease_epoch: *lease_epoch,
+                        sequence: block.sequence,
                         bytes: block.bytes,
                         records: decoded,
                         generation_fence_ids: Arc::new(HashSet::new()),
@@ -4307,17 +4327,42 @@ mod tests {
     #[test]
     fn reopened_higher_epoch_writer_preserves_and_extends_the_committed_tail() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let mut original =
-            LaneLogWriter::new_empty(Arc::clone(&store), "memory:///lane-reopen", 3, 7).unwrap();
-        original.append(b"before-restart", 1).unwrap();
+        let uri = "memory:///lane-reopen";
+        let before = crate::format::wal_records_to_table(
+            &[stamped_record("before-restart", vec![1.0, 0.0], 1)],
+            2,
+            VectorElementType::Float32,
+            PhysicalFormat::Parquet,
+        )
+        .unwrap();
+        let after = crate::format::wal_records_to_table(
+            &[stamped_record("after-restart", vec![0.0, 1.0], 2)],
+            2,
+            VectorElementType::Float32,
+            PhysicalFormat::Parquet,
+        )
+        .unwrap();
+        let mut original = LaneLogWriter::new_empty(Arc::clone(&store), uri, 0, 7).unwrap();
+        original.append(&before, 1).unwrap();
         drop(original);
 
-        let mut reopened = LaneLogWriter::open(store, "memory:///lane-reopen", 3, 8).unwrap();
-        reopened.append(b"after-restart", 1).unwrap();
+        let mut reopened = LaneLogWriter::open(Arc::clone(&store), uri, 0, 8).unwrap();
+        reopened.append(&after, 1).unwrap();
 
+        assert_eq!(reopened.visible_payloads().unwrap(), vec![before, after]);
+        let reader = LaneLogReader::new(store, uri, 1).unwrap();
+        let heads = reader.read_heads().unwrap();
+        let snapshot = reader.decode_snapshot(heads, &[], None).unwrap();
         assert_eq!(
-            reopened.visible_payloads().unwrap(),
-            vec![b"before-restart".to_vec(), b"after-restart".to_vec()]
+            snapshot
+                .record_blocks
+                .iter()
+                .map(|block| block.source_range().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                crate::global_leaf_run::LaneSourceRange::new(0, 7, 1, 1).unwrap(),
+                crate::global_leaf_run::LaneSourceRange::new(0, 8, 2, 2).unwrap(),
+            ]
         );
     }
 

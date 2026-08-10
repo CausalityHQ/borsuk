@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use borsuk::{
-    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, SearchOptions,
-    VectorMetric, VectorRecord, WalConfig,
+    BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafCapability,
+    SearchOptions, VectorMetric, VectorRecord, WalConfig,
 };
 
 fn config(uri: String) -> IndexConfig {
@@ -206,6 +206,80 @@ fn wal_disabled_matches_the_classic_segment_per_add_path() {
             .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
             .unwrap(),
         ["a"]
+    );
+}
+
+#[test]
+fn wal_disabled_add_after_finalization_invalidates_stale_global_ann() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index =
+        BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::disabled()).unwrap();
+    index
+        .add(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32, row as f32]))
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    assert_eq!(index.stats().global_ann_layout_version, Some(11));
+
+    index
+        .add(vec![VectorRecord::new("new", vec![1_000.0, 1_000.0])])
+        .unwrap();
+
+    assert_eq!(index.stats().global_ann_layout_version, None);
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(
+                &[1_000.0, 1_000.0],
+                SearchOptions::approx(1, borsuk::LeafMode::SrhtPqScan)
+                    .with_max_segments(usize::MAX),
+            )
+            .unwrap(),
+        ["new"]
+    );
+}
+
+#[test]
+fn wal_disabled_paged_add_after_finalization_invalidates_stale_global_ann() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create_with_wal_routing_page_fanout_and_leaf_capability(
+        config(uri.clone()),
+        WalConfig::disabled(),
+        2,
+        LeafCapability::GraphEnabled,
+    )
+    .unwrap();
+    index
+        .add(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32, row as f32]))
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    assert!(index.stats().routing_max_level > 0);
+    assert_eq!(index.stats().global_ann_layout_version, Some(11));
+
+    index
+        .add(vec![VectorRecord::new("new", vec![1_000.0, 1_000.0])])
+        .unwrap();
+
+    assert_eq!(index.stats().global_ann_layout_version, None);
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_ids(
+                &[1_000.0, 1_000.0],
+                SearchOptions::approx(1, borsuk::LeafMode::SrhtPqScan)
+                    .with_max_segments(usize::MAX),
+            )
+            .unwrap(),
+        ["new"]
     );
 }
 

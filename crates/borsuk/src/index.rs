@@ -43,8 +43,9 @@ use crate::{
         tombstone_ids_to_parquet, wal_records_from_table, wal_records_to_table,
     },
     global_leaf_run::{
-        GlobalAnnRef, GlobalCodebookRef, GlobalLeafDirectoryRef, GlobalLeafRunRef,
-        ResidentGlobalLeafRun,
+        GlobalAnnRef, GlobalCodebookRef, GlobalLeafPersistenceWriter, GlobalLeafRunRef,
+        LeafRunBuildConfig, ResidentGlobalLeafRun, SourceRangeSet, UnpublishedGlobalLeafRun,
+        build_unpublished_leaf_run_from_records, persist_unpublished_leaf_run_directory,
     },
     global_pq_sidecar::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCoarseQuantizer, GlobalCodebookDescriptor,
@@ -666,6 +667,18 @@ pub struct WarmReport {
     pub coverage_complete: bool,
     /// Actual byte-accounted decoded segment and graph data still resident.
     pub bytes_resident: u64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Task 6 consumes resident records and source coverage from the materialization plan"
+)]
+pub(crate) struct PlannedLaneMaterialization {
+    pub(crate) records: Vec<VectorRecord>,
+    pub(crate) source_ranges: SourceRangeSet,
+    pub(crate) committed_sequences: Vec<u64>,
+    pub(crate) segment_summaries: Vec<SegmentSummary>,
+    pub(crate) leaf_run: Option<UnpublishedGlobalLeafRun>,
 }
 
 /// A BORSUK index handle.
@@ -1803,7 +1816,7 @@ type ResidentGlobalLeafRunCache = Arc<BoundedResidentCache<ResidentGlobalLeafRun
 struct ResidentGlobalAnnPins {
     codebook_key: String,
     codebook: Arc<ResidentGlobalCodebook>,
-    base: Option<(String, Arc<ResidentGlobalLeafRun>)>,
+    leaf_runs: Vec<(String, Arc<ResidentGlobalLeafRun>)>,
 }
 
 impl ResidentGlobalAnnPins {
@@ -1812,9 +1825,9 @@ impl ResidentGlobalAnnPins {
     }
 
     fn leaf_run(&self, key: &str) -> Option<Arc<ResidentGlobalLeafRun>> {
-        self.base
-            .as_ref()
-            .and_then(|(base_key, base)| (base_key == key).then(|| Arc::clone(base)))
+        self.leaf_runs
+            .iter()
+            .find_map(|(run_key, run)| (run_key == key).then(|| Arc::clone(run)))
     }
 }
 
@@ -2230,6 +2243,29 @@ impl BorsukIndex {
             return Ok((committed_sequences, self.manifest.version));
         }
 
+        let source_ranges = SourceRangeSet::new(
+            self.lane_log_snapshot
+                .iter()
+                .map(crate::lane_log::LaneLogRecordBlock::source_range)
+                .collect::<Result<Vec<_>>>()?,
+        )?;
+        let previous_global_ann = self.manifest.global_ann_ref.clone();
+        if previous_global_ann.as_ref().is_some_and(|reference| {
+            reference
+                .incremental_runs()
+                .iter()
+                .any(|run| run.level() == 0)
+        }) {
+            return Err(BorsukError::InvalidStorage(
+                "V11 leaf-run level zero is occupied; binary carry maintenance is required"
+                    .to_owned(),
+            ));
+        }
+        let resident_codebook = previous_global_ann
+            .as_ref()
+            .map(|reference| self.load_resident_global_codebook(reference.codebook()))
+            .transpose()?;
+
         let generation_fence_ids = self
             .lane_log_snapshot
             .iter()
@@ -2293,10 +2329,7 @@ impl BorsukIndex {
         // is refreshed below; other modes safely use the authoritative routing
         // tree until explicit/background maintenance rebuilds this optimization.
         manifest.quantizer_ref = None;
-        // Task 3 publishes no incremental leaf runs. Materializing new segments
-        // invalidates the offline base atomically; Task 4 will replace this
-        // clear with direct lane-run drains.
-        manifest.global_ann_ref = None;
+        manifest.global_ann_ref = previous_global_ann.clone();
         if let Some(tombstone) = tombstone {
             manifest.tombstone_frontier.push(tombstone);
             manifest.tombstone_id_count = manifest
@@ -2324,7 +2357,7 @@ impl BorsukIndex {
         // Both references are published atomically below. The bounded delta
         // build reuses the stable base and never promotes it on this path.
         let index_ref: &BorsukIndex = &*self;
-        let new_segment_summaries = {
+        let segment_summaries = {
             let mut segments_to_write = Vec::with_capacity(write_batch_size);
             let mut new_summaries = Vec::with_capacity(planned_segments.len());
             for (chunk, (id, _)) in records.chunks(segment_max_vectors).zip(&planned_segments) {
@@ -2344,8 +2377,43 @@ impl BorsukIndex {
             new_summaries.extend(index_ref.write_segment_batch(&mut segments_to_write)?);
             new_summaries
         };
+        let leaf_run = match (&previous_global_ann, &resident_codebook) {
+            (Some(reference), Some(codebook)) => Some(build_unpublished_leaf_run_from_records(
+                &self.storage,
+                codebook,
+                reference.codebook(),
+                &records,
+                source_ranges.clone(),
+                0,
+                LeafRunBuildConfig {
+                    dimensions: manifest.config.dimensions,
+                    element_type: manifest.build_config.vector_element_type,
+                    normalize: manifest.config.metric.uses_normalized_euclidean_geometry(),
+                },
+            )?),
+            (None, None) => None,
+            _ => {
+                return Err(BorsukError::InvalidStorage(
+                    "V11 lane materialization lost its resident codebook".to_owned(),
+                ));
+            }
+        };
+        let plan = PlannedLaneMaterialization {
+            records,
+            source_ranges,
+            committed_sequences,
+            segment_summaries,
+            leaf_run,
+        };
+        if let (Some(reference), Some(unpublished)) = (previous_global_ann.as_ref(), plan.leaf_run)
+        {
+            let reconstruction_errors = unpublished.reconstruction_errors_micros().to_vec();
+            let run = persist_unpublished_leaf_run_directory(&self.storage, unpublished)?;
+            manifest.global_ann_ref =
+                Some(reference.with_level_zero_run(run, &reconstruction_errors)?);
+        }
         let mut routing_summaries = manifest.segments.clone();
-        routing_summaries.extend(new_segment_summaries.iter().cloned());
+        routing_summaries.extend(plan.segment_summaries.iter().cloned());
         if paged_manifest {
             // Paged indexes keep segment summaries and routing pivots in
             // immutable pages. Keep the new manifest metadata-only; the page
@@ -2358,6 +2426,7 @@ impl BorsukIndex {
             manifest.rebuild_pivots();
         }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
         self.manifest = if paged_manifest {
             self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
                 manifest,
@@ -2367,8 +2436,8 @@ impl BorsukIndex {
         } else {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
         };
-        self.resident_global_ann_pins = None;
-        Ok((committed_sequences, self.manifest.version))
+        self.resident_global_ann_pins = prepared_global_ann_pins;
+        Ok((plan.committed_sequences, self.manifest.version))
     }
 
     pub(crate) fn checkpoint_lane_log_materialized_through(
@@ -8225,6 +8294,11 @@ impl BorsukIndex {
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
+        // Until every direct-write path publishes a matching V11 incremental
+        // run, a segment change must invalidate the prior offline base. Keeping
+        // it would let approximate search serve only the old base and omit the
+        // newly published segment.
+        manifest.global_ann_ref = None;
         manifest.next_generated_id = next_generated_id;
         if let Some((tombstone, new_tombstone_ids)) = tombstone_update {
             manifest.tombstone_frontier.push(tombstone);
@@ -8266,9 +8340,8 @@ impl BorsukIndex {
         manifest.rebuild_pivots();
         // Direct writes are an ingest path, not an index-finalization boundary.
         // Building a corpus-wide artifact after every batch makes a 10M-vector
-        // load rescan the growing corpus repeatedly. If a finalized immutable
-        // base already exists, retain it and expose these appended cells through
-        // the same materialized-delta read path used by a WAL flush.
+        // load rescan the growing corpus repeatedly. Segment fallback remains
+        // authoritative until a later finalization or direct V11 run publish.
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let (published, storage_report) = self
             .publish_manifest_reusing_routing_pages_with_recovery_report(
@@ -8276,6 +8349,7 @@ impl BorsukIndex {
                 Some(&previous),
             )?;
         self.manifest = published;
+        self.resident_global_ann_pins = None;
         let mut report = add_report_from_parts(
             segments_written,
             graph_payloads_written,
@@ -10020,6 +10094,9 @@ impl BorsukIndex {
 
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
         let mut manifest = self.manifest.next_version();
+        // New right-edge routing pages are not represented by the existing V11
+        // base. Invalidate it atomically so approximate search cannot omit them.
+        manifest.global_ann_ref = None;
         manifest.segments.clear();
         manifest.pivots.clear();
         manifest.next_generated_id = next_generated_id;
@@ -10060,10 +10137,9 @@ impl BorsukIndex {
                 summary.size_bytes + summary.vector_size_bytes + summary.graph_size_bytes;
             new_summaries.push(summary);
         }
-        // Existing routing pages and their segment rows are unchanged. Keep a
-        // finalized immutable global base, if present; the new right-edge pages
-        // are a materialized delta until bounded delta-only compaction or an
-        // explicit offline rebuild replaces the base.
+        // Existing routing pages and their segment rows are unchanged. The new
+        // right-edge pages use authoritative segment fallback until an explicit
+        // finalization or direct V11 run publication covers them.
         if self.manifest.config.text
             || self
                 .manifest
@@ -10121,6 +10197,7 @@ impl BorsukIndex {
                 &mut storage_report,
             )?;
             self.manifest = published;
+            self.resident_global_ann_pins = None;
             return Ok(add_report_from_parts(
                 segments_written,
                 graph_payloads_written,
@@ -10152,6 +10229,7 @@ impl BorsukIndex {
             &mut storage_report,
         )?;
         self.manifest = published;
+        self.resident_global_ann_pins = None;
         Ok(add_report_from_parts(
             segments_written,
             graph_payloads_written,
@@ -12916,7 +12994,7 @@ impl BorsukIndex {
         let Some(reference) = manifest.global_ann_ref.as_ref() else {
             return Ok(None);
         };
-        reference.validate_offline_base_shape()?;
+        reference.validate()?;
         // Transactional preload always authenticates the manifest's exact durable
         // identities before any warm cache entry or pin can become visible.
         let codebook_reference = reference.codebook();
@@ -12931,23 +13009,25 @@ impl BorsukIndex {
         let codebook = self
             .resident_global_codebooks
             .load(&codebook_key, || Ok(codebook_loaded))?;
-        let base = reference
+        let leaf_runs = reference
             .base()
-            .map(|base| {
-                let key = serde_json::to_string(base).map_err(|error| {
+            .into_iter()
+            .chain(reference.incremental_runs())
+            .map(|run| {
+                let key = serde_json::to_string(run).map_err(|error| {
                     BorsukError::InvalidStorage(format!(
                         "V11 global leaf-run reference cannot be keyed: {error}"
                     ))
                 })?;
-                let resident = self.read_resident_global_leaf_run_from_backing(base)?;
+                let resident = self.read_resident_global_leaf_run_from_backing(run)?;
                 let loaded = self.resident_global_leaf_runs.load(&key, || Ok(resident))?;
                 Ok::<_, BorsukError>((key, loaded))
             })
-            .transpose()?;
+            .collect::<Result<Vec<_>>>()?;
         Ok(Some(ResidentGlobalAnnPins {
             codebook_key,
             codebook,
-            base,
+            leaf_runs,
         }))
     }
 
@@ -19591,281 +19671,6 @@ fn build_global_leaf_pages(
         }
     }
     Ok(pages)
-}
-
-struct PersistedGlobalLeafArtifacts {
-    directory: GlobalLeafDirectoryRef,
-    page_count: usize,
-    bundle_count: usize,
-    rows: usize,
-    storage_bytes: u64,
-    resident_bytes: u64,
-}
-
-struct GlobalLeafPersistenceWriter<'a> {
-    storage: &'a Storage,
-    dimensions: usize,
-    element_type: crate::record::VectorElementType,
-    bundle_pages: Vec<crate::global_leaf::GlobalLeafPageInput>,
-    bundles: Vec<crate::global_leaf::GlobalLeafBundleRef>,
-    page_refs: Vec<crate::global_leaf::GlobalLeafPageRef>,
-    codebook_checksum: String,
-    active_cell: Option<(u16, u32)>,
-    last_finalized_cell: Option<u16>,
-    page_count: usize,
-    rows: usize,
-    storage_bytes: u64,
-}
-
-impl<'a> GlobalLeafPersistenceWriter<'a> {
-    fn new(
-        storage: &'a Storage,
-        dimensions: usize,
-        element_type: crate::record::VectorElementType,
-        codebook_checksum: String,
-    ) -> Result<Self> {
-        Ok(Self {
-            storage,
-            dimensions,
-            element_type,
-            bundle_pages: Vec::with_capacity(crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_PAGES),
-            bundles: Vec::new(),
-            page_refs: Vec::new(),
-            codebook_checksum,
-            active_cell: None,
-            last_finalized_cell: None,
-            page_count: 0,
-            rows: 0,
-            storage_bytes: 0,
-        })
-    }
-
-    fn push_cell_chunk(
-        &mut self,
-        mut pages: Vec<crate::global_leaf::GlobalLeafPageInput>,
-    ) -> Result<()> {
-        let cell_index = pages
-            .first()
-            .map(|page| page.cell_index)
-            .ok_or_else(|| BorsukError::InvalidStorage("global leaf cell is empty".to_string()))?;
-        if pages.iter().enumerate().any(|(local_ordinal, page)| {
-            page.cell_index != cell_index
-                || usize::try_from(page.leaf_ordinal).ok() != Some(local_ordinal)
-                || page.rows.is_empty()
-        }) {
-            return Err(BorsukError::InvalidStorage(
-                "global leaf cell continuation is not locally canonical".to_string(),
-            ));
-        }
-        let first_leaf = match self.active_cell {
-            Some((active_cell, next_leaf)) if active_cell == cell_index => next_leaf,
-            Some(_) => {
-                return Err(BorsukError::InvalidStorage(
-                    "global leaf cell changed before explicit finalization".to_string(),
-                ));
-            }
-            None if self
-                .last_finalized_cell
-                .is_some_and(|prior| prior >= cell_index) =>
-            {
-                return Err(BorsukError::InvalidStorage(
-                    "global leaf cells are not strictly ordered".to_string(),
-                ));
-            }
-            None => 0,
-        };
-        for (local_ordinal, page) in pages.iter_mut().enumerate() {
-            page.leaf_ordinal = first_leaf
-                .checked_add(u32::try_from(local_ordinal).map_err(|_| {
-                    BorsukError::InvalidStorage(
-                        "global leaf continuation ordinal exceeds u32".to_string(),
-                    )
-                })?)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "global leaf continuation ordinal overflows".to_string(),
-                    )
-                })?;
-        }
-        let next_leaf = first_leaf
-            .checked_add(u32::try_from(pages.len()).map_err(|_| {
-                BorsukError::InvalidStorage(
-                    "global leaf continuation page count exceeds u32".to_string(),
-                )
-            })?)
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "global leaf continuation page count overflows".to_string(),
-                )
-            })?;
-        self.active_cell = Some((cell_index, next_leaf));
-        self.page_count = self.page_count.checked_add(pages.len()).ok_or_else(|| {
-            BorsukError::InvalidStorage("global leaf page count overflows".to_string())
-        })?;
-        let source_rows = pages.iter().try_fold(0_usize, |rows, page| {
-            rows.checked_add(page.rows.len()).ok_or_else(|| {
-                BorsukError::InvalidStorage("global leaf row count overflows".to_string())
-            })
-        })?;
-        self.rows = self.rows.checked_add(source_rows).ok_or_else(|| {
-            BorsukError::InvalidStorage("global leaf row count overflows".to_string())
-        })?;
-        for page in pages {
-            if self.bundle_pages.len() == crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_PAGES {
-                self.flush_bundle()?;
-            }
-            self.bundle_pages.push(page);
-        }
-        self.flush_bundle()?;
-        Ok(())
-    }
-
-    fn finalize_cell(&mut self, cell_index: u16) -> Result<()> {
-        if self.active_cell.map(|(active, _)| active) != Some(cell_index)
-            || !self.bundle_pages.is_empty()
-        {
-            return Err(BorsukError::InvalidStorage(
-                "global leaf finalization does not match its active cell".to_string(),
-            ));
-        }
-        self.active_cell = None;
-        self.last_finalized_cell = Some(cell_index);
-        Ok(())
-    }
-
-    fn flush_bundle(&mut self) -> Result<()> {
-        if self.bundle_pages.is_empty() {
-            return Ok(());
-        }
-        let pages = std::mem::take(&mut self.bundle_pages);
-        let encoded = crate::global_leaf::encode_global_leaf_bundle(
-            &pages,
-            self.dimensions,
-            self.element_type,
-        )?;
-        let checksum = *blake3::hash(&encoded.bytes).as_bytes();
-        let checksum_hex = blake3::Hash::from_bytes(checksum).to_hex().to_string();
-        let path = format!(
-            "global-leaf/bundles/{}/bundle-{checksum_hex}.arrow",
-            &checksum_hex[..2]
-        );
-        self.storage
-            .write_bytes_content_addressed(&path, &encoded.bytes)?;
-        let bundle_index = u32::try_from(self.bundles.len()).map_err(|_| {
-            BorsukError::InvalidStorage("global leaf bundle index exceeds u32".to_string())
-        })?;
-        let encoded_bytes = u64::try_from(encoded.bytes.len()).map_err(|_| {
-            BorsukError::InvalidStorage("global leaf bundle size exceeds u64".to_string())
-        })?;
-        self.storage_bytes = self
-            .storage_bytes
-            .checked_add(encoded_bytes)
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global leaf storage byte count overflows".to_string())
-            })?;
-        self.bundles.push(crate::global_leaf::GlobalLeafBundleRef {
-            path,
-            checksum,
-            encoded_bytes,
-        });
-        let page_refs = encoded
-            .pages
-            .into_iter()
-            .map(|page| {
-                Ok(crate::global_leaf::GlobalLeafPageRef {
-                    cell_index: page.cell_index,
-                    leaf_ordinal: page.leaf_ordinal,
-                    bundle_index,
-                    batch_offset: page.batch_offset,
-                    metadata_bytes: page.metadata_bytes,
-                    body_bytes: page.body_bytes,
-                    batch_bytes: page.batch_bytes,
-                    rows: u32::try_from(page.rows).map_err(|_| {
-                        BorsukError::InvalidStorage(
-                            "global leaf page row count exceeds u32".to_string(),
-                        )
-                    })?,
-                    partial_run_count: 0,
-                    checksum: page.checksum,
-                    centroid_code: page.centroid_code.into_boxed_slice(),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        self.page_refs.extend(page_refs);
-        Ok(())
-    }
-
-    fn finish(mut self) -> Result<PersistedGlobalLeafArtifacts> {
-        if self.active_cell.is_some() || !self.bundle_pages.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "global leaf writer has an unfinalized cell continuation".to_string(),
-            ));
-        }
-        let encoded = crate::global_leaf::encode_global_leaf_run_directory(
-            &self.codebook_checksum,
-            &self.page_refs,
-            &self.bundles,
-        )?;
-        for shard in &encoded.shards {
-            self.storage
-                .write_bytes_content_addressed(&shard.reference.path, &shard.bytes)?;
-            self.storage_bytes = self
-                .storage_bytes
-                .checked_add(shard.reference.encoded_bytes)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "global leaf storage byte count overflows".to_string(),
-                    )
-                })?;
-        }
-        let root_checksum = blake3::hash(&encoded.root).to_hex().to_string();
-        let root_path = format!(
-            "global-leaf/v11/directories/{}/directory-{root_checksum}.parquet",
-            &root_checksum[..2]
-        );
-        self.storage
-            .write_bytes_content_addressed(&root_path, &encoded.root)?;
-        let root_bytes = u64::try_from(encoded.root.len()).map_err(|_| {
-            BorsukError::InvalidStorage("global leaf directory size exceeds u64".to_string())
-        })?;
-        self.storage_bytes = self.storage_bytes.checked_add(root_bytes).ok_or_else(|| {
-            BorsukError::InvalidStorage("global leaf storage byte count overflows".to_string())
-        })?;
-        let directory = crate::global_leaf::decode_global_leaf_run_directory(
-            &self.codebook_checksum,
-            &encoded.root,
-            |reference| {
-                encoded
-                    .shards
-                    .iter()
-                    .find(|shard| shard.reference == *reference)
-                    .map(|shard| shard.bytes.clone())
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "V11 encoded directory lost an external shard".to_string(),
-                        )
-                    })
-            },
-        )?;
-        let resident_bytes = u64::try_from(directory.resident_bytes()).map_err(|_| {
-            BorsukError::InvalidStorage(
-                "global leaf directory resident bytes exceed u64".to_string(),
-            )
-        })?;
-        Ok(PersistedGlobalLeafArtifacts {
-            directory: GlobalLeafDirectoryRef::new(
-                root_path,
-                root_checksum,
-                root_bytes,
-                encoded.directory_object_count()?,
-            ),
-            page_count: self.page_count,
-            bundle_count: self.bundles.len(),
-            rows: self.rows,
-            storage_bytes: self.storage_bytes,
-            resident_bytes,
-        })
-    }
 }
 
 fn resident_global_pq_subspaces(
