@@ -444,6 +444,9 @@ impl HierarchicalCoarseQuantizer {
             );
             scored.push((distance, cell));
         }
+        if scored.iter().any(|(distance, _)| !distance.is_finite()) {
+            return invalid("hierarchical coarse routing produced a non-finite distance");
+        }
         scored.sort_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
@@ -617,6 +620,9 @@ impl GlobalCoarseQuantizer {
                         Ok((prepared.distance(&bytes[..width])? * distance_scale, cell))
                     })
                     .collect::<Result<Vec<_>>>()?;
+                if scored.iter().any(|(distance, _)| !distance.is_finite()) {
+                    return invalid("coarse product routing produced a non-finite distance");
+                }
                 scored.sort_by(|left, right| {
                     left.0
                         .total_cmp(&right.0)
@@ -1371,6 +1377,9 @@ impl GlobalCodebookDescriptor {
         let coarse_quantizer = coarse_quantizer.into();
         let scan_quantizer = GlobalScanQuantizer::from_state(quantizer.clone())?;
         let coarse = GlobalCoarseQuantizer::from_state(coarse_quantizer.clone())?;
+        if matches!(&metric, VectorMetric::Minkowski { p } if !p.is_finite() || *p < 1.0) {
+            return invalid("V11 codebook Minkowski power must be finite and at least one");
+        }
         let dimensions = scan_dimensions(&quantizer);
         if dimensions == 0 || dimensions != coarse_dimensions(&coarse_quantizer) {
             return invalid("V11 scan and coarse quantizers disagree on dimensions");
@@ -1378,12 +1387,15 @@ impl GlobalCodebookDescriptor {
         vector_element_type.fixed_width_bytes(dimensions)?;
         let cells = coarse.all_cells()?;
         if cell_count == 0
+            || cell_count > 65_536
             || usize::try_from(cell_count).ok() != Some(cells.len())
             || candidates == 0
             || probes == 0
+            || candidates > cell_count
+            || probes > cell_count
             || probes > candidates
         {
-            return invalid("V11 codebook typed identity columns are inconsistent");
+            return invalid("V11 codebook cell count, candidates, and probes are inconsistent");
         }
         Ok(Self {
             layout: V11_CODEBOOK_LAYOUT.to_string(),
@@ -1655,10 +1667,7 @@ impl ResidentGlobalCodebook {
         if !distance.is_finite() || distance < 0.0 {
             return invalid("V11 codebook reconstruction error is non-finite or negative");
         }
-        let micros = (f64::from(distance) * 1_000_000.0).round();
-        if !micros.is_finite() || micros < 0.0 || micros > u64::MAX as f64 {
-            return invalid("V11 codebook reconstruction error micros are out of range");
-        }
+        let reconstruction_error_micros = checked_reconstruction_error_micros(f64::from(distance))?;
         Ok(EncodedGlobalRecord {
             cell: self.coarse_quantizer.encode_cell_with_scratch(
                 vector,
@@ -1666,17 +1675,18 @@ impl ResidentGlobalCodebook {
                 &mut Vec::new(),
             )?,
             scan_code,
-            reconstruction_error_micros: micros as u64,
+            reconstruction_error_micros,
         })
     }
 
     pub(crate) fn nearest_cells(&self, query: &[f32], probes: usize) -> Result<Vec<u16>> {
-        Ok(self
-            .coarse_quantizer
-            .nearest_cells_with_distances(query, probes, &self.cells)?
-            .into_iter()
-            .map(|(_, cell)| cell)
-            .collect())
+        let ranked =
+            self.coarse_quantizer
+                .nearest_cells_with_distances(query, probes, &self.cells)?;
+        if ranked.iter().any(|(distance, _)| !distance.is_finite()) {
+            return invalid("V11 routing produced a non-finite cell distance");
+        }
+        Ok(ranked.into_iter().map(|(_, cell)| cell).collect())
     }
 
     pub(crate) fn rank_pages(
@@ -1688,18 +1698,9 @@ impl ResidentGlobalCodebook {
     ) -> Result<Vec<RoutedGlobalLeafPage>> {
         let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
         let prepared = self.quantizer.prepare_query(query)?;
-        let mut seen = BTreeSet::new();
         let mut ranked = pages
             .into_iter()
             .filter(|page| selected.contains(&page.page.cell_index))
-            .filter(|page| {
-                seen.insert((
-                    page.page.cell_index,
-                    page.page.leaf_ordinal,
-                    page.page.bundle_index,
-                    page.page.batch_offset,
-                ))
-            })
             .map(|mut routed| {
                 if u64::from(routed.page.batch_bytes)
                     > crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
@@ -1709,6 +1710,9 @@ impl ResidentGlobalCodebook {
                 routed.distance = self
                     .quantizer
                     .distance(&prepared, &routed.page.centroid_code)?;
+                if !routed.distance.is_finite() {
+                    return invalid("V11 routing produced a non-finite page distance");
+                }
                 Ok(routed)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1723,6 +1727,14 @@ impl ResidentGlobalCodebook {
         ranked.truncate(page_budget);
         Ok(ranked)
     }
+}
+
+fn checked_reconstruction_error_micros(distance: f64) -> Result<u64> {
+    let micros = (distance * 1_000_000.0).round();
+    if !micros.is_finite() || micros < 0.0 || micros >= 2_f64.powi(64) {
+        return invalid("V11 codebook reconstruction error micros are out of range");
+    }
+    Ok(micros as u64)
 }
 
 #[derive(Debug)]
@@ -2100,7 +2112,7 @@ mod tests {
             crate::VectorMetric::Euclidean,
             VectorElementType::Float32,
             16,
-            32,
+            16,
             8,
             17,
         )
@@ -2118,6 +2130,31 @@ mod tests {
         bytes
     }
 
+    fn replace_v11_descriptor_column(
+        bytes: &[u8],
+        index: usize,
+        replacement: Arc<dyn Array>,
+    ) -> Vec<u8> {
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes)).unwrap();
+        let batch = builder.build().unwrap().next().unwrap().unwrap();
+        let schema = batch.schema();
+        let mut columns = batch.columns().to_vec();
+        columns[index] = replacement;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), columns).unwrap();
+        let properties = WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue::new(
+                "borsuk.ann.layout".to_string(),
+                V11_CODEBOOK_LAYOUT.to_string(),
+            )]))
+            .build();
+        let mut encoded = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut encoded, schema, Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        encoded
+    }
+
     #[test]
     fn v11_codebook_round_trips_and_rejects_v10_marker() {
         let descriptor = test_v11_codebook_descriptor();
@@ -2131,6 +2168,149 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("rebuild the unreleased index"), "{error}");
+    }
+
+    #[test]
+    fn v11_codebook_rejects_typed_state_and_payload_layout_substitution() {
+        let descriptor = test_v11_codebook_descriptor();
+        let encoded = descriptor.encode().unwrap();
+        let dimensions = replace_v11_descriptor_column(
+            &encoded,
+            2,
+            Arc::new(UInt64Array::from(vec![descriptor.dimensions as u64 + 1])),
+        );
+        let error = GlobalCodebookDescriptor::decode(&dimensions).unwrap_err();
+        assert!(error.to_string().contains("typed columns"), "{error}");
+
+        let layout = replace_v11_descriptor_column(
+            &encoded,
+            0,
+            Arc::new(StringArray::from(vec!["bounded-arrow-leaf-v10"])),
+        );
+        let error = GlobalCodebookDescriptor::decode(&layout).unwrap_err();
+        assert!(
+            error.to_string().contains("rebuild the unreleased index"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn v11_page_ranking_keeps_distinct_run_local_pages_with_equal_coordinates() {
+        let descriptor = test_v11_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let query = vec![0.0_f32; 64];
+        let page = leaf_page(&quantizer, &query, 7, 0);
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+
+        let ranked = resident
+            .rank_pages(
+                &query,
+                &[7],
+                [
+                    RoutedGlobalLeafPage {
+                        layer: GlobalLeafLayer::Base,
+                        distance: f32::NAN,
+                        page: page.clone(),
+                    },
+                    RoutedGlobalLeafPage {
+                        layer: GlobalLeafLayer::Delta,
+                        distance: f32::NAN,
+                        page,
+                    },
+                ],
+                2,
+            )
+            .unwrap();
+
+        assert_eq!(ranked.len(), 2);
+    }
+
+    #[test]
+    fn v11_codebook_rejects_candidate_and_probe_counts_above_cell_count() {
+        let descriptor = test_v11_codebook_descriptor();
+        let error = GlobalCodebookDescriptor::new(
+            descriptor.quantizer.clone(),
+            descriptor.coarse_quantizer.clone(),
+            descriptor.metric.clone(),
+            descriptor.vector_element_type,
+            descriptor.cell_count,
+            descriptor.cell_count + 1,
+            descriptor.probes,
+            descriptor.reconstruction_error_p95_micros,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("cell count"), "{error}");
+    }
+
+    #[test]
+    fn v11_codebook_rejects_invalid_minkowski_metrics_before_encoding() {
+        let descriptor = test_v11_codebook_descriptor();
+        for p in [f32::NAN, f32::INFINITY, 0.5] {
+            let error = GlobalCodebookDescriptor::new(
+                descriptor.quantizer.clone(),
+                descriptor.coarse_quantizer.clone(),
+                VectorMetric::Minkowski { p },
+                descriptor.vector_element_type,
+                descriptor.cell_count,
+                descriptor.candidates,
+                descriptor.probes,
+                descriptor.reconstruction_error_p95_micros,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("Minkowski"), "{error}");
+        }
+    }
+
+    #[test]
+    fn reconstruction_micros_rejects_the_rounded_two_to_the_64_boundary() {
+        let distance = 2_f64.powi(64) / 1_000_000.0;
+        let error = checked_reconstruction_error_micros(distance).unwrap_err();
+        assert!(error.to_string().contains("out of range"), "{error}");
+    }
+
+    #[test]
+    fn v11_resident_routing_rejects_nonfinite_computed_distances() {
+        let descriptor = test_v11_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let page = leaf_page(&quantizer, &vec![0.0; 64], 7, 0);
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vec![f32::MAX; 64];
+
+        let nearest_error = resident.nearest_cells(&query, 1).unwrap_err();
+        assert!(
+            nearest_error.to_string().contains("non-finite"),
+            "{nearest_error}"
+        );
+        let rank_error = resident
+            .rank_pages(
+                &query,
+                &[7],
+                [RoutedGlobalLeafPage {
+                    layer: GlobalLeafLayer::Base,
+                    distance: 0.0,
+                    page,
+                }],
+                1,
+            )
+            .unwrap_err();
+        assert!(
+            rank_error.to_string().contains("non-finite"),
+            "{rank_error}"
+        );
+    }
+
+    #[test]
+    fn v11_resident_codebook_encodes_records_and_routes_cells() {
+        let descriptor = test_v11_codebook_descriptor();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let vector = vectors(1, 64).pop().unwrap();
+        let encoded = resident.encode_record(&vector).unwrap();
+        assert!(!encoded.scan_code.is_empty());
+        assert!(resident.cells.contains(&encoded.cell));
+        assert!(encoded.reconstruction_error_micros < u64::MAX);
+        let cells = resident.nearest_cells(&vector, 4).unwrap();
+        assert_eq!(cells.len(), 4);
+        assert!(cells.contains(&encoded.cell));
     }
 
     fn leaf_page(

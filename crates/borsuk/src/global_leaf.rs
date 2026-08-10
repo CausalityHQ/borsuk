@@ -910,6 +910,16 @@ pub(crate) struct EncodedGlobalLeafRunDirectory {
     pub(crate) shards: Vec<EncodedGlobalLeafDirectoryShard>,
 }
 
+impl EncodedGlobalLeafRunDirectory {
+    /// Total Parquet directory objects published for a run, including root.
+    pub(crate) fn directory_object_count(&self) -> Result<u32> {
+        u32::try_from(self.shards.len())
+            .ok()
+            .and_then(|shards| shards.checked_add(1))
+            .ok_or_else(|| invalid_leaf_directory("V11 directory object count exceeds u32"))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct GlobalLeafRunDirectory {
     pub(crate) pages: Vec<GlobalLeafPageRef>,
@@ -946,18 +956,20 @@ pub(crate) fn encode_global_leaf_run_directory(
     let code_width = v11_code_width(&pages)?;
     validate_v11_pages(&pages, bundles, code_width)?;
     if pages.len() <= GLOBAL_LEAF_DIRECTORY_SHARD_PAGES {
+        let root = encode_v11_directory_table(
+            codebook_checksum,
+            "leaf-run-directory-root",
+            code_width,
+            &V11DirectoryTable {
+                cells: v11_cell_bounds(&pages)?,
+                pages,
+                bundles: bundles.to_vec(),
+                shards: Vec::new(),
+            },
+        )?;
+        validate_v11_directory_object_size(root.len(), "root")?;
         return Ok(EncodedGlobalLeafRunDirectory {
-            root: encode_v11_directory_table(
-                codebook_checksum,
-                "leaf-run-directory-root",
-                code_width,
-                &V11DirectoryTable {
-                    cells: v11_cell_bounds(&pages)?,
-                    pages,
-                    bundles: bundles.to_vec(),
-                    shards: Vec::new(),
-                },
-            )?,
+            root,
             shards: Vec::new(),
         });
     }
@@ -1023,6 +1035,7 @@ pub(crate) fn decode_global_leaf_run_directory(
     mut load_shard: impl FnMut(&GlobalLeafDirectoryShardRef) -> Result<Vec<u8>>,
 ) -> Result<GlobalLeafRunDirectory> {
     validate_v11_checksum(codebook_checksum)?;
+    validate_v11_directory_object_size(root_bytes.len(), "root")?;
     let (code_width, root) =
         decode_v11_directory_table(codebook_checksum, "leaf-run-directory-root", root_bytes)?;
     if !root.pages.is_empty() {
@@ -1048,6 +1061,7 @@ pub(crate) fn decode_global_leaf_run_directory(
     let mut pages = Vec::new();
     for reference in &root.shards {
         let bytes = load_shard(reference)?;
+        validate_v11_directory_object_size(bytes.len(), "shard")?;
         if u64::try_from(bytes.len()).ok() != Some(reference.encoded_bytes)
             || blake3::hash(&bytes).to_hex().as_str() != reference.checksum
         {
@@ -1079,6 +1093,15 @@ pub(crate) fn decode_global_leaf_run_directory(
         bundles: root.bundles,
         shards: root.shards,
     })
+}
+
+fn validate_v11_directory_object_size(encoded_bytes: usize, kind: &str) -> Result<()> {
+    if encoded_bytes > GLOBAL_LEAF_DIRECTORY_SHARD_MAX_ENCODED_BYTES {
+        return Err(invalid_leaf_directory(&format!(
+            "V11 encoded directory {kind} exceeds the bounded four MiB object cap"
+        )));
+    }
+    Ok(())
 }
 
 fn encode_v11_directory_table(
@@ -1676,13 +1699,19 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
 }
 
 fn v11_hash(value: &str) -> Result<[u8; 32]> {
-    if value.len() != 64 {
+    let encoded = value.as_bytes();
+    if encoded.len() != 64 || encoded.iter().any(|byte| !byte.is_ascii_hexdigit()) {
         return Err(invalid_leaf_directory("V11 checksum hex width is invalid"));
     }
     let mut bytes = [0_u8; 32];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-            .map_err(|_| invalid_leaf_directory("V11 checksum hex is invalid"))?;
+    for (byte, pair) in bytes.iter_mut().zip(encoded.chunks_exact(2)) {
+        let nibble = |value: u8| match value {
+            b'0'..=b'9' => value - b'0',
+            b'a'..=b'f' => value - b'a' + 10,
+            b'A'..=b'F' => value - b'A' + 10,
+            _ => unreachable!("ASCII hex was validated above"),
+        };
+        *byte = (nibble(pair[0]) << 4) | nibble(pair[1]);
     }
     Ok(bytes)
 }
@@ -1799,6 +1828,16 @@ fn validate_v11_pages(
     bundles: &[GlobalLeafBundleRef],
     code_width: usize,
 ) -> Result<()> {
+    let mut prior_cell = None;
+    for page in pages {
+        if prior_cell != Some(page.cell_index) && page.leaf_ordinal != 0 {
+            return Err(invalid_leaf_directory(&format!(
+                "V11 cell {} starts at leaf ordinal {} (expected 0)",
+                page.cell_index, page.leaf_ordinal
+            )));
+        }
+        prior_cell = Some(page.cell_index);
+    }
     validate_global_leaf_directory(pages, bundles, code_width)?;
     if pages.iter().any(|page| page.partial_run_count > 4) {
         return Err(invalid_leaf_directory(
@@ -2990,6 +3029,26 @@ mod tests {
         )
     }
 
+    fn rewrite_v11_directory_metadata(
+        bytes: &[u8],
+        metadata: Vec<parquet::file::metadata::KeyValue>,
+    ) -> Vec<u8> {
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes)).unwrap();
+        let batch = builder.build().unwrap().next().unwrap().unwrap();
+        let schema = Arc::new(arrow_schema::Schema::new(batch.schema().fields().clone()));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), batch.columns().to_vec()).unwrap();
+        let properties = parquet::file::properties::WriterProperties::builder()
+            .set_key_value_metadata(Some(metadata))
+            .build();
+        let mut encoded = Vec::new();
+        let mut writer =
+            parquet::arrow::ArrowWriter::try_new(&mut encoded, schema, Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        encoded
+    }
+
     #[test]
     fn v11_directory_is_bound_to_one_codebook_checksum() {
         let (pages, bundles) = one_page_directory_fixture();
@@ -3060,6 +3119,156 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(kinds, vec![1, 2, 3], "cell, bundle, then page rows");
+    }
+
+    #[test]
+    fn v11_checksum_decoder_rejects_non_ascii_without_panicking() {
+        let malformed = format!("{}a", "€".repeat(21));
+        assert_eq!(malformed.len(), 64);
+        let error = super::v11_hash(&malformed).unwrap_err();
+        assert!(error.to_string().contains("checksum hex"), "{error}");
+    }
+
+    #[test]
+    fn v11_directory_rejects_oversized_roots_before_decode() {
+        let oversized = vec![0_u8; super::GLOBAL_LEAF_DIRECTORY_SHARD_MAX_ENCODED_BYTES + 1];
+        let error =
+            decode_global_leaf_run_directory("11aa", &oversized, |_| unreachable!()).unwrap_err();
+        assert!(error.to_string().contains("four MiB"), "{error}");
+
+        let (mut pages, bundles) = one_page_directory_fixture();
+        let mut state = 1_u64;
+        pages[0].centroid_code = (0..5 * 1024 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let error = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap_err();
+        assert!(error.to_string().contains("four MiB"), "{error}");
+    }
+
+    #[test]
+    fn v11_full_run_requires_every_cell_to_start_at_leaf_zero() {
+        let (mut pages, bundles) = one_page_directory_fixture();
+        pages[0].leaf_ordinal = 1;
+        let error = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap_err();
+        assert!(error.to_string().contains("expected 0"), "{error}");
+    }
+
+    #[test]
+    fn v11_directory_object_count_includes_the_root() {
+        let (pages, bundles) = one_page_directory_fixture();
+        let inline = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
+        assert_eq!(inline.directory_object_count().unwrap(), 1);
+
+        let shard = super::EncodedGlobalLeafDirectoryShard {
+            reference: super::GlobalLeafDirectoryShardRef {
+                path: "shard.parquet".to_string(),
+                checksum: "00".repeat(32),
+                encoded_bytes: 1,
+                first_cell: 0,
+                last_cell: 0,
+                page_count: 1,
+            },
+            bytes: vec![0],
+        };
+        let sharded = super::EncodedGlobalLeafRunDirectory {
+            root: vec![0],
+            shards: vec![shard.clone(), shard],
+        };
+        assert_eq!(sharded.directory_object_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn v11_inline_and_sharded_directories_round_trip() {
+        let (pages, bundles) = one_page_directory_fixture();
+        let inline = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
+        let decoded =
+            decode_global_leaf_run_directory("11aa", &inline.root, |_| unreachable!()).unwrap();
+        assert_eq!(decoded.pages, pages);
+        assert_eq!(decoded.bundles, bundles);
+
+        let sharded_pages = (0..=GLOBAL_LEAF_DIRECTORY_SHARD_PAGES)
+            .map(|ordinal| GlobalLeafPageRef {
+                cell_index: 7,
+                leaf_ordinal: ordinal as u32,
+                bundle_index: 0,
+                batch_offset: 64 + ordinal as u64 * 1536,
+                metadata_bytes: 512,
+                body_bytes: 1024,
+                batch_bytes: 1536,
+                rows: 1,
+                partial_run_count: u8::from(ordinal == GLOBAL_LEAF_DIRECTORY_SHARD_PAGES),
+                checksum: [(ordinal % 251) as u8; 32],
+                centroid_code: vec![7, (ordinal % 251) as u8].into_boxed_slice(),
+            })
+            .collect::<Vec<_>>();
+        let sharded_bundles = vec![GlobalLeafBundleRef {
+            path: "global-leaf/bundles/sharded.arrow".to_string(),
+            checksum: [9; 32],
+            encoded_bytes: 16 * 1024 * 1024,
+        }];
+        let sharded =
+            encode_global_leaf_run_directory("11aa", &sharded_pages, &sharded_bundles).unwrap();
+        assert_eq!(sharded.shards.len(), 2);
+        let decoded = decode_global_leaf_run_directory("11aa", &sharded.root, |reference| {
+            Ok(sharded
+                .shards
+                .iter()
+                .find(|shard| shard.reference.path == reference.path)
+                .unwrap()
+                .bytes
+                .clone())
+        })
+        .unwrap();
+        assert_eq!(decoded.pages, sharded_pages);
+        assert_eq!(decoded.bundles, sharded_bundles);
+        assert_eq!(decoded.shards.len(), 2);
+    }
+
+    #[test]
+    fn v11_directory_metadata_rejects_missing_and_duplicate_authentication() {
+        use parquet::file::metadata::KeyValue;
+        let (pages, bundles) = one_page_directory_fixture();
+        let encoded = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
+        let base = vec![
+            KeyValue::new("borsuk.ann.code_width".to_string(), "2".to_string()),
+            KeyValue::new(
+                "borsuk.ann.layout".to_string(),
+                "bounded-arrow-leaf-v11".to_string(),
+            ),
+            KeyValue::new(
+                "borsuk.ann.codebook_checksum".to_string(),
+                "11aa".to_string(),
+            ),
+            KeyValue::new(
+                "borsuk.ann.table".to_string(),
+                "leaf-run-directory-root".to_string(),
+            ),
+        ];
+        let mut missing = base.clone();
+        missing.retain(|entry| entry.key != "borsuk.ann.codebook_checksum");
+        let missing = rewrite_v11_directory_metadata(&encoded.root, missing);
+        assert!(decode_global_leaf_run_directory("11aa", &missing, |_| unreachable!()).is_err());
+        let mut duplicate = base;
+        duplicate.push(KeyValue::new(
+            "borsuk.ann.layout".to_string(),
+            "bounded-arrow-leaf-v11".to_string(),
+        ));
+        let duplicate = rewrite_v11_directory_metadata(&encoded.root, duplicate);
+        assert!(decode_global_leaf_run_directory("11aa", &duplicate, |_| unreachable!()).is_err());
+    }
+
+    #[test]
+    fn v11_directory_rejects_partial_run_count_above_four() {
+        let (mut pages, bundles) = one_page_directory_fixture();
+        pages[0].partial_run_count = 5;
+        let error = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap_err();
+        assert!(error.to_string().contains("1..=4"), "{error}");
     }
 
     #[test]
