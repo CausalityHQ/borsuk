@@ -364,3 +364,28 @@ preemptive cancellation of CPU work already in progress. It prevents a late
 result from being mislabeled and does not start any new work after observing
 expiration; hard CPU cancellation would require a separate cooperative scoring
 design.
+
+## Controller completion gate
+
+- The independent fix-round-3 review found all scoped deadline, snapshot-pin,
+  and transactional-publication findings addressed, with no new Critical or
+  Important issue.
+- The first fresh strict workspace Clippy run failed on three descriptor
+  accessors and `BoundedResidentCache::clear` that became production-dead after
+  the transactional pin refactor. Commit `3a8704a` removed that surface and
+  retained direct same-module descriptor/cache assertions. The focused
+  descriptor and delta-coverage tests each passed 1 / 561 filtered.
+- Fresh `cargo fmt --all -- --check` and `git diff --check` passed.
+- Fresh `cargo clippy --locked --workspace --all-features --all-targets -- -D
+  warnings` passed with no issues after the repair.
+- Fresh `cargo test --locked --workspace --all-features --all-targets` passed:
+  1,143 passed, 23 ignored, 1,122 filtered across 70 suites, with zero failures
+  in 484.67 seconds.
+- Pinned Python 3.12 `unittest` discovery with
+  `scripts/requirements-format-bench.txt` exited zero. Repository policy,
+  docs-web tests, and docs example synchronization also exited zero.
+- `validate_research_docs.py` still fails because this worktree lacks the
+  ignored historical raw benchmark tree and
+  `docs/web/assets/benchmarks/resource-schema.csv`. The Task 4 base archive
+  reproduces that same environmental failure. No missing CSV was inspected,
+  synthesized, or used as evidence.
