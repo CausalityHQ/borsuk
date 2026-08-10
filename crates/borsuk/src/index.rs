@@ -20122,6 +20122,7 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
                             "global leaf page row count exceeds u32".to_string(),
                         )
                     })?,
+                    partial_run_count: 0,
                     checksum: page.checksum,
                     centroid_code: page.centroid_code.into_boxed_slice(),
                 })

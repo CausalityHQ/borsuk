@@ -4,10 +4,11 @@ use std::{
     io::{BufReader, BufWriter, Read, Write},
     mem::size_of,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::Arc,
 };
 
-use arrow_array::{Array, RecordBatch, StringArray};
+use arrow_array::{Array, RecordBatch, StringArray, UInt32Array, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use parquet::{
@@ -19,6 +20,7 @@ use rayon::prelude::*;
 
 use crate::{
     BorsukError, Result,
+    metric::VectorMetric,
     mutation::{MutationStamp, MutationVersion},
     record::VectorElementType,
     rotated_product_quantizer::{
@@ -80,7 +82,7 @@ fn compose_spool_cell(primary: usize, secondary: usize, parent_high_byte: bool) 
     })
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "codec", content = "state", rename_all = "kebab-case")]
 pub(crate) enum GlobalScanQuantizerState {
     Pq(ProductQuantizerState),
@@ -626,6 +628,37 @@ impl GlobalCoarseQuantizer {
             Self::Hierarchical(quantizer) => {
                 quantizer.nearest_cells_with_distances(query, nprobe, cells)
             }
+        }
+    }
+
+    fn all_cells(&self) -> Result<Vec<u16>> {
+        match self {
+            Self::Product(quantizer) => {
+                let width = quantizer.code_bytes_per_vector();
+                if !(1..=2).contains(&width) || quantizer.centroids() > 256 {
+                    return invalid("coarse product cell state is invalid");
+                }
+                let count = if width == 1 {
+                    quantizer.centroids()
+                } else {
+                    quantizer
+                        .centroids()
+                        .checked_mul(quantizer.centroids())
+                        .ok_or_else(|| invalid_error("coarse product cell count overflows"))?
+                };
+                (0..count)
+                    .map(|cell| {
+                        u16::try_from(cell)
+                            .map_err(|_| invalid_error("coarse product cell exceeds u16"))
+                    })
+                    .collect()
+            }
+            Self::Hierarchical(quantizer) => (0..quantizer.primary_count())
+                .flat_map(|parent| {
+                    (0..quantizer.secondary_count(parent)).map(move |child| (parent, child))
+                })
+                .map(|(parent, child)| encode_hierarchical_cell(parent, child))
+                .collect(),
         }
     }
 }
@@ -1301,6 +1334,397 @@ impl GlobalPqDescriptor {
     }
 }
 
+const V11_CODEBOOK_LAYOUT: &str = "bounded-arrow-leaf-v11";
+const V11_CODEBOOK_QUANTIZER_COLUMN: &str = "quantizer_json";
+const V11_CODEBOOK_COARSE_QUANTIZER_COLUMN: &str = "coarse_quantizer_json";
+
+/// The shared, immutable V11 ANN codebook.  Leaf-run locations deliberately
+/// do not live here: a run authenticates the checksum of this descriptor.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GlobalCodebookDescriptor {
+    layout: String,
+    metric: VectorMetric,
+    dimensions: usize,
+    vector_element_type: VectorElementType,
+    centroid_code_bytes: usize,
+    cell_count: u32,
+    candidates: u32,
+    probes: u32,
+    reconstruction_error_p95_micros: u64,
+    quantizer: GlobalScanQuantizerState,
+    coarse_quantizer: GlobalCoarseQuantizerState,
+}
+
+impl GlobalCodebookDescriptor {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        quantizer: impl Into<GlobalScanQuantizerState>,
+        coarse_quantizer: impl Into<GlobalCoarseQuantizerState>,
+        metric: VectorMetric,
+        vector_element_type: VectorElementType,
+        cell_count: u32,
+        candidates: u32,
+        probes: u32,
+        reconstruction_error_p95_micros: u64,
+    ) -> Result<Self> {
+        let quantizer = quantizer.into();
+        let coarse_quantizer = coarse_quantizer.into();
+        let scan_quantizer = GlobalScanQuantizer::from_state(quantizer.clone())?;
+        let coarse = GlobalCoarseQuantizer::from_state(coarse_quantizer.clone())?;
+        let dimensions = scan_dimensions(&quantizer);
+        if dimensions == 0 || dimensions != coarse_dimensions(&coarse_quantizer) {
+            return invalid("V11 scan and coarse quantizers disagree on dimensions");
+        }
+        vector_element_type.fixed_width_bytes(dimensions)?;
+        let cells = coarse.all_cells()?;
+        if cell_count == 0
+            || usize::try_from(cell_count).ok() != Some(cells.len())
+            || candidates == 0
+            || probes == 0
+            || probes > candidates
+        {
+            return invalid("V11 codebook typed identity columns are inconsistent");
+        }
+        Ok(Self {
+            layout: V11_CODEBOOK_LAYOUT.to_string(),
+            metric,
+            dimensions,
+            vector_element_type,
+            centroid_code_bytes: scan_quantizer.code_bytes_per_vector(),
+            cell_count,
+            candidates,
+            probes,
+            reconstruction_error_p95_micros,
+            quantizer,
+            coarse_quantizer,
+        })
+    }
+
+    pub(crate) fn encode(&self) -> Result<Vec<u8>> {
+        validate_v11_codebook(self)?;
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("layout", DataType::Utf8, false),
+                Field::new("metric", DataType::Utf8, false),
+                Field::new("dimensions", DataType::UInt64, false),
+                Field::new("vector_element_type", DataType::Utf8, false),
+                Field::new("centroid_code_bytes", DataType::UInt64, false),
+                Field::new("cell_count", DataType::UInt32, false),
+                Field::new("candidates", DataType::UInt32, false),
+                Field::new("probes", DataType::UInt32, false),
+                Field::new("reconstruction_error_p95_micros", DataType::UInt64, false),
+                Field::new(V11_CODEBOOK_QUANTIZER_COLUMN, DataType::Utf8, false),
+                Field::new(V11_CODEBOOK_COARSE_QUANTIZER_COLUMN, DataType::Utf8, false),
+            ],
+            std::collections::HashMap::from([(
+                "borsuk.ann.layout".to_string(),
+                V11_CODEBOOK_LAYOUT.to_string(),
+            )]),
+        ));
+        let quantizer = serde_json::to_string(&self.quantizer).map_err(|error| {
+            BorsukError::InvalidStorage(format!("failed to encode V11 scan quantizer: {error}"))
+        })?;
+        let coarse_quantizer = serde_json::to_string(&self.coarse_quantizer).map_err(|error| {
+            BorsukError::InvalidStorage(format!("failed to encode V11 coarse quantizer: {error}"))
+        })?;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![self.layout.as_str()])),
+                Arc::new(StringArray::from(vec![self.metric.to_string()])),
+                Arc::new(UInt64Array::from(vec![
+                    u64::try_from(self.dimensions)
+                        .map_err(|_| invalid_error("V11 dimensions exceed u64"))?,
+                ])),
+                Arc::new(StringArray::from(vec![self.vector_element_type.as_str()])),
+                Arc::new(UInt64Array::from(vec![
+                    u64::try_from(self.centroid_code_bytes)
+                        .map_err(|_| invalid_error("V11 centroid code width exceeds u64"))?,
+                ])),
+                Arc::new(UInt32Array::from(vec![self.cell_count])),
+                Arc::new(UInt32Array::from(vec![self.candidates])),
+                Arc::new(UInt32Array::from(vec![self.probes])),
+                Arc::new(UInt64Array::from(vec![
+                    self.reconstruction_error_p95_micros,
+                ])),
+                Arc::new(StringArray::from(vec![quantizer])),
+                Arc::new(StringArray::from(vec![coarse_quantizer])),
+            ],
+        )?;
+        let mut bytes = Vec::new();
+        let properties = WriterProperties::builder()
+            .set_compression(Compression::ZSTD(Default::default()))
+            .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue::new(
+                "borsuk.ann.layout".to_string(),
+                V11_CODEBOOK_LAYOUT.to_string(),
+            )]))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
+        writer.write(&batch)?;
+        writer.close()?;
+        Ok(bytes)
+    }
+
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+        let markers = builder
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .ok_or_else(|| {
+                invalid_error("V11 codebook has no layout metadata; rebuild the unreleased index")
+            })?;
+        if markers
+            .iter()
+            .filter(|entry| entry.key == "borsuk.ann.layout")
+            .map(|entry| entry.value.as_deref())
+            .collect::<Vec<_>>()
+            != [Some(V11_CODEBOOK_LAYOUT)]
+        {
+            return invalid("V11 codebook layout is invalid; rebuild the unreleased index");
+        }
+        let expected = Self::schema();
+        let mut rows = Vec::new();
+        for batch in builder.build()? {
+            let batch = batch?;
+            if batch.schema().fields() != expected.fields()
+                || batch
+                    .columns()
+                    .iter()
+                    .any(|column| column.null_count() != 0)
+            {
+                return invalid("V11 codebook Parquet schema is invalid");
+            }
+            rows.push(batch);
+        }
+        if rows.len() != 1 || rows[0].num_rows() != 1 {
+            return invalid("V11 codebook must contain exactly one row");
+        }
+        let row = &rows[0];
+        let string = |index, name| -> Result<&StringArray> {
+            row.column(index)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| invalid_error(&format!("V11 codebook {name} is not Utf8")))
+        };
+        let u64_column = |index, name| -> Result<&UInt64Array> {
+            row.column(index)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| invalid_error(&format!("V11 codebook {name} is not UInt64")))
+        };
+        let u32_column = |index, name| -> Result<&UInt32Array> {
+            row.column(index)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .ok_or_else(|| invalid_error(&format!("V11 codebook {name} is not UInt32")))
+        };
+        let layout = string(0, "layout")?.value(0).to_string();
+        let metric = VectorMetric::from_str(string(1, "metric")?.value(0))
+            .map_err(|_| invalid_error("V11 codebook metric is invalid"))?;
+        let dimensions = usize::try_from(u64_column(2, "dimensions")?.value(0))
+            .map_err(|_| invalid_error("V11 codebook dimensions exceed usize"))?;
+        let vector_element_type =
+            VectorElementType::from_str(string(3, "vector_element_type")?.value(0))
+                .map_err(|_| invalid_error("V11 codebook vector element type is invalid"))?;
+        let centroid_code_bytes =
+            usize::try_from(u64_column(4, "centroid_code_bytes")?.value(0))
+                .map_err(|_| invalid_error("V11 codebook centroid code width exceeds usize"))?;
+        let cell_count = u32_column(5, "cell_count")?.value(0);
+        let candidates = u32_column(6, "candidates")?.value(0);
+        let probes = u32_column(7, "probes")?.value(0);
+        let reconstruction_error_p95_micros =
+            u64_column(8, "reconstruction_error_p95_micros")?.value(0);
+        let quantizer = serde_json::from_str(string(9, V11_CODEBOOK_QUANTIZER_COLUMN)?.value(0))
+            .map_err(|error| {
+                invalid_error(&format!("V11 scan quantizer state is invalid: {error}"))
+            })?;
+        let coarse_quantizer =
+            serde_json::from_str(string(10, V11_CODEBOOK_COARSE_QUANTIZER_COLUMN)?.value(0))
+                .map_err(|error| {
+                    invalid_error(&format!("V11 coarse quantizer state is invalid: {error}"))
+                })?;
+        let decoded = Self {
+            layout,
+            metric,
+            dimensions,
+            vector_element_type,
+            centroid_code_bytes,
+            cell_count,
+            candidates,
+            probes,
+            reconstruction_error_p95_micros,
+            quantizer,
+            coarse_quantizer,
+        };
+        validate_v11_codebook(&decoded)?;
+        Ok(decoded)
+    }
+
+    fn schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("layout", DataType::Utf8, false),
+            Field::new("metric", DataType::Utf8, false),
+            Field::new("dimensions", DataType::UInt64, false),
+            Field::new("vector_element_type", DataType::Utf8, false),
+            Field::new("centroid_code_bytes", DataType::UInt64, false),
+            Field::new("cell_count", DataType::UInt32, false),
+            Field::new("candidates", DataType::UInt32, false),
+            Field::new("probes", DataType::UInt32, false),
+            Field::new("reconstruction_error_p95_micros", DataType::UInt64, false),
+            Field::new(V11_CODEBOOK_QUANTIZER_COLUMN, DataType::Utf8, false),
+            Field::new(V11_CODEBOOK_COARSE_QUANTIZER_COLUMN, DataType::Utf8, false),
+        ]))
+    }
+
+    pub(crate) fn resident_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.layout.capacity()
+            + self.quantizer.heap_bytes()
+            + self.coarse_quantizer.heap_bytes()
+    }
+}
+
+fn scan_dimensions(state: &GlobalScanQuantizerState) -> usize {
+    match state {
+        GlobalScanQuantizerState::Pq(state) => state.dimensions,
+        GlobalScanQuantizerState::FastTurboQuantMse(state) => state.dimensions,
+        GlobalScanQuantizerState::FastTurboQuantProd(state) => state.dimensions,
+    }
+}
+
+fn coarse_dimensions(state: &GlobalCoarseQuantizerState) -> usize {
+    match state {
+        GlobalCoarseQuantizerState::Product(state) => state.dimensions,
+        GlobalCoarseQuantizerState::Hierarchical(state) => state.dimensions,
+    }
+}
+
+fn validate_v11_codebook(descriptor: &GlobalCodebookDescriptor) -> Result<()> {
+    if descriptor.layout != V11_CODEBOOK_LAYOUT {
+        return invalid("V11 codebook payload layout is invalid; rebuild the unreleased index");
+    }
+    let rebuilt = GlobalCodebookDescriptor::new(
+        descriptor.quantizer.clone(),
+        descriptor.coarse_quantizer.clone(),
+        descriptor.metric.clone(),
+        descriptor.vector_element_type,
+        descriptor.cell_count,
+        descriptor.candidates,
+        descriptor.probes,
+        descriptor.reconstruction_error_p95_micros,
+    )?;
+    if rebuilt.dimensions != descriptor.dimensions
+        || rebuilt.centroid_code_bytes != descriptor.centroid_code_bytes
+    {
+        return invalid("V11 codebook typed columns do not match quantizer state");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EncodedGlobalRecord {
+    pub(crate) cell: u16,
+    pub(crate) scan_code: Vec<u8>,
+    pub(crate) reconstruction_error_micros: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ResidentGlobalCodebook {
+    quantizer: GlobalScanQuantizer,
+    coarse_quantizer: GlobalCoarseQuantizer,
+    cells: Vec<u16>,
+}
+
+impl ResidentGlobalCodebook {
+    pub(crate) fn load(descriptor: GlobalCodebookDescriptor) -> Result<Self> {
+        validate_v11_codebook(&descriptor)?;
+        let coarse_quantizer = GlobalCoarseQuantizer::from_state(descriptor.coarse_quantizer)?;
+        let cells = coarse_quantizer.all_cells()?;
+        Ok(Self {
+            quantizer: GlobalScanQuantizer::from_state(descriptor.quantizer)?,
+            coarse_quantizer,
+            cells,
+        })
+    }
+
+    pub(crate) fn encode_record(&self, vector: &[f32]) -> Result<EncodedGlobalRecord> {
+        let scan_code = self.quantizer.encode(vector)?;
+        let prepared = self.quantizer.prepare_query(vector)?;
+        let distance = self.quantizer.distance(&prepared, &scan_code)?;
+        if !distance.is_finite() || distance < 0.0 {
+            return invalid("V11 codebook reconstruction error is non-finite or negative");
+        }
+        let micros = (f64::from(distance) * 1_000_000.0).round();
+        if !micros.is_finite() || micros < 0.0 || micros > u64::MAX as f64 {
+            return invalid("V11 codebook reconstruction error micros are out of range");
+        }
+        Ok(EncodedGlobalRecord {
+            cell: self.coarse_quantizer.encode_cell_with_scratch(
+                vector,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )?,
+            scan_code,
+            reconstruction_error_micros: micros as u64,
+        })
+    }
+
+    pub(crate) fn nearest_cells(&self, query: &[f32], probes: usize) -> Result<Vec<u16>> {
+        Ok(self
+            .coarse_quantizer
+            .nearest_cells_with_distances(query, probes, &self.cells)?
+            .into_iter()
+            .map(|(_, cell)| cell)
+            .collect())
+    }
+
+    pub(crate) fn rank_pages(
+        &self,
+        query: &[f32],
+        selected_cells: &[u16],
+        pages: impl IntoIterator<Item = RoutedGlobalLeafPage>,
+        page_budget: usize,
+    ) -> Result<Vec<RoutedGlobalLeafPage>> {
+        let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
+        let prepared = self.quantizer.prepare_query(query)?;
+        let mut seen = BTreeSet::new();
+        let mut ranked = pages
+            .into_iter()
+            .filter(|page| selected.contains(&page.page.cell_index))
+            .filter(|page| {
+                seen.insert((
+                    page.page.cell_index,
+                    page.page.leaf_ordinal,
+                    page.page.bundle_index,
+                    page.page.batch_offset,
+                ))
+            })
+            .map(|mut routed| {
+                if u64::from(routed.page.batch_bytes)
+                    > crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
+                {
+                    return invalid("bounded leaf page exceeds its encoded-byte cap");
+                }
+                routed.distance = self
+                    .quantizer
+                    .distance(&prepared, &routed.page.centroid_code)?;
+                Ok(routed)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ranked.sort_by(|left, right| {
+            left.distance
+                .total_cmp(&right.distance)
+                .then_with(|| left.page.cell_index.cmp(&right.page.cell_index))
+                .then_with(|| left.page.leaf_ordinal.cmp(&right.page.leaf_ordinal))
+                .then_with(|| left.page.bundle_index.cmp(&right.page.bundle_index))
+                .then_with(|| left.page.batch_offset.cmp(&right.page.batch_offset))
+        });
+        ranked.truncate(page_budget);
+        Ok(ranked)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct GlobalPqChunkBytes {
     pub(crate) bytes: Vec<u8>,
@@ -1667,6 +2091,48 @@ mod tests {
         }
     }
 
+    fn test_v11_codebook_descriptor() -> GlobalCodebookDescriptor {
+        let fit = vectors(256, 64);
+        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        GlobalCodebookDescriptor::new(
+            quantizer.state(),
+            coarse_state(&fit),
+            crate::VectorMetric::Euclidean,
+            VectorElementType::Float32,
+            16,
+            32,
+            8,
+            17,
+        )
+        .unwrap()
+    }
+
+    fn replace_layout_marker(mut bytes: Vec<u8>, replacement: &[u8]) -> Vec<u8> {
+        let marker = b"bounded-arrow-leaf-v11";
+        assert_eq!(marker.len(), replacement.len());
+        let offset = bytes
+            .windows(marker.len())
+            .position(|window| window == marker)
+            .expect("V11 descriptor marker is present");
+        bytes[offset..offset + marker.len()].copy_from_slice(replacement);
+        bytes
+    }
+
+    #[test]
+    fn v11_codebook_round_trips_and_rejects_v10_marker() {
+        let descriptor = test_v11_codebook_descriptor();
+        let bytes = descriptor.encode().unwrap();
+        assert_eq!(
+            GlobalCodebookDescriptor::decode(&bytes).unwrap(),
+            descriptor
+        );
+        let v10 = replace_layout_marker(bytes, b"bounded-arrow-leaf-v10");
+        let error = GlobalCodebookDescriptor::decode(&v10)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("rebuild the unreleased index"), "{error}");
+    }
+
     fn leaf_page(
         quantizer: &GlobalScanQuantizer,
         vector: &[f32],
@@ -1682,6 +2148,7 @@ mod tests {
             body_bytes: 127 * 1024,
             batch_bytes: 128 * 1024,
             rows: 32,
+            partial_run_count: 0,
             checksum: [leaf_ordinal as u8; 32],
             centroid_code: quantizer.encode(vector).unwrap().into_boxed_slice(),
         }
