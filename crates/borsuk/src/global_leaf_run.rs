@@ -19,6 +19,7 @@ pub(crate) struct LaneSourceRange {
 }
 
 impl LaneSourceRange {
+    #[allow(dead_code, reason = "Task 4 direct lane-run publication constructor")]
     pub(crate) fn new(
         lane: u16,
         lease_epoch: u64,
@@ -87,10 +88,12 @@ impl SourceRangeSet {
         Ok(Self { ranges })
     }
 
+    #[allow(dead_code, reason = "Task 4 direct lane-run publication inspection")]
     pub(crate) fn ranges(&self) -> &[LaneSourceRange] {
         &self.ranges
     }
 
+    #[allow(dead_code, reason = "Task 4 source-range coverage subtraction")]
     pub(crate) fn subtract(&self, covered: &Self) -> Result<CoverageDifference> {
         self.validate_canonical()?;
         covered.validate_canonical()?;
@@ -156,6 +159,7 @@ impl SourceRangeSet {
         }
     }
 
+    #[allow(dead_code, reason = "Task 4 source-range coverage validation")]
     pub(crate) fn covers(&self, candidate: &Self) -> bool {
         matches!(
             candidate.subtract(self),
@@ -187,6 +191,7 @@ impl SourceRangeSet {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code, reason = "Task 4 direct lane-run publication result")]
 pub(crate) enum CoverageDifference {
     FullyCovered,
     Disjoint(SourceRangeSet),
@@ -301,6 +306,10 @@ impl GlobalCodebookRef {
         &self.descriptor_checksum
     }
 
+    pub(crate) fn metric(&self) -> &VectorMetric {
+        &self.metric
+    }
+
     pub(crate) fn dimensions(&self) -> usize {
         self.dimensions
     }
@@ -323,6 +332,10 @@ impl GlobalCodebookRef {
 
     pub(crate) fn probes(&self) -> u32 {
         self.probes
+    }
+
+    pub(crate) fn reconstruction_error_p95_micros(&self) -> u64 {
+        self.reconstruction_error_p95_micros
     }
 
     pub(crate) fn resident_bytes(&self) -> u64 {
@@ -433,6 +446,10 @@ impl GlobalLeafRunRef {
         self.pages
     }
 
+    pub(crate) fn bundles(&self) -> u64 {
+        self.bundles
+    }
+
     pub(crate) fn sealed_pages(&self) -> u64 {
         self.sealed_pages
     }
@@ -533,14 +550,17 @@ impl GlobalAnnRef {
         &self.incremental_runs
     }
 
+    #[allow(dead_code, reason = "Task 4 incremental run publication")]
     pub(crate) fn coverage(&self) -> &SourceRangeSet {
         &self.coverage
     }
 
+    #[allow(dead_code, reason = "Task 5 purge-compaction accounting")]
     pub(crate) fn base_rows(&self) -> u64 {
         self.base_rows
     }
 
+    #[allow(dead_code, reason = "Task 5 purge-compaction accounting")]
     pub(crate) fn appended_live_rows(&self) -> u64 {
         self.appended_live_rows
     }
@@ -553,11 +573,12 @@ impl GlobalAnnRef {
         self.storage_bytes
     }
 
+    #[allow(dead_code, reason = "Task 4 resident run publication accounting")]
     pub(crate) fn resident_bytes(&self) -> u64 {
         self.resident_bytes
     }
 
-    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+    pub(crate) fn resident_bytes_estimate(&self) -> u64 {
         let codebook_strings = self
             .codebook
             .descriptor_path
@@ -579,8 +600,8 @@ impl GlobalAnnRef {
                             .saturating_mul(std::mem::size_of::<LaneSourceRange>()),
                     )
             })
-            .sum::<usize>();
-        std::mem::size_of::<Self>()
+            .fold(0_usize, usize::saturating_add);
+        let metadata_bytes = std::mem::size_of::<Self>()
             .saturating_add(codebook_strings)
             .saturating_add(
                 self.incremental_runs
@@ -593,11 +614,14 @@ impl GlobalAnnRef {
                     .pending_reconstruction_errors_micros
                     .capacity()
                     .saturating_mul(std::mem::size_of::<u64>()),
-            )
-            .saturating_add(usize::try_from(self.resident_bytes).unwrap_or(usize::MAX))
+            );
+        u64::try_from(metadata_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(self.resident_bytes)
     }
 
     #[cfg(test)]
+    #[allow(dead_code, reason = "Task 5 purge-compaction fixture mutation")]
     pub(crate) fn set_appended_live_rows(&mut self, appended_live_rows: u64) {
         self.appended_live_rows = appended_live_rows;
     }
@@ -673,6 +697,33 @@ impl GlobalAnnRef {
         }
         Ok(())
     }
+
+    /// Validate the exact Task 3 serving shape: one level-zero offline base and
+    /// no incremental coverage. Generic V11 validation remains available for
+    /// later incremental-run tasks, but those references are not yet servable.
+    pub(crate) fn validate_offline_base_shape(&self) -> Result<()> {
+        self.validate()?;
+        let Some(base) = &self.base else {
+            return invalid("V11 offline base reference is missing its base run");
+        };
+        if !self.incremental_runs.is_empty() || !self.coverage.ranges.is_empty() {
+            return invalid("V11 offline base reference contains incremental runs or coverage");
+        }
+        if base.level != 0 {
+            return invalid("V11 offline base run must be level zero");
+        }
+        if self.base_rows != base.rows
+            || self.rows != base.rows
+            || self.appended_live_rows != 0
+            || self.obsolete_rows != 0
+        {
+            return invalid("V11 offline base row counters are inconsistent");
+        }
+        if !self.drift.pending_reconstruction_errors_micros.is_empty() {
+            return invalid("V11 offline base must not contain pending drift samples");
+        }
+        Ok(())
+    }
 }
 
 fn validate_codebook(codebook: &GlobalCodebookRef) -> Result<()> {
@@ -700,8 +751,11 @@ fn validate_codebook(codebook: &GlobalCodebookRef) -> Result<()> {
     if codebook.candidates == 0 || codebook.candidates > codebook.cell_count {
         return invalid("V11 global codebook candidates must be within the cell count");
     }
-    if codebook.probes == 0 || codebook.probes > codebook.cell_count {
-        return invalid("V11 global codebook probes must be within the cell count");
+    if codebook.probes == 0
+        || codebook.probes > codebook.cell_count
+        || codebook.probes > codebook.candidates
+    {
+        return invalid("V11 global codebook probes must be within candidates and the cell count");
     }
     if let VectorMetric::Minkowski { p } = codebook.metric {
         if !p.is_finite() || p < 1.0 {
@@ -870,6 +924,54 @@ mod tests {
         }
     }
 
+    fn valid_offline_ann_ref() -> GlobalAnnRef {
+        let codebook = GlobalCodebookRef {
+            layout_version: GLOBAL_PQ_REF_LAYOUT_VERSION,
+            descriptor_path: "global-leaf/v11/codebooks/ab/codebook.parquet".to_owned(),
+            descriptor_checksum: "ab".repeat(32),
+            metric: VectorMetric::Euclidean,
+            dimensions: 4,
+            element_type: VectorElementType::Float32,
+            code_width: 4,
+            cell_count: 4,
+            candidates: 4,
+            probes: 2,
+            reconstruction_error_p95_micros: 7,
+            resident_bytes: 10,
+            storage_bytes: 20,
+        };
+        let base = GlobalLeafRunRef {
+            layout_version: GLOBAL_PQ_REF_LAYOUT_VERSION,
+            level: 0,
+            codebook_checksum: codebook.descriptor_checksum.clone(),
+            directory: GlobalLeafDirectoryRef {
+                path: "global-leaf/v11/directories/cd/directory.parquet".to_owned(),
+                checksum: "cd".repeat(32),
+                encoded_bytes: 30,
+                shard_count: 1,
+            },
+            rows: 4,
+            pages: 1,
+            bundles: 1,
+            sealed_pages: 1,
+            partial_pages: 0,
+            encoded_bytes: 30,
+            resident_bytes: 40,
+            min_stamp: Some(MutationStampRef {
+                hlc: 1,
+                writer: [1; 16],
+                digest: [2; 32],
+            }),
+            max_stamp: Some(MutationStampRef {
+                hlc: 2,
+                writer: [1; 16],
+                digest: [3; 32],
+            }),
+            source_ranges: SourceRangeSet::default(),
+        };
+        GlobalAnnRef::new_offline_base(codebook, base, 1, 0).unwrap()
+    }
+
     #[test]
     fn source_ranges_reject_overlap_and_preserve_partial_difference() {
         let covered = SourceRangeSet::new(vec![range(3, 7, 4, 8)]).unwrap();
@@ -940,6 +1042,50 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("cell count")
+        );
+    }
+
+    #[test]
+    fn offline_base_shape_rejects_a_generic_valid_incremental_reference() {
+        let mut ann = valid_offline_ann_ref();
+        let mut incremental = valid_ann_ref().incremental_runs.remove(0);
+        incremental.level = 1;
+        incremental.codebook_checksum = ann.codebook.descriptor_checksum.clone();
+        ann.coverage = incremental.source_ranges.clone();
+        ann.appended_live_rows = incremental.rows;
+        ann.rows += incremental.rows;
+        ann.storage_bytes += incremental.encoded_bytes;
+        ann.resident_bytes += incremental.resident_bytes;
+        ann.incremental_runs.push(incremental);
+        ann.validate().unwrap();
+
+        let error = ann.validate_offline_base_shape().unwrap_err().to_string();
+        assert!(error.contains("offline base"), "{error}");
+    }
+
+    #[test]
+    fn offline_base_shape_binds_base_level_and_row_counters() {
+        let mut ann = valid_offline_ann_ref();
+        ann.base.as_mut().unwrap().level = 1;
+        assert!(ann.validate().is_ok());
+        assert!(ann.validate_offline_base_shape().is_err());
+
+        let mut ann = valid_offline_ann_ref();
+        ann.base_rows += 1;
+        ann.rows += 1;
+        assert!(ann.validate().is_ok());
+        assert!(ann.validate_offline_base_shape().is_err());
+    }
+
+    #[test]
+    fn codebook_reference_rejects_probes_above_candidates() {
+        let mut ann = valid_offline_ann_ref();
+        ann.codebook.candidates = 1;
+        ann.codebook.probes = 2;
+        let error = ann.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("probes") && error.contains("candidates"),
+            "{error}"
         );
     }
 }

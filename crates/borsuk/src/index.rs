@@ -48,7 +48,7 @@ use crate::{
     },
     global_pq_sidecar::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCoarseQuantizer, GlobalCodebookDescriptor,
-        GlobalLeafLayer, GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalScanQuantizer,
+        GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalScanQuantizer,
         HierarchicalCoarseQuantizer, ResidentGlobalCodebook, RoutedGlobalLeafPage,
     },
     late_interaction::{LateInteractionSearchOptions, LateInteractionSearchReport},
@@ -331,7 +331,6 @@ struct SearchExecution {
 
 #[derive(Debug)]
 struct GlobalLeafReadGroup {
-    layer: GlobalLeafLayer,
     path: String,
     start: u64,
     end: u64,
@@ -340,7 +339,6 @@ struct GlobalLeafReadGroup {
 
 #[derive(Debug)]
 struct RoutedDecodedGlobalLeafRow {
-    layer: GlobalLeafLayer,
     row: crate::global_leaf::DecodedGlobalLeafRow,
 }
 
@@ -1797,27 +1795,26 @@ impl<T> BoundedResidentCache<T> {
     }
 }
 
-/// Loaded descriptor/codebook state keyed by content checksum. Base and delta
-/// layers share bounded retention and single-flight setup reads.
+/// Loaded V11 descriptor/codebook state keyed by the complete durable reference.
 type ResidentGlobalCodebookCache = Arc<BoundedResidentCache<ResidentGlobalCodebook>>;
 type ResidentGlobalLeafRunCache = Arc<BoundedResidentCache<ResidentGlobalLeafRun>>;
 
 #[derive(Clone, Debug)]
 struct ResidentGlobalAnnPins {
-    codebook_checksum: String,
+    codebook_key: String,
     codebook: Arc<ResidentGlobalCodebook>,
     base: Option<(String, Arc<ResidentGlobalLeafRun>)>,
 }
 
 impl ResidentGlobalAnnPins {
-    fn codebook(&self, checksum: &str) -> Option<Arc<ResidentGlobalCodebook>> {
-        (self.codebook_checksum == checksum).then(|| Arc::clone(&self.codebook))
+    fn codebook(&self, key: &str) -> Option<Arc<ResidentGlobalCodebook>> {
+        (self.codebook_key == key).then(|| Arc::clone(&self.codebook))
     }
 
-    fn leaf_run(&self, checksum: &str) -> Option<Arc<ResidentGlobalLeafRun>> {
+    fn leaf_run(&self, key: &str) -> Option<Arc<ResidentGlobalLeafRun>> {
         self.base
             .as_ref()
-            .and_then(|(base_checksum, base)| (base_checksum == checksum).then(|| Arc::clone(base)))
+            .and_then(|(base_key, base)| (base_key == key).then(|| Arc::clone(base)))
     }
 }
 
@@ -8041,9 +8038,6 @@ impl BorsukIndex {
             global_leaf_waves: 0,
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
-            global_delta_approximate_us: 0,
-            global_delta_exact_rerank_us: 0,
-            global_delta_wait_us: 0,
             resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
             collection_resident_bytes: 0,
             retained_bytes: 0,
@@ -12707,114 +12701,172 @@ impl BorsukIndex {
         &self,
         reference: &GlobalCodebookRef,
     ) -> Result<Arc<ResidentGlobalCodebook>> {
+        let key = serde_json::to_string(reference).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "V11 global codebook reference cannot be keyed: {error}"
+            ))
+        })?;
         let loaded = if let Some(pinned) = self
             .resident_global_ann_pins
             .as_ref()
-            .and_then(|pins| pins.codebook(reference.descriptor_checksum()))
+            .and_then(|pins| pins.codebook(&key))
         {
             pinned
         } else {
             self.resident_global_codebooks
-                .load(reference.descriptor_checksum(), || {
-                    let read = self
-                        .storage
-                        .read_known_size_with_cache_status_and_checksum(
-                            reference.descriptor_path(),
-                            reference.storage_bytes(),
-                            reference.descriptor_checksum(),
-                        )?;
-                    let descriptor = GlobalCodebookDescriptor::decode(&read.bytes)?;
-                    let resident = ResidentGlobalCodebook::load(descriptor)?;
-                    Ok(resident)
-                })?
+                .load(&key, || self.read_resident_global_codebook(reference))?
         };
+        self.validate_resident_global_codebook(reference, &loaded, &self.manifest)?;
+        Ok(loaded)
+    }
+
+    fn read_resident_global_codebook(
+        &self,
+        reference: &GlobalCodebookRef,
+    ) -> Result<ResidentGlobalCodebook> {
+        let read = self
+            .storage
+            .read_known_size_with_cache_status_and_checksum(
+                reference.descriptor_path(),
+                reference.storage_bytes(),
+                reference.descriptor_checksum(),
+            )?;
+        ResidentGlobalCodebook::load(GlobalCodebookDescriptor::decode(&read.bytes)?)
+    }
+
+    fn validate_resident_global_codebook(
+        &self,
+        reference: &GlobalCodebookRef,
+        loaded: &ResidentGlobalCodebook,
+        manifest: &Manifest,
+    ) -> Result<()> {
         if loaded.code_bytes_per_vector() != reference.code_width()
             || loaded.cell_count() != usize::try_from(reference.cell_count()).unwrap_or(usize::MAX)
             || u64::try_from(loaded.resident_bytes()).ok() != Some(reference.resident_bytes())
-            || reference.dimensions() != self.manifest.config.dimensions
-            || reference.element_type() != self.manifest.build_config.vector_element_type
+            || loaded.metric() != reference.metric()
+            || loaded.dimensions() != reference.dimensions()
+            || loaded.vector_element_type() != reference.element_type()
+            || loaded.candidates() != reference.candidates()
+            || loaded.probes() != reference.probes()
+            || loaded.reconstruction_error_p95_micros()
+                != reference.reconstruction_error_p95_micros()
+            || reference.metric() != &manifest.config.metric
+            || reference.dimensions() != manifest.config.dimensions
+            || reference.element_type() != manifest.build_config.vector_element_type
         {
             return Err(BorsukError::InvalidStorage(
                 "V11 global codebook reference does not match its descriptor".to_string(),
             ));
         }
-        Ok(loaded)
+        Ok(())
     }
 
     fn load_resident_global_leaf_run(
         &self,
         reference: &GlobalLeafRunRef,
     ) -> Result<Arc<ResidentGlobalLeafRun>> {
-        let directory_ref = reference.directory();
+        let key = serde_json::to_string(reference).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "V11 global leaf-run reference cannot be keyed: {error}"
+            ))
+        })?;
         let loaded = if let Some(pinned) = self
             .resident_global_ann_pins
             .as_ref()
-            .and_then(|pins| pins.leaf_run(directory_ref.checksum()))
+            .and_then(|pins| pins.leaf_run(&key))
         {
             pinned
         } else {
             self.resident_global_leaf_runs
-                .load(directory_ref.checksum(), || {
-                    let root = self
-                        .storage
-                        .read_known_size_with_cache_status_and_checksum(
-                            directory_ref.path(),
-                            directory_ref.encoded_bytes(),
-                            directory_ref.checksum(),
-                        )?;
-                    let directory = crate::global_leaf::decode_global_leaf_run_directory(
-                        reference.codebook_checksum(),
-                        &root.bytes,
-                        |shard| {
-                            self.storage
-                                .read_known_size_with_cache_status_and_checksum(
-                                    &shard.path,
-                                    shard.encoded_bytes,
-                                    &shard.checksum,
-                                )
-                                .map(|read| read.bytes)
-                        },
-                    )?;
-                    let directory_objects = u32::try_from(directory.shards.len())
-                        .ok()
-                        .and_then(|shards| shards.checked_add(1))
-                        .ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "V11 directory object count exceeds u32".into(),
-                            )
-                        })?;
-                    let encoded_bytes = directory
-                        .bundles
-                        .iter()
-                        .map(|bundle| bundle.encoded_bytes)
-                        .chain(directory.shards.iter().map(|shard| shard.encoded_bytes))
-                        .chain(std::iter::once(directory_ref.encoded_bytes()))
-                        .try_fold(0_u64, |total, bytes| {
-                            total.checked_add(bytes).ok_or_else(|| {
-                                BorsukError::InvalidStorage(
-                                    "V11 leaf-run encoded bytes overflow".into(),
-                                )
-                            })
-                        })?;
-                    let resident = ResidentGlobalLeafRun::new(directory);
-                    if directory_objects != directory_ref.object_count()
-                        || encoded_bytes != reference.encoded_bytes()
-                        || u64::try_from(resident.resident_bytes()).ok()
-                            != Some(reference.resident_bytes())
-                    {
-                        return Err(BorsukError::InvalidStorage(
-                            "V11 leaf-run reference does not match its directory".to_string(),
-                        ));
-                    }
-                    Ok(resident)
-                })?
+                .load(&key, || self.read_resident_global_leaf_run(reference))?
         };
-        if u64::try_from(loaded.resident_bytes()).ok() != Some(reference.resident_bytes()) {
+        self.validate_resident_global_leaf_run(reference, &loaded)?;
+        Ok(loaded)
+    }
+
+    fn read_resident_global_leaf_run(
+        &self,
+        reference: &GlobalLeafRunRef,
+    ) -> Result<ResidentGlobalLeafRun> {
+        let directory_ref = reference.directory();
+        let root = self
+            .storage
+            .read_known_size_with_cache_status_and_checksum(
+                directory_ref.path(),
+                directory_ref.encoded_bytes(),
+                directory_ref.checksum(),
+            )?;
+        let directory = crate::global_leaf::decode_global_leaf_run_directory(
+            reference.codebook_checksum(),
+            &root.bytes,
+            |shard| {
+                self.storage
+                    .read_known_size_with_cache_status_and_checksum(
+                        &shard.path,
+                        shard.encoded_bytes,
+                        &shard.checksum,
+                    )
+                    .map(|read| read.bytes)
+            },
+        )?;
+        let resident = ResidentGlobalLeafRun::new(directory);
+        self.validate_resident_global_leaf_run(reference, &resident)?;
+        Ok(resident)
+    }
+
+    fn validate_resident_global_leaf_run(
+        &self,
+        reference: &GlobalLeafRunRef,
+        loaded: &ResidentGlobalLeafRun,
+    ) -> Result<()> {
+        let directory = loaded.directory();
+        let directory_objects = u32::try_from(directory.shards.len())
+            .ok()
+            .and_then(|shards| shards.checked_add(1))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V11 directory object count exceeds u32".into())
+            })?;
+        let encoded_bytes = directory
+            .bundles
+            .iter()
+            .map(|bundle| bundle.encoded_bytes)
+            .chain(directory.shards.iter().map(|shard| shard.encoded_bytes))
+            .chain(std::iter::once(reference.directory().encoded_bytes()))
+            .try_fold(0_u64, |total, bytes| {
+                total.checked_add(bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage("V11 leaf-run encoded bytes overflow".into())
+                })
+            })?;
+        let rows = directory.pages.iter().try_fold(0_u64, |total, page| {
+            total.checked_add(u64::from(page.rows)).ok_or_else(|| {
+                BorsukError::InvalidStorage("V11 leaf-run row count overflows".into())
+            })
+        })?;
+        let pages = u64::try_from(directory.pages.len()).unwrap_or(u64::MAX);
+        let bundles = u64::try_from(directory.bundles.len()).unwrap_or(u64::MAX);
+        let sealed_pages = u64::try_from(
+            directory
+                .pages
+                .iter()
+                .filter(|page| page.partial_run_count == 0)
+                .count(),
+        )
+        .unwrap_or(u64::MAX);
+        let partial_pages = pages.saturating_sub(sealed_pages);
+        if directory_objects != reference.directory().object_count()
+            || rows != reference.rows()
+            || pages != reference.pages()
+            || bundles != reference.bundles()
+            || sealed_pages != reference.sealed_pages()
+            || partial_pages != reference.partial_pages()
+            || encoded_bytes != reference.encoded_bytes()
+            || u64::try_from(loaded.resident_bytes()).ok() != Some(reference.resident_bytes())
+        {
             return Err(BorsukError::InvalidStorage(
-                "V11 leaf-run cached directory does not match its reference".to_string(),
+                "V11 leaf-run reference does not match its directory".to_string(),
             ));
         }
-        Ok(loaded)
+        Ok(())
     }
 
     fn preload_resident_global_ann_for_manifest(
@@ -12824,17 +12876,35 @@ impl BorsukIndex {
         let Some(reference) = manifest.global_ann_ref.as_ref() else {
             return Ok(None);
         };
-        reference.validate()?;
-        let codebook = self.load_resident_global_codebook(reference.codebook())?;
+        reference.validate_offline_base_shape()?;
+        // Transactional preload always authenticates the manifest's exact durable
+        // identities before any warm cache entry or pin can become visible.
+        let codebook_reference = reference.codebook();
+        let codebook_key = serde_json::to_string(codebook_reference).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "V11 global codebook reference cannot be keyed: {error}"
+            ))
+        })?;
+        let codebook_loaded = self.read_resident_global_codebook(codebook_reference)?;
+        self.validate_resident_global_codebook(codebook_reference, &codebook_loaded, manifest)?;
+        let codebook = self
+            .resident_global_codebooks
+            .load(&codebook_key, || Ok(codebook_loaded))?;
         let base = reference
             .base()
             .map(|base| {
-                self.load_resident_global_leaf_run(base)
-                    .map(|loaded| (base.directory().checksum().to_string(), loaded))
+                let key = serde_json::to_string(base).map_err(|error| {
+                    BorsukError::InvalidStorage(format!(
+                        "V11 global leaf-run reference cannot be keyed: {error}"
+                    ))
+                })?;
+                let resident = self.read_resident_global_leaf_run(base)?;
+                let loaded = self.resident_global_leaf_runs.load(&key, || Ok(resident))?;
+                Ok::<_, BorsukError>((key, loaded))
             })
             .transpose()?;
         Ok(Some(ResidentGlobalAnnPins {
-            codebook_checksum: reference.codebook().descriptor_checksum().to_string(),
+            codebook_key,
             codebook,
             base,
         }))
@@ -12847,11 +12917,6 @@ impl BorsukIndex {
     ) -> Result<Vec<GlobalLeafReadGroup>> {
         let mut planned = Vec::with_capacity(pages.len());
         for routed in pages {
-            if routed.layer != GlobalLeafLayer::Base {
-                return Err(BorsukError::InvalidStorage(
-                    "base-only V11 search selected an incremental leaf layer".to_string(),
-                ));
-            }
             let bundle = base
                 .directory()
                 .bundles
@@ -12877,27 +12942,16 @@ impl BorsukIndex {
                 ));
             }
             planned.push((
-                routed.layer,
                 bundle.path.clone(),
                 routed.page.batch_offset,
                 end,
                 routed.page.clone(),
             ));
         }
-        planned.sort_by(|left, right| {
-            let layer_order = |layer| match layer {
-                GlobalLeafLayer::Delta => 0_u8,
-                GlobalLeafLayer::Base => 1_u8,
-            };
-            layer_order(left.0)
-                .cmp(&layer_order(right.0))
-                .then_with(|| left.1.cmp(&right.1))
-                .then_with(|| left.2.cmp(&right.2))
-        });
+        planned.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
         let mut groups: Vec<GlobalLeafReadGroup> = Vec::new();
-        for (layer, path, start, end, page) in planned {
+        for (path, start, end, page) in planned {
             if let Some(group) = groups.last_mut()
-                && group.layer == layer
                 && group.path == path
                 && group.end == start
             {
@@ -12906,7 +12960,6 @@ impl BorsukIndex {
                 continue;
             }
             groups.push(GlobalLeafReadGroup {
-                layer,
                 path,
                 start,
                 end,
@@ -12934,11 +12987,6 @@ impl BorsukIndex {
                 let stored = self
                     .storage
                     .read_range(&group.path, group.start..group.end)?;
-                if group.layer != GlobalLeafLayer::Base {
-                    return Err(BorsukError::InvalidStorage(
-                        "base-only V11 fetch selected an incremental leaf layer".to_string(),
-                    ));
-                }
                 let mut decoded = Vec::new();
                 for page in &group.pages {
                     let local_start =
@@ -12972,10 +13020,7 @@ impl BorsukIndex {
                             self.manifest.build_config.vector_element_type,
                         )?
                         .into_iter()
-                        .map(|row| RoutedDecodedGlobalLeafRow {
-                            layer: group.layer,
-                            row,
-                        }),
+                        .map(|row| RoutedDecodedGlobalLeafRow { row }),
                     );
                 }
                 Ok::<_, BorsukError>((decoded, stored.len() as u64))
@@ -13007,10 +13052,7 @@ impl BorsukIndex {
                     let greatest = current.row.stamp.greatest(candidate.row.stamp)?;
                     let newer = greatest == candidate.row.stamp
                         && candidate.row.stamp.version() > current.row.stamp.version();
-                    let delta_tie = candidate.row.stamp == current.row.stamp
-                        && candidate.layer == GlobalLeafLayer::Delta
-                        && current.layer == GlobalLeafLayer::Base;
-                    if newer || delta_tie {
+                    if newer {
                         entry.insert(candidate);
                     }
                 }
@@ -13024,7 +13066,6 @@ impl BorsukIndex {
                     candidate.row.stamp,
                 ) {
                     Ok(false) => Some(Ok(RoutedDecodedGlobalLeafRow {
-                        layer: candidate.layer,
                         row: candidate.row.clone(),
                     })),
                     Ok(true) => None,
@@ -13052,7 +13093,11 @@ impl BorsukIndex {
             )
             && options.filter.is_none()
             && !options.include_metadata
-            && self.manifest.global_ann_ref.is_some();
+            && self
+                .manifest
+                .global_ann_ref
+                .as_ref()
+                .is_some_and(|reference| reference.validate_offline_base_shape().is_ok());
         if !eligible {
             return None;
         }
@@ -13127,9 +13172,6 @@ impl BorsukIndex {
                     global_leaf_waves: 0,
                     global_base_approximate_us: 0,
                     global_base_exact_rerank_us: 0,
-                    global_delta_approximate_us: 0,
-                    global_delta_exact_rerank_us: 0,
-                    global_delta_wait_us: 0,
                     resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
                     collection_resident_bytes: 0,
                     retained_bytes: 0,
@@ -13186,7 +13228,6 @@ impl BorsukIndex {
                 .filter(|page| selected_cells.contains(&page.cell_index))
                 .cloned()
                 .map(|page| RoutedGlobalLeafPage {
-                    layer: GlobalLeafLayer::Base,
                     distance: 0.0,
                     page,
                 })
@@ -13220,31 +13261,8 @@ impl BorsukIndex {
         let global_approximate_us =
             u64::try_from(routing_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let exact_started = Instant::now();
-        let has_base = routed
-            .iter()
-            .any(|candidate| candidate.layer == GlobalLeafLayer::Base);
-        let has_delta = routed
-            .iter()
-            .any(|candidate| candidate.layer == GlobalLeafLayer::Delta);
         let mut initial_indices = BTreeSet::new();
-        if has_base && has_delta {
-            if let Some(index) = routed
-                .iter()
-                .position(|candidate| candidate.layer == GlobalLeafLayer::Base)
-            {
-                initial_indices.insert(index);
-            }
-            if let Some(index) = routed
-                .iter()
-                .position(|candidate| candidate.layer == GlobalLeafLayer::Delta)
-            {
-                initial_indices.insert(index);
-            }
-        }
-        let mut nominal_rows = initial_indices
-            .iter()
-            .map(|index| routed[*index].page.rows as usize)
-            .sum::<usize>();
+        let mut nominal_rows = 0_usize;
         for (index, candidate) in routed.iter().enumerate() {
             if nominal_rows >= options.k && !initial_indices.is_empty() {
                 break;
@@ -13406,9 +13424,6 @@ impl BorsukIndex {
                 global_base_approximate_us: global_approximate_us,
                 global_base_exact_rerank_us: u64::try_from(exact_started.elapsed().as_micros())
                     .unwrap_or(u64::MAX),
-                global_delta_approximate_us: 0,
-                global_delta_exact_rerank_us: 0,
-                global_delta_wait_us: 0,
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
@@ -14422,18 +14437,6 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_base_exact_rerank_us)
                 .sum(),
-            global_delta_approximate_us: reports
-                .iter()
-                .map(|(_, report)| report.global_delta_approximate_us)
-                .sum(),
-            global_delta_exact_rerank_us: reports
-                .iter()
-                .map(|(_, report)| report.global_delta_exact_rerank_us)
-                .sum(),
-            global_delta_wait_us: reports
-                .iter()
-                .map(|(_, report)| report.global_delta_wait_us)
-                .sum(),
             resident_bytes_estimate: self.collection_resident_bytes_estimate(),
             collection_resident_bytes: self.collection_resident_bytes_estimate(),
             retained_bytes: 0,
@@ -14585,9 +14588,6 @@ impl BorsukIndex {
                 global_leaf_waves: 0,
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
-                global_delta_approximate_us: 0,
-                global_delta_exact_rerank_us: 0,
-                global_delta_wait_us: 0,
                 resident_bytes_estimate,
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
@@ -14803,9 +14803,6 @@ impl BorsukIndex {
             global_leaf_waves: 0,
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
-            global_delta_approximate_us: 0,
-            global_delta_exact_rerank_us: 0,
-            global_delta_wait_us: 0,
             resident_bytes_estimate,
             collection_resident_bytes: 0,
             retained_bytes: 0,
@@ -14996,7 +14993,11 @@ impl BorsukIndex {
             && !options.disable_coarse_quantizer
             && options.filter.is_none()
             && !options.include_metadata
-            && self.manifest.global_ann_ref.is_some();
+            && self
+                .manifest
+                .global_ann_ref
+                .as_ref()
+                .is_some_and(|reference| reference.validate_offline_base_shape().is_ok());
         // Online segment-changing publishes clear the Task 3 base. Presence of
         // a V11 reference therefore certifies the active immutable set without
         // a routing-tree walk or a dual-format fallback.
@@ -15155,9 +15156,6 @@ impl BorsukIndex {
                     global_leaf_waves: 0,
                     global_base_approximate_us: 0,
                     global_base_exact_rerank_us: 0,
-                    global_delta_approximate_us: 0,
-                    global_delta_exact_rerank_us: 0,
-                    global_delta_wait_us: 0,
                     resident_bytes_estimate,
                     collection_resident_bytes: 0,
                     retained_bytes: 0,
@@ -15918,9 +15916,6 @@ impl BorsukIndex {
                 global_leaf_waves: 0,
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
-                global_delta_approximate_us: 0,
-                global_delta_exact_rerank_us: 0,
-                global_delta_wait_us: 0,
                 resident_bytes_estimate,
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
@@ -16028,9 +16023,6 @@ impl BorsukIndex {
                 global_leaf_waves: 0,
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
-                global_delta_approximate_us: 0,
-                global_delta_exact_rerank_us: 0,
-                global_delta_wait_us: 0,
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
@@ -20778,9 +20770,8 @@ fn is_vector_sidecar_path(path: &str) -> bool {
 
 fn is_global_pq_path(path: &str) -> bool {
     (path.starts_with("global-leaf/bundles/") && path.ends_with(".arrow"))
-        || ((path.starts_with("global-leaf/directories/")
-            || path.starts_with("global-leaf/roots/")
-            || path.starts_with("global-leaf/descriptors/"))
+        || ((path.starts_with("global-leaf/v11/codebooks/")
+            || path.starts_with("global-leaf/v11/directories/"))
             && path.ends_with(".parquet"))
 }
 
@@ -21177,7 +21168,7 @@ fn enforce_ram_budget(manifest: &Manifest, runtime_budget_bytes: Option<u64>) ->
         return Ok(());
     };
 
-    let resident_bytes = manifest.resident_bytes_estimate();
+    let resident_bytes = manifest.try_resident_bytes_estimate()?;
     if resident_bytes > budget_bytes {
         return Err(BorsukError::RamBudgetExceeded {
             resident_bytes,
@@ -22521,18 +22512,6 @@ fn merge_search_execution_hits(
         .report
         .global_base_exact_rerank_us
         .saturating_add(delta_report.global_base_exact_rerank_us);
-    base.report.global_delta_approximate_us = base
-        .report
-        .global_delta_approximate_us
-        .saturating_add(delta_report.global_delta_approximate_us);
-    base.report.global_delta_exact_rerank_us = base
-        .report
-        .global_delta_exact_rerank_us
-        .saturating_add(delta_report.global_delta_exact_rerank_us);
-    base.report.global_delta_wait_us = base
-        .report
-        .global_delta_wait_us
-        .saturating_add(delta_report.global_delta_wait_us);
     base.report.resident_bytes_estimate = base
         .report
         .resident_bytes_estimate
@@ -23035,6 +23014,7 @@ mod tests {
 
     use super::*;
     use std::sync::{Barrier, Mutex};
+    #[allow(dead_code, reason = "Task 4 direct lane-run search fixture")]
     fn assert_v11_leaf_hit(uri: &str, query: &[f32], expected: &str) -> SearchReport {
         let report = BorsukIndex::open(uri)
             .unwrap()
@@ -23048,6 +23028,38 @@ mod tests {
         assert!(report.global_leaf_pages_read > 0);
         assert!(report.global_leaf_exact_scores <= report.records_scored);
         report
+    }
+
+    fn build_finished_resident_global_v11_index() -> (tempfile::TempDir, BorsukIndex) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        (directory, index)
+    }
+
+    fn ann_from_mutated_json(
+        reference: &GlobalAnnRef,
+        mutate: impl FnOnce(&mut serde_json::Value),
+    ) -> GlobalAnnRef {
+        let mut value = serde_json::to_value(reference).unwrap();
+        mutate(&mut value);
+        serde_json::from_value(value).unwrap()
     }
 
     #[test]
@@ -25497,6 +25509,218 @@ mod tests {
     }
 
     #[test]
+    fn resident_global_v11_rejects_incremental_shape_before_search() {
+        let (_directory, index) = build_finished_resident_global_v11_index();
+        let mut manifest = index.manifest.clone();
+        let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
+            let mut incremental = value["base"].clone();
+            incremental["level"] = serde_json::Value::from(1);
+            incremental["source_ranges"] = serde_json::json!({
+                "ranges": [{
+                    "lane": 0,
+                    "lease_epoch": 1,
+                    "first_sequence": 1,
+                    "last_sequence": 1
+                }]
+            });
+            let appended = incremental["rows"].as_u64().unwrap();
+            value["incremental_runs"] = serde_json::Value::Array(vec![incremental.clone()]);
+            value["coverage"] = incremental["source_ranges"].clone();
+            value["appended_live_rows"] = serde_json::Value::from(appended);
+            value["rows"] =
+                serde_json::Value::from(value["base_rows"].as_u64().unwrap() + appended);
+            value["storage_bytes"] = serde_json::Value::from(
+                value["storage_bytes"].as_u64().unwrap()
+                    + incremental["encoded_bytes"].as_u64().unwrap(),
+            );
+            value["resident_bytes"] = serde_json::Value::from(
+                value["resident_bytes"].as_u64().unwrap()
+                    + incremental["resident_bytes"].as_u64().unwrap(),
+            );
+        });
+        ann.validate().unwrap();
+        manifest.global_ann_ref = Some(ann);
+
+        let error = index
+            .preload_resident_global_ann_for_manifest(&manifest)
+            .unwrap_err();
+        assert!(error.to_string().contains("offline base"), "{error}");
+
+        let options = SearchOptions::approx(3, LeafMode::SrhtPqScan).with_max_segments(4);
+        let mut serving = index;
+        serving.manifest = manifest;
+        assert!(serving.resident_global_v11_context(&options).is_none());
+    }
+
+    #[test]
+    fn resident_global_v11_warm_cache_cannot_substitute_missing_durable_paths() {
+        let (_directory, index) = build_finished_resident_global_v11_index();
+
+        for field in ["codebook", "directory"] {
+            let mut manifest = index.manifest.clone();
+            let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
+                if field == "codebook" {
+                    value["codebook"]["descriptor_path"] =
+                        serde_json::Value::from("global-leaf/v11/codebooks/missing.parquet");
+                } else {
+                    value["base"]["directory"]["path"] =
+                        serde_json::Value::from("global-leaf/v11/directories/missing.parquet");
+                }
+            });
+            ann.validate().unwrap();
+            manifest.global_ann_ref = Some(ann);
+            let error = index
+                .preload_resident_global_ann_for_manifest(&manifest)
+                .expect_err(field);
+            assert!(error.to_string().contains("missing"), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn resident_global_v11_binds_all_durable_run_counters() {
+        for field in [
+            "rows",
+            "pages",
+            "bundles",
+            "objects",
+            "encoded_bytes",
+            "resident_bytes",
+        ] {
+            let (_directory, mut index) = build_finished_resident_global_v11_index();
+            index.resident_global_ann_pins = None;
+            index.resident_global_leaf_runs.clear();
+            let mut manifest = index.manifest.clone();
+            let ann =
+                ann_from_mutated_json(
+                    manifest.global_ann_ref.as_ref().unwrap(),
+                    |value| match field {
+                        "rows" => {
+                            value["base"]["rows"] = serde_json::Value::from(
+                                value["base"]["rows"].as_u64().unwrap() + 1,
+                            );
+                            value["base_rows"] =
+                                serde_json::Value::from(value["base_rows"].as_u64().unwrap() + 1);
+                            value["rows"] =
+                                serde_json::Value::from(value["rows"].as_u64().unwrap() + 1);
+                        }
+                        "pages" => {
+                            value["base"]["pages"] = serde_json::Value::from(
+                                value["base"]["pages"].as_u64().unwrap() + 1,
+                            );
+                            value["base"]["sealed_pages"] = serde_json::Value::from(
+                                value["base"]["sealed_pages"].as_u64().unwrap() + 1,
+                            );
+                        }
+                        "bundles" => {
+                            value["base"]["bundles"] = serde_json::Value::from(
+                                value["base"]["bundles"].as_u64().unwrap() + 1,
+                            );
+                        }
+                        "objects" => {
+                            value["base"]["directory"]["shard_count"] = serde_json::Value::from(
+                                value["base"]["directory"]["shard_count"].as_u64().unwrap() + 1,
+                            );
+                        }
+                        "encoded_bytes" => {
+                            value["base"]["encoded_bytes"] = serde_json::Value::from(
+                                value["base"]["encoded_bytes"].as_u64().unwrap() + 1,
+                            );
+                            value["storage_bytes"] = serde_json::Value::from(
+                                value["storage_bytes"].as_u64().unwrap() + 1,
+                            );
+                        }
+                        "resident_bytes" => {
+                            value["base"]["resident_bytes"] = serde_json::Value::from(
+                                value["base"]["resident_bytes"].as_u64().unwrap() + 1,
+                            );
+                            value["resident_bytes"] = serde_json::Value::from(
+                                value["resident_bytes"].as_u64().unwrap() + 1,
+                            );
+                        }
+                        _ => unreachable!(),
+                    },
+                );
+            ann.validate().unwrap();
+            manifest.global_ann_ref = Some(ann);
+            let error = index
+                .preload_resident_global_ann_for_manifest(&manifest)
+                .expect_err(field);
+            assert!(
+                error.to_string().contains("does not match"),
+                "{field}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn resident_global_v11_binds_all_codebook_reference_fields() {
+        for field in ["metric", "candidates", "probes", "reconstruction"] {
+            let (_directory, index) = build_finished_resident_global_v11_index();
+            let mut manifest = index.manifest.clone();
+            let ann =
+                ann_from_mutated_json(
+                    manifest.global_ann_ref.as_ref().unwrap(),
+                    |value| match field {
+                        "metric" => {
+                            value["codebook"]["metric"] =
+                                serde_json::to_value(VectorMetric::Angular).unwrap();
+                        }
+                        "candidates" => {
+                            let current = value["codebook"]["candidates"].as_u64().unwrap();
+                            value["codebook"]["candidates"] =
+                                serde_json::Value::from(current.saturating_sub(1).max(1));
+                            let candidates = value["codebook"]["candidates"].as_u64().unwrap();
+                            value["codebook"]["probes"] = serde_json::Value::from(
+                                value["codebook"]["probes"]
+                                    .as_u64()
+                                    .unwrap()
+                                    .min(candidates),
+                            );
+                        }
+                        "probes" => {
+                            let current = value["codebook"]["probes"].as_u64().unwrap();
+                            let candidates = value["codebook"]["candidates"].as_u64().unwrap();
+                            let replacement = if current == 1 { candidates } else { 1 };
+                            value["codebook"]["probes"] = serde_json::Value::from(replacement);
+                        }
+                        "reconstruction" => {
+                            value["codebook"]["reconstruction_error_p95_micros"] =
+                                serde_json::Value::from(
+                                    value["codebook"]["reconstruction_error_p95_micros"]
+                                        .as_u64()
+                                        .unwrap()
+                                        + 1,
+                                );
+                        }
+                        _ => unreachable!(),
+                    },
+                );
+            ann.validate().unwrap();
+            manifest.global_ann_ref = Some(ann);
+            let error = index
+                .preload_resident_global_ann_for_manifest(&manifest)
+                .expect_err(field);
+            assert!(error.to_string().contains("codebook"), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn resident_global_v11_overflow_cannot_bypass_ram_admission() {
+        let (_directory, index) = build_finished_resident_global_v11_index();
+        let mut manifest = index.manifest.clone();
+        let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
+            let base_resident = value["base"]["resident_bytes"].as_u64().unwrap();
+            value["codebook"]["resident_bytes"] = serde_json::Value::from(u64::MAX - base_resident);
+            value["resident_bytes"] = serde_json::Value::from(u64::MAX);
+        });
+        ann.validate().unwrap();
+        manifest.global_ann_ref = Some(ann);
+
+        let error = enforce_ram_budget(&manifest, Some(u64::MAX - 1)).unwrap_err();
+        assert!(error.to_string().contains("RAM budget"), "{error}");
+    }
+
+    #[test]
     fn frozen_mutation_overlay_has_exact_heap_accounting_and_collision_safe_lookup() {
         let state = |hlc, writer, operation| {
             MutationState::new(
@@ -27530,7 +27754,7 @@ mod tests {
     }
 
     #[test]
-    fn gc_path_filters_accept_only_parquet_segments_and_all_global_pq_objects() {
+    fn gc_path_filters_accept_only_current_v11_global_ann_objects() {
         assert!(is_segment_table_path("segments/L0/aa/seg-1.parquet"));
         assert!(!is_segment_table_path("segments/L0/aa/seg-1.vortex"));
         assert!(!is_segment_table_path("segments/L0/aa/seg-1.arrow"));
@@ -27544,11 +27768,15 @@ mod tests {
         )));
 
         assert!(is_global_pq_path("global-leaf/bundles/ab/a.arrow"));
-        assert!(is_global_pq_path("global-leaf/directories/ab/a.parquet"));
-        assert!(is_global_pq_path("global-leaf/roots/ab/cells-a.parquet"));
         assert!(is_global_pq_path(
-            "global-leaf/descriptors/ab/descriptor-a.parquet"
+            "global-leaf/v11/codebooks/ab/codebook-a.parquet"
         ));
+        assert!(is_global_pq_path(
+            "global-leaf/v11/directories/ab/directory-a.parquet"
+        ));
+        assert!(!is_global_pq_path("global-leaf/directories/ab/a.parquet"));
+        assert!(!is_global_pq_path("global-leaf/roots/ab/cells-a.parquet"));
+        assert!(!is_global_pq_path("global-leaf/descriptors/ab/a.parquet"));
         assert!(!is_global_pq_path("global-pq/cell-graphs/a.bin"));
         assert!(!is_global_pq_path("global-pq/bundles/a.arrow"));
         assert!(!is_global_pq_path("vectors/a.arrow"));
@@ -27575,9 +27803,8 @@ mod tests {
         .unwrap();
         let paths = [
             "global-leaf/bundles/aa/orphan.arrow",
-            "global-leaf/directories/aa/orphan.parquet",
-            "global-leaf/roots/aa/orphan.parquet",
-            "global-leaf/descriptors/aa/orphan.parquet",
+            "global-leaf/v11/codebooks/aa/orphan.parquet",
+            "global-leaf/v11/directories/aa/orphan.parquet",
         ];
         for path in paths {
             index

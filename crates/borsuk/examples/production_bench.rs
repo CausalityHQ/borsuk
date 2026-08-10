@@ -4027,7 +4027,7 @@ mod tests {
     }
 
     #[test]
-    fn query_samples_carry_every_v10_leaf_counter() {
+    fn query_samples_carry_every_v11_leaf_counter() {
         let projection = |sample: &QuerySample| {
             (
                 sample.global_leaf_directory_reads,

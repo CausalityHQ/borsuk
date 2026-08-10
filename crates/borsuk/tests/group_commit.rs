@@ -205,7 +205,7 @@ fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_bas
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put && path.starts_with("global-leaf/")
         }) > 0,
-        "a threshold-sized drain must publish authenticated V10 leaf artifacts"
+        "a threshold-sized drain must publish authenticated V11 leaf artifacts"
     );
     let report = BorsukIndex::open_with_object_store(inner, uri)
         .unwrap()
@@ -218,7 +218,7 @@ fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_bas
         .unwrap();
     assert_eq!(report.hits[0].id.as_str(), "delta-17");
     assert_eq!(report.hits[0].distance, 0.0);
-    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
     assert_eq!(report.segments_searched, 0);
     assert_eq!(report.backing_bytes_read, report.bytes_read);
     assert!(report.global_leaf_directory_reads >= 2);
@@ -378,7 +378,7 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
         .unwrap();
 
     assert_eq!(report.hits[0].id.as_str(), "delta-17");
-    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
     assert!(report.global_leaf_directory_reads >= 2);
     assert!(report.global_leaf_directory_bytes > 0);
     assert!(report.global_leaf_pages_read >= 2);
@@ -396,21 +396,9 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
         report.global_base_exact_rerank_us > 0,
         "cold base+delta search must report base exact-rerank work: {report:?}"
     );
-    assert_eq!(
-        report.global_delta_approximate_us, 0,
-        "fused V10 routing must not retain a second delta phase: {report:?}"
-    );
-    assert_eq!(
-        report.global_delta_exact_rerank_us, 0,
-        "fused V10 scoring must not retain a second delta phase: {report:?}"
-    );
     assert!(
         gets.overlapped(),
         "cold base and immutable-delta reads remained serial: {report:?}"
-    );
-    assert_eq!(
-        report.global_delta_wait_us, 0,
-        "resident V10 descriptors must not leave a separate delta setup wait: {report:?}"
     );
 }
 
@@ -2020,9 +2008,9 @@ fn future_segment_size_can_change_without_rebuilding_logical_cell_topology() {
 }
 
 #[test]
-fn resident_v10_does_not_schedule_a_continuation_after_its_deadline() {
+fn resident_v11_does_not_schedule_a_continuation_after_its_deadline() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///resident-v10-continuation-deadline";
+    let uri = "memory:///resident-v11-continuation-deadline";
     let suffix = "x".repeat(100 * 1024);
     let ids = (0..64)
         .map(|row| format!("row-{row:02}-{suffix}"))
@@ -2088,13 +2076,13 @@ fn resident_v10_does_not_schedule_a_continuation_after_its_deadline() {
 }
 
 #[test]
-fn refresh_rejects_an_invalid_next_v10_before_publishing_it() {
+fn refresh_rejects_an_invalid_next_v11_before_publishing_it() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
         common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
     let store: Arc<dyn ObjectStore> = Arc::new(traced);
-    let uri = "memory:///refresh-invalid-next-v10";
+    let uri = "memory:///refresh-invalid-next-v11";
     let mut writer = BorsukIndex::create_with_object_store(
         Arc::clone(&store),
         IndexConfig {
@@ -2133,7 +2121,7 @@ fn refresh_rejects_an_invalid_next_v10_before_publishing_it() {
             operation == common::StoreOperation::Put && path.contains("global-leaf/descriptors/")
         })
         .pop()
-        .expect("delta publication writes a V10 descriptor");
+        .expect("online publication writes a V11 descriptor");
     runtime
         .block_on(inner.put(
             &next_descriptor.into(),
@@ -2150,16 +2138,16 @@ fn refresh_rejects_an_invalid_next_v10_before_publishing_it() {
         )
         .unwrap();
     assert_eq!(report.hits[0].id.as_str(), "base-0");
-    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
 }
 
 #[test]
-fn refresh_preloads_v10_once_before_concurrent_queries_and_preserves_old_snapshot() {
+fn refresh_preloads_v11_once_before_concurrent_queries_and_preserves_old_snapshot() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
         common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
     let store: Arc<dyn ObjectStore> = Arc::new(traced);
-    let uri = "memory:///refresh-preloads-next-v10";
+    let uri = "memory:///refresh-preloads-next-v11";
     let mut writer = BorsukIndex::create_with_object_store(
         Arc::clone(&store),
         IndexConfig {
@@ -2214,7 +2202,7 @@ fn refresh_preloads_v10_once_before_concurrent_queries_and_preserves_old_snapsho
                         SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
                     )
                     .unwrap();
-                assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+                assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
             });
         }
     });
@@ -2361,7 +2349,7 @@ fn successful_purge_installs_prepared_pins_without_post_publish_setup_gets() {
             SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
         )
         .unwrap();
-    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
     assert_eq!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Get

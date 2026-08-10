@@ -1051,47 +1051,35 @@ pub struct SearchReport {
     /// Logical lossless vector rows fetched and validated after MVCC.
     #[serde(default)]
     pub global_exact_vectors_fetched: usize,
-    /// Authenticated V10 leaf-directory shard objects read for selected cells.
+    /// Authenticated V11 leaf-directory shard objects read for selected cells.
     #[serde(default)]
     pub global_leaf_directory_reads: usize,
-    /// Encoded bytes read from authenticated V10 leaf-directory shards.
+    /// Encoded bytes read from authenticated V11 leaf-directory shards.
     #[serde(default)]
     pub global_leaf_directory_bytes: u64,
-    /// Logical V10 Arrow leaf pages read, independent of physical range coalescing.
+    /// Logical V11 Arrow leaf pages read, independent of physical range coalescing.
     #[serde(default)]
     pub global_leaf_pages_read: usize,
-    /// Encoded V10 Arrow batch bytes read for selected logical leaf pages.
+    /// Encoded V11 Arrow batch bytes read for selected logical leaf pages.
     #[serde(default)]
     pub global_leaf_page_bytes: u64,
-    /// Live canonical vectors exact-scored from V10 Arrow leaf pages.
+    /// Live canonical vectors exact-scored from V11 Arrow leaf pages.
     #[serde(default)]
     pub global_leaf_exact_scores: usize,
     /// Additional ranked-page batches consumed after MVCC suppressed initial rows.
     #[serde(default)]
     pub global_leaf_continuations: usize,
-    /// Critical-path V10 Arrow page-fetch waves.
+    /// Critical-path V11 Arrow page-fetch waves.
     #[serde(default)]
     pub global_leaf_waves: usize,
     /// Microseconds spent routing and producing approximate candidates in the
-    /// stable global ANN base. Base and delta work may overlap.
+    /// stable global ANN base.
     #[serde(default)]
     pub global_base_approximate_us: u64,
     /// Microseconds spent fetching and exact-scoring the stable base's global
-    /// shortlist. Base and delta work may overlap.
-    #[serde(default)]
-    pub global_base_exact_rerank_us: u64,
-    /// Microseconds spent routing and producing approximate candidates in the
-    /// immutable global delta layer.
-    #[serde(default)]
-    pub global_delta_approximate_us: u64,
-    /// Microseconds spent fetching and exact-scoring the global delta's
     /// shortlist.
     #[serde(default)]
-    pub global_delta_exact_rerank_us: u64,
-    /// Microseconds the base layer's caller waited after completing base work
-    /// for an overlapped immutable-delta search to finish.
-    #[serde(default)]
-    pub global_delta_wait_us: u64,
+    pub global_base_exact_rerank_us: u64,
     /// Collection-wide resident manifest/config/routing/pivot bytes.
     pub resident_bytes_estimate: u64,
     /// Collection-wide resident manifest bytes (explicit telemetry alias).
@@ -1681,7 +1669,7 @@ impl FromStr for GlobalPqLayout {
 /// lossless regardless of compression, and centroid sampling only perturbs which
 /// segment a vector lands in (rerank still re-scores the true vectors).
 ///
-/// V10 persists bounded Arrow leaves and does not accept the removed custom
+/// V11 persists bounded Arrow leaves and does not accept the removed custom
 /// global-cell-graph build control:
 ///
 /// ```compile_fail
@@ -1981,7 +1969,7 @@ impl SearchMode {
 
 /// Search options.
 ///
-/// V10 exact-scores every admitted Arrow leaf row; approximate-only global
+/// V11 exact-scores every admitted Arrow leaf row; approximate-only global
 /// result controls from the V9 code-scan path are not part of this API:
 ///
 /// ```compile_fail

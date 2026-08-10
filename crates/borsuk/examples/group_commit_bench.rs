@@ -51,9 +51,6 @@ struct ReadSample {
     segments_searched: usize,
     global_base_approximate_us: u64,
     global_base_exact_rerank_us: u64,
-    global_delta_approximate_us: u64,
-    global_delta_exact_rerank_us: u64,
-    global_delta_wait_us: u64,
 }
 
 struct ReadMeasurement {
@@ -476,9 +473,6 @@ fn measure_reads(
             segments_searched: report.segments_searched,
             global_base_approximate_us: report.global_base_approximate_us,
             global_base_exact_rerank_us: report.global_base_exact_rerank_us,
-            global_delta_approximate_us: report.global_delta_approximate_us,
-            global_delta_exact_rerank_us: report.global_delta_exact_rerank_us,
-            global_delta_wait_us: report.global_delta_wait_us,
         });
         measurement.hits += usize::from(contains_record_id);
     }
@@ -489,12 +483,12 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
     let mut reads = BufWriter::new(File::create(path)?);
     writeln!(
         reads,
-        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us"
+        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us"
     )?;
     for sample in samples {
         writeln!(
             reads,
-            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{}",
             sample.query,
             sample.record_id,
             sample.hit_id,
@@ -510,9 +504,6 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
             sample.segments_searched,
             sample.global_base_approximate_us,
             sample.global_base_exact_rerank_us,
-            sample.global_delta_approximate_us,
-            sample.global_delta_exact_rerank_us,
-            sample.global_delta_wait_us,
         )?;
     }
     reads.flush()?;

@@ -1391,13 +1391,6 @@ impl GlobalCodebookDescriptor {
             Field::new(V11_CODEBOOK_COARSE_QUANTIZER_COLUMN, DataType::Utf8, false),
         ]))
     }
-
-    pub(crate) fn resident_bytes(&self) -> usize {
-        size_of::<Self>()
-            + self.layout.capacity()
-            + self.quantizer.heap_bytes()
-            + self.coarse_quantizer.heap_bytes()
-    }
 }
 
 fn scan_dimensions(state: &GlobalScanQuantizerState) -> usize {
@@ -1438,6 +1431,7 @@ fn validate_v11_codebook(descriptor: &GlobalCodebookDescriptor) -> Result<()> {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "Task 4 direct lane-run record encoding")]
 pub(crate) struct EncodedGlobalRecord {
     pub(crate) cell: u16,
     pub(crate) scan_code: Vec<u8>,
@@ -1446,6 +1440,13 @@ pub(crate) struct EncodedGlobalRecord {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResidentGlobalCodebook {
+    metric: VectorMetric,
+    dimensions: usize,
+    vector_element_type: VectorElementType,
+    code_width: usize,
+    candidates: u32,
+    probes: u32,
+    reconstruction_error_p95_micros: u64,
     quantizer: GlobalScanQuantizer,
     coarse_quantizer: GlobalCoarseQuantizer,
     cells: Vec<u16>,
@@ -1454,15 +1455,30 @@ pub(crate) struct ResidentGlobalCodebook {
 impl ResidentGlobalCodebook {
     pub(crate) fn load(descriptor: GlobalCodebookDescriptor) -> Result<Self> {
         validate_v11_codebook(&descriptor)?;
+        let metric = descriptor.metric.clone();
+        let dimensions = descriptor.dimensions;
+        let vector_element_type = descriptor.vector_element_type;
+        let code_width = descriptor.centroid_code_bytes;
+        let candidates = descriptor.candidates;
+        let probes = descriptor.probes;
+        let reconstruction_error_p95_micros = descriptor.reconstruction_error_p95_micros;
         let coarse_quantizer = GlobalCoarseQuantizer::from_state(descriptor.coarse_quantizer)?;
         let cells = coarse_quantizer.all_cells()?;
         Ok(Self {
+            metric,
+            dimensions,
+            vector_element_type,
+            code_width,
+            candidates,
+            probes,
+            reconstruction_error_p95_micros,
             quantizer: GlobalScanQuantizer::from_state(descriptor.quantizer)?,
             coarse_quantizer,
             cells,
         })
     }
 
+    #[allow(dead_code, reason = "Task 4 direct lane-run record encoding")]
     pub(crate) fn encode_record(&self, vector: &[f32]) -> Result<EncodedGlobalRecord> {
         let scan_code = self.quantizer.encode(vector)?;
         let prepared = self.quantizer.prepare_query(vector)?;
@@ -1501,9 +1517,18 @@ impl ResidentGlobalCodebook {
     ) -> Result<Vec<RoutedGlobalLeafPage>> {
         let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
         let prepared = self.quantizer.prepare_query(query)?;
+        let mut seen = BTreeSet::new();
         let mut ranked = pages
             .into_iter()
             .filter(|page| selected.contains(&page.page.cell_index))
+            .filter(|page| {
+                seen.insert((
+                    page.page.cell_index,
+                    page.page.leaf_ordinal,
+                    page.page.bundle_index,
+                    page.page.batch_offset,
+                ))
+            })
             .map(|mut routed| {
                 if u64::from(routed.page.batch_bytes)
                     > crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
@@ -1532,7 +1557,31 @@ impl ResidentGlobalCodebook {
     }
 
     pub(crate) fn code_bytes_per_vector(&self) -> usize {
-        self.quantizer.code_bytes_per_vector()
+        self.code_width
+    }
+
+    pub(crate) fn metric(&self) -> &VectorMetric {
+        &self.metric
+    }
+
+    pub(crate) fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    pub(crate) fn vector_element_type(&self) -> VectorElementType {
+        self.vector_element_type
+    }
+
+    pub(crate) fn candidates(&self) -> u32 {
+        self.candidates
+    }
+
+    pub(crate) fn probes(&self) -> u32 {
+        self.probes
+    }
+
+    pub(crate) fn reconstruction_error_p95_micros(&self) -> u64 {
+        self.reconstruction_error_p95_micros
     }
 
     pub(crate) fn cell_count(&self) -> usize {
@@ -1577,164 +1626,10 @@ pub(crate) enum GlobalPqCellSpoolEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GlobalLeafLayer {
-    Base,
-    Delta,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct RoutedGlobalLeafPage {
-    pub(crate) layer: GlobalLeafLayer,
     pub(crate) distance: f32,
     pub(crate) page: crate::global_leaf::GlobalLeafPageRef,
-}
-
-fn rank_leaf_pages_scored(
-    quantizer: &GlobalScanQuantizer,
-    query: &[f32],
-    selected_cells: &[u16],
-    pages: &[crate::global_leaf::GlobalLeafPageRef],
-) -> Result<Vec<(f32, crate::global_leaf::GlobalLeafPageRef)>> {
-    let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
-    let prepared = quantizer.prepare_query(query)?;
-    let mut seen = BTreeSet::new();
-    let mut ranked = pages
-        .iter()
-        .filter(|page| selected.contains(&page.cell_index))
-        .filter(|page| {
-            seen.insert((
-                page.cell_index,
-                page.leaf_ordinal,
-                page.bundle_index,
-                page.batch_offset,
-            ))
-        })
-        .map(|page| {
-            if u64::from(page.batch_bytes) > crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES {
-                return invalid("bounded leaf page exceeds its encoded-byte cap");
-            }
-            Ok((
-                quantizer.distance(&prepared, &page.centroid_code)?,
-                page.clone(),
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    ranked.sort_by(|left, right| {
-        left.0
-            .total_cmp(&right.0)
-            .then_with(|| left.1.cell_index.cmp(&right.1.cell_index))
-            .then_with(|| left.1.leaf_ordinal.cmp(&right.1.leaf_ordinal))
-            .then_with(|| left.1.bundle_index.cmp(&right.1.bundle_index))
-            .then_with(|| left.1.batch_offset.cmp(&right.1.batch_offset))
-    });
-    Ok(ranked)
-}
-
-#[allow(dead_code, reason = "single-layer Task 3 routing interface")]
-pub(crate) fn rank_leaf_pages(
-    quantizer: &GlobalScanQuantizer,
-    query: &[f32],
-    selected_cells: &[u16],
-    pages: &[crate::global_leaf::GlobalLeafPageRef],
-    page_budget: usize,
-) -> Result<Vec<crate::global_leaf::GlobalLeafPageRef>> {
-    let mut ranked = rank_leaf_pages_scored(quantizer, query, selected_cells, pages)?;
-    ranked.truncate(page_budget);
-    Ok(ranked.into_iter().map(|(_, page)| page).collect())
-}
-
-#[cfg(test)]
-pub(crate) fn rank_fused_leaf_pages(
-    quantizer: &GlobalScanQuantizer,
-    query: &[f32],
-    base_cells: &[u16],
-    base_pages: &[crate::global_leaf::GlobalLeafPageRef],
-    delta_cells: &[u16],
-    delta_pages: &[crate::global_leaf::GlobalLeafPageRef],
-    page_budget: usize,
-) -> Result<Vec<RoutedGlobalLeafPage>> {
-    rank_fused_leaf_pages_with_quantizers(
-        quantizer,
-        quantizer,
-        query,
-        base_cells,
-        base_pages,
-        delta_cells,
-        delta_pages,
-        page_budget,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn rank_fused_leaf_pages_with_quantizers(
-    base_quantizer: &GlobalScanQuantizer,
-    delta_quantizer: &GlobalScanQuantizer,
-    query: &[f32],
-    base_cells: &[u16],
-    base_pages: &[crate::global_leaf::GlobalLeafPageRef],
-    delta_cells: &[u16],
-    delta_pages: &[crate::global_leaf::GlobalLeafPageRef],
-    page_budget: usize,
-) -> Result<Vec<RoutedGlobalLeafPage>> {
-    if page_budget == 0 {
-        return Ok(Vec::new());
-    }
-    let base = rank_leaf_pages_scored(base_quantizer, query, base_cells, base_pages)?;
-    let delta = rank_leaf_pages_scored(delta_quantizer, query, delta_cells, delta_pages)?;
-    let mut selected = Vec::with_capacity(page_budget);
-    let mut base_start = 0;
-    let mut delta_start = 0;
-    if page_budget >= 2 && !base.is_empty() && !delta.is_empty() {
-        selected.push(RoutedGlobalLeafPage {
-            layer: GlobalLeafLayer::Base,
-            distance: base[0].0,
-            page: base[0].1.clone(),
-        });
-        selected.push(RoutedGlobalLeafPage {
-            layer: GlobalLeafLayer::Delta,
-            distance: delta[0].0,
-            page: delta[0].1.clone(),
-        });
-        base_start = 1;
-        delta_start = 1;
-    }
-    let reserved = selected.len();
-    let mut remaining = base[base_start..]
-        .iter()
-        .map(|(distance, page)| RoutedGlobalLeafPage {
-            layer: GlobalLeafLayer::Base,
-            distance: *distance,
-            page: page.clone(),
-        })
-        .chain(
-            delta[delta_start..]
-                .iter()
-                .map(|(distance, page)| RoutedGlobalLeafPage {
-                    layer: GlobalLeafLayer::Delta,
-                    distance: *distance,
-                    page: page.clone(),
-                }),
-        )
-        .collect::<Vec<_>>();
-    let compare = |left: &RoutedGlobalLeafPage, right: &RoutedGlobalLeafPage| {
-        left.distance
-            .total_cmp(&right.distance)
-            .then_with(|| match (left.layer, right.layer) {
-                (GlobalLeafLayer::Delta, GlobalLeafLayer::Base) => std::cmp::Ordering::Less,
-                (GlobalLeafLayer::Base, GlobalLeafLayer::Delta) => std::cmp::Ordering::Greater,
-                _ => std::cmp::Ordering::Equal,
-            })
-            .then_with(|| left.page.cell_index.cmp(&right.page.cell_index))
-            .then_with(|| left.page.leaf_ordinal.cmp(&right.page.leaf_ordinal))
-            .then_with(|| left.page.bundle_index.cmp(&right.page.bundle_index))
-            .then_with(|| left.page.batch_offset.cmp(&right.page.batch_offset))
-    };
-    remaining.sort_by(compare);
-    remaining.truncate(page_budget.saturating_sub(reserved));
-    selected.extend(remaining);
-    selected.sort_by(compare);
-    Ok(selected)
 }
 
 fn invalid<T>(message: &str) -> Result<T> {
@@ -1790,17 +1685,6 @@ mod tests {
         .unwrap()
     }
 
-    fn replace_layout_marker(mut bytes: Vec<u8>, replacement: &[u8]) -> Vec<u8> {
-        let marker = b"bounded-arrow-leaf-v11";
-        assert_eq!(marker.len(), replacement.len());
-        let offset = bytes
-            .windows(marker.len())
-            .position(|window| window == marker)
-            .expect("V11 descriptor marker is present");
-        bytes[offset..offset + marker.len()].copy_from_slice(replacement);
-        bytes
-    }
-
     fn replace_v11_descriptor_column(
         bytes: &[u8],
         index: usize,
@@ -1827,18 +1711,13 @@ mod tests {
     }
 
     #[test]
-    fn v11_codebook_round_trips_and_rejects_v10_marker() {
+    fn v11_codebook_round_trips() {
         let descriptor = test_v11_codebook_descriptor();
         let bytes = descriptor.encode().unwrap();
         assert_eq!(
             GlobalCodebookDescriptor::decode(&bytes).unwrap(),
             descriptor
         );
-        let v10 = replace_layout_marker(bytes, b"bounded-arrow-leaf-v10");
-        let error = GlobalCodebookDescriptor::decode(&v10)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("rebuild the unreleased index"), "{error}");
     }
 
     #[test]
@@ -1856,7 +1735,7 @@ mod tests {
         let layout = replace_v11_descriptor_column(
             &encoded,
             0,
-            Arc::new(StringArray::from(vec!["bounded-arrow-leaf-v10"])),
+            Arc::new(StringArray::from(vec!["retired-global-leaf-layout"])),
         );
         let error = GlobalCodebookDescriptor::decode(&layout).unwrap_err();
         assert!(
@@ -1879,12 +1758,10 @@ mod tests {
                 &[7],
                 [
                     RoutedGlobalLeafPage {
-                        layer: GlobalLeafLayer::Base,
                         distance: f32::NAN,
                         page: page.clone(),
                     },
                     RoutedGlobalLeafPage {
-                        layer: GlobalLeafLayer::Delta,
                         distance: f32::NAN,
                         page,
                     },
@@ -1957,7 +1834,6 @@ mod tests {
                 &query,
                 &[7],
                 [RoutedGlobalLeafPage {
-                    layer: GlobalLeafLayer::Base,
                     distance: 0.0,
                     page,
                 }],
@@ -2005,15 +1881,11 @@ mod tests {
         }
     }
 
-    fn leaf_quantizer() -> GlobalScanQuantizer {
-        GlobalScanQuantizer::FastTurboQuantProd(
-            crate::turboquant::FastTurboQuantProdScanQuantizer::new(23, 64, 4).unwrap(),
-        )
-    }
-
     #[test]
     fn bounded_leaf_ranking_honours_every_production_budget_and_selected_cells() {
-        let quantizer = leaf_quantizer();
+        let descriptor = test_v11_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
         let query = vec![0.0_f32; 64];
         let mut pages = (0..40)
             .map(|ordinal| {
@@ -2026,13 +1898,23 @@ mod tests {
         pages.push(pages[3].clone());
 
         for budget in [4, 8, 16, 32] {
-            let ranked = rank_leaf_pages(&quantizer, &query, &[7, 7], &pages, budget).unwrap();
+            let ranked = resident
+                .rank_pages(
+                    &query,
+                    &[7, 7],
+                    pages.iter().cloned().map(|page| RoutedGlobalLeafPage {
+                        distance: f32::NAN,
+                        page,
+                    }),
+                    budget,
+                )
+                .unwrap();
             assert_eq!(ranked.len(), budget);
-            assert!(ranked.iter().all(|page| page.cell_index == 7));
+            assert!(ranked.iter().all(|page| page.page.cell_index == 7));
             assert_eq!(
                 ranked
                     .iter()
-                    .map(|page| (page.cell_index, page.leaf_ordinal))
+                    .map(|page| (page.page.cell_index, page.page.leaf_ordinal))
                     .collect::<BTreeSet<_>>()
                     .len(),
                 budget,
@@ -2041,58 +1923,11 @@ mod tests {
             assert!(
                 ranked
                     .iter()
-                    .map(|page| u64::from(page.batch_bytes))
+                    .map(|page| u64::from(page.page.batch_bytes))
                     .sum::<u64>()
                     <= budget as u64 * crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
             );
         }
-    }
-
-    #[test]
-    fn bounded_leaf_ranking_breaks_equal_distance_ties_canonically() {
-        let quantizer = leaf_quantizer();
-        let query = vec![0.0_f32; 64];
-        let pages = vec![
-            leaf_page(&quantizer, &query, 3, 2),
-            leaf_page(&quantizer, &query, 2, 1),
-            leaf_page(&quantizer, &query, 2, 0),
-            leaf_page(&quantizer, &query, 3, 0),
-        ];
-
-        let ranked = rank_leaf_pages(&quantizer, &query, &[3, 2], &pages, 4).unwrap();
-        assert_eq!(
-            ranked
-                .iter()
-                .map(|page| (page.cell_index, page.leaf_ordinal))
-                .collect::<Vec<_>>(),
-            vec![(2, 0), (2, 1), (3, 0), (3, 2)]
-        );
-    }
-
-    #[test]
-    fn fused_leaf_ranking_reserves_both_layers_and_prefers_delta_on_ties() {
-        let quantizer = leaf_quantizer();
-        let query = vec![0.0_f32; 64];
-        let near = query.clone();
-        let mut far = query.clone();
-        far[0] = 10.0;
-        let base = vec![
-            leaf_page(&quantizer, &near, 1, 0),
-            leaf_page(&quantizer, &near, 1, 1),
-            leaf_page(&quantizer, &near, 1, 2),
-        ];
-        let delta = vec![leaf_page(&quantizer, &far, 1, 0)];
-
-        let ranked =
-            rank_fused_leaf_pages(&quantizer, &query, &[1], &base, &[1], &delta, 2).unwrap();
-        assert_eq!(ranked.len(), 2);
-        assert_eq!(ranked[0].layer, GlobalLeafLayer::Base);
-        assert_eq!(ranked[1].layer, GlobalLeafLayer::Delta);
-
-        let tied = rank_fused_leaf_pages(&quantizer, &query, &[1], &base[..1], &[1], &base[..1], 2)
-            .unwrap();
-        assert_eq!(tied[0].layer, GlobalLeafLayer::Delta);
-        assert_eq!(tied[1].layer, GlobalLeafLayer::Base);
     }
 
     fn vectors(rows: usize, dimensions: usize) -> Vec<Vec<f32>> {

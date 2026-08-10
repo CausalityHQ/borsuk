@@ -333,7 +333,7 @@ mod global_pq_layout_tests {
     };
 
     #[test]
-    fn unreleased_v10_global_ann_reference_requires_rebuild() {
+    fn retired_global_ann_reference_requires_rebuild() {
         let error = decode_global_ann_ref_json(r#"{"layout_version":10}"#)
             .unwrap_err()
             .to_string();
@@ -376,6 +376,40 @@ mod global_pq_layout_tests {
         assert!(ann.incremental_runs().is_empty());
         assert!(ann.coverage().ranges().is_empty());
         ann.validate().unwrap();
+    }
+
+    #[test]
+    fn resident_estimate_overflow_is_conservative() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let mut manifest = index.manifest_for_format_tests().clone();
+        let mut value = serde_json::to_value(manifest.global_ann_ref.as_ref().unwrap()).unwrap();
+        let base_resident = value["base"]["resident_bytes"].as_u64().unwrap();
+        value["codebook"]["resident_bytes"] = serde_json::Value::from(u64::MAX - base_resident);
+        value["resident_bytes"] = serde_json::Value::from(u64::MAX);
+        let ann: crate::global_leaf_run::GlobalAnnRef = serde_json::from_value(value).unwrap();
+        ann.validate().unwrap();
+        manifest.global_ann_ref = Some(ann);
+
+        assert_eq!(manifest.resident_bytes_estimate(), u64::MAX);
     }
 }
 
@@ -681,75 +715,66 @@ impl Manifest {
     }
 
     pub(crate) fn resident_bytes_estimate(&self) -> u64 {
-        let config_bytes = size_of::<IndexConfig>() + self.config.uri.len();
-        let text_tokenizer_bytes = self
+        self.try_resident_bytes_estimate().unwrap_or(u64::MAX)
+    }
+
+    pub(crate) fn try_resident_bytes_estimate(&self) -> Result<u64> {
+        let mut total = 0_u64;
+        let mut add = |bytes: usize| -> Result<()> {
+            let bytes = u64::try_from(bytes).map_err(|_| {
+                BorsukError::InvalidStorage("manifest resident RAM budget estimate overflow".into())
+            })?;
+            total = total.checked_add(bytes).ok_or_else(|| {
+                BorsukError::InvalidStorage("manifest resident RAM budget estimate overflow".into())
+            })?;
+            Ok(())
+        };
+        add(size_of::<Self>())?;
+        add(size_of::<IndexConfig>())?;
+        add(self.config.uri.len())?;
+        add(self
             .text_tokenizer
             .as_ref()
             .map(String::len)
-            .unwrap_or_default();
-        let segments_bytes = self
-            .segments
-            .iter()
-            .map(SegmentSummary::resident_bytes_estimate)
-            .sum::<usize>();
-        let pivots_bytes = self
-            .pivots
-            .iter()
-            .map(PivotSummary::resident_bytes_estimate)
-            .sum::<usize>();
-        let tombstone_bytes = self
-            .tombstone
-            .as_ref()
-            .map(TombstoneSummary::resident_bytes_estimate)
-            .unwrap_or(0);
-        let tombstone_frontier_bytes = self
-            .tombstone_frontier
-            .iter()
-            .map(TombstoneSummary::resident_bytes_estimate)
-            .sum::<usize>();
-        let tombstone_page_bytes = self
-            .tombstone_pages
-            .iter()
-            .map(TombstonePageRef::resident_bytes_estimate)
-            .sum::<usize>();
-        let quantizer_ref_bytes = self
-            .quantizer_ref
-            .as_ref()
-            .map(QuantizerRef::resident_bytes_estimate)
-            .unwrap_or(0);
-        let global_ann_ref_bytes = self
-            .global_ann_ref
-            .as_ref()
-            .map(GlobalAnnRef::resident_bytes_estimate)
-            .unwrap_or(0);
-        let lexical_root_bytes = self
-            .lexical_roots
-            .iter()
-            .map(LexicalRootRef::resident_bytes_estimate)
-            .sum::<usize>();
-        let bm25_stats_delta_bytes = self
-            .bm25_stats_delta
-            .as_ref()
-            .map(Bm25StatsDeltaRef::resident_bytes_estimate)
-            .unwrap_or(0);
-        let bm25_stats_delta_frontier_bytes = self
-            .bm25_stats_delta_frontier
-            .iter()
-            .map(Bm25StatsDeltaRef::resident_bytes_estimate)
-            .sum::<usize>();
-        (size_of::<Self>()
-            + config_bytes
-            + text_tokenizer_bytes
-            + segments_bytes
-            + pivots_bytes
-            + tombstone_bytes
-            + tombstone_frontier_bytes
-            + tombstone_page_bytes
-            + quantizer_ref_bytes
-            + global_ann_ref_bytes
-            + lexical_root_bytes
-            + bm25_stats_delta_bytes
-            + bm25_stats_delta_frontier_bytes) as u64
+            .unwrap_or_default())?;
+        for segment in &self.segments {
+            add(segment.resident_bytes_estimate())?;
+        }
+        for pivot in &self.pivots {
+            add(pivot.resident_bytes_estimate())?;
+        }
+        if let Some(tombstone) = &self.tombstone {
+            add(tombstone.resident_bytes_estimate())?;
+        }
+        for tombstone in &self.tombstone_frontier {
+            add(tombstone.resident_bytes_estimate())?;
+        }
+        for page in &self.tombstone_pages {
+            add(page.resident_bytes_estimate())?;
+        }
+        if let Some(quantizer) = &self.quantizer_ref {
+            add(quantizer.resident_bytes_estimate())?;
+        }
+        for root in &self.lexical_roots {
+            add(root.resident_bytes_estimate())?;
+        }
+        if let Some(delta) = &self.bm25_stats_delta {
+            add(delta.resident_bytes_estimate())?;
+        }
+        for delta in &self.bm25_stats_delta_frontier {
+            add(delta.resident_bytes_estimate())?;
+        }
+        drop(add);
+        if let Some(global_ann) = &self.global_ann_ref {
+            total = total
+                .checked_add(global_ann.resident_bytes_estimate())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "manifest resident RAM budget estimate overflow".into(),
+                    )
+                })?;
+        }
+        Ok(total)
     }
 }
 
