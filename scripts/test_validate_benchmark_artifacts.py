@@ -20,6 +20,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             root,
             "bench_recall_latency.csv",
             [
+                "schema_version",
                 "scan_codec",
                 "cache_execution",
                 "phase",
@@ -37,6 +38,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
+                    "borsuk-production-bench-v10",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -58,6 +60,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             root,
             "bench_query_samples.csv",
             [
+                "schema_version",
                 "scan_codec",
                 "cache_execution",
                 "phase",
@@ -75,9 +78,19 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "transient_bytes",
                 "transient_capacity_bytes",
                 "transient_peak_bytes",
+                "global_leaf_directory_reads",
+                "global_leaf_directory_bytes",
+                "global_leaf_pages_read",
+                "global_leaf_page_bytes",
+                "global_leaf_waves",
+                "global_leaf_continuations",
+                "global_leaf_exact_scores",
+                "backing_reads",
+                "backing_bytes_read",
             ],
             [
                 [
+                    "borsuk-production-bench-v10",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -95,8 +108,18 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     50,
                     1024,
                     100,
+                    1,
+                    100,
+                    1,
+                    100,
+                    1,
+                    0,
+                    2,
+                    1,
+                    100,
                 ],
                 [
+                    "borsuk-production-bench-v10",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -114,9 +137,49 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     70,
                     1024,
                     120,
+                    1,
+                    100,
+                    1,
+                    100,
+                    1,
+                    0,
+                    2,
+                    1,
+                    100,
                 ],
             ],
         )
+
+    def test_query_samples_require_exact_v10_schema_and_telemetry(self) -> None:
+        mutations = (
+            ("missing", lambda rows: [row.pop("schema_version") for row in rows]),
+            (
+                "unknown",
+                lambda rows: [row.__setitem__("schema_version", "unknown") for row in rows],
+            ),
+            (
+                "V9",
+                lambda rows: [
+                    row.__setitem__("schema_version", "borsuk-production-bench-v9")
+                    for row in rows
+                ],
+            ),
+            (
+                "telemetry",
+                lambda rows: [row.pop("global_leaf_exact_scores") for row in rows],
+            ),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                self.write_valid_query_artifacts(root)
+                path = root / "bench_query_samples.csv"
+                with path.open(newline="") as handle:
+                    rows = list(csv.DictReader(handle))
+                mutate(rows)
+                self.write_csv(root, path.name, list(rows[0]), [list(row.values()) for row in rows])
+                with self.assertRaisesRegex(ValueError, "schema|telemetry|required columns"):
+                    validate_directory(root, None, ("bench_query_samples.csv",))
 
     def test_accepts_complete_distribution_artifacts_with_matching_codec(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

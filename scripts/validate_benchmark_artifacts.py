@@ -9,6 +9,17 @@ import math
 from collections import Counter
 from pathlib import Path
 
+try:
+    from .production_bench_schema import (
+        V10_QUERY_TELEMETRY_FIELDS,
+        validate_v10_query_sample_rows,
+    )
+except ImportError:
+    from production_bench_schema import (  # type: ignore[no-redef]
+        V10_QUERY_TELEMETRY_FIELDS,
+        validate_v10_query_sample_rows,
+    )
+
 DEFAULT_REQUIRED = (
     "bench_build.csv",
     "bench_recall_latency.csv",
@@ -57,6 +68,7 @@ REQUIRED_COLUMNS = {
         "max_ms",
     },
     "bench_query_samples.csv": {
+        "schema_version",
         "scan_codec",
         "cache_execution",
         "phase",
@@ -74,6 +86,7 @@ REQUIRED_COLUMNS = {
         "transient_bytes",
         "transient_capacity_bytes",
         "transient_peak_bytes",
+        *V10_QUERY_TELEMETRY_FIELDS,
     },
     "bench_concurrency.csv": {
         "scan_codec",
@@ -710,6 +723,8 @@ def validate_directory(
             raise ValueError(f"{path} missing required columns: {', '.join(missing)}")
         with path.open(newline="") as handle:
             parsed[name] = list(csv.DictReader(handle))
+        if name == "bench_query_samples.csv":
+            validate_v10_query_sample_rows(parsed[name], path)
         _validate_distribution_rows(path, parsed[name])
 
     _validate_sample_reconciliation(

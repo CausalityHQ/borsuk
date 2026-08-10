@@ -748,6 +748,9 @@ pub struct BorsukIndex {
     /// corpus-sized product-code payloads remain paged objects; row locations
     /// use the same segment ordinals as the summaries.
     resident_global_pq: ResidentGlobalPqCache,
+    /// Snapshot-owned base/delta metadata. Cloned handles keep these immutable
+    /// allocations alive even after the shared bounded cache advances.
+    resident_global_pq_pins: Option<ResidentGlobalPqPins>,
     /// Compact term-range roots loaded before serving; postings remain paged.
     resident_lexical_roots: ResidentLexicalRoots,
     admission: Option<Arc<AdmissionGate>>,
@@ -1798,6 +1801,25 @@ impl<T> BoundedResidentCache<T> {
 /// Loaded descriptor/codebook state keyed by content checksum. Base and delta
 /// layers share bounded retention and single-flight setup reads.
 type ResidentGlobalPqCache = Arc<BoundedResidentCache<ResidentGlobalPq>>;
+
+#[derive(Clone, Debug)]
+struct ResidentGlobalPqPins {
+    base_checksum: String,
+    base: Arc<ResidentGlobalPq>,
+    delta: Option<(String, Arc<ResidentGlobalPq>)>,
+}
+
+impl ResidentGlobalPqPins {
+    fn get(&self, checksum: &str) -> Option<Arc<ResidentGlobalPq>> {
+        if self.base_checksum == checksum {
+            return Some(Arc::clone(&self.base));
+        }
+        self.delta.as_ref().and_then(|(delta_checksum, delta)| {
+            (delta_checksum == checksum).then(|| Arc::clone(delta))
+        })
+    }
+}
+
 /// Resident immutable base plus the materialized segments not covered by it.
 type LoadedResidentGlobalPq = (Arc<ResidentGlobalPq>, usize, Arc<Vec<SegmentSummary>>);
 
@@ -2363,6 +2385,7 @@ impl BorsukIndex {
         };
         if global_delta_updated {
             self.resident_global_pq.clear();
+            self.repin_current_resident_global_pq()?;
         }
         Ok((committed_sequences, self.manifest.version))
     }
@@ -3138,6 +3161,7 @@ impl BorsukIndex {
             resident_global_pq: Arc::new(BoundedResidentCache::new(
                 RESIDENT_GLOBAL_PQ_CACHE_GENERATIONS,
             )),
+            resident_global_pq_pins: None,
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: read_runtime.admission.clone(),
             decode_admission: read_runtime.decode_admission.clone(),
@@ -3447,6 +3471,7 @@ impl BorsukIndex {
             resident_global_pq: Arc::new(BoundedResidentCache::new(
                 RESIDENT_GLOBAL_PQ_CACHE_GENERATIONS,
             )),
+            resident_global_pq_pins: None,
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: read_runtime.admission.clone(),
             decode_admission: read_runtime.decode_admission.clone(),
@@ -3513,7 +3538,8 @@ impl BorsukIndex {
         // The global PQ fast path defines uncached query latency after open:
         // load its compact codes and exact-sidecar metadata here, never on the
         // first measured request.
-        let _ = index.load_resident_global_pq()?;
+        let manifest = index.manifest.clone();
+        index.resident_global_pq_pins = index.preload_resident_global_pq_for_manifest(&manifest)?;
         let _ = index.load_resident_lexical_roots()?;
         index.prepare_mutation_frontier(&index.manifest)?;
         index.resident_global_mutations = index.prepare_resident_global_mutations()?;
@@ -4012,7 +4038,7 @@ impl BorsukIndex {
         let latest_lane_log_snapshot = self.read_lane_log_snapshot_if_changed(latest.version)?;
         self.prepare_manifest_mutation_frontier(&latest)?;
         self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
-        self.preload_resident_global_pq_for_manifest(&latest)?;
+        let latest_global_pq_pins = self.preload_resident_global_pq_for_manifest(&latest)?;
         latest.cell_wal_visible_runs = cell_wal_run_count(&latest_cell_wal_snapshot);
         latest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&latest_cell_wal_snapshot);
@@ -4045,11 +4071,14 @@ impl BorsukIndex {
             )?;
             child.prepare_manifest_mutation_frontier(&manifest)?;
             child.prepare_cell_mutation_frontier(&cell_wal_snapshot)?;
-            child.preload_resident_global_pq_for_manifest(&manifest)?;
+            let global_pq_pins = child.preload_resident_global_pq_for_manifest(&manifest)?;
             manifest.cell_wal_visible_runs = cell_wal_run_count(&cell_wal_snapshot);
             manifest.cell_wal_visible_tombstone_runs =
                 cell_wal_tombstone_run_count(&cell_wal_snapshot);
-            prepared_named.insert(name.clone(), (manifest, reference, cell_wal_snapshot));
+            prepared_named.insert(
+                name.clone(),
+                (manifest, reference, cell_wal_snapshot, global_pq_pins),
+            );
         }
 
         let collection_advanced = self
@@ -4061,7 +4090,7 @@ impl BorsukIndex {
         let lane_log_advanced = latest_lane_log_snapshot.is_some();
         let named_advanced = prepared_named
             .iter()
-            .any(|(name, (manifest, _, snapshot))| {
+            .any(|(name, (manifest, _, snapshot, _))| {
                 let child = &self.named[name];
                 manifest.version != child.manifest.version || snapshot != &child.cell_wal_snapshot
             });
@@ -4075,6 +4104,7 @@ impl BorsukIndex {
         }
 
         self.manifest = latest;
+        self.resident_global_pq_pins = latest_global_pq_pins;
         self.manifest_reference = own_reference;
         self.cell_wal_snapshot = latest_cell_wal_snapshot;
         if let Some(latest_lane_log_snapshot) = latest_lane_log_snapshot {
@@ -4086,12 +4116,13 @@ impl BorsukIndex {
             .store(collection_wal_snapshot_retries, AtomicOrdering::Relaxed);
         self.resident_global_mutations = None;
         self.resident_global_mutations = self.prepare_resident_global_mutations()?;
-        for (name, (manifest, reference, cell_wal_snapshot)) in prepared_named {
+        for (name, (manifest, reference, cell_wal_snapshot, global_pq_pins)) in prepared_named {
             let child = self
                 .named
                 .get_mut(&name)
                 .expect("prepared named modality belongs to the current schema");
             child.manifest = manifest;
+            child.resident_global_pq_pins = global_pq_pins;
             child.manifest_reference = reference;
             child.cell_wal_snapshot = cell_wal_snapshot;
             child
@@ -5731,6 +5762,8 @@ impl BorsukIndex {
         // a concurrent or delayed reader may already have observed.
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.resident_global_pq.clear();
+        self.repin_current_resident_global_pq()?;
         // Purge rebuilt the cell layout; refresh the persisted cold quantizer.
         self.refresh_persisted_quantizer()?;
 
@@ -11043,6 +11076,8 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.resident_global_pq.clear();
+        self.repin_current_resident_global_pq()?;
         // Frontier just changed (tail folded in and cleared). Immutable decoded
         // runs can remain in the bounded collection cache and age out by LRU.
         if clear_frontier {
@@ -12741,16 +12776,34 @@ impl BorsukIndex {
         )
     }
 
-    fn preload_resident_global_pq_for_manifest(&self, manifest: &Manifest) -> Result<()> {
+    fn preload_resident_global_pq_for_manifest(
+        &self,
+        manifest: &Manifest,
+    ) -> Result<Option<ResidentGlobalPqPins>> {
         let Some(global_ref) = manifest.global_pq_ref.as_ref() else {
-            return Ok(());
+            return Ok(None);
         };
         let element_type = manifest.build_config.vector_element_type;
-        let _ =
+        let base =
             self.load_resident_global_pq_reference_for_element_type(global_ref, element_type)?;
-        if let Some(delta) = global_ref.delta.as_deref() {
-            let _ = self.load_resident_global_pq_reference_for_element_type(delta, element_type)?;
-        }
+        let delta = global_ref
+            .delta
+            .as_deref()
+            .map(|delta| {
+                self.load_resident_global_pq_reference_for_element_type(delta, element_type)
+                    .map(|loaded| (delta.checksum.clone(), loaded))
+            })
+            .transpose()?;
+        Ok(Some(ResidentGlobalPqPins {
+            base_checksum: global_ref.checksum.clone(),
+            base,
+            delta,
+        }))
+    }
+
+    fn repin_current_resident_global_pq(&mut self) -> Result<()> {
+        let manifest = self.manifest.clone();
+        self.resident_global_pq_pins = self.preload_resident_global_pq_for_manifest(&manifest)?;
         Ok(())
     }
 
@@ -12759,50 +12812,59 @@ impl BorsukIndex {
         global_ref: &GlobalPqRef,
         expected_element_type: crate::VectorElementType,
     ) -> Result<Arc<ResidentGlobalPq>> {
-        self.resident_global_pq.load(&global_ref.checksum, || {
-            let read = self.storage.read_bytes_with_cache_status_and_checksum(
-                &global_ref.path,
-                &global_ref.checksum,
-            )?;
-            let descriptor = GlobalPqDescriptor::decode(&read.bytes)?;
-            if descriptor.vectors() != global_ref.vectors
-                || descriptor.subspaces() != global_ref.subspaces
-                || descriptor.vector_element_type() != expected_element_type
-            {
-                return Err(BorsukError::InvalidStorage(
-                    "resident global PQ reference does not match its descriptor".to_string(),
-                ));
-            }
-            let read_table = |table: &crate::global_leaf::GlobalLeafTableRef| {
-                let checksum = blake3::Hash::from_bytes(table.checksum)
-                    .to_hex()
-                    .to_string();
-                self.storage
-                    .read_known_size_with_cache_status_and_checksum(
-                        &table.path,
-                        table.encoded_bytes,
-                        &checksum,
-                    )
-                    .map(|read| read.bytes)
-            };
-            let cell_bytes = read_table(descriptor.cell_root())?;
-            let shard_bytes = read_table(descriptor.shard_table())?;
-            let bundle_bytes = read_table(descriptor.bundle_table())?;
-            let root = crate::global_leaf::decode_global_leaf_directory_root(
-                &cell_bytes,
-                &shard_bytes,
-                &bundle_bytes,
-            )?;
-            let index = ResidentGlobalPq::load(descriptor, root)?;
-            if index.len() != global_ref.vectors
-                || index.code_bytes_per_vector() != global_ref.subspaces
-            {
-                return Err(BorsukError::InvalidStorage(
-                    "resident global PQ reference does not match its artifact".to_string(),
-                ));
-            }
-            Ok(index)
-        })
+        let loaded = if let Some(pinned) = self
+            .resident_global_pq_pins
+            .as_ref()
+            .and_then(|pins| pins.get(&global_ref.checksum))
+        {
+            pinned
+        } else {
+            self.resident_global_pq.load(&global_ref.checksum, || {
+                let read = self.storage.read_bytes_with_cache_status_and_checksum(
+                    &global_ref.path,
+                    &global_ref.checksum,
+                )?;
+                let descriptor = GlobalPqDescriptor::decode(&read.bytes)?;
+                let read_table = |table: &crate::global_leaf::GlobalLeafTableRef| {
+                    let checksum = blake3::Hash::from_bytes(table.checksum)
+                        .to_hex()
+                        .to_string();
+                    self.storage
+                        .read_known_size_with_cache_status_and_checksum(
+                            &table.path,
+                            table.encoded_bytes,
+                            &checksum,
+                        )
+                        .map(|read| read.bytes)
+                };
+                let cell_bytes = read_table(descriptor.cell_root())?;
+                let shard_bytes = read_table(descriptor.shard_table())?;
+                let bundle_bytes = read_table(descriptor.bundle_table())?;
+                let root = crate::global_leaf::decode_global_leaf_directory_root(
+                    &cell_bytes,
+                    &shard_bytes,
+                    &bundle_bytes,
+                )?;
+                let index = ResidentGlobalPq::load(descriptor, root)?;
+                if index.len() != global_ref.vectors
+                    || index.code_bytes_per_vector() != global_ref.subspaces
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "resident global PQ reference does not match its artifact".to_string(),
+                    ));
+                }
+                Ok(index)
+            })?
+        };
+        if loaded.len() != global_ref.vectors
+            || loaded.code_bytes_per_vector() != global_ref.subspaces
+            || loaded.vector_element_type() != expected_element_type
+        {
+            return Err(BorsukError::InvalidStorage(
+                "resident global PQ reference does not match its descriptor".to_string(),
+            ));
+        }
+        Ok(loaded)
     }
 
     fn load_selected_global_leaf_directory(
@@ -13097,6 +13159,76 @@ impl BorsukIndex {
         if !exact_fringe.is_empty() {
             return Ok(None);
         }
+        if resident_v10_latency_expired(options, started) {
+            let segments_total = global_ref.segments.len()
+                + global_ref
+                    .delta
+                    .as_deref()
+                    .map_or(0, |reference| reference.segments.len());
+            return Ok(Some(SearchExecution {
+                report: SearchReport {
+                    hits: Vec::new(),
+                    leaf_mode: "bounded-arrow-leaf-v10".to_string(),
+                    termination_reason: SearchTerminationReason::MaxLatency,
+                    recall_guarantee: RecallGuarantee::Degraded,
+                    segments_total,
+                    segments_searched: 0,
+                    segments_skipped: segments_total,
+                    routing_page_indexes_read: 0,
+                    routing_pages_read: 0,
+                    bytes_read: 0,
+                    prefetched_bytes_unused: 0,
+                    graph_bytes_read: 0,
+                    decoded_cache_hits: 0,
+                    decoded_cache_bytes_read: 0,
+                    object_cache_hits: 0,
+                    object_cache_misses: 0,
+                    disk_cache_bytes_read: 0,
+                    backing_bytes_read: 0,
+                    disk_cache_reads: 0,
+                    backing_reads: 0,
+                    cache_repairs: 0,
+                    records_considered: 0,
+                    records_scored: 0,
+                    graph_candidates_added: 0,
+                    global_graph_chunks_searched: 0,
+                    global_scan_chunks_searched: 0,
+                    global_identity_rows_resolved: 0,
+                    global_exact_vectors_fetched: 0,
+                    global_leaf_directory_reads: 0,
+                    global_leaf_directory_bytes: 0,
+                    global_leaf_pages_read: 0,
+                    global_leaf_page_bytes: 0,
+                    global_leaf_exact_scores: 0,
+                    global_leaf_continuations: 0,
+                    global_leaf_waves: 0,
+                    global_base_approximate_us: 0,
+                    global_base_exact_rerank_us: 0,
+                    global_delta_approximate_us: 0,
+                    global_delta_exact_rerank_us: 0,
+                    global_delta_wait_us: 0,
+                    resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                    collection_resident_bytes: 0,
+                    retained_bytes: 0,
+                    retained_capacity_bytes: 0,
+                    retained_peak_bytes: 0,
+                    transient_bytes: 0,
+                    transient_capacity_bytes: 0,
+                    transient_peak_bytes: 0,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    requests: self.storage.request_counts().delta(requests_before),
+                    rows_evaluated: 0,
+                    rows_passed_filter: 0,
+                    segments_pruned_by_filter: 0,
+                    wal_cells_examined: 0,
+                    wal_lanes_examined: 0,
+                    wal_runs_examined: 0,
+                    wal_records_examined: 0,
+                    wal_snapshot_retries: 0,
+                },
+                vectors: Vec::new(),
+            }));
+        }
         let routing_started = Instant::now();
         let base = self.load_resident_global_pq_reference(&global_ref)?;
         let delta_reference = global_ref.delta.as_deref();
@@ -13324,15 +13456,14 @@ impl BorsukIndex {
         } else {
             Vec::new()
         };
-        let termination_reason = if latency_limited {
-            SearchTerminationReason::MaxLatency
-        } else if hits.len() < options.k && byte_budget_limited {
-            SearchTerminationReason::MaxBytes
-        } else if hits.len() < options.k {
-            SearchTerminationReason::MaxSegments
-        } else {
-            SearchTerminationReason::Complete
-        };
+        let termination_reason = resident_v10_termination_reason(
+            options,
+            started,
+            latency_limited,
+            hits.len(),
+            options.k,
+            byte_budget_limited,
+        );
         let segments_total = global_ref.segments.len()
             + delta_reference.map_or(0, |reference| reference.segments.len());
         Ok(Some(SearchExecution {
@@ -14017,6 +14148,7 @@ impl BorsukIndex {
             manifest, &previous,
         )?;
         self.resident_global_pq.clear();
+        self.repin_current_resident_global_pq()?;
         Ok(true)
     }
 
@@ -14134,6 +14266,7 @@ impl BorsukIndex {
                 .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         }
         self.resident_global_pq.clear();
+        self.repin_current_resident_global_pq()?;
         Ok(())
     }
 
@@ -23175,6 +23308,25 @@ fn resident_v10_latency_expired(options: &SearchOptions, started: Instant) -> bo
     started.elapsed().as_millis() >= u128::from(*limit)
 }
 
+fn resident_v10_termination_reason(
+    options: &SearchOptions,
+    started: Instant,
+    latency_limited: bool,
+    hits: usize,
+    k: usize,
+    byte_budget_limited: bool,
+) -> SearchTerminationReason {
+    if latency_limited || resident_v10_latency_expired(options, started) {
+        SearchTerminationReason::MaxLatency
+    } else if hits < k && byte_budget_limited {
+        SearchTerminationReason::MaxBytes
+    } else if hits < k {
+        SearchTerminationReason::MaxSegments
+    } else {
+        SearchTerminationReason::Complete
+    }
+}
+
 /// Restrict a recursive search layer to the request budget its predecessors did
 /// not consume. Returns the first exhausted hard boundary instead of creating
 /// an invalid zero-valued child option.
@@ -23465,6 +23617,234 @@ mod tests {
         assert!(
             reclaimable.upgrade().is_none(),
             "evicted and unpinned generation was not reclaimed"
+        );
+    }
+
+    #[test]
+    fn resident_v10_cached_checksum_still_validates_declared_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let reference = index.manifest.global_pq_ref.clone().unwrap();
+        let _ = index.load_resident_global_pq_reference(&reference).unwrap();
+
+        let mut wrong_vectors = reference.clone();
+        wrong_vectors.vectors += 1;
+        assert!(
+            index
+                .load_resident_global_pq_reference(&wrong_vectors)
+                .is_err(),
+            "cache hit accepted a mismatched declared vector count"
+        );
+
+        let mut wrong_subspaces = reference.clone();
+        wrong_subspaces.subspaces += 1;
+        assert!(
+            index
+                .load_resident_global_pq_reference(&wrong_subspaces)
+                .is_err(),
+            "cache hit accepted a mismatched declared subspace count"
+        );
+
+        assert!(
+            index
+                .load_resident_global_pq_reference_for_element_type(
+                    &reference,
+                    crate::VectorElementType::Float16,
+                )
+                .is_err(),
+            "cache hit accepted a mismatched declared element type"
+        );
+    }
+
+    #[test]
+    fn preloaded_primary_and_named_snapshots_pin_setup_metadata_after_cache_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "named".to_string(),
+                crate::VectorSpec {
+                    dimensions: 8,
+                    metric: VectorMetric::Euclidean,
+                    kind: crate::VectorKind::Dense,
+                    element_type: crate::VectorElementType::Float32,
+                },
+            )]),
+        })
+        .unwrap();
+        writer
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(format!("row-{row}"), vec![row as f32; 8])
+                            .with_named_vector("named", vec![(127 - row) as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        writer.finish_bulk_load().unwrap();
+        let primary_reference = writer.manifest.global_pq_ref.clone().unwrap();
+        let _ = writer
+            .load_resident_global_pq_reference(&primary_reference)
+            .unwrap();
+        let named_writer = writer.named.get_mut("named").unwrap();
+        named_writer.refresh_resident_global_pq().unwrap();
+        let named_reference = named_writer.manifest.global_pq_ref.clone().unwrap();
+        let _ = named_writer
+            .load_resident_global_pq_reference(&named_reference)
+            .unwrap();
+        let old_snapshot = writer.clone();
+        drop(writer);
+
+        let primary_reference = old_snapshot.manifest.global_pq_ref.clone().unwrap();
+        let primary = old_snapshot
+            .resident_global_pq
+            .get(&primary_reference.checksum)
+            .unwrap();
+        old_snapshot.resident_global_pq.clear();
+        drop(primary);
+        let named_snapshot = old_snapshot.named.get("named").unwrap();
+        let named_reference = named_snapshot.manifest.global_pq_ref.clone().unwrap();
+        let named = named_snapshot
+            .resident_global_pq
+            .get(&named_reference.checksum)
+            .unwrap();
+        named_snapshot.resident_global_pq.clear();
+        drop(named);
+
+        let primary_requests = old_snapshot.storage.request_counts();
+        let _ = old_snapshot
+            .load_resident_global_pq_reference(&primary_reference)
+            .unwrap();
+        assert_eq!(
+            old_snapshot
+                .storage
+                .request_counts()
+                .delta(&primary_requests)
+                .gets,
+            0,
+            "preloaded primary snapshot repeated evicted setup reads"
+        );
+        let named_requests = named_snapshot.storage.request_counts();
+        let _ = named_snapshot
+            .load_resident_global_pq_reference(&named_reference)
+            .unwrap();
+        assert_eq!(
+            named_snapshot
+                .storage
+                .request_counts()
+                .delta(&named_requests)
+                .gets,
+            0,
+            "preloaded named snapshot repeated evicted setup reads"
+        );
+
+        let primary_report = old_snapshot
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        let named_report = old_snapshot
+            .search_with_report(
+                &[127.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_vector_name("named")
+                    .with_max_segments(4),
+            )
+            .unwrap();
+        assert_eq!(primary_report.hits[0].id.as_str(), "row-0");
+        assert_eq!(named_report.hits[0].id.as_str(), "row-0");
+        assert_eq!(primary_report.leaf_mode, "bounded-arrow-leaf-v10");
+        assert_eq!(named_report.leaf_mode, "bounded-arrow-leaf-v10");
+    }
+
+    #[test]
+    fn resident_v10_deadline_stops_before_descriptor_and_root_setup() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index.resident_global_pq.clear();
+        let requests_before = index.storage.request_counts();
+        let started = Instant::now()
+            .checked_sub(Duration::from_millis(10))
+            .unwrap();
+
+        let execution = index
+            .search_resident_global_pq(
+                &[0.0; 8],
+                &SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_latency_ms(1),
+                false,
+                started,
+                &requests_before,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            execution.report.termination_reason,
+            SearchTerminationReason::MaxLatency
+        );
+        assert_eq!(
+            index.storage.request_counts().delta(&requests_before).gets,
+            0,
+            "expired V10 request performed descriptor/root setup I/O"
+        );
+    }
+
+    #[test]
+    fn resident_v10_deadline_is_resampled_after_scoring_and_hit_materialization() {
+        let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
+            .with_max_segments(4)
+            .with_max_latency_ms(1);
+        let started = Instant::now()
+            .checked_sub(Duration::from_millis(10))
+            .unwrap();
+
+        assert_eq!(
+            resident_v10_termination_reason(&options, started, false, 1, 1, false),
+            SearchTerminationReason::MaxLatency
         );
     }
 

@@ -212,3 +212,80 @@ query authenticated V10 base/delta leaves.
 The V10 schema is a deliberate break. Existing unversioned V9 campaign
 artifacts remain immutable historical evidence and are intentionally rejected
 by current-schema consumers; they must not be used for old/new comparisons.
+
+## Fix round 2/5 — terminal deadline sampling, snapshot pins, and fail-closed consumers
+
+### Root causes and repairs
+
+1. The first resident V10 deadline gate still followed coverage resolution and
+   descriptor/root setup, and the final latency sample preceded CPU scoring,
+   sorting, hit construction, and optional vector materialization. An expired
+   request now returns before descriptor/root setup with zero resident work,
+   and termination is sampled again after result construction. `MaxLatency`
+   has precedence over byte, segment, and complete outcomes.
+2. The four-generation cache retained metadata only by recency; index clones
+   did not own immutable references, so cache churn could reintroduce four
+   setup GETs. Each primary or named snapshot now pins its validated base and
+   optional delta `Arc`. Open and refresh prepare pins before handoff, and
+   every writer publication that replaces the resident PQ artifact repins the
+   new manifest. Cache and pin hits are both revalidated against declared
+   vector count, subspace count, and vector element type.
+3. Current query CSV consumers did not all enforce the new contract, and the
+   storage-layout assembler filtered rows before validation. A shared schema
+   module now requires the exact `borsuk-production-bench-v10` version and all
+   nine V10 telemetry fields on every source row. The artifact validator,
+   publication validator, and assembler validate the full input before any
+   phase/cohort selection; missing, unknown, V9, mixed, and off-cohort stale
+   rows fail closed.
+
+### Strict TDD evidence
+
+- Pre-setup/final deadline RED first failed to compile because the planned
+  termination helper did not exist. With a temporary test stub, both assertions
+  failed: 0 passed / 2 failed / 555 filtered; the expired setup path performed
+  four GETs and the post-materialization result incorrectly reported
+  `Complete`. GREEN: 2 passed / 555 filtered with zero setup GETs and terminal
+  `MaxLatency`.
+- Cached-reference validation RED: 0 passed / 1 failed / 557 filtered because
+  a cached checksum accepted a mismatched vector count. GREEN: 1 passed / 558
+  filtered, covering vector count, subspaces, and element type.
+- Snapshot-pin RED: 0 passed / 1 failed / 558 filtered because an evicted
+  primary snapshot repeated four setup GETs. GREEN: 1 passed / 558 filtered;
+  primary and named snapshots perform zero setup GETs after cache clear and an
+  old clone remains queryable through V10.
+- Artifact-consumer RED: four table cases failed to raise for missing/unknown/
+  V9 schema or missing telemetry. Publication-consumer RED: three cases failed
+  to raise for unknown/V9-mixed/missing telemetry. Assembler RED failed because
+  no pre-selection schema hook existed. GREEN: the combined three-module
+  Python consumer suite passed 29 tests, including off-cohort stale rows.
+
+The first deadline compile check and the following assertion run briefly
+appeared as overlapping process groups in controller telemetry even though the
+first command had returned; both groups were gone when inspected. Every later
+Cargo launch used an explicit process and memory-pressure guard, with only one
+Cargo command active at a time.
+
+### Focused verification
+
+- Delayed resident deadline integration: 1 passed / 45 filtered.
+- Invalid-next refresh rejection: 1 passed / 45 filtered.
+- Refresh preload, concurrent first queries, and old snapshot: 1 passed / 45
+  filtered.
+- Full paged compaction resident-PQ rebuild: 1 passed / 558 filtered.
+- Purge/re-add publication path: 1 passed / 155 filtered.
+- Python direct-consumer suites: 29 passed.
+- `cargo fmt --all -- --check`: passed after applying the formatting delta
+  reported by its first check.
+- `git diff --check`: passed.
+
+One initially attempted namespaced library test used `--exact` without the
+module prefix and therefore selected 0 tests / 559 filtered; it was immediately
+rerun with the correct filter and produced the compaction result above. Per the
+round controller, no broad workspace test, Clippy, or no-run gate was launched.
+
+### Remaining concern
+
+The exact V10 schema requirement is intentionally incompatible with historical
+V9/unversioned query samples. Those artifacts remain immutable, but current
+assemblers and publication validators will reject them rather than silently
+mix architectures.

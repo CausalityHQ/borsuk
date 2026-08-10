@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any
 
 if __package__:
+    from scripts.production_bench_schema import validate_v10_query_sample_rows
+else:
+    from production_bench_schema import validate_v10_query_sample_rows
+
+if __package__:
     from scripts.analyze_publication_claims import compare_direct
     from scripts.publication_protocol import (
         SCHEDULE_FIELDS,
@@ -351,6 +356,7 @@ def _direct_rows(
         / f"amazon-s3-vectors/fashion-mnist-784/{repetition_id}/query_samples.csv"
     )
     borsuk_source = _read_csv(borsuk_path)
+    validate_v10_query_sample_rows(borsuk_source, borsuk_path)
     s3_source = _read_csv(s3_path)
     borsuk: dict[str, list[dict[str, Any]]] = {}
     s3: dict[str, list[dict[str, Any]]] = {}

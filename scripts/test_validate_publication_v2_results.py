@@ -286,6 +286,7 @@ def write_fixture(root: Path) -> None:
         for query_position, source_index in enumerate((1, 0)):
             for phase, latency in (("uncached", 10.0), ("disk_cached", 5.0)):
                 row = {
+                    "schema_version": "borsuk-production-bench-v10",
                     "repetition_id": repetition,
                     "query_seed": query_seed,
                     "phase": phase,
@@ -296,6 +297,15 @@ def write_fixture(root: Path) -> None:
                     "query_source_index": source_index,
                     "latency_ms": latency + query_position,
                     "recall_at_10": 1.0,
+                    "global_leaf_directory_reads": 1,
+                    "global_leaf_directory_bytes": 100,
+                    "global_leaf_pages_read": 1,
+                    "global_leaf_page_bytes": 100,
+                    "global_leaf_waves": 1,
+                    "global_leaf_continuations": 0,
+                    "global_leaf_exact_scores": 2,
+                    "backing_reads": 1,
+                    "backing_bytes_read": 100,
                 }
                 borsuk_rows.append(row)
                 all_borsuk.append(
@@ -364,6 +374,28 @@ def write_fixture(root: Path) -> None:
 
 
 class ValidatePublicationV2ResultsTests(unittest.TestCase):
+    def test_rejects_non_v10_or_incomplete_borsuk_query_samples(self) -> None:
+        mutations = (
+            ("unknown", "schema_version", "unknown"),
+            ("V9", "schema_version", "borsuk-production-bench-v9"),
+            ("telemetry", "global_leaf_exact_scores", None),
+        )
+        for label, field, value in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                write_fixture(root)
+                path = root / "r01/borsuk-direct/fashion-mnist-784/bench_query_samples.csv"
+                with path.open(newline="") as handle:
+                    rows = list(csv.DictReader(handle))
+                if value is None:
+                    for row in rows:
+                        row.pop(field)
+                else:
+                    rows[0][field] = value
+                write_csv(path, rows)
+                with self.assertRaisesRegex(ValueError, "schema|telemetry"):
+                    validate_result_tree(root, bootstrap_samples=100)
+
     def test_accepts_complete_frozen_paired_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

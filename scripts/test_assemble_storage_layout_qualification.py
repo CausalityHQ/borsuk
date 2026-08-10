@@ -121,6 +121,36 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
                 "case",
             )
 
+    def test_rejects_off_cohort_or_mixed_schema_rows_before_selection(self) -> None:
+        valid = {
+            "schema_version": "borsuk-production-bench-v10",
+            "global_leaf_directory_reads": "0",
+            "global_leaf_directory_bytes": "0",
+            "global_leaf_pages_read": "0",
+            "global_leaf_page_bytes": "0",
+            "global_leaf_waves": "0",
+            "global_leaf_continuations": "0",
+            "global_leaf_exact_scores": "0",
+            "backing_reads": "0",
+            "backing_bytes_read": "0",
+        }
+        off_cohort_v9 = {
+            **valid,
+            "schema_version": "borsuk-production-bench-v9",
+            "phase": "disk_cached",
+        }
+        with self.assertRaisesRegex(ValueError, "schema"):
+            assemble._validate_query_sample_schema_rows(
+                [valid, off_cohort_v9], "case"
+            )
+
+        missing_telemetry = valid.copy()
+        missing_telemetry.pop("global_leaf_waves")
+        with self.assertRaisesRegex(ValueError, "telemetry"):
+            assemble._validate_query_sample_schema_rows(
+                [missing_telemetry], "case"
+            )
+
     def test_rejects_raw_sample_identity_that_disagrees_with_schedule(self) -> None:
         row = {
             "scan_codec": "srht-pq-scan",
