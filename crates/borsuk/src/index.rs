@@ -25913,12 +25913,7 @@ mod tests {
             },
         )
         .unwrap();
-        let decoded_root =
-            crate::global_leaf::decode_global_leaf_run_directory_root("11aa", &encoded.root)
-                .unwrap();
-        let expected_resident_bytes = ResidentGlobalLeafRun::new(decoded_root, decoded, None)
-            .unwrap()
-            .resident_bytes() as u64;
+        let expected_resident_bytes = decoded.resident_bytes() as u64;
         let root_path = "global-leaf/v11/directories/preload-auth-root.parquet";
         index.storage.write_bytes(root_path, &encoded.root).unwrap();
         for shard in &encoded.shards {
@@ -25970,6 +25965,8 @@ mod tests {
             "preload must authenticate one root plus both directory shards from backing"
         );
         assert_eq!(resident.root().shards().len(), 2);
+        assert_eq!(resident.resident_bytes() as u64, expected_resident_bytes);
+        assert!(resident.runtime_resident_bytes() as u64 > expected_resident_bytes);
         for ordinal in 0..resident.root().shards().len() {
             assert!(!resident.shard_is_loaded(ordinal).unwrap());
         }
@@ -26201,6 +26198,33 @@ mod tests {
 
         let error = enforce_ram_budget(&manifest, Some(u64::MAX - 1)).unwrap_err();
         assert!(error.to_string().contains("RAM budget"), "{error}");
+    }
+
+    #[test]
+    fn resident_global_v11_runtime_slot_overhead_is_ram_admitted() {
+        let (_directory, index) = build_finished_resident_global_v11_index();
+        let manifest = index.manifest.clone();
+        let ann = manifest.global_ann_ref.as_ref().unwrap();
+        let runtime_overhead = ann.runtime_resident_overhead();
+        let resident_estimate = manifest.try_resident_bytes_estimate().unwrap();
+        let budget_without_runtime_overhead = resident_estimate
+            .checked_sub(runtime_overhead)
+            .expect("runtime overhead fits within the complete estimate");
+
+        assert!(runtime_overhead > 0);
+        let error = enforce_ram_budget(&manifest, Some(budget_without_runtime_overhead))
+            .expect_err("runtime slot overhead escaped RAM admission");
+        assert!(
+            matches!(
+                error,
+                BorsukError::RamBudgetExceeded {
+                    resident_bytes,
+                    budget_bytes
+                } if resident_bytes == resident_estimate
+                    && budget_bytes == budget_without_runtime_overhead
+            ),
+            "{error}"
+        );
     }
 
     #[test]

@@ -553,6 +553,8 @@ struct V11CellBounds {
     page_count: u32,
 }
 
+pub(crate) const GLOBAL_LEAF_V11_CELL_BOUND_BYTES: usize = std::mem::size_of::<V11CellBounds>();
+
 #[derive(Debug)]
 pub(crate) struct GlobalLeafRunDirectoryRoot {
     code_width: usize,
@@ -563,53 +565,6 @@ pub(crate) struct GlobalLeafRunDirectoryRoot {
 }
 
 impl GlobalLeafRunDirectoryRoot {
-    pub(crate) fn resident_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            .saturating_add(
-                self.cells
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<V11CellBounds>()),
-            )
-            .saturating_add(
-                self.pages
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<GlobalLeafPageRef>()),
-            )
-            .saturating_add(
-                self.pages
-                    .iter()
-                    .map(|page| page.centroid_code.len())
-                    .sum::<usize>(),
-            )
-            .saturating_add(
-                self.bundles
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<GlobalLeafBundleRef>()),
-            )
-            .saturating_add(
-                self.bundles
-                    .iter()
-                    .map(|bundle| bundle.path.capacity())
-                    .sum::<usize>(),
-            )
-            .saturating_add(
-                self.shards
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<GlobalLeafDirectoryShardRef>()),
-            )
-            .saturating_add(
-                self.shards
-                    .iter()
-                    .map(|shard| {
-                        shard
-                            .path
-                            .capacity()
-                            .saturating_add(shard.checksum.capacity())
-                    })
-                    .sum::<usize>(),
-            )
-    }
-
     pub(crate) fn inline_pages(&self) -> &[GlobalLeafPageRef] {
         &self.pages
     }

@@ -418,7 +418,7 @@ pub(crate) struct ResidentGlobalLeafRun {
     sealed_pages: u64,
     partial_pages: u64,
     encoded_bytes: u64,
-    resident_bytes: usize,
+    persisted_resident_bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -433,6 +433,25 @@ enum ResidentGlobalLeafShardState {
     Empty,
     Loading,
     Ready(Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>),
+}
+
+fn resident_global_leaf_runtime_overhead(page_count: usize, shard_count: usize) -> usize {
+    std::mem::size_of::<ResidentGlobalLeafRun>()
+        .saturating_add(
+            page_count.saturating_mul(crate::global_leaf::GLOBAL_LEAF_V11_CELL_BOUND_BYTES),
+        )
+        .saturating_add(
+            shard_count.saturating_mul(
+                std::mem::size_of::<ResidentGlobalLeafShardSlot>()
+                    .saturating_add(std::mem::size_of::<
+                        Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>,
+                    >())
+                    .saturating_add(2 * std::mem::size_of::<usize>())
+                    .saturating_add(std::mem::size_of::<
+                        Vec<crate::global_leaf::GlobalLeafPageRef>,
+                    >()),
+            ),
+        )
 }
 
 impl ResidentGlobalLeafRun {
@@ -477,28 +496,10 @@ impl ResidentGlobalLeafRun {
         let decoded_shards = (0..root.shards().len())
             .map(|_| ResidentGlobalLeafShardSlot::default())
             .collect::<Vec<_>>();
-        // The persisted reservation is deliberately conservative: it covers
-        // the complete decoded directory page set, the retained authenticated
-        // root, every fixed slot, and the maximum Arc control/allocation
-        // overhead when all shard slots are populated.
-        let resident_bytes = validated_directory
-            .resident_bytes()
-            .saturating_add(root.resident_bytes())
-            .saturating_add(std::mem::size_of::<Self>())
-            .saturating_add(
-                decoded_shards
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<ResidentGlobalLeafShardSlot>()),
-            )
-            .saturating_add(
-                root.shards().len().saturating_mul(
-                    std::mem::size_of::<Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>>()
-                        .saturating_add(2 * std::mem::size_of::<usize>())
-                        .saturating_add(std::mem::size_of::<
-                            Vec<crate::global_leaf::GlobalLeafPageRef>,
-                        >()),
-                ),
-            );
+        // V11 persists the exact decoded full-directory size. Runtime-only
+        // fixed-slot overhead is accounted separately so the established V11
+        // serialized contract does not change under the same format marker.
+        let persisted_resident_bytes = validated_directory.resident_bytes();
         Ok(Self {
             root,
             decoded_shards,
@@ -509,7 +510,7 @@ impl ResidentGlobalLeafRun {
             sealed_pages,
             partial_pages: pages.saturating_sub(sealed_pages),
             encoded_bytes,
-            resident_bytes,
+            persisted_resident_bytes,
         })
     }
 
@@ -518,7 +519,16 @@ impl ResidentGlobalLeafRun {
     }
 
     pub(crate) fn resident_bytes(&self) -> usize {
-        self.resident_bytes
+        self.persisted_resident_bytes
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_resident_bytes(&self) -> usize {
+        self.persisted_resident_bytes
+            .saturating_add(resident_global_leaf_runtime_overhead(
+                usize::try_from(self.pages).unwrap_or(usize::MAX),
+                self.decoded_shards.len(),
+            ))
     }
 
     pub(crate) fn pages(&self) -> u64 {
@@ -698,6 +708,17 @@ impl GlobalLeafRunRef {
 
     pub(crate) fn resident_bytes(&self) -> u64 {
         self.resident_bytes
+    }
+
+    fn runtime_resident_overhead(&self) -> u64 {
+        let page_count = usize::try_from(self.pages).unwrap_or(usize::MAX);
+        let shard_count =
+            usize::try_from(self.directory.object_count().saturating_sub(1)).unwrap_or(usize::MAX);
+        u64::try_from(resident_global_leaf_runtime_overhead(
+            page_count,
+            shard_count,
+        ))
+        .unwrap_or(u64::MAX)
     }
 
     pub(crate) fn level(&self) -> u8 {
@@ -920,6 +941,15 @@ impl GlobalAnnRef {
         u64::try_from(metadata_bytes)
             .unwrap_or(u64::MAX)
             .saturating_add(self.resident_bytes)
+            .saturating_add(self.runtime_resident_overhead())
+    }
+
+    pub(crate) fn runtime_resident_overhead(&self) -> u64 {
+        self.base
+            .iter()
+            .chain(self.incremental_runs.iter())
+            .map(GlobalLeafRunRef::runtime_resident_overhead)
+            .fold(0_u64, u64::saturating_add)
     }
 
     #[cfg(test)]
@@ -1506,10 +1536,6 @@ fn persist_directory_artifacts(
     storage_bytes = storage_bytes.checked_add(root_bytes).ok_or_else(|| {
         BorsukError::InvalidStorage("global leaf storage byte count overflows".to_owned())
     })?;
-    let root = crate::global_leaf::decode_global_leaf_run_directory_root(
-        codebook_checksum,
-        &encoded.root,
-    )?;
     let directory = crate::global_leaf::decode_global_leaf_run_directory(
         codebook_checksum,
         &encoded.root,
@@ -1526,13 +1552,9 @@ fn persist_directory_artifacts(
                 })
         },
     )?;
-    let resident_bytes =
-        u64::try_from(ResidentGlobalLeafRun::new(root, directory, None)?.resident_bytes())
-            .map_err(|_| {
-                BorsukError::InvalidStorage(
-                    "global leaf directory resident bytes exceed u64".to_owned(),
-                )
-            })?;
+    let resident_bytes = u64::try_from(directory.resident_bytes()).map_err(|_| {
+        BorsukError::InvalidStorage("global leaf directory resident bytes exceed u64".to_owned())
+    })?;
     Ok(PersistedDirectoryArtifacts {
         directory: GlobalLeafDirectoryRef::new(
             root_path,
@@ -1947,6 +1969,28 @@ mod tests {
         GlobalAnnRef::new_offline_base(codebook, base, 1, 0).unwrap()
     }
 
+    #[test]
+    fn v11_serialized_resident_bytes_stay_stable_while_runtime_slots_are_estimated() {
+        let inline = valid_ann_ref();
+        let mut sharded = inline.clone();
+        sharded.incremental_runs[0].directory.shard_count = 3;
+        sharded.validate().unwrap();
+
+        assert_eq!(sharded.resident_bytes(), inline.resident_bytes());
+        assert!(
+            sharded.resident_bytes_estimate() > inline.resident_bytes_estimate(),
+            "runtime estimate ignored two authenticated fixed shard slots"
+        );
+        let run = &sharded.incremental_runs[0];
+        assert!(
+            sharded.resident_bytes_estimate()
+                >= sharded
+                    .resident_bytes()
+                    .saturating_add(run.runtime_resident_overhead()),
+            "runtime estimate does not cover the derived fixed-slot reservation"
+        );
+    }
+
     fn resident_codebook() -> (ResidentGlobalCodebook, GlobalCodebookRef) {
         let training = (0..16)
             .map(|row| vec![row as f32, (row * 3) as f32])
@@ -2077,8 +2121,13 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(resident.shard_slot_count(), 2);
+        assert_eq!(
+            resident.resident_bytes(),
+            decoded_directory_bytes,
+            "V11 persisted resident bytes changed from the full-directory contract"
+        );
         assert!(
-            resident.resident_bytes()
+            resident.runtime_resident_bytes()
                 >= decoded_directory_bytes
                     + 2 * std::mem::size_of::<Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>>(),
             "resident reservation omitted fixed slot/Arc overhead"
