@@ -494,8 +494,6 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
         OpenOptions {
             cache_dir,
             cache_max_bytes: env_optional_u64("BORSUK_HYBRID_CACHE_MAX_BYTES")?,
-            global_pq_prefetch_stripe_bytes: OpenOptions::default().global_pq_prefetch_stripe_bytes,
-            global_pq_slow_read_hedge_after: None,
             ram_budget_bytes: Some(ram_budget_bytes),
             resident_routing: env_bool("BORSUK_HYBRID_RESIDENT_ROUTING", false)?,
             segment_cache_max_bytes: env_optional_u64("BORSUK_HYBRID_SEGMENT_CACHE_MAX_BYTES")?,
@@ -503,7 +501,6 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
                 "BORSUK_HYBRID_ROUTING_PAGE_CACHE_MAX_BYTES",
                 borsuk::DEFAULT_ROUTING_PAGE_CACHE_BYTES,
             )?,
-            global_cell_graph_cache_max_bytes: env_u64("BORSUK_HYBRID_GRAPH_CACHE_MAX_BYTES", 0)?,
             tombstone_page_cache_max_bytes: env_u64(
                 "BORSUK_HYBRID_TOMBSTONE_CACHE_MAX_BYTES",
                 32 * 1024 * 1024,

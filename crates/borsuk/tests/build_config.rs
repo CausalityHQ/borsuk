@@ -15,8 +15,8 @@ use std::fs;
 use std::path::Path;
 
 use borsuk::{
-    BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions, IndexConfig, LeafMode,
-    OpenOptions, SearchOptions, SidecarCompression, VectorElementType, VectorMetric, VectorRecord,
+    BorsukIndex, BuildConfig, CompactionOptions, IndexConfig, SearchOptions, SidecarCompression,
+    VectorElementType, VectorMetric, VectorRecord,
 };
 
 fn base_config(uri: String, dimensions: usize) -> IndexConfig {
@@ -370,10 +370,6 @@ fn build_config_survives_manifest_round_trip() {
         global_turboquant_bits: 3,
         global_turboquant_qjl_bits: 24,
         global_turboquant_shards: 2,
-        global_cell_graph: Some(borsuk::GlobalCellGraphConfig {
-            degree: 24,
-            construction_ef: 96,
-        }),
     };
     let index =
         BorsukIndex::create_with_build_config(base_config(uri.clone(), dimensions), build.clone())
@@ -387,65 +383,6 @@ fn build_config_survives_manifest_round_trip() {
         &build,
         "BuildConfig did not survive a manifest round-trip"
     );
-}
-
-#[test]
-fn cached_global_cell_graphs_mix_with_scan_without_becoming_required() {
-    let root = tempfile::tempdir().unwrap();
-    let cache = tempfile::tempdir().unwrap();
-    let uri = root.path().to_string_lossy().into_owned();
-    let dimensions = 16;
-    let records = clustered_records(8, 80, dimensions);
-    let mut index = BorsukIndex::create_with_build_config(
-        base_config(uri.clone(), dimensions),
-        BuildConfig {
-            global_cell_graph: Some(borsuk::GlobalCellGraphConfig {
-                degree: 8,
-                construction_ef: 32,
-            }),
-            ..BuildConfig::default()
-        },
-    )
-    .unwrap();
-    index.add(records.clone()).unwrap();
-    index.finish_bulk_load().unwrap();
-    drop(index);
-
-    let index = BorsukIndex::open_with_options(
-        &uri,
-        OpenOptions {
-            cache_dir: Some(cache.path().to_path_buf()),
-            resident_routing: true,
-            global_cell_graph_cache_max_bytes: 8 * 1024 * 1024,
-            ..OpenOptions::default()
-        },
-    )
-    .unwrap();
-    let query = records[37].vector.clone();
-    let options = SearchOptions::approx(10, LeafMode::SrhtPqScan)
-        .with_max_segments(32)
-        .with_max_candidates_per_segment(128)
-        .with_cache_execution(CacheExecutionPolicy::Auto);
-
-    let uncached = index.search_with_report(&query, options.clone()).unwrap();
-    assert_eq!(uncached.leaf_mode, "srht-pq-scan");
-    assert_eq!(uncached.graph_candidates_added, 0);
-    assert_eq!(uncached.global_graph_chunks_searched, 0);
-    assert!(uncached.global_scan_chunks_searched > 0);
-
-    let warmed = index
-        .warm_global_cell_graphs_for_queries(std::slice::from_ref(&query), 32)
-        .unwrap();
-    assert!(warmed > 0);
-    let mixed = index.search_with_report(&query, options).unwrap();
-    assert!(mixed.leaf_mode.contains("global-cell-graph"));
-    assert!(mixed.graph_candidates_added > 0);
-    assert!(mixed.global_graph_chunks_searched > 0);
-    assert_eq!(
-        mixed.global_graph_chunks_searched + mixed.global_scan_chunks_searched,
-        mixed.segments_searched
-    );
-    assert_eq!(mixed.hits.len(), 10);
 }
 
 #[test]

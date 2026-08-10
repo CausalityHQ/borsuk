@@ -17,9 +17,9 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     AddReport, BorsukError, BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
-    GarbageCollectionOptions, GlobalCellGraphConfig, IndexConfig, LeafCapability, LeafMode,
-    Manifest, OpenOptions, QuantizerKind, RebuildOptions, RecallGuarantee, SearchMode,
-    SearchOptions, SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord, WalConfig,
+    GarbageCollectionOptions, IndexConfig, LeafCapability, LeafMode, Manifest, OpenOptions,
+    QuantizerKind, RebuildOptions, RecallGuarantee, SearchMode, SearchOptions,
+    SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord, WalConfig,
     leaf_mode_names, vector_records_to_parquet,
 };
 use futures_util::TryStreamExt;
@@ -65,142 +65,6 @@ fn create_graph_enabled_with_wal(
     wal: WalConfig,
 ) -> Result<BorsukIndex, BorsukError> {
     BorsukIndex::create_with_wal_and_leaf_capability(config, wal, LeafCapability::GraphEnabled)
-}
-
-fn resident_global_hedge_fixture(uri: &str) -> Arc<dyn ObjectStore> {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let mut writer = BorsukIndex::create_with_object_store(
-        Arc::clone(&inner),
-        IndexConfig {
-            uri: uri.to_string(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 256,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        },
-    )
-    .unwrap();
-    writer
-        .add(
-            (0..128)
-                .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
-                .collect(),
-        )
-        .unwrap();
-    writer.finish_bulk_load().unwrap();
-    inner
-}
-
-fn open_global_hedge_reader(
-    inner: Arc<dyn ObjectStore>,
-    uri: &str,
-    hedge_after: Option<Duration>,
-    slow_path_prefix: &'static str,
-) -> BorsukIndex {
-    let slow: Arc<dyn ObjectStore> = Arc::new(
-        common::FaultInjectingObjectStore::new(inner).with_get_latency_for(
-            // Keep the injected tail well above the 5 ms hedge timer even
-            // when the full parallel test binary temporarily delays Tokio's
-            // timer polling. The old 30 ms gap was not deterministic under
-            // a saturated assurance run.
-            Duration::from_millis(250),
-            move |operation, path| {
-                operation == common::StoreOperation::Get
-                    && path.as_ref().starts_with(slow_path_prefix)
-            },
-        ),
-    );
-    BorsukIndex::open_with_object_store_and_options(
-        slow,
-        uri,
-        OpenOptions {
-            global_pq_slow_read_hedge_after: hedge_after,
-            ..OpenOptions::default()
-        },
-    )
-    .unwrap()
-}
-
-#[test]
-fn configured_hedge_reaches_real_exact_rerank_and_preserves_strict_budgets() {
-    let uri = "memory:///exact-rerank-hedge-propagation";
-    let inner = resident_global_hedge_fixture(uri);
-    let query = [0.0; 8];
-    let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
-        .with_max_segments(1)
-        .with_max_candidates_per_segment(1);
-
-    let control =
-        open_global_hedge_reader(Arc::clone(&inner), uri, None, "global-pq/exact-bundles/")
-            .search_with_report(&query, options.clone())
-            .unwrap();
-    let candidate = open_global_hedge_reader(
-        Arc::clone(&inner),
-        uri,
-        Some(Duration::from_millis(5)),
-        "global-pq/exact-bundles/",
-    )
-    .search_with_report(&query, options.clone())
-    .unwrap();
-
-    assert_eq!(candidate.hits, control.hits);
-    assert_eq!(candidate.bytes_read, control.bytes_read);
-    assert_eq!(candidate.global_exact_vectors_fetched, 1);
-    assert!(
-        candidate.requests.gets > control.requests.gets,
-        "a slow production exact range must issue its one configured duplicate: control={:?}, candidate={:?}",
-        control.requests,
-        candidate.requests
-    );
-
-    for bounded in [
-        options.clone().with_max_bytes(u64::MAX),
-        options.with_max_latency_ms(u64::MAX),
-    ] {
-        let report = open_global_hedge_reader(
-            Arc::clone(&inner),
-            uri,
-            Some(Duration::from_millis(5)),
-            "global-pq/exact-bundles/",
-        )
-        .search_with_report(&query, bounded)
-        .unwrap();
-        assert_eq!(report.hits, control.hits);
-        assert_eq!(report.bytes_read, control.bytes_read);
-        assert_eq!(report.requests.gets, control.requests.gets);
-    }
-}
-
-#[test]
-fn strict_global_pq_budgets_disable_query_stage_stripe_hedging() {
-    let uri = "memory:///strict-global-stripe-hedge";
-    let inner = resident_global_hedge_fixture(uri);
-    let query = [0.0; 8];
-    let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
-        .with_max_segments(1)
-        .with_max_candidates_per_segment(1);
-
-    let control = open_global_hedge_reader(Arc::clone(&inner), uri, None, "global-pq/bundles/")
-        .search_with_report(&query, options.clone().with_max_bytes(u64::MAX))
-        .unwrap();
-    for bounded in [
-        options.clone().with_max_bytes(u64::MAX),
-        options.with_max_latency_ms(u64::MAX),
-    ] {
-        let report = open_global_hedge_reader(
-            Arc::clone(&inner),
-            uri,
-            Some(Duration::from_millis(5)),
-            "global-pq/bundles/",
-        )
-        .search_with_report(&query, bounded)
-        .unwrap();
-        assert_eq!(report.hits, control.hits);
-        assert_eq!(report.bytes_read, control.bytes_read);
-        assert_eq!(report.requests.gets, control.requests.gets);
-    }
 }
 
 #[test]
@@ -543,8 +407,6 @@ fn local_index_persists_segments_and_reopens_for_exact_search() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -3726,8 +3588,6 @@ fn graph_search_rejects_graph_object_size_mismatch() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap_err();
@@ -3795,8 +3655,6 @@ fn graph_search_rejects_graph_edges_for_missing_segment_records() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap_err();
@@ -3859,8 +3717,6 @@ fn graph_search_rejects_graph_edge_distance_mismatch() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap_err();
@@ -3922,8 +3778,6 @@ fn graph_search_rejects_self_referential_graph_edges() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap_err();
@@ -3989,8 +3843,6 @@ fn graph_search_rejects_duplicate_graph_edges() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap_err();
@@ -4072,8 +3924,6 @@ fn graph_search_rejects_graph_source_out_degree_above_local_limit() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap_err();
@@ -4140,8 +3990,6 @@ fn graph_search_rejects_empty_graph_for_multi_record_segment() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap_err();
@@ -4278,8 +4126,6 @@ fn approximate_search_obeys_segment_budget() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .map(|report| report.hits)
@@ -4358,8 +4204,6 @@ fn approximate_search_obeys_byte_budget() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -4397,8 +4241,6 @@ fn approximate_search_obeys_byte_budget() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -4775,8 +4617,6 @@ fn approximate_search_rejects_invalid_budgets() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -4801,8 +4641,6 @@ fn approximate_search_rejects_invalid_budgets() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
             "eps must be finite and non-negative when set",
         ),
@@ -4827,8 +4665,6 @@ fn approximate_search_rejects_invalid_budgets() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
             "max_segments must be greater than zero when set",
         ),
@@ -4853,8 +4689,6 @@ fn approximate_search_rejects_invalid_budgets() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
             "max_bytes must be greater than zero when set",
         ),
@@ -4879,8 +4713,6 @@ fn approximate_search_rejects_invalid_budgets() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
             "max_latency_ms must be greater than zero when set",
         ),
@@ -4905,8 +4737,6 @@ fn approximate_search_rejects_invalid_budgets() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
             "max_candidates_per_segment must be greater than zero when set",
         ),
@@ -5081,8 +4911,6 @@ fn approximate_search_limits_exact_scoring_inside_each_segment() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -5160,8 +4988,6 @@ fn approximate_search_enforces_candidate_budget_when_k_is_larger() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -5220,8 +5046,6 @@ fn approximate_flat_scan_leaf_mode_skips_segment_graph() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -5383,88 +5207,6 @@ fn public_scan_names_are_distinct_and_srht_is_the_default() {
             .cache_execution,
         CacheExecutionPolicy::Graph
     );
-}
-
-#[test]
-fn graph_capable_index_keeps_storage_scan_fallback_and_uses_only_complete_local_graphs() {
-    let dir = tempfile::tempdir().unwrap();
-    let cache = tempfile::tempdir().unwrap();
-    let uri = dir.path().to_string_lossy().into_owned();
-    let build_config = BuildConfig {
-        global_cell_graph: Some(GlobalCellGraphConfig::default()),
-        ..BuildConfig::default()
-    };
-    let mut writer = BorsukIndex::create_with_wal_capability_and_build_config(
-        IndexConfig {
-            uri: uri.clone(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 2,
-            segment_max_vectors: 8,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        },
-        WalConfig::default(),
-        LeafCapability::GraphEnabled,
-        build_config,
-    )
-    .unwrap();
-    writer
-        .add(
-            (0..128)
-                .map(|row| VectorRecord::new(format!("row-{row}"), vec![(row % 8) as f32, 0.0]))
-                .collect(),
-        )
-        .unwrap();
-    writer.finish_bulk_load().unwrap();
-    assert!(
-        dir.path().join("global-pq/descriptors").is_dir(),
-        "graph-capable builds must retain the storage scan artifact"
-    );
-    drop(writer);
-    let index = BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
-
-    let graph_options = SearchOptions::approx(2, LeafMode::SrhtPqScan)
-        .with_max_candidates_per_segment(4)
-        .with_cache_execution(CacheExecutionPolicy::Graph);
-    let graph_fallback = index
-        .search_with_report(&[2.0, 0.0], graph_options.clone())
-        .unwrap();
-    assert_eq!(graph_fallback.leaf_mode, "srht-pq-scan");
-    assert_eq!(graph_fallback.routing_pages_read, 0);
-
-    let automatic = index
-        .search_with_report(
-            &[2.0, 0.0],
-            SearchOptions::approx(2, LeafMode::SrhtPqScan)
-                .with_max_candidates_per_segment(4)
-                .with_cache_execution(CacheExecutionPolicy::Auto),
-        )
-        .unwrap();
-    assert_eq!(automatic.leaf_mode, "srht-pq-scan");
-
-    let warmed = index
-        .warm_global_cell_graphs_for_queries(&[vec![2.0, 0.0]], 0)
-        .unwrap();
-    assert!(warmed > 0);
-    let automatic_after_warm = index
-        .search_with_report(
-            &[2.0, 0.0],
-            SearchOptions::approx(2, LeafMode::SrhtPqScan)
-                .with_max_candidates_per_segment(4)
-                .with_cache_execution(CacheExecutionPolicy::Auto),
-        )
-        .unwrap();
-    assert_eq!(automatic_after_warm.leaf_mode, "global-cell-graph");
-    assert!(automatic_after_warm.global_graph_chunks_searched > 0);
-    assert_eq!(automatic_after_warm.global_scan_chunks_searched, 0);
-    let graph = index
-        .search_with_report(&[2.0, 0.0], graph_options)
-        .unwrap();
-    assert_eq!(graph.leaf_mode, "global-cell-graph");
-    assert!(graph.global_graph_chunks_searched > 0);
-    assert_eq!(graph.global_scan_chunks_searched, 0);
-    assert_eq!(graph.graph_bytes_read, 0);
 }
 
 #[test]
@@ -5949,8 +5691,6 @@ fn approximate_search_expands_candidates_from_segment_graph() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -6018,8 +5758,6 @@ fn approximate_search_walks_segment_graph_beyond_first_hop() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -6081,8 +5819,6 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -6129,8 +5865,6 @@ fn read_through_cache_serves_segment_and_graph_after_source_removal() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -6195,8 +5929,6 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
@@ -6232,8 +5964,6 @@ fn read_through_cache_refetches_corrupt_segment_and_graph_payloads() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();

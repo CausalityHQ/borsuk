@@ -99,17 +99,6 @@ pub(crate) fn collection_wal_now_ms() -> Result<u64> {
 const SIDECAR_RANGE_COALESCE_BYTES: u64 = 64 * 1024;
 const SIDECAR_MAX_PHYSICAL_RANGE_BYTES: u64 = 4 * 1024 * 1024;
 const SIDECAR_RANGE_MAX_PARALLEL: usize = 10;
-// Global exact reranks commonly need 12-24 tiny, scattered rows from one
-// immutable bundle. Issue the complete bounded shortlist in one S3 wave
-// instead of serializing after ten.
-const GLOBAL_RERANK_RANGE_MAX_PARALLEL: usize = 32;
-// For dense shortlist clusters, a few bounded transfers are cheaper than a
-// wave of tiny S3 range requests. The locally optimal partition charges every
-// physical request 128 KiB while retaining the four-megabyte span cap. Thus a
-// range crosses a gap only when the avoided request repays that transfer; a
-// distant dense cluster starts a separate request instead of disabling local
-// coalescing everywhere.
-const GLOBAL_RERANK_REQUEST_WEIGHT_BYTES: u64 = 128 * 1024;
 static COORDINATION_FALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -192,98 +181,6 @@ fn plan_bounded_ranges(
     BoundedRangePlan { physical, slices }
 }
 
-fn plan_global_rerank_ranges(ranges: &[Range<u64>]) -> Result<BoundedRangePlan> {
-    if ranges.is_empty() {
-        return Ok(plan_bounded_ranges(
-            ranges,
-            0,
-            SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
-        ));
-    }
-    let mut sorted = Vec::with_capacity(ranges.len());
-    for (input_index, range) in ranges.iter().enumerate() {
-        if range.start >= range.end {
-            return Err(BorsukError::InvalidStorage(format!(
-                "global rerank range {}..{} must be nonempty and ordered",
-                range.start, range.end
-            )));
-        }
-        let mut start = range.start;
-        while start < range.end {
-            let end = start
-                .saturating_add(SIDECAR_MAX_PHYSICAL_RANGE_BYTES)
-                .min(range.end);
-            sorted.push((input_index, start..end));
-            start = end;
-        }
-    }
-    sorted.sort_unstable_by_key(|(_, range)| (range.start, range.end));
-    let count = sorted.len();
-    let mut best = vec![None::<(u64, usize)>; count + 1];
-    let mut previous = vec![0_usize; count + 1];
-    best[0] = Some((0, 0));
-
-    for end in 1..=count {
-        let mut group_end = sorted[end - 1].1.end;
-        for start in (0..end).rev() {
-            group_end = group_end.max(sorted[start].1.end);
-            let span = group_end.saturating_sub(sorted[start].1.start);
-            if span > SIDECAR_MAX_PHYSICAL_RANGE_BYTES {
-                break;
-            }
-            let Some((prefix_cost, prefix_requests)) = best[start] else {
-                continue;
-            };
-            let candidate = (
-                prefix_cost
-                    .saturating_add(span)
-                    .saturating_add(GLOBAL_RERANK_REQUEST_WEIGHT_BYTES),
-                prefix_requests.saturating_add(1),
-            );
-            if best[end].is_none_or(|current| candidate < current) {
-                best[end] = Some(candidate);
-                previous[end] = start;
-            }
-        }
-    }
-
-    let mut partitions = Vec::new();
-    let mut end = count;
-    while end > 0 {
-        let start = previous[end];
-        partitions.push(start..end);
-        end = start;
-    }
-    partitions.reverse();
-    let mut physical = Vec::with_capacity(partitions.len());
-    let mut slices = vec![Vec::new(); ranges.len()];
-    for partition in partitions {
-        let members = &sorted[partition];
-        let start = members[0].1.start;
-        let end = members
-            .iter()
-            .map(|(_, range)| range.end)
-            .max()
-            .expect("a planned global rerank partition is nonempty");
-        push_planned_range(&mut physical, &mut slices, start, end, members);
-    }
-    Ok(BoundedRangePlan { physical, slices })
-}
-
-pub(crate) fn global_rerank_plan_stats(ranges: &[Range<u64>]) -> Result<(usize, u64, usize)> {
-    let plan = plan_global_rerank_ranges(ranges)?;
-    let bytes = plan
-        .physical
-        .iter()
-        .map(|range| range.end.saturating_sub(range.start))
-        .sum();
-    let waves = plan
-        .physical
-        .len()
-        .div_ceil(GLOBAL_RERANK_RANGE_MAX_PARALLEL);
-    Ok((plan.physical.len(), bytes, waves))
-}
-
 async fn fetch_with_optional_hedge<F, Fut, T, E>(
     mut fetch: F,
     hedge_after: Option<Duration>,
@@ -320,23 +217,6 @@ where
             }
         }
     }
-}
-
-#[cfg(test)]
-async fn coalesce_bounded_ranges<F, E, Fut>(
-    ranges: &[Range<u64>],
-    fetch: F,
-    max_gap: u64,
-    max_physical_range: u64,
-    max_parallel: usize,
-) -> std::result::Result<Vec<Bytes>, E>
-where
-    F: Send + FnMut(Range<u64>) -> Fut,
-    E: Send,
-    Fut: Future<Output = std::result::Result<Bytes, E>> + Send,
-{
-    let plan = plan_bounded_ranges(ranges, max_gap, max_physical_range);
-    fetch_bounded_range_plan(&plan, fetch, max_parallel).await
 }
 
 async fn fetch_bounded_range_plan<F, E, Fut>(
@@ -3357,34 +3237,6 @@ impl Storage {
         })
     }
 
-    /// Read a validated object only when it is already present in the local
-    /// disk cache. A miss or corrupt cache entry returns `None` and never
-    /// reaches the backing object store, which lets mixed execution fall back
-    /// to its storage scan without turning a graph-cache miss into network I/O.
-    pub(crate) fn read_cached_bytes_with_checksum(
-        &self,
-        relative: &str,
-        expected_checksum: &str,
-    ) -> Result<Option<Vec<u8>>> {
-        let Some(bytes) = self.read_cache_file(relative)? else {
-            return Ok(None);
-        };
-        if blake3::hash(&bytes).to_hex().as_str() == expected_checksum {
-            self.storage_trace.record(StorageAccessEvent::cached_read(
-                relative,
-                physical_format_for_path(relative),
-                bytes.len() as u64,
-            ))?;
-            return Ok(Some(bytes));
-        }
-        self.delete_cache_file(relative)?;
-        Ok(None)
-    }
-
-    pub(crate) fn has_cached_object(&self, relative: &str) -> bool {
-        self.cache_path(relative).is_some_and(|path| path.is_file())
-    }
-
     /// Read a content-addressed object whose size is already present in routing
     /// metadata. Avoids a redundant HEAD and performs exactly one object GET on
     /// a cache miss.
@@ -3643,56 +3495,6 @@ impl Storage {
             SIDECAR_RANGE_MAX_PARALLEL,
             None,
         )
-    }
-
-    /// Fetch global exact-rerank rows with the same byte-bounded range plan as
-    /// ordinary sidecars, but admit the complete production shortlist in one
-    /// remote wave. The 4 MiB span cap remains authoritative per request.
-    pub(crate) fn read_global_rerank_ranges(
-        &self,
-        relative: &str,
-        ranges: &[Range<u64>],
-        hedge_after: Option<Duration>,
-    ) -> Result<ReadRanges> {
-        self.read_ranges_with_policy(
-            relative,
-            ranges,
-            plan_global_rerank_ranges(ranges)?,
-            GLOBAL_RERANK_RANGE_MAX_PARALLEL,
-            hedge_after,
-        )
-    }
-
-    /// Read one logical range as independently parallel, ordered physical
-    /// stripes. The deterministic ordered range list is also the disk-cache
-    /// key, so a repeated read reconstructs the same bytes without backing
-    /// requests.
-    pub(crate) fn read_striped_range(
-        &self,
-        relative: &str,
-        range: Range<u64>,
-        stripe_bytes: u64,
-        max_parallel: usize,
-        hedge_after: Option<Duration>,
-    ) -> Result<ReadBytes> {
-        if max_parallel == 0 {
-            return Err(BorsukError::InvalidStorage(
-                "striped range parallelism must be positive".to_string(),
-            ));
-        }
-        let ranges = split_contiguous_range(range, stripe_bytes)?;
-        let read = self.read_ranges_with_policy(
-            relative,
-            &ranges,
-            plan_bounded_ranges(&ranges, 0, stripe_bytes),
-            max_parallel,
-            hedge_after,
-        )?;
-        Ok(ReadBytes {
-            bytes: read.chunks.concat(),
-            cache_hit: read.cache_hit,
-            cache_repaired: false,
-        })
     }
 
     fn read_ranges_with_policy(
@@ -4329,27 +4131,6 @@ fn atomic_write_cache_file(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn split_contiguous_range(range: Range<u64>, max_bytes: u64) -> Result<Vec<Range<u64>>> {
-    if range.start >= range.end {
-        return Err(BorsukError::InvalidStorage(
-            "striped range must be non-empty and ordered".to_string(),
-        ));
-    }
-    if max_bytes == 0 {
-        return Err(BorsukError::InvalidStorage(
-            "striped range width must be positive".to_string(),
-        ));
-    }
-    let mut ranges = Vec::new();
-    let mut start = range.start;
-    while start < range.end {
-        let end = start.saturating_add(max_bytes).min(range.end);
-        ranges.push(start..end);
-        start = end;
-    }
-    Ok(ranges)
-}
-
 fn range_bundle_cache_key(relative: &str, ranges: &[Range<u64>]) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(relative.as_bytes());
@@ -4856,7 +4637,6 @@ mod tests {
         fs::{self, OpenOptions},
         future::Future,
         io,
-        ops::Range,
         path::{Path, PathBuf},
         process::Command,
         sync::{
@@ -4868,11 +4648,9 @@ mod tests {
     };
 
     use super::{
-        CacheReadCounters, CacheReadCounts, CreateOutcome, GLOBAL_RERANK_RANGE_MAX_PARALLEL,
-        PrefetchedRead, RangedColumns, ReadBytes, RequestCounters,
-        SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
-        coalesce_bounded_ranges, fetch_bounded_range_plan, plan_bounded_ranges,
-        plan_global_rerank_ranges,
+        CacheReadCounters, CacheReadCounts, CreateOutcome, PrefetchedRead, RangedColumns,
+        ReadBytes, RequestCounters, SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES,
+        Storage, plan_bounded_ranges,
     };
     use crate::{
         collection_control::{
@@ -5501,48 +5279,6 @@ mod tests {
             ))
             .unwrap_err();
         assert_eq!(error, "hedge");
-    }
-
-    #[test]
-    fn global_rerank_range_wave_does_not_serialize_twenty_small_gets() {
-        let active = Arc::new(AtomicUsize::new(0));
-        let peak = Arc::new(AtomicUsize::new(0));
-        let ranges = (0_u64..20)
-            .map(|index| {
-                let start = index * 128 * 1024;
-                start..start + 4
-            })
-            .collect::<Vec<_>>();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let fetched = runtime
-            .block_on(coalesce_bounded_ranges(
-                &ranges,
-                |range: std::ops::Range<u64>| {
-                    let active = Arc::clone(&active);
-                    let peak = Arc::clone(&peak);
-                    async move {
-                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
-                        peak.fetch_max(now, Ordering::SeqCst);
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        active.fetch_sub(1, Ordering::SeqCst);
-                        Ok::<_, ()>(bytes::Bytes::from(vec![
-                            7_u8;
-                            (range.end - range.start) as usize
-                        ]))
-                    }
-                },
-                0,
-                SIDECAR_MAX_PHYSICAL_RANGE_BYTES,
-                GLOBAL_RERANK_RANGE_MAX_PARALLEL,
-            ))
-            .unwrap();
-
-        assert_eq!(fetched, vec![bytes::Bytes::from_static(&[7_u8; 4]); 20]);
-        assert_eq!(peak.load(Ordering::SeqCst), 20);
     }
 
     impl Drop for DropFlag {
@@ -6199,225 +5935,6 @@ mod tests {
     }
 
     #[test]
-    fn striped_range_hedge_setting_preserves_order_and_fast_request_count() {
-        const MIB: usize = 1024 * 1024;
-        let dir = tempfile::tempdir().unwrap();
-        let cache = tempfile::tempdir().unwrap();
-        let writer = Storage::from_uri(&file_uri(dir.path())).unwrap();
-        let bytes = (0..3 * MIB)
-            .map(|index| (index % 251) as u8)
-            .collect::<Vec<_>>();
-        writer
-            .write_bytes("global-pq/bundles/large.arrow", &bytes)
-            .unwrap();
-        writer
-            .write_bytes("global-pq/bundles/small.arrow", &bytes[..MIB / 2])
-            .unwrap();
-        let storage =
-            Storage::from_uri_with_cache(&file_uri(dir.path()), Some(cache.path().to_path_buf()))
-                .unwrap();
-
-        let before = storage.request_counts();
-        let first = storage
-            .read_striped_range(
-                "global-pq/bundles/large.arrow",
-                0..bytes.len() as u64,
-                MIB as u64,
-                16,
-                Some(Duration::from_secs(1)),
-            )
-            .unwrap();
-        assert_eq!(first.bytes, bytes);
-        assert!(!first.cache_hit);
-        assert_eq!(storage.request_counts().delta(&before).gets, 3);
-
-        let after_first = storage.request_counts();
-        let second = storage
-            .read_striped_range(
-                "global-pq/bundles/large.arrow",
-                0..bytes.len() as u64,
-                MIB as u64,
-                16,
-                None,
-            )
-            .unwrap();
-        assert_eq!(second.bytes, bytes);
-        assert!(second.cache_hit);
-        assert_eq!(storage.request_counts().delta(&after_first).gets, 0);
-
-        let before_small = storage.request_counts();
-        let small = storage
-            .read_striped_range(
-                "global-pq/bundles/small.arrow",
-                0..(MIB / 2) as u64,
-                MIB as u64,
-                16,
-                None,
-            )
-            .unwrap();
-        assert_eq!(small.bytes, bytes[..MIB / 2]);
-        assert_eq!(storage.request_counts().delta(&before_small).gets, 1);
-
-        assert!(storage.read_striped_range("x", 1..1, 1, 1, None).is_err());
-        #[allow(clippy::reversed_empty_ranges)]
-        let reversed = 2..1;
-        assert!(
-            storage
-                .read_striped_range("x", reversed, 1, 1, None)
-                .is_err()
-        );
-        assert!(storage.read_striped_range("x", 0..1, 0, 1, None).is_err());
-        assert!(storage.read_striped_range("x", 0..1, 1, 0, None).is_err());
-    }
-
-    #[test]
-    fn hedged_striped_read_preserves_order_and_hedges_each_slow_stripe_once() {
-        let throttled = ThrottledStore::new(
-            InMemory::new(),
-            ThrottleConfig {
-                wait_get_per_call: Duration::from_millis(50),
-                ..ThrottleConfig::default()
-            },
-        );
-        let storage = Storage::from_object_store(
-            "memory:///hedged-striped-read".to_string(),
-            Arc::new(throttled),
-        )
-        .unwrap();
-        let expected = b"abcdefghijkl";
-        storage
-            .write_bytes("global-pq/bundles/hedged.arrow", expected)
-            .unwrap();
-
-        let before = storage.request_counts();
-        let read = storage
-            .read_striped_range(
-                "global-pq/bundles/hedged.arrow",
-                0..expected.len() as u64,
-                4,
-                3,
-                Some(Duration::from_millis(10)),
-            )
-            .unwrap();
-
-        assert_eq!(read.bytes, expected);
-        assert_eq!(
-            storage.request_counts().delta(&before).gets,
-            6,
-            "three slow stripes should each issue one bounded hedge"
-        );
-    }
-
-    #[test]
-    fn global_rerank_ranges_hedge_each_slow_physical_range_once_and_preserve_order() {
-        let throttled = ThrottledStore::new(
-            InMemory::new(),
-            ThrottleConfig {
-                wait_get_per_call: Duration::from_millis(50),
-                ..ThrottleConfig::default()
-            },
-        );
-        let trace_dir = tempfile::tempdir().unwrap();
-        let trace_path = trace_dir.path().join("storage-access.csv");
-        let mut storage = Storage::from_object_store(
-            "memory:///hedged-global-rerank".to_string(),
-            Arc::new(throttled),
-        )
-        .unwrap();
-        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
-        let mut object = vec![0_u8; 512 * 1024 + 4];
-        object[..4].copy_from_slice(b"left");
-        object[512 * 1024..].copy_from_slice(b"righ");
-        storage
-            .write_bytes("global-pq/exact/hedged.arrow", &object)
-            .unwrap();
-        storage.storage_trace.reset().unwrap();
-        let ranges = [512 * 1024..512 * 1024 + 4, 0..4];
-        let before = storage.request_counts();
-
-        let read = storage
-            .read_global_rerank_ranges(
-                "global-pq/exact/hedged.arrow",
-                &ranges,
-                Some(Duration::from_millis(10)),
-            )
-            .unwrap();
-
-        assert_eq!(read.chunks, vec![b"righ".to_vec(), b"left".to_vec()]);
-        assert_eq!(read.bytes_fetched, 8);
-        assert_eq!(
-            storage.request_counts().delta(&before).gets,
-            4,
-            "two slow physical ranges should each issue one bounded hedge"
-        );
-        let traced_gets = fs::read_to_string(&trace_path)
-            .unwrap()
-            .lines()
-            .skip(1)
-            .map(|line| line.split(',').nth(5).unwrap().parse::<u64>().unwrap())
-            .sum::<u64>();
-        assert_eq!(traced_gets, 4, "trace must retain every hedge attempt");
-        let traced_bytes = fs::read_to_string(&trace_path)
-            .unwrap()
-            .lines()
-            .skip(1)
-            .map(|line| line.split(',').nth(6).unwrap().parse::<u64>().unwrap())
-            .sum::<u64>();
-        assert_eq!(read.backing_reads, traced_gets);
-        assert_eq!(read.backing_bytes, traced_bytes);
-    }
-
-    #[test]
-    fn global_rerank_queued_losing_hedge_is_not_reported_as_a_backing_read() {
-        let throttled = ThrottledStore::new(
-            InMemory::new(),
-            ThrottleConfig {
-                wait_get_per_call: Duration::from_millis(50),
-                ..ThrottleConfig::default()
-            },
-        );
-        let trace_dir = tempfile::tempdir().unwrap();
-        let trace_path = trace_dir.path().join("storage-access.csv");
-        let admission = Arc::new(Semaphore::new(1));
-        let mut storage = Storage::from_parts_with_get_admission(
-            "memory:///queued-global-rerank-hedge".to_string(),
-            Arc::new(throttled),
-            object_store::path::Path::from(""),
-            None,
-            None,
-            admission,
-        )
-        .unwrap();
-        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
-        storage
-            .write_bytes("global-pq/exact/queued.arrow", b"body")
-            .unwrap();
-        storage.storage_trace.reset().unwrap();
-        let before = storage.request_counts();
-        let range = 0..4;
-
-        let read = storage
-            .read_global_rerank_ranges(
-                "global-pq/exact/queued.arrow",
-                std::slice::from_ref(&range),
-                Some(Duration::from_millis(10)),
-            )
-            .unwrap();
-
-        assert_eq!(read.chunks, vec![b"body".to_vec()]);
-        assert_eq!(storage.request_counts().delta(&before).gets, 1);
-        assert_eq!(read.backing_reads, 1);
-        assert_eq!(read.backing_bytes, 4);
-        let traced_gets = fs::read_to_string(&trace_path)
-            .unwrap()
-            .lines()
-            .skip(1)
-            .map(|line| line.split(',').nth(5).unwrap().parse::<u64>().unwrap())
-            .sum::<u64>();
-        assert_eq!(traced_gets, 1);
-    }
-
-    #[test]
     fn concurrent_range_trace_counts_each_physical_get_once() {
         let throttled = ThrottledStore::new(
             InMemory::new(),
@@ -6454,7 +5971,7 @@ mod tests {
                         barrier.wait();
                         let range = 0..4;
                         storage
-                            .read_global_rerank_ranges(path, std::slice::from_ref(&range), None)
+                            .read_ranges(path, std::slice::from_ref(&range))
                             .unwrap()
                     })
                 })
@@ -6692,210 +6209,6 @@ mod tests {
         assert_eq!(read.chunks, vec![vec![7_u8; 4], vec![7_u8; 4]]);
         assert_eq!(requests.gets, 1);
         assert_eq!(read.bytes_fetched, 32 * 1024 + 4);
-    }
-
-    #[test]
-    fn global_rerank_ranges_do_not_fetch_a_half_mib_unselected_gap() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
-        let object = vec![7_u8; 512 * 1024 + 4];
-        storage
-            .write_bytes("global-pq/bundles/rerank.arrow", &object)
-            .unwrap();
-        let ranges = [0..4, 512 * 1024..512 * 1024 + 4];
-        let before = storage.request_counts();
-
-        let read = storage
-            .read_global_rerank_ranges("global-pq/bundles/rerank.arrow", &ranges, None)
-            .unwrap();
-        let requests = storage.request_counts().delta(&before);
-
-        assert_eq!(read.chunks, vec![vec![7_u8; 4]; 2]);
-        assert_eq!(requests.gets, 2);
-        assert_eq!(read.bytes_fetched, 8);
-    }
-
-    #[test]
-    fn global_rerank_ranges_fold_a_dense_768d_shortlist_into_one_bounded_get() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
-        const VECTOR_BYTES: u64 = 768 * 4;
-        const ROW_STRIDE: u64 = 96 * 1024;
-        const CANDIDATES: u64 = 16;
-        let object_len = ((CANDIDATES - 1) * ROW_STRIDE + VECTOR_BYTES) as usize;
-        let object = vec![7_u8; object_len];
-        storage
-            .write_bytes("global-pq/bundles/dense-rerank.arrow", &object)
-            .unwrap();
-        let ranges = (0..CANDIDATES)
-            .map(|row| {
-                let start = row * ROW_STRIDE;
-                start..start + VECTOR_BYTES
-            })
-            .collect::<Vec<_>>();
-        let before = storage.request_counts();
-
-        let read = storage
-            .read_global_rerank_ranges("global-pq/bundles/dense-rerank.arrow", &ranges, None)
-            .unwrap();
-        let requests = storage.request_counts().delta(&before);
-
-        assert_eq!(read.chunks, vec![vec![7_u8; VECTOR_BYTES as usize]; 16]);
-        assert_eq!(requests.gets, 1);
-        assert_eq!(read.bytes_fetched, object_len as u64);
-    }
-
-    #[test]
-    fn global_rerank_ranges_fold_distant_dense_clusters_independently() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
-        const VECTOR_BYTES: u64 = 768 * 4;
-        const ROW_STRIDE: u64 = 96 * 1024;
-        const CANDIDATES_PER_CLUSTER: u64 = 16;
-        const SECOND_CLUSTER_START: u64 = 8 * 1024 * 1024;
-        let cluster_bytes = (CANDIDATES_PER_CLUSTER - 1) * ROW_STRIDE + VECTOR_BYTES;
-        let object = vec![7_u8; (SECOND_CLUSTER_START + cluster_bytes) as usize];
-        storage
-            .write_bytes("global-pq/bundles/clustered-rerank.arrow", &object)
-            .unwrap();
-        let ranges = [0, SECOND_CLUSTER_START]
-            .into_iter()
-            .flat_map(|cluster_start| {
-                (0..CANDIDATES_PER_CLUSTER).map(move |row| {
-                    let start = cluster_start + row * ROW_STRIDE;
-                    start..start + VECTOR_BYTES
-                })
-            })
-            .collect::<Vec<_>>();
-        let before = storage.request_counts();
-
-        let read = storage
-            .read_global_rerank_ranges("global-pq/bundles/clustered-rerank.arrow", &ranges, None)
-            .unwrap();
-        let requests = storage.request_counts().delta(&before);
-
-        assert_eq!(
-            read.chunks,
-            vec![vec![7_u8; VECTOR_BYTES as usize]; ranges.len()]
-        );
-        assert_eq!(requests.gets, 2, "one GET per bounded dense cluster");
-        assert_eq!(read.bytes_fetched, 2 * cluster_bytes);
-    }
-
-    #[test]
-    fn global_rerank_cluster_plan_fetches_both_physical_ranges_concurrently() {
-        const VECTOR_BYTES: u64 = 768 * 4;
-        const ROW_STRIDE: u64 = 96 * 1024;
-        const SECOND_CLUSTER_START: u64 = 8 * 1024 * 1024;
-        let ranges = [0, SECOND_CLUSTER_START]
-            .into_iter()
-            .flat_map(|cluster_start| {
-                (0..8).map(move |row| {
-                    let start = cluster_start + row * ROW_STRIDE;
-                    start..start + VECTOR_BYTES
-                })
-            })
-            .collect::<Vec<_>>();
-        let plan = plan_global_rerank_ranges(&ranges).unwrap();
-        assert_eq!(plan.physical.len(), 2);
-        assert!(plan.physical.iter().all(|range| {
-            range.end.saturating_sub(range.start) <= SIDECAR_MAX_PHYSICAL_RANGE_BYTES
-        }));
-        let active = Arc::new(AtomicUsize::new(0));
-        let peak = Arc::new(AtomicUsize::new(0));
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let fetched = runtime
-            .block_on(fetch_bounded_range_plan(
-                &plan,
-                |range| {
-                    let active = Arc::clone(&active);
-                    let peak = Arc::clone(&peak);
-                    async move {
-                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
-                        peak.fetch_max(now, Ordering::SeqCst);
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        active.fetch_sub(1, Ordering::SeqCst);
-                        Ok::<_, ()>(bytes::Bytes::from(vec![
-                            7_u8;
-                            (range.end - range.start) as usize
-                        ]))
-                    }
-                },
-                GLOBAL_RERANK_RANGE_MAX_PARALLEL,
-            ))
-            .unwrap();
-
-        assert_eq!(
-            fetched,
-            vec![bytes::Bytes::from(vec![7_u8; VECTOR_BYTES as usize]); 16]
-        );
-        assert_eq!(peak.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn global_rerank_ranges_preserve_shuffled_logical_order() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
-        const ROW_BYTES: usize = 768 * 4;
-        const SECOND_START: usize = 8 * 1024 * 1024;
-        let mut object = vec![0_u8; SECOND_START + ROW_BYTES];
-        object[..ROW_BYTES].fill(1);
-        object[SECOND_START..].fill(2);
-        storage
-            .write_bytes("global-pq/bundles/shuffled-rerank.arrow", &object)
-            .unwrap();
-        let ranges = [
-            SECOND_START as u64..(SECOND_START + ROW_BYTES) as u64,
-            0..ROW_BYTES as u64,
-        ];
-
-        let read = storage
-            .read_global_rerank_ranges("global-pq/bundles/shuffled-rerank.arrow", &ranges, None)
-            .unwrap();
-
-        assert_eq!(
-            read.chunks,
-            vec![vec![2_u8; ROW_BYTES], vec![1_u8; ROW_BYTES]]
-        );
-    }
-
-    #[test]
-    fn global_rerank_ranges_split_and_reassemble_a_logical_range_above_the_cap() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
-        let object = vec![7_u8; SIDECAR_MAX_PHYSICAL_RANGE_BYTES as usize + 4];
-        storage
-            .write_bytes("global-pq/bundles/oversize-rerank.arrow", &object)
-            .unwrap();
-        let before = storage.request_counts();
-        let oversized = 0..object.len() as u64;
-
-        let read = storage
-            .read_global_rerank_ranges(
-                "global-pq/bundles/oversize-rerank.arrow",
-                std::slice::from_ref(&oversized),
-                None,
-            )
-            .unwrap();
-        let requests = storage.request_counts().delta(&before);
-
-        assert_eq!(read.chunks, vec![object]);
-        assert_eq!(requests.gets, 2);
-        let exact_cap = 0..SIDECAR_MAX_PHYSICAL_RANGE_BYTES;
-        assert_eq!(
-            plan_global_rerank_ranges(std::slice::from_ref(&exact_cap))
-                .unwrap()
-                .physical,
-            vec![exact_cap]
-        );
-        let reversed = Range { start: 10, end: 5 };
-        assert!(plan_global_rerank_ranges(std::slice::from_ref(&reversed)).is_err());
-        let empty = 5..5;
-        assert!(plan_global_rerank_ranges(std::slice::from_ref(&empty)).is_err());
     }
 
     #[test]

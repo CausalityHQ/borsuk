@@ -50,10 +50,3 @@ where
 {
     io_pool().install(work)
 }
-
-pub(crate) fn spawn_io<F>(work: F)
-where
-    F: FnOnce() + Send + 'static,
-{
-    io_pool().spawn(work);
-}

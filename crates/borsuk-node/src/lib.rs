@@ -1696,8 +1696,6 @@ fn search_options_from_js(options: &SearchOptionsJs, mode: SearchMode) -> Result
             .unwrap_or("scan")
             .parse::<borsuk::CacheExecutionPolicy>()
             .map_err(to_js_error)?,
-        global_exact_rerank: true,
-        global_exact_bound_shadow: false,
     })
 }
 

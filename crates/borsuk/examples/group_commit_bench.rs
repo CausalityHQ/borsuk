@@ -17,7 +17,7 @@ use arrow_array::{Array, FixedSizeListArray, Float32Array, LargeListArray, ListA
 use borsuk::{
     BorsukIndex, GROUP_COMMIT_STRIPE_COUNT, GroupCommitConfig, GroupCommitLaneReceipt,
     GroupCommitTicket, GroupCommitWriter, LeafMode, OpenOptions, RequestCounts, SearchOptions,
-    StorageAccessTrace, VectorRecord, install_storage_access_trace,
+    VectorRecord,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -44,35 +44,16 @@ struct ReadSample {
     query: usize,
     record_id: String,
     hit_id: String,
-    hit_ids: String,
     contains_record_id: bool,
     latency_ms: f64,
     requests: RequestCounts,
     bytes_read: u64,
-    disk_cache_bytes_read: u64,
-    backing_bytes_read: u64,
     segments_searched: usize,
     global_base_approximate_us: u64,
     global_base_exact_rerank_us: u64,
     global_delta_approximate_us: u64,
     global_delta_exact_rerank_us: u64,
     global_delta_wait_us: u64,
-    global_exact_bound_candidates: usize,
-    global_exact_bound_survivors: usize,
-    global_exact_bound_fail_open: usize,
-    global_exact_bound_containment_failures: usize,
-    global_exact_bound_baseline_reads: usize,
-    global_exact_bound_baseline_bytes: u64,
-    global_exact_bound_predicted_reads: usize,
-    global_exact_bound_predicted_waves: usize,
-    global_exact_bound_predicted_bytes: u64,
-    global_exact_bound_certificate_kind: String,
-    global_exact_bound_exact_backing_reads: u64,
-    global_exact_bound_exact_backing_bytes: u64,
-    global_exact_bound_residual_bytes: u64,
-    global_exact_bound_residual_scan_bytes: u64,
-    global_exact_bound_cpu_us: u64,
-    global_exact_bound_certificate_scratch_allocations: usize,
 }
 
 struct ReadMeasurement {
@@ -94,26 +75,6 @@ struct ReadConfig {
     diagnostic_protocol: bool,
     max_read_segments: usize,
     refresh_before_each: bool,
-    exact_bound_shadow: bool,
-}
-
-#[derive(Clone, Copy)]
-struct ReadQualificationShape {
-    writers: usize,
-    operations: usize,
-    records_per_operation: usize,
-    dimensions: usize,
-    query_count: usize,
-    max_read_segments: usize,
-    stripe_bytes: usize,
-    repetition: usize,
-}
-
-#[derive(Clone, Copy)]
-struct ReadHedgeQualificationShape {
-    read: ReadQualificationShape,
-    read_writer: usize,
-    hedge_after_ms: Option<u64>,
 }
 
 struct PendingAppend {
@@ -127,14 +88,7 @@ fn required(name: &str) -> BenchResult<String> {
     env::var(name).map_err(|_| format!("missing required environment variable {name}").into())
 }
 
-fn exact_bound_shadow_enabled() -> bool {
-    env::var("BORSUK_GROUP_COMMIT_EXACT_BOUND_SHADOW").as_deref() == Ok("1")
-}
-
-fn open_benchmark_index_with_stripe(
-    uri: &str,
-    global_pq_prefetch_stripe_bytes: usize,
-) -> borsuk::Result<BorsukIndex> {
+fn open_benchmark_index(uri: &str) -> borsuk::Result<BorsukIndex> {
     let cache_dir = env::var_os("BORSUK_GROUP_COMMIT_CACHE_DIR").map(PathBuf::from);
     BorsukIndex::open_with_options(
         uri,
@@ -143,39 +97,10 @@ fn open_benchmark_index_with_stripe(
             // this is the bounded production read profile for object storage.
             cache_dir,
             cache_max_bytes: Some(256 * 1024 * 1024),
-            global_pq_prefetch_stripe_bytes,
             segment_cache_max_bytes: Some(64 * 1024 * 1024),
             ..OpenOptions::default()
         },
     )
-}
-
-fn read_hedge_open_options(
-    global_pq_prefetch_stripe_bytes: usize,
-    hedge_after_ms: Option<u64>,
-) -> OpenOptions {
-    OpenOptions {
-        cache_dir: None,
-        global_pq_prefetch_stripe_bytes,
-        global_pq_slow_read_hedge_after: hedge_after_ms.map(Duration::from_millis),
-        segment_cache_max_bytes: Some(64 * 1024 * 1024),
-        ..OpenOptions::default()
-    }
-}
-
-fn open_read_hedge_index(
-    uri: &str,
-    global_pq_prefetch_stripe_bytes: usize,
-    hedge_after_ms: Option<u64>,
-) -> borsuk::Result<BorsukIndex> {
-    BorsukIndex::open_with_options(
-        uri,
-        read_hedge_open_options(global_pq_prefetch_stripe_bytes, hedge_after_ms),
-    )
-}
-
-fn open_benchmark_index(uri: &str) -> borsuk::Result<BorsukIndex> {
-    open_benchmark_index_with_stripe(uri, OpenOptions::default().global_pq_prefetch_stripe_bytes)
 }
 
 fn number<T: std::str::FromStr>(name: &str) -> BenchResult<T>
@@ -483,220 +408,6 @@ fn production_record_id(ordinal: usize) -> String {
     format!("group-o{ordinal:08}")
 }
 
-fn validate_read_qualification_shape(
-    shape: ReadQualificationShape,
-    structural_smoke: bool,
-) -> BenchResult<()> {
-    const MIB: usize = 1024 * 1024;
-    let common =
-        shape.max_read_segments == 4 && [MIB, 2 * MIB, 4 * MIB].contains(&shape.stripe_bytes);
-    let expected = if structural_smoke {
-        shape.writers == 2
-            && shape.operations == 2
-            && shape.records_per_operation == 1
-            && shape.dimensions == 8
-            && shape.query_count == 4
-            && shape.repetition == 1
-    } else {
-        shape.writers == 8
-            && shape.operations == 1_000
-            && shape.records_per_operation == 16
-            && shape.dimensions == 768
-            && shape.query_count == 100
-            && (1..=5).contains(&shape.repetition)
-    };
-    if !common || !expected {
-        return Err("read qualification differs from the preregistered shape".into());
-    }
-    Ok(())
-}
-
-fn validate_read_confirmation_shape(
-    shape: ReadQualificationShape,
-    structural_smoke: bool,
-) -> BenchResult<()> {
-    const MIB: usize = 1024 * 1024;
-    let common = shape.max_read_segments == 4 && [MIB, 4 * MIB].contains(&shape.stripe_bytes);
-    let expected = if structural_smoke {
-        shape.writers == 2
-            && shape.operations == 2
-            && shape.records_per_operation == 1
-            && shape.dimensions == 8
-            && shape.query_count == 4
-            && shape.repetition == 1
-    } else {
-        shape.writers == 8
-            && shape.operations == 1_000
-            && shape.records_per_operation == 16
-            && shape.dimensions == 768
-            && shape.query_count == 500
-            && (1..=5).contains(&shape.repetition)
-    };
-    if !common || !expected {
-        return Err("read stripe confirmation differs from the preregistered shape".into());
-    }
-    Ok(())
-}
-
-fn validate_read_hedge_qualification_shape(
-    shape: ReadHedgeQualificationShape,
-    structural_smoke: bool,
-) -> BenchResult<()> {
-    const MIB: usize = 1024 * 1024;
-    let common = shape.read.max_read_segments == 4
-        && shape.read.stripe_bytes == MIB
-        && shape.read_writer == 0;
-    let expected = if structural_smoke {
-        shape.read.writers == 2
-            && shape.read.operations == 2
-            && shape.read.records_per_operation == 1
-            && shape.read.dimensions == 8
-            && shape.read.query_count == 4
-            && shape.read.repetition == 1
-            && matches!(shape.hedge_after_ms, None | Some(5))
-    } else {
-        shape.read.writers == 8
-            && shape.read.operations == 1_000
-            && shape.read.records_per_operation == 16
-            && shape.read.dimensions == 768
-            && shape.read.query_count == 500
-            && (1..=5).contains(&shape.read.repetition)
-            && matches!(shape.hedge_after_ms, None | Some(20) | Some(35) | Some(75))
-    };
-    if !common || !expected {
-        return Err("read hedge qualification differs from the preregistered shape".into());
-    }
-    Ok(())
-}
-
-fn validate_read_hedge_qualification_inputs(
-    shape: ReadHedgeQualificationShape,
-    structural_smoke: bool,
-    cache_dir_present: bool,
-) -> BenchResult<()> {
-    validate_read_hedge_qualification_shape(shape, structural_smoke)?;
-    if cache_dir_present {
-        return Err("read hedge qualification forbids a disk cache".into());
-    }
-    Ok(())
-}
-
-fn parse_read_hedge_after_ms(value: &str, structural_smoke: bool) -> BenchResult<Option<u64>> {
-    match (value, structural_smoke) {
-        ("none", _) => Ok(None),
-        ("5", true) => Ok(Some(5)),
-        ("20", false) => Ok(Some(20)),
-        ("35", false) => Ok(Some(35)),
-        ("75", false) => Ok(Some(75)),
-        _ => Err("read hedge delay differs from the preregistration".into()),
-    }
-}
-
-fn read_hedge_order_position(
-    repetition: usize,
-    hedge_after_ms: Option<u64>,
-    structural_smoke: bool,
-) -> BenchResult<usize> {
-    let repetition_is_valid = if structural_smoke {
-        repetition == 1
-    } else {
-        (1..=5).contains(&repetition)
-    };
-    let registered_delay = if structural_smoke {
-        matches!(hedge_after_ms, None | Some(5))
-    } else {
-        matches!(hedge_after_ms, None | Some(20) | Some(35) | Some(75))
-    };
-    if !repetition_is_valid || !registered_delay {
-        return Err("read hedge arm order differs from the preregistration".into());
-    }
-    let control_first = structural_smoke || repetition % 2 == 1;
-    Ok(match (control_first, hedge_after_ms.is_some()) {
-        (true, false) | (false, true) => 0,
-        (true, true) | (false, false) => 1,
-    })
-}
-
-fn read_hedge_query_positions(
-    writers: usize,
-    operations: usize,
-    read_writer: usize,
-    query_count: usize,
-) -> BenchResult<Vec<usize>> {
-    if writers == 0 || operations == 0 || query_count == 0 || read_writer >= writers {
-        return Err("read hedge query cohort is invalid".into());
-    }
-    let writer_start = read_writer
-        .checked_mul(operations)
-        .ok_or("read hedge writer offset exceeds usize")?;
-    (0..query_count)
-        .map(|query| {
-            let offset = query
-                .checked_mul(operations)
-                .ok_or("read hedge query offset exceeds usize")?
-                / query_count;
-            writer_start
-                .checked_add(offset)
-                .ok_or_else(|| "read hedge query position exceeds usize".into())
-        })
-        .collect()
-}
-
-fn read_qualification_query_ordinal(
-    sample: &Sample,
-    operations: usize,
-    records_per_operation: usize,
-) -> BenchResult<usize> {
-    if sample.operation >= operations
-        || sample.batch_records != records_per_operation
-        || sample.record_ids.len() != records_per_operation
-    {
-        return Err("read qualification sample shape is invalid".into());
-    }
-    let ordinal = sample
-        .writer
-        .checked_mul(operations)
-        .and_then(|value| value.checked_add(sample.operation))
-        .and_then(|value| value.checked_mul(records_per_operation))
-        .ok_or("read qualification dataset ordinal exceeds usize")?;
-    if sample.record_ids[0] != production_record_id(ordinal) {
-        return Err("read qualification sample ID does not match its dataset ordinal".into());
-    }
-    Ok(ordinal)
-}
-
-fn read_qualification_order_position(repetition: usize, stripe_bytes: usize) -> BenchResult<usize> {
-    const MIB: usize = 1024 * 1024;
-    if !(1..=5).contains(&repetition) {
-        return Err("read qualification repetition is outside 1..=5".into());
-    }
-    let order = match (repetition - 1) % 3 {
-        0 => [MIB, 2 * MIB, 4 * MIB],
-        1 => [2 * MIB, 4 * MIB, MIB],
-        _ => [4 * MIB, MIB, 2 * MIB],
-    };
-    order
-        .iter()
-        .position(|candidate| *candidate == stripe_bytes)
-        .ok_or_else(|| "read qualification stripe is not preregistered".into())
-}
-
-fn read_confirmation_order_position(repetition: usize, stripe_bytes: usize) -> BenchResult<usize> {
-    const MIB: usize = 1024 * 1024;
-    if !(1..=5).contains(&repetition) {
-        return Err("read stripe confirmation repetition is outside 1..=5".into());
-    }
-    let order = if repetition % 2 == 1 {
-        [MIB, 4 * MIB]
-    } else {
-        [4 * MIB, MIB]
-    };
-    order
-        .iter()
-        .position(|candidate| *candidate == stripe_bytes)
-        .ok_or_else(|| "read stripe confirmation arm is not preregistered".into())
-}
-
 fn measure_reads(
     index: &mut BorsukIndex,
     samples: &[Sample],
@@ -730,7 +441,6 @@ fn measure_reads(
                 // budget preserves headroom while avoiding needless
                 // object-store vector fetches on the post-drain path.
                 .with_max_candidates_per_segment(16)
-                .with_global_exact_bound_shadow(config.exact_bound_shadow)
         };
         let report = index.search_with_report(&input_vectors[ordinal], options)?;
         let latency_ms = read_started.elapsed().as_secs_f64() * 1_000.0;
@@ -754,57 +464,21 @@ fn measure_reads(
             .hits
             .first()
             .map_or_else(String::new, |hit| hit.id.as_str().to_string());
-        let hit_ids = report
-            .hits
-            .iter()
-            .take(10)
-            .map(|hit| hit.id.as_str())
-            .collect::<Vec<_>>()
-            .join("|");
         let contains_record_id = report.hits.iter().any(|hit| hit.id.as_str() == record_id);
         measurement.samples.push(ReadSample {
             query: query_index,
             record_id: record_id.clone(),
             hit_id,
-            hit_ids,
             contains_record_id,
             latency_ms,
             requests: report.requests,
             bytes_read: report.bytes_read,
-            disk_cache_bytes_read: report.disk_cache_bytes_read,
-            backing_bytes_read: report.backing_bytes_read,
             segments_searched: report.segments_searched,
             global_base_approximate_us: report.global_base_approximate_us,
             global_base_exact_rerank_us: report.global_base_exact_rerank_us,
             global_delta_approximate_us: report.global_delta_approximate_us,
             global_delta_exact_rerank_us: report.global_delta_exact_rerank_us,
             global_delta_wait_us: report.global_delta_wait_us,
-            global_exact_bound_candidates: report.global_exact_bound_shadow.candidates,
-            global_exact_bound_survivors: report.global_exact_bound_shadow.survivors,
-            global_exact_bound_fail_open: report.global_exact_bound_shadow.fail_open,
-            global_exact_bound_containment_failures: report
-                .global_exact_bound_shadow
-                .containment_failures,
-            global_exact_bound_baseline_reads: report.global_exact_bound_shadow.baseline_reads,
-            global_exact_bound_baseline_bytes: report.global_exact_bound_shadow.baseline_bytes,
-            global_exact_bound_predicted_reads: report.global_exact_bound_shadow.predicted_reads,
-            global_exact_bound_predicted_waves: report.global_exact_bound_shadow.predicted_waves,
-            global_exact_bound_predicted_bytes: report.global_exact_bound_shadow.predicted_bytes,
-            global_exact_bound_certificate_kind: report.global_exact_bound_shadow.certificate_kind,
-            global_exact_bound_exact_backing_reads: report
-                .global_exact_bound_shadow
-                .exact_backing_reads,
-            global_exact_bound_exact_backing_bytes: report
-                .global_exact_bound_shadow
-                .exact_backing_bytes,
-            global_exact_bound_residual_bytes: report.global_exact_bound_shadow.residual_bytes,
-            global_exact_bound_residual_scan_bytes: report
-                .global_exact_bound_shadow
-                .residual_scan_bytes,
-            global_exact_bound_cpu_us: report.global_exact_bound_shadow.cpu_us,
-            global_exact_bound_certificate_scratch_allocations: report
-                .global_exact_bound_shadow
-                .certificate_scratch_allocations,
         });
         measurement.hits += usize::from(contains_record_id);
     }
@@ -815,12 +489,12 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
     let mut reads = BufWriter::new(File::create(path)?);
     writeln!(
         reads,
-        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us,global_exact_bound_candidates,global_exact_bound_survivors,global_exact_bound_fail_open,global_exact_bound_containment_failures,global_exact_bound_baseline_reads,global_exact_bound_baseline_bytes,global_exact_bound_predicted_reads,global_exact_bound_predicted_waves,global_exact_bound_predicted_bytes,global_exact_bound_certificate_kind,global_exact_bound_exact_backing_reads,global_exact_bound_exact_backing_bytes,global_exact_bound_residual_bytes,global_exact_bound_residual_scan_bytes,global_exact_bound_cpu_us,global_exact_bound_certificate_scratch_allocations"
+        "query,record_id,hit_id,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us"
     )?;
     for sample in samples {
         writeln!(
             reads,
-            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             sample.query,
             sample.record_id,
             sample.hit_id,
@@ -839,75 +513,6 @@ fn write_read_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
             sample.global_delta_approximate_us,
             sample.global_delta_exact_rerank_us,
             sample.global_delta_wait_us,
-            sample.global_exact_bound_candidates,
-            sample.global_exact_bound_survivors,
-            sample.global_exact_bound_fail_open,
-            sample.global_exact_bound_containment_failures,
-            sample.global_exact_bound_baseline_reads,
-            sample.global_exact_bound_baseline_bytes,
-            sample.global_exact_bound_predicted_reads,
-            sample.global_exact_bound_predicted_waves,
-            sample.global_exact_bound_predicted_bytes,
-            sample.global_exact_bound_certificate_kind,
-            sample.global_exact_bound_exact_backing_reads,
-            sample.global_exact_bound_exact_backing_bytes,
-            sample.global_exact_bound_residual_bytes,
-            sample.global_exact_bound_residual_scan_bytes,
-            sample.global_exact_bound_cpu_us,
-            sample.global_exact_bound_certificate_scratch_allocations,
-        )?;
-    }
-    reads.flush()?;
-    Ok(())
-}
-
-fn write_read_hedge_samples(path: &Path, samples: &[ReadSample]) -> BenchResult<()> {
-    let mut reads = BufWriter::new(File::create(path)?);
-    writeln!(
-        reads,
-        "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,segments_searched,global_base_approximate_us,global_base_exact_rerank_us,global_delta_approximate_us,global_delta_exact_rerank_us,global_delta_wait_us,global_exact_bound_candidates,global_exact_bound_survivors,global_exact_bound_fail_open,global_exact_bound_containment_failures,global_exact_bound_baseline_reads,global_exact_bound_baseline_bytes,global_exact_bound_predicted_reads,global_exact_bound_predicted_waves,global_exact_bound_predicted_bytes,global_exact_bound_certificate_kind,global_exact_bound_exact_backing_reads,global_exact_bound_exact_backing_bytes,global_exact_bound_residual_bytes,global_exact_bound_residual_scan_bytes,global_exact_bound_cpu_us,global_exact_bound_certificate_scratch_allocations"
-    )?;
-    for sample in samples {
-        writeln!(
-            reads,
-            "{},{},{},{},{},{:.9},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            sample.query,
-            sample.record_id,
-            sample.hit_id,
-            sample.hit_ids,
-            sample.contains_record_id,
-            sample.latency_ms,
-            sample.requests.total(),
-            sample.requests.gets,
-            sample.requests.puts,
-            sample.requests.deletes,
-            sample.requests.heads,
-            sample.requests.lists,
-            sample.bytes_read,
-            sample.disk_cache_bytes_read,
-            sample.backing_bytes_read,
-            sample.segments_searched,
-            sample.global_base_approximate_us,
-            sample.global_base_exact_rerank_us,
-            sample.global_delta_approximate_us,
-            sample.global_delta_exact_rerank_us,
-            sample.global_delta_wait_us,
-            sample.global_exact_bound_candidates,
-            sample.global_exact_bound_survivors,
-            sample.global_exact_bound_fail_open,
-            sample.global_exact_bound_containment_failures,
-            sample.global_exact_bound_baseline_reads,
-            sample.global_exact_bound_baseline_bytes,
-            sample.global_exact_bound_predicted_reads,
-            sample.global_exact_bound_predicted_waves,
-            sample.global_exact_bound_predicted_bytes,
-            sample.global_exact_bound_certificate_kind,
-            sample.global_exact_bound_exact_backing_reads,
-            sample.global_exact_bound_exact_backing_bytes,
-            sample.global_exact_bound_residual_bytes,
-            sample.global_exact_bound_residual_scan_bytes,
-            sample.global_exact_bound_cpu_us,
-            sample.global_exact_bound_certificate_scratch_allocations,
         )?;
     }
     reads.flush()?;
@@ -1187,321 +792,9 @@ fn run_process_coordinator(output: &Path, writers: usize) -> BenchResult<(Vec<Sa
     Ok((samples, elapsed_ms))
 }
 
-fn required_sha256(name: &str) -> BenchResult<String> {
-    let value = required(name)?;
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(format!("{name} must be a 64-character SHA-256").into());
-    }
-    Ok(value.to_ascii_lowercase())
-}
-
-fn run_read_qualification(protocol: &str) -> BenchResult<()> {
-    let confirmation = protocol == "read-stripe-confirmation";
-    let hedge_qualification = protocol == "read-hedge-qualification";
-    let uri = required("BORSUK_GROUP_COMMIT_INDEX_URI")?;
-    let structural_smoke = env::var("BORSUK_GROUP_COMMIT_READ_SMOKE").as_deref() == Ok("1");
-    if !uri.starts_with("s3://") && !structural_smoke {
-        return Err("read qualification requires an s3:// index outside structural smoke".into());
-    }
-    let output = PathBuf::from(required("BORSUK_GROUP_COMMIT_OUTPUT")?);
-    let cache_dir = env::var_os("BORSUK_GROUP_COMMIT_CACHE_DIR").map(PathBuf::from);
-    if !hedge_qualification && cache_dir.is_none() {
-        return Err("missing required environment variable BORSUK_GROUP_COMMIT_CACHE_DIR".into());
-    }
-    if output.exists() {
-        return Err(format!("refusing to replace output {}", output.display()).into());
-    }
-    if let Some(cache_dir) = cache_dir.as_deref()
-        && cache_dir.exists()
-    {
-        return Err(format!("refusing to reuse cache {}", cache_dir.display()).into());
-    }
-    let source_sha = required_sha256("BORSUK_SOURCE_SHA256")?;
-    let manifest_sha = required_sha256("BORSUK_GROUP_COMMIT_MANIFEST_SHA256")?;
-    let base_source_sha = required_sha256("BORSUK_GROUP_COMMIT_BASE_SOURCE_SHA256")?;
-    let base_manifest_sha = required_sha256("BORSUK_GROUP_COMMIT_BASE_MANIFEST_SHA256")?;
-    let base_samples_sha = required_sha256("BORSUK_GROUP_COMMIT_BASE_SAMPLES_SHA256")?;
-    let dataset_sha = required_sha256("BORSUK_GROUP_COMMIT_DATASET_SHA256")?;
-    let base_cell = required("BORSUK_GROUP_COMMIT_BASE_CELL")?;
-    if (!structural_smoke && base_cell != "c2000/r01/l1/w8")
-        || (structural_smoke && base_cell != "smoke")
-    {
-        return Err("read qualification base cell differs from the preregistration".into());
-    }
-    let shape = ReadQualificationShape {
-        writers: number("BORSUK_GROUP_COMMIT_WRITERS")?,
-        operations: number("BORSUK_GROUP_COMMIT_OPERATIONS_PER_WRITER")?,
-        records_per_operation: number("BORSUK_GROUP_COMMIT_RECORDS_PER_OPERATION")?,
-        dimensions: number("BORSUK_GROUP_COMMIT_DIMENSIONS")?,
-        query_count: number("BORSUK_GROUP_COMMIT_READ_QUERIES")?,
-        max_read_segments: number("BORSUK_GROUP_COMMIT_MAX_READ_SEGMENTS")?,
-        stripe_bytes: number("BORSUK_GROUP_COMMIT_PREFETCH_STRIPE_BYTES")?,
-        repetition: number("BORSUK_GROUP_COMMIT_READ_REPETITION")?,
-    };
-    let hedge_after_ms = if hedge_qualification {
-        parse_read_hedge_after_ms(
-            &required("BORSUK_GROUP_COMMIT_HEDGE_AFTER_MS")?,
-            structural_smoke,
-        )?
-    } else {
-        None
-    };
-    let read_writer = if hedge_qualification {
-        number("BORSUK_GROUP_COMMIT_READ_WRITER")?
-    } else {
-        0
-    };
-    if hedge_qualification {
-        validate_read_hedge_qualification_inputs(
-            ReadHedgeQualificationShape {
-                read: shape,
-                read_writer,
-                hedge_after_ms,
-            },
-            structural_smoke,
-            cache_dir.is_some(),
-        )?;
-    } else if confirmation {
-        validate_read_confirmation_shape(shape, structural_smoke)?;
-    } else {
-        validate_read_qualification_shape(shape, structural_smoke)?;
-    }
-    let order_position: usize = number("BORSUK_GROUP_COMMIT_READ_ORDER_POSITION")?;
-    let expected_order_position = if structural_smoke {
-        if hedge_qualification {
-            read_hedge_order_position(shape.repetition, hedge_after_ms, true)?
-        } else {
-            0
-        }
-    } else if hedge_qualification {
-        read_hedge_order_position(shape.repetition, hedge_after_ms, false)?
-    } else if confirmation {
-        read_confirmation_order_position(shape.repetition, shape.stripe_bytes)?
-    } else {
-        read_qualification_order_position(shape.repetition, shape.stripe_bytes)?
-    };
-    if order_position != expected_order_position {
-        return Err("read qualification arm order differs from the preregistration".into());
-    }
-    let samples_path = PathBuf::from(required("BORSUK_GROUP_COMMIT_BASE_SAMPLES")?);
-    let dataset = if structural_smoke {
-        None
-    } else {
-        Some(PathBuf::from(required("BORSUK_GROUP_COMMIT_DATASET")?))
-    };
-    let samples = read_samples(&samples_path)?;
-    let expected_samples = shape
-        .writers
-        .checked_mul(shape.operations)
-        .ok_or("read qualification sample count exceeds usize")?;
-    if samples.len() != expected_samples {
-        return Err(format!(
-            "read qualification requires {expected_samples} base samples, got {}",
-            samples.len()
-        )
-        .into());
-    }
-    for (row, sample) in samples.iter().enumerate() {
-        let expected_writer = row / shape.operations;
-        let expected_operation = row % shape.operations;
-        if sample.writer != expected_writer || sample.operation != expected_operation {
-            return Err(
-                "read qualification base samples are not in canonical writer/operation order"
-                    .into(),
-            );
-        }
-        read_qualification_query_ordinal(sample, shape.operations, shape.records_per_operation)?;
-    }
-    let query_samples = if hedge_qualification {
-        read_hedge_query_positions(
-            shape.writers,
-            shape.operations,
-            read_writer,
-            shape.query_count,
-        )?
-        .into_iter()
-        .map(|position| samples[position].clone())
-        .collect::<Vec<_>>()
-    } else {
-        (0..shape.query_count)
-            .map(|query| {
-                let position = query * samples.len() / shape.query_count;
-                samples[position].clone()
-            })
-            .collect::<Vec<_>>()
-    };
-    let required_dataset_rows = query_samples.iter().try_fold(0_usize, |rows, sample| {
-        read_qualification_query_ordinal(sample, shape.operations, shape.records_per_operation)
-            .map(|ordinal| rows.max(ordinal.saturating_add(1)))
-    })?;
-    let input_vectors = if let Some(dataset) = dataset.as_deref() {
-        read_parquet_vectors(dataset, required_dataset_rows, shape.dimensions)?
-    } else {
-        let seed = cohort_seed(false, shape.writers, shape.repetition);
-        (0..required_dataset_rows)
-            .map(|ordinal| vector(seed, ordinal as u64, shape.dimensions))
-            .collect()
-    };
-
-    fs::create_dir_all(&output)?;
-    let query_trace = if hedge_qualification {
-        env::var_os("BORSUK_GROUP_COMMIT_READ_STORAGE_TRACE")
-            .map(StorageAccessTrace::create)
-            .transpose()?
-    } else {
-        None
-    };
-    if let Some(trace) = query_trace.as_ref() {
-        install_storage_access_trace(trace.clone())?;
-    }
-    let mut index = if hedge_qualification {
-        open_read_hedge_index(&uri, shape.stripe_bytes, hedge_after_ms)?
-    } else {
-        open_benchmark_index_with_stripe(&uri, shape.stripe_bytes)?
-    };
-    if let Some(trace) = query_trace.as_ref() {
-        trace.reset()?;
-    }
-    let reads = measure_reads(
-        &mut index,
-        &query_samples,
-        &input_vectors,
-        ReadConfig {
-            operations: shape.operations,
-            records_per_operation: shape.records_per_operation,
-            query_count: shape.query_count,
-            diagnostic_protocol: false,
-            max_read_segments: shape.max_read_segments,
-            refresh_before_each: false,
-            exact_bound_shadow: exact_bound_shadow_enabled(),
-        },
-    )?;
-    if reads.hits != shape.query_count {
-        return Err(format!(
-            "read qualification inserted-ID recall failed: {}/{}",
-            reads.hits, shape.query_count
-        )
-        .into());
-    }
-    if reads.requests.puts != 0 || reads.requests.deletes != 0 {
-        return Err("read qualification performed a write-like storage request".into());
-    }
-    if hedge_qualification && reads.disk_cache_bytes != 0 {
-        return Err("read hedge qualification observed disk-cache bytes".into());
-    }
-    if hedge_qualification {
-        write_read_hedge_samples(&output.join("reads.csv"), &reads.samples)?;
-    } else {
-        write_read_samples(&output.join("reads.csv"), &reads.samples)?;
-    }
-    let read_p50_ms = percentile(&reads.latencies, 0.50);
-    let read_p95_ms = percentile(&reads.latencies, 0.95);
-    let recall = reads.hits as f64 / shape.query_count as f64;
-    let mut summary = BufWriter::new(File::create(output.join("summary.csv"))?);
-    if hedge_qualification {
-        let hedge_after_label =
-            hedge_after_ms.map_or_else(|| "none".to_string(), |ms| ms.to_string());
-        writeln!(
-            summary,
-            "protocol_kind,source_sha256,manifest_sha256,base_source_sha256,base_manifest_sha256,base_samples_sha256,dataset_sha256,base_cell,index_uri,repetition,order_position,writers,operations_per_writer,records_per_operation,dimensions,read_writer,stripe_bytes,hedge_after_ms,cache_enabled,queries,max_read_segments,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_disk_cache_bytes,read_backing_bytes,read_segments_searched"
-        )?;
-        writeln!(
-            summary,
-            "{},{source_sha},{manifest_sha},{base_source_sha},{base_manifest_sha},{base_samples_sha},{dataset_sha},{base_cell},{uri},{},{order_position},{},{},{},{},{read_writer},{},{hedge_after_label},false,{},{},{recall:.9},{read_p50_ms:.9},{read_p95_ms:.9},{},{},{},{},{},{},{},{},{},{}",
-            if structural_smoke {
-                "structural-smoke"
-            } else if hedge_after_ms.is_some() {
-                "range-hedge-candidate"
-            } else {
-                "range-hedge-control"
-            },
-            shape.repetition,
-            shape.writers,
-            shape.operations,
-            shape.records_per_operation,
-            shape.dimensions,
-            shape.stripe_bytes,
-            shape.query_count,
-            shape.max_read_segments,
-            reads.requests.total(),
-            reads.requests.gets,
-            reads.requests.puts,
-            reads.requests.deletes,
-            reads.requests.heads,
-            reads.requests.lists,
-            reads.bytes,
-            reads.disk_cache_bytes,
-            reads.backing_bytes,
-            reads.segments_searched,
-        )?;
-    } else {
-        writeln!(
-            summary,
-            "protocol_kind,source_sha256,manifest_sha256,base_source_sha256,base_manifest_sha256,base_samples_sha256,dataset_sha256,base_cell,index_uri,repetition,order_position,stripe_bytes,queries,inserted_id_recall_at_10,read_p50_ms,read_p95_ms,read_storage_requests,read_storage_gets,read_storage_puts,read_storage_deletes,read_storage_heads,read_storage_lists,read_bytes,read_segments_searched"
-        )?;
-        writeln!(
-            summary,
-            "{},{source_sha},{manifest_sha},{base_source_sha},{base_manifest_sha},{base_samples_sha},{dataset_sha},{base_cell},{uri},{},{order_position},{},{},{recall:.9},{read_p50_ms:.9},{read_p95_ms:.9},{},{},{},{},{},{},{},{}",
-            if structural_smoke {
-                "structural-smoke"
-            } else if confirmation {
-                "stripe-confirmation"
-            } else {
-                "production-diagnostic"
-            },
-            shape.repetition,
-            shape.stripe_bytes,
-            shape.query_count,
-            reads.requests.total(),
-            reads.requests.gets,
-            reads.requests.puts,
-            reads.requests.deletes,
-            reads.requests.heads,
-            reads.requests.lists,
-            reads.bytes,
-            reads.segments_searched,
-        )?;
-    }
-    summary.flush()?;
-    let cache_dir_label = cache_dir
-        .as_deref()
-        .map_or_else(|| "none".to_string(), |path| path.display().to_string());
-    let hedge_after_label = hedge_after_ms.map_or_else(|| "none".to_string(), |ms| ms.to_string());
-    fs::write(
-        output.join("environment.txt"),
-        format!(
-            "source_sha256={source_sha}\nmanifest_sha256={manifest_sha}\nbase_source_sha256={base_source_sha}\nbase_manifest_sha256={base_manifest_sha}\nbase_samples_sha256={base_samples_sha}\ndataset_sha256={dataset_sha}\nbase_cell={base_cell}\nindex_uri={uri}\ncache_dir={cache_dir_label}\ncache_enabled={}\nrepetition={}\nwriters={}\noperations_per_writer={}\nrecords_per_operation={}\ndimensions={}\nread_writer={read_writer}\nqueries={}\nmax_read_segments={}\nstripe_bytes={}\nhedge_after_ms={hedge_after_label}\norder_position={order_position}\n",
-            !hedge_qualification,
-            shape.repetition,
-            shape.writers,
-            shape.operations,
-            shape.records_per_operation,
-            shape.dimensions,
-            shape.query_count,
-            shape.max_read_segments,
-            shape.stripe_bytes,
-        ),
-    )?;
-    fs::write(
-        output.join(if hedge_qualification {
-            "READ_HEDGE_QUALIFICATION_COMPLETE"
-        } else {
-            "READ_QUALIFICATION_COMPLETE"
-        }),
-        b"complete\n",
-    )?;
-    Ok(())
-}
-
 fn main() -> BenchResult<()> {
     let protocol =
         env::var("BORSUK_GROUP_COMMIT_PROTOCOL").unwrap_or_else(|_| "diagnostic".to_string());
-    if matches!(
-        protocol.as_str(),
-        "read-qualification" | "read-stripe-confirmation" | "read-hedge-qualification"
-    ) {
-        return run_read_qualification(&protocol);
-    }
     let uri = required("BORSUK_GROUP_COMMIT_INDEX_URI")?;
     let output = PathBuf::from(required("BORSUK_GROUP_COMMIT_OUTPUT")?);
     let source_sha = required("BORSUK_SOURCE_SHA256")?;
@@ -1810,7 +1103,6 @@ fn main() -> BenchResult<()> {
             diagnostic_protocol,
             max_read_segments,
             refresh_before_each: true,
-            exact_bound_shadow: exact_bound_shadow_enabled(),
         },
     )?;
     if active_tail_reads.hits != recall_queries {
@@ -1968,7 +1260,6 @@ fn main() -> BenchResult<()> {
             diagnostic_protocol,
             max_read_segments,
             refresh_before_each: false,
-            exact_bound_shadow: exact_bound_shadow_enabled(),
         },
     )?;
     if reads.hits != recall_queries {
@@ -2094,410 +1385,6 @@ mod tests {
         assert_eq!(environment.get(borsuk::IO_THREADS_ENV).unwrap(), "2");
         assert!(configure_writer_process_thread_budget(&mut command, 0, 2).is_err());
         assert!(configure_writer_process_thread_budget(&mut command, 1, 129).is_err());
-    }
-
-    #[test]
-    fn read_hedge_qualification_accepts_only_the_preregistered_shape() {
-        const MIB: usize = 1024 * 1024;
-        let shape = ReadHedgeQualificationShape {
-            read: ReadQualificationShape {
-                writers: 8,
-                operations: 1_000,
-                records_per_operation: 16,
-                dimensions: 768,
-                query_count: 500,
-                max_read_segments: 4,
-                stripe_bytes: MIB,
-                repetition: 3,
-            },
-            read_writer: 0,
-            hedge_after_ms: Some(75),
-        };
-        validate_read_hedge_qualification_shape(shape, false).unwrap();
-        validate_read_hedge_qualification_shape(
-            ReadHedgeQualificationShape {
-                hedge_after_ms: None,
-                ..shape
-            },
-            false,
-        )
-        .unwrap();
-        validate_read_hedge_qualification_shape(
-            ReadHedgeQualificationShape {
-                hedge_after_ms: Some(35),
-                ..shape
-            },
-            false,
-        )
-        .unwrap();
-        validate_read_hedge_qualification_shape(
-            ReadHedgeQualificationShape {
-                hedge_after_ms: Some(20),
-                ..shape
-            },
-            false,
-        )
-        .unwrap();
-
-        for invalid in [
-            ReadHedgeQualificationShape {
-                read_writer: 1,
-                ..shape
-            },
-            ReadHedgeQualificationShape {
-                hedge_after_ms: Some(74),
-                ..shape
-            },
-            ReadHedgeQualificationShape {
-                read: ReadQualificationShape {
-                    query_count: 499,
-                    ..shape.read
-                },
-                ..shape
-            },
-            ReadHedgeQualificationShape {
-                read: ReadQualificationShape {
-                    stripe_bytes: 2 * MIB,
-                    ..shape.read
-                },
-                ..shape
-            },
-            ReadHedgeQualificationShape {
-                read: ReadQualificationShape {
-                    repetition: 0,
-                    ..shape.read
-                },
-                ..shape
-            },
-        ] {
-            assert!(validate_read_hedge_qualification_shape(invalid, false).is_err());
-        }
-    }
-
-    #[test]
-    fn read_hedge_qualification_spreads_writer_zero_without_crossing_writers() {
-        let positions = read_hedge_query_positions(8, 1_000, 0, 500).unwrap();
-        assert_eq!(positions.len(), 500);
-        assert_eq!(positions.first(), Some(&0));
-        assert_eq!(positions.last(), Some(&998));
-        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert!(positions.iter().all(|position| *position < 1_000));
-        assert_eq!(positions[1], 2);
-        assert_eq!(positions[250], 500);
-    }
-
-    #[test]
-    fn read_hedge_qualification_rejects_cache_and_unregistered_delay_text() {
-        const MIB: usize = 1024 * 1024;
-        let shape = ReadHedgeQualificationShape {
-            read: ReadQualificationShape {
-                writers: 8,
-                operations: 1_000,
-                records_per_operation: 16,
-                dimensions: 768,
-                query_count: 500,
-                max_read_segments: 4,
-                stripe_bytes: MIB,
-                repetition: 1,
-            },
-            read_writer: 0,
-            hedge_after_ms: None,
-        };
-
-        validate_read_hedge_qualification_inputs(shape, false, false).unwrap();
-        assert!(validate_read_hedge_qualification_inputs(shape, false, true).is_err());
-        assert_eq!(parse_read_hedge_after_ms("none", false).unwrap(), None);
-        assert_eq!(parse_read_hedge_after_ms("20", false).unwrap(), Some(20));
-        assert_eq!(parse_read_hedge_after_ms("35", false).unwrap(), Some(35));
-        assert_eq!(parse_read_hedge_after_ms("75", false).unwrap(), Some(75));
-        assert_eq!(parse_read_hedge_after_ms("5", true).unwrap(), Some(5));
-        for invalid in ["", "0", "5", "74", "076", "75.0", "none "] {
-            assert!(parse_read_hedge_after_ms(invalid, false).is_err());
-        }
-    }
-
-    #[test]
-    fn read_hedge_qualification_alternates_control_and_candidate_order() {
-        assert_eq!(read_hedge_order_position(1, None, false).unwrap(), 0);
-        assert_eq!(read_hedge_order_position(1, Some(20), false).unwrap(), 1);
-        assert_eq!(read_hedge_order_position(2, Some(20), false).unwrap(), 0);
-        assert_eq!(read_hedge_order_position(1, Some(35), false).unwrap(), 1);
-        assert_eq!(read_hedge_order_position(2, Some(35), false).unwrap(), 0);
-        assert_eq!(read_hedge_order_position(1, Some(75), false).unwrap(), 1);
-        assert_eq!(read_hedge_order_position(2, Some(75), false).unwrap(), 0);
-        assert_eq!(read_hedge_order_position(2, None, false).unwrap(), 1);
-        assert_eq!(read_hedge_order_position(1, None, true).unwrap(), 0);
-        assert_eq!(read_hedge_order_position(1, Some(5), true).unwrap(), 1);
-        assert!(read_hedge_order_position(0, None, false).is_err());
-        assert!(read_hedge_order_position(1, Some(5), false).is_err());
-    }
-
-    #[test]
-    fn read_hedge_qualification_opens_uncached_with_the_selected_delay() {
-        let options = read_hedge_open_options(1024 * 1024, Some(75));
-        assert_eq!(options.cache_dir, None);
-        assert_eq!(options.global_pq_prefetch_stripe_bytes, 1024 * 1024);
-        assert_eq!(
-            options.global_pq_slow_read_hedge_after,
-            Some(Duration::from_millis(75))
-        );
-
-        let control = read_hedge_open_options(1024 * 1024, None);
-        assert_eq!(control.cache_dir, None);
-        assert_eq!(control.global_pq_slow_read_hedge_after, None);
-    }
-
-    #[test]
-    fn read_hedge_qualification_csv_preserves_physical_byte_telemetry() {
-        let path = env::temp_dir().join(format!(
-            "borsuk-read-hedge-samples-{}.csv",
-            std::process::id()
-        ));
-        let sample = ReadSample {
-            query: 0,
-            record_id: "group-o00000000".to_string(),
-            hit_id: "group-o00000000".to_string(),
-            hit_ids: "group-o00000000|neighbor-1|neighbor-2".to_string(),
-            contains_record_id: true,
-            latency_ms: 12.5,
-            requests: RequestCounts {
-                gets: 3,
-                ..RequestCounts::default()
-            },
-            bytes_read: 100,
-            disk_cache_bytes_read: 123,
-            backing_bytes_read: 456,
-            segments_searched: 4,
-            global_base_approximate_us: 1,
-            global_base_exact_rerank_us: 2,
-            global_delta_approximate_us: 3,
-            global_delta_exact_rerank_us: 4,
-            global_delta_wait_us: 5,
-            global_exact_bound_candidates: 16,
-            global_exact_bound_survivors: 11,
-            global_exact_bound_fail_open: 0,
-            global_exact_bound_containment_failures: 0,
-            global_exact_bound_baseline_reads: 9,
-            global_exact_bound_baseline_bytes: 49_152,
-            global_exact_bound_predicted_reads: 7,
-            global_exact_bound_predicted_waves: 2,
-            global_exact_bound_predicted_bytes: 33_792,
-            global_exact_bound_certificate_kind: "residual-pq-v8".to_string(),
-            global_exact_bound_exact_backing_reads: 9,
-            global_exact_bound_exact_backing_bytes: 49_152,
-            global_exact_bound_residual_bytes: 1_088,
-            global_exact_bound_residual_scan_bytes: 69_632,
-            global_exact_bound_cpu_us: 91,
-            global_exact_bound_certificate_scratch_allocations: 4,
-        };
-
-        write_read_hedge_samples(&path, &[sample]).unwrap();
-        let csv = fs::read_to_string(&path).unwrap();
-        fs::remove_file(&path).unwrap();
-        assert!(csv.starts_with(
-            "query,record_id,hit_id,hit_ids,contains_record_id,latency_ms,requests,gets,puts,deletes,heads,lists,bytes_read,disk_cache_bytes_read,backing_bytes_read,"
-        ));
-        assert!(csv.contains(
-            ",100,123,456,4,1,2,3,4,5,16,11,0,0,9,49152,7,2,33792,residual-pq-v8,9,49152,1088,69632,91,4\n"
-        ));
-    }
-
-    #[test]
-    fn read_qualification_accepts_only_the_preregistered_shape() {
-        let shape = ReadQualificationShape {
-            writers: 8,
-            operations: 1_000,
-            records_per_operation: 16,
-            dimensions: 768,
-            query_count: 100,
-            max_read_segments: 4,
-            stripe_bytes: 2 * 1024 * 1024,
-            repetition: 3,
-        };
-        validate_read_qualification_shape(shape, false).unwrap();
-
-        for invalid in [
-            ReadQualificationShape {
-                stripe_bytes: 0,
-                ..shape
-            },
-            ReadQualificationShape {
-                stripe_bytes: 3 * 1024 * 1024,
-                ..shape
-            },
-            ReadQualificationShape {
-                repetition: 0,
-                ..shape
-            },
-            ReadQualificationShape {
-                repetition: 6,
-                ..shape
-            },
-            ReadQualificationShape {
-                query_count: 20,
-                ..shape
-            },
-        ] {
-            assert!(validate_read_qualification_shape(invalid, false).is_err());
-        }
-    }
-
-    #[test]
-    fn read_qualification_smoke_is_small_but_keeps_the_same_read_policy() {
-        validate_read_qualification_shape(
-            ReadQualificationShape {
-                writers: 2,
-                operations: 2,
-                records_per_operation: 1,
-                dimensions: 8,
-                query_count: 4,
-                max_read_segments: 4,
-                stripe_bytes: 4 * 1024 * 1024,
-                repetition: 1,
-            },
-            true,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn read_qualification_arm_order_matches_the_preregistration() {
-        const MIB: usize = 1024 * 1024;
-        assert_eq!(read_qualification_order_position(1, MIB).unwrap(), 0);
-        assert_eq!(read_qualification_order_position(1, 2 * MIB).unwrap(), 1);
-        assert_eq!(read_qualification_order_position(2, 2 * MIB).unwrap(), 0);
-        assert_eq!(read_qualification_order_position(3, MIB).unwrap(), 1);
-        assert!(read_qualification_order_position(0, MIB).is_err());
-        assert!(read_qualification_order_position(1, 3 * MIB).is_err());
-    }
-
-    #[test]
-    fn read_confirmation_accepts_only_the_preregistered_shape() {
-        const MIB: usize = 1024 * 1024;
-        let shape = ReadQualificationShape {
-            writers: 8,
-            operations: 1_000,
-            records_per_operation: 16,
-            dimensions: 768,
-            query_count: 500,
-            max_read_segments: 4,
-            stripe_bytes: 4 * MIB,
-            repetition: 5,
-        };
-        validate_read_confirmation_shape(shape, false).unwrap();
-        validate_read_confirmation_shape(
-            ReadQualificationShape {
-                stripe_bytes: MIB,
-                ..shape
-            },
-            false,
-        )
-        .unwrap();
-
-        for invalid in [
-            ReadQualificationShape {
-                stripe_bytes: 2 * MIB,
-                ..shape
-            },
-            ReadQualificationShape {
-                query_count: 100,
-                ..shape
-            },
-            ReadQualificationShape {
-                query_count: 499,
-                ..shape
-            },
-            ReadQualificationShape {
-                repetition: 0,
-                ..shape
-            },
-            ReadQualificationShape {
-                repetition: 6,
-                ..shape
-            },
-            ReadQualificationShape {
-                max_read_segments: 3,
-                ..shape
-            },
-        ] {
-            assert!(validate_read_confirmation_shape(invalid, false).is_err());
-        }
-    }
-
-    #[test]
-    fn read_confirmation_preserves_the_structural_smoke_shape() {
-        const MIB: usize = 1024 * 1024;
-        let smoke = ReadQualificationShape {
-            writers: 2,
-            operations: 2,
-            records_per_operation: 1,
-            dimensions: 8,
-            query_count: 4,
-            max_read_segments: 4,
-            stripe_bytes: MIB,
-            repetition: 1,
-        };
-        validate_read_confirmation_shape(smoke, true).unwrap();
-        validate_read_confirmation_shape(
-            ReadQualificationShape {
-                stripe_bytes: 4 * MIB,
-                ..smoke
-            },
-            true,
-        )
-        .unwrap();
-        assert!(
-            validate_read_confirmation_shape(
-                ReadQualificationShape {
-                    stripe_bytes: 2 * MIB,
-                    ..smoke
-                },
-                true,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn read_confirmation_arm_order_matches_the_preregistration() {
-        const MIB: usize = 1024 * 1024;
-        assert_eq!(read_confirmation_order_position(1, MIB).unwrap(), 0);
-        assert_eq!(read_confirmation_order_position(1, 4 * MIB).unwrap(), 1);
-        assert_eq!(read_confirmation_order_position(2, 4 * MIB).unwrap(), 0);
-        assert_eq!(read_confirmation_order_position(2, MIB).unwrap(), 1);
-        assert_eq!(read_confirmation_order_position(5, MIB).unwrap(), 0);
-        assert!(read_confirmation_order_position(0, MIB).is_err());
-        assert!(read_confirmation_order_position(6, MIB).is_err());
-        assert!(read_confirmation_order_position(1, 2 * MIB).is_err());
-    }
-
-    #[test]
-    fn read_qualification_reconstructs_the_original_dataset_row() {
-        let sample = Sample {
-            process_id: 1,
-            writer: 3,
-            writer_instance: 3,
-            operation: 17,
-            batch_records: 16,
-            record_ids: (0..16)
-                .map(|batch| production_record_id((3 * 1_000 + 17) * 16 + batch))
-                .collect(),
-            latency_ms: 1.0,
-            commit_lane: 0,
-            commit_sequence: 1,
-            committed_records: 16,
-            acknowledgement_bytes: 1,
-            group_requests: RequestCounts::default(),
-            lane_receipts: Vec::new(),
-        };
-
-        assert_eq!(
-            read_qualification_query_ordinal(&sample, 1_000, 16).unwrap(),
-            48_272
-        );
-        let mut wrong_id = sample.clone();
-        wrong_id.record_ids[0] = "wrong".to_string();
-        assert!(read_qualification_query_ordinal(&wrong_id, 1_000, 16).is_err());
     }
 
     #[test]

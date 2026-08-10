@@ -1,12 +1,10 @@
 use std::{
-    cmp::Reverse,
-    collections::{BTreeSet, BinaryHeap, HashMap},
+    collections::BTreeSet,
     fs::File,
     io::{BufReader, BufWriter, Read, Write},
     mem::size_of,
-    ops::Range,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use arrow_array::{Array, RecordBatch, StringArray};
@@ -37,14 +35,10 @@ use crate::{
 use crate::rotated_product_quantizer::ProductQuantizerConfig;
 
 const DESCRIPTOR_JSON_COLUMN: &str = "ann_descriptor_json";
-const CELL_GRAPH_MAGIC: &[u8; 8] = b"BRSGCG01";
-const CELL_GRAPH_VERSION: u32 = 5;
-const CELL_GRAPH_HEADER_LEN: usize = 64;
 pub(crate) const DEFAULT_GLOBAL_PQ_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const DEFAULT_GLOBAL_EXACT_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const BUILD_SCRATCH_DIR_ENV: &str = "BORSUK_BUILD_SCRATCH_DIR";
-const RESIDENT_CODE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const HIERARCHICAL_PARENT_ASSIGNMENT_WIDTH: usize = 4;
 
 /// Hierarchical cell identity. Keeping the semantic parent in the high byte
@@ -195,20 +189,6 @@ impl GlobalScanQuantizer {
         }
     }
 
-    fn certificate_l2_interval(
-        &self,
-        query: &[f32],
-        vector: &[f32],
-        code: &[u8],
-    ) -> Result<Option<(f64, f64)>> {
-        match self {
-            Self::Pq(quantizer) => quantizer
-                .certificate_l2_interval(query, vector, code)
-                .map(Some),
-            Self::FastTurboQuantMse(_) | Self::FastTurboQuantProd(_) => Ok(None),
-        }
-    }
-
     pub(crate) fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
         match self {
             Self::Pq(quantizer) => quantizer.encode(vector),
@@ -268,15 +248,6 @@ impl GlobalScanQuantizer {
                 PreparedGlobalScan::FastTurboQuantProd(prepared),
             ) => quantizer.distance(prepared, code),
             _ => invalid("prepared query does not match the global scan codec"),
-        }
-    }
-
-    #[cfg(test)]
-    fn resident_bytes(&self) -> usize {
-        match self {
-            Self::Pq(quantizer) => quantizer.resident_bytes(),
-            Self::FastTurboQuantMse(quantizer) => quantizer.resident_bytes(),
-            Self::FastTurboQuantProd(quantizer) => quantizer.resident_bytes(),
         }
     }
 }
@@ -479,13 +450,6 @@ impl HierarchicalCoarseQuantizer {
         scored.truncate(nprobe.min(scored.len()));
         Ok(scored)
     }
-
-    #[cfg(test)]
-    fn resident_bytes(&self) -> usize {
-        self.parent.resident_bytes()
-            + self.child_offsets.capacity() * size_of::<u16>()
-            + self.child_centroids.capacity() * size_of::<f32>()
-    }
 }
 
 /// Keep only the fixed number of parent cells examined by hierarchical
@@ -608,23 +572,6 @@ impl GlobalCoarseQuantizer {
         matches!(self, Self::Hierarchical(_))
     }
 
-    #[cfg(test)]
-    fn encode_cell(&self, vector: &[f32]) -> Result<u16> {
-        match self {
-            Self::Product(quantizer) => {
-                let code = quantizer.encode(vector)?;
-                if !(1..=2).contains(&code.len()) {
-                    return invalid("coarse cell codes must contain one or two bytes");
-                }
-                Ok(u16::from_le_bytes([
-                    code[0],
-                    code.get(1).copied().unwrap_or(0),
-                ]))
-            }
-            Self::Hierarchical(quantizer) => quantizer.encode_cell(vector),
-        }
-    }
-
     fn encode_cell_with_scratch(
         &self,
         vector: &[f32],
@@ -679,14 +626,6 @@ impl GlobalCoarseQuantizer {
             Self::Hierarchical(quantizer) => {
                 quantizer.nearest_cells_with_distances(query, nprobe, cells)
             }
-        }
-    }
-
-    #[cfg(test)]
-    fn resident_bytes(&self) -> usize {
-        match self {
-            Self::Product(quantizer) => quantizer.resident_bytes(),
-            Self::Hierarchical(quantizer) => quantizer.resident_bytes(),
         }
     }
 }
@@ -771,270 +710,6 @@ fn fit_local_centroids(
     centroids
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct GlobalPqRow {
-    pub(crate) segment_index: u32,
-    pub(crate) row_index: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct LocationEncoding {
-    width: u8,
-    row_bits: u8,
-}
-
-impl LocationEncoding {
-    pub(crate) fn width_bytes(self) -> usize {
-        usize::from(self.width)
-    }
-
-    pub(crate) fn for_layout(segment_count: usize, max_rows_per_segment: usize) -> Result<Self> {
-        let max_row = max_rows_per_segment.saturating_sub(1) as u64;
-        let row_bits = (u64::BITS - max_row.leading_zeros()).max(1) as u8;
-        let max_segment = segment_count.saturating_sub(1) as u64;
-        let needed_bits = row_bits as u32 + (u64::BITS - max_segment.leading_zeros()).max(1);
-        if needed_bits > 64 {
-            return invalid("row locations exceed 64 bits");
-        }
-        Ok(Self {
-            width: if needed_bits <= 32 { 4 } else { 8 },
-            row_bits,
-        })
-    }
-
-    fn pack(self, row: GlobalPqRow) -> Result<u64> {
-        let row_limit = 1_u64.checked_shl(self.row_bits as u32).unwrap_or(0);
-        if u64::from(row.row_index) >= row_limit {
-            return invalid("row ordinal exceeds its packed layout");
-        }
-        let packed = (u64::from(row.segment_index) << self.row_bits) | u64::from(row.row_index);
-        if self.width == 4 && packed > u64::from(u32::MAX) {
-            return invalid("location exceeds its u32 layout");
-        }
-        Ok(packed)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn unpack(self, packed: u64) -> GlobalPqRow {
-        let mask = 1_u64
-            .checked_shl(self.row_bits as u32)
-            .unwrap_or(0)
-            .saturating_sub(1);
-        GlobalPqRow {
-            segment_index: (packed >> self.row_bits) as u32,
-            row_index: (packed & mask) as u32,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct GlobalCellGraphRef {
-    pub(crate) path: String,
-    pub(crate) checksum: String,
-    pub(crate) size_bytes: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct GlobalPqChunkRef {
-    pub(crate) path: String,
-    /// Checksum of this chunk's typed code-and-ordinal envelope, not of the containing bundle.
-    pub(crate) checksum: String,
-    pub(crate) offset_bytes: u32,
-    /// Domain-separated checksum of the complete identity/MVCC envelope.
-    pub(crate) identity_checksum: Box<str>,
-    /// Separate standard-Arrow IPC object containing only exact-vector batches.
-    pub(crate) exact_path: String,
-    /// Checksum of the bundle-wide lossless-vector values buffer shared by all
-    /// chunks in the scan bundle.
-    pub(crate) exact_checksum: Box<str>,
-    /// Absolute range of that shared typed values buffer in `exact_path`.
-    pub(crate) exact_offset_bytes: usize,
-    pub(crate) exact_size_bytes: usize,
-    pub(crate) cell_index: u16,
-    /// Absolute starts for the typed segment, row, and bundle-local exact-row
-    /// ordinal buffers.
-    pub(crate) ordinal_buffer_offsets: [u32; 3],
-    /// Absolute starts for the identity offsets/values and four mutation
-    /// buffers. Arrow permits implementation-defined padding between buffers,
-    /// so every range start is persisted instead of deriving later columns
-    /// from one writer's current padding policy. Bundles are capped far below
-    /// 4 GiB, keeping these standard-Arrow offsets compact.
-    pub(crate) typed_buffer_offsets: [u32; 6],
-    /// Exact raw standard-Arrow identity-values buffer length. Inter-buffer
-    /// padding is deliberately excluded from authentication.
-    pub(crate) identity_values_size_bytes: u32,
-    pub(crate) row_start: usize,
-    pub(crate) rows: usize,
-    pub(crate) size_bytes: u32,
-    /// Optional immutable graph for this exact cell chunk. Absence is a normal
-    /// scan-only layout, not an error or a compatibility fallback.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) graph: Option<GlobalCellGraphRef>,
-}
-
-impl GlobalPqChunkRef {
-    pub(crate) fn scan_buffer_ranges(&self, code_width: usize) -> Result<[Range<usize>; 4]> {
-        let scan_start = self.offset_bytes as usize;
-        let scan_end = scan_start
-            .checked_add(self.size_bytes as usize)
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global PQ scan envelope overflows".to_string())
-            })?;
-        let code_end = self
-            .rows
-            .checked_mul(code_width)
-            .and_then(|bytes| scan_start.checked_add(bytes))
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global PQ code buffer range overflows".to_string())
-            })?;
-        let ordinal_bytes = self.rows.checked_mul(size_of::<u32>()).ok_or_else(|| {
-            BorsukError::InvalidStorage("global PQ ordinal buffer size overflows".to_string())
-        })?;
-        let [segment_start, row_start, exact_start] =
-            self.ordinal_buffer_offsets.map(|offset| offset as usize);
-        let segment_end = segment_start.checked_add(ordinal_bytes).ok_or_else(|| {
-            BorsukError::InvalidStorage("global PQ segment ordinal range overflows".to_string())
-        })?;
-        let row_end = row_start.checked_add(ordinal_bytes).ok_or_else(|| {
-            BorsukError::InvalidStorage("global PQ row ordinal range overflows".to_string())
-        })?;
-        let exact_end = exact_start.checked_add(ordinal_bytes).ok_or_else(|| {
-            BorsukError::InvalidStorage("global PQ exact ordinal range overflows".to_string())
-        })?;
-        if code_end > segment_start
-            || segment_end > row_start
-            || row_end > exact_start
-            || exact_end != scan_end
-        {
-            return invalid("global PQ typed scan ordinal ranges are invalid");
-        }
-        Ok([
-            scan_start..code_end,
-            segment_start..segment_end,
-            row_start..row_end,
-            exact_start..exact_end,
-        ])
-    }
-
-    pub(crate) fn identity_ranges(&self) -> Result<(Range<usize>, Range<usize>)> {
-        let expected_offsets = self
-            .rows
-            .checked_add(1)
-            .and_then(|rows| rows.checked_mul(size_of::<i32>()))
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global identity offsets size overflows".to_string())
-            })?;
-        let code_end = usize::try_from(self.offset_bytes)
-            .ok()
-            .and_then(|offset| offset.checked_add(self.size_bytes as usize))
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global PQ code range overflows".to_string())
-            })?;
-        let [
-            offsets_start,
-            values_start,
-            hlc_start,
-            writer_start,
-            digest_start,
-            integrity_start,
-        ] = self.typed_buffer_offsets.map(|offset| offset as usize);
-        let offsets_end = offsets_start.checked_add(expected_offsets).ok_or_else(|| {
-            BorsukError::InvalidStorage("global identity offsets range overflows".to_string())
-        })?;
-        let values_end = values_start
-            .checked_add(self.identity_values_size_bytes as usize)
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global identity values range overflows".to_string())
-            })?;
-        if code_end > offsets_start
-            || offsets_end > values_start
-            || values_end > hlc_start
-            || hlc_start > writer_start
-            || writer_start > digest_start
-            || digest_start > integrity_start
-        {
-            return invalid("global PQ identity ranges are invalid");
-        }
-        Ok((offsets_start..offsets_end, values_start..values_end))
-    }
-
-    pub(crate) fn mutation_ranges(&self) -> Result<[Range<usize>; 4]> {
-        let range = |start: usize, width: usize, name: &str| -> Result<Range<usize>> {
-            let size = self.rows.checked_mul(width).ok_or_else(|| {
-                BorsukError::InvalidStorage(format!("global {name} size overflows"))
-            })?;
-            let end = start.checked_add(size).ok_or_else(|| {
-                BorsukError::InvalidStorage(format!("global {name} range overflows"))
-            })?;
-            Ok(start..end)
-        };
-        let [_, _, hlc, writer, digest, integrity] =
-            self.typed_buffer_offsets.map(|offset| offset as usize);
-        let ranges = [
-            range(hlc, 8, "mutation HLC")?,
-            range(writer, 16, "mutation writer")?,
-            range(digest, 32, "mutation digest")?,
-            range(integrity, 32, "row integrity")?,
-        ];
-        if ranges.windows(2).any(|pair| pair[0].end > pair[1].start) {
-            return invalid("global PQ mutation ranges overlap");
-        }
-        Ok(ranges)
-    }
-
-    #[cfg(test)]
-    fn with_test_typed_identity_ranges(mut self) -> Self {
-        if self.ordinal_buffer_offsets == [0; 3] {
-            let minimum_scan_bytes = self.rows.saturating_mul(64 + 12);
-            self.size_bytes = u32::try_from((self.size_bytes as usize).max(minimum_scan_bytes))
-                .expect("test scan envelope fits u32");
-            let scan_end = (self.offset_bytes as usize).saturating_add(self.size_bytes as usize);
-            let exact = scan_end.saturating_sub(self.rows.saturating_mul(4));
-            let row = exact.saturating_sub(self.rows.saturating_mul(4));
-            let segment = row.saturating_sub(self.rows.saturating_mul(4));
-            self.ordinal_buffer_offsets = [segment, row, exact]
-                .map(|offset| u32::try_from(offset).expect("test ordinal offset fits u32"));
-        }
-        let scan_end = (self.offset_bytes as usize).saturating_add(self.size_bytes as usize);
-        let offsets =
-            next_arrow_column_values(scan_end).expect("test Arrow identity offset aligns");
-        let mut cursor = offsets.saturating_add(self.rows.saturating_add(1).saturating_mul(4));
-        cursor = align_arrow_buffer(cursor).expect("test Arrow buffer offset aligns");
-        let values = cursor;
-        let hlc = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
-        cursor = hlc;
-        cursor = cursor.saturating_add(self.rows.saturating_mul(8));
-        let writer = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
-        cursor = writer;
-        cursor = cursor.saturating_add(self.rows.saturating_mul(16));
-        let digest = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
-        cursor = digest;
-        cursor = cursor.saturating_add(self.rows.saturating_mul(32));
-        let integrity = next_arrow_column_values(cursor).expect("test Arrow column offset aligns");
-        self.typed_buffer_offsets = [offsets, values, hlc, writer, digest, integrity]
-            .map(|offset| u32::try_from(offset).expect("test bundle offset fits u32"));
-        self.identity_values_size_bytes = 0;
-        self
-    }
-}
-
-#[cfg(test)]
-fn align_arrow_buffer(offset: usize) -> Result<usize> {
-    offset
-        .checked_add(63)
-        .map(|value| value & !63)
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage("global Arrow buffer alignment overflows".to_string())
-        })
-}
-
-#[cfg(test)]
-fn next_arrow_column_values(offset: usize) -> Result<usize> {
-    align_arrow_buffer(offset)?.checked_add(64).ok_or_else(|| {
-        BorsukError::InvalidStorage("global Arrow column buffer offset overflows".to_string())
-    })
-}
-
 /// Disk-backed external partitioner for the global IVF/PQ serving artifact.
 ///
 /// Codes are assigned by the vector-level coarse quantizer, rather than by the
@@ -1045,7 +720,6 @@ fn next_arrow_column_values(offset: usize) -> Result<usize> {
 pub(crate) struct GlobalPqCellSpool {
     quantizer: GlobalScanQuantizer,
     coarse_quantizer: GlobalCoarseQuantizer,
-    location: LocationEncoding,
     directory: tempfile::TempDir,
     primary_paths: Vec<PathBuf>,
     primary_writers: Vec<BufWriter<File>>,
@@ -1119,7 +793,6 @@ impl GlobalPqCellSpool {
     pub(crate) fn new(
         quantizer: impl Into<GlobalScanQuantizer>,
         coarse_quantizer: impl Into<GlobalCoarseQuantizer>,
-        location: LocationEncoding,
         max_chunk_bytes: usize,
         dimensions: usize,
         vector_element_type: VectorElementType,
@@ -1127,7 +800,7 @@ impl GlobalPqCellSpool {
         let quantizer = quantizer.into();
         let coarse_quantizer = coarse_quantizer.into();
         let exact_row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
-        let row_bytes = quantizer.code_bytes_per_vector() + usize::from(location.width);
+        let row_bytes = quantizer.code_bytes_per_vector();
         if max_chunk_bytes < row_bytes {
             return invalid("chunk byte cap cannot hold one row");
         }
@@ -1151,7 +824,6 @@ impl GlobalPqCellSpool {
         Ok(Self {
             quantizer,
             coarse_quantizer,
-            location,
             directory,
             primary_paths,
             primary_writers,
@@ -1162,37 +834,6 @@ impl GlobalPqCellSpool {
             exact_row_buffer: Vec::with_capacity(exact_row_bytes),
             rows: 0,
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn push(
-        &mut self,
-        vector: &[f32],
-        row: GlobalPqRow,
-        exact_vector: &[f32],
-        id: &[u8],
-        generation: u64,
-    ) -> Result<()> {
-        let (cell, code) = self.encode_vector(vector)?;
-        self.push_encoded(
-            cell,
-            &code,
-            row,
-            exact_vector,
-            id,
-            MutationStamp::new(
-                MutationVersion::from_parts(generation, [0_u8; 16]),
-                [0_u8; 32],
-            ),
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn encode_vector(&self, vector: &[f32]) -> Result<(u16, Vec<u8>)> {
-        Ok((
-            self.coarse_quantizer.encode_cell(vector)?,
-            self.quantizer.encode(vector)?,
-        ))
     }
 
     pub(crate) fn encode_vector_with_scratch(
@@ -1212,7 +853,6 @@ impl GlobalPqCellSpool {
         &mut self,
         coarse: u16,
         code: &[u8],
-        row: GlobalPqRow,
         exact_vector: &[f32],
         id: &[u8],
         stamp: MutationStamp,
@@ -1239,16 +879,6 @@ impl GlobalPqCellSpool {
         writer
             .write_all(code)
             .map_err(|source| io_error(&self.primary_paths[primary], source))?;
-        let packed = self.location.pack(row)?;
-        match self.location.width {
-            4 => writer
-                .write_all(&(packed as u32).to_le_bytes())
-                .map_err(|source| io_error(&self.primary_paths[primary], source))?,
-            8 => writer
-                .write_all(&packed.to_le_bytes())
-                .map_err(|source| io_error(&self.primary_paths[primary], source))?,
-            _ => return invalid("location width is unsupported"),
-        }
         self.vector_element_type
             .encode_canonical_fixed_width_into(exact_vector, &mut self.exact_row_buffer)?;
         writer
@@ -1327,7 +957,6 @@ impl GlobalPqCellSpool {
         writers: &mut [BufWriter<File>],
     ) -> Result<()> {
         let fixed_width = self.quantizer.code_bytes_per_vector()
-            + usize::from(self.location.width)
             + self
                 .vector_element_type
                 .fixed_width_bytes(self.dimensions)?;
@@ -1364,8 +993,7 @@ impl GlobalPqCellSpool {
         emit: &mut impl FnMut(GlobalPqCellSpoolEvent) -> Result<()>,
     ) -> Result<()> {
         let code_width = self.quantizer.code_bytes_per_vector();
-        let location_width = usize::from(self.location.width);
-        let code_row_width = code_width + location_width;
+        let code_row_width = code_width;
         let exact_row_width = self
             .vector_element_type
             .fixed_width_bytes(self.dimensions)?;
@@ -1581,7 +1209,9 @@ impl GlobalPqDescriptor {
             .collect::<Vec<_>>()
             != [Some("bounded-arrow-leaf-v10")]
         {
-            return invalid("V10 descriptor layout metadata is missing or invalid");
+            return invalid(
+                "V10 descriptor layout metadata is missing or invalid; rebuild the unreleased index",
+            );
         }
         let reader = builder.build()?;
         let mut payload = None;
@@ -1701,101 +1331,13 @@ pub(crate) enum GlobalPqCellSpoolEvent {
     },
 }
 
-#[cfg(test)]
-pub(crate) struct ResidentGlobalPqBuilder {
-    quantizer: RotatedProductQuantizer,
-    location: LocationEncoding,
-    codes: Vec<u8>,
-    locations: Vec<u8>,
-    rows: usize,
-    max_rows: usize,
-}
-
-#[cfg(test)]
-impl ResidentGlobalPqBuilder {
-    pub(crate) fn new(
-        quantizer: RotatedProductQuantizer,
-        location: LocationEncoding,
-        max_chunk_bytes: usize,
-    ) -> Result<Self> {
-        let row_bytes = quantizer.code_bytes_per_vector() + usize::from(location.width);
-        let max_rows = max_chunk_bytes / row_bytes;
-        if max_rows == 0 {
-            return invalid("chunk byte cap cannot hold one row");
-        }
-        Ok(Self {
-            quantizer,
-            location,
-            codes: Vec::new(),
-            locations: Vec::new(),
-            rows: 0,
-            max_rows,
-        })
-    }
-
-    pub(crate) fn push(
-        &mut self,
-        vector: &[f32],
-        row: GlobalPqRow,
-    ) -> Result<Option<GlobalPqChunkBytes>> {
-        let completed = (self.rows == self.max_rows)
-            .then(|| self.flush())
-            .transpose()?
-            .flatten();
-        self.codes
-            .extend_from_slice(&self.quantizer.encode(vector)?);
-        let packed = self.location.pack(row)?;
-        match self.location.width {
-            4 => self
-                .locations
-                .extend_from_slice(&(packed as u32).to_le_bytes()),
-            8 => self.locations.extend_from_slice(&packed.to_le_bytes()),
-            _ => return invalid("location width is unsupported"),
-        }
-        self.rows += 1;
-        Ok(completed)
-    }
-
-    /// Close the current chunk at a segment boundary. Default layouts therefore
-    /// fetch one small code object per selected IVF cell; oversized explicit
-    /// segments can still split at the hard 64 MiB bound.
-    pub(crate) fn flush(&mut self) -> Result<Option<GlobalPqChunkBytes>> {
-        if self.rows == 0 {
-            return Ok(None);
-        }
-        let rows = self.rows;
-        let code_width = self.quantizer.code_bytes_per_vector();
-        let mut bytes = Vec::with_capacity(self.codes.len().saturating_add(self.locations.len()));
-        for row in 0..rows {
-            let code_start = row * code_width;
-            let location_start = row * usize::from(self.location.width);
-            bytes.extend_from_slice(&self.codes[code_start..code_start + code_width]);
-            bytes.extend_from_slice(
-                &self.locations[location_start..location_start + usize::from(self.location.width)],
-            );
-        }
-        self.codes.clear();
-        self.locations.clear();
-        self.rows = 0;
-        Ok(Some(GlobalPqChunkBytes {
-            bytes,
-            exact_bytes: Vec::new(),
-            identities: Vec::new(),
-            rows,
-        }))
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct ResidentGlobalPq {
     quantizer: GlobalScanQuantizer,
     coarse_quantizer: GlobalCoarseQuantizer,
     directory: crate::global_leaf::GlobalLeafDirectory,
     vector_element_type: VectorElementType,
-    location: LocationEncoding,
-    chunks: Vec<GlobalPqChunkRef>,
     len: usize,
-    code_cache: Arc<Mutex<HashMap<String, Bytes>>>,
 }
 
 impl ResidentGlobalPq {
@@ -1821,13 +1363,7 @@ impl ResidentGlobalPq {
             coarse_quantizer: GlobalCoarseQuantizer::from_state(descriptor.coarse_quantizer)?,
             directory,
             vector_element_type: descriptor.vector_element_type,
-            location: LocationEncoding {
-                width: 4,
-                row_bits: 0,
-            },
-            chunks: Vec::new(),
             len: descriptor.vectors,
-            code_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -1873,43 +1409,12 @@ impl ResidentGlobalPq {
         }
     }
 
-    pub(crate) fn cached_code(&self, checksum: &str) -> Option<Bytes> {
-        self.code_cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(checksum)
-            .cloned()
-    }
-
-    pub(crate) fn cache_code(&self, checksum: String, bytes: Bytes) {
-        let mut cache = self
-            .code_cache
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let used = cache.values().map(Bytes::len).sum::<usize>();
-        if used.saturating_add(bytes.len()) <= RESIDENT_CODE_CACHE_BYTES {
-            cache.entry(checksum).or_insert(bytes);
-        }
-    }
-
     pub(crate) fn len(&self) -> usize {
         self.len
     }
 
     pub(crate) fn code_bytes_per_vector(&self) -> usize {
         self.quantizer.code_bytes_per_vector()
-    }
-
-    pub(crate) fn chunks_for_cells(&self, cells: &[u16]) -> Vec<GlobalPqChunkRef> {
-        let selected = cells
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
-        self.chunks
-            .iter()
-            .filter(|chunk| selected.contains(&chunk.cell_index))
-            .cloned()
-            .collect()
     }
 
     pub(crate) fn cell_count(&self) -> usize {
@@ -1938,93 +1443,6 @@ impl ResidentGlobalPq {
             .collect::<Vec<_>>();
         self.coarse_quantizer
             .nearest_cells_with_distances(query, nprobe, &cells)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn resident_bytes(&self) -> usize {
-        size_of::<Self>()
-            + self.quantizer.resident_bytes()
-            + self.coarse_quantizer.resident_bytes()
-            + self.directory.resident_bytes()
-            + self.chunks.capacity() * size_of::<GlobalPqChunkRef>()
-            + self
-                .chunks
-                .iter()
-                .map(|chunk| {
-                    chunk.path.len()
-                        + chunk.checksum.len()
-                        + chunk.exact_checksum.len()
-                        + chunk
-                            .graph
-                            .as_ref()
-                            .map_or(0, |graph| graph.path.len() + graph.checksum.len())
-                })
-                .sum::<usize>()
-    }
-
-    pub(crate) fn candidates_in_chunks(
-        &self,
-        query: &[f32],
-        limit: usize,
-        loaded: &[(GlobalPqChunkRef, Bytes)],
-        parallelism: usize,
-    ) -> Result<Vec<GlobalPqCandidate>> {
-        if limit == 0 || loaded.is_empty() {
-            return Ok(Vec::new());
-        }
-        let prepared = self.quantizer.prepare_query(query)?;
-        let code_width = self.code_bytes_per_vector();
-        let workers = parallelism.max(1).min(loaded.len());
-        let per_worker = loaded.len().div_ceil(workers);
-        let local_heaps = crate::parallel::install(|| {
-            loaded
-                .par_chunks(per_worker)
-                .map(|group| {
-                    let mut heap = BinaryHeap::with_capacity(limit + 1);
-                    for (reference, bytes) in group {
-                        let chunk = ParsedChunk::new(reference, bytes, code_width, self.location)?;
-                        for local in 0..chunk.rows {
-                            let code = chunk.code(local);
-                            push_scanned_candidate(
-                                &mut heap,
-                                self.quantizer.distance(&prepared, code)?,
-                                reference.row_start + local,
-                                reference.row_start,
-                                local,
-                                chunk.exact_ordinal(local)?,
-                                chunk.row(local)?,
-                                code,
-                                limit,
-                            );
-                        }
-                    }
-                    Ok::<_, BorsukError>(heap)
-                })
-                .collect::<Result<Vec<_>>>()
-        })?;
-        Ok(merge_candidates(
-            local_heaps.into_iter().map(BinaryHeap::into_vec).collect(),
-            limit,
-        ))
-    }
-
-    pub(crate) fn candidates_in_graph(
-        &self,
-        query: &[f32],
-        graph: &GlobalCellGraph,
-        limit: usize,
-        ef: usize,
-    ) -> Result<Vec<GlobalPqCandidate>> {
-        graph.candidates(query, &self.quantizer, limit, ef)
-    }
-
-    pub(crate) fn certificate_l2_interval(
-        &self,
-        query: &[f32],
-        vector: &[f32],
-        code: &[u8],
-    ) -> Result<Option<(f64, f64)>> {
-        self.quantizer.certificate_l2_interval(query, vector, code)
     }
 }
 
@@ -2188,646 +1606,6 @@ fn rank_fused_leaf_pages_with_quantizers(
     Ok(selected)
 }
 
-struct ParsedChunk<'a> {
-    bytes: &'a [u8],
-    rows: usize,
-    code_width: usize,
-    segment_offset: usize,
-    row_offset: usize,
-    exact_ordinal_offset: usize,
-}
-
-impl<'a> ParsedChunk<'a> {
-    fn new(
-        reference: &GlobalPqChunkRef,
-        bytes: &'a [u8],
-        code_width: usize,
-        _location: LocationEncoding,
-    ) -> Result<Self> {
-        if bytes.len() != reference.size_bytes as usize {
-            return invalid("Arrow scan buffer does not match its descriptor");
-        }
-        let base = reference.offset_bytes as usize;
-        let [_, segment_range, row_range, exact_ordinal_range] =
-            reference.scan_buffer_ranges(code_width)?;
-        let segment_start = segment_range.start.checked_sub(base).ok_or_else(|| {
-            BorsukError::InvalidStorage("global PQ segment ordinal offset underflows".to_string())
-        })?;
-        let row_start = row_range.start.checked_sub(base).ok_or_else(|| {
-            BorsukError::InvalidStorage("global PQ row ordinal offset underflows".to_string())
-        })?;
-        let exact_ordinal_start = exact_ordinal_range.start.checked_sub(base).ok_or_else(|| {
-            BorsukError::InvalidStorage("global PQ exact ordinal offset underflows".to_string())
-        })?;
-        Ok(Self {
-            bytes,
-            rows: reference.rows,
-            code_width,
-            segment_offset: segment_start,
-            row_offset: row_start,
-            exact_ordinal_offset: exact_ordinal_start,
-        })
-    }
-
-    fn code(&self, local: usize) -> &[u8] {
-        let start = local * self.code_width;
-        &self.bytes[start..start + self.code_width]
-    }
-
-    fn row(&self, local: usize) -> Result<GlobalPqRow> {
-        let segment_start = self.segment_offset + local * size_of::<u32>();
-        let row_start = self.row_offset + local * size_of::<u32>();
-        Ok(GlobalPqRow {
-            segment_index: read_u32(self.bytes, segment_start)?,
-            row_index: read_u32(self.bytes, row_start)?,
-        })
-    }
-
-    fn exact_ordinal(&self, local: usize) -> Result<usize> {
-        let start = self.exact_ordinal_offset + local * size_of::<u32>();
-        Ok(read_u32(self.bytes, start)? as usize)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct CellGraphCandidate {
-    distance: f32,
-    node: u32,
-}
-
-impl Eq for CellGraphCandidate {}
-
-impl Ord for CellGraphCandidate {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.distance
-            .total_cmp(&other.distance)
-            .then_with(|| self.node.cmp(&other.node))
-    }
-}
-
-impl PartialOrd for CellGraphCandidate {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// Compact graph and existing typed scan envelope for one independently cached global
-/// cell chunk. Exact vectors deliberately remain in the ordinary fixed-width
-/// lossless bundle and are fetched only for the merged final candidates.
-#[derive(Debug, Clone)]
-pub(crate) struct GlobalCellGraph {
-    cell_index: u16,
-    row_start: usize,
-    rows: usize,
-    code_width: usize,
-    location: LocationEncoding,
-    ordinal_buffer_offsets: [u32; 3],
-    entry: u32,
-    node_layer_offsets: Vec<u32>,
-    adjacency_offsets: Vec<u32>,
-    neighbours: Vec<u32>,
-    chunk: Vec<u8>,
-}
-
-impl GlobalCellGraph {
-    #[allow(clippy::too_many_arguments)]
-    #[cfg(test)]
-    pub(crate) fn build(
-        reference: &GlobalPqChunkRef,
-        chunk: Vec<u8>,
-        exact_bytes: &[u8],
-        dimensions: usize,
-        vector_element_type: VectorElementType,
-        code_width: usize,
-        location: LocationEncoding,
-        degree: usize,
-        construction_ef: usize,
-        normalize: bool,
-    ) -> Result<Self> {
-        if reference.rows < 2 || degree == 0 || construction_ef < degree || dimensions == 0 {
-            return invalid("global cell graph build parameters are invalid");
-        }
-        let parsed = ParsedChunk::new(reference, &chunk, code_width, location)?;
-        let exact_row_bytes = vector_element_type.fixed_width_bytes(dimensions)?;
-        if exact_bytes.len()
-            != reference.rows.checked_mul(exact_row_bytes).ok_or_else(|| {
-                BorsukError::InvalidStorage("global cell graph exact payload overflows".into())
-            })?
-        {
-            return invalid("global cell graph exact payload size is invalid");
-        }
-        let mut vectors = exact_bytes
-            .chunks_exact(exact_row_bytes)
-            .map(|row| vector_element_type.decode_fixed_width(row, dimensions))
-            .collect::<Result<Vec<_>>>()?;
-        if normalize {
-            for vector in &mut vectors {
-                *vector = crate::metric::unit_l2_normalized(vector);
-            }
-        }
-        let builder = crate::centroid_hnsw::CentroidHnsw::build_with(
-            &vectors,
-            degree.div_ceil(2).max(2),
-            degree,
-            construction_ef,
-        )
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage("global cell graph builder rejected its rows".into())
-        })?;
-        let (entry, towers) = builder.into_adjacency();
-        let layer_count = towers.iter().map(Vec::len).sum::<usize>();
-        let edge_count = towers
-            .iter()
-            .flat_map(|tower| tower.iter())
-            .map(Vec::len)
-            .sum::<usize>();
-        let mut node_layer_offsets = Vec::with_capacity(towers.len() + 1);
-        let mut adjacency_offsets = Vec::with_capacity(layer_count + 1);
-        let mut neighbours = Vec::with_capacity(edge_count);
-        node_layer_offsets.push(0);
-        adjacency_offsets.push(0);
-        for tower in towers {
-            // `CentroidHnsw` exports top-first; compact traversal addresses
-            // layer zero as the dense base layer.
-            for layer in tower.into_iter().rev() {
-                neighbours.extend(layer);
-                adjacency_offsets.push(u32::try_from(neighbours.len()).map_err(|_| {
-                    BorsukError::InvalidStorage("global cell graph has more than u32 edges".into())
-                })?);
-            }
-            node_layer_offsets.push(u32::try_from(adjacency_offsets.len() - 1).map_err(|_| {
-                BorsukError::InvalidStorage("global cell graph has more than u32 layers".into())
-            })?);
-        }
-        debug_assert_eq!(parsed.rows, reference.rows);
-        let scan_start = reference.offset_bytes;
-        let ordinal_buffer_offsets = reference.ordinal_buffer_offsets.map(|offset| {
-            offset.checked_sub(scan_start).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "global cell graph ordinal offset underflows".to_string(),
-                )
-            })
-        });
-        let ordinal_buffer_offsets = ordinal_buffer_offsets
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?
-            .try_into()
-            .expect("three graph ordinal offsets");
-        let graph = Self {
-            cell_index: reference.cell_index,
-            row_start: reference.row_start,
-            rows: reference.rows,
-            code_width,
-            location,
-            ordinal_buffer_offsets,
-            entry,
-            node_layer_offsets,
-            adjacency_offsets,
-            neighbours,
-            chunk,
-        };
-        graph.validate()?;
-        Ok(graph)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        self.validate()?;
-        let total = CELL_GRAPH_HEADER_LEN
-            .saturating_add(self.node_layer_offsets.len() * size_of::<u32>())
-            .saturating_add(self.adjacency_offsets.len() * size_of::<u32>())
-            .saturating_add(self.neighbours.len() * size_of::<u32>())
-            .saturating_add(self.chunk.len());
-        let mut bytes = Vec::with_capacity(total);
-        bytes.extend_from_slice(CELL_GRAPH_MAGIC);
-        bytes.extend_from_slice(&CELL_GRAPH_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&self.cell_index.to_le_bytes());
-        bytes.push(self.location.width);
-        bytes.push(self.location.row_bits);
-        bytes.extend_from_slice(
-            &u64::try_from(self.row_start)
-                .map_err(|_| {
-                    BorsukError::InvalidStorage("global cell graph row start exceeds u64".into())
-                })?
-                .to_le_bytes(),
-        );
-        for value in [
-            self.rows,
-            self.code_width,
-            self.ordinal_buffer_offsets[0] as usize,
-            self.ordinal_buffer_offsets[1] as usize,
-            self.ordinal_buffer_offsets[2] as usize,
-            self.entry as usize,
-            self.node_layer_offsets.len(),
-            self.adjacency_offsets.len(),
-            self.neighbours.len(),
-            self.chunk.len(),
-        ] {
-            bytes.extend_from_slice(
-                &u32::try_from(value)
-                    .map_err(|_| {
-                        BorsukError::InvalidStorage("global cell graph field exceeds u32".into())
-                    })?
-                    .to_le_bytes(),
-            );
-        }
-        for values in [
-            self.node_layer_offsets.as_slice(),
-            self.adjacency_offsets.as_slice(),
-            self.neighbours.as_slice(),
-        ] {
-            for value in values {
-                bytes.extend_from_slice(&value.to_le_bytes());
-            }
-        }
-        bytes.extend_from_slice(&self.chunk);
-        debug_assert_eq!(bytes.len(), total);
-        Ok(bytes)
-    }
-
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < CELL_GRAPH_HEADER_LEN
-            || &bytes[..8] != CELL_GRAPH_MAGIC
-            || read_u32(bytes, 8)? != CELL_GRAPH_VERSION
-        {
-            return invalid("global cell graph header is invalid");
-        }
-        let cell_index = u16::from_le_bytes(bytes[12..14].try_into().expect("two-byte slice"));
-        let location = LocationEncoding {
-            width: bytes[14],
-            row_bits: bytes[15],
-        };
-        let row_start = usize::try_from(read_u64(bytes, 16)?).map_err(|_| {
-            BorsukError::InvalidStorage("global cell graph row start exceeds usize".into())
-        })?;
-        let fields = (0..10)
-            .map(|index| read_u32(bytes, 24 + index * 4).map(|value| value as usize))
-            .collect::<Result<Vec<_>>>()?;
-        let [
-            rows,
-            code_width,
-            segment_offset,
-            row_offset,
-            exact_ordinal_offset,
-            entry,
-            node_len,
-            adjacency_len,
-            neighbour_len,
-            chunk_len,
-        ] = fields.as_slice()
-        else {
-            unreachable!("fixed graph header field count")
-        };
-        let arrays_bytes = node_len
-            .saturating_add(*adjacency_len)
-            .saturating_add(*neighbour_len)
-            .saturating_mul(size_of::<u32>());
-        if CELL_GRAPH_HEADER_LEN
-            .checked_add(arrays_bytes)
-            .and_then(|value| value.checked_add(*chunk_len))
-            != Some(bytes.len())
-        {
-            return invalid("global cell graph sections are truncated");
-        }
-        let mut cursor = CELL_GRAPH_HEADER_LEN;
-        let mut read_array = |len: usize| -> Result<Vec<u32>> {
-            let end = cursor.saturating_add(len.saturating_mul(size_of::<u32>()));
-            let values = bytes
-                .get(cursor..end)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("global cell graph array is truncated".into())
-                })?
-                .chunks_exact(size_of::<u32>())
-                .map(|value| u32::from_le_bytes(value.try_into().expect("four-byte chunk")))
-                .collect();
-            cursor = end;
-            Ok(values)
-        };
-        let node_layer_offsets = read_array(*node_len)?;
-        let adjacency_offsets = read_array(*adjacency_len)?;
-        let neighbours = read_array(*neighbour_len)?;
-        let chunk = bytes[cursor..].to_vec();
-        let graph = Self {
-            cell_index,
-            row_start,
-            rows: *rows,
-            code_width: *code_width,
-            location,
-            ordinal_buffer_offsets: [
-                u32::try_from(*segment_offset).expect("decoded u32 segment offset"),
-                u32::try_from(*row_offset).expect("decoded u32 row offset"),
-                u32::try_from(*exact_ordinal_offset).expect("decoded u32 exact ordinal offset"),
-            ],
-            entry: u32::try_from(*entry).expect("decoded u32 entry"),
-            node_layer_offsets,
-            adjacency_offsets,
-            neighbours,
-            chunk,
-        };
-        graph.validate()?;
-        Ok(graph)
-    }
-
-    pub(crate) fn candidates(
-        &self,
-        query: &[f32],
-        quantizer: &GlobalScanQuantizer,
-        limit: usize,
-        ef: usize,
-    ) -> Result<Vec<GlobalPqCandidate>> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-        let reference = self.chunk_reference();
-        let chunk = ParsedChunk::new(&reference, &self.chunk, self.code_width, self.location)?;
-        let prepared = quantizer.prepare_query(query)?;
-        let score = |node: u32| quantizer.distance(&prepared, chunk.code(node as usize));
-        let mut current = self.entry;
-        let mut current_distance = score(current)?;
-        for layer in (1..self.layer_count(current)).rev() {
-            loop {
-                let mut improved = false;
-                for &neighbour in self.neighbours(current, layer) {
-                    let distance = score(neighbour)?;
-                    if distance < current_distance {
-                        current = neighbour;
-                        current_distance = distance;
-                        improved = true;
-                    }
-                }
-                if !improved {
-                    break;
-                }
-            }
-        }
-        let width = ef.max(limit).min(self.rows);
-        let mut visited = vec![false; self.rows];
-        let start = CellGraphCandidate {
-            distance: current_distance,
-            node: current,
-        };
-        let mut frontier = BinaryHeap::from([Reverse(start)]);
-        let mut best = BinaryHeap::from([start]);
-        visited[current as usize] = true;
-        while let Some(Reverse(candidate)) = frontier.pop() {
-            if best.len() >= width && best.peek().is_some_and(|worst| candidate > *worst) {
-                break;
-            }
-            for &neighbour in self.neighbours(candidate.node, 0) {
-                if visited[neighbour as usize] {
-                    continue;
-                }
-                visited[neighbour as usize] = true;
-                let next = CellGraphCandidate {
-                    distance: score(neighbour)?,
-                    node: neighbour,
-                };
-                if best.len() < width || best.peek().is_some_and(|worst| next < *worst) {
-                    frontier.push(Reverse(next));
-                    best.push(next);
-                    if best.len() > width {
-                        best.pop();
-                    }
-                }
-            }
-        }
-        let mut ordered = best.into_vec();
-        ordered.sort();
-        ordered.truncate(limit.min(ordered.len()));
-        ordered
-            .into_iter()
-            .map(|candidate| {
-                let local = candidate.node as usize;
-                Ok(GlobalPqCandidate {
-                    distance: candidate.distance,
-                    node: self.row_start + local,
-                    chunk_row_start: self.row_start,
-                    local_row: local,
-                    exact_ordinal: chunk.exact_ordinal(local)?,
-                    row: chunk.row(local)?,
-                    code: chunk.code(local).into(),
-                })
-            })
-            .collect()
-    }
-
-    pub(crate) fn resident_bytes(&self) -> usize {
-        size_of::<Self>()
-            + (self.node_layer_offsets.capacity()
-                + self.adjacency_offsets.capacity()
-                + self.neighbours.capacity())
-                * size_of::<u32>()
-            + self.chunk.capacity()
-    }
-
-    pub(crate) fn validate_reference(&self, reference: &GlobalPqChunkRef) -> Result<()> {
-        let relative_ordinals = reference.ordinal_buffer_offsets.map(|offset| {
-            offset.checked_sub(reference.offset_bytes).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "global cell graph reference ordinal offset underflows".to_string(),
-                )
-            })
-        });
-        let relative_ordinals: [u32; 3] = relative_ordinals
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?
-            .try_into()
-            .expect("three graph ordinal offsets");
-        if self.cell_index != reference.cell_index
-            || self.row_start != reference.row_start
-            || self.rows != reference.rows
-            || self.ordinal_buffer_offsets != relative_ordinals
-            || self.chunk.len() != reference.size_bytes as usize
-            || blake3::hash(&self.chunk).to_hex().as_str() != reference.checksum
-        {
-            return invalid("global cell graph does not match its chunk reference");
-        }
-        Ok(())
-    }
-
-    fn chunk_reference(&self) -> GlobalPqChunkRef {
-        GlobalPqChunkRef {
-            path: String::new(),
-            checksum: blake3::hash(&self.chunk).to_hex().to_string(),
-            offset_bytes: 0,
-            identity_checksum: String::new().into_boxed_str(),
-            exact_path: String::new(),
-            exact_checksum: String::new().into_boxed_str(),
-            exact_offset_bytes: 0,
-            exact_size_bytes: 0,
-            cell_index: self.cell_index,
-            ordinal_buffer_offsets: self.ordinal_buffer_offsets,
-            typed_buffer_offsets: [0; 6],
-            identity_values_size_bytes: 0,
-            row_start: self.row_start,
-            rows: self.rows,
-            size_bytes: u32::try_from(self.chunk.len()).expect("cell graph chunk fits u32"),
-            graph: None,
-        }
-    }
-
-    fn validate(&self) -> Result<()> {
-        if self.rows < 2
-            || self.entry as usize >= self.rows
-            || self.node_layer_offsets.len() != self.rows + 1
-            || self.node_layer_offsets.first() != Some(&0)
-            || !self
-                .node_layer_offsets
-                .windows(2)
-                .all(|pair| pair[0] < pair[1])
-            || self
-                .node_layer_offsets
-                .last()
-                .copied()
-                .map(|value| value as usize + 1)
-                != Some(self.adjacency_offsets.len())
-            || self.adjacency_offsets.first() != Some(&0)
-            || !self
-                .adjacency_offsets
-                .windows(2)
-                .all(|pair| pair[0] <= pair[1])
-            || self
-                .adjacency_offsets
-                .last()
-                .copied()
-                .map(|value| value as usize)
-                != Some(self.neighbours.len())
-            || self
-                .neighbours
-                .iter()
-                .any(|node| *node as usize >= self.rows)
-        {
-            return invalid("global cell graph structure is invalid");
-        }
-        ParsedChunk::new(
-            &self.chunk_reference(),
-            &self.chunk,
-            self.code_width,
-            self.location,
-        )?;
-        Ok(())
-    }
-
-    fn layer_count(&self, node: u32) -> usize {
-        (self.node_layer_offsets[node as usize + 1] - self.node_layer_offsets[node as usize])
-            as usize
-    }
-
-    fn neighbours(&self, node: u32, layer: usize) -> &[u32] {
-        if layer >= self.layer_count(node) {
-            return &[];
-        }
-        let slot = self.node_layer_offsets[node as usize] as usize + layer;
-        let start = self.adjacency_offsets[slot] as usize;
-        let end = self.adjacency_offsets[slot + 1] as usize;
-        &self.neighbours[start..end]
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct GlobalPqCandidate {
-    pub(crate) distance: f32,
-    pub(crate) node: usize,
-    pub(crate) chunk_row_start: usize,
-    pub(crate) local_row: usize,
-    pub(crate) exact_ordinal: usize,
-    pub(crate) row: GlobalPqRow,
-    pub(crate) code: Box<[u8]>,
-}
-
-impl Eq for GlobalPqCandidate {}
-impl Ord for GlobalPqCandidate {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.distance
-            .total_cmp(&other.distance)
-            .then_with(|| self.node.cmp(&other.node))
-    }
-}
-impl PartialOrd for GlobalPqCandidate {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-fn push_candidate(
-    best: &mut BinaryHeap<GlobalPqCandidate>,
-    candidate: GlobalPqCandidate,
-    limit: usize,
-) {
-    if best.len() < limit {
-        best.push(candidate);
-    } else if best.peek().is_some_and(|worst| candidate < *worst) {
-        best.pop();
-        best.push(candidate);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn push_scanned_candidate(
-    best: &mut BinaryHeap<GlobalPqCandidate>,
-    distance: f32,
-    node: usize,
-    chunk_row_start: usize,
-    local_row: usize,
-    exact_ordinal: usize,
-    row: GlobalPqRow,
-    code: &[u8],
-    limit: usize,
-) {
-    let should_insert = best.len() < limit
-        || best.peek().is_some_and(|worst| {
-            distance
-                .total_cmp(&worst.distance)
-                .then_with(|| node.cmp(&worst.node))
-                .is_lt()
-        });
-    if !should_insert {
-        return;
-    }
-    if best.len() == limit {
-        best.pop();
-    }
-    best.push(GlobalPqCandidate {
-        distance,
-        node,
-        chunk_row_start,
-        local_row,
-        exact_ordinal,
-        row,
-        code: code.into(),
-    });
-}
-
-/// Merge independently scanned code pages without retaining their payloads.
-/// The global top-k is necessarily contained in the union of each page's
-/// local top-k, so this is equivalent to scanning all pages at once.
-pub(crate) fn merge_candidates(
-    pages: Vec<Vec<GlobalPqCandidate>>,
-    limit: usize,
-) -> Vec<GlobalPqCandidate> {
-    let mut best = BinaryHeap::with_capacity(limit + 1);
-    for candidate in pages.into_iter().flatten() {
-        push_candidate(&mut best, candidate, limit);
-    }
-    let mut ordered = best.into_vec();
-    ordered.sort();
-    ordered
-}
-
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
-    let value = bytes
-        .get(offset..offset + 4)
-        .ok_or_else(|| BorsukError::InvalidStorage("global PQ chunk is truncated".to_string()))?;
-    Ok(u32::from_le_bytes(value.try_into().expect("four bytes")))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    let value = bytes
-        .get(offset..offset + 8)
-        .ok_or_else(|| BorsukError::InvalidStorage("global PQ chunk is truncated".to_string()))?;
-    Ok(u64::from_le_bytes(value.try_into().expect("eight bytes")))
-}
-
 fn invalid<T>(message: &str) -> Result<T> {
     Err(invalid_error(message))
 }
@@ -2865,6 +1643,41 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    fn unreleased_legacy_descriptor_bytes(bundle_layout: &str) -> Vec<u8> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            DESCRIPTOR_JSON_COLUMN,
+            DataType::Utf8,
+            false,
+        )]));
+        let payload = serde_json::json!({ "bundle_layout": bundle_layout }).to_string();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec![payload]))],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut bytes, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        bytes
+    }
+
+    #[test]
+    fn v7_and_v9_descriptors_require_an_explicit_rebuild() {
+        for layout in [
+            "typed-columns-v7-cell-local-exact-arrow",
+            "typed-columns-v9-cell-local-exact-arrow",
+        ] {
+            let error = GlobalPqDescriptor::decode(&unreleased_legacy_descriptor_bytes(layout))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("rebuild the unreleased index"),
+                "legacy {layout} descriptor produced an ambiguous error: {error}"
+            );
+        }
+    }
 
     fn leaf_page(
         quantizer: &GlobalScanQuantizer,
@@ -2974,44 +1787,6 @@ mod tests {
             .unwrap();
         assert_eq!(tied[0].layer, GlobalLeafLayer::Delta);
         assert_eq!(tied[1].layer, GlobalLeafLayer::Base);
-    }
-
-    fn typed_scan_fixture(
-        interleaved: &[u8],
-        rows: usize,
-        code_width: usize,
-        location: LocationEncoding,
-    ) -> (Vec<u8>, [u32; 3]) {
-        let row_width = code_width + location.width_bytes();
-        assert_eq!(interleaved.len(), rows * row_width);
-        let mut scan = Vec::with_capacity(rows * (code_width + 12));
-        for row in interleaved.chunks_exact(row_width) {
-            scan.extend_from_slice(&row[..code_width]);
-        }
-        let segment_offset = u32::try_from(scan.len()).unwrap();
-        let decoded = interleaved
-            .chunks_exact(row_width)
-            .map(|row| {
-                let packed = match location.width_bytes() {
-                    4 => u64::from(u32::from_le_bytes(row[code_width..].try_into().unwrap())),
-                    8 => u64::from_le_bytes(row[code_width..].try_into().unwrap()),
-                    _ => unreachable!("validated location width"),
-                };
-                location.unpack(packed)
-            })
-            .collect::<Vec<_>>();
-        for row in &decoded {
-            scan.extend_from_slice(&row.segment_index.to_le_bytes());
-        }
-        let row_offset = u32::try_from(scan.len()).unwrap();
-        for row in &decoded {
-            scan.extend_from_slice(&row.row_index.to_le_bytes());
-        }
-        let exact_ordinal_offset = u32::try_from(scan.len()).unwrap();
-        for row in 0..rows {
-            scan.extend_from_slice(&u32::try_from(row).unwrap().to_le_bytes());
-        }
-        (scan, [segment_offset, row_offset, exact_ordinal_offset])
     }
 
     fn vectors(rows: usize, dimensions: usize) -> Vec<Vec<f32>> {
@@ -3216,70 +1991,5 @@ mod tests {
             .unwrap();
         assert!(near_distance < far_distance);
         assert_eq!(restored.code_bytes_per_vector(), 40);
-    }
-
-    #[test]
-    fn independently_scanned_pages_merge_to_the_global_top_k() {
-        let row = |node| GlobalPqRow {
-            segment_index: node as u32,
-            row_index: 0,
-        };
-        let pages = vec![
-            vec![
-                GlobalPqCandidate {
-                    distance: 0.7,
-                    node: 7,
-                    chunk_row_start: 0,
-                    local_row: 7,
-                    exact_ordinal: 7,
-                    row: row(7),
-                    code: vec![7].into_boxed_slice(),
-                },
-                GlobalPqCandidate {
-                    distance: 0.1,
-                    node: 1,
-                    chunk_row_start: 0,
-                    local_row: 1,
-                    exact_ordinal: 1,
-                    row: row(1),
-                    code: vec![1].into_boxed_slice(),
-                },
-            ],
-            vec![
-                GlobalPqCandidate {
-                    distance: 0.2,
-                    node: 2,
-                    chunk_row_start: 0,
-                    local_row: 2,
-                    exact_ordinal: 2,
-                    row: row(2),
-                    code: vec![2].into_boxed_slice(),
-                },
-                GlobalPqCandidate {
-                    distance: 0.3,
-                    node: 3,
-                    chunk_row_start: 0,
-                    local_row: 3,
-                    exact_ordinal: 3,
-                    row: row(3),
-                    code: vec![3].into_boxed_slice(),
-                },
-            ],
-        ];
-        let merged = merge_candidates(pages, 3);
-        assert_eq!(
-            merged
-                .iter()
-                .map(|candidate| candidate.node)
-                .collect::<Vec<_>>(),
-            vec![1, 2, 3]
-        );
-        assert_eq!(
-            merged
-                .iter()
-                .map(|candidate| candidate.code.as_ref())
-                .collect::<Vec<_>>(),
-            vec![&[1][..], &[2][..], &[3][..]]
-        );
     }
 }

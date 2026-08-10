@@ -130,10 +130,14 @@ fn drain_keeps_global_base_and_searches_materialized_delta_without_rebuild() {
         )
         .unwrap();
     assert_eq!(report.hits[0].id.as_str(), "delta");
-    assert!(
-        report.global_scan_chunks_searched > 0,
-        "drain must retain and search the immutable global base: {report:?}"
-    );
+    assert_eq!(report.hits[0].distance, 0.0);
+    assert_eq!(report.leaf_mode, "srht-pq-scan");
+    assert!(report.segments_searched > 0);
+    assert_eq!(report.global_leaf_directory_reads, 0);
+    assert_eq!(report.global_leaf_directory_bytes, 0);
+    assert_eq!(report.global_leaf_pages_read, 0);
+    assert_eq!(report.global_leaf_page_bytes, 0);
+    assert_eq!(report.global_leaf_exact_scores, 0);
 }
 
 #[test]
@@ -190,23 +194,16 @@ fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_bas
 
     assert_eq!(
         operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Get && path.starts_with("segments/")
-        }),
-        0,
-        "drain already owns the materialized records and must not reread its newly written segments to build the global delta"
-    );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put && path.starts_with("manifests/")
         }),
         1,
-        "segment coverage and the derived global delta must publish atomically in one manifest"
+        "the materialized exact fringe must publish atomically in one manifest"
     );
     assert!(
         operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put && path.starts_with("global-pq/")
+            operation == common::StoreOperation::Put && path.starts_with("global-leaf/")
         }) > 0,
-        "a threshold-sized drain must publish an incremental global-PQ delta"
+        "a threshold-sized drain must publish authenticated V10 leaf artifacts"
     );
     let report = BorsukIndex::open_with_object_store(inner, uri)
         .unwrap()
@@ -218,23 +215,23 @@ fn drain_indexes_a_threshold_sized_materialized_delta_without_rebuilding_the_bas
         )
         .unwrap();
     assert_eq!(report.hits[0].id.as_str(), "delta-17");
+    assert_eq!(report.hits[0].distance, 0.0);
+    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+    assert_eq!(report.segments_searched, 0);
+    assert_eq!(report.backing_bytes_read, report.bytes_read);
+    assert!(report.global_leaf_directory_reads >= 2);
+    assert!(report.global_leaf_directory_bytes > 0);
+    assert!(report.global_leaf_pages_read >= 2);
+    assert!(report.global_leaf_page_bytes > 0);
+    assert!(report.global_leaf_exact_scores > 0);
 }
 
 #[test]
-fn drain_fails_closed_when_the_incremental_global_delta_cannot_be_published() {
+fn drain_fails_closed_when_the_exact_fringe_manifest_cannot_be_published() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let faulted = common::FaultInjectingObjectStore::fail_nth_matching(
-        Arc::clone(&inner),
-        3,
-        true,
-        |operation, path| {
-            operation == common::StoreOperation::Put
-                && path.as_ref().starts_with("global-pq/descriptors/")
-        },
-    );
     let uri = "memory:///group-drain-global-delta-fail-closed";
     let mut index = BorsukIndex::create_with_object_store(
-        Arc::new(faulted),
+        Arc::clone(&inner),
         IndexConfig {
             uri: uri.to_string(),
             metric: VectorMetric::Euclidean,
@@ -255,6 +252,17 @@ fn drain_fails_closed_when_the_incremental_global_delta_cannot_be_published() {
         .unwrap();
     index.finish_bulk_load().unwrap();
     let manifest_version_before_drain = index.stats().manifest_version;
+    drop(index);
+
+    let faulted = common::FaultInjectingObjectStore::fail_nth_matching(
+        Arc::clone(&inner),
+        1,
+        true,
+        |operation, path| {
+            operation == common::StoreOperation::Put && path.as_ref().starts_with("manifests/")
+        },
+    );
+    let index = BorsukIndex::open_with_object_store(Arc::new(faulted), uri).unwrap();
 
     let writer = GroupCommitWriter::new(
         index,
@@ -275,7 +283,7 @@ fn drain_fails_closed_when_the_incremental_global_delta_cannot_be_published() {
 
     let error = writer
         .drain()
-        .expect_err("drain must not publish an unindexed large exact fringe");
+        .expect_err("drain must not expose an exact fringe without its manifest");
     assert!(
         error.to_string().contains("injected Put failure"),
         "{error}"
@@ -320,7 +328,7 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
     let base_paths = runtime
         .block_on(
             inner
-                .list(Some(&"global-pq".into()))
+                .list(Some(&"global-leaf".into()))
                 .try_collect::<Vec<_>>(),
         )
         .unwrap()
@@ -340,7 +348,7 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
     let all_paths = runtime
         .block_on(
             inner
-                .list(Some(&"global-pq".into()))
+                .list(Some(&"global-leaf".into()))
                 .try_collect::<Vec<_>>(),
         )
         .unwrap()
@@ -368,6 +376,16 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
         .unwrap();
 
     assert_eq!(report.hits[0].id.as_str(), "delta-17");
+    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+    assert!(report.global_leaf_directory_reads >= 2);
+    assert!(report.global_leaf_directory_bytes > 0);
+    assert!(report.global_leaf_pages_read >= 2);
+    assert!(report.global_leaf_page_bytes > 0);
+    assert!(report.global_leaf_exact_scores > 0);
+    assert_eq!(
+        report.bytes_read,
+        report.global_leaf_directory_bytes + report.global_leaf_page_bytes
+    );
     assert!(
         report.global_base_approximate_us > 0,
         "cold base+delta search must report base routing/code-scan work: {report:?}"
@@ -376,22 +394,21 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
         report.global_base_exact_rerank_us > 0,
         "cold base+delta search must report base exact-rerank work: {report:?}"
     );
-    assert!(
-        report.global_delta_approximate_us > 0,
-        "cold base+delta search must report delta routing/code-scan work: {report:?}"
+    assert_eq!(
+        report.global_delta_approximate_us, 0,
+        "fused V10 routing must not retain a second delta phase: {report:?}"
     );
     assert_eq!(
         report.global_delta_exact_rerank_us, 0,
-        "fused base+delta search must not retain a second exact-rerank phase: {report:?}"
+        "fused V10 scoring must not retain a second delta phase: {report:?}"
     );
     assert!(
         gets.overlapped(),
         "cold base and immutable-delta reads remained serial: {report:?}"
     );
-    assert!(
-        report.global_delta_wait_us < 10_000,
-        "cold descriptor setup left the delta pipeline trailing the base by {} us: {report:?}",
-        report.global_delta_wait_us
+    assert_eq!(
+        report.global_delta_wait_us, 0,
+        "resident V10 descriptors must not leave a separate delta setup wait: {report:?}"
     );
 }
 

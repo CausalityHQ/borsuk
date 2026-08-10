@@ -221,8 +221,6 @@ fn approx_options(leaf_mode: LeafMode) -> SearchOptions {
         vector_name: String::new(),
         disable_coarse_quantizer: false,
         cache_execution: borsuk::CacheExecutionPolicy::Scan,
-        global_exact_rerank: true,
-        global_exact_bound_shadow: false,
     }
 }
 
@@ -356,7 +354,6 @@ fn synthetic_report(
         global_leaf_exact_scores: 0,
         global_leaf_continuations: 0,
         global_leaf_waves: 0,
-        global_exact_bound_shadow: Default::default(),
         global_base_approximate_us: 0,
         global_base_exact_rerank_us: 0,
         global_delta_approximate_us: 0,

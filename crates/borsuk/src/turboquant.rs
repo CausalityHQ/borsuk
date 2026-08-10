@@ -283,30 +283,6 @@ impl StructuredRotation {
         // there; the loop above stops at `vector.len()` and leaves the tail zero.
         fwht_in_place(work);
     }
-
-    /// Apply the same seeded SRHT in scalar f64 arithmetic. Certificate math
-    /// uses this path so its geometry is not derived from the approximate f32
-    /// SIMD accumulation used for ranking.
-    pub(crate) fn rotate_f64(&self, vector: &[f32]) -> Vec<f64> {
-        debug_assert_eq!(vector.len(), self.dimensions);
-        let mut work = vec![0.0_f64; self.padded];
-        for (output, (value, sign)) in work.iter_mut().zip(vector.iter().zip(&self.signs)) {
-            *output = f64::from(*value) * f64::from(*sign);
-        }
-        let mut width = 1;
-        while width < work.len() {
-            for block in work.chunks_exact_mut(width * 2) {
-                for lane in 0..width {
-                    let left = block[lane];
-                    let right = block[lane + width];
-                    block[lane] = left + right;
-                    block[lane + width] = left - right;
-                }
-            }
-            width *= 2;
-        }
-        work
-    }
 }
 
 /// A seeded 1-bit Quantized-JL projection over `padded`-length (already
@@ -1124,15 +1100,6 @@ impl FastTurboQuantProdScanQuantizer {
 
     pub(crate) fn packed_code_len(&self) -> usize {
         self.scalar_bytes() + self.qjl.sign_len() + 2 * std::mem::size_of::<f32>()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn resident_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.rotation.signs.capacity() * std::mem::size_of::<f32>()
-            + self.qjl.rotation.signs.capacity() * std::mem::size_of::<f32>()
-            + (self.state.codebook.boundaries.capacity() + self.state.codebook.centroids.capacity())
-                * std::mem::size_of::<f32>()
     }
 
     pub(crate) fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {

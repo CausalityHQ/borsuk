@@ -970,44 +970,6 @@ pub struct AddReport {
 }
 
 /// Search hits plus execution measurements useful for performance smoke tests and tuning.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct GlobalExactBoundShadow {
-    /// Persisted certificate implementation evaluated by this shadow.
-    pub certificate_kind: String,
-    /// Live post-MVCC candidates evaluated by the shadow certificate.
-    pub candidates: usize,
-    /// Candidates the counterfactual certificate would still exact-fetch.
-    pub survivors: usize,
-    /// Candidates retained because their interval was unsupported or invalid.
-    pub fail_open: usize,
-    /// Exact f32 scores found outside their predicted interval.
-    pub containment_failures: usize,
-    /// Physical exact-range requests for the unchanged all-candidate plan.
-    pub baseline_reads: usize,
-    /// Physical exact-range bytes for the unchanged all-candidate plan.
-    pub baseline_bytes: u64,
-    /// Counterfactual physical exact-range requests after survivor filtering.
-    pub predicted_reads: usize,
-    /// Counterfactual remote request waves at the production parallelism cap.
-    pub predicted_waves: usize,
-    /// Counterfactual physical exact-range bytes after survivor filtering.
-    pub predicted_bytes: u64,
-    /// Physical backing GET attempts made by the unchanged exact fetch.
-    pub exact_backing_reads: u64,
-    /// Object-store response-range bytes charged to those exact attempts.
-    pub exact_backing_bytes: u64,
-    /// Certificate payload bytes retained for evaluated candidates.
-    pub residual_bytes: u64,
-    /// Residual-column scan bytes; always zero for the V9 scalar shadow.
-    pub residual_scan_bytes: u64,
-    /// Shadow calculation wall time; no I/O is included.
-    pub cpu_us: u64,
-    /// Heap buffers allocated for prepared certificate queries and reusable
-    /// interval scratch. This excludes benchmark and exact-fetch allocations.
-    pub certificate_scratch_allocations: usize,
-}
-
-/// Search hits plus execution measurements useful for performance smoke tests and tuning.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SearchReport {
     /// Top-k hits returned by the search.
@@ -1098,9 +1060,6 @@ pub struct SearchReport {
     /// Critical-path V10 Arrow page-fetch waves.
     #[serde(default)]
     pub global_leaf_waves: usize,
-    /// Result-preserving counterfactual exact-rerank certificate evidence.
-    #[serde(default)]
-    pub global_exact_bound_shadow: GlobalExactBoundShadow,
     /// Microseconds spent routing and producing approximate candidates in the
     /// stable global ANN base. Base and delta work may overlap.
     #[serde(default)]
@@ -1638,26 +1597,6 @@ impl fmt::Display for GlobalScanCodec {
     }
 }
 
-/// Optional cached-tier graph built independently for every bounded global
-/// cell chunk. The graph is never required for search: uncovered cells use the
-/// configured storage scan codec and merge into the same exact rerank.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct GlobalCellGraphConfig {
-    /// Maximum base-layer neighbours retained per vector.
-    pub degree: usize,
-    /// Candidate width used while constructing immutable graph links.
-    pub construction_ef: usize,
-}
-
-impl Default for GlobalCellGraphConfig {
-    fn default() -> Self {
-        Self {
-            degree: 32,
-            construction_ef: 128,
-        }
-    }
-}
-
 /// Coarse-cell topology used by the paged global product-PQ artifact.
 ///
 /// [`GlobalPqLayout::Adaptive`] is the production default selected from metric,
@@ -1729,6 +1668,14 @@ impl FromStr for GlobalPqLayout {
 /// None of these knobs affect recall on the exact-rerank path: the sidecar stays
 /// lossless regardless of compression, and centroid sampling only perturbs which
 /// segment a vector lands in (rerank still re-scores the true vectors).
+///
+/// V10 persists bounded Arrow leaves and does not accept the removed custom
+/// global-cell-graph build control:
+///
+/// ```compile_fail
+/// let mut build = borsuk::BuildConfig::default();
+/// build.global_cell_graph = None;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BuildConfig {
     /// Declared physical scalar type of the primary fixed-size vector. Ingest
@@ -1812,11 +1759,6 @@ pub struct BuildConfig {
     /// Independent coordinate shards used by `fast-turboquant-mse-scan`.
     #[serde(default = "default_turboquant_shards")]
     pub global_turboquant_shards: u32,
-    /// Build optional per-cell graph objects for cache-aware mixed execution.
-    /// `None` keeps the scan-only footprint; graph promotion remains gated on
-    /// fresh recall/latency/resource experiments.
-    #[serde(default)]
-    pub global_cell_graph: Option<GlobalCellGraphConfig>,
 }
 
 /// serde default for [`BuildConfig::persist_coarse_quantizer`]: persist the
@@ -1849,7 +1791,6 @@ impl Default for BuildConfig {
             global_turboquant_bits: crate::turboquant::DEFAULT_TURBOQUANT_BITS,
             global_turboquant_qjl_bits: crate::turboquant::DEFAULT_QJL_BITS,
             global_turboquant_shards: crate::turboquant::DEFAULT_SHARDS,
-            global_cell_graph: None,
         }
     }
 }
@@ -2027,6 +1968,15 @@ impl SearchMode {
 }
 
 /// Search options.
+///
+/// V10 exact-scores every admitted Arrow leaf row; approximate-only global
+/// result controls from the V9 code-scan path are not part of this API:
+///
+/// ```compile_fail
+/// let mut options = borsuk::SearchOptions::default();
+/// options.global_exact_rerank = false;
+/// options.global_exact_bound_shadow = true;
+/// ```
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SearchOptions {
     /// Number of nearest hits to return.
@@ -2062,16 +2012,6 @@ pub struct SearchOptions {
     /// graph policies require a separately built and validated local artifact.
     #[serde(default)]
     pub cache_execution: CacheExecutionPolicy,
-    /// Fetch and score lossless vectors after global approximate candidate
-    /// selection. Disable only for ID-only approximate-first queries whose
-    /// recall is acceptable to the caller; vector-returning APIs require this.
-    #[serde(default = "default_global_exact_rerank")]
-    pub global_exact_rerank: bool,
-    /// Enable result-preserving exact-bound qualification telemetry. This is
-    /// disabled by default because the V7 shadow recomputes residuals from
-    /// fetched exact rows.
-    #[serde(default)]
-    pub global_exact_bound_shadow: bool,
 }
 
 impl SearchOptions {
@@ -2088,8 +2028,6 @@ impl SearchOptions {
             vector_name: String::new(),
             disable_coarse_quantizer: false,
             cache_execution: CacheExecutionPolicy::Scan,
-            global_exact_rerank: true,
-            global_exact_bound_shadow: false,
         }
     }
 
@@ -2116,8 +2054,6 @@ impl SearchOptions {
             vector_name: String::new(),
             disable_coarse_quantizer: false,
             cache_execution: CacheExecutionPolicy::Scan,
-            global_exact_rerank: true,
-            global_exact_bound_shadow: false,
         }
     }
 
@@ -2291,20 +2227,6 @@ impl SearchOptions {
         self.cache_execution = policy;
         self
     }
-
-    /// Enable or disable lossless global exact reranking for ID-only search.
-    #[must_use]
-    pub fn with_global_exact_rerank(mut self, enabled: bool) -> Self {
-        self.global_exact_rerank = enabled;
-        self
-    }
-
-    /// Enable or disable result-preserving exact-bound qualification telemetry.
-    #[must_use]
-    pub fn with_global_exact_bound_shadow(mut self, enabled: bool) -> Self {
-        self.global_exact_bound_shadow = enabled;
-        self
-    }
 }
 
 impl Default for SearchOptions {
@@ -2432,10 +2354,6 @@ impl HybridOptions {
 
 const fn default_search_prefetch_depth() -> usize {
     DEFAULT_SEARCH_PREFETCH_DEPTH
-}
-
-const fn default_global_exact_rerank() -> bool {
-    true
 }
 
 /// Default bounded source-segment batch for incremental compaction.

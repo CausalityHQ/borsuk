@@ -14,11 +14,8 @@ mod collection_control;
 mod error;
 mod float8;
 mod format;
-#[cfg(test)]
-mod global_graph;
 mod global_leaf;
 mod global_pq_sidecar;
-mod global_read_planner;
 mod group_commit;
 mod index;
 mod lane_log;
@@ -174,13 +171,12 @@ pub use record::{
     AddReport, BuildConfig, CacheExecutionPolicy, CompactionOptions, CompactionReport,
     DEFAULT_COMPACTION_MAX_SEGMENTS, DEFAULT_GARBAGE_COLLECTION_MIN_AGE,
     DEFAULT_SEARCH_PREFETCH_DEPTH, DEFAULT_TURBOQUANT_SEED, DeleteReport, ExplainReport, Fusion,
-    GarbageCollectionOptions, GarbageCollectionReport, GlobalCellGraphConfig,
-    GlobalExactBoundShadow, GlobalPqLayout, GlobalScanCodec, HybridOptions, HybridQuery,
-    IncrementalMaintenanceOptions, IncrementalReport, IndexStats, LeafCapability, LeafMode,
-    PurgeReport, QuantizerKind, QueryCostModel, RebuildOptions, RebuildReport, RecallGuarantee,
-    RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions, SearchReport,
-    SearchTerminationReason, SidecarCompression, StorageEncoding, VectorElementType, VectorKind,
-    VectorRecord, VectorSpec, leaf_mode_names,
+    GarbageCollectionOptions, GarbageCollectionReport, GlobalPqLayout, GlobalScanCodec,
+    HybridOptions, HybridQuery, IncrementalMaintenanceOptions, IncrementalReport, IndexStats,
+    LeafCapability, LeafMode, PurgeReport, QuantizerKind, QueryCostModel, RebuildOptions,
+    RebuildReport, RecallGuarantee, RecordId, RequestCounts, SearchHit, SearchMode, SearchOptions,
+    SearchReport, SearchTerminationReason, SidecarCompression, StorageEncoding, VectorElementType,
+    VectorKind, VectorRecord, VectorSpec, leaf_mode_names,
 };
 pub use sparse::{
     SparseVector, VectorView, cosine_distance, dot, euclidean_distance, inner_product_distance,

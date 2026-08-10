@@ -20,12 +20,12 @@ use arrow_array::{
 use borsuk::{
     BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
     DEFAULT_MAX_CONCURRENT_CELL_DECODES, DEFAULT_MAX_CONCURRENT_SEARCHES, GlobalPqLayout,
-    GlobalScanCodec, IndexConfig, LeafCapability, LeafMode, OpenOptions, RequestCounts, SearchMode,
+    GlobalScanCodec, IndexConfig, LeafCapability, LeafMode, OpenOptions, RequestCounts,
     SearchOptions, SearchReport, VectorElementType, VectorMetric, VectorRecord, WalConfig,
     WarmReport, recall_at_k, recommended_segment_max_vectors,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 const DEFAULT_QUERIES: usize = 1_000;
 const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
@@ -114,10 +114,8 @@ struct ResolvedConfig {
     global_turboquant_bits: u8,
     global_turboquant_qjl_bits: u32,
     global_turboquant_shards: u32,
-    global_cell_graph: Option<borsuk::GlobalCellGraphConfig>,
     cache_execution: CacheExecutionPolicy,
     force_segment_path: bool,
-    global_cell_graph_cache_max_bytes: u64,
     ram_budget_bytes: Option<u64>,
     segment_cache_max_bytes: Option<u64>,
     recall_nprobes: Vec<usize>,
@@ -138,7 +136,6 @@ struct ResolvedConfig {
     recall_only: bool,
     skip_recall: bool,
     skip_exact_recall: bool,
-    approximate_first_pair: bool,
     recluster_build: bool,
     read_only: bool,
     insert_only: bool,
@@ -469,12 +466,6 @@ fn run() -> BenchResult<()> {
     let config = resolve_config()?;
     print_config(&config);
     let dataset = load_dataset(&config)?;
-    validate_approximate_first_pair_requirements(
-        config.approximate_first_pair,
-        config.cache_profile,
-        dataset.train_count,
-        dataset.meta.n_train,
-    )?;
     fs::create_dir_all(&config.output_dir)?;
 
     if config.build_index {
@@ -502,7 +493,6 @@ fn run() -> BenchResult<()> {
                 global_turboquant_bits: config.global_turboquant_bits,
                 global_turboquant_qjl_bits: config.global_turboquant_qjl_bits,
                 global_turboquant_shards: config.global_turboquant_shards,
-                global_cell_graph: config.global_cell_graph.clone(),
                 ..BuildConfig::default()
             },
         )?;
@@ -580,10 +570,6 @@ fn run() -> BenchResult<()> {
         return Ok(());
     }
 
-    if config.approximate_first_pair {
-        write_approximate_first_pairs(&config, &dataset)?;
-        return Ok(());
-    }
     if !config.skip_recall && config.cache_profile != BenchmarkCacheProfile::MixedCoverage {
         let reader = Arc::new(open_serving_index(&config)?);
         eprintln!("index build_config={:?}", reader.build_config());
@@ -678,7 +664,6 @@ fn open_serving_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
             cache_dir: Some(config.cache_dir.clone()),
             ram_budget_bytes: config.ram_budget_bytes,
             segment_cache_max_bytes: effective_segment_cache_budget(config),
-            global_cell_graph_cache_max_bytes: config.global_cell_graph_cache_max_bytes,
             // Routing summaries and the centroid graph are serving metadata.
             // Load/build them during open so neither cache-state measurement
             // charges one-time library initialization to the first query.
@@ -782,18 +767,6 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let global_turboquant_shards =
         u32::try_from(env_usize("BORSUK_BENCH_TURBOQUANT_SHARDS", 1)?)
             .map_err(|_| invalid_input("BORSUK_BENCH_TURBOQUANT_SHARDS must fit u32"))?;
-    let global_cell_graph = env_optional_cap("BORSUK_BENCH_GLOBAL_CELL_GRAPH_DEGREE", None)?
-        .map(|degree| {
-            let construction_ef = env_usize(
-                "BORSUK_BENCH_GLOBAL_CELL_GRAPH_CONSTRUCTION_EF",
-                degree.saturating_mul(4),
-            )?;
-            Ok::<_, Box<dyn Error>>(borsuk::GlobalCellGraphConfig {
-                degree,
-                construction_ef,
-            })
-        })
-        .transpose()?;
     let cache_execution = non_empty_env("BORSUK_BENCH_CACHE_EXECUTION").map_or(
         Ok::<CacheExecutionPolicy, Box<dyn Error>>(CacheExecutionPolicy::Scan),
         |value| {
@@ -803,10 +776,6 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         },
     )?;
     let force_segment_path = env_flag("BORSUK_BENCH_FORCE_SEGMENT_PATH")?;
-    let global_cell_graph_cache_max_bytes = env_u64(
-        "BORSUK_BENCH_GLOBAL_CELL_GRAPH_CACHE_MAX_BYTES",
-        OpenOptions::default().global_cell_graph_cache_max_bytes,
-    )?;
     let ram_budget_bytes = env_optional_byte_cap(
         "BORSUK_BENCH_RAM_BUDGET_BYTES",
         Some(DEFAULT_PRODUCTION_RAM_BUDGET_BYTES),
@@ -889,7 +858,6 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let recall_only = env_flag("BORSUK_BENCH_RECALL_ONLY")?;
     let skip_recall = env_flag("BORSUK_BENCH_SKIP_RECALL")?;
     let skip_exact_recall = env_flag("BORSUK_BENCH_SKIP_EXACT_RECALL")?;
-    let approximate_first_pair = env_flag("BORSUK_BENCH_APPROXIMATE_FIRST_PAIR")?;
     validate_phase_selection(recall_only, skip_recall)?;
     let read_only = env_flag("BORSUK_BENCH_READ_ONLY")?;
     let insert_only = env_flag("BORSUK_BENCH_INSERT_ONLY")?;
@@ -918,10 +886,8 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         global_turboquant_bits,
         global_turboquant_qjl_bits,
         global_turboquant_shards,
-        global_cell_graph,
         cache_execution,
         force_segment_path,
-        global_cell_graph_cache_max_bytes,
         ram_budget_bytes,
         segment_cache_max_bytes,
         recall_nprobes,
@@ -942,7 +908,6 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         recall_only,
         skip_recall,
         skip_exact_recall,
-        approximate_first_pair,
         recluster_build,
         read_only,
         insert_only,
@@ -962,7 +927,7 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} global_cell_graph={:?} cache_execution={} force_segment_path={} global_cell_graph_cache_max_bytes={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} approximate_first_pair={} recluster_build={} read_only={} insert_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
@@ -986,10 +951,8 @@ fn print_config(config: &ResolvedConfig) {
         config.global_turboquant_bits,
         config.global_turboquant_qjl_bits,
         config.global_turboquant_shards,
-        config.global_cell_graph,
         config.cache_execution,
         config.force_segment_path,
-        config.global_cell_graph_cache_max_bytes,
         config
             .ram_budget_bytes
             .map_or_else(|| "unbounded".to_string(), |value| value.to_string()),
@@ -1017,7 +980,6 @@ fn print_config(config: &ResolvedConfig) {
         config.recall_only,
         config.skip_recall,
         config.skip_exact_recall,
-        config.approximate_first_pair,
         config.recluster_build,
         config.read_only,
         config.insert_only,
@@ -1794,229 +1756,6 @@ fn write_recall_latency_csv(
     Ok(())
 }
 
-#[derive(Serialize)]
-struct ApproximateFirstArmSample {
-    mode: &'static str,
-    ordered_ids: Vec<String>,
-    recall_at_10: Option<f32>,
-    latency_ms: f64,
-    execution_engine: String,
-    storage_gets: u64,
-    storage_heads: u64,
-    backing_reads: u64,
-    backing_bytes_read: u64,
-    decoded_cache_hits: usize,
-    decoded_cache_bytes_read: u64,
-    disk_cache_reads: u64,
-    disk_cache_bytes_read: u64,
-    bytes_read: u64,
-    global_identity_rows_resolved: usize,
-    global_exact_vectors_fetched: usize,
-    global_base_approximate_us: u64,
-    global_base_exact_rerank_us: u64,
-    global_delta_approximate_us: u64,
-    global_delta_exact_rerank_us: u64,
-    global_delta_wait_us: u64,
-    collection_resident_bytes: u64,
-    retained_bytes: u64,
-    retained_capacity_bytes: u64,
-    retained_peak_bytes: u64,
-    transient_bytes: u64,
-    transient_capacity_bytes: u64,
-    transient_peak_bytes: u64,
-}
-
-#[derive(Serialize)]
-struct ApproximateFirstPairSample {
-    schema_version: u32,
-    repetition_id: String,
-    query_seed: u64,
-    sample_index: usize,
-    query_source_index: usize,
-    arm_order: &'static str,
-    scan_codec: String,
-    cache_execution: String,
-    nprobe: usize,
-    max_candidates: usize,
-    ground_truth_ids: Vec<String>,
-    control: ApproximateFirstArmSample,
-    treatment: ApproximateFirstArmSample,
-}
-
-fn write_approximate_first_pairs(config: &ResolvedConfig, dataset: &Dataset) -> BenchResult<()> {
-    let final_path = config
-        .output_dir
-        .join("bench_approximate_first_pairs.jsonl");
-    let temporary_path = config
-        .output_dir
-        .join("bench_approximate_first_pairs.jsonl.incomplete");
-    let complete_path = config.output_dir.join("APPROXIMATE_FIRST_PAIRS_COMPLETE");
-    for path in [&final_path, &temporary_path, &complete_path] {
-        if path.exists() {
-            return Err(invalid_input(&format!(
-                "refusing to overwrite paired-search artifact {}",
-                path.display()
-            ))
-            .into());
-        }
-    }
-
-    let control_index = open_serving_index(config)?;
-    let treatment_index = open_serving_index(config)?;
-    let mut writer = BufWriter::new(File::create(&temporary_path)?);
-    let mut rows = 0usize;
-    for &max_candidates in &config.recall_candidates {
-        for &nprobe in &config.recall_nprobes {
-            let (control_options, treatment_options) = paired_search_options(
-                config.recall_leaf_mode,
-                max_candidates,
-                nprobe,
-                config.cache_execution,
-                config.force_segment_path,
-            );
-            for (sample_index, query) in dataset.queries.iter().enumerate() {
-                let truth = &dataset.ground_truth[sample_index];
-                let control_first = sample_index % 2 == 0;
-                let (control, treatment, arm_order) = if control_first {
-                    reset_cache(&config.cache_dir)?;
-                    let control = measure_approximate_first_arm(
-                        &control_index,
-                        query,
-                        truth,
-                        control_options.clone(),
-                        "exact-rerank-control",
-                    )?;
-                    reset_cache(&config.cache_dir)?;
-                    let treatment = measure_approximate_first_arm(
-                        &treatment_index,
-                        query,
-                        truth,
-                        treatment_options.clone(),
-                        "approximate-first",
-                    )?;
-                    (control, treatment, "control,treatment")
-                } else {
-                    reset_cache(&config.cache_dir)?;
-                    let treatment = measure_approximate_first_arm(
-                        &treatment_index,
-                        query,
-                        truth,
-                        treatment_options.clone(),
-                        "approximate-first",
-                    )?;
-                    reset_cache(&config.cache_dir)?;
-                    let control = measure_approximate_first_arm(
-                        &control_index,
-                        query,
-                        truth,
-                        control_options.clone(),
-                        "exact-rerank-control",
-                    )?;
-                    (control, treatment, "treatment,control")
-                };
-                if treatment.global_exact_vectors_fetched != 0
-                    || treatment.global_base_exact_rerank_us != 0
-                    || treatment.global_delta_exact_rerank_us != 0
-                {
-                    return Err(invalid_input(
-                        "approximate-first treatment performed exact-vector work",
-                    )
-                    .into());
-                }
-                if control.disk_cache_reads != 0 || treatment.disk_cache_reads != 0 {
-                    return Err(invalid_input(
-                        "uncached paired-search arm observed disk-cache reads",
-                    )
-                    .into());
-                }
-                let pair = ApproximateFirstPairSample {
-                    schema_version: 1,
-                    repetition_id: config.repetition_id.clone(),
-                    query_seed: config.query_seed,
-                    sample_index,
-                    query_source_index: dataset.query_source_indices[sample_index],
-                    arm_order,
-                    scan_codec: config.global_scan_codec.to_string(),
-                    cache_execution: config.cache_execution.to_string(),
-                    nprobe,
-                    max_candidates,
-                    ground_truth_ids: truth.clone(),
-                    control,
-                    treatment,
-                };
-                serde_json::to_writer(&mut writer, &pair)?;
-                writer.write_all(b"\n")?;
-                rows = rows.saturating_add(1);
-            }
-        }
-    }
-    writer.flush()?;
-    drop(writer);
-    fs::rename(&temporary_path, &final_path)?;
-    fs::write(&complete_path, format!("schema_version=1\nrows={rows}\n"))?;
-    eprintln!(
-        "wrote {} rows={} completion_marker={}",
-        final_path.display(),
-        rows,
-        complete_path.display()
-    );
-    Ok(())
-}
-
-fn measure_approximate_first_arm(
-    index: &BorsukIndex,
-    query: &[f32],
-    ground_truth: &[String],
-    options: SearchOptions,
-    mode: &'static str,
-) -> BenchResult<ApproximateFirstArmSample> {
-    let started = Instant::now();
-    let report = index.search_with_report(query, options)?;
-    let latency_ms = elapsed_ms(started);
-    let ordered_ids = report
-        .hits
-        .iter()
-        .map(|hit| hit.id.to_utf8_string())
-        .collect::<borsuk::Result<Vec<_>>>()?;
-    let recall_at_10 = if is_zero_norm(query) {
-        None
-    } else {
-        Some(recall_at_k(ground_truth, &ordered_ids, RECALL_K)?)
-    };
-    Ok(ApproximateFirstArmSample {
-        mode,
-        ordered_ids,
-        recall_at_10,
-        latency_ms,
-        execution_engine: execution_engine_label(&report).to_string(),
-        storage_gets: report.requests.gets,
-        storage_heads: report.requests.heads,
-        backing_reads: report.backing_reads,
-        backing_bytes_read: report.backing_bytes_read,
-        decoded_cache_hits: report.decoded_cache_hits,
-        decoded_cache_bytes_read: report.decoded_cache_bytes_read,
-        disk_cache_reads: report.disk_cache_reads,
-        disk_cache_bytes_read: report.disk_cache_bytes_read,
-        bytes_read: report
-            .disk_cache_bytes_read
-            .saturating_add(report.backing_bytes_read),
-        global_identity_rows_resolved: report.global_identity_rows_resolved,
-        global_exact_vectors_fetched: report.global_exact_vectors_fetched,
-        global_base_approximate_us: report.global_base_approximate_us,
-        global_base_exact_rerank_us: report.global_base_exact_rerank_us,
-        global_delta_approximate_us: report.global_delta_approximate_us,
-        global_delta_exact_rerank_us: report.global_delta_exact_rerank_us,
-        global_delta_wait_us: report.global_delta_wait_us,
-        collection_resident_bytes: report.collection_resident_bytes,
-        retained_bytes: report.retained_bytes,
-        retained_capacity_bytes: report.retained_capacity_bytes,
-        retained_peak_bytes: report.retained_peak_bytes,
-        transient_bytes: report.transient_bytes,
-        transient_capacity_bytes: report.transient_capacity_bytes,
-        transient_peak_bytes: report.transient_peak_bytes,
-    })
-}
-
 struct QuerySampleContext<'a> {
     phase: &'a str,
     mode: &'a str,
@@ -2185,16 +1924,6 @@ fn run_recall_cache_phases(
     }
 
     reset_cache(&config.cache_dir)?;
-    if !matches!(config.cache_execution, CacheExecutionPolicy::Scan) {
-        let nprobe = match &options.mode {
-            SearchMode::Approx {
-                max_segments: Some(value),
-                ..
-            } => *value,
-            _ => 1,
-        };
-        let _ = index.warm_global_cell_graphs_for_queries(&dataset.queries, nprobe)?;
-    }
     let _ = run_queries(index, &dataset.queries, None, options.clone())?;
     let disk_cached = run_queries(
         index,
@@ -2233,10 +1962,6 @@ fn run_disk_cached_queries(
     options: SearchOptions,
 ) -> BenchResult<QuerySummary> {
     reset_cache(&config.cache_dir)?;
-    if !matches!(config.cache_execution, CacheExecutionPolicy::Scan) {
-        let _ = index
-            .warm_global_cell_graphs_for_queries(&dataset.queries, selected_nprobe(&options))?;
-    }
     let _ = run_queries(index, &dataset.queries, None, options.clone())?;
     let summary = run_queries(
         index,
@@ -2266,7 +1991,7 @@ fn write_recall_row(
         config.global_turboquant_qjl_bits,
         config.global_turboquant_shards,
         config.cache_execution,
-        config.global_cell_graph_cache_max_bytes,
+        0,
         summary.execution_engine(),
         summary.recall(),
         summary.count(),
@@ -2382,10 +2107,6 @@ fn write_cold_warm_csv(
         // result row: its only job is to populate the local disk cache. The
         // subsequent pass must report no storage bytes or underlying GETs.
         reset_cache(&config.cache_dir)?;
-        if !matches!(config.cache_execution, CacheExecutionPolicy::Scan) {
-            let nprobe = selected_nprobe(&options);
-            let _ = index.warm_global_cell_graphs_for_queries(&dataset.queries, nprobe)?;
-        }
         let _ = run_queries(index, &dataset.queries, None, options.clone())?;
         let cached = run_queries(
             index,
@@ -2461,7 +2182,7 @@ fn write_cache_state_row(
         config.global_turboquant_qjl_bits,
         config.global_turboquant_shards,
         config.cache_execution,
-        config.global_cell_graph_cache_max_bytes,
+        0,
         summary.execution_engine(),
         summary.count(),
         summary.recall(),
@@ -2487,30 +2208,6 @@ fn validate_phase_selection(recall_only: bool, skip_recall: bool) -> BenchResult
     if recall_only && skip_recall {
         return Err(invalid_input(
             "BORSUK_BENCH_RECALL_ONLY and BORSUK_BENCH_SKIP_RECALL cannot both be enabled",
-        )
-        .into());
-    }
-    Ok(())
-}
-
-fn validate_approximate_first_pair_requirements(
-    enabled: bool,
-    cache_profile: BenchmarkCacheProfile,
-    train_count: usize,
-    full_train_count: usize,
-) -> BenchResult<()> {
-    if !enabled {
-        return Ok(());
-    }
-    if cache_profile != BenchmarkCacheProfile::Uncached {
-        return Err(invalid_input(
-            "BORSUK_BENCH_APPROXIMATE_FIRST_PAIR requires BORSUK_BENCH_CACHE_PROFILE=uncached",
-        )
-        .into());
-    }
-    if train_count != full_train_count {
-        return Err(invalid_input(
-            "BORSUK_BENCH_APPROXIMATE_FIRST_PAIR requires the full corpus and shipped ground truth",
         )
         .into());
     }
@@ -2701,7 +2398,7 @@ fn write_concurrency_csv(
             config.global_turboquant_qjl_bits,
             config.global_turboquant_shards,
             config.cache_execution,
-            config.global_cell_graph_cache_max_bytes,
+            0,
             config.cache_profile.as_str(),
             config.cache_coverage_percent,
             if execution_engines.len() == 1 {
@@ -2830,14 +2527,6 @@ fn write_cache_coverage_csv(config: &ResolvedConfig, dataset: &Dataset) -> Bench
             // so a preceding cold request cannot silently turn a later one hot.
             reset_cache(&config.cache_dir)?;
             let index = open_serving_index(config)?;
-            if !matches!(config.cache_execution, CacheExecutionPolicy::Scan) {
-                let hot_queries = hot_indices
-                    .iter()
-                    .map(|&index| dataset.queries[index].clone())
-                    .collect::<Vec<_>>();
-                let _ = index
-                    .warm_global_cell_graphs_for_queries(&hot_queries, selected_nprobe(&options))?;
-            }
             for &query_index in &hot_indices {
                 let _ = index.search_with_report(&dataset.queries[query_index], options.clone())?;
             }
@@ -2898,7 +2587,7 @@ fn write_cache_coverage_csv(config: &ResolvedConfig, dataset: &Dataset) -> Bench
                     "{},{},{},{:.2},{repetition},{position},{},{},{},{},{recall:.3},{latency_ms:.3},{},{},{},{global_graph_fraction:.3},{},{},{},{},{},{},{decoded_fraction:.3},{disk_fraction:.3},{backing_fraction:.3},{},{},{}",
                     config.global_scan_codec,
                     config.cache_execution,
-                    config.global_cell_graph_cache_max_bytes,
+                    0,
                     target_hot_percent as f64 / 100.0,
                     if is_hot { "hot" } else { "outside_hot_set" },
                     query_index,
@@ -2955,23 +2644,8 @@ fn rotated_workload_index(
     (repetition * selected_per_repetition + cursor) % cohort_len
 }
 
-fn graph_config_columns(config: &ResolvedConfig) -> (usize, usize) {
-    config
-        .global_cell_graph
-        .as_ref()
-        .map_or((0, 0), |graph| (graph.degree, graph.construction_ef))
-}
-
-fn selected_nprobe(options: &SearchOptions) -> usize {
-    match &options.mode {
-        SearchMode::Approx {
-            max_segments: Some(value),
-            ..
-        } => *value,
-        // Zero delegates to the persisted production nprobe, exactly as the
-        // subsequent search does.
-        _ => 0,
-    }
+fn graph_config_columns(_config: &ResolvedConfig) -> (usize, usize) {
+    (0, 0)
 }
 
 fn cache_access_fractions(report: &SearchReport) -> (f64, f64, f64) {
@@ -3636,25 +3310,6 @@ fn approximate_options(
     }
 }
 
-fn paired_search_options(
-    leaf_mode: LeafMode,
-    max_candidates: usize,
-    nprobe: usize,
-    cache_execution: CacheExecutionPolicy,
-    force_segment_path: bool,
-) -> (SearchOptions, SearchOptions) {
-    let control = approximate_options(
-        leaf_mode,
-        HIGH_RECALL_ROUTING_OVERFETCH,
-        max_candidates,
-        nprobe,
-        cache_execution,
-        force_segment_path,
-    );
-    let treatment = control.clone().with_global_exact_rerank(false);
-    (control, treatment)
-}
-
 fn serving_options(config: &ResolvedConfig) -> SearchOptions {
     match config.serving_mode {
         ServingMode::Exact => SearchOptions::exact(RECALL_K),
@@ -3970,25 +3625,22 @@ fn permuted_positions(count: usize, seed: u64) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApproximateFirstPairSample, BUILD_HEADER, BenchmarkCacheProfile, BorsukIndex,
-        CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER,
-        CacheExecutionPolicy, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, IndexConfig, LIFECYCLE_HEADER,
-        LeafCapability, LeafMode, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER,
-        QUERY_SAMPLE_HEADER, QuerySummary, RECALL_LATENCY_HEADER, ServingMode, VectorMetric,
-        VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER, approximate_options,
-        cache_coverage_cohort_size, cache_coverage_enabled, dataset_metric,
+        BUILD_HEADER, BenchmarkCacheProfile, CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER,
+        CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
+        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, LIFECYCLE_HEADER, LeafCapability, LeafMode,
+        MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySummary,
+        RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
+        approximate_options, cache_coverage_cohort_size, cache_coverage_enabled, dataset_metric,
         default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
         dollars_per_million_queries, ingest_batch_size, is_hot_workload_position,
-        measure_approximate_first_arm, mixed_concurrency_query_indices, neighbor_row,
-        normalized_cache_access_fractions, paired_search_options, parse_flag_value,
-        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
-        parse_positive_list, parse_serving_mode, permuted_positions, preload_query_count,
-        recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
-        sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
-        validate_approximate_first_pair_requirements, validate_build_only,
-        validate_disk_cached_network, validate_generated_id_range, validate_insert_only,
-        validate_leaf_capability_modes, validate_phase_selection, vector_row, write_batch_len,
-        write_operation_count,
+        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
+        parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
+        parse_optional_byte_cap, parse_positive_list, parse_serving_mode, permuted_positions,
+        preload_query_count, recall_preloads_local_snapshot, recall_row_count,
+        rotated_workload_index, sample_mean, sample_stddev, uses_bounded_decoded_cache_phases,
+        uses_memory_preloaded_phase, validate_build_only, validate_disk_cached_network,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
+        validate_phase_selection, vector_row, write_batch_len, write_operation_count,
     };
 
     #[test]
@@ -4017,159 +3669,6 @@ mod tests {
         );
 
         assert!(options.disable_coarse_quantizer);
-    }
-
-    #[test]
-    fn approximate_first_pair_changes_only_exact_rerank_policy() {
-        let (control, treatment) = paired_search_options(
-            LeafMode::SrhtPqScan,
-            4096,
-            32,
-            CacheExecutionPolicy::Scan,
-            false,
-        );
-
-        assert!(control.global_exact_rerank);
-        assert!(!treatment.global_exact_rerank);
-        let mut expected = control;
-        expected.global_exact_rerank = false;
-        assert_eq!(treatment, expected);
-    }
-
-    #[test]
-    fn approximate_first_pair_requires_uncached_full_corpus() {
-        assert!(
-            validate_approximate_first_pair_requirements(
-                true,
-                BenchmarkCacheProfile::Uncached,
-                1_000_000,
-                1_000_000,
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_approximate_first_pair_requirements(
-                true,
-                BenchmarkCacheProfile::DiskCached,
-                1_000_000,
-                1_000_000,
-            )
-            .is_err()
-        );
-        assert!(
-            validate_approximate_first_pair_requirements(
-                true,
-                BenchmarkCacheProfile::Uncached,
-                10_000,
-                1_000_000,
-            )
-            .is_err()
-        );
-        assert!(
-            validate_approximate_first_pair_requirements(
-                false,
-                BenchmarkCacheProfile::All,
-                10_000,
-                1_000_000,
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn approximate_first_pair_jsonl_smoke_is_structurally_valid() {
-        let directory = tempfile::tempdir().unwrap();
-        let uri = directory.path().to_string_lossy().into_owned();
-        let mut index = BorsukIndex::create(IndexConfig {
-            uri,
-            metric: VectorMetric::Angular,
-            dimensions: 8,
-            segment_max_vectors: 256,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        })
-        .unwrap();
-        let vectors = (0..128)
-            .map(|row| {
-                (0..8)
-                    .map(|dimension| {
-                        (((row + 1) * (dimension + 3) * 17) % 101) as f32 / 100.0 + 0.01
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        index
-            .add(
-                vectors
-                    .iter()
-                    .enumerate()
-                    .map(|(row, vector)| VectorRecord::new(format!("row-{row}"), vector.clone()))
-                    .collect(),
-            )
-            .unwrap();
-        index.finish_bulk_load().unwrap();
-        let query = vectors[37]
-            .iter()
-            .map(|value| value * 3.0)
-            .collect::<Vec<_>>();
-        let truth = index
-            .search_ids(&query, super::SearchOptions::exact(10))
-            .unwrap();
-        let (control_options, treatment_options) = paired_search_options(
-            LeafMode::SrhtPqScan,
-            64,
-            8,
-            CacheExecutionPolicy::Scan,
-            false,
-        );
-        let control = measure_approximate_first_arm(
-            &index,
-            &query,
-            &truth,
-            control_options,
-            "exact-rerank-control",
-        )
-        .unwrap();
-        let treatment = measure_approximate_first_arm(
-            &index,
-            &query,
-            &truth,
-            treatment_options,
-            "approximate-first",
-        )
-        .unwrap();
-        assert!(control.global_exact_vectors_fetched > 0);
-        assert_eq!(treatment.global_exact_vectors_fetched, 0);
-        assert_eq!(treatment.global_base_exact_rerank_us, 0);
-        assert_eq!(treatment.global_delta_exact_rerank_us, 0);
-        let encoded = serde_json::to_string(&ApproximateFirstPairSample {
-            schema_version: 1,
-            repetition_id: "local-structural-smoke".to_string(),
-            query_seed: 17,
-            sample_index: 0,
-            query_source_index: 37,
-            arm_order: "control,treatment",
-            scan_codec: "srht-pq-scan".to_string(),
-            cache_execution: "scan".to_string(),
-            nprobe: 8,
-            max_candidates: 64,
-            ground_truth_ids: truth,
-            control,
-            treatment,
-        })
-        .unwrap();
-        let decoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(decoded["schema_version"], 1);
-        assert_eq!(decoded["query_source_index"], 37);
-        assert_eq!(decoded["treatment"]["global_exact_vectors_fetched"], 0);
-        assert_eq!(
-            decoded["treatment"]["ordered_ids"]
-                .as_array()
-                .unwrap()
-                .len(),
-            10
-        );
     }
 
     #[test]

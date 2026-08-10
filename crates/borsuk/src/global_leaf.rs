@@ -2409,7 +2409,7 @@ mod tests {
             checksum: [cell_index as u8; 32],
             centroid_code: vec![cell_index as u8, leaf_ordinal as u8].into_boxed_slice(),
         };
-        let pages = vec![page(2, 1, 1, 2048), page(1, 0, 0, 64), page(2, 0, 1, 512)];
+        let pages = [page(2, 1, 1, 2048), page(1, 0, 0, 64), page(2, 0, 1, 512)];
         let bundles = vec![
             GlobalLeafBundleRef {
                 path: "global-leaf/aa.arrow".to_string(),

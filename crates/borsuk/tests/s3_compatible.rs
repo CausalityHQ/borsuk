@@ -85,8 +85,6 @@ fn s3_compatible_index_round_trip_when_configured() {
                 vector_name: String::new(),
                 disable_coarse_quantizer: false,
                 cache_execution: borsuk::CacheExecutionPolicy::Scan,
-                global_exact_rerank: true,
-                global_exact_bound_shadow: false,
             },
         )
         .unwrap();
