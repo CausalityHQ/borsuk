@@ -15,6 +15,7 @@ mod error;
 mod float8;
 mod format;
 mod global_leaf;
+mod global_leaf_run;
 mod global_pq_sidecar;
 mod group_commit;
 mod index;
