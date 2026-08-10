@@ -122,3 +122,97 @@ canceled rather than left pending.
 Task 4 still owns removal of the now-unused V9 resident-global query
 implementation and its legacy helpers. The production dispatch is V10-first and
 does not call that path.
+
+## Post-Task-3 independent review fix round 1/5
+
+### Root cause and architecture correction
+
+The independent review found that the V10 directory and leaf reads already
+reached the correct process-wide physical GET-admission seam in
+`CountingObjectStore::get_opts`, but MVCC resolution did not. After each admitted
+leaf wave, `resolve_global_leaf_rows` called the ordinary query-paged
+`mutation_states` path. A cold stable tombstone page could therefore start a
+dependent GET wave, repeat across continuations when tombstone retention was
+disabled, and add backing bytes that were absent from V10's logical
+directory/leaf byte telemetry.
+
+The fix keeps the physical GET seam unchanged and gives V10 an explicit bounded
+MVCC eligibility contract:
+
+- Open and full refresh may prepare one complete mutation view containing the
+  stable tombstone pages, manifest frontier, and visible cell-WAL tombstone runs.
+- Preparation first rejects count-derived lower bounds above 32 MiB, then holds
+  a full 32 MiB permit from the collection-shared `RetainedBytePool` before
+  decoding, and finally rejects an actual decoded view above that cap.
+- The view is keyed by the manifest, lane-head, and cell-WAL snapshot digest.
+  V10 uses it only on an exact key match. Missing, oversized, unreserved, or
+  stale views cause segment-engine fallback before any V10 directory or leaf
+  read; ordinary paged MVCC remains available to that fallback.
+- `resolve_global_leaf_rows` now performs only resident hash lookups and cannot
+  issue storage reads. Search telemetry reports the retained-pool reservation.
+- A 100M-ID declared overlay is rejected before any object GET or allocation.
+- `max_segments` dispatch now admits only the qualified page budgets 4, 8, 16,
+  and 32. Every other explicit positive maximum falls back unchanged, so the
+  caller's segment maximum remains authoritative.
+
+### RED evidence
+
+All fix-round Rust commands used this exact isolated environment:
+
+`CARGO_TARGET_DIR=/home/rb/worktrees/borsuk-prod-ready-v9/target-task3-fix1 RUSTC_WRAPPER=/usr/local/libexec/devbox-rustc-wrapper SCCACHE_DIR=/data/cache/sccache CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 RUSTFLAGS='-C codegen-units=8' rtk cargo ...`
+
+1. `resident_global_v10_cold_stable_tombstone_has_no_dependent_get_wave`
+   used a shared real `object_store::memory::InMemory`, no disk cache, a zero-byte
+   decoded tombstone cache, and a flushed stable tombstone page. Before the fix
+   it failed with `backing_bytes_read=226890` versus reported
+   `bytes_read=213506`; it issued 5 GETs while one directory read plus two leaf
+   pages allowed exactly 3. The two extra GETs were repeated post-decode reads of
+   the same cold tombstone page across the initial and continuation waves.
+2. `resident_global_v10_dispatch_accepts_only_qualified_page_budgets` failed at
+   the first unsupported value: budget 1 reported `bounded-arrow-leaf-v10`
+   instead of the required `srht-pq-scan` fallback.
+3. The dedicated retained-view lifecycle regression was mutation-tested against
+   both required invalidations. Removing the pre-replacement release from full
+   `refresh` made the deliberately tight 48 MiB retained pool reject the second
+   32 MiB view and the test failed on a missing replacement. Removing the
+   `refresh_wal_tail` invalidation failed its explicit assertion that the stale
+   resident view was gone before search.
+
+### GREEN and focused regression evidence
+
+- Cold stable-tombstone no-dependent-GET regression: 1 passed, 594 filtered out.
+  It returns the next live ID through V10, requires backing bytes to equal
+  reported V10 bytes, requires physical GETs to equal directory plus leaf reads,
+  and observes a nonzero retained-byte reservation.
+- Exact supported/unsupported budget matrix: 1 passed, 594 filtered out.
+- 100M mutation-overlay refusal before object reads: 1 passed, 594 filtered out.
+- Full-refresh and lane-tail-refresh lifecycle regression: 1 passed, 595
+  filtered out. Two successive mutation refreshes replace both the exact
+  snapshot key and resident object while retained bytes remain exactly 32 MiB;
+  unchanged refreshes do not grow the pool. A lane-tail refresh removes the
+  view/reservation, after which a supported-budget search explicitly uses
+  `srht-pq-scan` with zero V10 directory and leaf reads.
+- `cargo test --locked -p borsuk resident_global_ --lib`: 15 passed, 581
+  filtered out, covering base/delta fusion, moved upserts/generations,
+  tombstones, continuation, WAL merge, and explicit fallbacks.
+- `cargo test --locked -p borsuk leaf_ranking --lib`: 3 passed, 592 filtered
+  out.
+- `cargo test --locked -p borsuk global_leaf::tests --lib`: 16 passed, 579
+  filtered out.
+- All named global scan codecs through V10: 1 passed, 594 filtered out.
+- `cargo test --locked -p borsuk physical_get_admission_ --lib`: 11 passed,
+  584 filtered out. These cover single admission below isolated read scopes,
+  response-body permit lifetime, exactly-once forwarded counting, and queued or
+  cancelled attempts remaining uncounted.
+- Focused performance-smoke report regression: 1 passed, 2 filtered out.
+- `cargo check --locked -p borsuk --lib`: exit 0.
+- `cargo clippy --locked -p borsuk --lib -- -D warnings`: no issues.
+- `cargo fmt --all -- --check` and `git diff --check`: exit 0.
+
+The repository-requested read-only cross-provider Claude review was started
+after the diff stabilized, but Claude reported its weekly usage limit and
+queued the job until reset. The obsolete queued job was canceled; it produced
+no code-review result.
+
+No full workspace suite, AWS operation, benchmark artifact access, push, or PR
+was performed in this fix round.

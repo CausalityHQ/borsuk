@@ -173,6 +173,13 @@ const DEFAULT_GLOBAL_CELL_GRAPH_CACHE_BYTES: u64 = 128 * 1024 * 1024;
 const DEFAULT_LEXICAL_RUN_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
+/// Maximum complete mutation view admitted for bounded V10 leaf routing.
+///
+/// Larger overlays retain the ordinary query-paged MVCC architecture and make
+/// V10 fall back before it reads a directory or leaf. The full reservation is
+/// held while the view is live, so this optimization cannot silently turn a
+/// 100M-row mutation map into unaccounted process memory.
+const GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_BM25_STATS_PAGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 /// Bound concurrent immutable-segment publication by both object count and
 /// records retained by the write wave. Tiny logical cells need enough parallel
@@ -860,6 +867,11 @@ pub struct BorsukIndex {
     /// hash bucket plus the bounded foreground frontier; cloned handles share
     /// the same read-only pages.
     tombstone_cache: TombstoneCache,
+    /// Complete mutation state for the exact pinned snapshot used by V10.
+    /// When this bounded, byte-reserved view is unavailable, V10 falls back
+    /// before issuing directory or leaf GETs rather than starting a dependent
+    /// post-decode tombstone wave.
+    resident_global_mutations: Option<Arc<ResidentGlobalMutationOverlay>>,
     /// Single-flight and byte-bounded decoded BM25 MVCC correction pages.
     inflight_bm25_stats_pages: Arc<InFlightReads<Bm25StatsPage>>,
     decoded_bm25_stats_pages: Arc<DecodedObjectCache<Bm25StatsPage>>,
@@ -1254,6 +1266,13 @@ type TombstoneOverlay = HashMap<Vec<u8>, MutationState>;
 type TombstoneCache = Arc<DecodedObjectCache<TombstoneOverlay>>;
 
 #[derive(Debug)]
+struct ResidentGlobalMutationOverlay {
+    snapshot_key: [u8; 32],
+    states: Arc<TombstoneOverlay>,
+    _retained: RetainedBytePermit,
+}
+
+#[derive(Debug)]
 struct GlobalIdentityRanges {
     offsets: Vec<u8>,
     values: Vec<u8>,
@@ -1323,6 +1342,14 @@ fn decoded_tombstone_overlay_bytes(overlay: &TombstoneOverlay) -> u64 {
             .saturating_mul(std::mem::size_of::<usize>())
             .saturating_mul(2) as u64,
     )
+}
+
+fn global_leaf_mvcc_overlay_count_fits(count: u64) -> bool {
+    let minimum_entry_bytes =
+        (std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<MutationState>() + 16) as u64;
+    count
+        .checked_mul(minimum_entry_bytes)
+        .is_some_and(|bytes| bytes <= GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES)
 }
 
 fn tombstone_bucket(id: &[u8]) -> u16 {
@@ -3118,6 +3145,7 @@ impl BorsukIndex {
                 &read_runtime.inflight_global_cell_graph_reads,
             ),
             tombstone_cache: Arc::clone(&read_runtime.tombstone_cache),
+            resident_global_mutations: None,
             inflight_bm25_stats_pages: Arc::clone(&read_runtime.inflight_bm25_stats_pages),
             decoded_bm25_stats_pages: Arc::clone(&read_runtime.decoded_bm25_stats_pages),
             vector_sidecar_indexes: Arc::clone(&read_runtime.vector_sidecar_indexes),
@@ -3433,6 +3461,7 @@ impl BorsukIndex {
                 &read_runtime.inflight_global_cell_graph_reads,
             ),
             tombstone_cache: Arc::clone(&read_runtime.tombstone_cache),
+            resident_global_mutations: None,
             inflight_bm25_stats_pages: Arc::clone(&read_runtime.inflight_bm25_stats_pages),
             decoded_bm25_stats_pages: Arc::clone(&read_runtime.decoded_bm25_stats_pages),
             vector_sidecar_indexes: Arc::clone(&read_runtime.vector_sidecar_indexes),
@@ -3490,6 +3519,7 @@ impl BorsukIndex {
         let _ = index.load_resident_global_pq()?;
         let _ = index.load_resident_lexical_roots()?;
         index.prepare_mutation_frontier(&index.manifest)?;
+        index.resident_global_mutations = index.prepare_resident_global_mutations()?;
         if options.preload {
             index.warm()?;
         }
@@ -3746,6 +3776,68 @@ impl BorsukIndex {
     fn prepare_mutation_frontier(&self, manifest: &Manifest) -> Result<()> {
         self.prepare_manifest_mutation_frontier(manifest)?;
         self.prepare_cell_mutation_frontier(&self.cell_wal_snapshot)
+    }
+
+    fn global_leaf_mutation_state_required(&self) -> bool {
+        self.manifest.tombstone_id_count > 0
+            || self.manifest.tombstone.is_some()
+            || !self.manifest.tombstone_pages.is_empty()
+            || !self.manifest.tombstone_frontier.is_empty()
+            || self.cell_wal_snapshot.iter().any(|transaction| {
+                transaction
+                    .runs
+                    .iter()
+                    .any(|run| run.kind == CellWalRunKind::Tombstones)
+            })
+    }
+
+    /// Build the complete mutation view V10 needs before the handle serves a
+    /// request. Refuse large snapshots by declared ID count before reading any
+    /// tombstone object, reserve the full fixed cap before decoding, and keep
+    /// that reservation pinned with the exact snapshot key.
+    fn prepare_resident_global_mutations(
+        &self,
+    ) -> Result<Option<Arc<ResidentGlobalMutationOverlay>>> {
+        if self.manifest.global_pq_ref.is_none() || !self.global_leaf_mutation_state_required() {
+            return Ok(None);
+        }
+        let visible_ids = self.visible_tombstone_id_count()?;
+        let referenced_ids = self
+            .manifest
+            .tombstone
+            .iter()
+            .map(|summary| summary.count)
+            .chain(self.manifest.tombstone_pages.iter().map(|page| page.count))
+            .chain(
+                self.manifest
+                    .tombstone_frontier
+                    .iter()
+                    .map(|summary| summary.count),
+            )
+            .try_fold(0_u64, |total, count| total.checked_add(count))
+            .unwrap_or(u64::MAX);
+        if !global_leaf_mvcc_overlay_count_fits(visible_ids.max(referenced_ids)) {
+            return Ok(None);
+        }
+        let Some(retained_pool) = self.read_runtime.retained_pool.as_ref().map(Arc::clone) else {
+            return Ok(None);
+        };
+        let Some(retained) = retained_pool.try_reserve(GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES) else {
+            return Ok(None);
+        };
+        let Some(states) = self.tombstone_overlay_for_manifest(&self.manifest)? else {
+            return Ok(None);
+        };
+        if states.is_empty()
+            || decoded_tombstone_overlay_bytes(&states) > GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES
+        {
+            return Ok(None);
+        }
+        Ok(Some(Arc::new(ResidentGlobalMutationOverlay {
+            snapshot_key: self.live_wal_snapshot_key(),
+            states,
+            _retained: retained,
+        })))
     }
 
     fn prepare_manifest_mutation_frontier(&self, manifest: &Manifest) -> Result<()> {
@@ -4035,6 +4127,8 @@ impl BorsukIndex {
         }
         self.cell_wal_snapshot_retries
             .store(collection_wal_snapshot_retries, AtomicOrdering::Relaxed);
+        self.resident_global_mutations = None;
+        self.resident_global_mutations = self.prepare_resident_global_mutations()?;
         for (name, (manifest, reference, cell_wal_snapshot)) in prepared_named {
             let child = self
                 .named
@@ -4046,6 +4140,8 @@ impl BorsukIndex {
             child
                 .cell_wal_snapshot_retries
                 .store(collection_wal_snapshot_retries, AtomicOrdering::Relaxed);
+            child.resident_global_mutations = None;
+            child.resident_global_mutations = child.prepare_resident_global_mutations()?;
             child.collection_snapshot = Some(latest_collection.clone());
         }
         self.collection_snapshot = Some(latest_collection);
@@ -4067,6 +4163,7 @@ impl BorsukIndex {
         self.lane_log_snapshot = latest.record_blocks;
         self.lane_log_committed_sequences = latest.committed_sequences;
         self.lane_log_head_checksums = latest.head_checksums;
+        self.resident_global_mutations = None;
         Ok(true)
     }
 
@@ -13823,6 +13920,7 @@ impl BorsukIndex {
     fn resolve_global_leaf_rows(
         &self,
         rows: &[RoutedDecodedGlobalLeafRow],
+        mutation_states: Option<&TombstoneOverlay>,
     ) -> Result<Vec<RoutedDecodedGlobalLeafRow>> {
         let mut winners = BTreeMap::<RecordId, &RoutedDecodedGlobalLeafRow>::new();
         for candidate in rows {
@@ -13844,12 +13942,11 @@ impl BorsukIndex {
                 }
             }
         }
-        let mutation_states = self.mutation_states(winners.keys().map(RecordId::as_bytes))?;
         winners
             .into_iter()
             .filter_map(|(id, candidate)| {
                 match Self::state_suppresses_stamp(
-                    mutation_states.get(id.as_bytes()).copied().flatten(),
+                    mutation_states.and_then(|states| states.get(id.as_bytes()).copied()),
                     candidate.row.stamp,
                 ) {
                     Ok(false) => Some(Ok(RoutedDecodedGlobalLeafRow {
@@ -13889,6 +13986,26 @@ impl BorsukIndex {
         if !eligible {
             return Ok(None);
         }
+        let page_budget = match options.mode {
+            SearchMode::Approx { max_segments, .. } => match max_segments.unwrap_or(16) {
+                budget @ (4 | 8 | 16 | 32) => budget,
+                _ => return Ok(None),
+            },
+            SearchMode::Exact => unreachable!("V10 eligibility requires approximate mode"),
+        };
+        let mutation_states = if self.global_leaf_mutation_state_required() {
+            let snapshot_key = self.live_wal_snapshot_key();
+            let Some(overlay) = self
+                .resident_global_mutations
+                .as_deref()
+                .filter(|overlay| overlay.snapshot_key == snapshot_key)
+            else {
+                return Ok(None);
+            };
+            Some(overlay.states.as_ref())
+        } else {
+            None
+        };
         let Some(global_ref) = self.manifest.global_pq_ref.clone() else {
             return Ok(None);
         };
@@ -13926,10 +14043,6 @@ impl BorsukIndex {
             } else {
                 (Vec::new(), None)
             };
-        let page_budget = match options.mode {
-            SearchMode::Approx { max_segments, .. } => max_segments.unwrap_or(16).min(32),
-            SearchMode::Exact => unreachable!("V10 eligibility requires approximate mode"),
-        };
         let mut routed = base.rank_fused_leaf_pages(
             &pq_query,
             &base_cells,
@@ -14037,7 +14150,7 @@ impl BorsukIndex {
         }
         let mut waves = usize::from(!initial.is_empty());
         let mut continuations = 0_usize;
-        let mut live = self.resolve_global_leaf_rows(&decoded)?;
+        let mut live = self.resolve_global_leaf_rows(&decoded, mutation_states)?;
         while live.len() < options.k && !remaining.is_empty() {
             let missing = options.k - live.len();
             let mut continuation = Vec::new();
@@ -14065,7 +14178,7 @@ impl BorsukIndex {
             decoded.append(&mut rows);
             continuations = continuations.saturating_add(1);
             waves = waves.saturating_add(1);
-            live = self.resolve_global_leaf_rows(&decoded)?;
+            live = self.resolve_global_leaf_rows(&decoded, mutation_states)?;
         }
         let records_considered = decoded.len();
         let mut scored = live
@@ -29603,6 +29716,284 @@ mod tests {
                 <= (report.global_leaf_directory_reads + report.global_leaf_pages_read) as u64,
             "V10 issued a dependent identity/exact GET wave: {report:?}"
         );
+    }
+
+    #[test]
+    fn resident_global_v10_cold_stable_tombstone_has_no_dependent_get_wave() {
+        let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let uri = "memory:///v10-cold-stable-tombstone";
+        let suffix = "x".repeat(100 * 1024);
+        let ids = (0..64)
+            .map(|row| format!("row-{row:02}-{suffix}"))
+            .collect::<Vec<_>>();
+        let mut index = BorsukIndex::create_with_object_store(
+            Arc::clone(&store),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 256,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+        )
+        .unwrap();
+        index
+            .add(
+                ids.iter()
+                    .enumerate()
+                    .map(|(row, id)| VectorRecord::new(id.clone(), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index.delete([ids[0].as_str()]).unwrap();
+        index.flush().unwrap();
+        assert!(
+            !index.manifest.tombstone_pages.is_empty(),
+            "the regression requires a query-paged stable tombstone"
+        );
+        assert!(index.cell_wal_snapshot.is_empty());
+        drop(index);
+
+        let mut open = OpenOptions::default();
+        open.tombstone_page_cache_max_bytes = 0;
+        let reader = BorsukIndex::open_with_object_store_and_options(store, uri, open).unwrap();
+        let report = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+
+        assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+        assert_eq!(
+            report.backing_bytes_read, report.bytes_read,
+            "a cold query performed an unreported post-leaf tombstone read: {report:?}"
+        );
+        assert_eq!(
+            report.requests.gets,
+            (report.global_leaf_directory_reads + report.global_leaf_pages_read) as u64,
+            "a cold query performed a dependent GET wave: {report:?}"
+        );
+        assert!(
+            report.retained_bytes > 0,
+            "the complete MVCC view must be byte-accounted"
+        );
+    }
+
+    #[test]
+    fn resident_global_v10_refresh_rebuilds_the_exact_mutation_snapshot() {
+        let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let uri = "memory:///v10-refresh-mutation-snapshot";
+        let mut writer = BorsukIndex::create_with_object_store(
+            Arc::clone(&store),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 256,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+        )
+        .unwrap();
+        writer
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        writer.finish_bulk_load().unwrap();
+        writer.delete(["row-0"]).unwrap();
+        writer.flush().unwrap();
+        let mut open = OpenOptions::default();
+        open.ram_budget_bytes = Some(128 * 1024 * 1024);
+        open.tombstone_page_cache_max_bytes = 0;
+        let mut reader =
+            BorsukIndex::open_with_object_store_and_options(Arc::clone(&store), uri, open).unwrap();
+        let retained_pool = Arc::clone(reader.read_runtime.retained_pool.as_ref().unwrap());
+        assert_eq!(
+            retained_pool.capacity_bytes(),
+            48 * 1024 * 1024,
+            "the fixture needs room for exactly one, not two, complete views"
+        );
+        assert_eq!(
+            retained_pool.used_bytes(),
+            GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES
+        );
+
+        let mut prior_snapshot_key = reader
+            .resident_global_mutations
+            .as_ref()
+            .unwrap()
+            .snapshot_key;
+        let mut prior_address = Arc::as_ptr(reader.resident_global_mutations.as_ref().unwrap());
+        for id in ["row-1", "row-2"] {
+            writer.delete([id]).unwrap();
+            writer.flush().unwrap();
+            assert!(reader.refresh().unwrap());
+            let current = reader.resident_global_mutations.as_ref().unwrap();
+            assert_ne!(current.snapshot_key, prior_snapshot_key);
+            assert_ne!(Arc::as_ptr(current), prior_address);
+            assert_eq!(
+                retained_pool.used_bytes(),
+                GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES,
+                "full refresh leaked or failed to replace the old reservation"
+            );
+            prior_snapshot_key = current.snapshot_key;
+            prior_address = Arc::as_ptr(current);
+            assert!(!reader.refresh().unwrap());
+            assert_eq!(
+                retained_pool.used_bytes(),
+                GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES,
+                "an unchanged refresh changed retained MVCC bytes"
+            );
+        }
+
+        let report = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+
+        assert_eq!(report.hits[0].id, RecordId::from("row-3"));
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+        assert_eq!(report.backing_bytes_read, report.bytes_read);
+        assert_eq!(
+            report.requests.gets,
+            (report.global_leaf_directory_reads + report.global_leaf_pages_read) as u64
+        );
+        assert!(report.retained_bytes > 0);
+
+        let group_writer = crate::GroupCommitWriter::new(
+            writer,
+            crate::GroupCommitConfig {
+                max_delay: Duration::ZERO,
+                max_records: 1,
+                worker_lanes: 1,
+            },
+        )
+        .unwrap();
+        group_writer
+            .append(vec![VectorRecord::new("lane-tail", vec![10_000.0; 8])])
+            .unwrap();
+        drop(group_writer);
+        assert!(reader.refresh_wal_tail().unwrap());
+        assert!(reader.resident_global_mutations.is_none());
+        assert!(
+            retained_pool.used_bytes() < GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES,
+            "lane-tail invalidation retained the stale complete view; small decoded WAL cache entries are allowed"
+        );
+
+        let fallback = reader
+            .search_with_report(
+                &[3.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        assert_eq!(fallback.hits[0].id, RecordId::from("row-3"));
+        assert_eq!(fallback.leaf_mode, "srht-pq-scan");
+        assert_eq!(fallback.global_leaf_directory_reads, 0);
+        assert_eq!(fallback.global_leaf_pages_read, 0);
+        assert!(fallback.segments_searched > 0);
+    }
+
+    #[test]
+    fn resident_global_v10_dispatch_accepts_only_qualified_page_budgets() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        drop(index);
+        let reader = BorsukIndex::open(&uri).unwrap();
+
+        for budget in [4, 8, 16, 32] {
+            let report = reader
+                .search_with_report(
+                    &[0.0; 8],
+                    SearchOptions::approx(3, LeafMode::SrhtPqScan).with_max_segments(budget),
+                )
+                .unwrap();
+            assert_eq!(
+                report.leaf_mode, "bounded-arrow-leaf-v10",
+                "qualified page budget {budget} did not dispatch V10"
+            );
+            assert!(report.global_leaf_pages_read <= budget);
+        }
+
+        for budget in [1, 2, 3, 5, 6, 7, 9, 15, 17, 31, 33] {
+            let report = reader
+                .search_with_report(
+                    &[0.0; 8],
+                    SearchOptions::approx(3, LeafMode::SrhtPqScan).with_max_segments(budget),
+                )
+                .unwrap();
+            assert_eq!(
+                report.leaf_mode, "srht-pq-scan",
+                "unqualified page budget {budget} entered V10"
+            );
+            assert_eq!(report.global_leaf_pages_read, 0);
+            assert!(
+                report.segments_searched <= budget,
+                "fallback exceeded caller maximum {budget}: {report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resident_global_v10_refuses_a_100m_mutation_overlay_before_object_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index.manifest.tombstone_id_count = 100_000_000;
+        let before = index.storage.request_counts();
+
+        assert!(index.prepare_resident_global_mutations().unwrap().is_none());
+        assert_eq!(
+            index.storage.request_counts().delta(&before).gets,
+            0,
+            "100M mutation planning must refuse before loading any object"
+        );
+        assert!(!global_leaf_mvcc_overlay_count_fits(100_000_000));
     }
 
     #[test]
