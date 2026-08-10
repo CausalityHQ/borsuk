@@ -61,11 +61,11 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
                 "elapsed_ms,cpu_percent,rss_bytes\n0,0,100\n100,50,200\n300,25,150\n"
             )
             (case / "bench_query_samples.csv").write_text(
-                "scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,latency_ms,"
+                "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,latency_ms,"
                 "query_source_index,recall_at_10,network_gets,backing_reads,bytes_read,backing_bytes_read,segments_searched,"
-                "global_scan_chunks,execution_engine,query_seed,repetition_id\n"
-                "srht-pq-scan,scan,uncached,srht-pq-scan,8,320,0,1.5,17,0.99,3,7,2048,1024,8,0,srht-pq-scan,17,r01\n"
-                "srht-pq-scan,scan,disk_cached,srht-pq-scan,8,320,0,0.5,17,0.99,0,0,128,0,8,0,srht-pq-scan,17,r01\n"
+                "global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,execution_engine,query_seed,repetition_id\n"
+                "borsuk-production-bench-v10,srht-pq-scan,scan,uncached,srht-pq-scan,8,320,0,1.5,17,0.99,3,7,2048,1024,8,0,0,0,0,0,0,0,srht-pq-scan,17,r01\n"
+                "borsuk-production-bench-v10,srht-pq-scan,scan,disk_cached,srht-pq-scan,8,320,0,0.5,17,0.99,0,0,128,0,8,0,0,0,0,0,0,0,srht-pq-scan,17,r01\n"
             )
 
             rows = assemble.assemble_rows(root, minimum_samples=1)
@@ -92,11 +92,34 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
             "mode": "srht-pq-scan",
             "nprobe": "8",
             "max_candidates": "320",
+            "schema_version": "borsuk-production-bench-v10",
             "segments_searched": "8",
-            "global_scan_chunks": "8",
+            "global_leaf_directory_reads": "1",
+            "global_leaf_directory_bytes": "1",
+            "global_leaf_pages_read": "1",
+            "global_leaf_page_bytes": "1",
+            "global_leaf_waves": "1",
+            "global_leaf_continuations": "0",
+            "global_leaf_exact_scores": "1",
         }
-        with self.assertRaisesRegex(ValueError, "global-PQ"):
+        with self.assertRaisesRegex(ValueError, "global-leaf"):
             assemble._validate_segment_path(row, "case")
+
+    def test_rejects_an_unversioned_production_benchmark_sample(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported production benchmark schema"):
+            assemble._validate_segment_path(
+                {
+                    "segments_searched": "8",
+                    "global_leaf_directory_reads": "0",
+                    "global_leaf_directory_bytes": "0",
+                    "global_leaf_pages_read": "0",
+                    "global_leaf_page_bytes": "0",
+                    "global_leaf_waves": "0",
+                    "global_leaf_continuations": "0",
+                    "global_leaf_exact_scores": "0",
+                },
+                "case",
+            )
 
     def test_rejects_raw_sample_identity_that_disagrees_with_schedule(self) -> None:
         row = {

@@ -15,6 +15,13 @@ class PhysicalGetAdmissionResultsTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_historical_validator_rejects_v10_schema_rows(self) -> None:
+        with self.assertRaisesRegex(validator.ValidationError, "cannot be compared"):
+            validator.validate_historical_benchmark_schema(
+                [{"schema_version": "borsuk-production-bench-v10"}],
+                self.root / "bench_concurrency.csv",
+            )
+
     @staticmethod
     def write_csv(path: Path, header: list[str], rows: list[list[object]]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

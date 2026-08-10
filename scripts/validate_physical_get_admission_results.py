@@ -224,6 +224,17 @@ def validate_summary_against_samples(
         )
 
 
+def validate_historical_benchmark_schema(
+    rows: list[dict[str, str]], path: Path
+) -> None:
+    require(bool(rows), f"{path} contains no benchmark rows")
+    require(
+        all("schema_version" not in row for row in rows),
+        f"{path} uses a versioned production benchmark schema; the frozen unversioned V9 "
+        "campaign cannot be compared with V10 output",
+    )
+
+
 def validate(root: Path, *, verify_payload_hashes: bool = True) -> dict[str, object]:
     # This guard must remain before every measurement CSV read.
     validate_terminal_markers(root)
@@ -294,6 +305,12 @@ def validate(root: Path, *, verify_payload_hashes: bool = True) -> dict[str, obj
                 raise ValidationError(str(error)) from error
             summaries = read_csv(case_root / "bench_concurrency.csv")
             samples = read_csv(case_root / "bench_concurrency_samples.csv")
+            validate_historical_benchmark_schema(
+                summaries, case_root / "bench_concurrency.csv"
+            )
+            validate_historical_benchmark_schema(
+                samples, case_root / "bench_concurrency_samples.csv"
+            )
             resources = read_csv(case_root / "resources.csv")
             arm_peak_rss[arm] = max(
                 arm_peak_rss[arm],

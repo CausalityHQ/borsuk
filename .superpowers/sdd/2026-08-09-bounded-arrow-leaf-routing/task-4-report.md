@@ -141,3 +141,74 @@ the explicit segment engine because the exact fringe is nonempty. A follow-on
 incremental/resident-write design should materialize those rows into V10 leaves
 without waiting for the threshold. Threshold-sized drains already publish and
 query authenticated V10 base/delta leaves.
+
+## Fix round 1/5 — latency, refresh/cache, and benchmark schema
+
+### Root causes and repairs
+
+1. The resident V10 scheduler bypassed the segment path's stop helper, so it
+   could begin directory reads, the initial page wave, and tombstone-driven
+   continuations after `max_latency_ms` had expired. V10 now checks the shared
+   absolute deadline before every base/delta directory wave, before the initial
+   leaf wave, and before every continuation. A wave that crosses the deadline
+   makes `MaxLatency` terminal even if it completed `k`; latency takes precedence
+   over `MaxBytes`, `MaxSegments`, and `Complete`.
+2. Resident descriptor/root setup used an unlocked-miss, strong, unbounded
+   `HashMap`. Refresh also swapped manifests without validating the next base
+   and delta references. It is now a four-generation recency cache with the
+   existing `InFlightReads` primitive coalescing descriptor plus three-root
+   setup. Values are immutable `Arc`s, so eviction cannot invalidate an active
+   query and unpinned evicted generations are reclaimable. Refresh validates
+   and preloads target-manifest base/delta references for primary and named
+   modalities before any manifest handoff; target element type is passed
+   explicitly because `self.manifest` is intentionally still the old snapshot.
+3. Production CSVs were unversioned and still emitted literal-zero graph
+   configuration plus removed graph/scan telemetry. Query-related outputs now
+   declare `borsuk-production-bench-v10` and emit V10 directory reads/bytes,
+   page reads/bytes, waves, continuations, exact scores, and backing reads/bytes.
+   Compatibility columns and `graph_config_columns` were deleted. The
+   storage-layout assembler accepts only this exact schema. The immutable V9
+   physical-GET validator explicitly rejects versioned V10 rows so historical
+   V9 results cannot be compared as though they came from this architecture.
+
+### Strict TDD evidence
+
+- Latency RED (the first command accidentally omitted `--locked`, with no
+  dependency resolution change): 0 passed / 1 failed / 43 filtered. The delayed
+  store returned a hit from a continuation scheduled after the deadline.
+  GREEN with `--locked`: 1 passed / 43 filtered; zero post-deadline
+  continuations and exactly one bundle GET.
+- Bounded/single-flight cache RED: compilation failed because
+  `BoundedResidentCache` did not exist. GREEN: 1 passed / 554 filtered, proving
+  one loader invocation for concurrent callers, the hard retention bound,
+  active-`Arc` safety, and reclaim after eviction/drop.
+- Transactional refresh RED with preload removed: 0 passed / 1 failed / 44
+  filtered because a corrupted next descriptor was published. GREEN: 1 passed /
+  44 filtered; the refresh errors while retaining/querying the old manifest.
+- Concurrent refresh GREEN: 1 passed / 45 filtered. Refresh performs exactly
+  one new descriptor plus three root GETs; two concurrent first queries perform
+  zero descriptor/root setup GETs, and a pre-refresh clone still queries its old
+  V10 snapshot.
+- Benchmark RED: seven missing V10 `QuerySample` fields. GREEN: focused field
+  test 1 passed / 41 filtered, header test 1 passed / 41 filtered, and the full
+  `production_bench` example target 42 passed. All six row formats have the same
+  arity as their respective headers.
+- Focused Python consumers: storage-layout assembler 9 passed; frozen
+  physical-GET validator 6 passed.
+- Existing V10 continuation regression: 1 passed / 554 filtered.
+
+### Fresh verification
+
+- `cargo --locked fmt --all -- --check` first found formatting differences;
+  `cargo --locked fmt --all` applied them. `git diff --check` is clean.
+- `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`:
+  passed with no issues.
+- `cargo test --locked --workspace --all-targets --all-features --no-run`:
+  exited 0 with no diagnostics. This was compilation only; no broad test suite
+  or qualification arm was run in the fix round.
+
+### Remaining concern
+
+The V10 schema is a deliberate break. Existing unversioned V9 campaign
+artifacts remain immutable historical evidence and are intentionally rejected
+by current-schema consumers; they must not be used for old/new comparisons.

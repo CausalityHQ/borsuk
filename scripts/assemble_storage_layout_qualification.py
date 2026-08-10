@@ -234,14 +234,27 @@ def _case_metrics(result_root: Path, case_id: str) -> dict[str, Any]:
 
 
 def _validate_segment_path(row: dict[str, str], case_id: str) -> None:
+    if row.get("schema_version") != "borsuk-production-bench-v10":
+        raise ValueError(f"unsupported production benchmark schema for {case_id}")
     try:
-        global_scan_chunks = int(row["global_scan_chunks"])
         segments_searched = int(row["segments_searched"])
+        global_leaf_counters = {
+            key: int(row[key])
+            for key in (
+                "global_leaf_directory_reads",
+                "global_leaf_directory_bytes",
+                "global_leaf_pages_read",
+                "global_leaf_page_bytes",
+                "global_leaf_waves",
+                "global_leaf_continuations",
+                "global_leaf_exact_scores",
+            )
+        }
     except (KeyError, ValueError) as error:
         raise ValueError(f"missing segment-path proof for {case_id}") from error
-    if global_scan_chunks != 0:
+    if any(global_leaf_counters.values()):
         raise ValueError(
-            f"global-PQ sample cannot qualify normal segments for {case_id}"
+            f"global-leaf sample cannot qualify normal segments for {case_id}"
         )
     if segments_searched <= 0:
         raise ValueError(f"normal-segment sample searched no segments for {case_id}")

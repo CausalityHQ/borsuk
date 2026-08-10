@@ -325,7 +325,7 @@ struct SearchExecution {
     vectors: Vec<Vec<f32>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct GlobalLeafDirectoryLoad {
     pages: Vec<crate::global_leaf::GlobalLeafPageRef>,
     reads: usize,
@@ -1706,9 +1706,98 @@ type LogicalCellQuantizerCache = Arc<Mutex<Option<(u64, Arc<CentroidHnsw>)>>>;
 type PersistedQuantizerCache =
     Arc<Mutex<Option<(String, Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>)>>>;
 
+const RESIDENT_GLOBAL_PQ_CACHE_GENERATIONS: usize = 4;
+
+#[derive(Debug)]
+struct BoundedResidentCache<T> {
+    state: Mutex<BoundedResidentCacheState<T>>,
+    inflight: InFlightReads<T>,
+    max_entries: usize,
+}
+
+#[derive(Debug)]
+struct BoundedResidentCacheState<T> {
+    entries: HashMap<String, Arc<T>>,
+    order: VecDeque<String>,
+}
+
+impl<T> Default for BoundedResidentCacheState<T> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+}
+
+impl<T> BoundedResidentCache<T> {
+    fn new(max_entries: usize) -> Self {
+        assert!(max_entries > 0, "resident cache requires a positive bound");
+        Self {
+            state: Mutex::new(BoundedResidentCacheState::default()),
+            inflight: InFlightReads::default(),
+            max_entries,
+        }
+    }
+
+    fn get(&self, checksum: &str) -> Option<Arc<T>> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let value = state.entries.get(checksum).cloned()?;
+        state.order.retain(|key| key != checksum);
+        state.order.push_back(checksum.to_string());
+        Some(value)
+    }
+
+    fn insert(&self, checksum: String, value: Arc<T>) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.order.retain(|key| key != &checksum);
+        state.entries.insert(checksum.clone(), value);
+        state.order.push_back(checksum);
+        while state.entries.len() > self.max_entries {
+            let oldest = state
+                .order
+                .pop_front()
+                .expect("non-empty resident cache has an eviction candidate");
+            state.entries.remove(&oldest);
+        }
+    }
+
+    fn load<F>(&self, checksum: &str, loader: F) -> Result<Arc<T>>
+    where
+        F: FnOnce() -> Result<T>,
+    {
+        if let Some(value) = self.get(checksum) {
+            return Ok(value);
+        }
+        let (loaded, _, _) = self
+            .inflight
+            .load(checksum, || loader().map(|value| (value, 0)))?;
+        if let Some(value) = self.get(checksum) {
+            return Ok(value);
+        }
+        self.insert(checksum.to_string(), Arc::clone(&loaded));
+        Ok(loaded)
+    }
+
+    fn clear(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.entries.clear();
+        state.order.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .entries
+            .len()
+    }
+}
+
 /// Loaded descriptor/codebook state keyed by content checksum. Base and delta
-/// layers share this cache; active summary resolution remains snapshot-local.
-type ResidentGlobalPqCache = Arc<Mutex<HashMap<String, Arc<ResidentGlobalPq>>>>;
+/// layers share bounded retention and single-flight setup reads.
+type ResidentGlobalPqCache = Arc<BoundedResidentCache<ResidentGlobalPq>>;
 /// Resident immutable base plus the materialized segments not covered by it.
 type LoadedResidentGlobalPq = (Arc<ResidentGlobalPq>, usize, Arc<Vec<SegmentSummary>>);
 
@@ -2273,10 +2362,7 @@ impl BorsukIndex {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
         };
         if global_delta_updated {
-            self.resident_global_pq
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clear();
+            self.resident_global_pq.clear();
         }
         Ok((committed_sequences, self.manifest.version))
     }
@@ -3049,7 +3135,9 @@ impl BorsukIndex {
             coarse_quantizer: Arc::new(Mutex::new(None)),
             logical_cell_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
-            resident_global_pq: Arc::new(Mutex::new(HashMap::new())),
+            resident_global_pq: Arc::new(BoundedResidentCache::new(
+                RESIDENT_GLOBAL_PQ_CACHE_GENERATIONS,
+            )),
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: read_runtime.admission.clone(),
             decode_admission: read_runtime.decode_admission.clone(),
@@ -3356,7 +3444,9 @@ impl BorsukIndex {
             coarse_quantizer: Arc::new(Mutex::new(None)),
             logical_cell_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
-            resident_global_pq: Arc::new(Mutex::new(HashMap::new())),
+            resident_global_pq: Arc::new(BoundedResidentCache::new(
+                RESIDENT_GLOBAL_PQ_CACHE_GENERATIONS,
+            )),
             resident_lexical_roots: Arc::new(Mutex::new(None)),
             admission: read_runtime.admission.clone(),
             decode_admission: read_runtime.decode_admission.clone(),
@@ -3922,6 +4012,7 @@ impl BorsukIndex {
         let latest_lane_log_snapshot = self.read_lane_log_snapshot_if_changed(latest.version)?;
         self.prepare_manifest_mutation_frontier(&latest)?;
         self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
+        self.preload_resident_global_pq_for_manifest(&latest)?;
         latest.cell_wal_visible_runs = cell_wal_run_count(&latest_cell_wal_snapshot);
         latest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&latest_cell_wal_snapshot);
@@ -3954,6 +4045,7 @@ impl BorsukIndex {
             )?;
             child.prepare_manifest_mutation_frontier(&manifest)?;
             child.prepare_cell_mutation_frontier(&cell_wal_snapshot)?;
+            child.preload_resident_global_pq_for_manifest(&manifest)?;
             manifest.cell_wal_visible_runs = cell_wal_run_count(&cell_wal_snapshot);
             manifest.cell_wal_visible_tombstone_runs =
                 cell_wal_tombstone_run_count(&cell_wal_snapshot);
@@ -12643,15 +12735,31 @@ impl BorsukIndex {
         &self,
         global_ref: &GlobalPqRef,
     ) -> Result<Arc<ResidentGlobalPq>> {
-        let cached = self
-            .resident_global_pq
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(&global_ref.checksum)
-            .cloned();
-        let index = if let Some(index) = cached {
-            index
-        } else {
+        self.load_resident_global_pq_reference_for_element_type(
+            global_ref,
+            self.manifest.build_config.vector_element_type,
+        )
+    }
+
+    fn preload_resident_global_pq_for_manifest(&self, manifest: &Manifest) -> Result<()> {
+        let Some(global_ref) = manifest.global_pq_ref.as_ref() else {
+            return Ok(());
+        };
+        let element_type = manifest.build_config.vector_element_type;
+        let _ =
+            self.load_resident_global_pq_reference_for_element_type(global_ref, element_type)?;
+        if let Some(delta) = global_ref.delta.as_deref() {
+            let _ = self.load_resident_global_pq_reference_for_element_type(delta, element_type)?;
+        }
+        Ok(())
+    }
+
+    fn load_resident_global_pq_reference_for_element_type(
+        &self,
+        global_ref: &GlobalPqRef,
+        expected_element_type: crate::VectorElementType,
+    ) -> Result<Arc<ResidentGlobalPq>> {
+        self.resident_global_pq.load(&global_ref.checksum, || {
             let read = self.storage.read_bytes_with_cache_status_and_checksum(
                 &global_ref.path,
                 &global_ref.checksum,
@@ -12659,8 +12767,7 @@ impl BorsukIndex {
             let descriptor = GlobalPqDescriptor::decode(&read.bytes)?;
             if descriptor.vectors() != global_ref.vectors
                 || descriptor.subspaces() != global_ref.subspaces
-                || descriptor.vector_element_type()
-                    != self.manifest.build_config.vector_element_type
+                || descriptor.vector_element_type() != expected_element_type
             {
                 return Err(BorsukError::InvalidStorage(
                     "resident global PQ reference does not match its descriptor".to_string(),
@@ -12686,7 +12793,7 @@ impl BorsukIndex {
                 &shard_bytes,
                 &bundle_bytes,
             )?;
-            let index = Arc::new(ResidentGlobalPq::load(descriptor, root)?);
+            let index = ResidentGlobalPq::load(descriptor, root)?;
             if index.len() != global_ref.vectors
                 || index.code_bytes_per_vector() != global_ref.subspaces
             {
@@ -12694,13 +12801,8 @@ impl BorsukIndex {
                     "resident global PQ reference does not match its artifact".to_string(),
                 ));
             }
-            self.resident_global_pq
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .insert(global_ref.checksum.clone(), Arc::clone(&index));
-            index
-        };
-        Ok(index)
+            Ok(index)
+        })
     }
 
     fn load_selected_global_leaf_directory(
@@ -13013,13 +13115,23 @@ impl BorsukIndex {
         };
         let base_cells =
             base.nearest_cells(&pq_query, global_ref.probes.max(1).min(base.cell_count()))?;
-        let base_directory = self.load_selected_global_leaf_directory(&base, &base_cells)?;
+        let mut latency_limited = resident_v10_latency_expired(options, started);
+        let base_directory = if latency_limited {
+            GlobalLeafDirectoryLoad::default()
+        } else {
+            self.load_selected_global_leaf_directory(&base, &base_cells)?
+        };
         let (delta_cells, delta_directory) =
             if let (Some(reference), Some(index)) = (delta_reference, delta.as_deref()) {
                 let cells = index
                     .nearest_cells(&pq_query, reference.probes.max(1).min(index.cell_count()))?;
-                let directory = self.load_selected_global_leaf_directory(index, &cells)?;
-                (cells, Some(directory))
+                if resident_v10_latency_expired(options, started) {
+                    latency_limited = true;
+                    (cells, None)
+                } else {
+                    let directory = self.load_selected_global_leaf_directory(index, &cells)?;
+                    (cells, Some(directory))
+                }
             } else {
                 (Vec::new(), None)
             };
@@ -13116,22 +13228,39 @@ impl BorsukIndex {
             .into_iter()
             .map(|index| routed[index].clone())
             .collect::<Vec<_>>();
-        let mut fetched_pages = initial.len();
-        let mut logical_page_bytes = initial
-            .iter()
-            .map(|candidate| u64::from(candidate.page.batch_bytes))
-            .sum::<u64>();
-        let (mut decoded, initial_bytes) =
-            self.fetch_global_leaf_wave(&initial, &base, delta.as_deref())?;
-        if initial_bytes != logical_page_bytes {
-            return Err(BorsukError::InvalidStorage(
-                "global leaf coalescing changed the logical encoded-byte budget".to_string(),
-            ));
-        }
-        let mut waves = usize::from(!initial.is_empty());
+        let mut fetched_pages = 0_usize;
+        let mut logical_page_bytes = 0_u64;
+        let mut waves = 0_usize;
         let mut continuations = 0_usize;
+        let mut decoded = Vec::new();
+        if !initial.is_empty() {
+            if resident_v10_latency_expired(options, started) {
+                latency_limited = true;
+            } else {
+                let planned_bytes = initial
+                    .iter()
+                    .map(|candidate| u64::from(candidate.page.batch_bytes))
+                    .sum::<u64>();
+                let (rows, initial_bytes) =
+                    self.fetch_global_leaf_wave(&initial, &base, delta.as_deref())?;
+                if initial_bytes != planned_bytes {
+                    return Err(BorsukError::InvalidStorage(
+                        "global leaf coalescing changed the logical encoded-byte budget"
+                            .to_string(),
+                    ));
+                }
+                fetched_pages = initial.len();
+                logical_page_bytes = planned_bytes;
+                waves = 1;
+                decoded = rows;
+            }
+        }
         let mut live = self.resolve_global_leaf_rows(&decoded, mutation_states)?;
         while live.len() < options.k && !remaining.is_empty() {
+            if resident_v10_latency_expired(options, started) {
+                latency_limited = true;
+                break;
+            }
             let missing = options.k - live.len();
             let mut continuation = Vec::new();
             let mut continuation_rows = 0_usize;
@@ -13160,6 +13289,7 @@ impl BorsukIndex {
             waves = waves.saturating_add(1);
             live = self.resolve_global_leaf_rows(&decoded, mutation_states)?;
         }
+        latency_limited |= resident_v10_latency_expired(options, started);
         let records_considered = decoded.len();
         let mut scored = live
             .into_iter()
@@ -13194,7 +13324,9 @@ impl BorsukIndex {
         } else {
             Vec::new()
         };
-        let termination_reason = if hits.len() < options.k && byte_budget_limited {
+        let termination_reason = if latency_limited {
+            SearchTerminationReason::MaxLatency
+        } else if hits.len() < options.k && byte_budget_limited {
             SearchTerminationReason::MaxBytes
         } else if hits.len() < options.k {
             SearchTerminationReason::MaxSegments
@@ -13884,10 +14016,7 @@ impl BorsukIndex {
         self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
             manifest, &previous,
         )?;
-        self.resident_global_pq
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clear();
+        self.resident_global_pq.clear();
         Ok(true)
     }
 
@@ -14004,11 +14133,7 @@ impl BorsukIndex {
             self.manifest = self
                 .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         }
-        let mut cache = self
-            .resident_global_pq
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        cache.clear();
+        self.resident_global_pq.clear();
         Ok(())
     }
 
@@ -23039,6 +23164,17 @@ fn search_stop_reason_before_segment(
     }
 }
 
+fn resident_v10_latency_expired(options: &SearchOptions, started: Instant) -> bool {
+    let SearchMode::Approx {
+        max_latency_ms: Some(limit),
+        ..
+    } = &options.mode
+    else {
+        return false;
+    };
+    started.elapsed().as_millis() >= u128::from(*limit)
+}
+
 /// Restrict a recursive search layer to the request budget its predecessors did
 /// not consume. Returns the first exhausted hard boundary instead of creating
 /// an invalid zero-valued child option.
@@ -23295,6 +23431,41 @@ mod tests {
         });
         assert_eq!(*first, 11);
         assert_eq!(builds.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn resident_generation_cache_is_single_flight_bounded_and_arc_safe() {
+        let cache = Arc::new(BoundedResidentCache::<u64>::new(2));
+        let loads = Arc::new(AtomicUsize::new(0));
+        thread::scope(|scope| {
+            for _ in 0..2 {
+                let cache = Arc::clone(&cache);
+                let loads = Arc::clone(&loads);
+                scope.spawn(move || {
+                    let loaded = cache
+                        .load("one", || {
+                            loads.fetch_add(1, AtomicOrdering::Relaxed);
+                            thread::sleep(Duration::from_millis(25));
+                            Ok(1_u64)
+                        })
+                        .unwrap();
+                    assert_eq!(*loaded, 1);
+                });
+            }
+        });
+        assert_eq!(loads.load(AtomicOrdering::Relaxed), 1);
+
+        let pinned = cache.get("one").unwrap();
+        let reclaimable = Arc::downgrade(&pinned);
+        cache.insert("two".to_string(), Arc::new(2));
+        cache.insert("three".to_string(), Arc::new(3));
+        assert_eq!(cache.len(), 2);
+        assert_eq!(*pinned, 1, "eviction invalidated a live snapshot pin");
+        drop(pinned);
+        assert!(
+            reclaimable.upgrade().is_none(),
+            "evicted and unpinned generation was not reclaimed"
+        );
     }
 
     #[test]

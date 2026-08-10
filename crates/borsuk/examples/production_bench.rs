@@ -58,12 +58,13 @@ const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
 const WRITE_FRACTION_DENOMINATOR: usize = 20;
 const CACHE_COVERAGE_COHORT_QUERIES: usize = 40;
 const CACHE_COVERAGE_REPETITIONS: usize = 4;
-const RECALL_LATENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,execution_engine,phase,mode,nprobe,max_candidates,recall_at_10,samples,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries";
-const QUERY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_graph_chunks,global_scan_chunks,graph_bytes_read,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
-const CACHE_STATE_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
-const CONCURRENCY_HEADER: &str = "scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,graph_degree,graph_construction_ef,cache_execution,global_graph_cache_max_bytes,cache_profile,target_cache_coverage_percent,execution_engine,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_graph_candidates_added,avg_global_graph_chunks,avg_global_scan_chunks,avg_global_graph_fraction,avg_graph_bytes_read,avg_bytes_read";
-const CONCURRENCY_SAMPLE_HEADER: &str = "scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
-const CACHE_COVERAGE_HEADER: &str = "scan_codec,cache_execution,global_graph_cache_max_bytes,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_graph_chunks,global_scan_chunks,global_graph_fraction,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,graph_bytes_read,network_gets";
+const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v10";
+const RECALL_LATENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,mode,nprobe,max_candidates,recall_at_10,samples,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries";
+const QUERY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
+const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
+const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,cache_profile,target_cache_coverage_percent,execution_engine,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read";
+const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
+const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,network_gets";
 const BUILD_HEADER: &str = "vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
 const WRITE_COST_HEADER: &str = "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
 const WRITE_SAMPLE_HEADER: &str =
@@ -212,10 +213,15 @@ struct QuerySummary {
     bytes_read: u128,
     billable_requests: u128,
     object_cache_misses: u128,
-    graph_candidates_added: u128,
-    global_graph_chunks_searched: u128,
-    global_scan_chunks_searched: u128,
-    graph_bytes_read: u128,
+    global_leaf_directory_reads: u128,
+    global_leaf_directory_bytes: u128,
+    global_leaf_pages_read: u128,
+    global_leaf_page_bytes: u128,
+    global_leaf_waves: u128,
+    global_leaf_continuations: u128,
+    global_leaf_exact_scores: u128,
+    backing_reads: u128,
+    backing_bytes_read: u128,
     execution_engines: BTreeSet<String>,
 }
 
@@ -224,9 +230,13 @@ struct QuerySample {
     recall: Option<f32>,
     execution_engine: String,
     segments_searched: usize,
-    global_graph_chunks: usize,
-    global_scan_chunks: usize,
-    graph_bytes_read: u64,
+    global_leaf_directory_reads: usize,
+    global_leaf_directory_bytes: u64,
+    global_leaf_pages_read: usize,
+    global_leaf_page_bytes: u64,
+    global_leaf_waves: usize,
+    global_leaf_continuations: usize,
+    global_leaf_exact_scores: usize,
     bytes_read: u64,
     decoded_cache_hits: usize,
     disk_cache_reads: u64,
@@ -257,10 +267,13 @@ struct ConcurrencyMeasurement {
     disk_cache_bytes_read: u64,
     backing_bytes_read: u64,
     network_gets: u64,
-    graph_candidates_added: usize,
-    global_graph_chunks_searched: usize,
-    global_scan_chunks_searched: usize,
-    graph_bytes_read: u64,
+    global_leaf_directory_reads: usize,
+    global_leaf_directory_bytes: u64,
+    global_leaf_pages_read: usize,
+    global_leaf_page_bytes: u64,
+    global_leaf_waves: usize,
+    global_leaf_continuations: usize,
+    global_leaf_exact_scores: usize,
     execution_engine: String,
     collection_resident_bytes: u64,
     retained_bytes: u64,
@@ -285,9 +298,13 @@ impl QuerySummary {
             recall,
             execution_engine: execution_engine_label(report).to_string(),
             segments_searched: report.segments_searched,
-            global_graph_chunks: report.global_graph_chunks_searched,
-            global_scan_chunks: report.global_scan_chunks_searched,
-            graph_bytes_read: report.graph_bytes_read,
+            global_leaf_directory_reads: report.global_leaf_directory_reads,
+            global_leaf_directory_bytes: report.global_leaf_directory_bytes,
+            global_leaf_pages_read: report.global_leaf_pages_read,
+            global_leaf_page_bytes: report.global_leaf_page_bytes,
+            global_leaf_waves: report.global_leaf_waves,
+            global_leaf_continuations: report.global_leaf_continuations,
+            global_leaf_exact_scores: report.global_leaf_exact_scores,
             bytes_read: measured_bytes_read,
             decoded_cache_hits: report.decoded_cache_hits,
             disk_cache_reads: report.disk_cache_reads,
@@ -311,10 +328,15 @@ impl QuerySummary {
         self.billable_requests +=
             u128::from(report.requests.gets.saturating_add(report.requests.heads));
         self.object_cache_misses += report.object_cache_misses as u128;
-        self.graph_candidates_added += report.graph_candidates_added as u128;
-        self.global_graph_chunks_searched += report.global_graph_chunks_searched as u128;
-        self.global_scan_chunks_searched += report.global_scan_chunks_searched as u128;
-        self.graph_bytes_read += u128::from(report.graph_bytes_read);
+        self.global_leaf_directory_reads += report.global_leaf_directory_reads as u128;
+        self.global_leaf_directory_bytes += u128::from(report.global_leaf_directory_bytes);
+        self.global_leaf_pages_read += report.global_leaf_pages_read as u128;
+        self.global_leaf_page_bytes += u128::from(report.global_leaf_page_bytes);
+        self.global_leaf_waves += report.global_leaf_waves as u128;
+        self.global_leaf_continuations += report.global_leaf_continuations as u128;
+        self.global_leaf_exact_scores += report.global_leaf_exact_scores as u128;
+        self.backing_reads += u128::from(report.backing_reads);
+        self.backing_bytes_read += u128::from(report.backing_bytes_read);
         self.execution_engines
             .insert(execution_engine_label(report).to_string());
     }
@@ -331,10 +353,15 @@ impl QuerySummary {
         self.bytes_read += other.bytes_read;
         self.billable_requests += other.billable_requests;
         self.object_cache_misses += other.object_cache_misses;
-        self.graph_candidates_added += other.graph_candidates_added;
-        self.global_graph_chunks_searched += other.global_graph_chunks_searched;
-        self.global_scan_chunks_searched += other.global_scan_chunks_searched;
-        self.graph_bytes_read += other.graph_bytes_read;
+        self.global_leaf_directory_reads += other.global_leaf_directory_reads;
+        self.global_leaf_directory_bytes += other.global_leaf_directory_bytes;
+        self.global_leaf_pages_read += other.global_leaf_pages_read;
+        self.global_leaf_page_bytes += other.global_leaf_page_bytes;
+        self.global_leaf_waves += other.global_leaf_waves;
+        self.global_leaf_continuations += other.global_leaf_continuations;
+        self.global_leaf_exact_scores += other.global_leaf_exact_scores;
+        self.backing_reads += other.backing_reads;
+        self.backing_bytes_read += other.backing_bytes_read;
         self.execution_engines.append(&mut other.execution_engines);
     }
 
@@ -358,31 +385,32 @@ impl QuerySummary {
         mean(self.object_cache_misses as f64, self.count())
     }
 
-    fn average_graph_candidates_added(&self) -> f64 {
-        mean(self.graph_candidates_added as f64, self.count())
+    fn average_global_leaf_directory_reads(&self) -> f64 {
+        mean(self.global_leaf_directory_reads as f64, self.count())
     }
-
-    fn average_global_graph_chunks(&self) -> f64 {
-        mean(self.global_graph_chunks_searched as f64, self.count())
+    fn average_global_leaf_directory_bytes(&self) -> f64 {
+        mean(self.global_leaf_directory_bytes as f64, self.count())
     }
-
-    fn average_global_scan_chunks(&self) -> f64 {
-        mean(self.global_scan_chunks_searched as f64, self.count())
+    fn average_global_leaf_pages_read(&self) -> f64 {
+        mean(self.global_leaf_pages_read as f64, self.count())
     }
-
-    fn global_graph_fraction(&self) -> f64 {
-        let total = self
-            .global_graph_chunks_searched
-            .saturating_add(self.global_scan_chunks_searched);
-        if total == 0 {
-            0.0
-        } else {
-            self.global_graph_chunks_searched as f64 / total as f64
-        }
+    fn average_global_leaf_page_bytes(&self) -> f64 {
+        mean(self.global_leaf_page_bytes as f64, self.count())
     }
-
-    fn average_graph_bytes_read(&self) -> f64 {
-        mean(self.graph_bytes_read as f64, self.count())
+    fn average_global_leaf_waves(&self) -> f64 {
+        mean(self.global_leaf_waves as f64, self.count())
+    }
+    fn average_global_leaf_continuations(&self) -> f64 {
+        mean(self.global_leaf_continuations as f64, self.count())
+    }
+    fn average_global_leaf_exact_scores(&self) -> f64 {
+        mean(self.global_leaf_exact_scores as f64, self.count())
+    }
+    fn average_backing_reads(&self) -> f64 {
+        mean(self.backing_reads as f64, self.count())
+    }
+    fn average_backing_bytes_read(&self) -> f64 {
+        mean(self.backing_bytes_read as f64, self.count())
     }
 
     fn dollars_per_million_queries(&self) -> f64 {
@@ -1786,7 +1814,7 @@ fn write_query_samples(
         })?;
         writeln!(
             writer,
-            "{},{},{phase},{mode},{nprobe},{max_candidates},{sample_index},{query_source_index},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{phase},{mode},{nprobe},{max_candidates},{sample_index},{query_source_index},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             config.global_scan_codec,
             config.cache_execution,
             sample.latency_ms,
@@ -1796,9 +1824,13 @@ fn write_query_samples(
                 .unwrap_or_default(),
             sample.execution_engine,
             sample.segments_searched,
-            sample.global_graph_chunks,
-            sample.global_scan_chunks,
-            sample.graph_bytes_read,
+            sample.global_leaf_directory_reads,
+            sample.global_leaf_directory_bytes,
+            sample.global_leaf_pages_read,
+            sample.global_leaf_page_bytes,
+            sample.global_leaf_waves,
+            sample.global_leaf_continuations,
+            sample.global_leaf_exact_scores,
             sample.bytes_read,
             sample.decoded_cache_hits,
             sample.disk_cache_reads,
@@ -1982,16 +2014,14 @@ fn write_recall_row(
     max_candidates: usize,
     summary: &QuerySummary,
 ) -> io::Result<()> {
-    let (graph_degree, graph_construction_ef) = graph_config_columns(config);
     writeln!(
         writer,
-        "{},{},{},{},{graph_degree},{graph_construction_ef},{},{},{},{phase},{mode},{routing_page_overfetch},{max_candidates},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+        "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{},{},{},{},{phase},{mode},{routing_page_overfetch},{max_candidates},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
         config.global_scan_codec,
         config.global_turboquant_bits,
         config.global_turboquant_qjl_bits,
         config.global_turboquant_shards,
         config.cache_execution,
-        0,
         summary.execution_engine(),
         summary.recall(),
         summary.count(),
@@ -2001,11 +2031,15 @@ fn write_recall_row(
         percentile(&summary.latencies_ms, 0.95),
         percentile(&summary.latencies_ms, 0.99),
         maximum(&summary.latencies_ms),
-        summary.average_graph_candidates_added(),
-        summary.average_global_graph_chunks(),
-        summary.average_global_scan_chunks(),
-        summary.global_graph_fraction(),
-        summary.average_graph_bytes_read(),
+        summary.average_global_leaf_directory_reads(),
+        summary.average_global_leaf_directory_bytes(),
+        summary.average_global_leaf_pages_read(),
+        summary.average_global_leaf_page_bytes(),
+        summary.average_global_leaf_waves(),
+        summary.average_global_leaf_continuations(),
+        summary.average_global_leaf_exact_scores(),
+        summary.average_backing_reads(),
+        summary.average_backing_bytes_read(),
         summary.average_bytes(),
         summary.average_requests(),
         summary.dollars_per_million_queries()
@@ -2173,16 +2207,14 @@ fn write_cache_state_row(
     phase: &str,
     summary: &QuerySummary,
 ) -> io::Result<()> {
-    let (graph_degree, graph_construction_ef) = graph_config_columns(config);
     writeln!(
         writer,
-        "{},{},{},{},{graph_degree},{graph_construction_ef},{},{},{},{phase},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+        "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{},{},{},{},{phase},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
         config.global_scan_codec,
         config.global_turboquant_bits,
         config.global_turboquant_qjl_bits,
         config.global_turboquant_shards,
         config.cache_execution,
-        0,
         summary.execution_engine(),
         summary.count(),
         summary.recall(),
@@ -2192,11 +2224,15 @@ fn write_cache_state_row(
         percentile(&summary.latencies_ms, 0.95),
         percentile(&summary.latencies_ms, 0.99),
         maximum(&summary.latencies_ms),
-        summary.average_graph_candidates_added(),
-        summary.average_global_graph_chunks(),
-        summary.average_global_scan_chunks(),
-        summary.global_graph_fraction(),
-        summary.average_graph_bytes_read(),
+        summary.average_global_leaf_directory_reads(),
+        summary.average_global_leaf_directory_bytes(),
+        summary.average_global_leaf_pages_read(),
+        summary.average_global_leaf_page_bytes(),
+        summary.average_global_leaf_waves(),
+        summary.average_global_leaf_continuations(),
+        summary.average_global_leaf_exact_scores(),
+        summary.average_backing_reads(),
+        summary.average_backing_bytes_read(),
         summary.average_bytes(),
         summary.average_cache_misses(),
         summary.average_requests(),
@@ -2244,7 +2280,6 @@ fn write_concurrency_csv(
     let samples_path = config.output_dir.join("bench_concurrency_samples.csv");
     let mut samples_writer = csv_writer(&samples_path)?;
     writeln!(samples_writer, "{CONCURRENCY_SAMPLE_HEADER}")?;
-    let (graph_degree, graph_construction_ef) = graph_config_columns(config);
     for &workers in &config.concurrency {
         let query_indices = prepare_concurrency_cache_state(config, dataset, index)?;
         let ground_truth = Arc::new(dataset.ground_truth.clone());
@@ -2303,10 +2338,13 @@ fn write_concurrency_csv(
                                 .requests
                                 .gets
                                 .saturating_add(report.requests.heads),
-                            graph_candidates_added: report.graph_candidates_added,
-                            global_graph_chunks_searched: report.global_graph_chunks_searched,
-                            global_scan_chunks_searched: report.global_scan_chunks_searched,
-                            graph_bytes_read: report.graph_bytes_read,
+                            global_leaf_directory_reads: report.global_leaf_directory_reads,
+                            global_leaf_directory_bytes: report.global_leaf_directory_bytes,
+                            global_leaf_pages_read: report.global_leaf_pages_read,
+                            global_leaf_page_bytes: report.global_leaf_page_bytes,
+                            global_leaf_waves: report.global_leaf_waves,
+                            global_leaf_continuations: report.global_leaf_continuations,
+                            global_leaf_exact_scores: report.global_leaf_exact_scores,
                             execution_engine: execution_engine_label(&report).to_string(),
                             collection_resident_bytes: report.collection_resident_bytes,
                             retained_bytes: report.retained_bytes,
@@ -2339,17 +2377,27 @@ fn write_concurrency_csv(
             .map(|measurement| measurement.latency_ms)
             .collect::<Vec<_>>();
         let mut bytes_read = 0_u128;
-        let mut graph_candidates_added = 0_u128;
-        let mut global_graph_chunks_searched = 0_u128;
-        let mut global_scan_chunks_searched = 0_u128;
-        let mut graph_bytes_read = 0_u128;
+        let mut global_leaf_directory_reads = 0_u128;
+        let mut global_leaf_directory_bytes = 0_u128;
+        let mut global_leaf_pages_read = 0_u128;
+        let mut global_leaf_page_bytes = 0_u128;
+        let mut global_leaf_waves = 0_u128;
+        let mut global_leaf_continuations = 0_u128;
+        let mut global_leaf_exact_scores = 0_u128;
+        let mut backing_reads = 0_u128;
+        let mut backing_bytes_read = 0_u128;
         let mut execution_engines = BTreeSet::new();
         for measurement in &measurements {
             bytes_read += u128::from(measurement.bytes_read);
-            graph_candidates_added += measurement.graph_candidates_added as u128;
-            global_graph_chunks_searched += measurement.global_graph_chunks_searched as u128;
-            global_scan_chunks_searched += measurement.global_scan_chunks_searched as u128;
-            graph_bytes_read += u128::from(measurement.graph_bytes_read);
+            global_leaf_directory_reads += measurement.global_leaf_directory_reads as u128;
+            global_leaf_directory_bytes += u128::from(measurement.global_leaf_directory_bytes);
+            global_leaf_pages_read += measurement.global_leaf_pages_read as u128;
+            global_leaf_page_bytes += u128::from(measurement.global_leaf_page_bytes);
+            global_leaf_waves += measurement.global_leaf_waves as u128;
+            global_leaf_continuations += measurement.global_leaf_continuations as u128;
+            global_leaf_exact_scores += measurement.global_leaf_exact_scores as u128;
+            backing_reads += u128::from(measurement.backing_reads);
+            backing_bytes_read += u128::from(measurement.backing_bytes_read);
             execution_engines.insert(measurement.execution_engine.clone());
         }
         let wall_seconds = started.elapsed().as_secs_f64();
@@ -2362,7 +2410,7 @@ fn write_concurrency_csv(
         for (sample_index, measurement) in measurements.iter().enumerate() {
             writeln!(
                 samples_writer,
-                "{},{},{},{},{workers},{sample_index},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{},{},{workers},{sample_index},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 config.global_scan_codec,
                 config.cache_execution,
                 config.cache_profile.as_str(),
@@ -2372,6 +2420,13 @@ fn write_concurrency_csv(
                 measurement.latency_ms,
                 measurement.recall,
                 measurement.execution_engine,
+                measurement.global_leaf_directory_reads,
+                measurement.global_leaf_directory_bytes,
+                measurement.global_leaf_pages_read,
+                measurement.global_leaf_page_bytes,
+                measurement.global_leaf_waves,
+                measurement.global_leaf_continuations,
+                measurement.global_leaf_exact_scores,
                 measurement.bytes_read,
                 measurement.decoded_cache_hits,
                 measurement.disk_cache_reads,
@@ -2392,13 +2447,12 @@ fn write_concurrency_csv(
         }
         writeln!(
             writer,
-            "{},{},{},{},{graph_degree},{graph_construction_ef},{},{},{},{},{},{workers},{total_queries},{qps:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+            "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{},{},{},{},{},{},{workers},{total_queries},{qps:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
             config.global_scan_codec,
             config.global_turboquant_bits,
             config.global_turboquant_qjl_bits,
             config.global_turboquant_shards,
             config.cache_execution,
-            0,
             config.cache_profile.as_str(),
             config.cache_coverage_percent,
             if execution_engines.len() == 1 {
@@ -2414,16 +2468,15 @@ fn write_concurrency_csv(
             percentile(&latencies_ms, 0.95),
             percentile(&latencies_ms, 0.99),
             maximum(&latencies_ms),
-            mean(graph_candidates_added as f64, total_queries),
-            mean(global_graph_chunks_searched as f64, total_queries),
-            mean(global_scan_chunks_searched as f64, total_queries),
-            if global_graph_chunks_searched + global_scan_chunks_searched == 0 {
-                0.0
-            } else {
-                global_graph_chunks_searched as f64
-                    / (global_graph_chunks_searched + global_scan_chunks_searched) as f64
-            },
-            mean(graph_bytes_read as f64, total_queries),
+            mean(global_leaf_directory_reads as f64, total_queries),
+            mean(global_leaf_directory_bytes as f64, total_queries),
+            mean(global_leaf_pages_read as f64, total_queries),
+            mean(global_leaf_page_bytes as f64, total_queries),
+            mean(global_leaf_waves as f64, total_queries),
+            mean(global_leaf_continuations as f64, total_queries),
+            mean(global_leaf_exact_scores as f64, total_queries),
+            mean(backing_reads as f64, total_queries),
+            mean(backing_bytes_read as f64, total_queries),
             mean(bytes_read as f64, total_queries)
         )?;
     }
@@ -2574,28 +2627,24 @@ fn write_cache_coverage_csv(config: &ResolvedConfig, dataset: &Dataset) -> Bench
                 };
                 let (decoded_fraction, disk_fraction, backing_fraction) =
                     cache_access_fractions(&report);
-                let global_chunks = report
-                    .global_graph_chunks_searched
-                    .saturating_add(report.global_scan_chunks_searched);
-                let global_graph_fraction = if global_chunks == 0 {
-                    0.0
-                } else {
-                    report.global_graph_chunks_searched as f64 / global_chunks as f64
-                };
                 writeln!(
                     writer,
-                    "{},{},{},{:.2},{repetition},{position},{},{},{},{},{recall:.3},{latency_ms:.3},{},{},{},{global_graph_fraction:.3},{},{},{},{},{},{},{decoded_fraction:.3},{disk_fraction:.3},{backing_fraction:.3},{},{},{}",
+                    "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{:.2},{repetition},{position},{},{},{},{},{recall:.3},{latency_ms:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{decoded_fraction:.3},{disk_fraction:.3},{backing_fraction:.3},{},{}",
                     config.global_scan_codec,
                     config.cache_execution,
-                    0,
                     target_hot_percent as f64 / 100.0,
                     if is_hot { "hot" } else { "outside_hot_set" },
                     query_index,
                     execution_engine_label(&report),
                     observed_cache_tier(&report),
                     report.segments_searched,
-                    report.global_graph_chunks_searched,
-                    report.global_scan_chunks_searched,
+                    report.global_leaf_directory_reads,
+                    report.global_leaf_directory_bytes,
+                    report.global_leaf_pages_read,
+                    report.global_leaf_page_bytes,
+                    report.global_leaf_waves,
+                    report.global_leaf_continuations,
+                    report.global_leaf_exact_scores,
                     report.decoded_cache_hits,
                     report.disk_cache_reads,
                     report.backing_reads,
@@ -2603,7 +2652,6 @@ fn write_cache_coverage_csv(config: &ResolvedConfig, dataset: &Dataset) -> Bench
                     report.disk_cache_bytes_read,
                     report.backing_bytes_read,
                     report.bytes_read,
-                    report.graph_bytes_read,
                     report.requests.gets.saturating_add(report.requests.heads),
                 )?;
             }
@@ -2642,10 +2690,6 @@ fn rotated_workload_index(
 ) -> usize {
     debug_assert!(cohort_len > 0);
     (repetition * selected_per_repetition + cursor) % cohort_len
-}
-
-fn graph_config_columns(_config: &ResolvedConfig) -> (usize, usize) {
-    (0, 0)
 }
 
 fn cache_access_fractions(report: &SearchReport) -> (f64, f64, f64) {
@@ -3628,19 +3672,20 @@ mod tests {
         BUILD_HEADER, BenchmarkCacheProfile, CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER,
         CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
         DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, LIFECYCLE_HEADER, LeafCapability, LeafMode,
-        MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySummary,
-        RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
-        approximate_options, cache_coverage_cohort_size, cache_coverage_enabled, dataset_metric,
-        default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
-        dollars_per_million_queries, ingest_batch_size, is_hot_workload_position,
-        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
-        parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
-        parse_optional_byte_cap, parse_positive_list, parse_serving_mode, permuted_positions,
-        preload_query_count, recall_preloads_local_snapshot, recall_row_count,
-        rotated_workload_index, sample_mean, sample_stddev, uses_bounded_decoded_cache_phases,
-        uses_memory_preloaded_phase, validate_build_only, validate_disk_cached_network,
-        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_phase_selection, vector_row, write_batch_len, write_operation_count,
+        MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample,
+        QuerySummary, RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER,
+        WRITE_SAMPLE_HEADER, approximate_options, cache_coverage_cohort_size,
+        cache_coverage_enabled, dataset_metric, default_build_leaf_capability,
+        default_recall_leaf_mode, default_serving_leaf_mode, dollars_per_million_queries,
+        ingest_batch_size, is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
+        normalized_cache_access_fractions, parse_flag_value, parse_global_pq_layout,
+        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
+        parse_serving_mode, permuted_positions, preload_query_count,
+        recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
+        sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        validate_build_only, validate_disk_cached_network, validate_generated_id_range,
+        validate_insert_only, validate_leaf_capability_modes, validate_phase_selection, vector_row,
+        write_batch_len, write_operation_count,
     };
 
     #[test]
@@ -3852,29 +3897,45 @@ mod tests {
 
     #[test]
     fn latency_artifact_schemas_include_the_worst_query() {
-        assert_eq!(RECALL_LATENCY_HEADER.split(',').count(), 29);
-        assert_eq!(CACHE_STATE_HEADER.split(',').count(), 27);
-        assert_eq!(CONCURRENCY_HEADER.split(',').count(), 26);
-        assert_eq!(CACHE_COVERAGE_HEADER.split(',').count(), 28);
-        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 32);
-        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 27);
+        assert_eq!(RECALL_LATENCY_HEADER.split(',').count(), 31);
+        assert_eq!(CACHE_STATE_HEADER.split(',').count(), 29);
+        assert_eq!(CONCURRENCY_HEADER.split(',').count(), 28);
+        assert_eq!(CACHE_COVERAGE_HEADER.split(',').count(), 31);
+        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 37);
+        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 35);
+        for header in [
+            RECALL_LATENCY_HEADER,
+            CACHE_STATE_HEADER,
+            CONCURRENCY_HEADER,
+            CACHE_COVERAGE_HEADER,
+            QUERY_SAMPLE_HEADER,
+            CONCURRENCY_SAMPLE_HEADER,
+        ] {
+            assert!(header.starts_with("schema_version,"));
+            assert!(!header.contains("graph"), "stale graph column in {header}");
+            assert!(
+                !header.contains("global_scan"),
+                "stale scan column in {header}"
+            );
+        }
         for column in [
             "scan_codec",
             "turboquant_bits",
             "turboquant_qjl_bits",
             "turboquant_shards",
-            "graph_degree",
-            "graph_construction_ef",
             "cache_execution",
-            "global_graph_cache_max_bytes",
             "execution_engine",
             "mean_ms",
             "stddev_ms",
-            "avg_graph_candidates_added",
-            "avg_global_graph_chunks",
-            "avg_global_scan_chunks",
-            "avg_global_graph_fraction",
-            "avg_graph_bytes_read",
+            "avg_global_leaf_directory_reads",
+            "avg_global_leaf_directory_bytes",
+            "avg_global_leaf_pages_read",
+            "avg_global_leaf_page_bytes",
+            "avg_global_leaf_waves",
+            "avg_global_leaf_continuations",
+            "avg_global_leaf_exact_scores",
+            "avg_backing_reads",
+            "avg_backing_bytes_read",
         ] {
             assert!(RECALL_LATENCY_HEADER.contains(column), "missing {column}");
             assert!(CACHE_STATE_HEADER.contains(column), "missing {column}");
@@ -3891,6 +3952,13 @@ mod tests {
             "recall_at_10",
             "disk_cache_bytes_read",
             "backing_bytes_read",
+            "global_leaf_directory_reads",
+            "global_leaf_directory_bytes",
+            "global_leaf_pages_read",
+            "global_leaf_page_bytes",
+            "global_leaf_waves",
+            "global_leaf_continuations",
+            "global_leaf_exact_scores",
             "network_gets",
             "query_seed",
             "repetition_id",
@@ -3933,15 +4001,18 @@ mod tests {
             );
         }
         for column in [
-            "global_graph_cache_max_bytes",
             "target_hot_query_fraction",
             "repetition",
             "cohort_position",
             "query_class",
             "observed_cache_tier",
-            "global_graph_chunks",
-            "global_scan_chunks",
-            "global_graph_fraction",
+            "global_leaf_directory_reads",
+            "global_leaf_directory_bytes",
+            "global_leaf_pages_read",
+            "global_leaf_page_bytes",
+            "global_leaf_waves",
+            "global_leaf_continuations",
+            "global_leaf_exact_scores",
             "decoded_access_fraction",
             "disk_access_fraction",
             "backing_access_fraction",
@@ -3953,6 +4024,24 @@ mod tests {
         ] {
             assert!(CACHE_COVERAGE_HEADER.contains(column), "missing {column}");
         }
+    }
+
+    #[test]
+    fn query_samples_carry_every_v10_leaf_counter() {
+        let projection = |sample: &QuerySample| {
+            (
+                sample.global_leaf_directory_reads,
+                sample.global_leaf_directory_bytes,
+                sample.global_leaf_pages_read,
+                sample.global_leaf_page_bytes,
+                sample.global_leaf_waves,
+                sample.global_leaf_continuations,
+                sample.global_leaf_exact_scores,
+                sample.backing_reads,
+                sample.backing_bytes_read,
+            )
+        };
+        let _ = projection;
     }
 
     #[test]

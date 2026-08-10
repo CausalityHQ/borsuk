@@ -13,8 +13,9 @@ use arrow_ipc::reader::StreamReader;
 use arrow_schema::DataType;
 use borsuk::{
     BorsukIndex, GROUP_COMMIT_STRIPE_COUNT, GroupCommitConfig, GroupCommitWriter, IndexConfig,
-    LeafMode, SearchOptions, VectorMetric, VectorRecord,
+    LeafMode, SearchOptions, SearchTerminationReason, VectorMetric, VectorRecord,
 };
+use bytes::Bytes;
 use futures_util::TryStreamExt;
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory};
 
@@ -2015,4 +2016,221 @@ fn future_segment_size_can_change_without_rebuilding_logical_cell_topology() {
 
     assert_eq!(reopened.manifest().logical_cells(), logical_cells);
     assert_eq!(reopened.manifest().segment_max_vectors(), 128);
+}
+
+#[test]
+fn resident_v10_does_not_schedule_a_continuation_after_its_deadline() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///resident-v10-continuation-deadline";
+    let suffix = "x".repeat(100 * 1024);
+    let ids = (0..64)
+        .map(|row| format!("row-{row:02}-{suffix}"))
+        .collect::<Vec<_>>();
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::clone(&inner),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    index
+        .add(
+            ids.iter()
+                .enumerate()
+                .map(|(row, id)| VectorRecord::new(id.clone(), vec![row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    index.finish_bulk_load().unwrap();
+    index.delete([ids[0].as_str()]).unwrap();
+    drop(index);
+
+    let delayed = common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_get_latency_for(
+        std::time::Duration::from_millis(40),
+        |operation, path| {
+            operation == common::StoreOperation::Get
+                && (path.as_ref().contains("global-leaf/directories/")
+                    || path.as_ref().contains("global-leaf/bundles/"))
+        },
+    );
+    let (delayed, operations) = delayed.with_operation_log();
+    let reader = BorsukIndex::open_with_object_store(Arc::new(delayed), uri).unwrap();
+    operations.clear();
+
+    let report = reader
+        .search_with_report(
+            &[0.0; 8],
+            SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                .with_max_segments(4)
+                .with_max_latency_ms(60),
+        )
+        .unwrap();
+
+    assert!(report.hits.is_empty());
+    assert_eq!(
+        report.termination_reason,
+        SearchTerminationReason::MaxLatency
+    );
+    assert_eq!(report.global_leaf_waves, 1);
+    assert_eq!(report.global_leaf_continuations, 0);
+    assert_eq!(report.global_leaf_pages_read, 1);
+    let bundle_gets = operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Get && path.contains("global-leaf/bundles/")
+    });
+    assert_eq!(bundle_gets, 1, "deadline scheduled an extra page wave");
+}
+
+#[test]
+fn refresh_rejects_an_invalid_next_v10_before_publishing_it() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(traced);
+    let uri = "memory:///refresh-invalid-next-v10";
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    writer
+        .add(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    writer.finish_bulk_load().unwrap();
+    let mut reader = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+    let old_version = reader.manifest().version;
+    operations.clear();
+
+    writer
+        .add(
+            (0..32)
+                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![256.0 + row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    writer.flush().unwrap();
+    let next_descriptor = operations
+        .matching_paths(|operation, path| {
+            operation == common::StoreOperation::Put && path.contains("global-leaf/descriptors/")
+        })
+        .pop()
+        .expect("delta publication writes a V10 descriptor");
+    runtime
+        .block_on(inner.put(
+            &next_descriptor.into(),
+            Bytes::from_static(b"corrupt").into(),
+        ))
+        .unwrap();
+
+    assert!(reader.refresh().is_err());
+    assert_eq!(reader.manifest().version, old_version);
+    let report = reader
+        .search_with_report(
+            &[0.0; 8],
+            SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+        )
+        .unwrap();
+    assert_eq!(report.hits[0].id.as_str(), "base-0");
+    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+}
+
+#[test]
+fn refresh_preloads_v10_once_before_concurrent_queries_and_preserves_old_snapshot() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(traced);
+    let uri = "memory:///refresh-preloads-next-v10";
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+    )
+    .unwrap();
+    writer
+        .add(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    writer.finish_bulk_load().unwrap();
+    let mut reader = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+    let old_snapshot = reader.clone();
+    writer
+        .add(
+            (0..32)
+                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![256.0 + row as f32; 8]))
+                .collect(),
+        )
+        .unwrap();
+    writer.flush().unwrap();
+    operations.clear();
+
+    assert!(reader.refresh().unwrap());
+    let setup_gets = operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Get
+            && (path.contains("global-leaf/descriptors/") || path.contains("global-leaf/roots/"))
+    });
+    assert_eq!(
+        setup_gets, 4,
+        "refresh did not preload one descriptor and three roots"
+    );
+    operations.clear();
+
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            let query_reader = reader.clone();
+            scope.spawn(move || {
+                let report = query_reader
+                    .search_with_report(
+                        &[270.0; 8],
+                        SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+                    )
+                    .unwrap();
+                assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v10");
+            });
+        }
+    });
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get
+                && (path.contains("global-leaf/descriptors/")
+                    || path.contains("global-leaf/roots/"))
+        }),
+        0,
+        "first queries repeated descriptor/root setup I/O after refresh"
+    );
+    let old_report = old_snapshot
+        .search_with_report(
+            &[0.0; 8],
+            SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+        )
+        .unwrap();
+    assert_eq!(old_report.hits[0].id.as_str(), "base-0");
 }
