@@ -882,7 +882,10 @@ pub(crate) fn decode_global_leaf_directory_root(
 }
 
 const GLOBAL_LEAF_V11_LAYOUT: &str = "bounded-arrow-leaf-v11";
-const V11_DIRECTORY_JSON_COLUMN: &str = "directory_json";
+const V11_ROW_CELL: u8 = 1;
+const V11_ROW_BUNDLE: u8 = 2;
+const V11_ROW_PAGE: u8 = 3;
+const V11_ROW_SHARD: u8 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -914,9 +917,16 @@ pub(crate) struct GlobalLeafRunDirectory {
     pub(crate) shards: Vec<GlobalLeafDirectoryShardRef>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct V11DirectoryPayload {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct V11CellBounds {
+    cell_index: u16,
+    first_page: u64,
+    page_count: u32,
+}
+
+#[derive(Debug, Clone)]
+struct V11DirectoryTable {
+    cells: Vec<V11CellBounds>,
     pages: Vec<GlobalLeafPageRef>,
     bundles: Vec<GlobalLeafBundleRef>,
     shards: Vec<GlobalLeafDirectoryShardRef>,
@@ -941,7 +951,8 @@ pub(crate) fn encode_global_leaf_run_directory(
                 codebook_checksum,
                 "leaf-run-directory-root",
                 code_width,
-                &V11DirectoryPayload {
+                &V11DirectoryTable {
+                    cells: v11_cell_bounds(&pages)?,
                     pages,
                     bundles: bundles.to_vec(),
                     shards: Vec::new(),
@@ -958,7 +969,8 @@ pub(crate) fn encode_global_leaf_run_directory(
             codebook_checksum,
             "leaf-run-directory-shard",
             code_width,
-            &V11DirectoryPayload {
+            &V11DirectoryTable {
+                cells: Vec::new(),
                 pages: page_chunk.to_vec(),
                 bundles: Vec::new(),
                 shards: Vec::new(),
@@ -990,7 +1002,8 @@ pub(crate) fn encode_global_leaf_run_directory(
         codebook_checksum,
         "leaf-run-directory-root",
         code_width,
-        &V11DirectoryPayload {
+        &V11DirectoryTable {
+            cells: v11_cell_bounds(&pages)?,
             pages: Vec::new(),
             bundles: bundles.to_vec(),
             shards: references,
@@ -1019,6 +1032,7 @@ pub(crate) fn decode_global_leaf_run_directory(
             ));
         }
         validate_v11_pages(&root.pages, &root.bundles, code_width)?;
+        validate_v11_cell_bounds(&root.cells, &root.pages)?;
         return Ok(GlobalLeafRunDirectory {
             pages: root.pages,
             bundles: root.bundles,
@@ -1059,6 +1073,7 @@ pub(crate) fn decode_global_leaf_run_directory(
         pages.extend(payload.pages);
     }
     validate_v11_pages(&pages, &root.bundles, code_width)?;
+    validate_v11_cell_bounds(&root.cells, &pages)?;
     Ok(GlobalLeafRunDirectory {
         pages,
         bundles: root.bundles,
@@ -1070,30 +1085,101 @@ fn encode_v11_directory_table(
     codebook_checksum: &str,
     table: &str,
     code_width: usize,
-    payload: &V11DirectoryPayload,
+    payload: &V11DirectoryTable,
 ) -> Result<Vec<u8>> {
-    let json = serde_json::to_string(payload).map_err(|error| {
-        BorsukError::InvalidStorage(format!("failed to encode V11 leaf directory: {error}"))
-    })?;
-    let schema = Arc::new(Schema::new_with_metadata(
-        vec![Field::new(V11_DIRECTORY_JSON_COLUMN, DataType::Utf8, false)],
-        HashMap::from([
-            (
-                "borsuk.ann.layout".to_string(),
-                GLOBAL_LEAF_V11_LAYOUT.to_string(),
-            ),
-            (
-                "borsuk.ann.codebook_checksum".to_string(),
-                codebook_checksum.to_string(),
-            ),
-            ("borsuk.ann.table".to_string(), table.to_string()),
-            ("borsuk.ann.code_width".to_string(), code_width.to_string()),
-        ]),
-    ));
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(StringArray::from(vec![json]))],
-    )?;
+    let schema = v11_directory_schema(codebook_checksum, table, code_width);
+    let mut rows = Vec::new();
+    for cell in &payload.cells {
+        rows.push(V11TypedRow::cell(cell));
+    }
+    for (index, bundle) in payload.bundles.iter().enumerate() {
+        rows.push(V11TypedRow::bundle(
+            u32::try_from(index)
+                .map_err(|_| invalid_leaf_directory("V11 bundle index exceeds u32"))?,
+            bundle,
+        ));
+    }
+    for page in &payload.pages {
+        rows.push(V11TypedRow::page(page));
+    }
+    for shard in &payload.shards {
+        rows.push(V11TypedRow::shard(shard));
+    }
+    if rows.is_empty() {
+        return Err(invalid_leaf_directory(
+            "V11 directory table contains no rows",
+        ));
+    }
+    let columns: Vec<Arc<dyn Array>> = vec![
+        Arc::new(UInt8Array::from_iter_values(
+            rows.iter().map(|row| row.kind),
+        )),
+        Arc::new(UInt16Array::from_iter(
+            rows.iter().map(|row| row.cell_index),
+        )),
+        Arc::new(UInt64Array::from_iter(
+            rows.iter().map(|row| row.cell_first_page),
+        )),
+        Arc::new(UInt32Array::from_iter(
+            rows.iter().map(|row| row.cell_page_count),
+        )),
+        Arc::new(UInt32Array::from_iter(
+            rows.iter().map(|row| row.leaf_ordinal),
+        )),
+        Arc::new(UInt32Array::from_iter(
+            rows.iter().map(|row| row.bundle_index),
+        )),
+        Arc::new(UInt64Array::from_iter(
+            rows.iter().map(|row| row.batch_offset),
+        )),
+        Arc::new(UInt32Array::from_iter(
+            rows.iter().map(|row| row.metadata_bytes),
+        )),
+        Arc::new(UInt32Array::from_iter(
+            rows.iter().map(|row| row.body_bytes),
+        )),
+        Arc::new(UInt32Array::from_iter(
+            rows.iter().map(|row| row.batch_bytes),
+        )),
+        Arc::new(UInt32Array::from_iter(rows.iter().map(|row| row.rows))),
+        Arc::new(UInt8Array::from_iter(
+            rows.iter().map(|row| row.partial_run_count),
+        )),
+        Arc::new(StringArray::from_iter(
+            rows.iter().map(|row| row.page_checksum.as_deref()),
+        )),
+        Arc::new(BinaryArray::from_iter(
+            rows.iter().map(|row| row.centroid_code.as_deref()),
+        )),
+        Arc::new(StringArray::from_iter(
+            rows.iter().map(|row| row.bundle_path.as_deref()),
+        )),
+        Arc::new(StringArray::from_iter(
+            rows.iter().map(|row| row.bundle_checksum.as_deref()),
+        )),
+        Arc::new(UInt64Array::from_iter(
+            rows.iter().map(|row| row.bundle_encoded_bytes),
+        )),
+        Arc::new(StringArray::from_iter(
+            rows.iter().map(|row| row.shard_path.as_deref()),
+        )),
+        Arc::new(StringArray::from_iter(
+            rows.iter().map(|row| row.shard_checksum.as_deref()),
+        )),
+        Arc::new(UInt64Array::from_iter(
+            rows.iter().map(|row| row.shard_encoded_bytes),
+        )),
+        Arc::new(UInt16Array::from_iter(
+            rows.iter().map(|row| row.shard_first_cell),
+        )),
+        Arc::new(UInt16Array::from_iter(
+            rows.iter().map(|row| row.shard_last_cell),
+        )),
+        Arc::new(UInt32Array::from_iter(
+            rows.iter().map(|row| row.shard_page_count),
+        )),
+    ];
+    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
     let mut bytes = Vec::new();
     let properties = global_leaf_parquet_properties(schema.as_ref());
     let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
@@ -1106,7 +1192,7 @@ fn decode_v11_directory_table(
     codebook_checksum: &str,
     table: &str,
     bytes: &[u8],
-) -> Result<(usize, V11DirectoryPayload)> {
+) -> Result<(usize, V11DirectoryTable)> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
     let metadata = builder.metadata().file_metadata().key_value_metadata();
     let required = HashMap::from([
@@ -1131,39 +1217,509 @@ fn decode_v11_directory_table(
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|width| *width > 0)
         .ok_or_else(|| invalid_leaf_directory("V11 directory code width metadata is invalid"))?;
-    let expected = Arc::new(Schema::new(vec![Field::new(
-        V11_DIRECTORY_JSON_COLUMN,
-        DataType::Utf8,
-        false,
-    )]));
-    let mut payload = None;
+    let expected = v11_directory_schema(codebook_checksum, table, code_width);
+    let mut rows = Vec::new();
     for batch in builder.build()? {
         let batch = batch?;
-        if batch.schema().fields() != expected.fields()
-            || batch.num_rows() != 1
-            || batch
-                .columns()
-                .iter()
-                .any(|column| column.null_count() != 0)
-            || payload.is_some()
-        {
+        if batch.schema().fields() != expected.fields() {
             return Err(invalid_leaf_directory(
                 "V11 directory Parquet schema is invalid",
             ));
         }
-        let json = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| invalid_leaf_directory("V11 directory payload is not Utf8"))?;
-        payload = Some(serde_json::from_str(json.value(0)).map_err(|error| {
-            invalid_leaf_directory(&format!("V11 directory payload is invalid: {error}"))
-        })?);
+        rows.extend(v11_rows_from_batch(&batch)?);
     }
-    Ok((
-        code_width,
-        payload.ok_or_else(|| invalid_leaf_directory("V11 directory contains no row"))?,
+    v11_table_from_rows(rows, table).map(|table| (code_width, table))
+}
+
+#[derive(Default)]
+struct V11TypedRow {
+    kind: u8,
+    cell_index: Option<u16>,
+    cell_first_page: Option<u64>,
+    cell_page_count: Option<u32>,
+    leaf_ordinal: Option<u32>,
+    bundle_index: Option<u32>,
+    batch_offset: Option<u64>,
+    metadata_bytes: Option<u32>,
+    body_bytes: Option<u32>,
+    batch_bytes: Option<u32>,
+    rows: Option<u32>,
+    partial_run_count: Option<u8>,
+    page_checksum: Option<String>,
+    centroid_code: Option<Vec<u8>>,
+    bundle_path: Option<String>,
+    bundle_checksum: Option<String>,
+    bundle_encoded_bytes: Option<u64>,
+    shard_path: Option<String>,
+    shard_checksum: Option<String>,
+    shard_encoded_bytes: Option<u64>,
+    shard_first_cell: Option<u16>,
+    shard_last_cell: Option<u16>,
+    shard_page_count: Option<u32>,
+}
+impl V11TypedRow {
+    fn cell(cell: &V11CellBounds) -> Self {
+        Self {
+            kind: V11_ROW_CELL,
+            cell_index: Some(cell.cell_index),
+            cell_first_page: Some(cell.first_page),
+            cell_page_count: Some(cell.page_count),
+            ..Self::default()
+        }
+    }
+    fn bundle(index: u32, bundle: &GlobalLeafBundleRef) -> Self {
+        Self {
+            kind: V11_ROW_BUNDLE,
+            bundle_index: Some(index),
+            bundle_path: Some(bundle.path.clone()),
+            bundle_checksum: Some(
+                blake3::Hash::from_bytes(bundle.checksum)
+                    .to_hex()
+                    .to_string(),
+            ),
+            bundle_encoded_bytes: Some(bundle.encoded_bytes),
+            ..Self::default()
+        }
+    }
+    fn page(page: &GlobalLeafPageRef) -> Self {
+        Self {
+            kind: V11_ROW_PAGE,
+            cell_index: Some(page.cell_index),
+            leaf_ordinal: Some(page.leaf_ordinal),
+            bundle_index: Some(page.bundle_index),
+            batch_offset: Some(page.batch_offset),
+            metadata_bytes: Some(page.metadata_bytes),
+            body_bytes: Some(page.body_bytes),
+            batch_bytes: Some(page.batch_bytes),
+            rows: Some(page.rows),
+            partial_run_count: Some(page.partial_run_count),
+            page_checksum: Some(blake3::Hash::from_bytes(page.checksum).to_hex().to_string()),
+            centroid_code: Some(page.centroid_code.to_vec()),
+            ..Self::default()
+        }
+    }
+    fn shard(shard: &GlobalLeafDirectoryShardRef) -> Self {
+        Self {
+            kind: V11_ROW_SHARD,
+            shard_path: Some(shard.path.clone()),
+            shard_checksum: Some(shard.checksum.clone()),
+            shard_encoded_bytes: Some(shard.encoded_bytes),
+            shard_first_cell: Some(shard.first_cell),
+            shard_last_cell: Some(shard.last_cell),
+            shard_page_count: Some(shard.page_count),
+            ..Self::default()
+        }
+    }
+}
+
+fn v11_directory_schema(codebook_checksum: &str, table: &str, code_width: usize) -> Arc<Schema> {
+    let nullable = |name, data_type| Field::new(name, data_type, true);
+    Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("row_kind", DataType::UInt8, false),
+            nullable("cell_index", DataType::UInt16),
+            nullable("cell_first_page", DataType::UInt64),
+            nullable("cell_page_count", DataType::UInt32),
+            nullable("leaf_ordinal", DataType::UInt32),
+            nullable("bundle_index", DataType::UInt32),
+            nullable("batch_offset", DataType::UInt64),
+            nullable("metadata_bytes", DataType::UInt32),
+            nullable("body_bytes", DataType::UInt32),
+            nullable("batch_bytes", DataType::UInt32),
+            nullable("rows", DataType::UInt32),
+            nullable("partial_run_count", DataType::UInt8),
+            nullable("page_checksum", DataType::Utf8),
+            nullable("centroid_code", DataType::Binary),
+            nullable("bundle_path", DataType::Utf8),
+            nullable("bundle_checksum", DataType::Utf8),
+            nullable("bundle_encoded_bytes", DataType::UInt64),
+            nullable("shard_path", DataType::Utf8),
+            nullable("shard_checksum", DataType::Utf8),
+            nullable("shard_encoded_bytes", DataType::UInt64),
+            nullable("shard_first_cell", DataType::UInt16),
+            nullable("shard_last_cell", DataType::UInt16),
+            nullable("shard_page_count", DataType::UInt32),
+        ],
+        HashMap::from([
+            (
+                "borsuk.ann.layout".to_string(),
+                GLOBAL_LEAF_V11_LAYOUT.to_string(),
+            ),
+            (
+                "borsuk.ann.codebook_checksum".to_string(),
+                codebook_checksum.to_string(),
+            ),
+            ("borsuk.ann.table".to_string(), table.to_string()),
+            ("borsuk.ann.code_width".to_string(), code_width.to_string()),
+        ]),
     ))
+}
+
+fn v11_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V11TypedRow>> {
+    macro_rules! array {
+        ($index:expr, $ty:ty, $name:literal) => {
+            batch
+                .column($index)
+                .as_any()
+                .downcast_ref::<$ty>()
+                .ok_or_else(|| {
+                    invalid_leaf_directory(concat!(
+                        "V11 directory ",
+                        $name,
+                        " column has wrong type"
+                    ))
+                })?
+        };
+    }
+    let kind = array!(0, UInt8Array, "row_kind");
+    let cell = array!(1, UInt16Array, "cell_index");
+    let first = array!(2, UInt64Array, "cell_first_page");
+    let cell_pages = array!(3, UInt32Array, "cell_page_count");
+    let leaf = array!(4, UInt32Array, "leaf_ordinal");
+    let bundle = array!(5, UInt32Array, "bundle_index");
+    let offset = array!(6, UInt64Array, "batch_offset");
+    let meta = array!(7, UInt32Array, "metadata_bytes");
+    let body = array!(8, UInt32Array, "body_bytes");
+    let bytes = array!(9, UInt32Array, "batch_bytes");
+    let rows = array!(10, UInt32Array, "rows");
+    let partial = array!(11, UInt8Array, "partial_run_count");
+    let page_hash = array!(12, StringArray, "page_checksum");
+    let code = array!(13, BinaryArray, "centroid_code");
+    let bundle_path = array!(14, StringArray, "bundle_path");
+    let bundle_hash = array!(15, StringArray, "bundle_checksum");
+    let bundle_bytes = array!(16, UInt64Array, "bundle_encoded_bytes");
+    let shard_path = array!(17, StringArray, "shard_path");
+    let shard_hash = array!(18, StringArray, "shard_checksum");
+    let shard_bytes = array!(19, UInt64Array, "shard_encoded_bytes");
+    let shard_first = array!(20, UInt16Array, "shard_first_cell");
+    let shard_last = array!(21, UInt16Array, "shard_last_cell");
+    let shard_pages = array!(22, UInt32Array, "shard_page_count");
+    let mut out = Vec::new();
+    for row in 0..batch.num_rows() {
+        if kind.is_null(row) {
+            return Err(invalid_leaf_directory("V11 directory row kind is null"));
+        }
+        macro_rules! number {
+            ($a:ident, $v:expr) => {
+                if $a.is_null(row) { None } else { Some($v) }
+            };
+        }
+        out.push(V11TypedRow {
+            kind: kind.value(row),
+            cell_index: number!(cell, cell.value(row)),
+            cell_first_page: number!(first, first.value(row)),
+            cell_page_count: number!(cell_pages, cell_pages.value(row)),
+            leaf_ordinal: number!(leaf, leaf.value(row)),
+            bundle_index: number!(bundle, bundle.value(row)),
+            batch_offset: number!(offset, offset.value(row)),
+            metadata_bytes: number!(meta, meta.value(row)),
+            body_bytes: number!(body, body.value(row)),
+            batch_bytes: number!(bytes, bytes.value(row)),
+            rows: number!(rows, rows.value(row)),
+            partial_run_count: number!(partial, partial.value(row)),
+            page_checksum: if page_hash.is_null(row) {
+                None
+            } else {
+                Some(page_hash.value(row).to_string())
+            },
+            centroid_code: if code.is_null(row) {
+                None
+            } else {
+                Some(code.value(row).to_vec())
+            },
+            bundle_path: if bundle_path.is_null(row) {
+                None
+            } else {
+                Some(bundle_path.value(row).to_string())
+            },
+            bundle_checksum: if bundle_hash.is_null(row) {
+                None
+            } else {
+                Some(bundle_hash.value(row).to_string())
+            },
+            bundle_encoded_bytes: number!(bundle_bytes, bundle_bytes.value(row)),
+            shard_path: if shard_path.is_null(row) {
+                None
+            } else {
+                Some(shard_path.value(row).to_string())
+            },
+            shard_checksum: if shard_hash.is_null(row) {
+                None
+            } else {
+                Some(shard_hash.value(row).to_string())
+            },
+            shard_encoded_bytes: number!(shard_bytes, shard_bytes.value(row)),
+            shard_first_cell: number!(shard_first, shard_first.value(row)),
+            shard_last_cell: number!(shard_last, shard_last.value(row)),
+            shard_page_count: number!(shard_pages, shard_pages.value(row)),
+        });
+    }
+    Ok(out)
+}
+
+fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11DirectoryTable> {
+    let mut result = V11DirectoryTable {
+        cells: Vec::new(),
+        pages: Vec::new(),
+        bundles: Vec::new(),
+        shards: Vec::new(),
+    };
+    let mut prior_kind = 0_u8;
+    for row in rows {
+        if row.kind < prior_kind {
+            return Err(invalid_leaf_directory(
+                "V11 directory rows are out of canonical kind order",
+            ));
+        }
+        prior_kind = row.kind;
+        match row.kind {
+            V11_ROW_CELL => {
+                let (Some(cell_index), Some(first_page), Some(page_count)) =
+                    (row.cell_index, row.cell_first_page, row.cell_page_count)
+                else {
+                    return Err(invalid_leaf_directory("V11 cell row is incomplete"));
+                };
+                if row.leaf_ordinal.is_some()
+                    || row.bundle_index.is_some()
+                    || row.batch_offset.is_some()
+                    || row.metadata_bytes.is_some()
+                    || row.body_bytes.is_some()
+                    || row.batch_bytes.is_some()
+                    || row.rows.is_some()
+                    || row.partial_run_count.is_some()
+                    || row.page_checksum.is_some()
+                    || row.centroid_code.is_some()
+                    || row.bundle_path.is_some()
+                    || row.bundle_checksum.is_some()
+                    || row.bundle_encoded_bytes.is_some()
+                    || row.shard_path.is_some()
+                    || row.shard_checksum.is_some()
+                    || row.shard_encoded_bytes.is_some()
+                    || row.shard_first_cell.is_some()
+                    || row.shard_last_cell.is_some()
+                    || row.shard_page_count.is_some()
+                {
+                    return Err(invalid_leaf_directory(
+                        "V11 cell row contains unrelated values",
+                    ));
+                }
+                result.cells.push(V11CellBounds {
+                    cell_index,
+                    first_page,
+                    page_count,
+                });
+            }
+            V11_ROW_BUNDLE => {
+                let (Some(index), Some(path), Some(checksum), Some(encoded_bytes)) = (
+                    row.bundle_index,
+                    row.bundle_path,
+                    row.bundle_checksum,
+                    row.bundle_encoded_bytes,
+                ) else {
+                    return Err(invalid_leaf_directory("V11 bundle row is incomplete"));
+                };
+                if index as usize != result.bundles.len()
+                    || row.cell_index.is_some()
+                    || row.cell_first_page.is_some()
+                    || row.cell_page_count.is_some()
+                    || row.leaf_ordinal.is_some()
+                    || row.batch_offset.is_some()
+                    || row.metadata_bytes.is_some()
+                    || row.body_bytes.is_some()
+                    || row.batch_bytes.is_some()
+                    || row.rows.is_some()
+                    || row.partial_run_count.is_some()
+                    || row.page_checksum.is_some()
+                    || row.centroid_code.is_some()
+                    || row.shard_path.is_some()
+                    || row.shard_checksum.is_some()
+                    || row.shard_encoded_bytes.is_some()
+                    || row.shard_first_cell.is_some()
+                    || row.shard_last_cell.is_some()
+                    || row.shard_page_count.is_some()
+                {
+                    return Err(invalid_leaf_directory("V11 bundle rows are not canonical"));
+                }
+                result.bundles.push(GlobalLeafBundleRef {
+                    path,
+                    checksum: v11_hash(&checksum)?,
+                    encoded_bytes,
+                });
+            }
+            V11_ROW_PAGE => {
+                let (
+                    Some(cell_index),
+                    Some(leaf_ordinal),
+                    Some(bundle_index),
+                    Some(batch_offset),
+                    Some(metadata_bytes),
+                    Some(body_bytes),
+                    Some(batch_bytes),
+                    Some(rows),
+                    Some(partial_run_count),
+                    Some(checksum),
+                    Some(centroid_code),
+                ) = (
+                    row.cell_index,
+                    row.leaf_ordinal,
+                    row.bundle_index,
+                    row.batch_offset,
+                    row.metadata_bytes,
+                    row.body_bytes,
+                    row.batch_bytes,
+                    row.rows,
+                    row.partial_run_count,
+                    row.page_checksum,
+                    row.centroid_code,
+                )
+                else {
+                    return Err(invalid_leaf_directory("V11 page row is incomplete"));
+                };
+                if row.cell_first_page.is_some()
+                    || row.cell_page_count.is_some()
+                    || row.bundle_path.is_some()
+                    || row.bundle_checksum.is_some()
+                    || row.bundle_encoded_bytes.is_some()
+                    || row.shard_path.is_some()
+                    || row.shard_checksum.is_some()
+                    || row.shard_encoded_bytes.is_some()
+                    || row.shard_first_cell.is_some()
+                    || row.shard_last_cell.is_some()
+                    || row.shard_page_count.is_some()
+                {
+                    return Err(invalid_leaf_directory(
+                        "V11 page row contains unrelated values",
+                    ));
+                }
+                result.pages.push(GlobalLeafPageRef {
+                    cell_index,
+                    leaf_ordinal,
+                    bundle_index,
+                    batch_offset,
+                    metadata_bytes,
+                    body_bytes,
+                    batch_bytes,
+                    rows,
+                    partial_run_count,
+                    checksum: v11_hash(&checksum)?,
+                    centroid_code: centroid_code.into_boxed_slice(),
+                });
+            }
+            V11_ROW_SHARD => {
+                let (
+                    Some(path),
+                    Some(checksum),
+                    Some(encoded_bytes),
+                    Some(first_cell),
+                    Some(last_cell),
+                    Some(page_count),
+                ) = (
+                    row.shard_path,
+                    row.shard_checksum,
+                    row.shard_encoded_bytes,
+                    row.shard_first_cell,
+                    row.shard_last_cell,
+                    row.shard_page_count,
+                )
+                else {
+                    return Err(invalid_leaf_directory("V11 shard row is incomplete"));
+                };
+                if row.cell_index.is_some()
+                    || row.cell_first_page.is_some()
+                    || row.cell_page_count.is_some()
+                    || row.leaf_ordinal.is_some()
+                    || row.bundle_index.is_some()
+                    || row.batch_offset.is_some()
+                    || row.metadata_bytes.is_some()
+                    || row.body_bytes.is_some()
+                    || row.batch_bytes.is_some()
+                    || row.rows.is_some()
+                    || row.partial_run_count.is_some()
+                    || row.page_checksum.is_some()
+                    || row.centroid_code.is_some()
+                    || row.bundle_path.is_some()
+                    || row.bundle_checksum.is_some()
+                    || row.bundle_encoded_bytes.is_some()
+                {
+                    return Err(invalid_leaf_directory(
+                        "V11 shard row contains unrelated values",
+                    ));
+                }
+                result.shards.push(GlobalLeafDirectoryShardRef {
+                    path,
+                    checksum,
+                    encoded_bytes,
+                    first_cell,
+                    last_cell,
+                    page_count,
+                });
+            }
+            _ => return Err(invalid_leaf_directory("V11 directory row kind is invalid")),
+        }
+    }
+    let invalid_role = if table == "leaf-run-directory-shard" {
+        result.pages.is_empty()
+            || !result.cells.is_empty()
+            || !result.bundles.is_empty()
+            || !result.shards.is_empty()
+    } else {
+        result.cells.is_empty()
+            || (result.pages.is_empty() && result.shards.is_empty())
+            || (!result.pages.is_empty() && !result.shards.is_empty())
+    };
+    if invalid_role {
+        return Err(invalid_leaf_directory(
+            "V11 directory table row kinds are invalid for its role",
+        ));
+    }
+    Ok(result)
+}
+
+fn v11_hash(value: &str) -> Result<[u8; 32]> {
+    if value.len() != 64 {
+        return Err(invalid_leaf_directory("V11 checksum hex width is invalid"));
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .map_err(|_| invalid_leaf_directory("V11 checksum hex is invalid"))?;
+    }
+    Ok(bytes)
+}
+
+fn v11_cell_bounds(pages: &[GlobalLeafPageRef]) -> Result<Vec<V11CellBounds>> {
+    let mut bounds = Vec::new();
+    let mut offset = 0_u64;
+    let mut index = 0_usize;
+    while index < pages.len() {
+        let cell_index = pages[index].cell_index;
+        let start = offset;
+        let mut count = 0_u32;
+        while index < pages.len() && pages[index].cell_index == cell_index {
+            index += 1;
+            offset = offset
+                .checked_add(1)
+                .ok_or_else(|| invalid_leaf_directory("V11 page offset overflows"))?;
+            count = count
+                .checked_add(1)
+                .ok_or_else(|| invalid_leaf_directory("V11 cell page count overflows"))?;
+        }
+        bounds.push(V11CellBounds {
+            cell_index,
+            first_page: start,
+            page_count: count,
+        });
+    }
+    Ok(bounds)
+}
+
+fn validate_v11_cell_bounds(bounds: &[V11CellBounds], pages: &[GlobalLeafPageRef]) -> Result<()> {
+    if bounds != v11_cell_bounds(pages)?.as_slice() {
+        return Err(invalid_leaf_directory(
+            "V11 cell bounds do not match page coverage",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_v11_directory_metadata(
@@ -2389,8 +2945,10 @@ fn global_leaf_batch_ranges(
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::RecordBatch;
+    use arrow_array::{RecordBatch, UInt8Array};
     use arrow_schema::{DataType, Field};
+    use bytes::Bytes;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     use super::{
         GLOBAL_LEAF_DIRECTORY_SHARD_PAGES, GlobalLeafBundleRef, GlobalLeafCellRef,
@@ -2444,6 +3002,64 @@ mod tests {
             .to_string()
             .contains("codebook checksum")
         );
+    }
+
+    #[test]
+    fn v11_directory_uses_typed_rows_for_cells_bundles_and_pages() {
+        let (pages, bundles) = one_page_directory_fixture();
+        let encoded = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(encoded.root)).unwrap();
+        let reader = builder.build().unwrap();
+        let batches = reader.collect::<std::result::Result<Vec<_>, _>>().unwrap();
+        let schema = batches[0].schema();
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            fields,
+            vec![
+                "row_kind",
+                "cell_index",
+                "cell_first_page",
+                "cell_page_count",
+                "leaf_ordinal",
+                "bundle_index",
+                "batch_offset",
+                "metadata_bytes",
+                "body_bytes",
+                "batch_bytes",
+                "rows",
+                "partial_run_count",
+                "page_checksum",
+                "centroid_code",
+                "bundle_path",
+                "bundle_checksum",
+                "bundle_encoded_bytes",
+                "shard_path",
+                "shard_checksum",
+                "shard_encoded_bytes",
+                "shard_first_cell",
+                "shard_last_cell",
+                "shard_page_count",
+            ]
+        );
+        let kinds = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt8Array>()
+                    .unwrap()
+                    .values()
+                    .iter()
+                    .copied()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, vec![1, 2, 3], "cell, bundle, then page rows");
     }
 
     #[test]
