@@ -49,7 +49,7 @@ fn ids_in_ownership_lane(lane: usize, count: usize) -> Vec<String> {
 }
 
 #[test]
-fn drain_keeps_global_base_and_searches_materialized_delta_without_rebuild() {
+fn drain_materializes_one_record_directly_into_v11() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
         common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
@@ -122,7 +122,7 @@ fn drain_keeps_global_base_and_searches_materialized_delta_without_rebuild() {
         0,
         "drain must not rebuild the corpus-wide global PQ artifact"
     );
-    let report = BorsukIndex::open_with_object_store(inner, uri)
+    let report = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri)
         .unwrap()
         .search_with_report(
             &delta,
@@ -133,13 +133,113 @@ fn drain_keeps_global_base_and_searches_materialized_delta_without_rebuild() {
         .unwrap();
     assert_eq!(report.hits[0].id.as_str(), "delta");
     assert_eq!(report.hits[0].distance, 0.0);
-    assert_eq!(report.leaf_mode, "srht-pq-scan");
-    assert!(report.segments_searched > 0);
-    assert_eq!(report.global_leaf_directory_reads, 0);
-    assert_eq!(report.global_leaf_directory_bytes, 0);
-    assert_eq!(report.global_leaf_pages_read, 0);
-    assert_eq!(report.global_leaf_page_bytes, 0);
-    assert_eq!(report.global_leaf_exact_scores, 0);
+    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
+    assert_eq!(report.segments_searched, 0);
+    assert!(report.global_leaf_directory_reads >= 2, "{report:?}");
+    assert!(report.global_leaf_directory_bytes > 0, "{report:?}");
+    assert!(report.global_leaf_pages_read > 0, "{report:?}");
+    assert!(report.global_leaf_page_bytes > 0, "{report:?}");
+    assert!(report.global_leaf_exact_scores > 0, "{report:?}");
+
+    let byte_limited = BorsukIndex::open_with_object_store(inner, uri)
+        .unwrap()
+        .search_with_report(
+            &delta,
+            SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                .with_max_segments(4)
+                .with_max_bytes(1),
+        )
+        .unwrap();
+    assert!(byte_limited.hits.is_empty(), "{byte_limited:?}");
+    assert_eq!(byte_limited.segments_searched, 0, "{byte_limited:?}");
+    assert_eq!(
+        byte_limited.termination_reason,
+        SearchTerminationReason::MaxBytes
+    );
+    assert!(byte_limited.global_leaf_directory_bytes > 1);
+    assert_eq!(byte_limited.global_leaf_pages_read, 0);
+}
+
+#[test]
+fn drains_one_through_fifteen_rows_without_segment_fallback() {
+    for rows in 1..=15 {
+        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = format!("memory:///group-drain-direct-v11-{rows}");
+        let mut index = BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+        )
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(format!("base-{row}"), vec![row as f32 / 128.0; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let target = vec![10_000.0 + rows as f32; 8];
+        let writer = GroupCommitWriter::new(
+            index,
+            GroupCommitConfig {
+                max_delay: std::time::Duration::ZERO,
+                max_records: 16,
+                worker_lanes: 1,
+            },
+        )
+        .unwrap();
+        writer
+            .append(
+                (0..rows)
+                    .map(|row| {
+                        let vector = if row + 1 == rows {
+                            target.clone()
+                        } else {
+                            vec![1_000.0 + row as f32; 8]
+                        };
+                        VectorRecord::new(format!("delta-{rows}-{row}"), vector)
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        writer.drain().unwrap();
+        drop(writer);
+
+        let report = BorsukIndex::open_with_object_store(inner, &uri)
+            .unwrap()
+            .search_with_report(
+                &target,
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        assert_eq!(
+            report.hits[0].id.as_str(),
+            format!("delta-{rows}-{}", rows - 1),
+            "rows={rows}: {report:?}"
+        );
+        assert_eq!(report.hits[0].distance, 0.0, "rows={rows}: {report:?}");
+        assert_eq!(
+            report.leaf_mode, "bounded-arrow-leaf-v11",
+            "rows={rows}: {report:?}"
+        );
+        assert_eq!(report.segments_searched, 0, "rows={rows}: {report:?}");
+        assert!(
+            report.global_leaf_directory_reads >= 2,
+            "rows={rows}: {report:?}"
+        );
+        assert!(report.global_leaf_pages_read > 0, "rows={rows}: {report:?}");
+    }
 }
 
 #[test]
@@ -296,7 +396,7 @@ fn drain_fails_closed_when_the_incremental_run_manifest_cannot_be_published() {
 }
 
 #[test]
-fn cold_search_overlaps_independent_global_base_and_delta_reads() {
+fn cold_search_fuses_v11_base_and_incremental_run() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///parallel-global-base-delta-search";
     let mut index = BorsukIndex::create_with_object_store(
@@ -334,15 +434,24 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
         .into_iter()
         .map(|meta| meta.location.to_string())
         .collect::<HashSet<_>>();
-    index
-        .add(
+    let writer = GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 64,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    writer
+        .append(
             (0..32)
                 .map(|row| VectorRecord::new(format!("delta-{row}"), vec![10.0 + row as f32; 8]))
                 .collect(),
         )
         .unwrap();
-    index.flush().unwrap();
-    drop(index);
+    writer.drain().unwrap();
+    drop(writer);
 
     let all_paths = runtime
         .block_on(
@@ -368,7 +477,7 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
     let report = reader
         .search_with_report(
             &[27.0; 8],
-            SearchOptions::approx(3, LeafMode::SrhtPqScan)
+            SearchOptions::approx(40, LeafMode::SrhtPqScan)
                 .with_max_segments(4)
                 .with_max_candidates_per_segment(32),
         )
@@ -379,6 +488,8 @@ fn cold_search_overlaps_independent_global_base_and_delta_reads() {
     assert!(report.global_leaf_directory_reads >= 2);
     assert!(report.global_leaf_directory_bytes > 0);
     assert!(report.global_leaf_pages_read >= 2);
+    assert!(report.global_leaf_pages_read <= 4);
+    assert_eq!(report.segments_searched, 0);
     assert!(report.global_leaf_page_bytes > 0);
     assert!(report.global_leaf_exact_scores > 0);
     assert_eq!(
@@ -2058,7 +2169,11 @@ fn resident_v11_does_not_schedule_a_continuation_after_its_deadline() {
         )
         .unwrap();
 
-    assert!(report.hits.is_empty());
+    assert!(
+        report.hits.is_empty(),
+        "deadline search returned {} hits",
+        report.hits.len()
+    );
     assert_eq!(
         report.termination_reason,
         SearchTerminationReason::MaxLatency
@@ -2105,23 +2220,34 @@ fn refresh_rejects_an_invalid_next_v11_before_publishing_it() {
     let old_version = reader.manifest().version;
     operations.clear();
 
-    writer
-        .add(
+    let group_writer = GroupCommitWriter::new(
+        writer,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 64,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    group_writer
+        .append(
             (0..32)
                 .map(|row| VectorRecord::new(format!("delta-{row}"), vec![256.0 + row as f32; 8]))
                 .collect(),
         )
         .unwrap();
-    writer.flush().unwrap();
-    let next_descriptor = operations
+    group_writer.drain().unwrap();
+    drop(group_writer);
+    let next_directory = operations
         .matching_paths(|operation, path| {
-            operation == common::StoreOperation::Put && path.contains("global-leaf/descriptors/")
+            operation == common::StoreOperation::Put
+                && path.starts_with("global-leaf/v11/directories/")
         })
         .pop()
-        .expect("online publication writes a V11 descriptor");
+        .expect("online publication writes a V11 incremental directory");
     runtime
         .block_on(inner.put(
-            &next_descriptor.into(),
+            &next_directory.into(),
             Bytes::from_static(b"corrupt").into(),
         ))
         .unwrap();
@@ -2168,24 +2294,35 @@ fn refresh_preloads_v11_once_before_concurrent_queries_and_preserves_old_snapsho
     writer.finish_bulk_load().unwrap();
     let mut reader = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
     let old_snapshot = reader.clone();
-    writer
-        .add(
+    let group_writer = GroupCommitWriter::new(
+        writer,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 64,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    group_writer
+        .append(
             (0..32)
                 .map(|row| VectorRecord::new(format!("delta-{row}"), vec![256.0 + row as f32; 8]))
                 .collect(),
         )
         .unwrap();
-    writer.flush().unwrap();
+    group_writer.drain().unwrap();
+    drop(group_writer);
     operations.clear();
 
     assert!(reader.refresh().unwrap());
     let setup_gets = operations.count_matching(|operation, path| {
         operation == common::StoreOperation::Get
-            && (path.contains("global-leaf/descriptors/") || path.contains("global-leaf/roots/"))
+            && (path.starts_with("global-leaf/v11/codebooks/")
+                || path.starts_with("global-leaf/v11/directories/"))
     });
     assert_eq!(
-        setup_gets, 4,
-        "refresh did not preload one descriptor and three roots"
+        setup_gets, 3,
+        "refresh did not preload one codebook plus base and incremental directories"
     );
     operations.clear();
 
@@ -2206,11 +2343,11 @@ fn refresh_preloads_v11_once_before_concurrent_queries_and_preserves_old_snapsho
     assert_eq!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Get
-                && (path.contains("global-leaf/descriptors/")
-                    || path.contains("global-leaf/roots/"))
+                && (path.starts_with("global-leaf/v11/codebooks/")
+                    || path.starts_with("global-leaf/v11/directories/"))
         }),
         0,
-        "first queries repeated descriptor/root setup I/O after refresh"
+        "first queries repeated codebook/directory setup I/O after refresh"
     );
     let old_report = old_snapshot
         .search_with_report(
@@ -2246,14 +2383,25 @@ fn maintenance_setup_read_failure_does_not_publish_or_advance_the_handle() {
         )
         .unwrap();
     writer.finish_bulk_load().unwrap();
-    writer
-        .add(
+    let group_writer = GroupCommitWriter::new(
+        writer,
+        GroupCommitConfig {
+            max_delay: std::time::Duration::ZERO,
+            max_records: 64,
+            worker_lanes: 1,
+        },
+    )
+    .unwrap();
+    group_writer
+        .append(
             (0..64)
                 .map(|row| VectorRecord::new(format!("delta-{row}"), vec![1_000.0 + row as f32; 8]))
                 .collect(),
         )
         .unwrap();
-    writer.flush().unwrap();
+    group_writer.drain().unwrap();
+    drop(group_writer);
+    let mut writer = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
     writer
         .delete(
             (0..64)
@@ -2268,11 +2416,11 @@ fn maintenance_setup_read_failure_does_not_publish_or_advance_the_handle() {
 
     let faulted = common::FaultInjectingObjectStore::fail_nth_matching(
         Arc::clone(&inner),
-        3,
+        2,
         true,
         |operation, path| {
             operation == common::StoreOperation::Get
-                && path.as_ref().contains("global-leaf/descriptors/")
+                && path.as_ref().starts_with("global-leaf/v11/codebooks/")
         },
     );
     let mut maintainer = BorsukIndex::open_with_object_store(Arc::new(faulted), uri).unwrap();
@@ -2281,7 +2429,7 @@ fn maintenance_setup_read_failure_does_not_publish_or_advance_the_handle() {
         .run_incremental_maintenance(IncrementalMaintenanceOptions {
             max_segment_vectors: usize::MAX,
             max_segment_radius: None,
-            min_segment_vectors: 15,
+            min_segment_vectors: 17,
             max_operations: 1,
         })
         .unwrap_err();
@@ -2333,11 +2481,11 @@ fn successful_purge_installs_prepared_pins_without_post_publish_setup_gets() {
     assert_eq!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Get
-                && (path.contains("global-leaf/descriptors/")
-                    || path.contains("global-leaf/roots/"))
+                && (path.starts_with("global-leaf/v11/codebooks/")
+                    || path.starts_with("global-leaf/v11/directories/"))
         }),
-        4,
-        "purge must validate exactly one descriptor and three roots before publication"
+        2,
+        "purge must validate one shared codebook and one base directory before publication"
     );
     operations.clear();
     let report = index
@@ -2350,8 +2498,8 @@ fn successful_purge_installs_prepared_pins_without_post_publish_setup_gets() {
     assert_eq!(
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Get
-                && (path.contains("global-leaf/descriptors/")
-                    || path.contains("global-leaf/roots/"))
+                && (path.starts_with("global-leaf/v11/codebooks/")
+                    || path.starts_with("global-leaf/v11/directories/"))
         }),
         0,
         "first post-purge query repeated setup reads"

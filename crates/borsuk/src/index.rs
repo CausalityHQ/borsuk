@@ -332,10 +332,19 @@ struct SearchExecution {
 
 #[derive(Debug)]
 struct GlobalLeafReadGroup {
+    run_ordinal: usize,
+    bundle_index: u32,
     path: String,
     start: u64,
     end: u64,
     pages: Vec<crate::global_leaf::GlobalLeafPageRef>,
+}
+
+#[derive(Debug)]
+struct GlobalLeafDirectoryLoad {
+    pages: Vec<RoutedGlobalLeafPage>,
+    objects_read: usize,
+    encoded_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -12854,6 +12863,7 @@ impl BorsukIndex {
     fn load_resident_global_leaf_run(
         &self,
         reference: &GlobalLeafRunRef,
+        level: Option<u8>,
     ) -> Result<Arc<ResidentGlobalLeafRun>> {
         let key = serde_json::to_string(reference).map_err(|error| {
             BorsukError::InvalidStorage(format!(
@@ -12867,9 +12877,15 @@ impl BorsukIndex {
         {
             pinned
         } else {
-            self.resident_global_leaf_runs
-                .load(&key, || self.read_resident_global_leaf_run(reference))?
+            self.resident_global_leaf_runs.load(&key, || {
+                self.read_resident_global_leaf_run(reference, level)
+            })?
         };
+        if loaded.level() != level {
+            return Err(BorsukError::InvalidStorage(
+                "V11 leaf-run cache identity has the wrong level".to_owned(),
+            ));
+        }
         self.validate_resident_global_leaf_run(reference, &loaded)?;
         Ok(loaded)
     }
@@ -12877,6 +12893,7 @@ impl BorsukIndex {
     fn read_resident_global_leaf_run(
         &self,
         reference: &GlobalLeafRunRef,
+        level: Option<u8>,
     ) -> Result<ResidentGlobalLeafRun> {
         let directory_ref = reference.directory();
         let root = self
@@ -12899,7 +12916,10 @@ impl BorsukIndex {
                     .map(|read| read.bytes)
             },
         )?;
-        let resident = ResidentGlobalLeafRun::new(directory);
+        let rows = usize::try_from(reference.rows()).map_err(|_| {
+            BorsukError::InvalidStorage("V11 leaf-run row count exceeds usize".to_owned())
+        })?;
+        let resident = ResidentGlobalLeafRun::new(directory, level, rows);
         self.validate_resident_global_leaf_run(reference, &resident)?;
         Ok(resident)
     }
@@ -12907,6 +12927,7 @@ impl BorsukIndex {
     fn read_resident_global_leaf_run_from_backing(
         &self,
         reference: &GlobalLeafRunRef,
+        level: Option<u8>,
     ) -> Result<ResidentGlobalLeafRun> {
         let directory_ref = reference.directory();
         let root = self.storage.read_known_size_from_backing_with_checksum(
@@ -12927,7 +12948,10 @@ impl BorsukIndex {
                     .map(|read| read.bytes)
             },
         )?;
-        let resident = ResidentGlobalLeafRun::new(directory);
+        let rows = usize::try_from(reference.rows()).map_err(|_| {
+            BorsukError::InvalidStorage("V11 leaf-run row count exceeds usize".to_owned())
+        })?;
+        let resident = ResidentGlobalLeafRun::new(directory, level, rows);
         self.validate_resident_global_leaf_run(reference, &resident)?;
         Ok(resident)
     }
@@ -12978,6 +13002,7 @@ impl BorsukIndex {
             || sealed_pages != reference.sealed_pages()
             || partial_pages != reference.partial_pages()
             || encoded_bytes != reference.encoded_bytes()
+            || u64::try_from(loaded.rows()).ok() != Some(reference.rows())
             || u64::try_from(loaded.resident_bytes()).ok() != Some(reference.resident_bytes())
         {
             return Err(BorsukError::InvalidStorage(
@@ -12994,7 +13019,7 @@ impl BorsukIndex {
         let Some(reference) = manifest.global_ann_ref.as_ref() else {
             return Ok(None);
         };
-        reference.validate()?;
+        reference.validate_serving_shape()?;
         // Transactional preload always authenticates the manifest's exact durable
         // identities before any warm cache entry or pin can become visible.
         let codebook_reference = reference.codebook();
@@ -13011,15 +13036,21 @@ impl BorsukIndex {
             .load(&codebook_key, || Ok(codebook_loaded))?;
         let leaf_runs = reference
             .base()
+            .map(|run| (None, run))
             .into_iter()
-            .chain(reference.incremental_runs())
-            .map(|run| {
+            .chain(
+                reference
+                    .incremental_runs()
+                    .iter()
+                    .map(|run| (Some(run.level()), run)),
+            )
+            .map(|(level, run)| {
                 let key = serde_json::to_string(run).map_err(|error| {
                     BorsukError::InvalidStorage(format!(
                         "V11 global leaf-run reference cannot be keyed: {error}"
                     ))
                 })?;
-                let resident = self.read_resident_global_leaf_run_from_backing(run)?;
+                let resident = self.read_resident_global_leaf_run_from_backing(run, level)?;
                 let loaded = self.resident_global_leaf_runs.load(&key, || Ok(resident))?;
                 Ok::<_, BorsukError>((key, loaded))
             })
@@ -13031,14 +13062,94 @@ impl BorsukIndex {
         }))
     }
 
+    fn load_selected_global_leaf_directories(
+        &self,
+        codebook: &GlobalCodebookRef,
+        runs: &[(Option<u8>, &GlobalLeafRunRef, Arc<ResidentGlobalLeafRun>)],
+        selected_cells: &[u16],
+    ) -> Result<Vec<GlobalLeafDirectoryLoad>> {
+        let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
+        runs.iter()
+            .enumerate()
+            .map(|(run_ordinal, (level, reference, resident))| {
+                if reference.codebook_checksum() != codebook.descriptor_checksum()
+                    || resident.level() != *level
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "V11 routed leaf run is not bound to the shared codebook and level"
+                            .to_owned(),
+                    ));
+                }
+                self.validate_resident_global_leaf_run(reference, resident)?;
+                let directory = resident.directory();
+                let objects_read = directory.shards.len().checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V11 directory object count exceeds usize".to_owned(),
+                    )
+                })?;
+                if u32::try_from(objects_read).ok() != Some(reference.directory().object_count()) {
+                    return Err(BorsukError::InvalidStorage(
+                        "V11 directory object count does not match its reference".to_owned(),
+                    ));
+                }
+                let encoded_bytes = directory
+                    .shards
+                    .iter()
+                    .map(|shard| shard.encoded_bytes)
+                    .try_fold(reference.directory().encoded_bytes(), |total, bytes| {
+                        total.checked_add(bytes).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V11 directory byte count overflows".to_owned(),
+                            )
+                        })
+                    })?;
+                let pages = directory
+                    .pages
+                    .iter()
+                    .filter(|page| selected.contains(&page.cell_index))
+                    .map(|page| {
+                        let bundle = directory
+                            .bundles
+                            .get(page.bundle_index as usize)
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "V11 directory page references a missing bundle".to_owned(),
+                                )
+                            })?;
+                        Ok(RoutedGlobalLeafPage {
+                            run_ordinal,
+                            level: *level,
+                            distance: f32::NAN,
+                            bundle_path: bundle.path.clone(),
+                            page: page.clone(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(GlobalLeafDirectoryLoad {
+                    pages,
+                    objects_read,
+                    encoded_bytes,
+                })
+            })
+            .collect()
+    }
+
     fn global_leaf_read_groups(
         &self,
         pages: &[RoutedGlobalLeafPage],
-        base: &ResidentGlobalLeafRun,
+        runs: &[Arc<ResidentGlobalLeafRun>],
     ) -> Result<Vec<GlobalLeafReadGroup>> {
         let mut planned = Vec::with_capacity(pages.len());
         for routed in pages {
-            let bundle = base
+            let run = runs.get(routed.run_ordinal).ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf page references a missing run".to_string())
+            })?;
+            if run.level() != routed.level {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf page level does not match its run".to_string(),
+                ));
+            }
+            let bundle = run
                 .directory()
                 .bundles
                 .get(routed.page.bundle_index as usize)
@@ -13055,6 +13166,7 @@ impl BorsukIndex {
                     BorsukError::InvalidStorage("global leaf page range overflows".to_string())
                 })?;
             if end > bundle.encoded_bytes
+                || bundle.path != routed.bundle_path
                 || u64::from(routed.page.batch_bytes)
                     > crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
             {
@@ -13063,16 +13175,26 @@ impl BorsukIndex {
                 ));
             }
             planned.push((
+                routed.run_ordinal,
+                routed.page.bundle_index,
                 bundle.path.clone(),
                 routed.page.batch_offset,
                 end,
                 routed.page.clone(),
             ));
         }
-        planned.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        planned.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
         let mut groups: Vec<GlobalLeafReadGroup> = Vec::new();
-        for (path, start, end, page) in planned {
+        for (run_ordinal, bundle_index, path, start, end, page) in planned {
             if let Some(group) = groups.last_mut()
+                && group.run_ordinal == run_ordinal
+                && group.bundle_index == bundle_index
                 && group.path == path
                 && group.end == start
             {
@@ -13081,6 +13203,8 @@ impl BorsukIndex {
                 continue;
             }
             groups.push(GlobalLeafReadGroup {
+                run_ordinal,
+                bundle_index,
                 path,
                 start,
                 end,
@@ -13093,12 +13217,12 @@ impl BorsukIndex {
     fn fetch_global_leaf_wave(
         &self,
         pages: &[RoutedGlobalLeafPage],
-        base: &ResidentGlobalLeafRun,
+        runs: &[Arc<ResidentGlobalLeafRun>],
     ) -> Result<(Vec<RoutedDecodedGlobalLeafRow>, u64)> {
         if pages.is_empty() {
             return Ok((Vec::new(), 0));
         }
-        let groups = self.global_leaf_read_groups(pages, base)?;
+        let groups = self.global_leaf_read_groups(pages, runs)?;
         let dimensions = self.manifest.config.dimensions;
         let reads = bounded_io_map_with_gate(
             &groups,
@@ -13157,19 +13281,25 @@ impl BorsukIndex {
         Ok((rows, bytes))
     }
 
-    fn resolve_global_leaf_rows(
+    fn merge_global_leaf_rows(
         &self,
-        rows: &[RoutedDecodedGlobalLeafRow],
+        winners: &mut BTreeMap<RecordId, RoutedDecodedGlobalLeafRow>,
+        rows: Vec<RoutedDecodedGlobalLeafRow>,
         mutation_states: Option<&FrozenMutationOverlay>,
-    ) -> Result<Vec<RoutedDecodedGlobalLeafRow>> {
-        let mut winners = BTreeMap::<RecordId, &RoutedDecodedGlobalLeafRow>::new();
+    ) -> Result<()> {
         for candidate in rows {
+            if Self::state_suppresses_stamp(
+                mutation_states.and_then(|states| states.get(candidate.row.id.as_bytes())),
+                candidate.row.stamp,
+            )? {
+                continue;
+            }
             match winners.entry(candidate.row.id.clone()) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     entry.insert(candidate);
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    let current = *entry.get();
+                    let current = entry.get();
                     let greatest = current.row.stamp.greatest(candidate.row.stamp)?;
                     let newer = greatest == candidate.row.stamp
                         && candidate.row.stamp.version() > current.row.stamp.version();
@@ -13179,27 +13309,13 @@ impl BorsukIndex {
                 }
             }
         }
-        winners
-            .into_iter()
-            .filter_map(|(id, candidate)| {
-                match Self::state_suppresses_stamp(
-                    mutation_states.and_then(|states| states.get(id.as_bytes())),
-                    candidate.row.stamp,
-                ) {
-                    Ok(false) => Some(Ok(RoutedDecodedGlobalLeafRow {
-                        row: candidate.row.clone(),
-                    })),
-                    Ok(true) => None,
-                    Err(error) => Some(Err(error)),
-                }
-            })
-            .collect()
+        Ok(())
     }
 
     fn resident_global_v11_context(
         &self,
         options: &SearchOptions,
-    ) -> Option<ResidentGlobalV11Context<'_>> {
+    ) -> Result<Option<ResidentGlobalV11Context<'_>>> {
         let expected_leaf_mode = self.manifest.build_config.global_scan_codec.leaf_mode();
         let eligible = matches!(options.mode, SearchMode::Approx { .. })
             && options.mode.leaf_mode() == expected_leaf_mode
@@ -13214,26 +13330,29 @@ impl BorsukIndex {
             )
             && options.filter.is_none()
             && !options.include_metadata
-            && self
-                .manifest
-                .global_ann_ref
-                .as_ref()
-                .is_some_and(|reference| reference.validate_offline_base_shape().is_ok());
+            && self.manifest.global_ann_ref.is_some();
         if !eligible {
-            return None;
+            return Ok(None);
         }
+        self.manifest
+            .global_ann_ref
+            .as_ref()
+            .expect("eligibility requires a V11 reference")
+            .validate_serving_shape()?;
         let page_budget = match options.mode {
             SearchMode::Approx { max_segments, .. } => match max_segments.unwrap_or(16) {
                 budget @ (4 | 8 | 16 | 32) => budget,
-                _ => return None,
+                _ => return Ok(None),
             },
-            SearchMode::Exact => return None,
+            SearchMode::Exact => return Ok(None),
         };
-        let mutation_states = self.resident_global_mutations_for_current_snapshot()?;
-        Some(ResidentGlobalV11Context {
+        let Some(mutation_states) = self.resident_global_mutations_for_current_snapshot() else {
+            return Ok(None);
+        };
+        Ok(Some(ResidentGlobalV11Context {
             page_budget,
             mutation_states,
-        })
+        }))
     }
 
     fn search_resident_global_ann(
@@ -13244,7 +13363,7 @@ impl BorsukIndex {
         started: Instant,
         requests_before: &RequestCounts,
     ) -> Result<Option<SearchExecution>> {
-        let Some(context) = self.resident_global_v11_context(options) else {
+        let Some(context) = self.resident_global_v11_context(options)? else {
             return Ok(None);
         };
         let page_budget = context.page_budget;
@@ -13317,10 +13436,6 @@ impl BorsukIndex {
         }
         let routing_started = Instant::now();
         let codebook = self.load_resident_global_codebook(global_ref.codebook())?;
-        let Some(base_reference) = global_ref.base() else {
-            return Ok(None);
-        };
-        let base = self.load_resident_global_leaf_run(base_reference)?;
         let pq_query = if self
             .manifest
             .config
@@ -13331,7 +13446,7 @@ impl BorsukIndex {
         } else {
             query.to_vec()
         };
-        let base_cells = codebook.nearest_cells(
+        let selected_cells = codebook.nearest_cells(
             &pq_query,
             usize::try_from(global_ref.codebook().probes())
                 .unwrap_or(usize::MAX)
@@ -13339,24 +13454,54 @@ impl BorsukIndex {
                 .min(codebook.cell_count()),
         )?;
         let mut latency_limited = resident_global_latency_expired(options, started);
-        let selected_cells = base_cells.iter().copied().collect::<BTreeSet<_>>();
-        let base_pages = if latency_limited {
-            Vec::new()
+        let run_references = global_ref
+            .base()
+            .map(|run| (None, run))
+            .into_iter()
+            .chain(
+                global_ref
+                    .incremental_runs()
+                    .iter()
+                    .map(|run| (Some(run.level()), run)),
+            )
+            .collect::<Vec<_>>();
+        let (resident_runs, directory_loads) = if latency_limited {
+            (Vec::new(), Vec::new())
         } else {
-            base.directory()
-                .pages
+            let loaded = run_references
                 .iter()
-                .filter(|page| selected_cells.contains(&page.cell_index))
-                .cloned()
-                .map(|page| RoutedGlobalLeafPage {
-                    distance: 0.0,
-                    page,
+                .map(|(level, reference)| {
+                    self.load_resident_global_leaf_run(reference, *level)
+                        .map(|resident| (*level, *reference, resident))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>>>()?;
+            let directory_loads = self.load_selected_global_leaf_directories(
+                global_ref.codebook(),
+                &loaded,
+                &selected_cells,
+            )?;
+            let resident_runs = loaded
+                .into_iter()
+                .map(|(_, _, resident)| resident)
+                .collect::<Vec<_>>();
+            (resident_runs, directory_loads)
         };
-        let mut routed = codebook.rank_pages(&pq_query, &base_cells, base_pages, page_budget)?;
-        let directory_reads = 0_usize;
-        let directory_bytes = 0_u64;
+        latency_limited |= resident_global_latency_expired(options, started);
+        let directory_reads = directory_loads.iter().try_fold(0_usize, |total, load| {
+            total.checked_add(load.objects_read).ok_or_else(|| {
+                BorsukError::InvalidStorage("V11 directory read count overflows".to_owned())
+            })
+        })?;
+        let directory_bytes = directory_loads.iter().try_fold(0_u64, |total, load| {
+            total.checked_add(load.encoded_bytes).ok_or_else(|| {
+                BorsukError::InvalidStorage("V11 directory byte count overflows".to_owned())
+            })
+        })?;
+        let pages = directory_loads
+            .into_iter()
+            .flat_map(|load| load.pages)
+            .collect::<Vec<_>>();
+        let mut routed = codebook.rank_pages(&pq_query, &selected_cells, pages, page_budget)?;
         let max_bytes = match options.mode {
             SearchMode::Approx { max_bytes, .. } => max_bytes,
             SearchMode::Exact => None,
@@ -13365,19 +13510,22 @@ impl BorsukIndex {
         if let Some(limit) = max_bytes {
             let mut planned = directory_bytes;
             let available = routed.len();
-            let prefix_len = routed
-                .iter()
-                .take_while(|candidate| {
-                    let next = planned.saturating_add(u64::from(candidate.page.batch_bytes));
+            let mut prefix_len = 0_usize;
+            if planned <= limit {
+                for candidate in &routed {
+                    let Some(next) = planned.checked_add(u64::from(candidate.page.batch_bytes))
+                    else {
+                        break;
+                    };
                     if next > limit {
-                        return false;
+                        break;
                     }
                     planned = next;
-                    true
-                })
-                .count();
+                    prefix_len += 1;
+                }
+            }
             routed.truncate(prefix_len);
-            byte_budget_limited = prefix_len < available;
+            byte_budget_limited = directory_bytes > limit || prefix_len < available;
         }
         let global_approximate_us =
             u64::try_from(routing_started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -13406,7 +13554,9 @@ impl BorsukIndex {
         let mut logical_page_bytes = 0_u64;
         let mut waves = 0_usize;
         let mut continuations = 0_usize;
-        let mut decoded = Vec::new();
+        let mut records_considered = 0_usize;
+        let mut winners = BTreeMap::new();
+        let mut observed_wave_latency = Duration::ZERO;
         if !initial.is_empty() {
             if resident_global_latency_expired(options, started) {
                 latency_limited = true;
@@ -13415,7 +13565,10 @@ impl BorsukIndex {
                     .iter()
                     .map(|candidate| u64::from(candidate.page.batch_bytes))
                     .sum::<u64>();
-                let (rows, initial_bytes) = self.fetch_global_leaf_wave(&initial, &base)?;
+                let wave_started = Instant::now();
+                let (rows, initial_bytes) =
+                    self.fetch_global_leaf_wave(&initial, &resident_runs)?;
+                observed_wave_latency = wave_started.elapsed();
                 if initial_bytes != planned_bytes {
                     return Err(BorsukError::InvalidStorage(
                         "global leaf coalescing changed the logical encoded-byte budget"
@@ -13425,16 +13578,19 @@ impl BorsukIndex {
                 fetched_pages = initial.len();
                 logical_page_bytes = planned_bytes;
                 waves = 1;
-                decoded = rows;
+                records_considered = records_considered.saturating_add(rows.len());
+                self.merge_global_leaf_rows(&mut winners, rows, mutation_states)?;
             }
         }
-        let mut live = self.resolve_global_leaf_rows(&decoded, mutation_states)?;
-        while live.len() < options.k && !remaining.is_empty() {
-            if resident_global_latency_expired(options, started) {
+        while winners.len() < options.k && !remaining.is_empty() {
+            if resident_global_latency_expired(options, started)
+                || resident_global_remaining_latency(options, started)
+                    .is_some_and(|remaining| remaining <= observed_wave_latency)
+            {
                 latency_limited = true;
                 break;
             }
-            let missing = options.k - live.len();
+            let missing = options.k - winners.len();
             let mut continuation = Vec::new();
             let mut continuation_rows = 0_usize;
             while continuation_rows < missing {
@@ -13448,7 +13604,14 @@ impl BorsukIndex {
                 .iter()
                 .map(|candidate| u64::from(candidate.page.batch_bytes))
                 .sum::<u64>();
-            let (mut rows, fetched_bytes) = self.fetch_global_leaf_wave(&continuation, &base)?;
+            if resident_global_latency_expired(options, started) {
+                latency_limited = true;
+                break;
+            }
+            let wave_started = Instant::now();
+            let (rows, fetched_bytes) =
+                self.fetch_global_leaf_wave(&continuation, &resident_runs)?;
+            observed_wave_latency = observed_wave_latency.max(wave_started.elapsed());
             if fetched_bytes != continuation_bytes {
                 return Err(BorsukError::InvalidStorage(
                     "global leaf continuation changed its logical encoded-byte budget".to_string(),
@@ -13456,15 +13619,14 @@ impl BorsukIndex {
             }
             fetched_pages = fetched_pages.saturating_add(continuation.len());
             logical_page_bytes = logical_page_bytes.saturating_add(continuation_bytes);
-            decoded.append(&mut rows);
+            records_considered = records_considered.saturating_add(rows.len());
+            self.merge_global_leaf_rows(&mut winners, rows, mutation_states)?;
             continuations = continuations.saturating_add(1);
             waves = waves.saturating_add(1);
-            live = self.resolve_global_leaf_rows(&decoded, mutation_states)?;
         }
         latency_limited |= resident_global_latency_expired(options, started);
-        let records_considered = decoded.len();
-        let mut scored = live
-            .into_iter()
+        let mut scored = winners
+            .into_values()
             .map(|candidate| {
                 Ok((
                     self.manifest
@@ -15084,7 +15246,7 @@ impl BorsukIndex {
 
         let requests_before = self.storage.request_counts();
         let started = Instant::now();
-        let resident_global_v11_context = self.resident_global_v11_context(&options);
+        let resident_global_v11_context = self.resident_global_v11_context(&options)?;
         let wal_query_cells = self.wal_query_cells(query, &options)?;
         let live_wal_tail = if options.k == 0 {
             Arc::new(Vec::new())
@@ -15107,18 +15269,7 @@ impl BorsukIndex {
         };
         let zero_distance_wal_eligible = matches!(options.mode, SearchMode::Approx { .. })
             && self.manifest.config.metric.supports_centroid_lower_bound();
-        let global_eligible = options.mode.leaf_mode()
-            == self.manifest.build_config.global_scan_codec.leaf_mode()
-            && matches!(options.mode, SearchMode::Approx { .. })
-            && !options.guaranteed_recall
-            && !options.disable_coarse_quantizer
-            && options.filter.is_none()
-            && !options.include_metadata
-            && self
-                .manifest
-                .global_ann_ref
-                .as_ref()
-                .is_some_and(|reference| reference.validate_offline_base_shape().is_ok());
+        let global_eligible = resident_global_v11_context.is_some();
         // Online segment-changing publishes clear the Task 3 base. Presence of
         // a V11 reference therefore certifies the active immutable set without
         // a routing-tree walk or a dual-format fallback.
@@ -22768,6 +22919,20 @@ fn resident_global_latency_expired(options: &SearchOptions, started: Instant) ->
     started.elapsed().as_millis() >= u128::from(*limit)
 }
 
+fn resident_global_remaining_latency(
+    options: &SearchOptions,
+    started: Instant,
+) -> Option<Duration> {
+    let SearchMode::Approx {
+        max_latency_ms: Some(limit),
+        ..
+    } = &options.mode
+    else {
+        return None;
+    };
+    Some(Duration::from_millis(*limit).saturating_sub(started.elapsed()))
+}
+
 fn resident_global_termination_reason(
     options: &SearchOptions,
     started: Instant,
@@ -25287,7 +25452,7 @@ mod tests {
         let codebook = index
             .load_resident_global_codebook(reference.codebook())
             .unwrap();
-        let run = index.load_resident_global_leaf_run(base).unwrap();
+        let run = index.load_resident_global_leaf_run(base, None).unwrap();
         assert_eq!(
             reference.resident_bytes(),
             u64::try_from(codebook.resident_bytes() + run.resident_bytes()).unwrap()
@@ -25383,7 +25548,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_rejects_incremental_shape_before_search() {
+    fn resident_global_v11_preload_rejects_mismatched_incremental_directory() {
         let (_directory, index) = build_finished_resident_global_v11_index();
         let mut manifest = index.manifest.clone();
         let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
@@ -25411,6 +25576,12 @@ mod tests {
                 value["resident_bytes"].as_u64().unwrap()
                     + incremental["resident_bytes"].as_u64().unwrap(),
             );
+            value["incremental_runs"][0]["directory"]["shard_count"] = serde_json::Value::from(
+                value["incremental_runs"][0]["directory"]["shard_count"]
+                    .as_u64()
+                    .unwrap()
+                    + 1,
+            );
         });
         ann.validate().unwrap();
         manifest.global_ann_ref = Some(ann);
@@ -25418,12 +25589,10 @@ mod tests {
         let error = index
             .preload_resident_global_ann_for_manifest(&manifest)
             .unwrap_err();
-        assert!(error.to_string().contains("offline base"), "{error}");
-
-        let options = SearchOptions::approx(3, LeafMode::SrhtPqScan).with_max_segments(4);
-        let mut serving = index;
-        serving.manifest = manifest;
-        assert!(serving.resident_global_v11_context(&options).is_none());
+        assert!(
+            error.to_string().contains("does not match its directory"),
+            "{error}"
+        );
     }
 
     #[test]

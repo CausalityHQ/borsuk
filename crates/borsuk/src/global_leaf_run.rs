@@ -408,11 +408,21 @@ pub(crate) struct GlobalLeafRunRef {
 #[derive(Debug, Clone)]
 pub(crate) struct ResidentGlobalLeafRun {
     directory: crate::global_leaf::GlobalLeafRunDirectory,
+    level: Option<u8>,
+    rows: usize,
 }
 
 impl ResidentGlobalLeafRun {
-    pub(crate) fn new(directory: crate::global_leaf::GlobalLeafRunDirectory) -> Self {
-        Self { directory }
+    pub(crate) fn new(
+        directory: crate::global_leaf::GlobalLeafRunDirectory,
+        level: Option<u8>,
+        rows: usize,
+    ) -> Self {
+        Self {
+            directory,
+            level,
+            rows,
+        }
     }
 
     pub(crate) fn directory(&self) -> &crate::global_leaf::GlobalLeafRunDirectory {
@@ -421,6 +431,14 @@ impl ResidentGlobalLeafRun {
 
     pub(crate) fn resident_bytes(&self) -> usize {
         self.directory.resident_bytes()
+    }
+
+    pub(crate) fn level(&self) -> Option<u8> {
+        self.level
+    }
+
+    pub(crate) fn rows(&self) -> usize {
+        self.rows
     }
 }
 
@@ -829,31 +847,16 @@ impl GlobalAnnRef {
         Ok(())
     }
 
-    /// Validate the exact Task 3 serving shape: one level-zero offline base and
-    /// no incremental coverage. Generic V11 validation remains available for
-    /// later incremental-run tasks, but those references are not yet servable.
-    pub(crate) fn validate_offline_base_shape(&self) -> Result<()> {
+    /// Validate a complete V11 serving shape. Unlike the Task 3 base-only
+    /// gate, this accepts authenticated incremental levels while retaining the
+    /// invariant that every retired lane range has exactly one searchable run.
+    pub(crate) fn validate_serving_shape(&self) -> Result<()> {
         self.validate()?;
         let Some(base) = &self.base else {
-            return invalid("V11 offline base reference is missing its base run");
+            return invalid("V11 serving reference is missing its base run");
         };
-        if !self.incremental_runs.is_empty() || !self.coverage.ranges.is_empty() {
-            return invalid("V11 offline base reference contains incremental runs or coverage");
-        }
-        if base.level != 0 {
-            return invalid("V11 offline base run must be level zero");
-        }
-        if self.base_rows != base.rows
-            || self.rows != base.rows
-            || self.appended_live_rows != 0
-            || self.obsolete_rows != 0
-        {
-            return invalid("V11 offline base row counters are inconsistent");
-        }
-        if !self.drift.pending_reconstruction_errors_micros.is_empty()
-            || self.drift.consecutive_breaches != 0
-        {
-            return invalid("V11 offline base must not contain pending drift samples");
+        if base.level != 0 || self.base_rows != base.rows {
+            return invalid("V11 serving base counters are inconsistent");
         }
         Ok(())
     }
@@ -1860,7 +1863,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_base_shape_rejects_a_generic_valid_incremental_reference() {
+    fn serving_shape_accepts_a_generic_valid_incremental_reference() {
         let mut ann = valid_offline_ann_ref();
         let mut incremental = valid_ann_ref().incremental_runs.remove(0);
         incremental.level = 1;
@@ -1873,8 +1876,7 @@ mod tests {
         ann.incremental_runs.push(incremental);
         ann.validate().unwrap();
 
-        let error = ann.validate_offline_base_shape().unwrap_err().to_string();
-        assert!(error.contains("offline base"), "{error}");
+        ann.validate_serving_shape().unwrap();
     }
 
     #[test]
@@ -1891,17 +1893,17 @@ mod tests {
     }
 
     #[test]
-    fn offline_base_shape_binds_base_level_and_row_counters() {
+    fn serving_shape_binds_base_level_and_row_counters() {
         let mut ann = valid_offline_ann_ref();
         ann.base.as_mut().unwrap().level = 1;
         assert!(ann.validate().is_ok());
-        assert!(ann.validate_offline_base_shape().is_err());
+        assert!(ann.validate_serving_shape().is_err());
 
         let mut ann = valid_offline_ann_ref();
         ann.base_rows += 1;
         ann.rows += 1;
         assert!(ann.validate().is_ok());
-        assert!(ann.validate_offline_base_shape().is_err());
+        assert!(ann.validate_serving_shape().is_err());
     }
 
     #[test]

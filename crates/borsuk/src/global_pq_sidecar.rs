@@ -1538,10 +1538,17 @@ impl ResidentGlobalCodebook {
         ranked.sort_by(|left, right| {
             left.distance
                 .total_cmp(&right.distance)
+                .then_with(|| match (left.level, right.level) {
+                    (Some(left_level), Some(right_level)) => left_level.cmp(&right_level),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                })
                 .then_with(|| left.page.cell_index.cmp(&right.page.cell_index))
                 .then_with(|| left.page.leaf_ordinal.cmp(&right.page.leaf_ordinal))
-                .then_with(|| left.page.bundle_index.cmp(&right.page.bundle_index))
+                .then_with(|| left.bundle_path.cmp(&right.bundle_path))
                 .then_with(|| left.page.batch_offset.cmp(&right.page.batch_offset))
+                .then_with(|| left.run_ordinal.cmp(&right.run_ordinal))
         });
         ranked.truncate(page_budget);
         Ok(ranked)
@@ -1619,7 +1626,10 @@ pub(crate) enum GlobalPqCellSpoolEvent {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RoutedGlobalLeafPage {
+    pub(crate) run_ordinal: usize,
+    pub(crate) level: Option<u8>,
     pub(crate) distance: f32,
+    pub(crate) bundle_path: String,
     pub(crate) page: crate::global_leaf::GlobalLeafPageRef,
 }
 
@@ -1749,11 +1759,17 @@ mod tests {
                 &[7],
                 [
                     RoutedGlobalLeafPage {
+                        run_ordinal: 0,
+                        level: None,
                         distance: f32::NAN,
+                        bundle_path: "base.arrow".to_owned(),
                         page: page.clone(),
                     },
                     RoutedGlobalLeafPage {
+                        run_ordinal: 1,
+                        level: Some(0),
                         distance: f32::NAN,
+                        bundle_path: "incremental.arrow".to_owned(),
                         page,
                     },
                 ],
@@ -1825,7 +1841,10 @@ mod tests {
                 &query,
                 &[7],
                 [RoutedGlobalLeafPage {
+                    run_ordinal: 0,
+                    level: None,
                     distance: 0.0,
+                    bundle_path: "base.arrow".to_owned(),
                     page,
                 }],
                 1,
@@ -1894,7 +1913,10 @@ mod tests {
                     &query,
                     &[7, 7],
                     pages.iter().cloned().map(|page| RoutedGlobalLeafPage {
+                        run_ordinal: 0,
+                        level: None,
                         distance: f32::NAN,
+                        bundle_path: format!("bundle-{}.arrow", page.bundle_index),
                         page,
                     }),
                     budget,
@@ -1919,6 +1941,38 @@ mod tests {
                     <= budget as u64 * crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
             );
         }
+    }
+
+    #[test]
+    fn v11_page_ranking_uses_one_global_budget_without_per_run_reservation() {
+        let descriptor = test_v11_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vec![0.0_f32; 64];
+        let pages = std::iter::once(RoutedGlobalLeafPage {
+            run_ordinal: 0,
+            level: None,
+            distance: f32::NAN,
+            bundle_path: "base.arrow".to_owned(),
+            page: leaf_page(&quantizer, &query, 7, 99),
+        })
+        .chain((0..5).map(|ordinal| RoutedGlobalLeafPage {
+            run_ordinal: 1,
+            level: Some(0),
+            distance: f32::NAN,
+            bundle_path: "incremental.arrow".to_owned(),
+            page: leaf_page(&quantizer, &query, 7, ordinal),
+        }));
+
+        let ranked = resident.rank_pages(&query, &[7], pages, 4).unwrap();
+
+        assert_eq!(ranked.len(), 4);
+        assert!(
+            ranked
+                .iter()
+                .all(|page| page.run_ordinal == 1 && page.level == Some(0)),
+            "the global page budget reserved capacity for the base: {ranked:?}"
+        );
     }
 
     fn vectors(rows: usize, dimensions: usize) -> Vec<Vec<f32>> {
