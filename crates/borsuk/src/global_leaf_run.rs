@@ -757,10 +757,10 @@ fn validate_codebook(codebook: &GlobalCodebookRef) -> Result<()> {
     {
         return invalid("V11 global codebook probes must be within candidates and the cell count");
     }
-    if let VectorMetric::Minkowski { p } = codebook.metric {
-        if !p.is_finite() || p < 1.0 {
-            return invalid("V11 global codebook metric is invalid");
-        }
+    if let VectorMetric::Minkowski { p } = codebook.metric
+        && (!p.is_finite() || p < 1.0)
+    {
+        return invalid("V11 global codebook metric is invalid");
     }
     Ok(())
 }

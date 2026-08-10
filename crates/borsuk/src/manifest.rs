@@ -720,51 +720,56 @@ impl Manifest {
 
     pub(crate) fn try_resident_bytes_estimate(&self) -> Result<u64> {
         let mut total = 0_u64;
-        let mut add = |bytes: usize| -> Result<()> {
-            let bytes = u64::try_from(bytes).map_err(|_| {
-                BorsukError::InvalidStorage("manifest resident RAM budget estimate overflow".into())
-            })?;
-            total = total.checked_add(bytes).ok_or_else(|| {
-                BorsukError::InvalidStorage("manifest resident RAM budget estimate overflow".into())
-            })?;
-            Ok(())
-        };
-        add(size_of::<Self>())?;
-        add(size_of::<IndexConfig>())?;
-        add(self.config.uri.len())?;
-        add(self
-            .text_tokenizer
-            .as_ref()
-            .map(String::len)
-            .unwrap_or_default())?;
-        for segment in &self.segments {
-            add(segment.resident_bytes_estimate())?;
+        {
+            let mut add = |bytes: usize| -> Result<()> {
+                let bytes = u64::try_from(bytes).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "manifest resident RAM budget estimate overflow".into(),
+                    )
+                })?;
+                total = total.checked_add(bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "manifest resident RAM budget estimate overflow".into(),
+                    )
+                })?;
+                Ok(())
+            };
+            add(size_of::<Self>())?;
+            add(size_of::<IndexConfig>())?;
+            add(self.config.uri.len())?;
+            add(self
+                .text_tokenizer
+                .as_ref()
+                .map(String::len)
+                .unwrap_or_default())?;
+            for segment in &self.segments {
+                add(segment.resident_bytes_estimate())?;
+            }
+            for pivot in &self.pivots {
+                add(pivot.resident_bytes_estimate())?;
+            }
+            if let Some(tombstone) = &self.tombstone {
+                add(tombstone.resident_bytes_estimate())?;
+            }
+            for tombstone in &self.tombstone_frontier {
+                add(tombstone.resident_bytes_estimate())?;
+            }
+            for page in &self.tombstone_pages {
+                add(page.resident_bytes_estimate())?;
+            }
+            if let Some(quantizer) = &self.quantizer_ref {
+                add(quantizer.resident_bytes_estimate())?;
+            }
+            for root in &self.lexical_roots {
+                add(root.resident_bytes_estimate())?;
+            }
+            if let Some(delta) = &self.bm25_stats_delta {
+                add(delta.resident_bytes_estimate())?;
+            }
+            for delta in &self.bm25_stats_delta_frontier {
+                add(delta.resident_bytes_estimate())?;
+            }
         }
-        for pivot in &self.pivots {
-            add(pivot.resident_bytes_estimate())?;
-        }
-        if let Some(tombstone) = &self.tombstone {
-            add(tombstone.resident_bytes_estimate())?;
-        }
-        for tombstone in &self.tombstone_frontier {
-            add(tombstone.resident_bytes_estimate())?;
-        }
-        for page in &self.tombstone_pages {
-            add(page.resident_bytes_estimate())?;
-        }
-        if let Some(quantizer) = &self.quantizer_ref {
-            add(quantizer.resident_bytes_estimate())?;
-        }
-        for root in &self.lexical_roots {
-            add(root.resident_bytes_estimate())?;
-        }
-        if let Some(delta) = &self.bm25_stats_delta {
-            add(delta.resident_bytes_estimate())?;
-        }
-        for delta in &self.bm25_stats_delta_frontier {
-            add(delta.resident_bytes_estimate())?;
-        }
-        drop(add);
         if let Some(global_ann) = &self.global_ann_ref {
             total = total
                 .checked_add(global_ann.resident_bytes_estimate())
