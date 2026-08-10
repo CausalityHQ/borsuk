@@ -1517,18 +1517,9 @@ impl ResidentGlobalCodebook {
     ) -> Result<Vec<RoutedGlobalLeafPage>> {
         let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
         let prepared = self.quantizer.prepare_query(query)?;
-        let mut seen = BTreeSet::new();
         let mut ranked = pages
             .into_iter()
             .filter(|page| selected.contains(&page.page.cell_index))
-            .filter(|page| {
-                seen.insert((
-                    page.page.cell_index,
-                    page.page.leaf_ordinal,
-                    page.page.bundle_index,
-                    page.page.batch_offset,
-                ))
-            })
             .map(|mut routed| {
                 if u64::from(routed.page.batch_bytes)
                     > crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES

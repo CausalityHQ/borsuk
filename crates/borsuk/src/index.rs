@@ -12734,6 +12734,18 @@ impl BorsukIndex {
         ResidentGlobalCodebook::load(GlobalCodebookDescriptor::decode(&read.bytes)?)
     }
 
+    fn read_resident_global_codebook_from_backing(
+        &self,
+        reference: &GlobalCodebookRef,
+    ) -> Result<ResidentGlobalCodebook> {
+        let read = self.storage.read_known_size_from_backing_with_checksum(
+            reference.descriptor_path(),
+            reference.storage_bytes(),
+            reference.descriptor_checksum(),
+        )?;
+        ResidentGlobalCodebook::load(GlobalCodebookDescriptor::decode(&read.bytes)?)
+    }
+
     fn validate_resident_global_codebook(
         &self,
         reference: &GlobalCodebookRef,
@@ -12802,6 +12814,34 @@ impl BorsukIndex {
             |shard| {
                 self.storage
                     .read_known_size_with_cache_status_and_checksum(
+                        &shard.path,
+                        shard.encoded_bytes,
+                        &shard.checksum,
+                    )
+                    .map(|read| read.bytes)
+            },
+        )?;
+        let resident = ResidentGlobalLeafRun::new(directory);
+        self.validate_resident_global_leaf_run(reference, &resident)?;
+        Ok(resident)
+    }
+
+    fn read_resident_global_leaf_run_from_backing(
+        &self,
+        reference: &GlobalLeafRunRef,
+    ) -> Result<ResidentGlobalLeafRun> {
+        let directory_ref = reference.directory();
+        let root = self.storage.read_known_size_from_backing_with_checksum(
+            directory_ref.path(),
+            directory_ref.encoded_bytes(),
+            directory_ref.checksum(),
+        )?;
+        let directory = crate::global_leaf::decode_global_leaf_run_directory(
+            reference.codebook_checksum(),
+            &root.bytes,
+            |shard| {
+                self.storage
+                    .read_known_size_from_backing_with_checksum(
                         &shard.path,
                         shard.encoded_bytes,
                         &shard.checksum,
@@ -12885,7 +12925,8 @@ impl BorsukIndex {
                 "V11 global codebook reference cannot be keyed: {error}"
             ))
         })?;
-        let codebook_loaded = self.read_resident_global_codebook(codebook_reference)?;
+        let codebook_loaded =
+            self.read_resident_global_codebook_from_backing(codebook_reference)?;
         self.validate_resident_global_codebook(codebook_reference, &codebook_loaded, manifest)?;
         let codebook = self
             .resident_global_codebooks
@@ -12898,7 +12939,7 @@ impl BorsukIndex {
                         "V11 global leaf-run reference cannot be keyed: {error}"
                     ))
                 })?;
-                let resident = self.read_resident_global_leaf_run(base)?;
+                let resident = self.read_resident_global_leaf_run_from_backing(base)?;
                 let loaded = self.resident_global_leaf_runs.load(&key, || Ok(resident))?;
                 Ok::<_, BorsukError>((key, loaded))
             })
@@ -23053,6 +23094,34 @@ mod tests {
         (directory, index)
     }
 
+    fn build_cached_finished_resident_global_v11_index()
+    -> (tempfile::TempDir, tempfile::TempDir, BorsukIndex) {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_cache(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 256,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            Some(cache.path().to_path_buf()),
+        )
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        (directory, cache, index)
+    }
+
     fn ann_from_mutated_json(
         reference: &GlobalAnnRef,
         mutate: impl FnOnce(&mut serde_json::Value),
@@ -25574,6 +25643,66 @@ mod tests {
                 .expect_err(field);
             assert!(error.to_string().contains("missing"), "{field}: {error}");
         }
+    }
+
+    #[test]
+    fn resident_global_v11_refresh_rejects_deleted_backing_object_when_cached_without_swapping() {
+        let (directory, cache, mut writer) = build_cached_finished_resident_global_v11_index();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut reader =
+            BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+        let version = reader.manifest.version;
+        let descriptor_path = reader
+            .manifest
+            .global_ann_ref
+            .as_ref()
+            .unwrap()
+            .codebook()
+            .descriptor_path()
+            .to_owned();
+        let previous = writer.manifest.clone();
+        let candidate = writer.manifest.next_version();
+        writer.manifest = writer
+            .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+                candidate, &previous,
+            )
+            .unwrap();
+        assert!(writer.manifest.version > version);
+        assert!(directory.path().join(&descriptor_path).is_file());
+        std::fs::remove_file(directory.path().join(&descriptor_path)).unwrap();
+
+        let error = reader.refresh().unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error}");
+        assert_eq!(reader.manifest.version, version);
+    }
+
+    #[test]
+    fn resident_global_v11_transactional_preload_rejects_false_known_size_when_cached() {
+        let (_directory, _cache, index) = build_cached_finished_resident_global_v11_index();
+        let version = index.manifest.version;
+        let mut candidate = index.manifest.clone();
+        candidate.global_ann_ref = Some(ann_from_mutated_json(
+            candidate.global_ann_ref.as_ref().unwrap(),
+            |value| {
+                value["codebook"]["storage_bytes"] = serde_json::Value::from(
+                    value["codebook"]["storage_bytes"].as_u64().unwrap() + 1,
+                );
+                value["storage_bytes"] =
+                    serde_json::Value::from(value["storage_bytes"].as_u64().unwrap() + 1);
+            },
+        ));
+        candidate
+            .global_ann_ref
+            .as_ref()
+            .unwrap()
+            .validate()
+            .unwrap();
+
+        let error = index
+            .preload_resident_global_ann_for_manifest(&candidate)
+            .unwrap_err();
+        assert!(error.to_string().contains("expected"), "{error}");
+        assert_eq!(index.manifest.version, version);
     }
 
     #[test]

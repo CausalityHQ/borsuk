@@ -3301,6 +3301,52 @@ impl Storage {
         })
     }
 
+    /// Authenticate a candidate manifest's durable object identity directly
+    /// against backing storage. This deliberately bypasses the local object
+    /// cache so a checksum-valid cached copy cannot mask deletion or a false
+    /// declared size. The successful backing read refreshes the local cache.
+    pub(crate) fn read_known_size_from_backing_with_checksum(
+        &self,
+        relative: &str,
+        known_size: u64,
+        expected_checksum: &str,
+    ) -> Result<ReadBytes> {
+        let location = self.resolve(relative)?;
+        let bytes = self
+            .runtime
+            .block_on(async { self.store.get_range(&location, 0..known_size).await })
+            .map_err(|err| map_object_store_error(relative, err))?
+            .to_vec();
+        if bytes.len() as u64 != known_size {
+            return Err(BorsukError::InvalidStorage(format!(
+                "object `{relative}` returned {} bytes, expected {known_size}",
+                bytes.len()
+            )));
+        }
+        let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
+        if actual_checksum != expected_checksum {
+            return Err(BorsukError::ChecksumMismatch {
+                path: relative.to_string(),
+                expected: expected_checksum.to_string(),
+                actual: actual_checksum,
+            });
+        }
+        self.write_cache_file(relative, &bytes)?;
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                known_size,
+                1,
+                bytes.len() as u64,
+            ))?;
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+            cache_repaired: false,
+        })
+    }
+
     pub(crate) fn prefetch_read_bytes_with_cache_status_and_checksum(
         &self,
         relative: String,
