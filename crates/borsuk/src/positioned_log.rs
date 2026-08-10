@@ -605,6 +605,7 @@ struct PositionedCommitReference {
     sequence: u64,
     rows: u64,
     encoded_bytes: u64,
+    materialized_collection_generation: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -616,6 +617,7 @@ struct PositionedShardHead {
     durable_sequence: u64,
     materialized_sequence: u64,
     materialized_collection_generation: u64,
+    evicted_recent_through_collection_generation: u64,
     pending_rows: u64,
     pending_bytes: u64,
     pending: Vec<PositionedCommitReference>,
@@ -632,6 +634,7 @@ impl PositionedShardHead {
             durable_sequence: 0,
             materialized_sequence: 0,
             materialized_collection_generation: 0,
+            evicted_recent_through_collection_generation: 0,
             pending_rows: 0,
             pending_bytes: 0,
             pending: Vec::new(),
@@ -650,6 +653,11 @@ impl PositionedShardHead {
         if self.materialized_sequence > self.durable_sequence {
             return invalid("positioned shard materialized sequence exceeds durable sequence");
         }
+        if (self.materialized_sequence == 0) != (self.materialized_collection_generation == 0) {
+            return invalid(
+                "positioned materialized collection generation must be zero exactly at sequence zero",
+            );
+        }
         if self.pending.len() > MAX_PENDING_ENVELOPES_PER_SHARD
             || self.recent.len() > MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD
         {
@@ -660,6 +668,9 @@ impl PositionedShardHead {
         let mut expected_sequence = self.materialized_sequence.checked_add(1);
         for reference in &self.pending {
             validate_commit_reference(reference)?;
+            if reference.materialized_collection_generation != 0 {
+                return invalid("positioned pending reference has a materialized generation");
+            }
             if Some(reference.sequence) != expected_sequence {
                 return invalid("positioned shard pending references are not a contiguous prefix");
             }
@@ -691,16 +702,66 @@ impl PositionedShardHead {
         }
         for reference in &self.recent {
             validate_commit_reference(reference)?;
-            if reference.sequence > self.materialized_sequence {
+            if reference.sequence > self.materialized_sequence
+                || reference.materialized_collection_generation == 0
+                || reference.materialized_collection_generation
+                    > self.materialized_collection_generation
+            {
                 return invalid("positioned recent receipt has not been materialized");
             }
         }
-        if !self
-            .recent
-            .windows(2)
-            .all(|pair| pair[0].sequence < pair[1].sequence)
-        {
-            return invalid("positioned recent receipts are not strictly sequence ordered");
+        let expected_recent_len = usize::try_from(
+            self.materialized_sequence
+                .min(MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD as u64),
+        )
+        .expect("bounded recent length fits usize");
+        if self.recent.len() != expected_recent_len {
+            return invalid("positioned recent receipts are not the exact bounded suffix");
+        }
+        if let Some(first) = self.recent.first() {
+            let expected_first = self
+                .materialized_sequence
+                .checked_sub(u64::try_from(self.recent.len()).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "positioned recent receipt count exceeds u64".to_owned(),
+                    )
+                })?)
+                .and_then(|sequence| sequence.checked_add(1))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "positioned recent suffix arithmetic overflow".to_owned(),
+                    )
+                })?;
+            if first.sequence != expected_first
+                || self.recent.last().map(|reference| reference.sequence)
+                    != Some(self.materialized_sequence)
+                || self
+                    .recent
+                    .last()
+                    .map(|reference| reference.materialized_collection_generation)
+                    != Some(self.materialized_collection_generation)
+            {
+                return invalid("positioned recent receipts are not the canonical suffix");
+            }
+        }
+        if !self.recent.windows(2).all(|pair| {
+            pair[0].sequence.checked_add(1) == Some(pair[1].sequence)
+                && pair[0].materialized_collection_generation
+                    <= pair[1].materialized_collection_generation
+        }) {
+            return invalid("positioned recent receipts contain a sequence or generation gap");
+        }
+        if self.materialized_sequence > MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD as u64 {
+            if self.evicted_recent_through_collection_generation == 0
+                || self.recent.first().is_some_and(|reference| {
+                    self.evicted_recent_through_collection_generation
+                        > reference.materialized_collection_generation
+                })
+            {
+                return invalid("positioned evicted recent generation boundary is invalid");
+            }
+        } else if self.evicted_recent_through_collection_generation != 0 {
+            return invalid("positioned head records impossible recent receipt eviction");
         }
         let mut transaction_digests = BTreeMap::new();
         for reference in self.pending.iter().chain(&self.recent) {
@@ -747,7 +808,10 @@ impl PositionedLogWriter {
             let path = shard_head_path(shard);
             let version = match storage.write_coordination_object(&path, &bytes, None) {
                 Ok(version) => version,
-                Err(BorsukError::ConcurrentModification { .. }) => {
+                Err(
+                    BorsukError::ConcurrentModification { .. }
+                    | BorsukError::ObjectStoreRetryable { .. },
+                ) => {
                     let stored = storage.read_coordination_object(&path)?.ok_or_else(|| {
                         BorsukError::InvalidStorage(format!(
                             "positioned shard head `{path}` disappeared during initialization"
@@ -778,6 +842,15 @@ impl PositionedLogWriter {
         store: Arc<dyn ObjectStore>,
         source_epoch: u64,
     ) -> Result<Self> {
+        Self::open_with_report(uri, store, source_epoch).map(|(writer, _)| writer)
+    }
+
+    /// Open all authoritative heads and report the exact cold-pin request cost.
+    pub fn open_with_report(
+        uri: impl Into<String>,
+        store: Arc<dyn ObjectStore>,
+        source_epoch: u64,
+    ) -> Result<(Self, RequestCounts)> {
         if source_epoch == 0 {
             return invalid("positioned source epoch must be positive");
         }
@@ -791,11 +864,15 @@ impl PositionedLogWriter {
                 })
             })
             .collect();
-        Ok(Self {
-            storage,
-            source_epoch,
-            heads: Arc::new(pinned),
-        })
+        let requests = storage.request_counts();
+        Ok((
+            Self {
+                storage,
+                source_epoch,
+                heads: Arc::new(pinned),
+            },
+            requests,
+        ))
     }
 
     /// Return a reader over the same storage authority and source epoch.
@@ -820,8 +897,19 @@ impl PositionedLogWriter {
         let mut pinned = self.heads[usize::from(shard)]
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        for attempt in 0..MAX_HEAD_CAS_ATTEMPTS {
+        let mut authoritative = false;
+        let mut cas_attempts = 0_usize;
+        let mut payloads_written = false;
+        let mut uploaded_envelope_checksum = None::<String>;
+        while cas_attempts < MAX_HEAD_CAS_ATTEMPTS {
             pinned.head.validate(self.source_epoch, shard)?;
+            if find_transaction(&pinned.head, &prepared.transaction_digest).is_some()
+                && !authoritative
+            {
+                refresh_pinned_head(&storage, &mut pinned, self.source_epoch, shard)?;
+                authoritative = true;
+                continue;
+            }
             if let Some(reference) = find_transaction(&pinned.head, &prepared.transaction_digest) {
                 if reference.request_digest != prepared.request_digest {
                     return invalid("positioned transaction ID conflicts with an earlier request");
@@ -833,14 +921,17 @@ impl PositionedLogWriter {
                     storage.request_counts().delta(&requests_before),
                 );
             }
-            reject_digest_conflict(
-                &pinned.head,
-                &prepared.transaction_digest,
-                &prepared.request_digest,
-            )?;
-            let sequence = pinned.head.durable_sequence.checked_add(1).ok_or_else(|| {
-                BorsukError::InvalidStorage("positioned durable sequence overflow".to_owned())
-            })?;
+            let sequence = match pinned.head.durable_sequence.checked_add(1) {
+                Some(sequence) => sequence,
+                None if !authoritative => {
+                    refresh_pinned_head(&storage, &mut pinned, self.source_epoch, shard)?;
+                    authoritative = true;
+                    continue;
+                }
+                None => {
+                    return invalid("positioned durable sequence overflow");
+                }
+            };
             let position = CommitSourcePosition::new(self.source_epoch, shard, sequence)?;
             let envelope = PositionedMutationEnvelope {
                 transaction_id: prepared.transaction_id.clone(),
@@ -863,12 +954,22 @@ impl PositionedLogWriter {
                 sequence,
                 rows: prepared.rows,
                 encoded_bytes: prepared.encoded_bytes,
+                materialized_collection_generation: 0,
             };
             let mut next = pinned.head.clone();
-            admit_pending(&mut next, reference.clone())?;
-            let next_bytes = shard_head_bytes(&next)?;
+            let next_bytes = match admit_pending(&mut next, reference.clone())
+                .and_then(|()| shard_head_bytes(&next))
+            {
+                Ok(bytes) => bytes,
+                Err(BorsukError::IngestBackpressure { .. }) if !authoritative => {
+                    refresh_pinned_head(&storage, &mut pinned, self.source_epoch, shard)?;
+                    authoritative = true;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let envelope_path = envelope_path(&envelope_checksum);
-            if attempt == 0 {
+            if !payloads_written {
                 let mut unique_payloads = BTreeMap::new();
                 for payload in &prepared.payloads {
                     unique_payloads
@@ -890,13 +991,17 @@ impl PositionedLogWriter {
                             .create_bytes_verified(path, bytes, object_checksum)
                             .map(|_| ())
                     })?;
-            } else {
+                payloads_written = true;
+                uploaded_envelope_checksum = Some(envelope_checksum.clone());
+            } else if uploaded_envelope_checksum.as_deref() != Some(&envelope_checksum) {
                 storage.create_bytes_verified(
                     &envelope_path,
                     &envelope_bytes,
                     &envelope_checksum,
                 )?;
+                uploaded_envelope_checksum = Some(envelope_checksum.clone());
             }
+            cas_attempts += 1;
             match storage.write_coordination_object(
                 &shard_head_path(shard),
                 &next_bytes,
@@ -913,8 +1018,8 @@ impl PositionedLogWriter {
                     );
                 }
                 Err(
-                    error @ (BorsukError::ConcurrentModification { .. }
-                    | BorsukError::ObjectStoreRetryable { .. }),
+                    BorsukError::ConcurrentModification { .. }
+                    | BorsukError::ObjectStoreRetryable { .. },
                 ) => {
                     let stored = storage
                         .read_coordination_object(&shard_head_path(shard))?
@@ -950,9 +1055,7 @@ impl PositionedLogWriter {
                     )?;
                     pinned.head = observed;
                     pinned.version = stored.version;
-                    if matches!(error, BorsukError::ObjectStoreRetryable { .. }) {
-                        return Err(error);
-                    }
+                    authoritative = true;
                 }
                 Err(error) => return Err(error),
             }
@@ -978,6 +1081,7 @@ impl PositionedLogWriter {
         let mut pinned = self.heads[usize::from(shard)]
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        refresh_pinned_head(&self.storage, &mut pinned, self.source_epoch, shard)?;
         for _ in 0..MAX_HEAD_CAS_ATTEMPTS {
             pinned.head.validate(self.source_epoch, shard)?;
             if pinned.head.materialized_sequence >= sequence {
@@ -1002,7 +1106,7 @@ impl PositionedLogWriter {
             if completed.last().map(|reference| reference.sequence) != Some(sequence) {
                 return invalid("positioned checkpoint must end on a contiguous pending sequence");
             }
-            for reference in completed {
+            for mut reference in completed {
                 next.pending_rows =
                     next.pending_rows
                         .checked_sub(reference.rows)
@@ -1019,11 +1123,20 @@ impl PositionedLogWriter {
                             "positioned checkpoint byte total underflow".to_owned(),
                         )
                     })?;
+                reference.materialized_collection_generation = collection_generation;
                 next.recent.push(reference);
             }
             if next.recent.len() > MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD {
                 let evict = next.recent.len() - MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD;
-                next.recent.drain(..evict);
+                let evicted_through = next
+                    .recent
+                    .drain(..evict)
+                    .map(|reference| reference.materialized_collection_generation)
+                    .max()
+                    .unwrap_or(next.evicted_recent_through_collection_generation);
+                next.evicted_recent_through_collection_generation = next
+                    .evicted_recent_through_collection_generation
+                    .max(evicted_through);
             }
             next.materialized_sequence = sequence;
             next.materialized_collection_generation = collection_generation;
@@ -1074,7 +1187,7 @@ pub struct PositionedLogReader {
 impl PositionedLogReader {
     /// Read all heads and decode every currently pending transaction envelope.
     pub fn snapshot(&self) -> Result<PositionedLogSnapshot> {
-        self.load_snapshot(None)?.ok_or_else(|| {
+        self.load_snapshot(None, None)?.ok_or_else(|| {
             BorsukError::InvalidStorage(
                 "positioned snapshot unexpectedly reported unchanged".to_owned(),
             )
@@ -1086,12 +1199,30 @@ impl PositionedLogReader {
         &self,
         previous_head_checksums: &[String; SOURCE_SHARD_COUNT as usize],
     ) -> Result<Option<PositionedLogSnapshot>> {
-        self.load_snapshot(Some(previous_head_checksums))
+        self.load_snapshot(Some(previous_head_checksums), None)
+    }
+
+    /// Read mutations not visible at the caller's pinned collection generation.
+    ///
+    /// The caller must pin the collection generation before any checkpoint can
+    /// advance. Visibility is retained for exactly the bounded recent-receipt
+    /// window; an older pin fails closed instead of silently omitting mutations.
+    pub fn snapshot_for_collection_generation(
+        &self,
+        pinned_collection_generation: u64,
+    ) -> Result<PositionedLogSnapshot> {
+        self.load_snapshot(None, Some(pinned_collection_generation))?
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned generation snapshot unexpectedly reported unchanged".to_owned(),
+                )
+            })
     }
 
     fn load_snapshot(
         &self,
         previous: Option<&[String; SOURCE_SHARD_COUNT as usize]>,
+        pinned_collection_generation: Option<u64>,
     ) -> Result<Option<PositionedLogSnapshot>> {
         let loaded = load_all_heads(&self.storage, self.source_epoch)?;
         let head_checksums = std::array::from_fn(|index| loaded[index].2.clone());
@@ -1103,15 +1234,30 @@ impl PositionedLogReader {
             std::array::from_fn(|index| loaded[index].0.materialized_sequence);
         let materialized_collection_generations =
             std::array::from_fn(|index| loaded[index].0.materialized_collection_generation);
-        let pending = loaded
+        if let Some(pinned_generation) = pinned_collection_generation {
+            for (head, _, _) in &loaded {
+                if pinned_generation < head.evicted_recent_through_collection_generation {
+                    return invalid(
+                        "positioned collection generation predates the bounded recent window",
+                    );
+                }
+            }
+        }
+        let visible = loaded
             .iter()
             .flat_map(|(head, _, _)| {
-                head.pending
+                head.recent
                     .iter()
+                    .filter(move |reference| {
+                        pinned_collection_generation.is_some_and(|generation| {
+                            reference.materialized_collection_generation > generation
+                        })
+                    })
+                    .chain(head.pending.iter())
                     .map(move |reference| (head.shard, reference))
             })
             .collect::<Vec<_>>();
-        let mut transactions = pending
+        let mut transactions = visible
             .par_iter()
             .map(|(shard, reference)| {
                 load_envelope(&self.storage, self.source_epoch, *shard, reference)
@@ -1159,13 +1305,10 @@ fn prepare_append(
     }
     let mut rows = 0_u64;
     let mut encoded_bytes = 0_u64;
-    let mut stamps = Vec::new();
-    let mut prepared = Vec::with_capacity(payloads.len());
-    for payload in payloads {
+    for payload in &payloads {
         validate_bounded_utf8("payload role", &payload.role)?;
-        let metadata = positioned_payload_metadata(&payload.bytes, payload.format)?;
-        if payload.rows == 0 || metadata.rows != payload.rows {
-            return invalid("positioned payload declared rows disagree with its typed container");
+        if payload.rows == 0 {
+            return invalid("positioned payload declared rows must be positive");
         }
         rows = rows.checked_add(payload.rows).ok_or_else(|| {
             BorsukError::InvalidStorage("positioned append row total overflow".to_owned())
@@ -1176,7 +1319,33 @@ fn prepare_append(
         encoded_bytes = encoded_bytes.checked_add(payload_bytes).ok_or_else(|| {
             BorsukError::InvalidStorage("positioned append byte total overflow".to_owned())
         })?;
-        stamps.extend(metadata.stamps);
+        validate_append_totals(rows, encoded_bytes)?;
+    }
+    let mut min_stamp = None::<PositionedMutationStamp>;
+    let mut max_stamp = None::<PositionedMutationStamp>;
+    let mut versions = BTreeMap::<(u64, [u8; 16]), [u8; 32]>::new();
+    let mut prepared = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        let metadata = positioned_payload_metadata(&payload.bytes, payload.format, payload.rows)?;
+        if metadata.rows != payload.rows {
+            return invalid("positioned payload declared rows disagree with its typed container");
+        }
+        let payload_bytes = u64::try_from(payload.bytes.len()).map_err(|_| {
+            BorsukError::InvalidStorage("positioned payload byte length exceeds u64".to_owned())
+        })?;
+        min_stamp = Some(min_stamp.map_or(metadata.min_stamp, |existing| {
+            existing.min(metadata.min_stamp)
+        }));
+        max_stamp = Some(max_stamp.map_or(metadata.max_stamp, |existing| {
+            existing.max(metadata.max_stamp)
+        }));
+        for (version, digest) in metadata.version_digests {
+            if let Some(existing) = versions.insert(version, digest)
+                && existing != digest
+            {
+                return invalid("equal mutation version has unequal canonical digests");
+            }
+        }
         let payload_checksum = checksum(&payload.bytes);
         let path = payload_path(payload.format, &payload_checksum);
         let reference = PositionedMutationPayloadRef {
@@ -1194,7 +1363,6 @@ fn prepare_append(
             bytes: payload.bytes,
         });
     }
-    validate_append_totals(rows, encoded_bytes)?;
     prepared.sort_unstable_by(|left, right| {
         payload_sort_key(&left.reference).cmp(&payload_sort_key(&right.reference))
     });
@@ -1204,22 +1372,10 @@ fn prepare_append(
     {
         return invalid("positioned append contains duplicate canonical payload references");
     }
-    let mut versions = BTreeMap::<(u64, [u8; 16]), [u8; 32]>::new();
-    for stamp in &stamps {
-        if let Some(existing) = versions.insert((stamp.hlc, stamp.writer), stamp.digest)
-            && existing != stamp.digest
-        {
-            return invalid("equal mutation version has unequal canonical digests");
-        }
-    }
-    let min_stamp = stamps.iter().min().copied().ok_or_else(|| {
+    let min_stamp = min_stamp.ok_or_else(|| {
         BorsukError::InvalidStorage("positioned append contains no mutation stamps".to_owned())
     })?;
-    let max_stamp = stamps
-        .iter()
-        .max()
-        .copied()
-        .expect("non-empty stamps have a maximum");
+    let max_stamp = max_stamp.expect("a minimum stamp implies a maximum stamp");
     let transaction_digest = *blake3::hash(transaction_id.as_bytes()).as_bytes();
     let transaction_digest_hex = hex_bytes(&transaction_digest);
     let payload_refs = prepared
@@ -1349,6 +1505,23 @@ fn load_all_heads(
         .collect()
 }
 
+fn refresh_pinned_head(
+    storage: &Storage,
+    pinned: &mut PinnedPositionedHead,
+    source_epoch: u64,
+    shard: u8,
+) -> Result<()> {
+    let path = shard_head_path(shard);
+    let stored = storage.read_coordination_object(&path)?.ok_or_else(|| {
+        BorsukError::InvalidStorage(format!(
+            "required positioned shard head `{path}` disappeared"
+        ))
+    })?;
+    pinned.head = shard_head_from_bytes(&stored.bytes, source_epoch, shard)?;
+    pinned.version = stored.version;
+    Ok(())
+}
+
 fn load_envelope(
     storage: &Storage,
     source_epoch: u64,
@@ -1362,11 +1535,26 @@ fn load_envelope(
     if checksum(&bytes) != reference.envelope_checksum {
         return invalid("positioned envelope checksum does not match its authoritative reference");
     }
+    validate_authorized_envelope(
+        positioned_envelope_from_parquet(&bytes)?,
+        source_epoch,
+        shard,
+        reference,
+    )
+}
+
+fn validate_authorized_envelope(
+    decoded: DecodedPositionedEnvelope,
+    source_epoch: u64,
+    shard: u8,
+    reference: &PositionedCommitReference,
+) -> Result<PositionedMutationEnvelope> {
     let DecodedPositionedEnvelope {
         envelope,
         transaction_digest,
         request_digest: decoded_request_digest,
-    } = positioned_envelope_from_parquet(&bytes)?;
+    } = decoded;
+    envelope.validate()?;
     if envelope.position.source_epoch != source_epoch
         || envelope.position.shard != shard
         || envelope.position.sequence != reference.sequence
@@ -1670,6 +1858,7 @@ mod tests {
                 sequence: 1,
                 rows: MAX_UNMATERIALIZED_ROWS_PER_SHARD,
                 encoded_bytes: MAX_UNMATERIALIZED_BYTES_PER_SHARD,
+                materialized_collection_generation: 0,
             },
         )
         .unwrap();
@@ -1684,10 +1873,117 @@ mod tests {
                     sequence: 2,
                     rows: 1,
                     encoded_bytes: 1,
+                    materialized_collection_generation: 0,
                 },
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn recent_receipts_are_a_gapless_suffix_and_generation_zero_tracks_zero_progress() {
+        let reference = |sequence: u64, digit: char| PositionedCommitReference {
+            transaction_digest: digit.to_string().repeat(64),
+            request_digest: "a".repeat(64),
+            envelope_checksum: "b".repeat(64),
+            sequence,
+            rows: 1,
+            encoded_bytes: 1,
+            materialized_collection_generation: sequence,
+        };
+        let mut head = PositionedShardHead::empty(7, 3).unwrap();
+        head.durable_sequence = 3;
+        head.materialized_sequence = 3;
+        head.materialized_collection_generation = 3;
+        head.recent = vec![reference(1, 'c'), reference(3, 'd')];
+        assert!(head.validate(7, 3).is_err());
+
+        let mut impossible_generation = PositionedShardHead::empty(7, 3).unwrap();
+        impossible_generation.materialized_collection_generation = 1;
+        assert!(impossible_generation.validate(7, 3).is_err());
+
+        let mut missing_generation = PositionedShardHead::empty(7, 3).unwrap();
+        missing_generation.durable_sequence = 1;
+        missing_generation.materialized_sequence = 1;
+        missing_generation.recent = vec![reference(1, 'e')];
+        assert!(missing_generation.validate(7, 3).is_err());
+    }
+
+    #[test]
+    fn shard_head_accepts_exact_sixty_four_kibibytes_and_rejects_plus_one() {
+        let head = PositionedShardHead::empty(7, 3).unwrap();
+        let mut bytes = shard_head_bytes(&head).unwrap();
+        bytes.resize(MAX_SHARD_HEAD_BYTES, b' ');
+        assert_eq!(bytes.len(), MAX_SHARD_HEAD_BYTES);
+        assert_eq!(shard_head_from_bytes(&bytes, 7, 3).unwrap(), head);
+        bytes.push(b' ');
+        assert!(shard_head_from_bytes(&bytes, 7, 3).is_err());
+    }
+
+    #[test]
+    fn authorized_envelope_validation_reaches_path_digest_and_total_checks() {
+        let payload_checksum = "b".repeat(64);
+        let envelope = PositionedMutationEnvelope {
+            transaction_id: "authorized-decoder".to_owned(),
+            schema_fingerprint: "a".repeat(64),
+            position: CommitSourcePosition::new(7, 3, 1).unwrap(),
+            min_stamp: PositionedMutationStamp {
+                hlc: 1,
+                writer: [2; 16],
+                digest: [3; 32],
+            },
+            max_stamp: PositionedMutationStamp {
+                hlc: 1,
+                writer: [2; 16],
+                digest: [3; 32],
+            },
+            payloads: vec![PositionedMutationPayloadRef {
+                modality: PositionedMutationModality::PrimaryDense,
+                role: "primary".to_owned(),
+                format: PositionedPayloadFormat::ArrowIpc,
+                path: payload_path(PositionedPayloadFormat::ArrowIpc, &payload_checksum),
+                checksum: payload_checksum,
+                rows: 1,
+                encoded_bytes: 128,
+            }],
+        };
+        let transaction_digest = blake3::hash(envelope.transaction_id.as_bytes())
+            .to_hex()
+            .to_string();
+        let request_digest = request_digest(
+            &envelope.transaction_id,
+            &envelope.schema_fingerprint,
+            envelope.min_stamp,
+            envelope.max_stamp,
+            &envelope.payloads,
+        );
+        let decoded = |envelope: PositionedMutationEnvelope| DecodedPositionedEnvelope {
+            envelope,
+            transaction_digest: transaction_digest.clone(),
+            request_digest: request_digest.clone(),
+        };
+        let reference = PositionedCommitReference {
+            transaction_digest: transaction_digest.clone(),
+            request_digest: request_digest.clone(),
+            envelope_checksum: "c".repeat(64),
+            sequence: 1,
+            rows: 1,
+            encoded_bytes: 128,
+            materialized_collection_generation: 0,
+        };
+        assert!(validate_authorized_envelope(decoded(envelope.clone()), 7, 3, &reference).is_ok());
+
+        let mut bad_digest = reference.clone();
+        bad_digest.transaction_digest = "d".repeat(64);
+        assert!(
+            validate_authorized_envelope(decoded(envelope.clone()), 7, 3, &bad_digest).is_err()
+        );
+        let mut bad_total = reference.clone();
+        bad_total.encoded_bytes += 1;
+        assert!(validate_authorized_envelope(decoded(envelope.clone()), 7, 3, &bad_total).is_err());
+        let mut bad_path = envelope;
+        bad_path.payloads[0].path = "positioned-log/payloads/wrong".to_owned();
+        assert!(validate_authorized_envelope(decoded(bad_path), 7, 3, &reference).is_err());
     }
 
     fn fixture_coverage_for_all_shards_and_levels() -> CommitSourceRangeSet {

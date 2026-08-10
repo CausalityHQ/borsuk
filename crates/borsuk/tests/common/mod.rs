@@ -497,11 +497,11 @@ impl ObjectStore for FaultInjectingObjectStore {
                 .as_deref()
                 .map(PutConcurrencyProbe::enter);
             self.maybe_sleep().await;
-            if !self.fail_after_put {
-                self.maybe_fail(StoreOperation::Put, location)?;
-            }
             if let Some(operation_log) = &self.operation_log {
                 operation_log.record_put(location, &opts.mode);
+            }
+            if !self.fail_after_put {
+                self.maybe_fail(StoreOperation::Put, location)?;
             }
             self.maybe_wait_at_put_barrier(StoreOperation::Put, location);
             let result = self.inner.put_opts(location, payload, opts).await?;

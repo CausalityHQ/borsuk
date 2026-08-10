@@ -5586,21 +5586,160 @@ fn validate_bm25_stats_delta_entries(entries: &[(u32, i64)]) -> Result<()> {
 
 pub(crate) struct PositionedPayloadMetadata {
     pub(crate) rows: u64,
-    pub(crate) stamps: Vec<PositionedMutationStamp>,
+    pub(crate) min_stamp: PositionedMutationStamp,
+    pub(crate) max_stamp: PositionedMutationStamp,
+    pub(crate) version_digests: BTreeMap<(u64, [u8; 16]), [u8; 32]>,
 }
 
 pub(crate) fn positioned_payload_metadata(
     bytes: &[u8],
     format: PositionedPayloadFormat,
+    row_limit: u64,
 ) -> Result<PositionedPayloadMetadata> {
-    let batches = match format {
-        PositionedPayloadFormat::ArrowIpc => StreamReader::try_new(Cursor::new(bytes), None)?
-            .collect::<std::result::Result<Vec<_>, _>>()?,
-        PositionedPayloadFormat::Parquet => read_batches(bytes)?,
-    };
+    if format == PositionedPayloadFormat::Parquet {
+        return catch_parquet_decode_panic(|| {
+            positioned_payload_metadata_inner(bytes, format, row_limit)
+        });
+    }
+    positioned_payload_metadata_inner(bytes, format, row_limit)
+}
+
+fn positioned_payload_metadata_inner(
+    bytes: &[u8],
+    format: PositionedPayloadFormat,
+    row_limit: u64,
+) -> Result<PositionedPayloadMetadata> {
+    match format {
+        PositionedPayloadFormat::ArrowIpc => {
+            reject_compressed_positioned_arrow_stream(bytes)?;
+            let schema_reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+            let columns =
+                mutation_stamp_columns(schema_reader.schema().as_ref())?.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "positioned payload must contain typed mutation stamp columns".to_owned(),
+                    )
+                })?;
+            drop(schema_reader);
+            let reader = StreamReader::try_new(
+                Cursor::new(bytes),
+                Some(vec![columns.0, columns.1, columns.2]),
+            )?;
+            summarize_positioned_payload_batches(
+                reader.map(|batch| batch.map_err(BorsukError::from)),
+                row_limit,
+            )
+        }
+        PositionedPayloadFormat::Parquet => {
+            let mut builder =
+                ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+            let columns = mutation_stamp_columns(builder.schema().as_ref())?.ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned payload must contain typed mutation stamp columns".to_owned(),
+                )
+            })?;
+            let physical_rows = u64::try_from(builder.metadata().file_metadata().num_rows())
+                .map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "positioned payload row count exceeds u64".to_owned(),
+                    )
+                })?;
+            if physical_rows > row_limit {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned payload exceeds its declared row bound".to_owned(),
+                ));
+            }
+            let projection =
+                ProjectionMask::roots(builder.parquet_schema(), [columns.0, columns.1, columns.2]);
+            builder = builder.with_projection(projection).with_batch_size(1024);
+            summarize_positioned_payload_batches(
+                builder
+                    .build()?
+                    .map(|batch| batch.map_err(BorsukError::from)),
+                row_limit,
+            )
+        }
+    }
+}
+
+fn reject_compressed_positioned_arrow_stream(bytes: &[u8]) -> Result<()> {
+    let mut offset = 0_usize;
+    loop {
+        let prefix = bytes.get(offset..offset.saturating_add(4)).ok_or_else(|| {
+            BorsukError::InvalidStorage("positioned Arrow stream has a truncated prefix".to_owned())
+        })?;
+        offset += 4;
+        let mut metadata_len = u32::from_le_bytes(prefix.try_into().expect("four-byte prefix"));
+        if metadata_len == u32::MAX {
+            let length = bytes.get(offset..offset.saturating_add(4)).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned Arrow stream has a truncated continuation".to_owned(),
+                )
+            })?;
+            offset += 4;
+            metadata_len = u32::from_le_bytes(length.try_into().expect("four-byte length"));
+        }
+        if metadata_len == 0 {
+            return Ok(());
+        }
+        let metadata_len = usize::try_from(metadata_len).map_err(|_| {
+            BorsukError::InvalidStorage("positioned Arrow metadata length exceeds usize".to_owned())
+        })?;
+        let metadata = bytes
+            .get(
+                offset..offset.checked_add(metadata_len).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "positioned Arrow metadata offset overflow".to_owned(),
+                    )
+                })?,
+            )
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned Arrow stream has truncated metadata".to_owned(),
+                )
+            })?;
+        offset += metadata_len;
+        let message = arrow_ipc::root_as_message(metadata).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "positioned Arrow message metadata is invalid: {error}"
+            ))
+        })?;
+        let compressed = message
+            .header_as_record_batch()
+            .is_some_and(|batch| batch.compression().is_some())
+            || message
+                .header_as_dictionary_batch()
+                .and_then(|batch| batch.data())
+                .is_some_and(|batch| batch.compression().is_some());
+        if compressed {
+            return Err(BorsukError::InvalidStorage(
+                "compressed positioned Arrow IPC is outside the bounded validation profile"
+                    .to_owned(),
+            ));
+        }
+        let body_len = usize::try_from(message.bodyLength()).map_err(|_| {
+            BorsukError::InvalidStorage("positioned Arrow body length is invalid".to_owned())
+        })?;
+        offset = offset.checked_add(body_len).ok_or_else(|| {
+            BorsukError::InvalidStorage("positioned Arrow body offset overflow".to_owned())
+        })?;
+        if offset > bytes.len() {
+            return Err(BorsukError::InvalidStorage(
+                "positioned Arrow stream has a truncated body".to_owned(),
+            ));
+        }
+    }
+}
+
+fn summarize_positioned_payload_batches(
+    batches: impl Iterator<Item = Result<RecordBatch>>,
+    row_limit: u64,
+) -> Result<PositionedPayloadMetadata> {
     let mut rows = 0_u64;
-    let mut stamps = Vec::new();
+    let mut min_stamp = None::<PositionedMutationStamp>;
+    let mut max_stamp = None::<PositionedMutationStamp>;
+    let mut version_digests = BTreeMap::new();
     for batch in batches {
+        let batch = batch?;
         let columns = mutation_stamp_columns(batch.schema().as_ref())?.ok_or_else(|| {
             BorsukError::InvalidStorage(
                 "positioned payload must contain typed mutation stamp columns".to_owned(),
@@ -5613,25 +5752,44 @@ pub(crate) fn positioned_payload_metadata(
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("positioned payload row total overflow".to_owned())
             })?;
+        if rows > row_limit {
+            return Err(BorsukError::InvalidStorage(
+                "positioned payload exceeds its declared row bound".to_owned(),
+            ));
+        }
         for row in 0..batch.num_rows() {
             let stamp = mutation_stamp_value(&batch, Some(columns), row)?.ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "positioned payload mutation stamp is unexpectedly absent".to_owned(),
                 )
             })?;
-            stamps.push(PositionedMutationStamp {
+            let stamp = PositionedMutationStamp {
                 hlc: stamp.version().hlc(),
                 writer: stamp.version().writer(),
                 digest: stamp.digest(),
-            });
+            };
+            if let Some(existing) = version_digests.insert((stamp.hlc, stamp.writer), stamp.digest)
+                && existing != stamp.digest
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "equal mutation version has unequal canonical digests".to_owned(),
+                ));
+            }
+            min_stamp = Some(min_stamp.map_or(stamp, |existing| existing.min(stamp)));
+            max_stamp = Some(max_stamp.map_or(stamp, |existing| existing.max(stamp)));
         }
     }
-    if rows == 0 || stamps.is_empty() {
-        return Err(BorsukError::InvalidStorage(
+    let min_stamp = min_stamp.ok_or_else(|| {
+        BorsukError::InvalidStorage(
             "positioned payload typed container must contain at least one row".to_owned(),
-        ));
-    }
-    Ok(PositionedPayloadMetadata { rows, stamps })
+        )
+    })?;
+    Ok(PositionedPayloadMetadata {
+        rows,
+        min_stamp,
+        max_stamp: max_stamp.expect("a minimum stamp implies a maximum stamp"),
+        version_digests,
+    })
 }
 
 pub(crate) struct DecodedPositionedEnvelope {
@@ -5640,13 +5798,10 @@ pub(crate) struct DecodedPositionedEnvelope {
     pub(crate) request_digest: String,
 }
 
-pub(crate) fn positioned_envelope_to_parquet(
-    envelope: &PositionedMutationEnvelope,
-    transaction_digest: &str,
-    request_digest: &str,
-) -> Result<Vec<u8>> {
-    envelope.validate()?;
-    let schema = Arc::new(Schema::new(vec![
+const MAX_POSITIONED_ENVELOPE_BYTES: usize = 1024 * 1024;
+
+fn positioned_envelope_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
         Field::new("layout", DataType::UInt16, false),
         Field::new("transaction_id", DataType::Utf8, false),
         Field::new("transaction_digest", DataType::Utf8, false),
@@ -5669,7 +5824,37 @@ pub(crate) fn positioned_envelope_to_parquet(
         Field::new("payload_checksum", DataType::Utf8, false),
         Field::new("payload_rows", DataType::UInt64, false),
         Field::new("payload_bytes", DataType::UInt64, false),
-    ]));
+    ]))
+}
+
+fn validate_positioned_envelope_batch(batch: &RecordBatch) -> Result<()> {
+    validate_positioned_envelope_schema_and_columns(batch.schema().as_ref(), batch.columns())
+}
+
+fn validate_positioned_envelope_schema_and_columns(
+    schema: &Schema,
+    columns: &[ArrayRef],
+) -> Result<()> {
+    if schema != positioned_envelope_schema().as_ref() {
+        return Err(BorsukError::InvalidStorage(
+            "positioned envelope schema is not the exact V12 schema".to_owned(),
+        ));
+    }
+    if columns.iter().any(|column| column.null_count() != 0) {
+        return Err(BorsukError::InvalidStorage(
+            "positioned envelope contains a null value".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn positioned_envelope_to_parquet(
+    envelope: &PositionedMutationEnvelope,
+    transaction_digest: &str,
+    request_digest: &str,
+) -> Result<Vec<u8>> {
+    envelope.validate()?;
+    let schema = positioned_envelope_schema();
     let payloads = &envelope.payloads;
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -5746,32 +5931,49 @@ pub(crate) fn positioned_envelope_to_parquet(
 }
 
 pub(crate) fn positioned_envelope_from_parquet(bytes: &[u8]) -> Result<DecodedPositionedEnvelope> {
-    let batches = read_batches(bytes)?;
-    let first_batch = batches.first().ok_or_else(|| {
-        BorsukError::InvalidStorage("positioned envelope contains no rows".to_owned())
-    })?;
-    if first_batch.num_rows() == 0 {
+    catch_parquet_decode_panic(|| positioned_envelope_from_parquet_inner(bytes))
+}
+
+fn positioned_envelope_from_parquet_inner(bytes: &[u8]) -> Result<DecodedPositionedEnvelope> {
+    if bytes.len() > MAX_POSITIONED_ENVELOPE_BYTES {
         return Err(BorsukError::InvalidStorage(
-            "positioned envelope contains no rows".to_owned(),
+            "positioned envelope exceeds its encoded byte bound".to_owned(),
         ));
     }
-    let first = decode_positioned_envelope_row(first_batch, 0)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    if builder.schema().as_ref() != positioned_envelope_schema().as_ref() {
+        return Err(BorsukError::InvalidStorage(
+            "positioned envelope schema is not the exact V12 schema".to_owned(),
+        ));
+    }
+    let mut batches = builder
+        .with_batch_size(crate::positioned_log::MAX_PAYLOADS_PER_TRANSACTION)
+        .build()?;
+    let mut first = None::<PositionedEnvelopeRow>;
     let mut payloads = Vec::new();
     let mut ordinal = 0_u32;
-    for batch in &batches {
+    for batch in &mut batches {
+        let batch = batch?;
+        validate_positioned_envelope_batch(&batch)?;
         for row in 0..batch.num_rows() {
-            let decoded = decode_positioned_envelope_row(batch, row)?;
-            if decoded.layout != 12
-                || decoded.transaction_id != first.transaction_id
-                || decoded.transaction_digest != first.transaction_digest
-                || decoded.request_digest != first.request_digest
-                || decoded.position != first.position
-                || decoded.schema_fingerprint != first.schema_fingerprint
-                || decoded.min_stamp != first.min_stamp
-                || decoded.max_stamp != first.max_stamp
-            {
+            let decoded = decode_positioned_envelope_row(&batch, row)?;
+            if let Some(first) = first.as_ref() {
+                if decoded.layout != 12
+                    || decoded.transaction_id != first.transaction_id
+                    || decoded.transaction_digest != first.transaction_digest
+                    || decoded.request_digest != first.request_digest
+                    || decoded.position != first.position
+                    || decoded.schema_fingerprint != first.schema_fingerprint
+                    || decoded.min_stamp != first.min_stamp
+                    || decoded.max_stamp != first.max_stamp
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned envelope repeated transaction columns disagree".to_owned(),
+                    ));
+                }
+            } else if decoded.layout != 12 {
                 return Err(BorsukError::InvalidStorage(
-                    "positioned envelope repeated transaction columns disagree".to_owned(),
+                    "positioned envelope layout marker is unsupported".to_owned(),
                 ));
             }
             if decoded.ordinal != ordinal {
@@ -5784,9 +5986,13 @@ pub(crate) fn positioned_envelope_from_parquet(bytes: &[u8]) -> Result<DecodedPo
                     "positioned envelope payload ordinal overflow".to_owned(),
                 )
             })?;
-            payloads.push(decoded.payload);
+            payloads.push(decoded.payload.clone());
+            first.get_or_insert(decoded);
         }
     }
+    let first = first.ok_or_else(|| {
+        BorsukError::InvalidStorage("positioned envelope contains no rows".to_owned())
+    })?;
     let envelope = PositionedMutationEnvelope {
         transaction_id: first.transaction_id,
         schema_fingerprint: first.schema_fingerprint,
@@ -6709,6 +6915,89 @@ mod tests {
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const VALID_GRAPH_CHECKSUM: &str =
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn positioned_envelope_fixture() -> PositionedMutationEnvelope {
+        let checksum = "b".repeat(64);
+        PositionedMutationEnvelope {
+            transaction_id: "decoder-fixture".to_owned(),
+            schema_fingerprint: "a".repeat(64),
+            position: crate::positioned_log::CommitSourcePosition::new(7, 3, 1).unwrap(),
+            min_stamp: PositionedMutationStamp {
+                hlc: 11,
+                writer: [1; 16],
+                digest: [2; 32],
+            },
+            max_stamp: PositionedMutationStamp {
+                hlc: 12,
+                writer: [3; 16],
+                digest: [4; 32],
+            },
+            payloads: vec![PositionedMutationPayloadRef {
+                modality: crate::positioned_log::PositionedMutationModality::PrimaryDense,
+                role: "primary".to_owned(),
+                format: PositionedPayloadFormat::ArrowIpc,
+                path: format!("positioned-log/payloads/arrow-ipc/bb/{checksum}.arrow"),
+                checksum,
+                rows: 1,
+                encoded_bytes: 128,
+            }],
+        }
+    }
+
+    fn positioned_envelope_batch() -> RecordBatch {
+        let bytes = positioned_envelope_to_parquet(
+            &positioned_envelope_fixture(),
+            &"c".repeat(64),
+            &"d".repeat(64),
+        )
+        .unwrap();
+        read_batches(&bytes).unwrap().into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn positioned_envelope_decoder_rejects_extra_and_nullable_schema_fields() {
+        assert!(positioned_envelope_from_parquet(b"PAR1corrupt").is_err());
+        let batch = positioned_envelope_batch();
+        let mut fields = batch.schema().fields().to_vec();
+        fields.push(Arc::new(Field::new("extra", DataType::UInt8, false)));
+        let mut columns = batch.columns().to_vec();
+        columns.push(array(UInt8Array::from_iter_values([1])));
+        let extra = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+        assert!(positioned_envelope_from_parquet(&write_batch(extra).unwrap()).is_err());
+
+        let batch = positioned_envelope_batch();
+        let mut fields = batch.schema().fields().to_vec();
+        fields[0] = Arc::new(Field::new("layout", DataType::UInt16, true));
+        let nullable =
+            RecordBatch::try_new(Arc::new(Schema::new(fields)), batch.columns().to_vec()).unwrap();
+        assert!(positioned_envelope_from_parquet(&write_batch(nullable).unwrap()).is_err());
+
+        let batch = positioned_envelope_batch();
+        let mut fields = batch.schema().fields().to_vec();
+        fields[9] = Arc::new(Field::new(
+            "min_mutation_writer",
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::UInt8, true)), 16),
+            false,
+        ));
+        let mut columns = batch.columns().to_vec();
+        columns[9] = array(FixedSizeListArray::from_iter_primitive::<UInt8Type, _, _>(
+            [Some(vec![Some(1_u8); 16])],
+            16,
+        ));
+        let fixed_list = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+        assert!(positioned_envelope_from_parquet(&write_batch(fixed_list).unwrap()).is_err());
+    }
+
+    #[test]
+    fn positioned_envelope_decoder_rejects_nulls_in_exact_typed_columns() {
+        let batch = positioned_envelope_batch();
+        let mut columns = batch.columns().to_vec();
+        columns[1] = array(StringArray::from(vec![None::<&str>]));
+        assert!(
+            validate_positioned_envelope_schema_and_columns(batch.schema().as_ref(), &columns)
+                .is_err()
+        );
+    }
 
     fn lexical_run_fixture() -> LexicalRunRef {
         LexicalRunRef {
