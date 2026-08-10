@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    io::Cursor,
     panic::{AssertUnwindSafe, catch_unwind},
     str::FromStr,
     sync::Arc,
@@ -14,6 +15,7 @@ use arrow_array::{
         UInt64Type,
     },
 };
+use arrow_ipc::reader::StreamReader;
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -40,6 +42,10 @@ use crate::{
     },
     metric::VectorMetric,
     mutation::{MutationOperation, MutationStamp, MutationState, MutationVersion},
+    positioned_log::{
+        PositionedMutationEnvelope, PositionedMutationPayloadRef, PositionedMutationStamp,
+        PositionedPayloadFormat,
+    },
     record::{LeafMode, RecordId, StorageEncoding, VectorElementType, VectorRecord},
     segment::{GraphEdge, Segment, SegmentGraph},
 };
@@ -5576,6 +5582,303 @@ fn validate_bm25_stats_delta_entries(entries: &[(u32, i64)]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub(crate) struct PositionedPayloadMetadata {
+    pub(crate) rows: u64,
+    pub(crate) stamps: Vec<PositionedMutationStamp>,
+}
+
+pub(crate) fn positioned_payload_metadata(
+    bytes: &[u8],
+    format: PositionedPayloadFormat,
+) -> Result<PositionedPayloadMetadata> {
+    let batches = match format {
+        PositionedPayloadFormat::ArrowIpc => StreamReader::try_new(Cursor::new(bytes), None)?
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        PositionedPayloadFormat::Parquet => read_batches(bytes)?,
+    };
+    let mut rows = 0_u64;
+    let mut stamps = Vec::new();
+    for batch in batches {
+        let columns = mutation_stamp_columns(batch.schema().as_ref())?.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "positioned payload must contain typed mutation stamp columns".to_owned(),
+            )
+        })?;
+        rows = rows
+            .checked_add(u64::try_from(batch.num_rows()).map_err(|_| {
+                BorsukError::InvalidStorage("positioned payload row count exceeds u64".to_owned())
+            })?)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("positioned payload row total overflow".to_owned())
+            })?;
+        for row in 0..batch.num_rows() {
+            let stamp = mutation_stamp_value(&batch, Some(columns), row)?.ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned payload mutation stamp is unexpectedly absent".to_owned(),
+                )
+            })?;
+            stamps.push(PositionedMutationStamp {
+                hlc: stamp.version().hlc(),
+                writer: stamp.version().writer(),
+                digest: stamp.digest(),
+            });
+        }
+    }
+    if rows == 0 || stamps.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "positioned payload typed container must contain at least one row".to_owned(),
+        ));
+    }
+    Ok(PositionedPayloadMetadata { rows, stamps })
+}
+
+pub(crate) struct DecodedPositionedEnvelope {
+    pub(crate) envelope: PositionedMutationEnvelope,
+    pub(crate) transaction_digest: String,
+    pub(crate) request_digest: String,
+}
+
+pub(crate) fn positioned_envelope_to_parquet(
+    envelope: &PositionedMutationEnvelope,
+    transaction_digest: &str,
+    request_digest: &str,
+) -> Result<Vec<u8>> {
+    envelope.validate()?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("layout", DataType::UInt16, false),
+        Field::new("transaction_id", DataType::Utf8, false),
+        Field::new("transaction_digest", DataType::Utf8, false),
+        Field::new("request_digest", DataType::Utf8, false),
+        Field::new("source_epoch", DataType::UInt64, false),
+        Field::new("shard", DataType::UInt8, false),
+        Field::new("sequence", DataType::UInt64, false),
+        Field::new("schema_fingerprint", DataType::Utf8, false),
+        Field::new("min_mutation_hlc", DataType::UInt64, false),
+        Field::new("min_mutation_writer", DataType::FixedSizeBinary(16), false),
+        Field::new("min_mutation_digest", DataType::FixedSizeBinary(32), false),
+        Field::new("max_mutation_hlc", DataType::UInt64, false),
+        Field::new("max_mutation_writer", DataType::FixedSizeBinary(16), false),
+        Field::new("max_mutation_digest", DataType::FixedSizeBinary(32), false),
+        Field::new("payload_ordinal", DataType::UInt32, false),
+        Field::new("payload_modality", DataType::Utf8, false),
+        Field::new("payload_role", DataType::Utf8, false),
+        Field::new("payload_format", DataType::Utf8, false),
+        Field::new("payload_path", DataType::Utf8, false),
+        Field::new("payload_checksum", DataType::Utf8, false),
+        Field::new("payload_rows", DataType::UInt64, false),
+        Field::new("payload_bytes", DataType::UInt64, false),
+    ]));
+    let payloads = &envelope.payloads;
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            array(UInt16Array::from_iter_values(payloads.iter().map(|_| 12))),
+            array(StringArray::from_iter_values(
+                payloads.iter().map(|_| envelope.transaction_id.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                payloads.iter().map(|_| transaction_digest),
+            )),
+            array(StringArray::from_iter_values(
+                payloads.iter().map(|_| request_digest),
+            )),
+            array(UInt64Array::from_iter_values(
+                payloads.iter().map(|_| envelope.position.source_epoch),
+            )),
+            array(UInt8Array::from_iter_values(
+                payloads.iter().map(|_| envelope.position.shard),
+            )),
+            array(UInt64Array::from_iter_values(
+                payloads.iter().map(|_| envelope.position.sequence),
+            )),
+            array(StringArray::from_iter_values(
+                payloads
+                    .iter()
+                    .map(|_| envelope.schema_fingerprint.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                payloads.iter().map(|_| envelope.min_stamp.hlc),
+            )),
+            array(FixedSizeBinaryArray::try_from_iter(
+                payloads.iter().map(|_| envelope.min_stamp.writer),
+            )?),
+            array(FixedSizeBinaryArray::try_from_iter(
+                payloads.iter().map(|_| envelope.min_stamp.digest),
+            )?),
+            array(UInt64Array::from_iter_values(
+                payloads.iter().map(|_| envelope.max_stamp.hlc),
+            )),
+            array(FixedSizeBinaryArray::try_from_iter(
+                payloads.iter().map(|_| envelope.max_stamp.writer),
+            )?),
+            array(FixedSizeBinaryArray::try_from_iter(
+                payloads.iter().map(|_| envelope.max_stamp.digest),
+            )?),
+            array(UInt32Array::from_iter_values(
+                (0..payloads.len()).map(|ordinal| u32::try_from(ordinal).unwrap_or(u32::MAX)),
+            )),
+            array(StringArray::from_iter_values(
+                payloads.iter().map(|payload| payload.modality.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                payloads.iter().map(|payload| payload.role.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                payloads.iter().map(|payload| payload.format.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                payloads.iter().map(|payload| payload.path.as_str()),
+            )),
+            array(StringArray::from_iter_values(
+                payloads.iter().map(|payload| payload.checksum.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                payloads.iter().map(|payload| payload.rows),
+            )),
+            array(UInt64Array::from_iter_values(
+                payloads.iter().map(|payload| payload.encoded_bytes),
+            )),
+        ],
+    )?;
+    write_batch(batch)
+}
+
+pub(crate) fn positioned_envelope_from_parquet(bytes: &[u8]) -> Result<DecodedPositionedEnvelope> {
+    let batches = read_batches(bytes)?;
+    let first_batch = batches.first().ok_or_else(|| {
+        BorsukError::InvalidStorage("positioned envelope contains no rows".to_owned())
+    })?;
+    if first_batch.num_rows() == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "positioned envelope contains no rows".to_owned(),
+        ));
+    }
+    let first = decode_positioned_envelope_row(first_batch, 0)?;
+    let mut payloads = Vec::new();
+    let mut ordinal = 0_u32;
+    for batch in &batches {
+        for row in 0..batch.num_rows() {
+            let decoded = decode_positioned_envelope_row(batch, row)?;
+            if decoded.layout != 12
+                || decoded.transaction_id != first.transaction_id
+                || decoded.transaction_digest != first.transaction_digest
+                || decoded.request_digest != first.request_digest
+                || decoded.position != first.position
+                || decoded.schema_fingerprint != first.schema_fingerprint
+                || decoded.min_stamp != first.min_stamp
+                || decoded.max_stamp != first.max_stamp
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned envelope repeated transaction columns disagree".to_owned(),
+                ));
+            }
+            if decoded.ordinal != ordinal {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned envelope payload ordinals are not contiguous".to_owned(),
+                ));
+            }
+            ordinal = ordinal.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned envelope payload ordinal overflow".to_owned(),
+                )
+            })?;
+            payloads.push(decoded.payload);
+        }
+    }
+    let envelope = PositionedMutationEnvelope {
+        transaction_id: first.transaction_id,
+        schema_fingerprint: first.schema_fingerprint,
+        position: first.position,
+        min_stamp: first.min_stamp,
+        max_stamp: first.max_stamp,
+        payloads,
+    };
+    envelope.validate()?;
+    Ok(DecodedPositionedEnvelope {
+        envelope,
+        transaction_digest: first.transaction_digest,
+        request_digest: first.request_digest,
+    })
+}
+
+struct PositionedEnvelopeRow {
+    layout: u16,
+    transaction_id: String,
+    transaction_digest: String,
+    request_digest: String,
+    position: crate::positioned_log::CommitSourcePosition,
+    schema_fingerprint: String,
+    min_stamp: PositionedMutationStamp,
+    max_stamp: PositionedMutationStamp,
+    ordinal: u32,
+    payload: PositionedMutationPayloadRef,
+}
+
+fn decode_positioned_envelope_row(
+    batch: &RecordBatch,
+    row: usize,
+) -> Result<PositionedEnvelopeRow> {
+    let value = |name: &str| string_value_by_name(batch, row, name).map(str::to_owned);
+    Ok(PositionedEnvelopeRow {
+        layout: primitive_value_by_name::<UInt16Type>(batch, row, "layout")?,
+        transaction_id: value("transaction_id")?,
+        transaction_digest: value("transaction_digest")?,
+        request_digest: value("request_digest")?,
+        position: crate::positioned_log::CommitSourcePosition::new(
+            primitive_value_by_name::<UInt64Type>(batch, row, "source_epoch")?,
+            primitive_value_by_name::<UInt8Type>(batch, row, "shard")?,
+            primitive_value_by_name::<UInt64Type>(batch, row, "sequence")?,
+        )?,
+        schema_fingerprint: value("schema_fingerprint")?,
+        min_stamp: PositionedMutationStamp {
+            hlc: primitive_value_by_name::<UInt64Type>(batch, row, "min_mutation_hlc")?,
+            writer: fixed_size_binary_value(
+                batch,
+                column_index(batch, "min_mutation_writer")?,
+                row,
+                "min_mutation_writer",
+            )?,
+            digest: fixed_size_binary_value(
+                batch,
+                column_index(batch, "min_mutation_digest")?,
+                row,
+                "min_mutation_digest",
+            )?,
+        },
+        max_stamp: PositionedMutationStamp {
+            hlc: primitive_value_by_name::<UInt64Type>(batch, row, "max_mutation_hlc")?,
+            writer: fixed_size_binary_value(
+                batch,
+                column_index(batch, "max_mutation_writer")?,
+                row,
+                "max_mutation_writer",
+            )?,
+            digest: fixed_size_binary_value(
+                batch,
+                column_index(batch, "max_mutation_digest")?,
+                row,
+                "max_mutation_digest",
+            )?,
+        },
+        ordinal: primitive_value_by_name::<UInt32Type>(batch, row, "payload_ordinal")?,
+        payload: PositionedMutationPayloadRef {
+            modality: crate::positioned_log::PositionedMutationModality::parse(
+                string_value_by_name(batch, row, "payload_modality")?,
+            )?,
+            role: value("payload_role")?,
+            format: PositionedPayloadFormat::parse(string_value_by_name(
+                batch,
+                row,
+                "payload_format",
+            )?)?,
+            path: value("payload_path")?,
+            checksum: value("payload_checksum")?,
+            rows: primitive_value_by_name::<UInt64Type>(batch, row, "payload_rows")?,
+            encoded_bytes: primitive_value_by_name::<UInt64Type>(batch, row, "payload_bytes")?,
+        },
+    })
 }
 
 fn write_batch(batch: RecordBatch) -> Result<Vec<u8>> {

@@ -169,6 +169,15 @@ pub use physical_layout::{
     CURRENT_LAYOUT_POLICY_VERSION, PhysicalFormat, PhysicalLayoutPolicy, PhysicalLayoutRef,
     production_object_roles,
 };
+pub use positioned_log::{
+    CommitSourcePosition, CommittedPositionedMutation, MAX_APPEND_ENCODED_BYTES, MAX_APPEND_ROWS,
+    MAX_HEAD_CAS_ATTEMPTS, MAX_PAYLOADS_PER_TRANSACTION, MAX_PENDING_ENVELOPES_PER_SHARD,
+    MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD, MAX_SHARD_HEAD_BYTES, MAX_UNMATERIALIZED_BYTES_PER_SHARD,
+    MAX_UNMATERIALIZED_ROWS_PER_SHARD, PositionedLogReader, PositionedLogSnapshot,
+    PositionedLogWriter, PositionedMutationEnvelope, PositionedMutationModality,
+    PositionedMutationPayloadInput, PositionedMutationPayloadRef, PositionedMutationStamp,
+    PositionedPayloadFormat, SOURCE_SHARD_COUNT,
+};
 pub use record::{
     AddReport, BuildConfig, CacheExecutionPolicy, CompactionOptions, CompactionReport,
     DEFAULT_COMPACTION_MAX_SEGMENTS, DEFAULT_GARBAGE_COLLECTION_MIN_AGE,

@@ -1,3 +1,8 @@
+#![allow(
+    dead_code,
+    reason = "shared integration-test support is target-specific"
+)]
+
 use std::{
     collections::HashSet,
     error::Error,
@@ -19,7 +24,7 @@ use futures_util::{
 };
 use object_store::{
     CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
     path::Path as ObjectPath,
 };
 
@@ -39,7 +44,21 @@ pub enum StoreOperation {
 
 #[derive(Debug, Default)]
 pub struct OperationLog {
-    entries: Mutex<Vec<(StoreOperation, String)>>,
+    entries: Mutex<Vec<OperationLogEntry>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoggedPutMode {
+    Overwrite,
+    Create,
+    Update,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationLogEntry {
+    pub operation: StoreOperation,
+    pub path: String,
+    pub put_mode: Option<LoggedPutMode>,
 }
 
 impl OperationLog {
@@ -52,7 +71,7 @@ impl OperationLog {
             .lock()
             .expect("operation log poisoned")
             .iter()
-            .filter(|(operation, path)| predicate(*operation, path))
+            .filter(|entry| predicate(entry.operation, &entry.path))
             .count()
     }
 
@@ -61,16 +80,40 @@ impl OperationLog {
             .lock()
             .expect("operation log poisoned")
             .iter()
-            .filter(|(operation, path)| predicate(*operation, path))
-            .map(|(_, path)| path.clone())
+            .filter(|entry| predicate(entry.operation, &entry.path))
+            .map(|entry| entry.path.clone())
             .collect()
+    }
+
+    pub fn entries(&self) -> Vec<OperationLogEntry> {
+        self.entries.lock().expect("operation log poisoned").clone()
     }
 
     fn record(&self, operation: StoreOperation, location: &ObjectPath) {
         self.entries
             .lock()
             .expect("operation log poisoned")
-            .push((operation, location.to_string()));
+            .push(OperationLogEntry {
+                operation,
+                path: location.to_string(),
+                put_mode: None,
+            });
+    }
+
+    fn record_put(&self, location: &ObjectPath, mode: &PutMode) {
+        let put_mode = match mode {
+            PutMode::Overwrite => LoggedPutMode::Overwrite,
+            PutMode::Create => LoggedPutMode::Create,
+            PutMode::Update(_) => LoggedPutMode::Update,
+        };
+        self.entries
+            .lock()
+            .expect("operation log poisoned")
+            .push(OperationLogEntry {
+                operation: StoreOperation::Put,
+                path: location.to_string(),
+                put_mode: Some(put_mode),
+            });
     }
 }
 
@@ -457,7 +500,9 @@ impl ObjectStore for FaultInjectingObjectStore {
             if !self.fail_after_put {
                 self.maybe_fail(StoreOperation::Put, location)?;
             }
-            self.record_operation(StoreOperation::Put, location);
+            if let Some(operation_log) = &self.operation_log {
+                operation_log.record_put(location, &opts.mode);
+            }
             self.maybe_wait_at_put_barrier(StoreOperation::Put, location);
             let result = self.inner.put_opts(location, payload, opts).await?;
             if self.fail_after_put {
