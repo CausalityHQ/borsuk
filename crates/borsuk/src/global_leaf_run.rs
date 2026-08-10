@@ -2004,7 +2004,7 @@ mod tests {
             sample_limit: training.len(),
             iterations: 2,
         };
-        let scan = RotatedProductQuantizer::fit(config.clone(), &training).unwrap();
+        let scan = RotatedProductQuantizer::fit(config, &training).unwrap();
         let coarse = RotatedProductQuantizer::fit(config, &training).unwrap();
         let descriptor = GlobalCodebookDescriptor::new(
             scan.state(),
