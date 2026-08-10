@@ -36,7 +36,6 @@ use crate::{
 #[cfg(test)]
 use crate::rotated_product_quantizer::ProductQuantizerConfig;
 
-const DESCRIPTOR_JSON_COLUMN: &str = "ann_descriptor_json";
 pub(crate) const DEFAULT_GLOBAL_PQ_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const DEFAULT_GLOBAL_EXACT_CHUNK_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -197,6 +196,27 @@ impl GlobalScanQuantizer {
             Self::FastTurboQuantMse(quantizer) => quantizer.encode(vector),
             Self::FastTurboQuantProd(quantizer) => quantizer.encode(vector),
         }
+    }
+
+    pub(crate) fn reconstruction_error_p95_micros(&self, sample: &[Vec<f32>]) -> Result<u64> {
+        if sample.is_empty() {
+            return invalid("V11 reconstruction baseline sample is empty");
+        }
+        let mut errors = sample
+            .iter()
+            .map(|vector| {
+                let code = self.encode(vector)?;
+                let prepared = self.prepare_query(vector)?;
+                checked_reconstruction_error_micros(f64::from(self.distance(&prepared, &code)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        errors.sort_unstable();
+        let rank = errors
+            .len()
+            .saturating_mul(95)
+            .div_ceil(100)
+            .saturating_sub(1);
+        Ok(errors[rank])
     }
 
     fn encode_with_scratch(
@@ -637,7 +657,7 @@ impl GlobalCoarseQuantizer {
         }
     }
 
-    fn all_cells(&self) -> Result<Vec<u16>> {
+    pub(crate) fn all_cells(&self) -> Result<Vec<u16>> {
         match self {
             Self::Product(quantizer) => {
                 let width = quantizer.code_bytes_per_vector();
@@ -1123,223 +1143,6 @@ impl GlobalPqCellSpool {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct GlobalPqDescriptor {
-    layout: String,
-    quantizer: GlobalScanQuantizerState,
-    coarse_quantizer: GlobalCoarseQuantizerState,
-    vectors: usize,
-    vector_element_type: VectorElementType,
-    centroid_code_bytes: usize,
-    cell_root: crate::global_leaf::GlobalLeafTableRef,
-    shard_table: crate::global_leaf::GlobalLeafTableRef,
-    bundle_table: crate::global_leaf::GlobalLeafTableRef,
-    cell_count: usize,
-    page_count: usize,
-    bundle_count: usize,
-}
-
-impl GlobalPqDescriptor {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        quantizer: impl Into<GlobalScanQuantizerState>,
-        coarse_quantizer: impl Into<GlobalCoarseQuantizerState>,
-        vectors: usize,
-        vector_element_type: VectorElementType,
-        cell_root: crate::global_leaf::GlobalLeafTableRef,
-        shard_table: crate::global_leaf::GlobalLeafTableRef,
-        bundle_table: crate::global_leaf::GlobalLeafTableRef,
-        cell_count: usize,
-        page_count: usize,
-        bundle_count: usize,
-    ) -> Result<Self> {
-        let quantizer = quantizer.into();
-        let coarse_quantizer = coarse_quantizer.into();
-        let scan_quantizer = GlobalScanQuantizer::from_state(quantizer.clone())?;
-        let _ = GlobalCoarseQuantizer::from_state(coarse_quantizer.clone())?;
-        let quantizer_dimensions = match &quantizer {
-            GlobalScanQuantizerState::Pq(state) => state.dimensions,
-            GlobalScanQuantizerState::FastTurboQuantMse(state) => state.dimensions,
-            GlobalScanQuantizerState::FastTurboQuantProd(state) => state.dimensions,
-        };
-        let coarse_dimensions = match &coarse_quantizer {
-            GlobalCoarseQuantizerState::Product(state) => state.dimensions,
-            GlobalCoarseQuantizerState::Hierarchical(state) => state.dimensions,
-        };
-        if quantizer_dimensions != coarse_dimensions {
-            return invalid("V10 scan and coarse quantizers disagree on dimensions");
-        }
-        vector_element_type.fixed_width_bytes(quantizer_dimensions)?;
-        let tables = [&cell_root, &shard_table, &bundle_table];
-        if tables
-            .iter()
-            .any(|table| table.path.is_empty() || table.encoded_bytes == 0)
-            || tables[0].path == tables[1].path
-            || tables[0].path == tables[2].path
-            || tables[1].path == tables[2].path
-        {
-            return invalid("V10 leaf table references must be complete and distinct");
-        }
-        if vectors == 0
-            || cell_count == 0
-            || page_count == 0
-            || bundle_count == 0
-            || cell_count > page_count
-            || page_count > vectors
-            || bundle_count > page_count
-        {
-            return invalid("V10 vector, cell, page, and bundle counts are inconsistent");
-        }
-        Ok(Self {
-            layout: "bounded-arrow-leaf-v10".to_string(),
-            quantizer,
-            coarse_quantizer,
-            vectors,
-            vector_element_type,
-            centroid_code_bytes: scan_quantizer.code_bytes_per_vector(),
-            cell_root,
-            shard_table,
-            bundle_table,
-            cell_count,
-            page_count,
-            bundle_count,
-        })
-    }
-
-    pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let json = serde_json::to_string(self).map_err(|error| {
-            BorsukError::InvalidStorage(format!("failed to encode V10 descriptor: {error}"))
-        })?;
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            DESCRIPTOR_JSON_COLUMN,
-            DataType::Utf8,
-            false,
-        )]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(StringArray::from(vec![json]))],
-        )?;
-        let properties = WriterProperties::builder()
-            .set_compression(Compression::ZSTD(Default::default()))
-            .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue::new(
-                "borsuk.ann.layout".to_string(),
-                "bounded-arrow-leaf-v10".to_string(),
-            )]))
-            .build();
-        let mut bytes = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties))?;
-        writer.write(&batch)?;
-        writer.close()?;
-        Ok(bytes)
-    }
-
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
-        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
-        let markers = builder
-            .metadata()
-            .file_metadata()
-            .key_value_metadata()
-            .ok_or_else(|| invalid_error("V10 descriptor has no layout metadata"))?;
-        if markers
-            .iter()
-            .filter(|entry| entry.key == "borsuk.ann.layout")
-            .map(|entry| entry.value.as_deref())
-            .collect::<Vec<_>>()
-            != [Some("bounded-arrow-leaf-v10")]
-        {
-            return invalid(
-                "V10 descriptor layout metadata is missing or invalid; rebuild the unreleased index",
-            );
-        }
-        let reader = builder.build()?;
-        let mut payload = None;
-        for batch in reader {
-            let batch = batch?;
-            if batch.num_columns() != 1
-                || batch.schema().field(0)
-                    != &Field::new(DESCRIPTOR_JSON_COLUMN, DataType::Utf8, false)
-            {
-                return invalid("V10 descriptor Parquet schema is invalid");
-            }
-            let column = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| invalid_error("V10 descriptor payload is not Utf8"))?;
-            if column.len() != 1 || column.is_null(0) || payload.is_some() {
-                return invalid("V10 descriptor must contain exactly one row");
-            }
-            payload = Some(column.value(0).to_string());
-        }
-        let payload = payload.ok_or_else(|| invalid_error("V10 descriptor contains no row"))?;
-        let descriptor: Self = serde_json::from_str(&payload).map_err(|error| {
-            BorsukError::InvalidStorage(format!("invalid global PQ V10 descriptor: {error}"))
-        })?;
-        if descriptor.layout != "bounded-arrow-leaf-v10" {
-            return invalid("V10 descriptor payload layout is invalid");
-        }
-        let centroid_code_bytes = descriptor.centroid_code_bytes;
-        let rebuilt = Self::new(
-            descriptor.quantizer,
-            descriptor.coarse_quantizer,
-            descriptor.vectors,
-            descriptor.vector_element_type,
-            descriptor.cell_root,
-            descriptor.shard_table,
-            descriptor.bundle_table,
-            descriptor.cell_count,
-            descriptor.page_count,
-            descriptor.bundle_count,
-        )?;
-        if rebuilt.centroid_code_bytes != centroid_code_bytes {
-            return invalid("V10 descriptor centroid code width is invalid");
-        }
-        Ok(rebuilt)
-    }
-
-    pub(crate) fn code_bytes_per_vector(&self) -> usize {
-        self.centroid_code_bytes
-    }
-
-    #[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
-    pub(crate) fn cell_count(&self) -> usize {
-        self.cell_count
-    }
-
-    #[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
-    pub(crate) fn page_count(&self) -> usize {
-        self.page_count
-    }
-
-    #[allow(dead_code, reason = "V10 query routing is wired in Task 3")]
-    pub(crate) fn bundle_count(&self) -> usize {
-        self.bundle_count
-    }
-
-    pub(crate) fn cell_root(&self) -> &crate::global_leaf::GlobalLeafTableRef {
-        &self.cell_root
-    }
-
-    pub(crate) fn shard_table(&self) -> &crate::global_leaf::GlobalLeafTableRef {
-        &self.shard_table
-    }
-
-    pub(crate) fn bundle_table(&self) -> &crate::global_leaf::GlobalLeafTableRef {
-        &self.bundle_table
-    }
-
-    pub(crate) fn resident_bytes(&self) -> usize {
-        size_of::<Self>()
-            + self.layout.capacity()
-            + self.quantizer.heap_bytes()
-            + self.coarse_quantizer.heap_bytes()
-            + self.cell_root.path.capacity()
-            + self.shard_table.path.capacity()
-            + self.bundle_table.path.capacity()
-    }
-}
-
 const V11_CODEBOOK_LAYOUT: &str = "bounded-arrow-leaf-v11";
 const V11_CODEBOOK_QUANTIZER_COLUMN: &str = "quantizer_json";
 const V11_CODEBOOK_COARSE_QUANTIZER_COLUMN: &str = "coarse_quantizer_json";
@@ -1727,6 +1530,25 @@ impl ResidentGlobalCodebook {
         ranked.truncate(page_budget);
         Ok(ranked)
     }
+
+    pub(crate) fn code_bytes_per_vector(&self) -> usize {
+        self.quantizer.code_bytes_per_vector()
+    }
+
+    pub(crate) fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub(crate) fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(self.quantizer.state().heap_bytes())
+            .saturating_add(self.coarse_quantizer.state().heap_bytes())
+            .saturating_add(
+                self.cells
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u16>()),
+            )
+    }
 }
 
 fn checked_reconstruction_error_micros(distance: f64) -> Result<u64> {
@@ -1753,121 +1575,6 @@ pub(crate) enum GlobalPqCellSpoolEvent {
     FinalizeCell {
         cell: u16,
     },
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ResidentGlobalPq {
-    quantizer: GlobalScanQuantizer,
-    coarse_quantizer: GlobalCoarseQuantizer,
-    directory: crate::global_leaf::GlobalLeafDirectory,
-    vector_element_type: VectorElementType,
-    len: usize,
-}
-
-impl ResidentGlobalPq {
-    pub(crate) fn load(
-        descriptor: GlobalPqDescriptor,
-        root: crate::global_leaf::GlobalLeafDirectoryRoot,
-    ) -> Result<Self> {
-        if root.cells.len() != descriptor.cell_count
-            || root.bundles.len() != descriptor.bundle_count
-            || root
-                .cells
-                .iter()
-                .map(|cell| cell.pages as usize)
-                .sum::<usize>()
-                != descriptor.page_count
-        {
-            return invalid("V10 directory counts do not match the descriptor");
-        }
-        let directory =
-            crate::global_leaf::GlobalLeafDirectory::new(root, descriptor.centroid_code_bytes)?;
-        Ok(Self {
-            quantizer: GlobalScanQuantizer::from_state(descriptor.quantizer)?,
-            coarse_quantizer: GlobalCoarseQuantizer::from_state(descriptor.coarse_quantizer)?,
-            directory,
-            vector_element_type: descriptor.vector_element_type,
-            len: descriptor.vectors,
-        })
-    }
-
-    pub(crate) fn directory(&self) -> &crate::global_leaf::GlobalLeafDirectory {
-        &self.directory
-    }
-
-    pub(crate) fn vector_element_type(&self) -> VectorElementType {
-        self.vector_element_type
-    }
-
-    pub(crate) fn rank_fused_leaf_pages(
-        &self,
-        query: &[f32],
-        base_cells: &[u16],
-        base_pages: &[crate::global_leaf::GlobalLeafPageRef],
-        delta: Option<(&Self, &[u16], &[crate::global_leaf::GlobalLeafPageRef])>,
-        page_budget: usize,
-    ) -> Result<Vec<RoutedGlobalLeafPage>> {
-        if let Some((delta_index, delta_cells, delta_pages)) = delta {
-            rank_fused_leaf_pages_with_quantizers(
-                &self.quantizer,
-                &delta_index.quantizer,
-                query,
-                base_cells,
-                base_pages,
-                delta_cells,
-                delta_pages,
-                page_budget,
-            )
-        } else {
-            Ok(
-                rank_leaf_pages_scored(&self.quantizer, query, base_cells, base_pages)?
-                    .into_iter()
-                    .take(page_budget)
-                    .map(|(distance, page)| RoutedGlobalLeafPage {
-                        layer: GlobalLeafLayer::Base,
-                        distance,
-                        page,
-                    })
-                    .collect(),
-            )
-        }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.len
-    }
-
-    pub(crate) fn code_bytes_per_vector(&self) -> usize {
-        self.quantizer.code_bytes_per_vector()
-    }
-
-    pub(crate) fn cell_count(&self) -> usize {
-        self.directory.root().cells.len()
-    }
-
-    pub(crate) fn nearest_cells(&self, query: &[f32], nprobe: usize) -> Result<Vec<u16>> {
-        Ok(self
-            .nearest_cells_with_distances(query, nprobe)?
-            .into_iter()
-            .map(|(_, cell)| cell)
-            .collect())
-    }
-
-    pub(crate) fn nearest_cells_with_distances(
-        &self,
-        query: &[f32],
-        nprobe: usize,
-    ) -> Result<Vec<(f32, u16)>> {
-        let cells = self
-            .directory
-            .root()
-            .cells
-            .iter()
-            .map(|cell| cell.cell_index)
-            .collect::<Vec<_>>();
-        self.coarse_quantizer
-            .nearest_cells_with_distances(query, nprobe, &cells)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2067,42 +1774,6 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-
-    fn unreleased_legacy_descriptor_bytes(bundle_layout: &str) -> Vec<u8> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            DESCRIPTOR_JSON_COLUMN,
-            DataType::Utf8,
-            false,
-        )]));
-        let payload = serde_json::json!({ "bundle_layout": bundle_layout }).to_string();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(StringArray::from(vec![payload]))],
-        )
-        .unwrap();
-        let mut bytes = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut bytes, schema, None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        bytes
-    }
-
-    #[test]
-    fn v7_and_v9_descriptors_require_an_explicit_rebuild() {
-        for layout in [
-            "typed-columns-v7-cell-local-exact-arrow",
-            "typed-columns-v9-cell-local-exact-arrow",
-        ] {
-            let error = GlobalPqDescriptor::decode(&unreleased_legacy_descriptor_bytes(layout))
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains("rebuild the unreleased index"),
-                "legacy {layout} descriptor produced an ambiguous error: {error}"
-            );
-        }
-    }
-
     fn test_v11_codebook_descriptor() -> GlobalCodebookDescriptor {
         let fit = vectors(256, 64);
         let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
@@ -2557,55 +2228,6 @@ mod tests {
         assert_eq!(partition_spool_cell(product, false), (3, 9));
         assert_eq!(compose_spool_cell(3, 9, false).unwrap(), product);
     }
-
-    #[test]
-    fn v10_descriptor_retains_only_quantizers_and_compact_leaf_table_roots() {
-        let fit = vectors(256, 64);
-        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
-        let table = |name: &str, checksum: u8| crate::global_leaf::GlobalLeafTableRef {
-            path: format!("global-leaf/{name}.parquet"),
-            checksum: [checksum; 32],
-            encoded_bytes: 4096,
-        };
-        let descriptor = GlobalPqDescriptor::new(
-            quantizer.state(),
-            coarse_state(&fit),
-            100_000_000,
-            VectorElementType::Float32,
-            table("cells", 1),
-            table("shards", 2),
-            table("bundles", 3),
-            43_403,
-            3_125_000,
-            6_400,
-        )
-        .unwrap();
-
-        let encoded = descriptor.encode().unwrap();
-        let decoded = GlobalPqDescriptor::decode(&encoded).unwrap();
-
-        assert!(encoded.starts_with(b"PAR1") && encoded.ends_with(b"PAR1"));
-        assert_eq!(decoded.vectors, 100_000_000);
-        assert_eq!(decoded.code_bytes_per_vector(), 8);
-        assert_eq!(decoded.cell_count(), 43_403);
-        assert_eq!(decoded.page_count(), 3_125_000);
-        assert_eq!(decoded.bundle_count(), 6_400);
-        assert_eq!(decoded.cell_root().path, "global-leaf/cells.parquet");
-        assert_eq!(decoded.shard_table().checksum, [2; 32]);
-        assert_eq!(decoded.bundle_table().checksum, [3; 32]);
-        assert_eq!(
-            descriptor.resident_bytes(),
-            size_of::<GlobalPqDescriptor>()
-                + descriptor.layout.capacity()
-                + descriptor.quantizer.heap_bytes()
-                + descriptor.coarse_quantizer.heap_bytes()
-                + descriptor.cell_root.path.capacity()
-                + descriptor.shard_table.path.capacity()
-                + descriptor.bundle_table.path.capacity()
-        );
-        assert!(descriptor.resident_bytes() < 2 * 1024 * 1024);
-    }
-
     #[test]
     fn production_turboquant_state_drives_global_scan_without_dense_state() {
         let quantizer = crate::turboquant::FastTurboQuantProdScanQuantizer::new(23, 64, 4).unwrap();

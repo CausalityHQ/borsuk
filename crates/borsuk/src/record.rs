@@ -796,6 +796,18 @@ pub struct IndexStats {
     /// rerank vectors and optional cell graphs.
     #[serde(default)]
     pub global_scan_bytes: u64,
+    /// Active global ANN manifest layout version.
+    pub global_ann_layout_version: Option<u8>,
+    /// Checksum of the single active V11 codebook descriptor.
+    pub global_ann_codebook_checksum: Option<String>,
+    /// Monotonic leaf-run epoch of the active V11 ANN.
+    pub global_leaf_epoch: Option<u64>,
+    /// Number of active leaf runs, including the optional base.
+    pub global_leaf_runs: usize,
+    /// Highest active leaf-run level; the offline base is level zero.
+    pub global_leaf_max_level: Option<u8>,
+    /// Number of partially filled active V11 leaf pages.
+    pub global_leaf_partial_pages: usize,
     /// Collection-wide resident manifest/config/routing/pivot bytes.
     pub resident_bytes_estimate: u64,
     /// Collection-wide resident manifest bytes (explicit telemetry alias).

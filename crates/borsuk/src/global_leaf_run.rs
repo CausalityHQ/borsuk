@@ -1,6 +1,6 @@
 use crate::{
     BorsukError, Result, lane_log::GROUP_COMMIT_STRIPE_COUNT, metric::VectorMetric,
-    record::VectorElementType,
+    mutation::MutationStamp, record::VectorElementType,
 };
 
 pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 11;
@@ -210,6 +210,38 @@ pub(crate) struct GlobalLeafDirectoryRef {
     shard_count: u32,
 }
 
+impl GlobalLeafDirectoryRef {
+    pub(crate) fn new(
+        path: String,
+        checksum: String,
+        encoded_bytes: u64,
+        object_count: u32,
+    ) -> Self {
+        Self {
+            path,
+            checksum,
+            encoded_bytes,
+            shard_count: object_count,
+        }
+    }
+
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(crate) fn checksum(&self) -> &str {
+        &self.checksum
+    }
+
+    pub(crate) fn encoded_bytes(&self) -> u64 {
+        self.encoded_bytes
+    }
+
+    pub(crate) fn object_count(&self) -> u32 {
+        self.shard_count
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GlobalCodebookRef {
@@ -226,6 +258,80 @@ pub(crate) struct GlobalCodebookRef {
     reconstruction_error_p95_micros: u64,
     resident_bytes: u64,
     storage_bytes: u64,
+}
+
+impl GlobalCodebookRef {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        descriptor_path: String,
+        descriptor_checksum: String,
+        metric: VectorMetric,
+        dimensions: usize,
+        element_type: VectorElementType,
+        code_width: usize,
+        cell_count: u32,
+        candidates: u32,
+        probes: u32,
+        reconstruction_error_p95_micros: u64,
+        resident_bytes: u64,
+        storage_bytes: u64,
+    ) -> Self {
+        Self {
+            layout_version: GLOBAL_PQ_REF_LAYOUT_VERSION,
+            descriptor_path,
+            descriptor_checksum,
+            metric,
+            dimensions,
+            element_type,
+            code_width,
+            cell_count,
+            candidates,
+            probes,
+            reconstruction_error_p95_micros,
+            resident_bytes,
+            storage_bytes,
+        }
+    }
+
+    pub(crate) fn descriptor_path(&self) -> &str {
+        &self.descriptor_path
+    }
+
+    pub(crate) fn descriptor_checksum(&self) -> &str {
+        &self.descriptor_checksum
+    }
+
+    pub(crate) fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    pub(crate) fn element_type(&self) -> VectorElementType {
+        self.element_type
+    }
+
+    pub(crate) fn code_width(&self) -> usize {
+        self.code_width
+    }
+
+    pub(crate) fn cell_count(&self) -> u32 {
+        self.cell_count
+    }
+
+    pub(crate) fn candidates(&self) -> u32 {
+        self.candidates
+    }
+
+    pub(crate) fn probes(&self) -> u32 {
+        self.probes
+    }
+
+    pub(crate) fn resident_bytes(&self) -> u64 {
+        self.resident_bytes
+    }
+
+    pub(crate) fn storage_bytes(&self) -> u64 {
+        self.storage_bytes
+    }
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -247,7 +353,74 @@ pub(crate) struct GlobalLeafRunRef {
     source_ranges: SourceRangeSet,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ResidentGlobalLeafRun {
+    directory: crate::global_leaf::GlobalLeafRunDirectory,
+}
+
+impl ResidentGlobalLeafRun {
+    pub(crate) fn new(directory: crate::global_leaf::GlobalLeafRunDirectory) -> Self {
+        Self { directory }
+    }
+
+    pub(crate) fn directory(&self) -> &crate::global_leaf::GlobalLeafRunDirectory {
+        &self.directory
+    }
+
+    pub(crate) fn resident_bytes(&self) -> usize {
+        self.directory.resident_bytes()
+    }
+}
+
 impl GlobalLeafRunRef {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_base(
+        codebook_checksum: String,
+        directory: GlobalLeafDirectoryRef,
+        rows: u64,
+        pages: u64,
+        bundles: u64,
+        sealed_pages: u64,
+        partial_pages: u64,
+        encoded_bytes: u64,
+        resident_bytes: u64,
+        min_stamp: MutationStamp,
+        max_stamp: MutationStamp,
+    ) -> Self {
+        Self {
+            layout_version: GLOBAL_PQ_REF_LAYOUT_VERSION,
+            level: 0,
+            codebook_checksum,
+            directory,
+            rows,
+            pages,
+            bundles,
+            sealed_pages,
+            partial_pages,
+            encoded_bytes,
+            resident_bytes,
+            min_stamp: Some(MutationStampRef::from_stamp(min_stamp)),
+            max_stamp: Some(MutationStampRef::from_stamp(max_stamp)),
+            source_ranges: SourceRangeSet::default(),
+        }
+    }
+
+    pub(crate) fn directory(&self) -> &GlobalLeafDirectoryRef {
+        &self.directory
+    }
+
+    pub(crate) fn codebook_checksum(&self) -> &str {
+        &self.codebook_checksum
+    }
+
+    pub(crate) fn encoded_bytes(&self) -> u64 {
+        self.encoded_bytes
+    }
+
+    pub(crate) fn resident_bytes(&self) -> u64 {
+        self.resident_bytes
+    }
+
     pub(crate) fn level(&self) -> u8 {
         self.level
     }
@@ -266,6 +439,16 @@ impl GlobalLeafRunRef {
 
     pub(crate) fn partial_pages(&self) -> u64 {
         self.partial_pages
+    }
+}
+
+impl MutationStampRef {
+    fn from_stamp(stamp: MutationStamp) -> Self {
+        Self {
+            hlc: stamp.version().hlc(),
+            writer: stamp.version().writer(),
+            digest: stamp.digest(),
+        }
     }
 }
 
@@ -295,6 +478,45 @@ pub(crate) struct GlobalAnnRef {
 }
 
 impl GlobalAnnRef {
+    pub(crate) fn new_offline_base(
+        codebook: GlobalCodebookRef,
+        base: GlobalLeafRunRef,
+        leaf_epoch: u64,
+        purge_epoch: u64,
+    ) -> Result<Self> {
+        let rows = base.rows;
+        let storage_bytes = codebook
+            .storage_bytes
+            .checked_add(base.encoded_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V11 global ANN storage total overflow".to_owned())
+            })?;
+        let resident_bytes = codebook
+            .resident_bytes
+            .checked_add(base.resident_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V11 global ANN resident total overflow".to_owned())
+            })?;
+        let reference = Self {
+            layout_version: GLOBAL_PQ_REF_LAYOUT_VERSION,
+            codebook,
+            base: Some(base),
+            incremental_runs: Vec::new(),
+            coverage: SourceRangeSet::default(),
+            leaf_epoch,
+            purge_epoch,
+            base_rows: rows,
+            appended_live_rows: 0,
+            obsolete_rows: 0,
+            rows,
+            storage_bytes,
+            resident_bytes,
+            drift: GlobalDriftState::default(),
+        };
+        reference.validate()?;
+        Ok(reference)
+    }
+
     pub(crate) fn layout_version(&self) -> u8 {
         self.layout_version
     }
@@ -321,6 +543,58 @@ impl GlobalAnnRef {
 
     pub(crate) fn appended_live_rows(&self) -> u64 {
         self.appended_live_rows
+    }
+
+    pub(crate) fn leaf_epoch(&self) -> u64 {
+        self.leaf_epoch
+    }
+
+    pub(crate) fn storage_bytes(&self) -> u64 {
+        self.storage_bytes
+    }
+
+    pub(crate) fn resident_bytes(&self) -> u64 {
+        self.resident_bytes
+    }
+
+    pub(crate) fn resident_bytes_estimate(&self) -> usize {
+        let codebook_strings = self
+            .codebook
+            .descriptor_path
+            .capacity()
+            .saturating_add(self.codebook.descriptor_checksum.capacity());
+        let run_bytes = self
+            .base
+            .iter()
+            .chain(self.incremental_runs.iter())
+            .map(|run| {
+                run.codebook_checksum
+                    .capacity()
+                    .saturating_add(run.directory.path.capacity())
+                    .saturating_add(run.directory.checksum.capacity())
+                    .saturating_add(
+                        run.source_ranges
+                            .ranges
+                            .capacity()
+                            .saturating_mul(std::mem::size_of::<LaneSourceRange>()),
+                    )
+            })
+            .sum::<usize>();
+        std::mem::size_of::<Self>()
+            .saturating_add(codebook_strings)
+            .saturating_add(
+                self.incremental_runs
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<GlobalLeafRunRef>()),
+            )
+            .saturating_add(run_bytes)
+            .saturating_add(
+                self.drift
+                    .pending_reconstruction_errors_micros
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u64>()),
+            )
+            .saturating_add(usize::try_from(self.resident_bytes).unwrap_or(usize::MAX))
     }
 
     #[cfg(test)]

@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use crate::{
     cell_wal::{CellWalConfig, LogicalCellId},
     error::{BorsukError, Result},
+    global_leaf_run::GlobalAnnRef,
     index::IndexConfig,
     metric::{VectorMetric, unit_l2_normalized},
     record::{BuildConfig, LeafCapability, LeafMode},
@@ -190,10 +191,10 @@ pub struct Manifest {
     /// so an older manifest (which lacks the field) reloads with no reference.
     #[serde(default)]
     pub(crate) quantizer_ref: Option<QuantizerRef>,
-    /// Reference to the compact global TurboQuant product-code artifact used by
-    /// the resident `pq-scan` fast path. The field is null until a full
-    /// compaction finalizes the current segment layout.
-    pub(crate) global_pq_ref: Option<GlobalPqRef>,
+    /// Reference to the V11 global codebook and leaf-run epoch. The field is
+    /// null until an offline bulk-load finish or full compaction publishes a
+    /// complete base run.
+    pub(crate) global_ann_ref: Option<GlobalAnnRef>,
     /// Content-addressed Arrow/Parquet roots for BM25 and named learned-sparse
     /// fields. Empty until lexical data exists; every segment-set change
     /// recreates the affected roots before this manifest is published.
@@ -236,50 +237,6 @@ pub(crate) struct QuantizerRef {
     pub checksum: String,
     /// Number of cells (centroid nodes) the quantizer indexes.
     pub cells: usize,
-}
-
-/// Content-addressed resident global product-code artifact for one manifest.
-pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 10;
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct GlobalPqRef {
-    /// Version of this embedded reference graph. This is intentionally required:
-    /// unreleased single-layer references must be rebuilt rather than silently
-    /// interpreted as the bounded-delta layout.
-    pub(crate) layout_version: u8,
-    pub(crate) path: String,
-    pub(crate) checksum: String,
-    pub(crate) vectors: usize,
-    pub(crate) subspaces: usize,
-    pub(crate) candidates: usize,
-    /// Default IVF cells probed when the caller leaves `max_segments` unset.
-    pub(crate) probes: usize,
-    /// Exact bytes retained for product codes, packed row locations, and the
-    /// codebook after the descriptor is loaded.
-    pub(crate) resident_bytes: u64,
-    /// Bytes retained by global exact-page indexes. Fixed-width V9 exact pages
-    /// need no index, so newly built references store zero.
-    pub(crate) sidecar_index_bytes: u64,
-    /// Physical bytes occupied by the Parquet descriptor, Arrow IPC ANN
-    /// bundles, and optional cell graphs.
-    #[serde(default)]
-    pub(crate) storage_bytes: u64,
-    /// Manifest version whose complete active segment set is covered by this
-    /// base plus its optional delta. Equality skips a routing-tree walk; every
-    /// segment-changing publish necessarily invalidates the shortcut.
-    pub(crate) covered_manifest_version: u64,
-    /// Active segment checksums in the exact ordinal order encoded by row
-    /// locations in the artifact.
-    pub(crate) segments: Vec<String>,
-    /// Small materialized segments not yet worth encoding as a delta ANN.
-    /// Persisting their summaries keeps post-drain exact-fringe reads bounded
-    /// without forcing a cold reader to walk every routing page.
-    #[serde(default)]
-    pub(crate) exact_fringe: Vec<SegmentSummary>,
-    /// A geometrically rebuilt ANN artifact over post-base segments. Nested
-    /// deltas are invalid; the remaining uncovered segments form the exact
-    /// fringe.
-    pub(crate) delta: Option<Box<GlobalPqRef>>,
 }
 
 /// Reference to one global hierarchical lexical root Parquet table.
@@ -367,93 +324,58 @@ impl LexicalRootRef {
     }
 }
 
-impl GlobalPqRef {
-    pub(crate) fn validate_layout(&self) -> Result<()> {
-        if self.layout_version != GLOBAL_PQ_REF_LAYOUT_VERSION {
-            return Err(BorsukError::InvalidStorage(format!(
-                "unsupported global PQ reference layout version {}; rebuild the unreleased index",
-                self.layout_version
-            )));
-        }
-        if self
-            .delta
-            .as_ref()
-            .is_some_and(|delta| delta.delta.is_some())
-        {
-            return Err(BorsukError::InvalidStorage(
-                "global PQ reference contains a nested delta; rebuild the unreleased index"
-                    .to_string(),
-            ));
-        }
-        if let Some(delta) = &self.delta {
-            delta.validate_layout()?;
-            let base = self
-                .segments
-                .iter()
-                .collect::<std::collections::HashSet<_>>();
-            if delta.segments.iter().any(|segment| base.contains(segment)) {
-                return Err(BorsukError::InvalidStorage(
-                    "global PQ base and delta segment coverage overlaps; rebuild the unreleased index"
-                        .to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn resident_bytes_estimate(&self) -> usize {
-        [
-            size_of::<Self>(),
-            self.path.len(),
-            self.checksum.len(),
-            self.segments.capacity().saturating_mul(size_of::<String>()),
-            self.segments.iter().map(String::len).sum::<usize>(),
-            self.exact_fringe
-                .iter()
-                .map(|summary| summary.resident_bytes_estimate())
-                .sum::<usize>(),
-            usize::try_from(self.resident_bytes).unwrap_or(usize::MAX),
-            usize::try_from(self.sidecar_index_bytes).unwrap_or(usize::MAX),
-        ]
-        .into_iter()
-        .fold(0_usize, usize::saturating_add)
-        .saturating_add(
-            self.delta
-                .as_ref()
-                .map_or(0, |delta| delta.resident_bytes_estimate()),
-        )
-    }
-}
-
 #[cfg(test)]
 mod global_pq_layout_tests {
-    use super::{GLOBAL_PQ_REF_LAYOUT_VERSION, GlobalPqRef};
+    use std::collections::BTreeMap;
+
+    use crate::{
+        BorsukIndex, IndexConfig, VectorMetric, VectorRecord, format::decode_global_ann_ref_json,
+    };
 
     #[test]
-    fn unreleased_v8_global_pq_layout_is_rejected() {
-        let reference = GlobalPqRef {
-            layout_version: 8,
-            path: "global-pq/ab/artifact.parquet".to_string(),
-            checksum: "ab".repeat(32),
-            vectors: 1,
-            subspaces: 1,
-            candidates: 1,
-            probes: 1,
-            resident_bytes: 1,
-            sidecar_index_bytes: 0,
-            storage_bytes: 1,
-            covered_manifest_version: 1,
-            segments: vec!["cd".repeat(32)],
-            exact_fringe: Vec::new(),
-            delta: None,
-        };
-
-        assert_ne!(GLOBAL_PQ_REF_LAYOUT_VERSION, 8);
-        let error = reference.validate_layout().unwrap_err().to_string();
+    fn unreleased_v10_global_ann_reference_requires_rebuild() {
+        let error = decode_global_ann_ref_json(r#"{"layout_version":10}"#)
+            .unwrap_err()
+            .to_string();
         assert!(
-            error.contains("unsupported global PQ reference layout version 8"),
+            error.contains("unsupported global ANN reference layout version 10"),
             "{error}"
         );
+        assert!(error.contains("rebuild the unreleased index"), "{error}");
+    }
+
+    #[test]
+    fn offline_v11_base_has_one_codebook_one_base_and_no_incremental_levels() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let ann = index
+            .manifest_for_format_tests()
+            .global_ann_ref
+            .as_ref()
+            .unwrap();
+        assert_eq!(ann.layout_version(), 11);
+        assert!(ann.base().is_some());
+        assert!(ann.incremental_runs().is_empty());
+        assert!(ann.coverage().ranges().is_empty());
+        ann.validate().unwrap();
     }
 }
 
@@ -566,7 +488,7 @@ impl Manifest {
             cell_wal_visible_runs: 0,
             cell_wal_visible_tombstone_runs: 0,
             quantizer_ref: None,
-            global_pq_ref: None,
+            global_ann_ref: None,
             lexical_roots: Vec::new(),
             bm25_stats_delta: None,
             bm25_stats_delta_frontier: Vec::new(),
@@ -605,7 +527,7 @@ impl Manifest {
             // Any publish that CHANGES the segment set explicitly recomputes or
             // clears this before publishing (see the compaction/flush paths).
             quantizer_ref: self.quantizer_ref.clone(),
-            global_pq_ref: self.global_pq_ref.clone(),
+            global_ann_ref: self.global_ann_ref.clone(),
             lexical_roots: self.lexical_roots.clone(),
             bm25_stats_delta: self.bm25_stats_delta.clone(),
             bm25_stats_delta_frontier: self.bm25_stats_delta_frontier.clone(),
@@ -795,10 +717,10 @@ impl Manifest {
             .as_ref()
             .map(QuantizerRef::resident_bytes_estimate)
             .unwrap_or(0);
-        let global_pq_ref_bytes = self
-            .global_pq_ref
+        let global_ann_ref_bytes = self
+            .global_ann_ref
             .as_ref()
-            .map(GlobalPqRef::resident_bytes_estimate)
+            .map(GlobalAnnRef::resident_bytes_estimate)
             .unwrap_or(0);
         let lexical_root_bytes = self
             .lexical_roots
@@ -824,7 +746,7 @@ impl Manifest {
             + tombstone_frontier_bytes
             + tombstone_page_bytes
             + quantizer_ref_bytes
-            + global_pq_ref_bytes
+            + global_ann_ref_bytes
             + lexical_root_bytes
             + bm25_stats_delta_bytes
             + bm25_stats_delta_frontier_bytes) as u64

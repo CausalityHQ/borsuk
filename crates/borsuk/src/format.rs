@@ -198,7 +198,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     // exists for this manifest. Its absence reloads as `None`, so a manifest
     // without a persisted quantizer stays byte-identical to a pre-quantizer one.
     let quantizer_ref_json = quantizer_ref_manifest_json(manifest)?;
-    let global_pq_ref_json = global_pq_ref_manifest_json(manifest)?;
+    let global_ann_ref_json = global_ann_ref_manifest_json(manifest)?;
     let lexical_roots_json = serde_json::to_string(&manifest.lexical_roots).map_err(|err| {
         BorsukError::InvalidStorage(format!("failed to serialize lexical root refs: {err}"))
     })?;
@@ -278,7 +278,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     if quantizer_ref_json.is_some() {
         columns.push(array(StringArray::from_iter([quantizer_ref_json])));
     }
-    columns.push(array(StringArray::from_iter([global_pq_ref_json])));
+    columns.push(array(StringArray::from_iter([global_ann_ref_json])));
     columns.push(array(StringArray::from_iter_values([
         lexical_roots_json.as_str()
     ])));
@@ -315,32 +315,67 @@ fn manifest_quantizer_ref(batch: &RecordBatch) -> Result<Option<crate::manifest:
         .map_err(|err| BorsukError::InvalidStorage(format!("failed to parse quantizer ref: {err}")))
 }
 
-fn global_pq_ref_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
-    let Some(global_pq_ref) = &manifest.global_pq_ref else {
+fn global_ann_ref_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
+    let Some(global_ann_ref) = &manifest.global_ann_ref else {
         return Ok(None);
     };
-    Ok(Some(serde_json::to_string(global_pq_ref).map_err(
-        |err| BorsukError::InvalidStorage(format!("failed to serialize global PQ ref: {err}")),
+    Ok(Some(serde_json::to_string(global_ann_ref).map_err(
+        |err| BorsukError::InvalidStorage(format!("failed to serialize global ANN ref: {err}")),
     )?))
 }
 
-fn manifest_global_pq_ref(batch: &RecordBatch) -> Result<Option<crate::manifest::GlobalPqRef>> {
-    let column = batch.schema().index_of("global_pq_ref_json").map_err(|_| {
-        BorsukError::InvalidStorage(
-            "manifest is missing required global_pq_ref_json column".to_string(),
-        )
+pub(crate) fn decode_global_ann_ref_json(
+    json: &str,
+) -> Result<crate::global_leaf_run::GlobalAnnRef> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|err| {
+        BorsukError::InvalidStorage(format!(
+            "failed to parse global ANN ref; rebuild the unreleased index: {err}"
+        ))
     })?;
+    if let Some(layout_version) = value
+        .get("layout_version")
+        .and_then(serde_json::Value::as_u64)
+        && layout_version != u64::from(crate::global_leaf_run::GLOBAL_PQ_REF_LAYOUT_VERSION)
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "unsupported global ANN reference layout version {layout_version}; rebuild the unreleased index"
+        )));
+    }
+    let reference: crate::global_leaf_run::GlobalAnnRef =
+        serde_json::from_value(value).map_err(|err| {
+            BorsukError::InvalidStorage(format!(
+                "failed to parse global ANN ref; rebuild the unreleased index: {err}"
+            ))
+        })?;
+    reference.validate()?;
+    Ok(reference)
+}
+
+fn manifest_global_ann_ref(
+    batch: &RecordBatch,
+) -> Result<Option<crate::global_leaf_run::GlobalAnnRef>> {
+    if let Ok(legacy_column) = batch.schema().index_of("global_pq_ref_json")
+        && !batch.column(legacy_column).is_null(0)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "unsupported global ANN reference layout version 10; rebuild the unreleased index"
+                .to_string(),
+        ));
+    }
+    let column = batch
+        .schema()
+        .index_of("global_ann_ref_json")
+        .map_err(|_| {
+            BorsukError::InvalidStorage(
+            "manifest is missing required global_ann_ref_json column; rebuild the unreleased index"
+                .to_string(),
+        )
+        })?;
     if batch.column(column).is_null(0) {
         return Ok(None);
     }
-    let json = string_value(batch, column, 0, "global_pq_ref_json")?;
-    let reference: crate::manifest::GlobalPqRef = serde_json::from_str(json).map_err(|err| {
-        BorsukError::InvalidStorage(format!(
-            "failed to parse global PQ ref; rebuild the unreleased index: {err}"
-        ))
-    })?;
-    reference.validate_layout()?;
-    Ok(Some(reference))
+    let json = string_value(batch, column, 0, "global_ann_ref_json")?;
+    decode_global_ann_ref_json(json).map(Some)
 }
 
 fn manifest_lexical_roots(batch: &RecordBatch) -> Result<Vec<crate::manifest::LexicalRootRef>> {
@@ -699,7 +734,7 @@ pub(crate) fn manifest_from_parquet(
         cell_wal_visible_runs: 0,
         cell_wal_visible_tombstone_runs: 0,
         quantizer_ref: manifest_quantizer_ref(&batch)?,
-        global_pq_ref: manifest_global_pq_ref(&batch)?,
+        global_ann_ref: manifest_global_ann_ref(&batch)?,
         lexical_roots: manifest_lexical_roots(&batch)?,
         bm25_stats_delta: manifest_bm25_stats_delta(&batch)?,
         bm25_stats_delta_frontier,
@@ -808,7 +843,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         cell_wal_visible_runs: 0,
         cell_wal_visible_tombstone_runs: 0,
         quantizer_ref: manifest_quantizer_ref(&batch)?,
-        global_pq_ref: manifest_global_pq_ref(&batch)?,
+        global_ann_ref: manifest_global_ann_ref(&batch)?,
         lexical_roots: manifest_lexical_roots(&batch)?,
         bm25_stats_delta: manifest_bm25_stats_delta(&batch)?,
         bm25_stats_delta_frontier,
@@ -4708,7 +4743,7 @@ fn manifest_schema_with_named_vectors_and_wal(
     if include_quantizer_ref {
         fields.push(Field::new("quantizer_ref_json", DataType::Utf8, true));
     }
-    fields.push(Field::new("global_pq_ref_json", DataType::Utf8, true));
+    fields.push(Field::new("global_ann_ref_json", DataType::Utf8, true));
     fields.push(Field::new("lexical_roots_json", DataType::Utf8, false));
     fields.push(Field::new("bm25_stats_delta_json", DataType::Utf8, true));
     Arc::new(Schema::new(fields))
@@ -7228,7 +7263,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_global_pq_manifest_is_rejected_instead_of_silently_upgraded() {
+    fn pre_global_ann_manifest_is_rejected_instead_of_silently_upgraded() {
         let manifest_bytes = legacy_external_manifest_parquet_without_routing_page_fanout(2, 100);
         let routing_bytes = routing_to_parquet(&valid_manifest()).unwrap();
 
@@ -7237,7 +7272,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("missing required global_pq_ref_json column"),
+                .contains("missing required global_ann_ref_json column"),
             "{error}"
         );
     }
@@ -7306,78 +7341,10 @@ mod tests {
     }
 
     #[test]
-    fn manifest_round_trips_resident_global_pq_reference() {
-        let mut expected = valid_manifest();
-        expected.global_pq_ref = Some(crate::manifest::GlobalPqRef {
-            layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
-            path: "global-pq/ab/artifact.parquet".to_string(),
-            checksum: "ab".repeat(32),
-            vectors: 1_183_514,
-            subspaces: 32,
-            candidates: 88,
-            probes: 96,
-            resident_bytes: 48_000_000,
-            sidecar_index_bytes: 12_000_000,
-            storage_bytes: 96_000_000,
-            covered_manifest_version: 41,
-            segments: vec!["cd".repeat(32), "ef".repeat(32)],
-            exact_fringe: Vec::new(),
-            delta: Some(Box::new(crate::manifest::GlobalPqRef {
-                layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
-                path: "global-pq/12/delta.parquet".to_string(),
-                checksum: "12".repeat(32),
-                vectors: 32_000,
-                subspaces: 32,
-                candidates: 48,
-                probes: 8,
-                resident_bytes: 1_500_000,
-                sidecar_index_bytes: 0,
-                storage_bytes: 3_000_000,
-                covered_manifest_version: 41,
-                segments: vec!["34".repeat(32)],
-                exact_fringe: Vec::new(),
-                delta: None,
-            })),
-        });
-
-        let manifest_bytes = manifest_to_parquet(&expected).unwrap();
-        let decoded = manifest_metadata_from_parquet(&manifest_bytes).unwrap();
-
-        assert_eq!(decoded.global_pq_ref, expected.global_pq_ref);
-    }
-
-    #[test]
-    fn manifest_rejects_unversioned_global_pq_reference() {
-        let mut expected = valid_manifest();
-        expected.global_pq_ref = Some(crate::manifest::GlobalPqRef {
-            layout_version: crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION,
-            path: "global-pq/ab/artifact.parquet".to_string(),
-            checksum: "ab".repeat(32),
-            vectors: 1,
-            subspaces: 1,
-            candidates: 1,
-            probes: 1,
-            resident_bytes: 1,
-            sidecar_index_bytes: 0,
-            storage_bytes: 1,
-            covered_manifest_version: 7,
-            segments: vec!["cd".repeat(32)],
-            exact_fringe: Vec::new(),
-            delta: None,
-        });
-        let json = serde_json::to_string(expected.global_pq_ref.as_ref().unwrap()).unwrap();
-        let unversioned = json.replacen(
-            &format!(
-                "\"layout_version\":{},",
-                crate::manifest::GLOBAL_PQ_REF_LAYOUT_VERSION
-            ),
-            "",
-            1,
-        );
-        let error = serde_json::from_str::<crate::manifest::GlobalPqRef>(&unversioned)
-            .unwrap_err()
-            .to_string();
+    fn manifest_rejects_unversioned_global_ann_reference() {
+        let error = decode_global_ann_ref_json(r#"{}"#).unwrap_err().to_string();
         assert!(error.contains("layout_version"), "{error}");
+        assert!(error.contains("rebuild the unreleased index"), "{error}");
     }
 
     #[test]
@@ -8149,7 +8116,7 @@ mod tests {
             cell_wal_visible_runs: 0,
             cell_wal_visible_tombstone_runs: 0,
             quantizer_ref: None,
-            global_pq_ref: None,
+            global_ann_ref: None,
             lexical_roots: Vec::new(),
             bm25_stats_delta: None,
             bm25_stats_delta_frontier: Vec::new(),
