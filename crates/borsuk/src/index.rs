@@ -9181,6 +9181,14 @@ impl BorsukIndex {
     }
 
     fn route_vector_to_logical_cell(&self, vector: &[f32]) -> Result<LogicalCellId> {
+        self.route_vector_to_logical_cell_with_path(vector)
+            .map(|(cell, _)| cell)
+    }
+
+    fn route_vector_to_logical_cell_with_path(
+        &self,
+        vector: &[f32],
+    ) -> Result<(LogicalCellId, &'static str)> {
         let bootstrap = self
             .manifest
             .logical_cells
@@ -9190,7 +9198,7 @@ impl BorsukIndex {
         if self.manifest.logical_cell_centroids.len() != self.manifest.logical_cells.len()
             || self.manifest.logical_cell_centroids.is_empty()
         {
-            return Ok(bootstrap);
+            return Ok((bootstrap, "bootstrap"));
         }
         let routed = if self
             .manifest
@@ -9219,7 +9227,7 @@ impl BorsukIndex {
                 None => {
                     let Some(built) = CentroidHnsw::build(&self.manifest.logical_cell_centroids)
                     else {
-                        return Ok(bootstrap);
+                        return Ok((bootstrap, "bootstrap"));
                     };
                     let built = Arc::new(built);
                     let mut cached = self
@@ -9235,7 +9243,7 @@ impl BorsukIndex {
                 .and_then(|ordinal| usize::try_from(ordinal).ok())
                 && let Some(cell) = self.manifest.logical_cells.get(ordinal)
             {
-                return Ok(*cell);
+                return Ok((*cell, "quantizer"));
             }
         }
         self.manifest
@@ -9253,6 +9261,7 @@ impl BorsukIndex {
             .into_iter()
             .min_by(|left, right| left.1.total_cmp(&right.1))
             .and_then(|(ordinal, _)| self.manifest.logical_cells.get(ordinal).copied())
+            .map(|cell| (cell, "flat"))
             .ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "logical cell routing catalog contains no usable centroid".to_string(),
@@ -9264,9 +9273,12 @@ impl BorsukIndex {
     /// path. This is a hidden qualification seam used to record routing
     /// distribution before a timed append; it does not mutate index state.
     #[doc(hidden)]
-    pub fn logical_cell_for_research(&self, vector: &[f32]) -> Result<LogicalCellId> {
+    pub fn logical_cell_for_research(
+        &self,
+        vector: &[f32],
+    ) -> Result<(LogicalCellId, &'static str)> {
         self.validate_vector(vector)?;
-        self.route_vector_to_logical_cell(vector)
+        self.route_vector_to_logical_cell_with_path(vector)
     }
 
     fn id_directory_partition(&self, id: &[u8]) -> LogicalCellId {

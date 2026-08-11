@@ -41,9 +41,13 @@ struct RunConfig {
     seed: u64,
     source_sha256: String,
     manifest_sha256: String,
-    cohort_sha256: String,
     architecture: String,
     instance_type: String,
+    instance_id: String,
+    availability_zone: String,
+    purchase_option: String,
+    mutation_protocol: String,
+    metric: String,
 }
 
 #[derive(Clone)]
@@ -53,6 +57,8 @@ struct Sample {
     record_id: String,
     latency_ms: f64,
     selected_cell: u32,
+    routing_path: &'static str,
+    vector_blake3: String,
     storage_requests: u64,
 }
 
@@ -182,14 +188,6 @@ fn is_smoke_value(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
-fn diagnostic_mode() -> bool {
-    is_diagnostic_value(env::var("BORSUK_ROUTING_DIAGNOSTIC").ok().as_deref())
-}
-
-fn is_diagnostic_value(value: Option<&str>) -> bool {
-    value == Some("1")
-}
-
 fn vector(seed: u64, ordinal: u64, dimensions: usize) -> Vec<f32> {
     let mut state = seed ^ ordinal.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     (0..dimensions)
@@ -198,9 +196,72 @@ fn vector(seed: u64, ordinal: u64, dimensions: usize) -> Vec<f32> {
             state ^= state << 25;
             state ^= state >> 27;
             let bits = state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 40;
-            bits as f32 / (1_u64 << 24) as f32
+            2.0 * (bits as f32 / (1_u64 << 24) as f32) - 1.0
         })
         .collect()
+}
+
+fn vector_blake3(vector: &[f32]) -> String {
+    let mut digest = blake3::Hasher::new();
+    for value in vector {
+        digest.update(&value.to_le_bytes());
+    }
+    digest.finalize().to_hex().to_string()
+}
+
+#[cfg(test)]
+fn cohort_digest(entries: &[(usize, usize, String, Vec<f32>)]) -> String {
+    let mut digest = blake3::Hasher::new();
+    for (writer, operation, record_id, vector) in entries {
+        digest.update(&writer.to_le_bytes());
+        digest.update(&operation.to_le_bytes());
+        digest.update(&(record_id.len() as u64).to_le_bytes());
+        digest.update(record_id.as_bytes());
+        digest.update(vector_blake3(vector).as_bytes());
+    }
+    digest.finalize().to_hex().to_string()
+}
+
+fn measured_cohort_digest(samples: &[Sample]) -> String {
+    let mut digest = blake3::Hasher::new();
+    for sample in samples {
+        digest.update(&sample.writer.to_le_bytes());
+        digest.update(&sample.operation.to_le_bytes());
+        digest.update(&(sample.record_id.len() as u64).to_le_bytes());
+        digest.update(sample.record_id.as_bytes());
+        digest.update(sample.vector_blake3.as_bytes());
+    }
+    digest.finalize().to_hex().to_string()
+}
+
+fn protocol_shape_is_valid(
+    smoke: bool,
+    cell_count: usize,
+    writers: usize,
+    repetition: usize,
+    operations: usize,
+    warmup: usize,
+    dimensions: usize,
+) -> bool {
+    if smoke {
+        cell_count == 2_000
+            && writers == 1
+            && repetition == 1
+            && operations == 2
+            && warmup == 1
+            && dimensions == 768
+    } else {
+        matches!(cell_count, 2_000 | 16_000)
+            && matches!(writers, 1 | 8 | 32)
+            && (1..=5).contains(&repetition)
+            && operations == 100
+            && warmup == 20
+            && dimensions == 768
+    }
+}
+
+fn routing_path_is_valid_for_arm(mode: &str, path: &str, distinct_cells: usize) -> bool {
+    path == mode && distinct_cells > 1
 }
 
 fn build() -> BenchResult<()> {
@@ -208,24 +269,14 @@ fn build() -> BenchResult<()> {
     let cell_count: usize = number("BORSUK_ROUTING_CELL_COUNT")?;
     let dimensions: usize = number("BORSUK_ROUTING_DIMENSIONS")?;
     let smoke = smoke_mode();
-    let group_commit_base = env::var("BORSUK_ROUTING_GROUP_COMMIT_BASE").as_deref() == Ok("1");
-    let production_dimensions = if group_commit_base {
-        dimensions == 768
-    } else {
-        dimensions == 96
-    };
-    if (!smoke && (!matches!(cell_count, 2_000 | 16_000) || !production_dimensions))
+    if (!smoke && (!matches!(cell_count, 2_000 | 16_000) || dimensions != 768))
         || (smoke && (cell_count != 2_000 || dimensions != 768))
     {
         return Err("build differs from its frozen logical-cell protocol".into());
     }
     let mut index = BorsukIndex::create(IndexConfig {
         uri,
-        metric: if group_commit_base {
-            VectorMetric::Cosine
-        } else {
-            VectorMetric::Euclidean
-        },
+        metric: VectorMetric::Cosine,
         dimensions,
         segment_max_vectors: 1,
         ram_budget_bytes: None,
@@ -245,9 +296,7 @@ fn build() -> BenchResult<()> {
     if index.manifest().logical_cells().len() != cell_count {
         return Err("built logical-cell count differs from frozen protocol".into());
     }
-    if group_commit_base {
-        index.set_segment_max_vectors(recommended_segment_max_vectors(dimensions))?;
-    }
+    index.set_segment_max_vectors(recommended_segment_max_vectors(dimensions))?;
     Ok(())
 }
 
@@ -265,45 +314,31 @@ fn run_config() -> BenchResult<RunConfig> {
         seed: number("BORSUK_ROUTING_MASTER_SEED")?,
         source_sha256: required("BORSUK_SOURCE_SHA256")?,
         manifest_sha256: required("BORSUK_ROUTING_MANIFEST_SHA256")?,
-        cohort_sha256: required("BORSUK_ROUTING_COHORT_SHA256")?,
         architecture: required("BORSUK_ARCHITECTURE")?,
         instance_type: required("BORSUK_INSTANCE_TYPE")?,
+        instance_id: required("BORSUK_INSTANCE_ID")?,
+        availability_zone: required("BORSUK_AVAILABILITY_ZONE")?,
+        purchase_option: required("BORSUK_PURCHASE_OPTION")?,
+        mutation_protocol: required("BORSUK_MUTATION_PROTOCOL")?,
+        metric: required("BORSUK_ROUTING_METRIC")?,
     };
     let smoke = smoke_mode();
-    let diagnostic = diagnostic_mode();
-    let production_shape = matches!(config.cell_count, 2_000 | 16_000)
-        && matches!(config.writers, 1 | 8 | 32)
-        && (1..=5).contains(&config.repetition)
-        && config.operations == 100
-        && config.warmup == 20
-        && config.dimensions == 96;
-    let smoke_shape = config.cell_count == 64
-        && config.writers == 1
-        && config.repetition == 1
-        && config.operations == 2
-        && config.warmup == 1
-        && config.dimensions == 8;
-    let diagnostic_shape = config.cell_count == 2_000
-        && config.writers == 8
-        && config.repetition == 1
-        && config.operations == 5
-        && config.warmup == 2
-        && config.dimensions == 96
-        && config.mode == "flat";
-    let shape_is_valid = match (smoke, diagnostic) {
-        (true, true) => false,
-        (true, false) => smoke_shape,
-        (false, true) => diagnostic_shape,
-        (false, false) => production_shape,
-    };
-    if !shape_is_valid || !matches!(config.mode.as_str(), "flat" | "quantizer") {
+    if !protocol_shape_is_valid(
+        smoke,
+        config.cell_count,
+        config.writers,
+        config.repetition,
+        config.operations,
+        config.warmup,
+        config.dimensions,
+    ) || !matches!(config.mode.as_str(), "flat" | "quantizer")
+        || config.purchase_option != "spot" && !smoke
+        || config.mutation_protocol != "positioned-v12"
+        || config.metric != "cosine"
+    {
         return Err("run cell differs from the frozen routing manifest".into());
     }
-    for digest in [
-        &config.source_sha256,
-        &config.manifest_sha256,
-        &config.cohort_sha256,
-    ] {
+    for digest in [&config.source_sha256, &config.manifest_sha256] {
         if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err("campaign identity is not a SHA-256 digest".into());
         }
@@ -369,8 +404,8 @@ fn run() -> BenchResult<()> {
                         progress.warmups_started.fetch_add(1, Ordering::Relaxed);
                         index.add(vec![VectorRecord::new(
                             format!(
-                                "warm-r{}-c{}-w{writer:02}-o{operation:03}",
-                                config.repetition, config.writers
+                                "warm-c{}-r{}-w{writer:02}-o{operation:03}",
+                                config.cell_count, config.repetition
                             ),
                             vector(config.seed, ordinal, config.dimensions),
                         )])?;
@@ -385,9 +420,9 @@ fn run() -> BenchResult<()> {
                                 config.dimensions,
                             );
                             progress.routes_started.fetch_add(1, Ordering::Relaxed);
-                            let cell = index.logical_cell_for_research(&value)?;
+                            let (cell, routing_path) = index.logical_cell_for_research(&value)?;
                             progress.routes_completed.fetch_add(1, Ordering::Relaxed);
-                            Ok((operation, value, cell.cell_ordinal))
+                            Ok((operation, value, cell.cell_ordinal, routing_path))
                         })
                         .collect::<BenchResult<Vec<_>>>()?;
                     Ok((index, cohort))
@@ -409,11 +444,12 @@ fn run() -> BenchResult<()> {
                     format!("writer {writer} start was cancelled after readiness: {error}")
                 })?;
                 let mut local = Vec::with_capacity(config.operations);
-                for (operation, value, selected_cell) in cohort {
+                for (operation, value, selected_cell, routing_path) in cohort {
                     let record_id = format!(
-                        "measure-c{}-r{}-c{}-w{writer:02}-o{operation:03}",
+                        "measure-c{}-r{}-w{}-writer{writer:02}-o{operation:03}",
                         config.cell_count, config.repetition, config.writers
                     );
+                    let vector_blake3 = vector_blake3(&value);
                     progress.appends_started.fetch_add(1, Ordering::Relaxed);
                     let started = Instant::now();
                     let (_, report) =
@@ -424,6 +460,8 @@ fn run() -> BenchResult<()> {
                         record_id,
                         latency_ms: started.elapsed().as_secs_f64() * 1_000.0,
                         selected_cell,
+                        routing_path,
+                        vector_blake3,
                         storage_requests: report.requests.total(),
                     });
                     progress.appends_completed.fetch_add(1, Ordering::Relaxed);
@@ -491,17 +529,48 @@ fn write_results(
         return Err(format!("staging output already exists: {}", staging.display()).into());
     }
     fs::create_dir_all(&staging)?;
+    let distinct = samples
+        .iter()
+        .map(|sample| sample.selected_cell)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let routing_paths = samples
+        .iter()
+        .map(|sample| sample.routing_path)
+        .collect::<BTreeSet<_>>();
+    let routing_path = routing_paths
+        .iter()
+        .copied()
+        .next()
+        .ok_or("routing arm contains no samples")?;
+    if routing_paths.len() != 1
+        || !routing_path_is_valid_for_arm(&config.mode, routing_path, distinct)
+    {
+        return Err(format!(
+            "routing arm did not exercise its labeled path: mode={} paths={routing_paths:?} distinct_cells={distinct}",
+            config.mode
+        )
+        .into());
+    }
+    let cohort_blake3 = measured_cohort_digest(samples);
     let identity = format!(
-        "{},{},{},{},{},{},{},{},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
         config.source_sha256,
         config.manifest_sha256,
         config.architecture,
         config.instance_type,
+        config.instance_id,
+        config.availability_zone,
+        config.purchase_option,
+        config.mutation_protocol,
+        config.dimensions,
+        config.metric,
         config.mode,
+        routing_path,
         config.cell_count,
         config.writers,
         config.repetition,
-        config.cohort_sha256,
+        cohort_blake3,
     );
     let latencies = samples
         .iter()
@@ -511,15 +580,10 @@ fn write_results(
         .iter()
         .map(|sample| sample.storage_requests)
         .sum::<u64>();
-    let distinct = samples
-        .iter()
-        .map(|sample| sample.selected_cell)
-        .collect::<BTreeSet<_>>()
-        .len();
     let mut summary = BufWriter::new(File::create(staging.join("summary.csv"))?);
     writeln!(
         summary,
-        "source_sha256,manifest_sha256,architecture,instance_type,routing_mode,cell_count,writers,repetition,cohort_sha256,operations,elapsed_ms,cpu_seconds,p50_ms,p95_ms,throughput_ops_per_second,storage_requests,distinct_cells"
+        "source_sha256,manifest_sha256,architecture,instance_type,instance_id,availability_zone,purchase_option,mutation_protocol,dimensions,metric,routing_mode,routing_path,cell_count,writers,repetition,cohort_blake3,operations,elapsed_ms,cpu_seconds,p50_ms,p95_ms,throughput_ops_per_second,storage_requests,distinct_cells"
     )?;
     writeln!(
         summary,
@@ -533,15 +597,16 @@ fn write_results(
     let mut raw = BufWriter::new(File::create(staging.join("samples.csv"))?);
     writeln!(
         raw,
-        "source_sha256,manifest_sha256,architecture,instance_type,routing_mode,cell_count,writers,repetition,cohort_sha256,writer,operation,record_id,latency_ms,selected_cell,storage_requests"
+        "source_sha256,manifest_sha256,architecture,instance_type,instance_id,availability_zone,purchase_option,mutation_protocol,dimensions,metric,routing_mode,routing_path,cell_count,writers,repetition,cohort_blake3,writer,operation,record_id,vector_blake3,latency_ms,selected_cell,storage_requests"
     )?;
     for sample in samples {
         writeln!(
             raw,
-            "{identity},{},{},{},{:.9},{},{}",
+            "{identity},{},{},{},{},{:.9},{},{}",
             sample.writer,
             sample.operation,
             sample.record_id,
+            sample.vector_blake3,
             sample.latency_ms,
             sample.selected_cell,
             sample.storage_requests,
@@ -566,10 +631,30 @@ mod tests {
 
     #[test]
     fn deterministic_vectors_are_finite_and_cohort_stable() {
-        let first = vector(7, 11, 96);
-        assert_eq!(first, vector(7, 11, 96));
-        assert_ne!(first, vector(7, 12, 96));
+        let first = vector(7, 11, 768);
+        assert_eq!(first, vector(7, 11, 768));
+        assert_ne!(first, vector(7, 12, 768));
         assert!(first.iter().all(|value| value.is_finite()));
+        assert!(first.iter().any(|value| *value < 0.0));
+        assert!(first.iter().any(|value| *value > 0.0));
+        let mean = first.iter().copied().sum::<f32>() / first.len() as f32;
+        assert!(mean.abs() < 0.1, "centered cosine fixture mean={mean}");
+    }
+
+    #[test]
+    fn cohort_digest_commits_to_actual_vector_bytes_and_order() {
+        let first = vec![
+            (0, 0, "a".to_owned(), vec![1.0, -2.0]),
+            (1, 0, "b".to_owned(), vec![3.0, -4.0]),
+        ];
+        let mut changed_value = first.clone();
+        changed_value[1].3[0] = 3.5;
+        let mut changed_order = first.clone();
+        changed_order.swap(0, 1);
+
+        assert_eq!(cohort_digest(&first), cohort_digest(&first));
+        assert_ne!(cohort_digest(&first), cohort_digest(&changed_value));
+        assert_ne!(cohort_digest(&first), cohort_digest(&changed_order));
     }
 
     #[test]
@@ -586,10 +671,26 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_mode_requires_an_explicit_one() {
-        assert!(!is_diagnostic_value(Some("0")));
-        assert!(is_diagnostic_value(Some("1")));
-        assert!(!is_diagnostic_value(None));
+    fn positioned_v12_protocol_requires_realistic_dimensions() {
+        assert!(protocol_shape_is_valid(false, 2_000, 1, 1, 100, 20, 768));
+        assert!(protocol_shape_is_valid(false, 16_000, 32, 5, 100, 20, 768));
+        assert!(!protocol_shape_is_valid(false, 2_000, 1, 1, 100, 20, 96));
+        assert!(!protocol_shape_is_valid(false, 2_000, 2, 1, 100, 20, 768));
+    }
+
+    #[test]
+    fn functional_smoke_is_realistic_but_claim_ineligible() {
+        assert!(protocol_shape_is_valid(true, 2_000, 1, 1, 2, 1, 768));
+        assert!(!protocol_shape_is_valid(true, 64, 1, 1, 2, 1, 8));
+    }
+
+    #[test]
+    fn arm_label_must_match_the_observed_routing_path() {
+        assert!(routing_path_is_valid_for_arm("flat", "flat", 2));
+        assert!(routing_path_is_valid_for_arm("quantizer", "quantizer", 2));
+        assert!(!routing_path_is_valid_for_arm("quantizer", "flat", 2));
+        assert!(!routing_path_is_valid_for_arm("quantizer", "bootstrap", 1));
+        assert!(!routing_path_is_valid_for_arm("flat", "flat", 1));
     }
 
     #[test]

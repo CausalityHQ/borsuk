@@ -1,0 +1,51 @@
+{
+  "campaign_id": "logical-cell-routing-positioned-v12-v1",
+  "protocol_kind": "architecture-qualification",
+  "status": "preregistered-not-launched",
+  "claim_scope": "paired synthetic write-routing architecture qualification only; not corpus ANN recall, production-read, or third-party comparison evidence",
+  "mutation_protocol": "positioned-v12",
+  "architecture": "aarch64",
+  "instance_type": "c7g.8xlarge",
+  "purchase_option": "spot",
+  "spot_interruption_policy": "sync every terminal arm to S3; discard a nonterminal arm and restart it from a fresh immutable base; never combine samples across attempts",
+  "cell_counts": [2000, 16000],
+  "routing_modes": ["flat", "quantizer"],
+  "writers": [1, 8, 32],
+  "writer_instance_policy": "one-separately-opened-library-instance-per-writer",
+  "repetitions": 5,
+  "operations_per_writer": 100,
+  "warmup_operations_per_writer": 20,
+  "cell_timeout_seconds": 240,
+  "clone_timeout_seconds": 60,
+  "setup_timeout_seconds": 1800,
+  "campaign_timeout_seconds": 21600,
+  "resource_sample_interval_ms": 100,
+  "master_seed": 76412031,
+  "dimensions": 768,
+  "metric": "cosine",
+  "cache_policy": "no-external-disk-cache; production in-memory caches enabled",
+  "max_write_p95_ms": 200.0,
+  "mode_order": {
+    "odd_repetitions": ["flat", "quantizer"],
+    "even_repetitions": ["quantizer", "flat"]
+  },
+  "required_artifacts": [
+    "summary.csv",
+    "samples.csv",
+    "correctness.csv",
+    "environment.txt",
+    "LOGICAL_CELL_ROUTING_COMPLETE"
+  ],
+  "terminal_failure_marker": "LOGICAL_CELL_ROUTING_FAILED",
+  "correctness_gates": [
+    "multi_writer_reopen",
+    "sequential_last_write_wins",
+    "delete_reopen",
+    "cross_modality_reopen",
+    "shard_head_conflict_rebase",
+    "lost_head_response_reconciled",
+    "publication_failure_invisible",
+    "materializer_race"
+  ],
+  "comparison_contract": "Both arms use the same clean source archive, Spot instance, centered 768-dimensional cosine vectors (with per-vector BLAKE3 evidence), logical-cell centroid catalog, immutable base, record IDs, separately opened writer instances, writer counts, synchronized measurement start, repetition, operation order, default production in-memory caches, no external disk cache, timeouts, and resource telemetry. Only logical-cell assignment changes. Every terminal arm preserves raw latency samples, exact storage-request reports, storage access trace, process exit, stdout/stderr, and sampled CPU, RSS, VMS, process I/O, disk, and network counters. The 200 ms p95 is a fail-closed hard cap, not an optimization target. Lower latency and higher throughput remain preferred at fixed correctness."
+}
