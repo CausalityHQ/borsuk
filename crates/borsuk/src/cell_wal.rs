@@ -2245,9 +2245,12 @@ mod tests {
             )])
             .unwrap()
         };
-        let positioned =
-            crate::positioned_log::PositionedLogWriter::create_from_storage(storage.clone(), 7)
-                .unwrap();
+        let positioned = crate::positioned_log::PositionedLogWriter::create_from_storage(
+            storage.clone(),
+            7,
+            &"ab".repeat(32),
+        )
+        .unwrap();
         let committed = positioned
             .append(
                 owner,
@@ -2378,22 +2381,25 @@ mod tests {
             crate::mutation::MutationState::new(stamp, crate::mutation::MutationOperation::Put),
         )])
         .unwrap();
-        let committed =
-            crate::positioned_log::PositionedLogWriter::create_from_storage(storage.clone(), 7)
-                .unwrap()
-                .append(
-                    owner,
-                    &"ab".repeat(32),
-                    vec![crate::positioned_log::PositionedMutationPayloadInput {
-                        modality: crate::positioned_log::PositionedMutationModality::Tombstone,
-                        role: "wide-owner".to_string(),
-                        id_bloom: Vec::new(),
-                        format: crate::positioned_log::PositionedPayloadFormat::Parquet,
-                        rows: 1,
-                        bytes,
-                    }],
-                )
-                .unwrap();
+        let committed = crate::positioned_log::PositionedLogWriter::create_from_storage(
+            storage.clone(),
+            7,
+            &"ab".repeat(32),
+        )
+        .unwrap()
+        .append(
+            owner,
+            &"ab".repeat(32),
+            vec![crate::positioned_log::PositionedMutationPayloadInput {
+                modality: crate::positioned_log::PositionedMutationModality::Tombstone,
+                role: "wide-owner".to_string(),
+                id_bloom: Vec::new(),
+                format: crate::positioned_log::PositionedPayloadFormat::Parquet,
+                rows: 1,
+                bytes,
+            }],
+        )
+        .unwrap();
         write_claim_authorization_receipt(
             &storage,
             committed.position.source_epoch,
@@ -2457,9 +2463,12 @@ mod tests {
             crate::mutation::MutationState::new(stamp, crate::mutation::MutationOperation::Put),
         )])
         .unwrap();
-        let positioned =
-            crate::positioned_log::PositionedLogWriter::create_from_storage(storage.clone(), 7)
-                .unwrap();
+        let positioned = crate::positioned_log::PositionedLogWriter::create_from_storage(
+            storage.clone(),
+            7,
+            &"ab".repeat(32),
+        )
+        .unwrap();
         positioned
             .append(
                 owner,

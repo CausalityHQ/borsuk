@@ -127,7 +127,8 @@ fn payload(role: impl Into<String>, hlc: u64) -> PositionedMutationPayloadInput 
 }
 
 fn create_writer(store: Arc<dyn ObjectStore>, epoch: u64) -> PositionedLogWriter {
-    PositionedLogWriter::create("memory:///positioned-log", store, epoch).unwrap()
+    PositionedLogWriter::create("memory:///positioned-log", store, epoch, SCHEMA_FINGERPRINT)
+        .unwrap()
 }
 
 fn tx_shard(transaction_id: &str) -> u8 {
@@ -169,6 +170,30 @@ fn arrow_and_parquet_payloads_reopen_from_one_typed_envelope() {
     assert_eq!(envelope.position, committed.position);
     assert_eq!(envelope.payloads.len(), 2);
     assert!(envelope.payloads[0] < envelope.payloads[1]);
+}
+
+#[test]
+fn schema_mismatch_is_rejected_before_immutable_or_head_writes() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
+    let writer = create_writer(Arc::new(traced), 7);
+    operations.clear();
+
+    let error = writer
+        .append(
+            "wrong-schema",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            vec![payload("primary", 1)],
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("schema fingerprint"), "{error}");
+    assert!(
+        operations.entries().is_empty(),
+        "schema rejection must precede immutable uploads and head CAS: {:?}",
+        operations.entries()
+    );
+    assert!(writer.reader().snapshot().unwrap().transactions.is_empty());
 }
 
 #[test]
@@ -699,6 +724,50 @@ fn concurrent_checkpoint_generation_race_converges_on_one_materialized_prefix() 
 }
 
 #[test]
+fn checkpoint_rebase_rejects_a_head_from_another_schema() {
+    let base: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let initializer = create_writer(Arc::clone(&base), 7);
+    let committed = initializer
+        .append(
+            "checkpoint-schema-rebase",
+            SCHEMA_FINGERPRINT,
+            vec![payload("primary", 1)],
+        )
+        .unwrap();
+    let shard = committed.position.shard;
+    let head_path = format!("positioned-log/heads/{shard:02}.json");
+    let barrier = Arc::new(Barrier::new(2));
+    let wrapped = common::FaultInjectingObjectStore::new(Arc::clone(&base)).with_put_barrier(
+        Arc::clone(&barrier),
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/heads/")
+        },
+    );
+    let (wrapped, operations) = wrapped.with_operation_log();
+    let writer =
+        PositionedLogWriter::open("memory:///positioned-log", Arc::new(wrapped), 7).unwrap();
+    let checkpoint = std::thread::spawn(move || {
+        writer.checkpoint_materialized_through(shard, committed.position.sequence, 1)
+    });
+
+    while operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+    }) == 0
+    {
+        std::thread::yield_now();
+    }
+    let mut head = serde_json::from_slice::<serde_json::Value>(&read(&base, &head_path)).unwrap();
+    head["schema_fingerprint"] =
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into();
+    overwrite(&base, &head_path, serde_json::to_vec(&head).unwrap());
+    barrier.wait();
+
+    let error = checkpoint.join().unwrap().unwrap_err();
+    assert!(error.to_string().contains("schema fingerprint"), "{error}");
+}
+
+#[test]
 fn retryable_head_failure_without_receipt_rebases_and_retries() {
     let base: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     create_writer(Arc::clone(&base), 7);
@@ -943,7 +1012,13 @@ fn lost_successful_head_initialization_response_reconciles_exact_empty_head() {
         },
     );
     let (faulted, operations) = faulted.with_operation_log();
-    PositionedLogWriter::create("memory:///positioned-log", Arc::new(faulted), 7).unwrap();
+    PositionedLogWriter::create(
+        "memory:///positioned-log",
+        Arc::new(faulted),
+        7,
+        SCHEMA_FINGERPRINT,
+    )
+    .unwrap();
     let entries = operations.entries();
     assert_eq!(
         entries
@@ -979,7 +1054,12 @@ fn concurrent_source_initialization_race_converges_on_exact_empty_heads() {
                         && path.as_ref() == "positioned-log/heads/00.json"
                 });
             std::thread::spawn(move || {
-                PositionedLogWriter::create("memory:///positioned-log", Arc::new(wrapped), 7)
+                PositionedLogWriter::create(
+                    "memory:///positioned-log",
+                    Arc::new(wrapped),
+                    7,
+                    SCHEMA_FINGERPRINT,
+                )
             })
         })
         .collect::<Vec<_>>();

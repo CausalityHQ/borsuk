@@ -2102,8 +2102,8 @@ fn add_with_report_describes_positioned_append_telemetry() {
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Get && path == "collection/CURRENT"
         }),
-        1,
-        "one logical mutation validates its pinned collection schema exactly once at commit"
+        0,
+        "the schema-pinned positioned head must avoid mutable collection reads during append"
     );
     assert_eq!(report.segments_written, 0);
     assert_eq!(report.graph_payloads_written, 0);

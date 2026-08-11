@@ -20,7 +20,7 @@ use crate::{
 pub const SOURCE_SHARD_COUNT: u8 = 64;
 pub(crate) const INITIAL_POSITIONED_SOURCE_EPOCH: u64 = 1;
 const MAX_COMMIT_SOURCE_RANGES: usize = SOURCE_SHARD_COUNT as usize * u64::BITS as usize;
-const POSITIONED_LOG_LAYOUT: u16 = 12;
+const POSITIONED_LOG_LAYOUT: u16 = 13;
 /// Maximum authoritative bytes in one serialized JSON shard head.
 pub const MAX_SHARD_HEAD_BYTES: usize = 64 * 1024;
 /// Maximum unmaterialized envelope references retained by one shard.
@@ -625,6 +625,7 @@ struct PositionedShardHead {
     layout: u16,
     source_epoch: u64,
     shard: u8,
+    schema_fingerprint: String,
     durable_sequence: u64,
     materialized_sequence: u64,
     materialized_collection_generation: u64,
@@ -636,12 +637,14 @@ struct PositionedShardHead {
 }
 
 impl PositionedShardHead {
-    fn empty(source_epoch: u64, shard: u8) -> Result<Self> {
+    fn empty(source_epoch: u64, shard: u8, schema_fingerprint: &str) -> Result<Self> {
         validate_source_epoch_and_shard(source_epoch, shard)?;
+        validate_hex("schema fingerprint", schema_fingerprint)?;
         Ok(Self {
             layout: POSITIONED_LOG_LAYOUT,
             source_epoch,
             shard,
+            schema_fingerprint: schema_fingerprint.to_owned(),
             durable_sequence: 0,
             materialized_sequence: 0,
             materialized_collection_generation: 0,
@@ -661,6 +664,7 @@ impl PositionedShardHead {
             return invalid("positioned shard head epoch or shard does not match its authority");
         }
         validate_source_epoch_and_shard(self.source_epoch, self.shard)?;
+        validate_hex("schema fingerprint", &self.schema_fingerprint)?;
         if self.materialized_sequence > self.durable_sequence {
             return invalid("positioned shard materialized sequence exceeds durable sequence");
         }
@@ -798,6 +802,7 @@ struct PinnedPositionedHead {
 pub struct PositionedLogWriter {
     storage: Storage,
     source_epoch: u64,
+    schema_fingerprint: String,
     heads: Arc<Vec<Mutex<PinnedPositionedHead>>>,
 }
 
@@ -806,30 +811,41 @@ impl PositionedLogWriter {
         Self {
             storage,
             source_epoch: self.source_epoch,
+            schema_fingerprint: self.schema_fingerprint.clone(),
             heads: Arc::clone(&self.heads),
         }
     }
 
     /// Initialize all 64 authoritative heads for one new source epoch.
+    ///
+    /// The schema fingerprint is immutable for that epoch and is enforced by
+    /// every subsequent head CAS. Starting a different schema requires a new
+    /// source epoch rather than a mixed-schema pending log.
     pub fn create(
         uri: impl Into<String>,
         store: Arc<dyn ObjectStore>,
         source_epoch: u64,
+        schema_fingerprint: &str,
     ) -> Result<Self> {
         if source_epoch == 0 {
             return invalid("positioned source epoch must be positive");
         }
         let storage = Storage::from_object_store(uri.into(), store)?;
-        Self::create_from_storage(storage, source_epoch)
+        Self::create_from_storage(storage, source_epoch, schema_fingerprint)
     }
 
-    pub(crate) fn create_from_storage(storage: Storage, source_epoch: u64) -> Result<Self> {
+    pub(crate) fn create_from_storage(
+        storage: Storage,
+        source_epoch: u64,
+        schema_fingerprint: &str,
+    ) -> Result<Self> {
         if source_epoch == 0 {
             return invalid("positioned source epoch must be positive");
         }
+        validate_hex("schema fingerprint", schema_fingerprint)?;
         let mut pinned = Vec::with_capacity(SOURCE_SHARD_COUNT as usize);
         for shard in 0..SOURCE_SHARD_COUNT {
-            let head = PositionedShardHead::empty(source_epoch, shard)?;
+            let head = PositionedShardHead::empty(source_epoch, shard, schema_fingerprint)?;
             let bytes = shard_head_bytes(&head)?;
             let path = shard_head_path(shard);
             let version = match storage.write_coordination_object(&path, &bytes, None) {
@@ -858,6 +874,7 @@ impl PositionedLogWriter {
         Ok(Self {
             storage,
             source_epoch,
+            schema_fingerprint: schema_fingerprint.to_owned(),
             heads: Arc::new(pinned),
         })
     }
@@ -881,21 +898,37 @@ impl PositionedLogWriter {
             return invalid("positioned source epoch must be positive");
         }
         let storage = Storage::from_object_store(uri.into(), store)?;
-        Self::open_from_storage_with_report(storage, source_epoch)
+        Self::open_from_storage_with_report(storage, source_epoch, None)
     }
 
-    pub(crate) fn open_from_storage(storage: Storage, source_epoch: u64) -> Result<Self> {
-        Self::open_from_storage_with_report(storage, source_epoch).map(|(writer, _)| writer)
+    pub(crate) fn open_from_storage(
+        storage: Storage,
+        source_epoch: u64,
+        schema_fingerprint: &str,
+    ) -> Result<Self> {
+        Self::open_from_storage_with_report(storage, source_epoch, Some(schema_fingerprint))
+            .map(|(writer, _)| writer)
     }
 
     fn open_from_storage_with_report(
         storage: Storage,
         source_epoch: u64,
+        expected_schema_fingerprint: Option<&str>,
     ) -> Result<(Self, RequestCounts)> {
         if source_epoch == 0 {
             return invalid("positioned source epoch must be positive");
         }
-        let pinned = load_all_heads(&storage, source_epoch)?
+        if let Some(schema_fingerprint) = expected_schema_fingerprint {
+            validate_hex("schema fingerprint", schema_fingerprint)?;
+        }
+        let loaded = load_all_heads(&storage, source_epoch, expected_schema_fingerprint)?;
+        let schema_fingerprint = loaded
+            .first()
+            .expect("fixed positioned shard count is nonzero")
+            .0
+            .schema_fingerprint
+            .clone();
+        let pinned = loaded
             .into_iter()
             .map(|head| {
                 Mutex::new(PinnedPositionedHead {
@@ -909,6 +942,7 @@ impl PositionedLogWriter {
             Self {
                 storage,
                 source_epoch,
+                schema_fingerprint,
                 heads: Arc::new(pinned),
             },
             requests,
@@ -920,16 +954,24 @@ impl PositionedLogWriter {
         PositionedLogReader {
             storage: self.storage.clone(),
             source_epoch: self.source_epoch,
+            schema_fingerprint: self.schema_fingerprint.clone(),
         }
     }
 
     /// Publish typed payloads and one position-bearing envelope before one head CAS.
+    ///
+    /// A schema mismatch fails before any immutable object is uploaded.
     pub fn append(
         &self,
         transaction_id: &str,
         schema_fingerprint: &str,
         payloads: Vec<PositionedMutationPayloadInput>,
     ) -> Result<CommittedPositionedMutation> {
+        if schema_fingerprint != self.schema_fingerprint {
+            return invalid(
+                "positioned append schema fingerprint differs from its shard authority",
+            );
+        }
         let storage = self.storage.clone_with_independent_mutation_counters();
         let prepared = prepare_append(transaction_id, schema_fingerprint, payloads)?;
         let shard = prepared.transaction_digest[0] % SOURCE_SHARD_COUNT;
@@ -942,10 +984,19 @@ impl PositionedLogWriter {
         let mut uploaded_envelope_checksum = None::<String>;
         while cas_attempts < MAX_HEAD_CAS_ATTEMPTS {
             pinned.head.validate(self.source_epoch, shard)?;
+            if pinned.head.schema_fingerprint != self.schema_fingerprint {
+                return invalid("positioned shard head schema fingerprint differs from its writer");
+            }
             if find_transaction(&pinned.head, &prepared.transaction_digest).is_some()
                 && !authoritative
             {
-                refresh_pinned_head(&storage, &mut pinned, self.source_epoch, shard)?;
+                refresh_pinned_head(
+                    &storage,
+                    &mut pinned,
+                    self.source_epoch,
+                    shard,
+                    &self.schema_fingerprint,
+                )?;
                 authoritative = true;
                 continue;
             }
@@ -964,7 +1015,13 @@ impl PositionedLogWriter {
             let sequence = match pinned.head.durable_sequence.checked_add(1) {
                 Some(sequence) => sequence,
                 None if !authoritative => {
-                    refresh_pinned_head(&storage, &mut pinned, self.source_epoch, shard)?;
+                    refresh_pinned_head(
+                        &storage,
+                        &mut pinned,
+                        self.source_epoch,
+                        shard,
+                        &self.schema_fingerprint,
+                    )?;
                     authoritative = true;
                     continue;
                 }
@@ -1002,7 +1059,13 @@ impl PositionedLogWriter {
             {
                 Ok(bytes) => bytes,
                 Err(BorsukError::IngestBackpressure { .. }) if !authoritative => {
-                    refresh_pinned_head(&storage, &mut pinned, self.source_epoch, shard)?;
+                    refresh_pinned_head(
+                        &storage,
+                        &mut pinned,
+                        self.source_epoch,
+                        shard,
+                        &self.schema_fingerprint,
+                    )?;
                     authoritative = true;
                     continue;
                 }
@@ -1125,9 +1188,18 @@ impl PositionedLogWriter {
         let mut pinned = self.heads[usize::from(shard)]
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        refresh_pinned_head(&self.storage, &mut pinned, self.source_epoch, shard)?;
+        refresh_pinned_head(
+            &self.storage,
+            &mut pinned,
+            self.source_epoch,
+            shard,
+            &self.schema_fingerprint,
+        )?;
         for _ in 0..MAX_HEAD_CAS_ATTEMPTS {
             pinned.head.validate(self.source_epoch, shard)?;
+            if pinned.head.schema_fingerprint != self.schema_fingerprint {
+                return invalid("positioned shard head schema fingerprint differs from its writer");
+            }
             if pinned.head.materialized_sequence >= sequence {
                 if pinned.head.materialized_collection_generation >= collection_generation {
                     return Ok(());
@@ -1226,6 +1298,7 @@ impl PositionedLogWriter {
 pub struct PositionedLogReader {
     storage: Storage,
     source_epoch: u64,
+    schema_fingerprint: String,
 }
 
 impl PositionedLogReader {
@@ -1268,7 +1341,11 @@ impl PositionedLogReader {
         previous: Option<&[String; SOURCE_SHARD_COUNT as usize]>,
         pinned_collection_generation: Option<u64>,
     ) -> Result<Option<PositionedLogSnapshot>> {
-        let loaded = load_all_heads(&self.storage, self.source_epoch)?;
+        let loaded = load_all_heads(
+            &self.storage,
+            self.source_epoch,
+            Some(&self.schema_fingerprint),
+        )?;
         let head_checksums = std::array::from_fn(|index| loaded[index].2.clone());
         if previous == Some(&head_checksums) {
             return Ok(None);
@@ -1304,8 +1381,14 @@ impl PositionedLogReader {
         let mut transactions = visible
             .par_iter()
             .map(|(shard, reference)| {
-                load_envelope(&self.storage, self.source_epoch, *shard, reference)
-                    .map(|envelope| (envelope, reference.envelope_checksum.clone()))
+                load_envelope(
+                    &self.storage,
+                    self.source_epoch,
+                    *shard,
+                    &self.schema_fingerprint,
+                    reference,
+                )
+                .map(|envelope| (envelope, reference.envelope_checksum.clone()))
             })
             .collect::<Result<Vec<_>>>()?;
         transactions.sort_unstable_by_key(|(envelope, _)| envelope.position);
@@ -1538,6 +1621,7 @@ fn ingest_backpressure<T>(head: &PositionedShardHead, rows: u64, bytes: u64) -> 
 fn load_all_heads(
     storage: &Storage,
     source_epoch: u64,
+    expected_schema_fingerprint: Option<&str>,
 ) -> Result<Vec<(PositionedShardHead, UpdateVersion, String)>> {
     (0..SOURCE_SHARD_COUNT)
         .into_par_iter()
@@ -1549,9 +1633,31 @@ fn load_all_heads(
                 ))
             })?;
             let head = shard_head_from_bytes(&stored.bytes, source_epoch, shard)?;
+            if expected_schema_fingerprint
+                .is_some_and(|schema_fingerprint| head.schema_fingerprint != schema_fingerprint)
+            {
+                return invalid(
+                    "positioned shard head schema fingerprint differs from its collection",
+                );
+            }
             Ok((head, stored.version, checksum(&stored.bytes)))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()
+        .and_then(|loaded| {
+            let schema_fingerprint = loaded
+                .first()
+                .expect("fixed positioned shard count is nonzero")
+                .0
+                .schema_fingerprint
+                .as_str();
+            if loaded
+                .iter()
+                .any(|(head, _, _)| head.schema_fingerprint != schema_fingerprint)
+            {
+                return invalid("positioned shard heads disagree on their schema fingerprint");
+            }
+            Ok(loaded)
+        })
 }
 
 fn refresh_pinned_head(
@@ -1559,6 +1665,7 @@ fn refresh_pinned_head(
     pinned: &mut PinnedPositionedHead,
     source_epoch: u64,
     shard: u8,
+    schema_fingerprint: &str,
 ) -> Result<()> {
     let path = shard_head_path(shard);
     let stored = storage.read_coordination_object(&path)?.ok_or_else(|| {
@@ -1567,6 +1674,9 @@ fn refresh_pinned_head(
         ))
     })?;
     pinned.head = shard_head_from_bytes(&stored.bytes, source_epoch, shard)?;
+    if pinned.head.schema_fingerprint != schema_fingerprint {
+        return invalid("positioned shard head schema fingerprint differs from its writer");
+    }
     pinned.version = stored.version;
     Ok(())
 }
@@ -1575,6 +1685,7 @@ fn load_envelope(
     storage: &Storage,
     source_epoch: u64,
     shard: u8,
+    schema_fingerprint: &str,
     reference: &PositionedCommitReference,
 ) -> Result<PositionedMutationEnvelope> {
     let path = canonical_envelope_path(&reference.envelope_checksum);
@@ -1584,12 +1695,16 @@ fn load_envelope(
     if checksum(&bytes) != reference.envelope_checksum {
         return invalid("positioned envelope checksum does not match its authoritative reference");
     }
-    validate_authorized_envelope(
+    let envelope = validate_authorized_envelope(
         positioned_envelope_from_parquet(&bytes)?,
         source_epoch,
         shard,
         reference,
-    )
+    )?;
+    if envelope.schema_fingerprint != schema_fingerprint {
+        return invalid("positioned envelope schema fingerprint differs from its shard authority");
+    }
+    Ok(envelope)
 }
 
 pub(crate) fn validate_claim_authorization_envelope(
@@ -1670,7 +1785,13 @@ pub(crate) fn authorized_transaction_receipt(
     else {
         return Ok(None);
     };
-    let envelope = load_envelope(storage, source_epoch, shard, reference)?;
+    let envelope = load_envelope(
+        storage,
+        source_epoch,
+        shard,
+        &head.schema_fingerprint,
+        reference,
+    )?;
     if envelope.transaction_id != transaction_id {
         return invalid("positioned transaction digest resolved to a different transaction id");
     }
@@ -1990,7 +2111,7 @@ mod tests {
         assert!(validate_append_totals(MAX_APPEND_ROWS + 1, MAX_APPEND_ENCODED_BYTES).is_err());
         assert!(validate_append_totals(MAX_APPEND_ROWS, MAX_APPEND_ENCODED_BYTES + 1).is_err());
 
-        let mut head = PositionedShardHead::empty(7, 3).unwrap();
+        let mut head = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
         admit_pending(
             &mut head,
             PositionedCommitReference {
@@ -2033,18 +2154,18 @@ mod tests {
             encoded_bytes: 1,
             materialized_collection_generation: sequence,
         };
-        let mut head = PositionedShardHead::empty(7, 3).unwrap();
+        let mut head = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
         head.durable_sequence = 3;
         head.materialized_sequence = 3;
         head.materialized_collection_generation = 3;
         head.recent = vec![reference(1, 'c'), reference(3, 'd')];
         assert!(head.validate(7, 3).is_err());
 
-        let mut impossible_generation = PositionedShardHead::empty(7, 3).unwrap();
+        let mut impossible_generation = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
         impossible_generation.materialized_collection_generation = 1;
         assert!(impossible_generation.validate(7, 3).is_err());
 
-        let mut missing_generation = PositionedShardHead::empty(7, 3).unwrap();
+        let mut missing_generation = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
         missing_generation.durable_sequence = 1;
         missing_generation.materialized_sequence = 1;
         missing_generation.recent = vec![reference(1, 'e')];
@@ -2053,8 +2174,14 @@ mod tests {
 
     #[test]
     fn shard_head_accepts_exact_sixty_four_kibibytes_and_rejects_plus_one() {
-        let head = PositionedShardHead::empty(7, 3).unwrap();
+        let head = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
         let mut bytes = shard_head_bytes(&head).unwrap();
+        let json = std::str::from_utf8(&bytes).unwrap();
+        assert!(json.contains("\"layout\":13"), "{json}");
+        assert!(
+            json.contains(&format!("\"schema_fingerprint\":\"{}\"", "a".repeat(64))),
+            "{json}"
+        );
         bytes.resize(MAX_SHARD_HEAD_BYTES, b' ');
         assert_eq!(bytes.len(), MAX_SHARD_HEAD_BYTES);
         assert_eq!(shard_head_from_bytes(&bytes, 7, 3).unwrap(), head);

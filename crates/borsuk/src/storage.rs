@@ -1633,34 +1633,6 @@ impl Storage {
         })
     }
 
-    pub(crate) fn collection_snapshot_generation_if_schema_compatible(
-        &self,
-        pinned_checksum: &str,
-        pinned_generation: u64,
-        schema_fingerprint: &str,
-    ) -> Result<u64> {
-        let current = self
-            .read_coordination_object(COLLECTION_CURRENT)?
-            .ok_or_else(|| BorsukError::IndexNotFound(self.uri.clone()))?;
-        let pointer = collection_current_from_slice(&current.bytes, COLLECTION_CURRENT)?;
-        if pointer.snapshot_checksum == pinned_checksum {
-            return Ok(pinned_generation);
-        }
-        let snapshot_bytes = self
-            .read_bytes_with_cache_status_and_checksum(
-                &pointer.snapshot_path,
-                &pointer.snapshot_checksum,
-            )?
-            .bytes;
-        let snapshot = collection_snapshot_from_slice(&snapshot_bytes, &pointer.snapshot_path)?;
-        if snapshot.schema_fingerprint != schema_fingerprint {
-            return Err(BorsukError::ConcurrentModification {
-                path: COLLECTION_CURRENT.to_string(),
-            });
-        }
-        Ok(snapshot.generation)
-    }
-
     pub(crate) fn collection_wal_transactions_snapshot_with_retries(
         &self,
     ) -> Result<(BTreeMap<String, CollectionCommit>, usize)> {

@@ -1079,8 +1079,6 @@ fn decoded_vector_sidecar_bytes(vectors: &[Vec<f32>], dimensions: usize) -> u64 
 struct ActiveCollectionTransaction {
     id: String,
     schema_fingerprint: String,
-    snapshot_checksum: String,
-    snapshot_generation: u64,
     positioned: Arc<Mutex<Vec<StagedPositionedRun>>>,
     positioned_metadata: Arc<Mutex<BTreeMap<String, StagedPositionedMetadata>>>,
 }
@@ -1106,8 +1104,6 @@ struct StagedTombstone {
 pub struct CanonicalMutationBatch {
     transaction_id: String,
     schema_fingerprint: String,
-    snapshot_checksum: String,
-    snapshot_generation: u64,
     runs: Vec<StagedPositionedRun>,
     metadata: BTreeMap<String, StagedPositionedMetadata>,
 }
@@ -3322,6 +3318,7 @@ impl BorsukIndex {
                     .collection_storage
                     .clone_with_independent_request_counters(),
                 POSITIONED_SOURCE_EPOCH,
+                &snapshot.schema_fingerprint,
             )?);
         }
         Ok(index)
@@ -3490,6 +3487,7 @@ impl BorsukIndex {
                 .collection_storage
                 .clone_with_independent_request_counters(),
             POSITIONED_SOURCE_EPOCH,
+            &schema_fingerprint,
         )?);
         index.named = index.open_named_indexes(
             &primary_uri,
@@ -4601,16 +4599,14 @@ impl BorsukIndex {
         // transaction has durably committed.
         self.maybe_flush_wal()?;
         let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
-        let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
-            BorsukError::InvalidStorage(
+        if self.collection_snapshot.is_none() {
+            return Err(BorsukError::InvalidStorage(
                 "collection transaction requires a pinned collection snapshot".to_string(),
-            )
-        })?;
+            ));
+        }
         let transaction = ActiveCollectionTransaction {
             id: Uuid::new_v4().simple().to_string(),
             schema_fingerprint,
-            snapshot_checksum: collection.checksum.clone(),
-            snapshot_generation: collection.snapshot.generation,
             positioned: Arc::new(Mutex::new(Vec::new())),
             positioned_metadata: Arc::new(Mutex::new(BTreeMap::new())),
         };
@@ -5489,12 +5485,6 @@ impl BorsukIndex {
                 )));
             }
         }
-        self.collection_storage
-            .collection_snapshot_generation_if_schema_compatible(
-                &batch.snapshot_checksum,
-                batch.snapshot_generation,
-                &batch.schema_fingerprint,
-            )?;
         let vectors_added = batch
             .runs
             .iter()
@@ -5923,8 +5913,6 @@ impl BorsukIndex {
         let batch = CanonicalMutationBatch {
             transaction_id: transaction.id,
             schema_fingerprint: transaction.schema_fingerprint,
-            snapshot_checksum: transaction.snapshot_checksum,
-            snapshot_generation: transaction.snapshot_generation,
             runs,
             metadata,
         };
