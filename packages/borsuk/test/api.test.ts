@@ -1065,14 +1065,8 @@ test("searchBatchWithReport preserves query order and counters", async () => {
   assert.ok(reports[1]?.bytesRead > 0);
   assert.ok(reports[0]?.residentBytesEstimate > 0);
   assert.ok(reports[1]?.residentBytesEstimate > 0);
-  assert.equal(
-    reports[0]?.collectionResidentBytes,
-    reports[0]?.residentBytesEstimate,
-  );
-  assert.ok(
-    (reports[0]?.transientPeakBytes ?? 0) <=
-      (reports[0]?.transientCapacityBytes ?? 0),
-  );
+  assert.equal(reports[0]?.collectionResidentBytes, reports[0]?.residentBytesEstimate);
+  assert.ok((reports[0]?.transientPeakBytes ?? 0) <= (reports[0]?.transientCapacityBytes ?? 0));
 });
 
 test("searchBatchWithReportBuffer accepts contiguous Float32Array rows", async () => {
@@ -1317,9 +1311,8 @@ test("open can use paged routing without resident segment summaries", async () =
     { ids: Array.from({ length: 130 }, (_, value) => `v${value}`) },
   );
   await index.flush();
-  const fullResidentBytes = (
-    await (await open(uri, { residentRouting: true })).stats()
-  ).residentBytesEstimate;
+  const fullResidentBytes = (await (await open(uri, { residentRouting: true })).stats())
+    .residentBytesEstimate;
 
   const reopened = await open(uri, {
     ramBudget: `${fullResidentBytes - 1}B`,
@@ -2354,10 +2347,7 @@ test("rebuild compacts all matching segments and deletes obsolete objects", asyn
   assert.ok(report.garbageCollection.objectsDeleted > 0);
   assert.ok(report.garbageCollection.routingObjectsDeleted > 0);
   assert.ok(report.garbageCollection.tablesDeleted > 0);
-  assert.equal(
-    report.garbageCollection.candidates.length,
-    report.garbageCollection.objectsDeleted,
-  );
+  assert.equal(report.garbageCollection.candidates.length, report.garbageCollection.objectsDeleted);
   assert.ok(report.garbageCollection.bytesReclaimed > 0);
   for (const candidate of report.garbageCollection.candidates) {
     assert.equal(existsSync(join(dir, candidate)), false);
