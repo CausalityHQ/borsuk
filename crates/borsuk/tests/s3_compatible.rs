@@ -4,16 +4,17 @@ use std::{env, ops::Range};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, GarbageCollectionOptions, IndexConfig, LeafCapability,
-    LeafMode, PhysicalObjectRole, SearchMode, SearchOptions, VectorMetric, VectorRecord,
+    LeafMode, PhysicalObjectRole, SearchMode, SearchOptions, VectorMetric, VectorRecord, WalConfig,
     physical_object_role_for_path,
 };
 use futures_util::TryStreamExt;
 use object_store::{ObjectStore, ObjectStoreExt, parse_url_opts, path::Path as ObjectPath};
+use serde::{Deserialize, Serialize};
 use tokio::runtime::Builder;
 use url::Url;
 use uuid::Uuid;
 
-const LARGE_OBJECT_BYTES: usize = 64 * 1024 * 1024 + 1;
+const LARGE_ID_BYTES: usize = 17 * 1024 * 1024;
 
 #[test]
 fn s3_compatible_index_round_trip_when_configured() {
@@ -51,7 +52,7 @@ fn s3_compatible_index_round_trip_when_configured() {
         .unwrap();
     index.flush().unwrap();
 
-    assert_s3_compatible_binary_layout(&uri);
+    assert_s3_compatible_standard_layout(&uri);
 
     let cache = tempfile::tempdir().unwrap();
     let mut reopened =
@@ -122,30 +123,85 @@ fn s3_compatible_large_object_round_trip_when_configured() {
         return;
     };
     let uri = format!("{}/{}", base_uri.trim_end_matches('/'), Uuid::new_v4());
-    let large_id = deterministic_bytes(LARGE_OBJECT_BYTES);
-
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Euclidean,
-        dimensions: 1,
-        segment_max_vectors: 1,
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })
+    let mut index = BorsukIndex::create_with_wal(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 1,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        WalConfig {
+            enabled: true,
+            flush_threshold_runs: usize::MAX,
+            flush_threshold_records: usize::MAX,
+            flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
+        },
+    )
     .unwrap();
-    index
-        .add(vec![VectorRecord::new_bytes(large_id.clone(), vec![42.0])])
-        .unwrap();
+
+    // Each ID is authenticated in the primary, ID-directory, and route-plan
+    // payloads. Keep every atomic append below the 64 MiB transaction bound,
+    // then flush four incompressible IDs into one >68 MiB segment so the S3
+    // multipart path is exercised without weakening atomicity.
+    let large_records = [
+        0x4d59_5df4_d0f3_3173_u64,
+        0x9e37_79b9_7f4a_7c15_u64,
+        0xd1b5_4a32_d192_ed03_u64,
+        0x94d0_49bb_1331_11eb_u64,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(ordinal, seed)| {
+        (
+            deterministic_bytes(LARGE_ID_BYTES, seed),
+            vec![ordinal as f32],
+        )
+    })
+    .collect::<Vec<_>>();
+    for (id, vector) in &large_records {
+        for attempt in 0..128 {
+            match index.add(vec![VectorRecord::new_bytes(id.clone(), vector.clone())]) {
+                Ok(()) => break,
+                Err(error) if error.code() == "ingest_backpressure" && attempt < 127 => {
+                    // Retrying an uncommitted request selects another source
+                    // shard if this large append collided with a near-full one.
+                }
+                Err(error) => panic!("bounded positioned append failed: {error}"),
+            }
+        }
+    }
+    index.flush().unwrap();
+    assert_large_segment_object(&uri);
 
     let reopened = BorsukIndex::open(&uri).unwrap();
-    assert_eq!(
-        reopened.get_vector_by_id(&large_id).unwrap(),
-        Some(vec![42.0])
+    for (id, vector) in large_records {
+        assert_eq!(reopened.get_vector_by_id(&id).unwrap(), Some(vector));
+    }
+}
+
+fn assert_large_segment_object(uri: &str) {
+    const MULTIPART_THRESHOLD_BYTES: u64 = 64 * 1024 * 1024;
+
+    let url = Url::parse(uri).unwrap();
+    let (store, prefix) = parse_url_opts(&url, env::vars()).unwrap();
+    let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+    let objects = runtime
+        .block_on(async { store.list(Some(&prefix)).try_collect::<Vec<_>>().await })
+        .unwrap();
+    assert!(
+        objects.iter().any(|object| {
+            relative_path(&prefix, &object.location).starts_with("segments/")
+                && object.size > MULTIPART_THRESHOLD_BYTES
+        }),
+        "the fixture must materialize a segment larger than the multipart threshold"
     );
 }
 
-fn assert_s3_compatible_binary_layout(uri: &str) {
+fn assert_s3_compatible_standard_layout(uri: &str) {
     let url = Url::parse(uri).unwrap();
     let (store, prefix) = parse_url_opts(&url, env::vars()).unwrap();
     let runtime = Builder::new_current_thread().enable_all().build().unwrap();
@@ -163,6 +219,10 @@ fn assert_s3_compatible_binary_layout(uri: &str) {
             PhysicalObjectRole::Unknown,
             "S3-compatible storage contains an unknown durable object: {path}"
         );
+        if is_checked_json_coordination_path(path) {
+            assert_checked_json_coordination(store.as_ref(), &prefix, path, *size, &runtime);
+            continue;
+        }
         if role == PhysicalObjectRole::FilterIndex {
             assert_filter_index_envelope(store.as_ref(), &prefix, path, *size, &runtime);
             continue;
@@ -214,32 +274,33 @@ fn assert_s3_compatible_binary_layout(uri: &str) {
     assert!(
         objects
             .iter()
-            .any(|(path, _)| path.contains("/wal/") && path.contains("/runs/records/")),
-        "default writes must leave an immutable WAL record run: {objects:?}"
+            .any(|(path, _)| path.starts_with("logical-cell-catalogs/")
+                && path.ends_with(".parquet")),
+        "generation one must pin a standard logical-cell catalog: {objects:?}"
+    );
+    assert!(
+        objects.iter().any(
+            |(path, _)| path.starts_with("positioned-log/payloads/parquet/")
+                && path.ends_with(".parquet")
+        ),
+        "default writes must leave authenticated positioned payload tables: {objects:?}"
     );
     assert!(
         objects
             .iter()
-            .any(|(path, _)| path.contains("/wal/") && path.contains("/frontier/")),
-        "default writes must leave an immutable WAL frontier: {objects:?}"
+            .any(|(path, _)| path.starts_with("positioned-log/envelopes/")
+                && path.ends_with(".parquet")),
+        "default writes must leave an authenticated positioned envelope: {objects:?}"
     );
-    assert!(
+    assert_eq!(
         objects
             .iter()
-            .any(|(path, _)| { path.contains("/wal/") && path.contains("/runs/id-directory/") }),
-        "default writes must leave a checked ID-directory delta run: {objects:?}"
-    );
-    assert!(
-        objects
-            .iter()
-            .any(|(path, _)| path.starts_with("transactions/") && path.ends_with("/COMMIT")),
-        "cross-cell WAL visibility must use a commit marker: {objects:?}"
-    );
-    assert!(
-        objects.iter().any(|(path, _)| {
-            path.starts_with("transactions/") && path.contains("/descriptors/")
-        }),
-        "cross-cell WAL visibility must pin an immutable descriptor: {objects:?}"
+            .filter(|(path, _)| {
+                path.starts_with("positioned-log/heads/") && path.ends_with(".json")
+            })
+            .count(),
+        64,
+        "positioned visibility must have one checked head per source shard: {objects:?}"
     );
     assert!(
         objects
@@ -248,10 +309,11 @@ fn assert_s3_compatible_binary_layout(uri: &str) {
         "insert-only coordination must use packed claim pages: {objects:?}"
     );
     assert!(
-        objects
-            .iter()
-            .all(|(path, _)| { !path.ends_with(".json") && !path.ends_with(".borsuk") }),
-        "JSON or ad-hoc manifest files must not be durable S3-compatible storage: {objects:?}"
+        objects.iter().all(|(path, _)| {
+            !path.ends_with(".borsuk")
+                && (!path.ends_with(".json") || is_checked_json_coordination_path(path))
+        }),
+        "only checked coordination JSON may accompany standard binary tables: {objects:?}"
     );
 
     let current_size = objects
@@ -270,6 +332,189 @@ fn assert_s3_compatible_binary_layout(uri: &str) {
     assert!(
         !String::from_utf8_lossy(&current).contains("manifest-"),
         "collection/CURRENT must be a checked binary pointer, not a text manifest path"
+    );
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LaneCoordinationDocument<T> {
+    schema_version: u8,
+    object_role: String,
+    payload_checksum_blake3: String,
+    payload: T,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ActiveStripeDirectoryDocument {
+    generation: u64,
+    active_bits: u64,
+    activation_epochs: Vec<u64>,
+    retirement_manifest_versions: Vec<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LaneEpochSealDocument {
+    lease_epoch: u64,
+    durable_sequence: u64,
+    materialized_sequence: u64,
+    materialized_manifest_version: u64,
+    max_mutation_hlc: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LaneEpochHeadDocument {
+    lane: u16,
+    lease_epoch: u64,
+    lease_owner: [u8; 16],
+    lease_expires_at_ms: u64,
+    durable_sequence: u64,
+    materialized_sequence: u64,
+    materialized_manifest_version: u64,
+    max_mutation_hlc: u64,
+    sealed_epoch: Option<LaneEpochSealDocument>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PositionedCommitReferenceDocument {
+    transaction_digest: String,
+    request_digest: String,
+    envelope_checksum: String,
+    sequence: u64,
+    rows: u64,
+    encoded_bytes: u64,
+    materialized_collection_generation: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PositionedShardHeadDocument {
+    layout: u16,
+    source_epoch: u64,
+    shard: u8,
+    schema_fingerprint: String,
+    durable_sequence: u64,
+    materialized_sequence: u64,
+    materialized_collection_generation: u64,
+    evicted_recent_through_collection_generation: u64,
+    pending_rows: u64,
+    pending_bytes: u64,
+    pending: Vec<PositionedCommitReferenceDocument>,
+    recent: Vec<PositionedCommitReferenceDocument>,
+}
+
+fn is_checked_json_coordination_path(path: &str) -> bool {
+    path == "lane-log/ACTIVE"
+        || (path.starts_with("lane-log/lanes/") && path.ends_with("/HEAD"))
+        || (path.starts_with("positioned-log/heads/") && path.ends_with(".json"))
+}
+
+fn assert_checked_json_coordination(
+    store: &dyn ObjectStore,
+    prefix: &ObjectPath,
+    path: &str,
+    size: u64,
+    runtime: &tokio::runtime::Runtime,
+) {
+    assert!(size <= 64 * 1024, "{path} exceeds its coordination bound");
+    let bytes = read_object_range(store, prefix, path, 0..size, runtime);
+    if path == "lane-log/ACTIVE" {
+        let document = serde_json::from_slice::<
+            LaneCoordinationDocument<ActiveStripeDirectoryDocument>,
+        >(&bytes)
+        .unwrap_or_else(|error| panic!("{path} is not checked coordination JSON: {error}"));
+        assert_eq!(document.schema_version, 31, "{path} schema marker");
+        assert_eq!(
+            document.object_role, "active_stripe_directory",
+            "{path} role"
+        );
+        assert_eq!(document.payload.activation_epochs.len(), 64, "{path}");
+        assert_eq!(
+            document.payload.retirement_manifest_versions.len(),
+            64,
+            "{path}"
+        );
+        assert_lane_coordination_checksum(path, &document);
+    } else if path.starts_with("lane-log/lanes/") {
+        let document =
+            serde_json::from_slice::<LaneCoordinationDocument<LaneEpochHeadDocument>>(&bytes)
+                .unwrap_or_else(|error| panic!("{path} is not checked coordination JSON: {error}"));
+        assert_eq!(document.schema_version, 31, "{path} schema marker");
+        assert_eq!(document.object_role, "lane_epoch_head", "{path} role");
+        assert_lane_coordination_checksum(path, &document);
+    } else {
+        let document = serde_json::from_slice::<PositionedShardHeadDocument>(&bytes)
+            .unwrap_or_else(|error| panic!("{path} is not checked coordination JSON: {error}"));
+        let shard = path
+            .strip_prefix("positioned-log/heads/")
+            .and_then(|suffix| suffix.strip_suffix(".json"))
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or_else(|| panic!("invalid positioned shard-head path: {path}"));
+        assert_eq!(document.layout, 15, "{path} layout marker");
+        assert!(document.source_epoch > 0, "{path} source epoch");
+        assert_eq!(document.shard, shard, "{path} shard authority");
+        assert_hex_checksum(path, "schema fingerprint", &document.schema_fingerprint);
+        assert!(
+            document.materialized_sequence <= document.durable_sequence,
+            "{path} materialized frontier"
+        );
+        assert_eq!(
+            document.pending_rows,
+            document.pending.iter().map(|entry| entry.rows).sum::<u64>(),
+            "{path} pending row total"
+        );
+        assert_eq!(
+            document.pending_bytes,
+            document
+                .pending
+                .iter()
+                .map(|entry| entry.encoded_bytes)
+                .sum::<u64>(),
+            "{path} pending byte total"
+        );
+        assert!(
+            document.evicted_recent_through_collection_generation
+                <= document.materialized_collection_generation,
+            "{path} recent-receipt frontier"
+        );
+        for entry in document.pending.iter().chain(&document.recent) {
+            assert!(entry.sequence > 0, "{path} commit sequence");
+            assert_hex_checksum(path, "transaction digest", &entry.transaction_digest);
+            assert_hex_checksum(path, "request digest", &entry.request_digest);
+            assert_hex_checksum(path, "envelope checksum", &entry.envelope_checksum);
+            assert!(entry.rows > 0, "{path} commit rows");
+            assert!(entry.encoded_bytes > 0, "{path} commit bytes");
+            if entry.materialized_collection_generation > 0 {
+                assert!(
+                    entry.materialized_collection_generation
+                        <= document.materialized_collection_generation,
+                    "{path} receipt generation"
+                );
+            }
+        }
+    }
+}
+
+fn assert_lane_coordination_checksum<T: Serialize>(
+    path: &str,
+    document: &LaneCoordinationDocument<T>,
+) {
+    let payload = serde_json::to_vec(&document.payload).unwrap();
+    assert_eq!(
+        document.payload_checksum_blake3,
+        blake3::hash(&payload).to_hex().to_string(),
+        "{path} payload checksum"
+    );
+}
+
+fn assert_hex_checksum(path: &str, label: &str, value: &str) {
+    assert_eq!(value.len(), 64, "{path} {label} length");
+    assert!(
+        value.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{path} {label} encoding"
     );
 }
 
@@ -348,8 +593,7 @@ fn collection_wal_frontier_head_uses_collection_magic() {
     );
 }
 
-fn deterministic_bytes(len: usize) -> Vec<u8> {
-    let mut state = 0x4d59_5df4_d0f3_3173_u64;
+fn deterministic_bytes(len: usize, mut state: u64) -> Vec<u8> {
     (0..len)
         .map(|_| {
             state ^= state << 13;

@@ -1899,10 +1899,11 @@ def main() -> None:
             "tieAwareRecallAtK",
         ],
         "crates/borsuk/tests/s3_compatible.rs": [
-            "assert_s3_compatible_binary_layout",
+            "assert_s3_compatible_standard_layout",
             "collection/CURRENT must be a checked binary pointer",
             "segment-summary routing tables must be Parquet objects",
-            "JSON or ad-hoc manifest files must not be durable S3-compatible storage",
+            "only checked coordination JSON may accompany standard binary tables",
+            "positioned visibility must have one checked head per source shard",
         ],
         "packages/borsuk/src/index.ts": [
             "export enum VectorMetricName",
