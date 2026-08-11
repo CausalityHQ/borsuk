@@ -138,7 +138,10 @@ use crate::{
 // Bumped 32 -> 33 when logical-cell centroids moved from repeated inline
 // manifest JSON into one checksum-pinned, content-addressed Parquet catalog.
 // Experimental v32 manifests are rebuilt rather than keeping a dual reader.
-const CURRENT_VERSION: u16 = 33;
+// Bumped 33 -> 34 when consumed positioned-run identities stopped embedding
+// removable logical-cell authority. Experimental v33 manifests are rejected
+// rather than interpreting their consumed markers under the new identity.
+const CURRENT_VERSION: u16 = 34;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -6639,6 +6642,7 @@ pub(crate) struct DecodedPositionedEnvelope {
 }
 
 const MAX_POSITIONED_ENVELOPE_BYTES: usize = 1024 * 1024;
+const POSITIONED_ENVELOPE_LAYOUT: u16 = 14;
 
 fn positioned_envelope_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -6678,7 +6682,7 @@ fn validate_positioned_envelope_schema_and_columns(
 ) -> Result<()> {
     if schema != positioned_envelope_schema().as_ref() {
         return Err(BorsukError::InvalidStorage(
-            "positioned envelope schema is not the exact V13 schema".to_owned(),
+            "positioned envelope schema is not the exact V14 schema".to_owned(),
         ));
     }
     if columns.iter().any(|column| column.null_count() != 0) {
@@ -6700,7 +6704,9 @@ pub(crate) fn positioned_envelope_to_parquet(
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            array(UInt16Array::from_iter_values(payloads.iter().map(|_| 13))),
+            array(UInt16Array::from_iter_values(
+                payloads.iter().map(|_| POSITIONED_ENVELOPE_LAYOUT),
+            )),
             array(StringArray::from_iter_values(
                 payloads.iter().map(|_| envelope.transaction_id.as_str()),
             )),
@@ -6797,7 +6803,7 @@ fn positioned_envelope_from_parquet_inner(bytes: &[u8]) -> Result<DecodedPositio
     }
     if builder.schema().as_ref() != positioned_envelope_schema().as_ref() {
         return Err(BorsukError::InvalidStorage(
-            "positioned envelope schema is not the exact V13 schema".to_owned(),
+            "positioned envelope schema is not the exact V14 schema".to_owned(),
         ));
     }
     let mut batches = builder
@@ -6812,7 +6818,7 @@ fn positioned_envelope_from_parquet_inner(bytes: &[u8]) -> Result<DecodedPositio
         for row in 0..batch.num_rows() {
             let decoded = decode_positioned_envelope_row(&batch, row)?;
             if let Some(first) = first.as_ref() {
-                if decoded.layout != 13
+                if decoded.layout != POSITIONED_ENVELOPE_LAYOUT
                     || decoded.transaction_id != first.transaction_id
                     || decoded.transaction_digest != first.transaction_digest
                     || decoded.request_digest != first.request_digest
@@ -6825,7 +6831,7 @@ fn positioned_envelope_from_parquet_inner(bytes: &[u8]) -> Result<DecodedPositio
                         "positioned envelope repeated transaction columns disagree".to_owned(),
                     ));
                 }
-            } else if decoded.layout != 13 {
+            } else if decoded.layout != POSITIONED_ENVELOPE_LAYOUT {
                 return Err(BorsukError::InvalidStorage(
                     "positioned envelope layout marker is unsupported".to_owned(),
                 ));
@@ -7838,13 +7844,28 @@ mod tests {
     }
 
     #[test]
-    fn positioned_envelope_v13_round_trips_authenticated_id_bloom() {
+    fn positioned_envelope_v14_round_trips_authenticated_id_bloom() {
         let mut expected = positioned_envelope_fixture();
         expected.payloads[0].id_bloom = vec![0x5a; 128];
         let bytes =
             positioned_envelope_to_parquet(&expected, &"c".repeat(64), &"d".repeat(64)).unwrap();
         let decoded = positioned_envelope_from_parquet(&bytes).unwrap();
         assert_eq!(decoded.envelope, expected);
+    }
+
+    #[test]
+    fn positioned_envelope_decoder_rejects_v13_layout_marker() {
+        let batch = positioned_envelope_batch();
+        let mut columns = batch.columns().to_vec();
+        columns[batch.schema().index_of("layout").unwrap()] =
+            array(UInt16Array::from_iter_values([13]));
+        let old = write_batch(RecordBatch::try_new(batch.schema(), columns).unwrap()).unwrap();
+
+        let error = positioned_envelope_from_parquet(&old)
+            .err()
+            .expect("v13 envelope must be rejected")
+            .to_string();
+        assert!(error.contains("layout marker is unsupported"), "{error}");
     }
 
     #[test]
@@ -9241,6 +9262,25 @@ mod tests {
         assert!(
             err.to_string().contains("routing table manifest_version"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn manifest_decoder_rejects_format_33_marker() {
+        let bytes = manifest_to_parquet(&valid_manifest()).unwrap();
+        let batch = first_batch(&bytes, "manifest").unwrap();
+        let mut columns = batch.columns().to_vec();
+        columns[batch.schema().index_of("format_version").unwrap()] =
+            array(UInt16Array::from_iter_values([33]));
+        let old = write_batch(RecordBatch::try_new(batch.schema(), columns).unwrap()).unwrap();
+        let routing = routing_to_parquet(&valid_manifest()).unwrap();
+
+        let error = manifest_from_parquet(&old, &routing)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("unsupported manifest table version 33"),
+            "{error}"
         );
     }
 

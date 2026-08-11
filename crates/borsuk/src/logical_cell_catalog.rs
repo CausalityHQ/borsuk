@@ -17,7 +17,7 @@ use crate::{
     metric::{VectorMetric, unit_l2_normalized},
 };
 
-pub(crate) const LOGICAL_CELL_CATALOG_FORMAT_VERSION: u16 = 33;
+pub(crate) const LOGICAL_CELL_CATALOG_FORMAT_VERSION: u16 = 34;
 const BLAKE3_HEX_LEN: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -640,7 +640,7 @@ mod tests {
         let bytes = logical_cell_catalog_to_parquet(&catalog).unwrap();
 
         let old_version = rewrite_catalog(&bytes, |batch| {
-            replace_column(batch, 0, Arc::new(UInt16Array::from_iter_values([32, 32])))
+            replace_column(batch, 0, Arc::new(UInt16Array::from_iter_values([33, 33])))
         });
         assert!(
             logical_cell_catalog_from_parquet(

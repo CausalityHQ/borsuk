@@ -793,26 +793,16 @@ impl CellWalStore {
     ) -> Result<(BTreeSet<String>, Vec<CommittedCellWalTransaction>)> {
         let transaction_ids = consumed_run_identities
             .iter()
-            .map(|identity| {
-                identity
-                    .split_once(':')
-                    .map(|(transaction_id, _)| transaction_id.to_string())
-            })
-            .collect::<Option<BTreeSet<_>>>()
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "consumed cell WAL run identity is missing its transaction prefix".to_string(),
-                )
-            })?;
+            .map(|identity| cell_wal_run_transaction_id(identity).map(str::to_string))
+            .collect::<Result<BTreeSet<_>>>()?;
         let mut paths = BTreeSet::new();
         let mut transactions = Vec::with_capacity(transaction_ids.len());
         for transaction_id in transaction_ids {
             let expected_runs = consumed_run_identities
                 .iter()
                 .filter(|identity| {
-                    identity
-                        .split_once(':')
-                        .is_some_and(|(candidate, _)| candidate == transaction_id)
+                    cell_wal_run_transaction_id(identity)
+                        .is_ok_and(|candidate| candidate == transaction_id)
                 })
                 .cloned()
                 .collect::<BTreeSet<_>>();
@@ -1602,11 +1592,41 @@ fn commit_marker_path(transaction_id: &str) -> String {
     format!("transactions/{transaction_id}/COMMIT")
 }
 
-fn cell_wal_run_identity(run: &PreparedCellWalRun) -> String {
-    format!(
-        "{}:{}:{}:{}:{}",
-        run.transaction_id, run.cell.routing_epoch, run.cell.cell_ordinal, run.lane, run.checksum
-    )
+pub(crate) fn cell_wal_run_identity(run: &PreparedCellWalRun) -> String {
+    format!("{}:{}:{}", run.transaction_id, run.lane, run.checksum)
+}
+
+pub(crate) fn cell_wal_run_transaction_id(identity: &str) -> Result<&str> {
+    let mut components = identity.split(':');
+    let transaction_id = components.next().unwrap_or_default();
+    let lane = components.next().ok_or_else(|| {
+        BorsukError::InvalidStorage(
+            "consumed cell WAL run identity is missing its lane".to_string(),
+        )
+    })?;
+    let checksum = components.next().ok_or_else(|| {
+        BorsukError::InvalidStorage(
+            "consumed cell WAL run identity is missing its checksum".to_string(),
+        )
+    })?;
+    if components.next().is_some() {
+        return Err(BorsukError::InvalidStorage(
+            "consumed cell WAL run identity has an unsupported layout".to_string(),
+        ));
+    }
+    validate_transaction_id(transaction_id)?;
+    let lane = lane.parse::<u8>().map_err(|_| {
+        BorsukError::InvalidStorage(
+            "consumed cell WAL run identity has an invalid lane".to_string(),
+        )
+    })?;
+    if lane >= MAX_CELL_WAL_LANES {
+        return Err(BorsukError::InvalidStorage(
+            "consumed cell WAL run identity lane exceeds the configured maximum".to_string(),
+        ));
+    }
+    validate_cell_wal_checksum(checksum, "consumed run", "manifest")?;
+    Ok(transaction_id)
 }
 
 fn validate_transaction_id(transaction_id: &str) -> Result<()> {
@@ -2125,6 +2145,64 @@ mod tests {
             record_count: 5,
             byte_len: 123,
         }
+    }
+
+    #[test]
+    fn consumed_run_identity_excludes_removed_cell_authority() {
+        let first = run();
+        let mut moved = first.clone();
+        moved.cell = LogicalCellId::new(99, 123);
+
+        assert_eq!(cell_wal_run_identity(&first), cell_wal_run_identity(&moved));
+        assert_eq!(
+            cell_wal_run_identity(&first),
+            format!("{}:{}:{}", first.transaction_id, first.lane, first.checksum)
+        );
+    }
+
+    #[test]
+    fn consumed_run_identity_parser_rejects_removed_five_part_layout() {
+        let first = run();
+        let old = format!(
+            "{}:{}:{}:{}:{}",
+            first.transaction_id,
+            first.cell.routing_epoch,
+            first.cell.cell_ordinal,
+            first.lane,
+            first.checksum
+        );
+
+        let error = cell_wal_run_transaction_id(&old).unwrap_err().to_string();
+        assert!(error.contains("unsupported layout"), "{error}");
+        assert_eq!(
+            cell_wal_run_transaction_id(&cell_wal_run_identity(&first)).unwrap(),
+            first.transaction_id
+        );
+    }
+
+    #[test]
+    fn retained_consumed_objects_rejects_removed_identity_layout_before_storage_reads() {
+        let first = run();
+        let old = format!(
+            "{}:{}:{}:{}:{}",
+            first.transaction_id,
+            first.cell.routing_epoch,
+            first.cell.cell_ordinal,
+            first.lane,
+            first.checksum
+        );
+        let storage = Storage::from_object_store(
+            "memory:///old-consumed-run-layout".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let store = CellWalStore::from_storage(storage, CellWalConfig::default(), 7).unwrap();
+
+        let error = store
+            .retained_consumed_objects(&BTreeSet::from([old]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unsupported layout"), "{error}");
     }
 
     #[test]

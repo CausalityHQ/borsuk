@@ -21,7 +21,8 @@ use uuid::Uuid;
 use crate::{
     cell_wal::{
         CellWalClaimCheckpoint, CellWalRunInput, CellWalRunKind, CellWalStore,
-        CommittedCellWalTransaction, LogicalCellId, PreparedCellWalRun,
+        CommittedCellWalTransaction, LogicalCellId, PreparedCellWalRun, cell_wal_run_identity,
+        cell_wal_run_transaction_id,
     },
     centroid_hnsw::CentroidHnsw,
     collection_control::{
@@ -150,13 +151,6 @@ fn join_rows(rows: &[usize]) -> String {
         .map(usize::to_string)
         .collect::<Vec<_>>()
         .join("|")
-}
-
-fn cell_wal_run_identity(run: &PreparedCellWalRun) -> String {
-    format!(
-        "{}:{}:{}:{}:{}",
-        run.transaction_id, run.cell.routing_epoch, run.cell.cell_ordinal, run.lane, run.checksum
-    )
 }
 
 fn cell_wal_run_count(transactions: &[CommittedCellWalTransaction]) -> usize {
@@ -13811,7 +13805,7 @@ impl BorsukIndex {
             .iter()
             .filter(|identity| {
                 !self.positioned_run_identities.contains(*identity)
-                    && identity.split_once(':').is_none_or(|(transaction_id, _)| {
+                    && cell_wal_run_transaction_id(identity).is_ok_and(|transaction_id| {
                         !positioned_retained_transaction_ids.contains(transaction_id)
                     })
             })
