@@ -18,8 +18,8 @@ use borsuk::{
     BorsukError, BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
     GarbageCollectionOptions, IndexConfig, LeafCapability, LeafMode, Manifest, OpenOptions,
     QuantizerKind, RebuildOptions, RecallGuarantee, RequestCounts, SearchMode, SearchOptions,
-    SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord, WalConfig,
-    leaf_mode_names, vector_records_to_parquet,
+    SearchTerminationReason, SegmentSummary, VectorElementType, VectorKind, VectorMetric,
+    VectorRecord, VectorSpec, WalConfig, leaf_mode_names, vector_records_to_parquet,
 };
 use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
@@ -64,6 +64,265 @@ fn create_graph_enabled_with_wal(
     wal: WalConfig,
 ) -> Result<BorsukIndex, BorsukError> {
     BorsukIndex::create_with_wal_and_leaf_capability(config, wal, LeafCapability::GraphEnabled)
+}
+
+#[test]
+fn automatic_default_logical_cell_catalog_authenticates_and_reopens() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Cosine,
+        dimensions: 3,
+        segment_max_vectors: 8,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+
+    let created = index
+        .logical_cell_catalog_evidence()
+        .expect("generation one must authenticate its routing catalog");
+    assert_eq!((created.1, created.2, created.4, created.5), (1, 3, 0, 0));
+    assert_eq!(
+        index.logical_cell_for_research(&[-9.0, 2.0, 1.0]).unwrap(),
+        (borsuk::LogicalCellId::new(1, 0), "flat")
+    );
+    drop(index);
+
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(reopened.logical_cell_catalog_evidence(), Some(created));
+    assert_eq!(
+        reopened
+            .logical_cell_for_research(&[-9.0, 2.0, 1.0])
+            .unwrap(),
+        (borsuk::LogicalCellId::new(1, 0), "flat")
+    );
+}
+
+#[test]
+fn automatic_defaults_cover_primary_dense_and_late_only() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let created = BorsukIndex::create_with_object_store(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: "memory:///generation-one-modalities".to_string(),
+            metric: VectorMetric::Cosine,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+            text: true,
+            named_vectors: BTreeMap::from([
+                (
+                    "dense".to_string(),
+                    VectorSpec {
+                        dimensions: 3,
+                        metric: VectorMetric::Angular,
+                        kind: VectorKind::Dense,
+                        element_type: VectorElementType::Float32,
+                    },
+                ),
+                (
+                    "sparse".to_string(),
+                    VectorSpec {
+                        dimensions: 128,
+                        metric: VectorMetric::InnerProduct,
+                        kind: VectorKind::Sparse,
+                        element_type: VectorElementType::Float32,
+                    },
+                ),
+                (
+                    "tokens".to_string(),
+                    VectorSpec {
+                        dimensions: 4,
+                        metric: VectorMetric::InnerProduct,
+                        kind: VectorKind::LateInteraction,
+                        element_type: VectorElementType::Float32,
+                    },
+                ),
+            ]),
+        },
+    )
+    .unwrap();
+    drop(created);
+    BorsukIndex::open_with_object_store(Arc::clone(&store), "memory:///generation-one-modalities")
+        .unwrap();
+
+    let catalog_paths = list_object_paths(store)
+        .into_iter()
+        .filter(|path| path.contains("logical-cell-catalogs/"))
+        .collect::<Vec<_>>();
+    assert_eq!(catalog_paths.len(), 3, "{catalog_paths:?}");
+    assert!(
+        catalog_paths
+            .iter()
+            .any(|path| path.starts_with("logical-cell-catalogs/"))
+    );
+    assert!(
+        catalog_paths
+            .iter()
+            .any(|path| path.starts_with("vectors/dense/logical-cell-catalogs/"))
+    );
+    assert!(
+        catalog_paths
+            .iter()
+            .any(|path| path.starts_with("vectors/tokens/logical-cell-catalogs/"))
+    );
+    assert!(
+        catalog_paths
+            .iter()
+            .all(|path| !path.starts_with("vectors/sparse/")),
+        "sparse analyzer authority must not publish a logical-cell catalog: {catalog_paths:?}"
+    );
+}
+
+#[test]
+fn post_create_catalog_replacement_is_rejected_even_when_locally_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri,
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 8,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    let before = index
+        .logical_cell_catalog_evidence()
+        .map(|evidence| evidence.0);
+
+    let error = index
+        .initialize_logical_cell_catalog(vec![vec![0.0, 1.0], vec![1.0, 0.0]])
+        .unwrap_err();
+
+    assert!(
+        matches!(error, BorsukError::InvalidStorage(ref message) if message.contains("creation time")),
+        "unexpected rejection: {error:?}"
+    );
+    assert_eq!(
+        index
+            .logical_cell_catalog_evidence()
+            .map(|evidence| evidence.0),
+        before
+    );
+}
+
+#[test]
+fn finish_bulk_load_preserves_the_generation_one_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().into_owned();
+    let mut index = BorsukIndex::create(IndexConfig {
+        uri: uri.clone(),
+        metric: VectorMetric::Euclidean,
+        dimensions: 2,
+        segment_max_vectors: 1,
+        ram_budget_bytes: None,
+        text: false,
+        named_vectors: BTreeMap::new(),
+    })
+    .unwrap();
+    let generation_one = index
+        .logical_cell_catalog_evidence()
+        .expect("creation must publish the catalog");
+    index
+        .add(vec![
+            VectorRecord::new("zero", vec![0.0, 0.0]),
+            VectorRecord::new("ten", vec![10.0, 0.0]),
+            VectorRecord::new("twenty", vec![20.0, 0.0]),
+        ])
+        .unwrap();
+
+    index.finish_bulk_load().unwrap();
+
+    let finished = index.logical_cell_catalog_evidence().unwrap();
+    assert_eq!(finished.0, generation_one.0);
+    assert_eq!((finished.1, finished.2), (1, 2));
+    drop(index);
+    assert_eq!(
+        BorsukIndex::open(&uri)
+            .unwrap()
+            .logical_cell_catalog_evidence()
+            .unwrap()
+            .0,
+        generation_one.0
+    );
+}
+
+#[test]
+fn catalog_put_failure_never_publishes_collection_current() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let store: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            false,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().starts_with("logical-cell-catalogs/")
+            },
+        ));
+
+    let created = BorsukIndex::create_with_object_store(
+        store,
+        IndexConfig {
+            uri: "memory:///catalog-put-failure".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        },
+    );
+
+    assert!(created.is_err(), "catalog PUT fault was not observed");
+    assert!(
+        list_object_paths(inner)
+            .iter()
+            .all(|path| path != "collection/CURRENT")
+    );
+}
+
+#[test]
+fn positioned_head_failure_never_publishes_collection_current() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let store: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
+            Arc::clone(&inner),
+            1,
+            false,
+            |operation, path| {
+                operation == common::StoreOperation::Put
+                    && path.as_ref().starts_with("positioned-log/heads/")
+            },
+        ));
+
+    let created = BorsukIndex::create_with_object_store(
+        store,
+        IndexConfig {
+            uri: "memory:///positioned-head-failure".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        },
+    );
+
+    assert!(
+        created.is_err(),
+        "positioned-head PUT fault was not observed"
+    );
+    assert!(
+        list_object_paths(inner)
+            .iter()
+            .all(|path| path != "collection/CURRENT")
+    );
 }
 
 #[test]
@@ -227,7 +486,7 @@ fn concurrent_hot_cells_compose_automatic_flushes_without_failing_add() {
         )
         .unwrap();
     setup.finish_bulk_load().unwrap();
-    assert!(setup.manifest().logical_cells().len() >= 4);
+    assert_eq!(setup.manifest().logical_cells().len(), 1);
     drop(setup);
 
     let current_barrier = Arc::new(std::sync::Barrier::new(2));

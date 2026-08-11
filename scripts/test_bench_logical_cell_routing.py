@@ -157,7 +157,7 @@ class BenchLogicalCellRoutingTest(unittest.TestCase):
             ],
         )
 
-    def test_rust_builder_uses_catalog_initialization_without_seed_records(
+    def test_rust_builder_supplies_catalog_during_create_without_seed_records(
         self,
     ) -> None:
         source = (
@@ -166,7 +166,8 @@ class BenchLogicalCellRoutingTest(unittest.TestCase):
         build_body = source.split("fn build() -> BenchResult<()> {", 1)[1].split(
             "\nfn run_config()", 1
         )[0]
-        self.assertIn("initialize_logical_cell_catalog", build_body)
+        self.assertIn("create_with_logical_cell_catalog", build_body)
+        self.assertNotIn("initialize_logical_cell_catalog", build_body)
         self.assertNotIn("index.add(", build_body)
         self.assertNotIn("finish_bulk_load", build_body)
         for field in (

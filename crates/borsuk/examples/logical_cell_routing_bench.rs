@@ -275,16 +275,18 @@ fn build() -> BenchResult<()> {
     let centroids = (0..cell_count)
         .map(|ordinal| vector(0x626f_7273_756b, ordinal as u64, dimensions))
         .collect::<Vec<_>>();
-    let mut index = BorsukIndex::create(IndexConfig {
-        uri: uri.clone(),
-        metric: VectorMetric::Cosine,
-        dimensions,
-        segment_max_vectors: recommended_segment_max_vectors(dimensions),
-        ram_budget_bytes: None,
-        text: false,
-        named_vectors: Default::default(),
-    })?;
-    index.initialize_logical_cell_catalog(centroids)?;
+    let index = BorsukIndex::create_with_logical_cell_catalog(
+        IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Cosine,
+            dimensions,
+            segment_max_vectors: recommended_segment_max_vectors(dimensions),
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        centroids,
+    )?;
     if index.manifest().logical_cells().len() != cell_count
         || !index.manifest().segments.is_empty()
         || index.manifest().next_generated_id != 0

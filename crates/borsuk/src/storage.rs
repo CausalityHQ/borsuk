@@ -2412,29 +2412,33 @@ impl Storage {
         }
         manifest.cell_wal_visible_runs = 0;
         manifest.cell_wal_visible_tombstone_runs = 0;
-        if let Some(reference) = manifest.logical_cell_catalog_ref.as_ref() {
+        if let Some(catalog_reference) = manifest.logical_cell_catalog_ref.as_ref() {
             let reusable = reusable_manifest.filter(|existing| {
-                existing.logical_cell_catalog_ref.as_ref() == Some(reference)
+                existing.logical_cell_catalog_ref.as_ref() == Some(catalog_reference)
                     && existing.config.dimensions == manifest.config.dimensions
                     && existing.config.metric == manifest.config.metric
             });
             let catalog = match reusable.and_then(|existing| existing.logical_cell_catalog.as_ref())
             {
                 Some(catalog) => Arc::clone(catalog),
-                None => {
-                    self.load_logical_cell_catalog(reference, manifest.config.metric.clone())?
-                }
+                None => self.load_logical_cell_catalog_at_path(
+                    catalog_reference,
+                    manifest.config.metric.clone(),
+                    &format!("{}{}", reference.prefix, catalog_reference.path),
+                )?,
             };
-            if reference.routing_epoch != manifest.routing_epoch {
+            if catalog_reference.routing_epoch != manifest.routing_epoch {
                 return Err(BorsukError::InvalidStorage(format!(
                     "logical-cell catalog epoch {} does not match manifest epoch {}",
-                    reference.routing_epoch, manifest.routing_epoch
+                    catalog_reference.routing_epoch, manifest.routing_epoch
                 )));
             }
-            if usize::try_from(reference.dimensions).ok() != Some(manifest.config.dimensions) {
+            if usize::try_from(catalog_reference.dimensions).ok()
+                != Some(manifest.config.dimensions)
+            {
                 return Err(BorsukError::InvalidStorage(format!(
                     "logical-cell catalog dimensions {} do not match manifest dimensions {}",
-                    reference.dimensions, manifest.config.dimensions
+                    catalog_reference.dimensions, manifest.config.dimensions
                 )));
             }
             manifest.logical_cell_catalog = Some(catalog);
@@ -2556,14 +2560,15 @@ impl Storage {
         Ok(())
     }
 
-    pub(crate) fn load_logical_cell_catalog(
+    fn load_logical_cell_catalog_at_path(
         &self,
         reference: &LogicalCellCatalogRef,
         metric: crate::metric::VectorMetric,
+        path: &str,
     ) -> Result<Arc<LogicalCellCatalog>> {
         reference.validate()?;
         let bytes = self
-            .read_bytes_with_cache_status_and_checksum(&reference.path, &reference.checksum)?
+            .read_bytes_with_cache_status_and_checksum(path, &reference.checksum)?
             .bytes;
         logical_cell_catalog_from_parquet(&bytes, reference, metric).map(Arc::new)
     }

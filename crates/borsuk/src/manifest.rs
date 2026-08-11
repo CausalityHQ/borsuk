@@ -171,15 +171,12 @@ pub struct Manifest {
     /// Independent lane count owned by every logical cell in this epoch.
     #[serde(default)]
     pub(crate) cell_wal_config: CellWalConfig,
-    /// Bounded reference to the immutable format-33 logical-cell catalog.
+    /// Bounded reference to the immutable format-34 logical-cell catalog.
     #[serde(default)]
     pub(crate) logical_cell_catalog_ref: Option<LogicalCellCatalogRef>,
     /// Authenticated resident catalog loaded before an index handle is exposed.
     #[serde(skip)]
     pub(crate) logical_cell_catalog: Option<Arc<LogicalCellCatalog>>,
-    /// Handle-local one-cell fallback used only before a catalog is initialized.
-    #[serde(skip, default = "default_logical_cells")]
-    pub(crate) bootstrap_logical_cells: [LogicalCellId; 1],
     /// Cell-WAL run checksums already materialized into immutable base segments.
     #[serde(default)]
     pub(crate) cell_wal_consumed_runs: BTreeSet<String>,
@@ -226,10 +223,6 @@ const fn legacy_leaf_capability() -> LeafCapability {
 
 const fn default_routing_epoch() -> u64 {
     1
-}
-
-fn default_logical_cells() -> [LogicalCellId; 1] {
-    [LogicalCellId::new(default_routing_epoch(), 0)]
 }
 
 /// Reference from a manifest to its persisted coarse-quantizer object. The
@@ -524,7 +517,6 @@ impl Manifest {
             cell_wal_config: CellWalConfig::default(),
             logical_cell_catalog_ref: None,
             logical_cell_catalog: None,
-            bootstrap_logical_cells: default_logical_cells(),
             cell_wal_consumed_runs: BTreeSet::new(),
             cell_wal_visible_runs: 0,
             cell_wal_visible_tombstone_runs: 0,
@@ -559,7 +551,6 @@ impl Manifest {
             cell_wal_config: self.cell_wal_config,
             logical_cell_catalog_ref: self.logical_cell_catalog_ref.clone(),
             logical_cell_catalog: self.logical_cell_catalog.clone(),
-            bootstrap_logical_cells: self.bootstrap_logical_cells,
             cell_wal_consumed_runs: self.cell_wal_consumed_runs.clone(),
             cell_wal_visible_runs: self.cell_wal_visible_runs,
             cell_wal_visible_tombstone_runs: self.cell_wal_visible_tombstone_runs,
@@ -629,7 +620,7 @@ impl Manifest {
     pub fn logical_cells(&self) -> &[LogicalCellId] {
         self.logical_cell_catalog
             .as_ref()
-            .map_or(&self.bootstrap_logical_cells, |catalog| &catalog.cells)
+            .map_or(&[], |catalog| &catalog.cells)
     }
 
     pub(crate) fn logical_cell_centroids(&self) -> &[Vec<f32>] {
