@@ -516,7 +516,8 @@ impl<'de> serde::Deserialize<'de> for RecordId {
 }
 
 /// Vector record inserted into an index.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(not(test), derive(Clone))]
 pub struct VectorRecord {
     /// External object identifier.
     pub id: RecordId,
@@ -559,6 +560,48 @@ pub struct VectorRecord {
     /// leave this unset; the owning index clock stamps canonical mutations.
     #[serde(skip)]
     pub(crate) mutation_stamp: Option<MutationStamp>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static VECTOR_RECORD_CLONE_COUNT: std::cell::Cell<Option<usize>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+#[cfg(test)]
+impl Clone for VectorRecord {
+    fn clone(&self) -> Self {
+        VECTOR_RECORD_CLONE_COUNT.with(|count| {
+            if let Some(current) = count.get() {
+                count.set(Some(current + 1));
+            }
+        });
+        Self {
+            id: self.id.clone(),
+            vector: self.vector.clone(),
+            extra_vectors: self.extra_vectors.clone(),
+            extra_sparse: self.extra_sparse.clone(),
+            extra_multi_vectors: self.extra_multi_vectors.clone(),
+            storage: self.storage,
+            text: self.text.clone(),
+            text_term_ids: self.text_term_ids.clone(),
+            text_term_freqs: self.text_term_freqs.clone(),
+            metadata: self.metadata.clone(),
+            generation: self.generation,
+            mutation_stamp: self.mutation_stamp,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn count_vector_record_clones<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    VECTOR_RECORD_CLONE_COUNT.with(|count| {
+        let previous = count.replace(Some(0));
+        let result = operation();
+        let observed = count.replace(previous).expect("clone counter is active");
+        (result, observed)
+    })
 }
 
 impl VectorRecord {

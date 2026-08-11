@@ -23,14 +23,15 @@ fn production_policy_resolves_every_persisted_role_to_a_supported_standard_forma
             | PhysicalObjectRole::GraphIndex
             | PhysicalObjectRole::NormalSegment
             | PhysicalObjectRole::LexicalBlock
-            | PhysicalObjectRole::Tombstone => assert_eq!(format, PhysicalFormat::Parquet),
+            | PhysicalObjectRole::Tombstone
+            | PhysicalObjectRole::IdDirectory => assert_eq!(format, PhysicalFormat::Parquet),
             PhysicalObjectRole::ProductCodes
             | PhysicalObjectRole::ExactVectors
             | PhysicalObjectRole::LateInteraction => assert_eq!(format, PhysicalFormat::ArrowIpc),
             PhysicalObjectRole::LaneHead
             | PhysicalObjectRole::CommitMarker
             | PhysicalObjectRole::FilterIndex
-            | PhysicalObjectRole::IdDirectory => assert_eq!(format, PhysicalFormat::Packed),
+            | PhysicalObjectRole::IdDirectoryControl => assert_eq!(format, PhysicalFormat::Packed),
             PhysicalObjectRole::WriterDirectory | PhysicalObjectRole::Unknown => {
                 panic!("unexpected production role: {role:?}")
             }

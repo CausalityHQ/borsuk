@@ -141,7 +141,10 @@ use crate::{
 // Bumped 33 -> 34 when consumed positioned-run identities stopped embedding
 // removable logical-cell authority. Experimental v33 manifests are rejected
 // rather than interpreting their consumed markers under the new identity.
-const CURRENT_VERSION: u16 = 34;
+// Bumped 34 -> 35 when positioned primary WAL rows gained required checked
+// routing epoch/cell columns and every positioned envelope gained one dedicated
+// route-plan payload. Experimental v34 artifacts cannot establish row owners.
+const CURRENT_VERSION: u16 = 35;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -2672,32 +2675,47 @@ pub(crate) fn segment_to_parquet(segment: &Segment) -> Result<Vec<u8>> {
     segment_to_parquet_impl(segment, false, VectorElementType::Float32)
 }
 
-/// Serialize `records` into an immutable WAL object. Unlike a normal segment
-/// (whose dense vectors live only in the per-segment Arrow sidecar), a WAL
-/// object carries the dense `vector` column INLINE so the un-flushed tail is
-/// fully searchable without a sidecar — the tail is small and brute-forced
-/// whole, so an inline vector column is the simplest lossless representation.
-/// Round-trips id, dense vector, sparse encoding, text, generation, and
-/// metadata. This does NOT build a graph, sidecar, or routing summary.
-pub(crate) fn wal_records_to_table(
-    records: &[VectorRecord],
+pub(crate) type PositionedWalRecord = (VectorRecord, u64, u32);
+
+pub(crate) fn positioned_wal_records_to_table(
+    records: &[PositionedWalRecord],
     dimensions: usize,
     element_type: VectorElementType,
     format: crate::PhysicalFormat,
 ) -> Result<Vec<u8>> {
-    let batch = wal_records_to_batch(records, dimensions, element_type)?;
+    let logical_records = records
+        .iter()
+        .map(|(record, _, _)| record)
+        .collect::<Vec<_>>();
+    let batch = wal_records_to_batch(&logical_records, dimensions, element_type)?;
+    let mut fields = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect::<Vec<_>>();
+    fields.push(Field::new("routing_epoch", DataType::UInt64, false));
+    fields.push(Field::new("cell_ordinal", DataType::UInt32, false));
+    let mut columns = batch.columns().to_vec();
+    columns.push(array(UInt64Array::from_iter_values(
+        records.iter().map(|(_, epoch, _)| *epoch),
+    )));
+    columns.push(array(UInt32Array::from_iter_values(
+        records.iter().map(|(_, _, ordinal)| *ordinal),
+    )));
+    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
     match format {
         crate::PhysicalFormat::Parquet => {
             write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
         }
         other => Err(BorsukError::InvalidStorage(format!(
-            "WAL records cannot use physical format `{other}`"
+            "positioned WAL records cannot use physical format `{other}`"
         ))),
     }
 }
 
 fn wal_records_to_batch(
-    records: &[VectorRecord],
+    records: &[&VectorRecord],
     dimensions: usize,
     vector_element_type: VectorElementType,
 ) -> Result<RecordBatch> {
@@ -2819,9 +2837,8 @@ fn wal_records_to_batch(
     Ok(RecordBatch::try_new(schema, columns)?)
 }
 
-/// Decode a WAL object written by [`wal_records_to_table`] back into its
-/// records, reconstructing each row's primary vector from the dedicated
-/// record-only table.
+/// Decode a WAL object back into its records, reconstructing each row's primary
+/// vector from the dedicated record-only table.
 pub(crate) fn wal_records_from_table(bytes: Vec<u8>, path: &str) -> Result<Vec<VectorRecord>> {
     let batches = if path.ends_with(".parquet") {
         read_batches(&bytes)?
@@ -2831,6 +2848,52 @@ pub(crate) fn wal_records_from_table(bytes: Vec<u8>, path: &str) -> Result<Vec<V
         )));
     };
     wal_records_from_batches(batches)
+}
+
+pub(crate) fn positioned_wal_records_from_table(
+    bytes: Vec<u8>,
+    path: &str,
+) -> Result<Vec<PositionedWalRecord>> {
+    if !path.ends_with(".parquet") {
+        return Err(BorsukError::InvalidStorage(format!(
+            "positioned WAL records object `{path}` has no supported table extension"
+        )));
+    }
+    let batches = read_batches(&bytes)?;
+    let mut owners = Vec::new();
+    for batch in &batches {
+        let epoch = batch.schema().index_of("routing_epoch").map_err(|_| {
+            BorsukError::InvalidStorage(
+                "positioned WAL table is missing required `routing_epoch`".to_string(),
+            )
+        })?;
+        let ordinal = batch.schema().index_of("cell_ordinal").map_err(|_| {
+            BorsukError::InvalidStorage(
+                "positioned WAL table is missing required `cell_ordinal`".to_string(),
+            )
+        })?;
+        for row in 0..batch.num_rows() {
+            let epoch = primitive_value::<UInt64Type>(batch, epoch, row, "routing_epoch")?;
+            let ordinal = primitive_value::<UInt32Type>(batch, ordinal, row, "cell_ordinal")?;
+            if epoch == 0 {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned WAL routing epoch must be positive".to_string(),
+                ));
+            }
+            owners.push((epoch, ordinal));
+        }
+    }
+    let records = wal_records_from_batches(batches)?;
+    if records.len() != owners.len() {
+        return Err(BorsukError::InvalidStorage(
+            "positioned WAL record and owner cardinalities differ".to_string(),
+        ));
+    }
+    Ok(records
+        .into_iter()
+        .zip(owners)
+        .map(|(record, (epoch, ordinal))| (record, epoch, ordinal))
+        .collect())
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -4889,10 +4952,26 @@ fn pivots_schema(dimensions: usize) -> Arc<Schema> {
     ]))
 }
 
-fn mutation_stamps_present(records: &[VectorRecord]) -> Result<bool> {
+trait VectorRecordView {
+    fn as_vector_record(&self) -> &VectorRecord;
+}
+
+impl VectorRecordView for VectorRecord {
+    fn as_vector_record(&self) -> &VectorRecord {
+        self
+    }
+}
+
+impl VectorRecordView for &VectorRecord {
+    fn as_vector_record(&self) -> &VectorRecord {
+        self
+    }
+}
+
+fn mutation_stamps_present<R: VectorRecordView>(records: &[R]) -> Result<bool> {
     let stamped = records
         .iter()
-        .filter(|record| record.mutation_stamp().is_some())
+        .filter(|record| record.as_vector_record().mutation_stamp().is_some())
         .count();
     if stamped != 0 && stamped != records.len() {
         return Err(BorsukError::InvalidStorage(
@@ -4910,11 +4989,11 @@ fn mutation_stamp_fields() -> [Field; 3] {
     ]
 }
 
-fn mutation_stamp_arrays(records: &[VectorRecord]) -> Result<[ArrayRef; 3]> {
+fn mutation_stamp_arrays<R: VectorRecordView>(records: &[R]) -> Result<[ArrayRef; 3]> {
     let stamps = records
         .iter()
         .map(|record| {
-            record.mutation_stamp().ok_or_else(|| {
+            record.as_vector_record().mutation_stamp().ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "record table mutation stamp disappeared during encoding".to_string(),
                 )
@@ -5183,8 +5262,8 @@ fn fixed_f32_array<'a>(
     FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(values, dimensions as i32)
 }
 
-fn optional_typed_vector_array(
-    records: &[VectorRecord],
+fn optional_typed_vector_array<R: VectorRecordView>(
+    records: &[R],
     sparse_indices: &[Option<Vec<u32>>],
     dimensions: usize,
     element_type: VectorElementType,
@@ -5193,6 +5272,7 @@ fn optional_typed_vector_array(
         .iter()
         .zip(sparse_indices)
         .map(|(record, sparse)| {
+            let record = record.as_vector_record();
             if sparse.is_some() {
                 Ok(None)
             } else {
@@ -6142,7 +6222,10 @@ pub(crate) fn positioned_route_plan_from_parquet(
 }
 
 fn positioned_route_plan_from_parquet_inner(bytes: &[u8]) -> Result<Vec<PositionedRoutePlanRow>> {
-    if bytes.len() as u64 > crate::positioned_log::MAX_APPEND_ENCODED_BYTES {
+    let encoded_bytes = u64::try_from(bytes.len()).map_err(|_| {
+        BorsukError::InvalidStorage("positioned route plan byte count exceeds u64".to_string())
+    })?;
+    if encoded_bytes > crate::positioned_log::MAX_APPEND_ENCODED_BYTES {
         return Err(BorsukError::InvalidStorage(
             "positioned route plan exceeds the append byte bound".to_string(),
         ));
@@ -6640,7 +6723,7 @@ pub(crate) struct DecodedPositionedEnvelope {
 }
 
 const MAX_POSITIONED_ENVELOPE_BYTES: usize = 1024 * 1024;
-const POSITIONED_ENVELOPE_LAYOUT: u16 = 14;
+const POSITIONED_ENVELOPE_LAYOUT: u16 = 15;
 
 fn positioned_envelope_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -7570,9 +7653,10 @@ fn validate_text_terms(record_id: &RecordId, term_ids: &[u32], term_freqs: &[u32
     Ok(())
 }
 
-fn validate_segment_record_ids(records: &[VectorRecord]) -> Result<()> {
+fn validate_segment_record_ids<R: VectorRecordView>(records: &[R]) -> Result<()> {
     let mut ids = HashSet::with_capacity(records.len());
     for record in records {
+        let record = record.as_vector_record();
         if record.id.is_empty() {
             return Err(BorsukError::InvalidStorage(
                 "record ids must not be empty".to_string(),
@@ -7797,6 +7881,62 @@ struct GraphMetadata {
 mod tests {
     use super::*;
 
+    fn wal_records_to_table(
+        records: &[VectorRecord],
+        dimensions: usize,
+        element_type: VectorElementType,
+        format: crate::PhysicalFormat,
+    ) -> Result<Vec<u8>> {
+        let records = records.iter().collect::<Vec<_>>();
+        let batch = wal_records_to_batch(&records, dimensions, element_type)?;
+        match format {
+            crate::PhysicalFormat::Parquet => {
+                write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
+            }
+            other => Err(BorsukError::InvalidStorage(format!(
+                "WAL records cannot use physical format `{other}`"
+            ))),
+        }
+    }
+
+    #[test]
+    fn positioned_wal_encoder_borrows_records_without_cloning_payloads() {
+        let mut record = valid_segment().records.remove(0);
+        record
+            .extra_vectors
+            .insert("dense".to_string(), vec![0.25, -0.75]);
+        record.extra_sparse.insert(
+            "sparse".to_string(),
+            crate::SparseVector::new(vec![3, 17], vec![1.5, 0.5]).unwrap(),
+        );
+        record.extra_multi_vectors.insert(
+            "tokens".to_string(),
+            crate::LateInteractionVector::new(
+                vec![vec![0.25, 0.5], vec![-0.75, 1.0]],
+                VectorElementType::Float16,
+            )
+            .unwrap(),
+        );
+        record.text_term_ids = vec![7, 11];
+        record.text_term_freqs = vec![2, 1];
+        let records = vec![(record, 1, 0)];
+
+        let (encoded, clone_count) = crate::record::count_vector_record_clones(|| {
+            positioned_wal_records_to_table(
+                &records,
+                2,
+                VectorElementType::Float32,
+                crate::PhysicalFormat::Parquet,
+            )
+        });
+
+        encoded.unwrap();
+        assert_eq!(
+            clone_count, 0,
+            "positioned WAL encoding must borrow staged record payloads"
+        );
+    }
+
     const VALID_SEGMENT_CHECKSUM: &str =
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const VALID_GRAPH_CHECKSUM: &str =
@@ -7842,7 +7982,7 @@ mod tests {
     }
 
     #[test]
-    fn positioned_envelope_v14_round_trips_authenticated_id_bloom() {
+    fn positioned_envelope_v15_round_trips_authenticated_id_bloom() {
         let mut expected = positioned_envelope_fixture();
         expected.payloads[0].id_bloom = vec![0x5a; 128];
         let bytes =
@@ -7852,16 +7992,16 @@ mod tests {
     }
 
     #[test]
-    fn positioned_envelope_decoder_rejects_v13_layout_marker() {
+    fn positioned_envelope_decoder_rejects_v14_layout_marker() {
         let batch = positioned_envelope_batch();
         let mut columns = batch.columns().to_vec();
         columns[batch.schema().index_of("layout").unwrap()] =
-            array(UInt16Array::from_iter_values([13]));
+            array(UInt16Array::from_iter_values([14]));
         let old = write_batch(RecordBatch::try_new(batch.schema(), columns).unwrap()).unwrap();
 
         let error = positioned_envelope_from_parquet(&old)
             .err()
-            .expect("v13 envelope must be rejected")
+            .expect("v14 envelope must be rejected")
             .to_string();
         assert!(error.contains("layout marker is unsupported"), "{error}");
     }
@@ -8371,6 +8511,33 @@ mod tests {
 
         assert!(positioned_route_plan_to_parquet(&[routed.clone(), summary.clone()]).is_err());
         assert!(positioned_route_plan_to_parquet(&[summary, routed]).is_err());
+
+        let duplicate_summary = PositionedRoutePlanRow::summary(
+            "primary",
+            PositionedRouteProjectionKind::Primary,
+            PositionedRouteAssignment::catalog([2; 32], 7).unwrap(),
+            2,
+            stamp,
+        )
+        .unwrap();
+        let duplicate_row = PositionedRoutePlanRow::routed(
+            b"row-a".to_vec(),
+            "primary",
+            PositionedRouteProjectionKind::Primary,
+            0,
+            PositionedRouteAssignment::catalog([2; 32], 7).unwrap(),
+            19,
+            stamp,
+        )
+        .unwrap();
+        assert!(
+            positioned_route_plan_to_parquet(&[
+                duplicate_summary,
+                duplicate_row.clone(),
+                duplicate_row,
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -9264,12 +9431,12 @@ mod tests {
     }
 
     #[test]
-    fn manifest_decoder_rejects_format_33_marker() {
+    fn manifest_decoder_rejects_format_34_marker() {
         let bytes = manifest_to_parquet(&valid_manifest()).unwrap();
         let batch = first_batch(&bytes, "manifest").unwrap();
         let mut columns = batch.columns().to_vec();
         columns[batch.schema().index_of("format_version").unwrap()] =
-            array(UInt16Array::from_iter_values([33]));
+            array(UInt16Array::from_iter_values([34]));
         let old = write_batch(RecordBatch::try_new(batch.schema(), columns).unwrap()).unwrap();
         let routing = routing_to_parquet(&valid_manifest()).unwrap();
 
@@ -9277,7 +9444,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("unsupported manifest table version 33"),
+            error.contains("unsupported manifest table version 34"),
             "{error}"
         );
     }
@@ -10173,13 +10340,17 @@ mod tests {
     }
 
     #[test]
-    fn manifest_table_uses_the_logical_cell_catalog_format_version() {
+    fn manifest_and_logical_cell_catalog_versions_are_independently_pinned() {
         let bytes = manifest_to_parquet(&valid_manifest()).unwrap();
         let batch = first_batch(&bytes, "manifest").unwrap();
 
         assert_eq!(
             primitive_value_by_name::<UInt16Type>(&batch, 0, "format_version").unwrap(),
-            crate::logical_cell_catalog::LOGICAL_CELL_CATALOG_FORMAT_VERSION
+            CURRENT_VERSION
+        );
+        assert_eq!(
+            crate::logical_cell_catalog::LOGICAL_CELL_CATALOG_FORMAT_VERSION,
+            34
         );
     }
 

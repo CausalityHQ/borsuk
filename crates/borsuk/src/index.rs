@@ -31,18 +31,22 @@ use crate::{
     },
     error::{BorsukError, Result},
     format::{
-        PositionedTombstoneRow, PositionedTransactionMetadataRow, bm25_postings_from_batches,
-        bm25_stats_delta_page_from_parquet, bm25_stats_delta_page_to_parquet, graph_from_parquet,
-        graph_to_parquet, id_directory_states_from_parquet, id_directory_states_to_parquet,
+        PositionedRouteAssignment, PositionedRoutePlanRow, PositionedRouteProjectionKind,
+        PositionedTombstoneRow, PositionedTransactionMetadataRow, PositionedWalRecord,
+        bm25_postings_from_batches, bm25_stats_delta_page_from_parquet,
+        bm25_stats_delta_page_to_parquet, graph_from_parquet, graph_to_parquet,
+        id_directory_states_from_parquet, id_directory_states_to_parquet,
         lean_segment_from_parquet, lexical_root_from_parquet, lexical_root_to_parquet,
         lexical_row_metadata_from_batches, lexical_term_page_from_batches,
         lexical_term_page_from_parquet, lexical_term_page_to_parquet, positioned_payload_metadata,
+        positioned_route_plan_from_parquet, positioned_route_plan_to_parquet,
         positioned_tombstones_from_parquet, positioned_tombstones_to_parquet,
         positioned_transaction_metadata_from_parquet, positioned_transaction_metadata_to_parquet,
+        positioned_wal_records_from_table, positioned_wal_records_to_table,
         routing_layer_page_from_parquet,
         routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_parquet,
         segment_to_parquet, sparse_postings_from_batches, tombstone_ids_from_parquet,
-        tombstone_ids_to_parquet, wal_records_from_table, wal_records_to_table,
+        tombstone_ids_to_parquet, wal_records_from_table,
     },
     global_leaf_run::{
         GlobalAnnRef, GlobalCodebookRef, GlobalLeafPersistenceWriter, GlobalLeafRunRef,
@@ -729,6 +733,8 @@ pub struct BorsukIndex {
     /// collection generation but not necessarily reclaimed from shard heads.
     positioned_materialized_candidates: Vec<crate::CommitSourcePosition>,
     positioned_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
+    positioned_prepared_authority: Option<PositionedSnapshotAuthority>,
+    positioned_prepared_envelopes: BTreeMap<String, PreparedPositionedEnvelope>,
     /// HEAD-reachable records from the format-v25 fixed ownership lanes.
     lane_log_snapshot: Vec<crate::lane_log::LaneLogRecordBlock>,
     lane_log_committed_sequences: Vec<u64>,
@@ -1118,16 +1124,50 @@ pub struct CanonicalMutationBatch {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PositionedRunRole {
     version: u8,
     modality: String,
     kind: CellWalRunKind,
-    routing_epoch: u64,
-    cell_ordinal: u32,
     #[serde(default)]
     tombstone_created_at_seconds: Option<i64>,
     #[serde(default)]
     tombstone_created_at_nanos: Option<u32>,
+}
+
+fn positioned_catalog_assignment(manifest: &Manifest) -> Result<PositionedRouteAssignment> {
+    let reference = manifest.logical_cell_catalog_ref.as_ref().ok_or_else(|| {
+        BorsukError::InvalidStorage(
+            "routed positioned modality is missing its catalog reference".to_string(),
+        )
+    })?;
+    let checksum = blake3::Hash::from_hex(&reference.checksum).map_err(|error| {
+        BorsukError::InvalidStorage(format!("positioned catalog checksum is invalid: {error}"))
+    })?;
+    PositionedRouteAssignment::catalog(*checksum.as_bytes(), reference.routing_epoch)
+}
+
+fn positioned_analyzer_assignment(
+    schema_fingerprint: &str,
+    modality: &str,
+    descriptor: &[u8],
+) -> Result<PositionedRouteAssignment> {
+    let mut hasher = blake3::Hasher::new();
+    for field in [
+        b"borsuk-positioned-analyzer-authority-v1".as_slice(),
+        schema_fingerprint.as_bytes(),
+        modality.as_bytes(),
+        descriptor,
+    ] {
+        let field_len = u64::try_from(field.len()).map_err(|_| {
+            BorsukError::InvalidStorage(
+                "positioned analyzer authority field exceeds u64".to_string(),
+            )
+        })?;
+        hasher.update(&field_len.to_be_bytes());
+        hasher.update(field);
+    }
+    PositionedRouteAssignment::analyzer(*hasher.finalize().as_bytes())
 }
 
 fn positioned_projection_metadata(name: &str, kind: VectorKind) -> Result<Vec<u8>> {
@@ -1460,12 +1500,29 @@ struct PreparedPositionedModalitySnapshot {
     run_identities: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PositionedSnapshotAuthority {
+    collection_checksum: String,
+    schema_fingerprint: String,
+    manifest_refs: Vec<CollectionManifestRef>,
+}
+
 #[derive(Debug, Clone, Default)]
+struct PreparedPositionedEnvelope {
+    primary: PreparedPositionedModalitySnapshot,
+    named: BTreeMap<String, PreparedPositionedModalitySnapshot>,
+    primary_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
+    fully_materialized_positions: Vec<crate::CommitSourcePosition>,
+}
+
+#[derive(Debug, Clone)]
 struct PreparedPositionedSnapshot {
     primary: PreparedPositionedModalitySnapshot,
     named: BTreeMap<String, PreparedPositionedModalitySnapshot>,
     primary_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
     fully_materialized_positions: Vec<crate::CommitSourcePosition>,
+    authority: PositionedSnapshotAuthority,
+    envelopes: BTreeMap<String, PreparedPositionedEnvelope>,
 }
 
 #[derive(Debug)]
@@ -3169,6 +3226,8 @@ impl BorsukIndex {
             positioned_run_identities: BTreeSet::new(),
             positioned_materialized_candidates: Vec::new(),
             positioned_bm25_deltas: BTreeMap::new(),
+            positioned_prepared_authority: None,
+            positioned_prepared_envelopes: BTreeMap::new(),
             lane_log_snapshot: Vec::new(),
             lane_log_committed_sequences: Vec::new(),
             lane_log_head_checksums: Vec::new(),
@@ -3507,6 +3566,8 @@ impl BorsukIndex {
             positioned_run_identities: BTreeSet::new(),
             positioned_materialized_candidates: Vec::new(),
             positioned_bm25_deltas: BTreeMap::new(),
+            positioned_prepared_authority: None,
+            positioned_prepared_envelopes: BTreeMap::new(),
             lane_log_snapshot: Vec::new(),
             lane_log_committed_sequences: Vec::new(),
             lane_log_head_checksums: Vec::new(),
@@ -4690,11 +4751,9 @@ impl BorsukIndex {
             .transpose()?
             .map(|metadata| metadata.created_at);
         serde_json::to_string(&PositionedRunRole {
-            version: 1,
+            version: 2,
             modality: run.modality.clone(),
             kind: run.input.kind,
-            routing_epoch: run.input.cell.routing_epoch,
-            cell_ordinal: run.input.cell.cell_ordinal,
             tombstone_created_at_seconds: tombstone_created_at.map(|value| value.timestamp()),
             tombstone_created_at_nanos: tombstone_created_at
                 .map(|value| value.timestamp_subsec_nanos()),
@@ -4709,6 +4768,409 @@ impl BorsukIndex {
     fn positioned_payload_path(input: &CellWalRunInput) -> String {
         let checksum = blake3::hash(&input.bytes).to_hex().to_string();
         canonical_payload_path(PositionedPayloadFormat::Parquet, &checksum)
+    }
+
+    fn expected_positioned_route_plan(
+        &self,
+        primary_manifest: &Manifest,
+        named_manifests: &BTreeMap<String, Manifest>,
+        primary_records: &[PositionedWalRecord],
+        id_directory: &[CellWalIdDirectoryEntry],
+        summary_stamp: MutationStamp,
+        observed: Option<&[PositionedRoutePlanRow]>,
+    ) -> Result<Vec<PositionedRoutePlanRow>> {
+        let observed_cells = observed
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|row| {
+                        Some((
+                            (
+                                row.modality.clone(),
+                                row.record_id.clone()?,
+                                row.projected_ordinal?,
+                            ),
+                            (row.assignment.clone(), row.cell_ordinal?),
+                        ))
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let mut records_by_id = BTreeMap::new();
+        for (record, routing_epoch, cell_ordinal) in primary_records {
+            let stamp = record.mutation_stamp().ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "positioned primary record `{}` is missing its mutation stamp",
+                    record.id
+                ))
+            })?;
+            let owner = LogicalCellId::new(*routing_epoch, *cell_ordinal);
+            if !primary_manifest.logical_cells().contains(&owner) {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "positioned primary record `{}` owner is outside the pinned catalog",
+                    record.id
+                )));
+            }
+            if records_by_id
+                .insert(record.id.as_bytes().to_vec(), (record, owner, stamp))
+                .is_some()
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned primary record payload repeats an id".to_string(),
+                ));
+            }
+        }
+        let mut directory_by_id = BTreeMap::new();
+        for entry in id_directory {
+            if !primary_manifest.logical_cells().contains(&entry.owner) {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned ID-directory owner is outside the pinned catalog".to_string(),
+                ));
+            }
+            if directory_by_id.insert(entry.id.clone(), entry).is_some() {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned ID-directory payload repeats an id".to_string(),
+                ));
+            }
+            if !entry.state.is_deleted() && !records_by_id.contains_key(&entry.id) {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned ID-directory has a live owner without a primary record".to_string(),
+                ));
+            }
+        }
+        for (id, (_, owner, stamp)) in &records_by_id {
+            let entry = directory_by_id.get(id).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned primary record is missing its ID-directory owner".to_string(),
+                )
+            })?;
+            if entry.state.is_deleted() || entry.owner != *owner || entry.state.stamp() != *stamp {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned primary record, ID-directory owner, and mutation stamp disagree"
+                        .to_string(),
+                ));
+            }
+        }
+
+        let schema_fingerprint = collection_schema_fingerprint(primary_manifest);
+        let primary_assignment = positioned_catalog_assignment(primary_manifest)?;
+        let mut groups = BTreeMap::<
+            String,
+            (
+                PositionedRouteProjectionKind,
+                PositionedRouteAssignment,
+                Vec<PositionedRoutePlanRow>,
+            ),
+        >::new();
+        let mut primary_rows = Vec::with_capacity(primary_records.len());
+        for (id, (_, owner, stamp)) in &records_by_id {
+            primary_rows.push(PositionedRoutePlanRow::routed(
+                id.clone(),
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                0,
+                primary_assignment.clone(),
+                owner.cell_ordinal,
+                *stamp,
+            )?);
+        }
+        groups.insert(
+            "primary".to_string(),
+            (
+                PositionedRouteProjectionKind::Primary,
+                primary_assignment,
+                primary_rows,
+            ),
+        );
+
+        for (name, spec) in &primary_manifest.config.named_vectors {
+            let mut projected = Vec::new();
+            let (projection_kind, assignment) = match spec.kind {
+                VectorKind::Dense => (
+                    PositionedRouteProjectionKind::Dense,
+                    positioned_catalog_assignment(named_manifests.get(name).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned dense modality `{name}` is missing its manifest"
+                        ))
+                    })?)?,
+                ),
+                VectorKind::Sparse => {
+                    let descriptor = serde_json::to_vec(spec).map_err(|error| {
+                        BorsukError::InvalidStorage(format!(
+                            "failed to encode sparse analyzer authority: {error}"
+                        ))
+                    })?;
+                    (
+                        PositionedRouteProjectionKind::Sparse,
+                        positioned_analyzer_assignment(&schema_fingerprint, name, &descriptor)?,
+                    )
+                }
+                VectorKind::LateInteraction => (
+                    PositionedRouteProjectionKind::LateInteraction,
+                    positioned_catalog_assignment(named_manifests.get(name).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned late-interaction modality `{name}` is missing its manifest"
+                        ))
+                    })?)?,
+                ),
+            };
+            for (id, (record, _, stamp)) in &records_by_id {
+                match spec.kind {
+                    VectorKind::Dense => {
+                        if let Some(vector) = record.extra_vectors.get(name) {
+                            let named_manifest = named_manifests.get(name).ok_or_else(|| {
+                                BorsukError::InvalidStorage(format!(
+                                    "positioned dense modality `{name}` is missing its manifest"
+                                ))
+                            })?;
+                            let child = self.named.get(name).ok_or_else(|| {
+                                BorsukError::InvalidStorage(format!(
+                                    "positioned dense modality `{name}` is not open"
+                                ))
+                            })?;
+                            let owner = if observed.is_some() {
+                                let (observed_assignment, cell_ordinal) = observed_cells
+                                    .get(&(name.clone(), id.clone(), 0))
+                                    .ok_or_else(|| {
+                                        BorsukError::InvalidStorage(format!(
+                                            "positioned dense modality `{name}` is missing an assignment"
+                                        ))
+                                    })?;
+                                if observed_assignment != &assignment {
+                                    return Err(BorsukError::InvalidStorage(format!(
+                                        "positioned dense modality `{name}` substituted its catalog"
+                                    )));
+                                }
+                                LogicalCellId::new(
+                                    assignment.routing_epoch.expect("catalog assignment"),
+                                    *cell_ordinal,
+                                )
+                            } else {
+                                child.route_vector_to_logical_cell(vector)?
+                            };
+                            if !named_manifest.logical_cells().contains(&owner) {
+                                return Err(BorsukError::InvalidStorage(format!(
+                                    "positioned dense modality `{name}` owner is outside its pinned catalog"
+                                )));
+                            }
+                            projected.push(PositionedRoutePlanRow::routed(
+                                id.clone(),
+                                name,
+                                projection_kind,
+                                0,
+                                assignment.clone(),
+                                owner.cell_ordinal,
+                                *stamp,
+                            )?);
+                        }
+                    }
+                    VectorKind::Sparse => {
+                        if record.extra_sparse.contains_key(name) {
+                            projected.push(PositionedRoutePlanRow::term_partitioned(
+                                id.clone(),
+                                name,
+                                projection_kind,
+                                0,
+                                assignment.clone(),
+                                *stamp,
+                            )?);
+                        }
+                    }
+                    VectorKind::LateInteraction => {
+                        if let Some(matrix) = record.extra_multi_vectors.get(name) {
+                            let named_manifest = named_manifests.get(name).ok_or_else(|| {
+                                BorsukError::InvalidStorage(format!(
+                                    "positioned late-interaction modality `{name}` is missing its manifest"
+                                ))
+                            })?;
+                            let child = self.named.get(name).ok_or_else(|| {
+                                BorsukError::InvalidStorage(format!(
+                                    "positioned late-interaction modality `{name}` is not open"
+                                ))
+                            })?;
+                            for (token_ordinal, token) in matrix.tokens().enumerate() {
+                                let token_ordinal = u32::try_from(token_ordinal).map_err(|_| {
+                                    BorsukError::InvalidStorage(
+                                        "late-interaction token ordinal exceeds u32".to_string(),
+                                    )
+                                })?;
+                                let owner = if observed.is_some() {
+                                    let (observed_assignment, cell_ordinal) = observed_cells
+                                        .get(&(name.clone(), id.clone(), token_ordinal))
+                                        .ok_or_else(|| {
+                                            BorsukError::InvalidStorage(format!(
+                                                "positioned late-interaction modality `{name}` is missing token ordinal {token_ordinal}"
+                                            ))
+                                        })?;
+                                    if observed_assignment != &assignment {
+                                        return Err(BorsukError::InvalidStorage(format!(
+                                            "positioned late-interaction modality `{name}` substituted its catalog"
+                                        )));
+                                    }
+                                    LogicalCellId::new(
+                                        assignment.routing_epoch.expect("catalog assignment"),
+                                        *cell_ordinal,
+                                    )
+                                } else {
+                                    child.route_vector_to_logical_cell(token)?
+                                };
+                                if !named_manifest.logical_cells().contains(&owner) {
+                                    return Err(BorsukError::InvalidStorage(format!(
+                                        "positioned late-interaction modality `{name}` owner is outside its pinned catalog"
+                                    )));
+                                }
+                                projected.push(PositionedRoutePlanRow::routed(
+                                    id.clone(),
+                                    name,
+                                    projection_kind,
+                                    token_ordinal,
+                                    assignment.clone(),
+                                    owner.cell_ordinal,
+                                    *stamp,
+                                )?);
+                            }
+                        }
+                    }
+                }
+            }
+            groups.insert(name.clone(), (projection_kind, assignment, projected));
+        }
+        if primary_manifest.config.text {
+            let tokenizer = primary_manifest.text_tokenizer.as_deref().ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "text-enabled positioned manifest is missing its tokenizer identity"
+                        .to_string(),
+                )
+            })?;
+            let assignment = positioned_analyzer_assignment(
+                &schema_fingerprint,
+                HYBRID_TEXT_MODALITY,
+                tokenizer.as_bytes(),
+            )?;
+            let mut text_rows = Vec::new();
+            for (id, (record, _, stamp)) in &records_by_id {
+                if !record.text_term_ids.is_empty() {
+                    text_rows.push(PositionedRoutePlanRow::term_partitioned(
+                        id.clone(),
+                        HYBRID_TEXT_MODALITY,
+                        PositionedRouteProjectionKind::Text,
+                        0,
+                        assignment.clone(),
+                        *stamp,
+                    )?);
+                }
+            }
+            groups.insert(
+                HYBRID_TEXT_MODALITY.to_string(),
+                (PositionedRouteProjectionKind::Text, assignment, text_rows),
+            );
+        }
+
+        let mut rows = Vec::new();
+        for (modality, (projection_kind, assignment, mut projected)) in groups {
+            projected.sort_by(|left, right| {
+                (left.record_id.as_deref(), left.projected_ordinal)
+                    .cmp(&(right.record_id.as_deref(), right.projected_ordinal))
+            });
+            let logical_row_count = u64::try_from(projected.len()).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "positioned route projection count exceeds u64".to_string(),
+                )
+            })?;
+            rows.push(PositionedRoutePlanRow::summary(
+                &modality,
+                projection_kind,
+                assignment,
+                logical_row_count,
+                summary_stamp,
+            )?);
+            rows.extend(projected);
+        }
+        Ok(rows)
+    }
+
+    fn positioned_route_plan_for_batch(
+        &self,
+        batch: &CanonicalMutationBatch,
+        summary_stamp: MutationStamp,
+    ) -> Result<Vec<PositionedRoutePlanRow>> {
+        let record_runs = batch
+            .runs
+            .iter()
+            .filter(|run| {
+                run.modality == PRIMARY_MODALITY && run.input.kind == CellWalRunKind::Records
+            })
+            .collect::<Vec<_>>();
+        if record_runs.len() > 1 {
+            return Err(BorsukError::InvalidStorage(
+                "positioned transaction contains multiple primary record payloads".to_string(),
+            ));
+        }
+        let primary_records = record_runs
+            .first()
+            .map(|run| {
+                positioned_wal_records_from_table(
+                    run.input.bytes.clone(),
+                    "positioned-primary.parquet",
+                )
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let directory_runs = batch
+            .runs
+            .iter()
+            .filter(|run| {
+                run.modality == PRIMARY_MODALITY && run.input.kind == CellWalRunKind::IdDirectory
+            })
+            .collect::<Vec<_>>();
+        if directory_runs.len() != 1 {
+            return Err(BorsukError::InvalidStorage(
+                "positioned transaction must contain exactly one primary ID-directory payload"
+                    .to_string(),
+            ));
+        }
+        let id_directory = cell_wal_id_directory_from_slice(
+            &directory_runs[0].input.bytes,
+            "positioned ID-directory payload",
+        )?;
+        let named_manifests = self
+            .named
+            .iter()
+            .map(|(name, child)| (name.clone(), child.manifest.clone()))
+            .collect::<BTreeMap<_, _>>();
+        self.expected_positioned_route_plan(
+            &self.manifest,
+            &named_manifests,
+            &primary_records,
+            &id_directory,
+            summary_stamp,
+            None,
+        )
+    }
+
+    fn validate_positioned_route_plan_rows(
+        &self,
+        primary_manifest: &Manifest,
+        named_manifests: &BTreeMap<String, Manifest>,
+        primary_records: &[PositionedWalRecord],
+        id_directory: &[CellWalIdDirectoryEntry],
+        summary_stamp: MutationStamp,
+        rows: &[PositionedRoutePlanRow],
+    ) -> Result<()> {
+        let expected = self.expected_positioned_route_plan(
+            primary_manifest,
+            named_manifests,
+            primary_records,
+            id_directory,
+            summary_stamp,
+            Some(rows),
+        )?;
+        if rows != expected {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route plan disagrees with records, owners, catalogs, analyzers, or configured projections"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     fn prepare_positioned_tombstone_projections(
@@ -4971,6 +5433,242 @@ impl BorsukIndex {
         Ok(())
     }
 
+    fn validate_positioned_route_plan_envelope(
+        &self,
+        envelope: &crate::positioned_log::PositionedMutationEnvelope,
+        primary_manifest: &Manifest,
+        named_manifests: &BTreeMap<String, Manifest>,
+    ) -> Result<BTreeMap<String, Vec<u8>>> {
+        if envelope
+            .payloads
+            .iter()
+            .any(|payload| payload.format != PositionedPayloadFormat::Parquet)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "positioned index payloads must use standard Parquet".to_string(),
+            ));
+        }
+        let route_payloads = envelope
+            .payloads
+            .iter()
+            .filter(|payload| payload.modality == PositionedMutationModality::RoutePlan)
+            .collect::<Vec<_>>();
+        if route_payloads.len() != 1 {
+            return Err(BorsukError::InvalidStorage(
+                "positioned transaction must reference exactly one route-plan payload".to_string(),
+            ));
+        }
+        let route_payload = route_payloads[0];
+        if route_payload.role != "route_plan_v1"
+            || route_payload.format != PositionedPayloadFormat::Parquet
+            || !route_payload.id_bloom.is_empty()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route-plan payload has a noncanonical role, format, or bloom"
+                    .to_string(),
+            ));
+        }
+
+        let mut primary_payload = None;
+        let mut directory_payload = None;
+        let mut transaction_min = None::<MutationStamp>;
+        let mut transaction_max = None::<MutationStamp>;
+        let mut source_min = None::<MutationStamp>;
+        let mut version_digests = BTreeMap::<MutationVersion, [u8; 32]>::new();
+        let mut loaded = BTreeMap::<String, Vec<u8>>::new();
+        for payload in &envelope.payloads {
+            let bytes = self
+                .collection_storage
+                .read_bytes_with_cache_status_and_checksum(&payload.path, &payload.checksum)?
+                .bytes;
+            let metadata = positioned_payload_metadata(&bytes, payload.format, payload.rows)?;
+            if metadata.rows != payload.rows {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned payload row count changed during route validation".to_string(),
+                ));
+            }
+            let minimum = MutationStamp::new(
+                MutationVersion::from_parts(metadata.min_stamp.hlc, metadata.min_stamp.writer),
+                metadata.min_stamp.digest,
+            );
+            let maximum = MutationStamp::new(
+                MutationVersion::from_parts(metadata.max_stamp.hlc, metadata.max_stamp.writer),
+                metadata.max_stamp.digest,
+            );
+            transaction_min = Some(transaction_min.map_or(minimum, |current| {
+                if minimum.version() < current.version() {
+                    minimum
+                } else {
+                    current
+                }
+            }));
+            transaction_max = Some(transaction_max.map_or(maximum, |current| {
+                if maximum.version() > current.version() {
+                    maximum
+                } else {
+                    current
+                }
+            }));
+            if payload.modality != PositionedMutationModality::RoutePlan {
+                source_min = Some(source_min.map_or(minimum, |current| {
+                    if minimum.version() < current.version() {
+                        minimum
+                    } else {
+                        current
+                    }
+                }));
+            }
+            for ((hlc, writer), digest) in metadata.version_digests {
+                let version = MutationVersion::from_parts(hlc, writer);
+                if let Some(previous) = version_digests.insert(version, digest)
+                    && previous != digest
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned payloads disagree on one mutation digest".to_string(),
+                    ));
+                }
+            }
+            if payload.role == "transaction_metadata_v2" {
+                if payload.modality != PositionedMutationModality::IdDirectory
+                    || !payload.id_bloom.is_empty()
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned transaction metadata has a substituted modality or bloom"
+                            .to_string(),
+                    ));
+                }
+            } else if payload.role == "tombstones_by_modality_v1" {
+                if payload.modality != PositionedMutationModality::Tombstone
+                    || !payload.id_bloom.is_empty()
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned tombstone payload has a substituted modality or bloom"
+                            .to_string(),
+                    ));
+                }
+            } else if payload.modality != PositionedMutationModality::RoutePlan {
+                let role: PositionedRunRole =
+                    serde_json::from_str(&payload.role).map_err(|error| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned payload role is invalid: {error}"
+                        ))
+                    })?;
+                if role.version != 2 {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned payload role has an unsupported version".to_string(),
+                    ));
+                }
+                let expected_modality = match role.kind {
+                    CellWalRunKind::Records if role.modality == PRIMARY_MODALITY => {
+                        PositionedMutationModality::PrimaryDense
+                    }
+                    CellWalRunKind::Records => match primary_manifest
+                        .config
+                        .named_vectors
+                        .get(&role.modality)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(format!(
+                                "positioned record role references unknown modality `{}`",
+                                role.modality
+                            ))
+                        })?
+                        .kind
+                    {
+                        VectorKind::Dense => PositionedMutationModality::NamedDense,
+                        VectorKind::Sparse => PositionedMutationModality::Sparse,
+                        VectorKind::LateInteraction => PositionedMutationModality::LateInteraction,
+                    },
+                    CellWalRunKind::IdDirectory if role.modality == PRIMARY_MODALITY => {
+                        PositionedMutationModality::IdDirectory
+                    }
+                    CellWalRunKind::IdDirectory => {
+                        return Err(BorsukError::InvalidStorage(
+                            "positioned ID-directory role must belong to the primary modality"
+                                .to_string(),
+                        ));
+                    }
+                    CellWalRunKind::Tombstones => PositionedMutationModality::Tombstone,
+                };
+                if payload.modality != expected_modality {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned payload modality disagrees with its decoded role and kind"
+                            .to_string(),
+                    ));
+                }
+                if role.modality == PRIMARY_MODALITY && role.kind == CellWalRunKind::Records {
+                    if primary_payload.replace(payload).is_some() {
+                        return Err(BorsukError::InvalidStorage(
+                            "positioned transaction repeats its primary record payload".to_string(),
+                        ));
+                    }
+                } else if role.modality == PRIMARY_MODALITY
+                    && role.kind == CellWalRunKind::IdDirectory
+                    && directory_payload.replace(payload).is_some()
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned transaction repeats its ID-directory payload".to_string(),
+                    ));
+                }
+            }
+            loaded.insert(payload.path.clone(), bytes);
+        }
+        let envelope_min = MutationStamp::new(
+            MutationVersion::from_parts(envelope.min_stamp.hlc, envelope.min_stamp.writer),
+            envelope.min_stamp.digest,
+        );
+        let envelope_max = MutationStamp::new(
+            MutationVersion::from_parts(envelope.max_stamp.hlc, envelope.max_stamp.writer),
+            envelope.max_stamp.digest,
+        );
+        if transaction_min != Some(envelope_min) || transaction_max != Some(envelope_max) {
+            return Err(BorsukError::InvalidStorage(
+                "positioned envelope stamp bounds disagree with its payloads".to_string(),
+            ));
+        }
+        let directory_payload = directory_payload.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "positioned transaction is missing its primary ID-directory payload".to_string(),
+            )
+        })?;
+        let primary_records = primary_payload
+            .map(|payload| {
+                positioned_wal_records_from_table(
+                    loaded
+                        .get(&payload.path)
+                        .expect("loaded primary payload")
+                        .clone(),
+                    &payload.path,
+                )
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let id_directory = cell_wal_id_directory_from_slice(
+            loaded
+                .get(&directory_payload.path)
+                .expect("loaded ID-directory payload"),
+            &directory_payload.path,
+        )?;
+        let rows = positioned_route_plan_from_parquet(
+            loaded
+                .get(&route_payload.path)
+                .expect("loaded route-plan payload"),
+        )?;
+        let source_min = source_min.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "positioned transaction has no non-route mutation payload".to_string(),
+            )
+        })?;
+        self.validate_positioned_route_plan_rows(
+            primary_manifest,
+            named_manifests,
+            &primary_records,
+            &id_directory,
+            source_min,
+            &rows,
+        )?;
+        Ok(loaded)
+    }
+
     fn prepare_positioned_snapshot(
         &self,
         collection_snapshot: &LoadedCollectionSnapshot,
@@ -4986,39 +5684,70 @@ impl BorsukIndex {
         let snapshot = writer
             .reader()
             .snapshot_for_collection_generation(generation)?;
+        let authority = PositionedSnapshotAuthority {
+            collection_checksum: collection_snapshot.checksum.clone(),
+            schema_fingerprint: collection_snapshot.snapshot.schema_fingerprint.clone(),
+            manifest_refs: collection_snapshot.snapshot.modalities.clone(),
+        };
+        let can_reuse = self.positioned_prepared_authority.as_ref() == Some(&authority);
         let mut prepared = PreparedPositionedSnapshot {
+            primary: PreparedPositionedModalitySnapshot::default(),
             named: named_manifests
                 .keys()
                 .map(|name| (name.clone(), PreparedPositionedModalitySnapshot::default()))
                 .collect(),
-            ..PreparedPositionedSnapshot::default()
+            primary_bm25_deltas: BTreeMap::new(),
+            fully_materialized_positions: Vec::new(),
+            authority,
+            envelopes: BTreeMap::new(),
         };
         for (envelope, descriptor_checksum) in snapshot
             .transactions
             .into_iter()
             .zip(snapshot.envelope_checksums)
         {
-            let mut fully_materialized = true;
             if envelope.schema_fingerprint != collection_schema_fingerprint(primary_manifest) {
                 return Err(BorsukError::InvalidStorage(format!(
                     "positioned transaction `{}` has an incompatible schema fingerprint",
                     envelope.transaction_id
                 )));
             }
+            if can_reuse
+                && let Some(contribution) =
+                    self.positioned_prepared_envelopes.get(&descriptor_checksum)
+            {
+                Self::merge_prepared_positioned_envelope(&mut prepared, contribution);
+                prepared
+                    .envelopes
+                    .insert(descriptor_checksum, contribution.clone());
+                continue;
+            }
+            let mut contribution = PreparedPositionedEnvelope {
+                named: named_manifests
+                    .keys()
+                    .map(|name| (name.clone(), PreparedPositionedModalitySnapshot::default()))
+                    .collect(),
+                ..PreparedPositionedEnvelope::default()
+            };
+            let mut fully_materialized = true;
+            let loaded = self.validate_positioned_route_plan_envelope(
+                &envelope,
+                primary_manifest,
+                named_manifests,
+            )?;
             let mut by_modality = BTreeMap::<String, Vec<PreparedCellWalRun>>::new();
             let mut transaction_metadata = BTreeMap::<String, StagedPositionedMetadata>::new();
             for payload in &envelope.payloads {
+                if payload.modality == PositionedMutationModality::RoutePlan {
+                    continue;
+                }
                 if payload.role == "transaction_metadata_v2" {
-                    let bytes = self
-                        .collection_storage
-                        .read_bytes_with_cache_status_and_checksum(
-                            &payload.path,
-                            &payload.checksum,
-                        )?
-                        .bytes;
+                    let bytes = loaded
+                        .get(&payload.path)
+                        .expect("validated positioned payload");
                     let mut active_modality = None::<String>;
                     let mut last_term = None::<u32>;
-                    for row in positioned_transaction_metadata_from_parquet(&bytes)? {
+                    for row in positioned_transaction_metadata_from_parquet(bytes)? {
                         if row.term.is_none() {
                             if transaction_metadata.contains_key(&row.modality)
                                 || row.document_frequency_delta != 0
@@ -5070,15 +5799,11 @@ impl BorsukIndex {
                     continue;
                 }
                 if payload.role == "tombstones_by_modality_v1" {
-                    let bytes = self
-                        .collection_storage
-                        .read_bytes_with_cache_status_and_checksum(
-                            &payload.path,
-                            &payload.checksum,
-                        )?
-                        .bytes;
+                    let bytes = loaded
+                        .get(&payload.path)
+                        .expect("validated positioned payload");
                     let mut grouped = BTreeMap::<String, Vec<PositionedTombstoneRow>>::new();
-                    for row in positioned_tombstones_from_parquet(&bytes)? {
+                    for row in positioned_tombstones_from_parquet(bytes)? {
                         grouped.entry(row.modality.clone()).or_default().push(row);
                     }
                     for (modality, rows) in grouped {
@@ -5141,7 +5866,7 @@ impl BorsukIndex {
                             "positioned payload role is invalid: {error}"
                         ))
                     })?;
-                if role.version != 1 {
+                if role.version != 2 {
                     return Err(BorsukError::InvalidStorage(
                         "positioned payload role has an unsupported version".to_string(),
                     ));
@@ -5150,14 +5875,10 @@ impl BorsukIndex {
                     BorsukError::InvalidStorage("positioned payload rows exceed usize".to_string())
                 })?;
                 let metadata = if role.kind == CellWalRunKind::Tombstones {
-                    let bytes = self
-                        .collection_storage
-                        .read_bytes_with_cache_status_and_checksum(
-                            &payload.path,
-                            &payload.checksum,
-                        )?
-                        .bytes;
-                    let entries = tombstone_ids_from_parquet(&bytes)?;
+                    let bytes = loaded
+                        .get(&payload.path)
+                        .expect("validated positioned payload");
+                    let entries = tombstone_ids_from_parquet(bytes)?;
                     let seconds = role.tombstone_created_at_seconds.ok_or_else(|| {
                         BorsukError::InvalidStorage(
                             "positioned tombstone role is missing created-at seconds".to_string(),
@@ -5198,12 +5919,25 @@ impl BorsukIndex {
                     }
                     Vec::new()
                 };
+                let target_manifest = if role.modality == PRIMARY_MODALITY {
+                    primary_manifest
+                } else {
+                    named_manifests.get(&role.modality).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned transaction references unknown modality `{}`",
+                            role.modality
+                        ))
+                    })?
+                };
                 by_modality
                     .entry(role.modality)
                     .or_default()
                     .push(PreparedCellWalRun {
                         transaction_id: envelope.transaction_id.clone(),
-                        cell: LogicalCellId::new(role.routing_epoch, role.cell_ordinal),
+                        // Bundle-cell placement is non-authoritative. Exact row
+                        // ownership was checked from the primary payload,
+                        // ID-directory table, and route plan above.
+                        cell: LogicalCellId::new(target_manifest.routing_epoch, 0),
                         lane: 0,
                         kind: role.kind,
                         metadata,
@@ -5249,9 +5983,9 @@ impl BorsukIndex {
                         .unwrap_or_default(),
                 };
                 let target = if is_primary {
-                    &mut prepared.primary
+                    &mut contribution.primary
                 } else {
-                    prepared.named.get_mut(&modality).ok_or_else(|| {
+                    contribution.named.get_mut(&modality).ok_or_else(|| {
                         BorsukError::InvalidStorage(format!(
                             "positioned transaction references unknown modality `{modality}`"
                         ))
@@ -5272,7 +6006,7 @@ impl BorsukIndex {
                 && let Some(metadata) = transaction_metadata.get(PRIMARY_MODALITY)
                 && !metadata.bm25_stats_delta.is_empty()
             {
-                prepared.primary_bm25_deltas.insert(
+                contribution.primary_bm25_deltas.insert(
                     envelope.transaction_id.clone(),
                     metadata.bm25_stats_delta.clone(),
                 );
@@ -5301,7 +6035,7 @@ impl BorsukIndex {
                             "positioned projection references missing modality `{name}`"
                         ))
                     })?;
-                    let target = prepared.named.get_mut(name).ok_or_else(|| {
+                    let target = contribution.named.get_mut(name).ok_or_else(|| {
                         BorsukError::InvalidStorage(format!(
                             "positioned projection references missing modality `{name}`"
                         ))
@@ -5343,10 +6077,12 @@ impl BorsukIndex {
                 }
             }
             if fully_materialized {
-                prepared
+                contribution
                     .fully_materialized_positions
                     .push(envelope.position);
             }
+            Self::merge_prepared_positioned_envelope(&mut prepared, &contribution);
+            prepared.envelopes.insert(descriptor_checksum, contribution);
         }
         prepared
             .primary
@@ -5358,6 +6094,38 @@ impl BorsukIndex {
                 .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
         }
         Ok(prepared)
+    }
+
+    fn merge_prepared_positioned_envelope(
+        prepared: &mut PreparedPositionedSnapshot,
+        contribution: &PreparedPositionedEnvelope,
+    ) {
+        prepared
+            .primary
+            .transactions
+            .extend(contribution.primary.transactions.iter().cloned());
+        prepared
+            .primary
+            .run_identities
+            .extend(contribution.primary.run_identities.iter().cloned());
+        for (name, modality) in &contribution.named {
+            let target = prepared
+                .named
+                .get_mut(name)
+                .expect("prepared envelope modality belongs to the pinned schema");
+            target
+                .transactions
+                .extend(modality.transactions.iter().cloned());
+            target
+                .run_identities
+                .extend(modality.run_identities.iter().cloned());
+        }
+        prepared
+            .primary_bm25_deltas
+            .extend(contribution.primary_bm25_deltas.clone());
+        prepared
+            .fully_materialized_positions
+            .extend(contribution.fully_materialized_positions.iter().copied());
     }
 
     fn prepare_positioned_derived_state(
@@ -5407,16 +6175,26 @@ impl BorsukIndex {
         prepared: PreparedPositionedSnapshot,
         mut derived: PreparedPositionedDerivedState,
     ) {
-        self.cell_wal_snapshot = prepared.primary.transactions;
-        self.positioned_run_identities = prepared.primary.run_identities;
-        self.positioned_materialized_candidates = prepared.fully_materialized_positions;
-        self.positioned_bm25_deltas = prepared.primary_bm25_deltas;
+        let PreparedPositionedSnapshot {
+            primary,
+            named,
+            primary_bm25_deltas,
+            fully_materialized_positions,
+            authority,
+            envelopes,
+        } = prepared;
+        self.positioned_prepared_authority = Some(authority);
+        self.positioned_prepared_envelopes = envelopes;
+        self.cell_wal_snapshot = primary.transactions;
+        self.positioned_run_identities = primary.run_identities;
+        self.positioned_materialized_candidates = fully_materialized_positions;
+        self.positioned_bm25_deltas = primary_bm25_deltas;
         self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
         self.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
         self.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
         self.resident_global_mutations = derived.primary_resident_global_mutations;
-        for (name, modality) in prepared.named {
+        for (name, modality) in named {
             let child = self
                 .named
                 .get_mut(&name)
@@ -5559,23 +6337,40 @@ impl BorsukIndex {
                 rows,
             });
         }
-        let stamp = payloads
-            .first()
-            .map(|payload| {
-                positioned_payload_metadata(&payload.bytes, payload.format, payload.rows)
-            })
-            .transpose()?
-            .map(|metadata| {
-                MutationStamp::new(
-                    MutationVersion::from_parts(metadata.min_stamp.hlc, metadata.min_stamp.writer),
-                    metadata.min_stamp.digest,
-                )
-            })
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "positioned mutation has no typed mutation rows".to_string(),
-                )
-            })?;
+        let mut stamp = None::<MutationStamp>;
+        for payload in &payloads {
+            let metadata =
+                positioned_payload_metadata(&payload.bytes, payload.format, payload.rows)?;
+            let candidate = MutationStamp::new(
+                MutationVersion::from_parts(metadata.min_stamp.hlc, metadata.min_stamp.writer),
+                metadata.min_stamp.digest,
+            );
+            stamp = Some(stamp.map_or(candidate, |current| {
+                if candidate.version() < current.version() {
+                    candidate
+                } else {
+                    current
+                }
+            }));
+        }
+        let stamp = stamp.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "positioned mutation has no typed mutation rows".to_string(),
+            )
+        })?;
+        let route_rows = self.positioned_route_plan_for_batch(&batch, stamp)?;
+        let route_bytes = positioned_route_plan_to_parquet(&route_rows)?;
+        let route_row_count = u64::try_from(route_rows.len()).map_err(|_| {
+            BorsukError::InvalidStorage("positioned route-plan rows exceed u64".to_string())
+        })?;
+        payloads.push(PositionedMutationPayloadInput {
+            modality: PositionedMutationModality::RoutePlan,
+            role: "route_plan_v1".to_string(),
+            id_bloom: Vec::new(),
+            format: PositionedPayloadFormat::Parquet,
+            rows: route_row_count,
+            bytes: route_bytes,
+        });
         let metadata_rows = batch
             .metadata
             .iter()
@@ -9875,13 +10670,13 @@ impl BorsukIndex {
     /// un-flushed WAL tail fully searchable without building a sidecar. Round-trips
     /// id, dense vector, generation, metadata, text, and sparse encoding. This does
     /// NOT build a graph, sidecars, or routing summary — just one PUT.
-    fn wal_object_bytes(&self, records: &[VectorRecord]) -> Result<(Vec<u8>, String)> {
+    fn wal_object_bytes(&self, records: &[PositionedWalRecord]) -> Result<(Vec<u8>, String)> {
         let format = self
             .manifest
             .build_config
             .physical_layout
             .resolve(crate::PhysicalObjectRole::WalRun)?;
-        let bytes = wal_records_to_table(
+        let bytes = positioned_wal_records_to_table(
             records,
             self.manifest.config.dimensions,
             self.manifest.build_config.vector_element_type,
@@ -9904,6 +10699,7 @@ impl BorsukIndex {
     ) -> Result<AddReport> {
         let vectors_added = records.len();
         let mut inputs = Vec::new();
+        let primary_modality = self.manifest_reference.modality == PRIMARY_MODALITY;
         let bundle_cell = self
             .manifest
             .logical_cells()
@@ -9914,24 +10710,31 @@ impl BorsukIndex {
         let mut bundled_directory = Vec::<CellWalIdDirectoryEntry>::with_capacity(records.len());
         let mut replaced_ids = HashSet::new();
         for record in records {
-            let owner = self.route_vector_to_logical_cell(&record.vector)?;
             replaced_ids.insert(record.id.as_bytes().to_vec());
-            bundled_directory.push(CellWalIdDirectoryEntry {
-                id: record.id.as_bytes().to_vec(),
-                owner,
-                state: MutationState::new(
-                    record.mutation_stamp().ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "record `{}` is missing its canonical mutation stamp",
-                            record.id
-                        ))
-                    })?,
-                    MutationOperation::Put,
-                ),
-            });
-            bundled_records.push(record);
+            let stamp = record.mutation_stamp().ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "record `{}` is missing its canonical mutation stamp",
+                    record.id
+                ))
+            })?;
+            if primary_modality {
+                let owner = self.route_vector_to_logical_cell(&record.vector)?;
+                bundled_directory.push(CellWalIdDirectoryEntry {
+                    id: record.id.as_bytes().to_vec(),
+                    owner,
+                    state: MutationState::new(stamp, MutationOperation::Put),
+                });
+                bundled_records.push((record, owner.routing_epoch, owner.cell_ordinal));
+            }
         }
-        if !bundled_records.is_empty() {
+        if primary_modality && !bundled_records.is_empty() {
+            bundled_records.sort_by(|left, right| {
+                (left.1, left.2, left.0.id.as_bytes()).cmp(&(
+                    right.1,
+                    right.2,
+                    right.0.id.as_bytes(),
+                ))
+            });
             let (bytes, extension) = self.wal_object_bytes(&bundled_records)?;
             inputs.push(CellWalRunInput {
                 cell: bundle_cell,
@@ -9955,8 +10758,13 @@ impl BorsukIndex {
                 .map(|(id, _)| id)
                 .filter(|id| !replaced_ids.contains(*id))
                 .collect::<Vec<_>>();
-            let previous_entries = self
-                .cell_wal_id_directory_entries(tombstone_only_ids.iter().map(|id| id.as_slice()))?;
+            let previous_entries = if primary_modality {
+                self.cell_wal_id_directory_entries(
+                    tombstone_only_ids.iter().map(|id| id.as_slice()),
+                )?
+            } else {
+                HashMap::new()
+            };
             let mut bundled_tombstones = Vec::with_capacity(tombstone_entries.len());
             for (id, state) in tombstone_entries {
                 let previous_owner = previous_entries
@@ -9964,7 +10772,7 @@ impl BorsukIndex {
                     .filter(|entry| !entry.state.is_deleted())
                     .map_or_else(|| self.id_directory_partition(&id), |entry| entry.owner);
                 bundled_tombstones.push((id.clone(), state));
-                if state.is_deleted() && !replaced_ids.contains(&id) {
+                if primary_modality && state.is_deleted() && !replaced_ids.contains(&id) {
                     bundled_directory.push(CellWalIdDirectoryEntry {
                         id,
                         owner: previous_owner,
@@ -9989,7 +10797,7 @@ impl BorsukIndex {
                 });
             }
         }
-        if !bundled_directory.is_empty() {
+        if primary_modality && !bundled_directory.is_empty() {
             // V12 partitions ownership row-by-row inside one typed table. A
             // transaction touching thousands of claim/cell partitions still
             // consumes one bounded payload reference, never one object per
@@ -10010,7 +10818,7 @@ impl BorsukIndex {
             });
         }
         let metadata = StagedPositionedMetadata {
-            logical_record_count: u64::try_from(bundled_records.len()).map_err(|_| {
+            logical_record_count: u64::try_from(vectors_added).map_err(|_| {
                 BorsukError::InvalidStorage(
                     "positioned logical record count exceeds u64".to_string(),
                 )
@@ -25942,6 +26750,230 @@ mod tests {
     }
 
     #[test]
+    fn positioned_route_validation_rejects_substitution_mismatch_and_payload_cardinality() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: true,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("routed", vec![1.0, 0.0]).with_text("alpha beta"),
+            ])
+            .unwrap();
+
+        let snapshot = index
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot()
+            .unwrap();
+        let envelope = snapshot.transactions.last().unwrap().clone();
+        let named_manifests = BTreeMap::new();
+        let loaded = index
+            .validate_positioned_route_plan_envelope(&envelope, &index.manifest, &named_manifests)
+            .unwrap();
+        let primary_payload = envelope
+            .payloads
+            .iter()
+            .find(|payload| payload.modality == PositionedMutationModality::PrimaryDense)
+            .unwrap();
+        let directory_payload = envelope
+            .payloads
+            .iter()
+            .find(|payload| {
+                payload.modality == PositionedMutationModality::IdDirectory
+                    && payload.role.starts_with('{')
+            })
+            .unwrap();
+        let route_payload = envelope
+            .payloads
+            .iter()
+            .find(|payload| payload.modality == PositionedMutationModality::RoutePlan)
+            .unwrap();
+        let primary_records = positioned_wal_records_from_table(
+            loaded.get(&primary_payload.path).unwrap().clone(),
+            &primary_payload.path,
+        )
+        .unwrap();
+        let id_directory = cell_wal_id_directory_from_slice(
+            loaded.get(&directory_payload.path).unwrap(),
+            &directory_payload.path,
+        )
+        .unwrap();
+        let rows =
+            positioned_route_plan_from_parquet(loaded.get(&route_payload.path).unwrap()).unwrap();
+        let summary_stamp = MutationStamp::new(
+            MutationVersion::from_parts(envelope.min_stamp.hlc, envelope.min_stamp.writer),
+            envelope.min_stamp.digest,
+        );
+        let rejects = |candidate: &[PositionedRoutePlanRow]| {
+            index
+                .validate_positioned_route_plan_rows(
+                    &index.manifest,
+                    &named_manifests,
+                    &primary_records,
+                    &id_directory,
+                    summary_stamp,
+                    candidate,
+                )
+                .is_err()
+        };
+
+        let mut substituted_catalog = rows.clone();
+        for row in substituted_catalog
+            .iter_mut()
+            .filter(|row| row.modality == "primary")
+        {
+            row.assignment.checksum = [0x55; 32];
+        }
+        assert!(rejects(&substituted_catalog));
+
+        let mut substituted_analyzer = rows.clone();
+        for row in substituted_analyzer
+            .iter_mut()
+            .filter(|row| row.modality == HYBRID_TEXT_MODALITY)
+        {
+            row.assignment.checksum = [0x66; 32];
+        }
+        assert!(rejects(&substituted_analyzer));
+
+        let mut primary_owner_mismatch = rows.clone();
+        primary_owner_mismatch
+            .iter_mut()
+            .find(|row| row.modality == "primary" && row.record_id.is_some())
+            .unwrap()
+            .cell_ordinal = Some(u32::MAX);
+        assert!(rejects(&primary_owner_mismatch));
+
+        let mut primary_payload_mismatch = primary_records.clone();
+        primary_payload_mismatch[0].2 = u32::MAX;
+        assert!(
+            index
+                .validate_positioned_route_plan_rows(
+                    &index.manifest,
+                    &named_manifests,
+                    &primary_payload_mismatch,
+                    &id_directory,
+                    summary_stamp,
+                    &rows,
+                )
+                .is_err()
+        );
+
+        let mut directory_mismatch = id_directory.clone();
+        directory_mismatch[0].owner =
+            LogicalCellId::new(directory_mismatch[0].owner.routing_epoch, u32::MAX);
+        assert!(
+            index
+                .validate_positioned_route_plan_rows(
+                    &index.manifest,
+                    &named_manifests,
+                    &primary_records,
+                    &directory_mismatch,
+                    summary_stamp,
+                    &rows,
+                )
+                .is_err()
+        );
+
+        let mut id_mismatch = rows.clone();
+        id_mismatch
+            .iter_mut()
+            .find(|row| row.modality == "primary" && row.record_id.is_some())
+            .unwrap()
+            .record_id = Some(b"substituted-id".to_vec());
+        assert!(rejects(&id_mismatch));
+
+        let mut missing = envelope.clone();
+        missing
+            .payloads
+            .retain(|payload| payload.modality != PositionedMutationModality::RoutePlan);
+        assert!(
+            index
+                .validate_positioned_route_plan_envelope(
+                    &missing,
+                    &index.manifest,
+                    &named_manifests,
+                )
+                .is_err()
+        );
+
+        let mut extra = envelope.clone();
+        extra.payloads.push(route_payload.clone());
+        assert!(
+            index
+                .validate_positioned_route_plan_envelope(&extra, &index.manifest, &named_manifests,)
+                .is_err()
+        );
+
+        let mut obsolete_role_authority = envelope.clone();
+        let role = &mut obsolete_role_authority
+            .payloads
+            .iter_mut()
+            .find(|payload| payload.modality == PositionedMutationModality::PrimaryDense)
+            .unwrap()
+            .role;
+        let mut role_json = serde_json::from_str::<serde_json::Value>(role).unwrap();
+        role_json["routing_epoch"] = serde_json::json!(1);
+        role_json["cell_ordinal"] = serde_json::json!(0);
+        *role = serde_json::to_string(&role_json).unwrap();
+        let obsolete_error = index
+            .validate_positioned_route_plan_envelope(
+                &obsolete_role_authority,
+                &index.manifest,
+                &named_manifests,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(obsolete_error.contains("unknown field"), "{obsolete_error}");
+
+        let mut non_parquet = envelope.clone();
+        non_parquet
+            .payloads
+            .iter_mut()
+            .find(|payload| payload.modality == PositionedMutationModality::PrimaryDense)
+            .unwrap()
+            .format = PositionedPayloadFormat::ArrowIpc;
+        let format_error = index
+            .validate_positioned_route_plan_envelope(
+                &non_parquet,
+                &index.manifest,
+                &named_manifests,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            format_error.contains("must use standard Parquet"),
+            "{format_error}"
+        );
+
+        let mut substituted_modality = envelope;
+        substituted_modality
+            .payloads
+            .iter_mut()
+            .find(|payload| payload.modality == PositionedMutationModality::PrimaryDense)
+            .unwrap()
+            .modality = PositionedMutationModality::NamedDense;
+        assert!(
+            index
+                .validate_positioned_route_plan_envelope(
+                    &substituted_modality,
+                    &index.manifest,
+                    &named_manifests,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn gc_retains_consumed_wal_payloads_for_readers_pinned_before_flush() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
@@ -28569,8 +29601,7 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_manifest_refresh_rejects_missing_eager_positioned_metadata_without_swapping_view()
-    {
+    fn unchanged_refresh_reuses_authenticated_payload_but_cold_open_rescrubs_after_loss() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut writer = BorsukIndex::create(IndexConfig {
@@ -28663,7 +29694,11 @@ mod tests {
             .expect("the loaded delete transaction must reference eager tombstone metadata");
         std::fs::remove_file(directory.path().join(&broken_payload.path)).unwrap();
 
-        let error = reader.refresh().unwrap_err();
+        assert!(
+            !reader.refresh().unwrap(),
+            "refresh synchronizes immutable authority; it is not a perpetual payload scrub"
+        );
+        let error = BorsukIndex::open(&uri).unwrap_err();
         assert!(error.to_string().contains("not found"), "{error}");
         assert_eq!(
             serde_json::to_value(&reader.manifest).unwrap(),
@@ -28704,18 +29739,47 @@ mod tests {
                 .snapshot_key,
             resident_snapshot_key_before
         );
-        assert_eq!(
-            reader
-                .search_ids(&[0.25; 8], SearchOptions::exact(256))
-                .unwrap(),
-            primary_hits_before
+    }
+
+    #[test]
+    fn installed_positioned_record_payload_loss_fails_closed_on_query() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        writer
+            .add(vec![VectorRecord::new("visible", vec![1.0, 0.0])])
+            .unwrap();
+        let mut reader = BorsukIndex::open(&uri).unwrap();
+        let snapshot = reader
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot()
+            .unwrap();
+        let record_payload = snapshot
+            .transactions
+            .iter()
+            .flat_map(|transaction| &transaction.payloads)
+            .find(|payload| payload.modality == PositionedMutationModality::PrimaryDense)
+            .unwrap();
+        std::fs::remove_file(directory.path().join(&record_payload.path)).unwrap();
+
+        assert!(
+            !reader.refresh().unwrap(),
+            "incremental refresh reuses the installed immutable contribution"
         );
-        assert_eq!(
-            reader.named["image"]
-                .search_ids(&[1_000.25; 8], SearchOptions::exact(256))
-                .unwrap(),
-            named_hits_before
-        );
+        let error = reader.get_vector("visible").unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error}");
     }
 
     #[test]

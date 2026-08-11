@@ -17,12 +17,13 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
     GarbageCollectionOptions, IndexConfig, LeafCapability, LeafMode, Manifest, OpenOptions,
-    QuantizerKind, RebuildOptions, RecallGuarantee, RequestCounts, SearchMode, SearchOptions,
+    PositionedLogWriter, PositionedMutationModality, PositionedMutationPayloadInput, QuantizerKind,
+    RebuildOptions, RecallGuarantee, RequestCounts, SearchMode, SearchOptions,
     SearchTerminationReason, SegmentSummary, VectorElementType, VectorKind, VectorMetric,
     VectorRecord, VectorSpec, WalConfig, leaf_mode_names, vector_records_to_parquet,
 };
 use futures_util::TryStreamExt;
-use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
+use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path as ObjectPath};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 
@@ -2368,6 +2369,519 @@ fn add_with_report_describes_positioned_append_telemetry() {
     assert_eq!(report.graph_payloads_written, 0);
     assert_eq!(report.manifest_tables_written, 0);
     assert_eq!(report.routing_pages_written, 0);
+}
+
+#[test]
+fn positioned_route_plan_covers_mixed_modalities_immediately_and_after_cold_reopen() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (instrumented, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(instrumented);
+    let uri = "memory:///mixed-positioned-route-plan";
+    let named_vectors = BTreeMap::from([
+        (
+            "dense".to_string(),
+            VectorSpec {
+                dimensions: 2,
+                metric: VectorMetric::Euclidean,
+                kind: VectorKind::Dense,
+                element_type: VectorElementType::Float32,
+            },
+        ),
+        (
+            "late".to_string(),
+            VectorSpec {
+                dimensions: 2,
+                metric: VectorMetric::InnerProduct,
+                kind: VectorKind::LateInteraction,
+                element_type: VectorElementType::Float32,
+            },
+        ),
+        (
+            "omitted".to_string(),
+            VectorSpec {
+                dimensions: 2,
+                metric: VectorMetric::Euclidean,
+                kind: VectorKind::Dense,
+                element_type: VectorElementType::Float32,
+            },
+        ),
+        (
+            "sparse".to_string(),
+            VectorSpec {
+                dimensions: 16,
+                metric: VectorMetric::InnerProduct,
+                kind: VectorKind::Sparse,
+                element_type: VectorElementType::Float32,
+            },
+        ),
+    ]);
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 32,
+            ram_budget_bytes: None,
+            text: true,
+            named_vectors,
+        },
+    )
+    .unwrap();
+    operations.clear();
+    let record = VectorRecord::new("complete", vec![1.0, 0.0])
+        .with_named_vector("dense", vec![0.0, 1.0])
+        .with_named_sparse_vector("sparse", vec![2, 7], vec![1.0, 3.0])
+        .unwrap()
+        .with_late_interaction("late", vec![vec![1.0, 0.0], vec![0.0, 1.0]])
+        .unwrap()
+        .with_text("alpha beta");
+    index
+        .add(vec![
+            record,
+            VectorRecord::new("primary-only", vec![0.0, 1.0]),
+        ])
+        .unwrap();
+    assert_eq!(index.get_vector("complete").unwrap(), Some(vec![1.0, 0.0]));
+
+    let snapshot = PositionedLogWriter::open(uri, Arc::clone(&store), 1)
+        .unwrap()
+        .reader()
+        .snapshot()
+        .unwrap();
+    let envelope = snapshot.transactions.last().unwrap();
+    let plans = envelope
+        .payloads
+        .iter()
+        .filter(|payload| payload.modality == PositionedMutationModality::RoutePlan)
+        .collect::<Vec<_>>();
+    assert_eq!(plans.len(), 1);
+    assert_eq!(plans[0].role, "route_plan_v1");
+    assert_eq!(plans[0].format, borsuk::PositionedPayloadFormat::Parquet);
+    assert_eq!(
+        plans[0].rows, 13,
+        "six summaries plus seven assignment rows"
+    );
+    let route_bytes = read_object_bytes(&inner, &plans[0].path);
+    let route_batch = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(route_bytes))
+        .unwrap()
+        .build()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    let row_kinds = route_batch
+        .column_by_name("row_kind")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<UInt8Array>()
+        .unwrap();
+    let record_ids = route_batch
+        .column_by_name("record_id")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
+    let modalities = route_batch
+        .column_by_name("modality")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let projection_kinds = route_batch
+        .column_by_name("projection_kind")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<UInt8Array>()
+        .unwrap();
+    let projected_ordinals = route_batch
+        .column_by_name("projected_ordinal")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .unwrap();
+    let assignment_kinds = route_batch
+        .column_by_name("assignment_kind")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<UInt8Array>()
+        .unwrap();
+    let routing_epochs = route_batch
+        .column_by_name("routing_epoch")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    let cell_ordinals = route_batch
+        .column_by_name("cell_ordinal")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .unwrap();
+    let logical_counts = route_batch
+        .column_by_name("logical_row_count")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap();
+    let mut summaries = BTreeMap::new();
+    let mut assignments = Vec::new();
+    for row in 0..route_batch.num_rows() {
+        let modality = modalities.value(row).to_string();
+        if row_kinds.value(row) == 0 {
+            assert!(record_ids.is_null(row));
+            assert!(projected_ordinals.is_null(row));
+            summaries.insert(
+                modality,
+                (
+                    projection_kinds.value(row),
+                    assignment_kinds.value(row),
+                    logical_counts.value(row),
+                    (!routing_epochs.is_null(row)).then(|| routing_epochs.value(row)),
+                ),
+            );
+        } else {
+            assignments.push((
+                modality,
+                record_ids.value(row).to_vec(),
+                projection_kinds.value(row),
+                projected_ordinals.value(row),
+                (!routing_epochs.is_null(row)).then(|| routing_epochs.value(row)),
+                (!cell_ordinals.is_null(row)).then(|| cell_ordinals.value(row)),
+            ));
+        }
+    }
+    assert_eq!(
+        summaries,
+        BTreeMap::from([
+            ("@text".to_string(), (3, 1, 1, None)),
+            ("dense".to_string(), (1, 0, 1, Some(1))),
+            ("late".to_string(), (4, 0, 2, Some(1))),
+            ("omitted".to_string(), (1, 0, 0, Some(1))),
+            ("primary".to_string(), (0, 0, 2, Some(1))),
+            ("sparse".to_string(), (2, 1, 1, None)),
+        ])
+    );
+    assert_eq!(
+        assignments,
+        vec![
+            ("@text".to_string(), b"complete".to_vec(), 3, 0, None, None),
+            (
+                "dense".to_string(),
+                b"complete".to_vec(),
+                1,
+                0,
+                Some(1),
+                Some(0),
+            ),
+            (
+                "late".to_string(),
+                b"complete".to_vec(),
+                4,
+                0,
+                Some(1),
+                Some(0),
+            ),
+            (
+                "late".to_string(),
+                b"complete".to_vec(),
+                4,
+                1,
+                Some(1),
+                Some(0),
+            ),
+            (
+                "primary".to_string(),
+                b"complete".to_vec(),
+                0,
+                0,
+                Some(1),
+                Some(0),
+            ),
+            (
+                "primary".to_string(),
+                b"primary-only".to_vec(),
+                0,
+                0,
+                Some(1),
+                Some(0),
+            ),
+            ("sparse".to_string(), b"complete".to_vec(), 2, 0, None, None),
+        ]
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/payloads/")
+        }),
+        4,
+        "primary, ID-directory, route-plan, and bounded transaction metadata"
+    );
+    assert_eq!(
+        index
+            .search_sparse_named("sparse", vec![2], vec![1.0], 1)
+            .unwrap()[0]
+            .id
+            .as_bytes(),
+        b"complete"
+    );
+    assert_eq!(
+        index.search_text("alpha", 1).unwrap().hits[0].id.as_bytes(),
+        b"complete"
+    );
+    assert_eq!(
+        index
+            .search_late_interaction("late", vec![vec![1.0, 0.0]], 1)
+            .unwrap()[0]
+            .id
+            .as_bytes(),
+        b"complete"
+    );
+
+    drop(index);
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(
+        reopened.get_vector("complete").unwrap(),
+        Some(vec![1.0, 0.0])
+    );
+    assert_eq!(
+        reopened.get_vector("primary-only").unwrap(),
+        Some(vec![0.0, 1.0])
+    );
+    assert_eq!(
+        reopened
+            .search_sparse_named("sparse", vec![7], vec![1.0], 1)
+            .unwrap()[0]
+            .id
+            .as_bytes(),
+        b"complete"
+    );
+    assert_eq!(
+        reopened.search_text("beta", 1).unwrap().hits[0]
+            .id
+            .as_bytes(),
+        b"complete"
+    );
+    assert_eq!(
+        reopened
+            .search_late_interaction("late", vec![vec![0.0, 1.0]], 1)
+            .unwrap()[0]
+            .id
+            .as_bytes(),
+        b"complete"
+    );
+}
+
+#[test]
+fn supplied_multi_cell_route_plan_objects_and_puts_do_not_follow_touched_cells() {
+    let append = |vectors: Vec<Vec<f32>>,
+                  ids: Vec<String>,
+                  expected_cells: BTreeSet<borsuk::LogicalCellId>| {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let centroids = (0..128)
+            .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+            .collect::<Vec<_>>();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 32,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            centroids,
+        )
+        .unwrap();
+        assert_eq!(
+            vectors
+                .iter()
+                .map(|vector| index.logical_cell_for_research(vector).unwrap().0)
+                .collect::<BTreeSet<_>>(),
+            expected_cells
+        );
+        let (_, report) = index.add_with_report(vectors, Some(ids)).unwrap();
+        let payloads =
+            collect_files_with_extension(dir.path().join("positioned-log/payloads"), "parquet")
+                .len();
+        let envelopes =
+            collect_files_with_extension(dir.path().join("positioned-log/envelopes"), "parquet")
+                .len();
+        (report.requests.puts, payloads, envelopes)
+    };
+
+    let one_cell = append(
+        vec![vec![0.0, 0.0], vec![0.1, 0.0]],
+        vec!["one-a".to_string(), "one-b".to_string()],
+        BTreeSet::from([borsuk::LogicalCellId::new(1, 0)]),
+    );
+    let two_cells = append(
+        vec![vec![0.0, 0.0], vec![730.0, 0.0]],
+        vec!["multi-a".to_string(), "multi-b".to_string()],
+        BTreeSet::from([
+            borsuk::LogicalCellId::new(1, 0),
+            borsuk::LogicalCellId::new(1, 73),
+        ]),
+    );
+
+    assert_eq!(one_cell.1, 4);
+    assert_eq!(two_cells.1, 4);
+    assert_eq!(one_cell.2, 1);
+    assert_eq!(two_cells.2, 1);
+    assert_eq!(two_cells.0, one_cell.0);
+}
+
+#[test]
+fn refresh_and_cold_open_reject_obsolete_route_authority_in_new_public_envelope() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///cold-route-role-substitution";
+    let mut index = BorsukIndex::create_with_object_store(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 32,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    index
+        .add(vec![VectorRecord::new("routed", vec![1.0, 0.0])])
+        .unwrap();
+    let mut reader = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+
+    let envelope = PositionedLogWriter::open(uri, Arc::clone(&store), 1)
+        .unwrap()
+        .reader()
+        .snapshot()
+        .unwrap()
+        .transactions
+        .pop()
+        .unwrap();
+    let schema_fingerprint = envelope.schema_fingerprint.clone();
+    let payloads = envelope
+        .payloads
+        .into_iter()
+        .map(|payload| {
+            let mut role = payload.role;
+            if payload.modality == PositionedMutationModality::PrimaryDense {
+                let mut decoded = serde_json::from_str::<serde_json::Value>(&role).unwrap();
+                decoded["routing_epoch"] = serde_json::json!(1);
+                decoded["cell_ordinal"] = serde_json::json!(0);
+                role = serde_json::to_string(&decoded).unwrap();
+            }
+            PositionedMutationPayloadInput {
+                modality: payload.modality,
+                role,
+                id_bloom: payload.id_bloom,
+                format: payload.format,
+                bytes: read_object_bytes(&store, &payload.path),
+                rows: payload.rows,
+            }
+        })
+        .collect::<Vec<_>>();
+    drop(index);
+    PositionedLogWriter::open(uri, Arc::clone(&store), 1)
+        .unwrap()
+        .append("obsolete-route-authority", &schema_fingerprint, payloads)
+        .unwrap();
+
+    let refresh_error = reader.refresh().unwrap_err();
+    assert!(
+        refresh_error.to_string().contains("unknown field"),
+        "{refresh_error}"
+    );
+    assert_eq!(
+        reader.get_vector("routed").unwrap(),
+        Some(vec![1.0, 0.0]),
+        "failed validation must leave the installed view unchanged"
+    );
+    drop(reader);
+    let open_error = BorsukIndex::open_with_object_store(store, uri).unwrap_err();
+    assert!(
+        open_error.to_string().contains("unknown field"),
+        "{open_error}"
+    );
+}
+
+#[test]
+fn unchanged_positioned_refresh_issues_no_payload_gets() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (instrumented, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(instrumented);
+    let uri = "memory:///incremental-positioned-refresh-unchanged";
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 32,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    writer
+        .add(vec![VectorRecord::new("first", vec![1.0, 0.0])])
+        .unwrap();
+    let mut reader = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+
+    operations.clear();
+    assert!(!reader.refresh().unwrap());
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get && path.starts_with("positioned-log/payloads/")
+        }),
+        0,
+        "an installed authenticated envelope must not refetch immutable payloads"
+    );
+}
+
+#[test]
+fn positioned_refresh_fetches_only_the_new_envelope_payloads() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (instrumented, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(instrumented);
+    let uri = "memory:///incremental-positioned-refresh-new-envelope";
+    let mut writer = BorsukIndex::create_with_object_store(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 32,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    writer
+        .add(vec![VectorRecord::new("first", vec![1.0, 0.0])])
+        .unwrap();
+    let mut reader = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+    writer
+        .add(vec![VectorRecord::new("second", vec![0.0, 1.0])])
+        .unwrap();
+
+    operations.clear();
+    assert!(reader.refresh().unwrap());
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get && path.starts_with("positioned-log/payloads/")
+        }),
+        4,
+        "refresh must validate only the one newly authorized envelope"
+    );
 }
 
 #[test]
@@ -9935,6 +10449,17 @@ fn list_object_paths(store: Arc<dyn ObjectStore>) -> Vec<String> {
         .unwrap();
     paths.sort();
     paths
+}
+
+fn read_object_bytes(store: &Arc<dyn ObjectStore>, path: &str) -> Vec<u8> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(async { store.get(&ObjectPath::from(path)).await?.bytes().await })
+        .unwrap()
+        .to_vec()
 }
 
 #[test]

@@ -81,8 +81,8 @@ fn persisted_paths_have_stable_physical_object_roles() {
             PhysicalObjectRole::IdDirectory,
         ),
         (
-            "id-directory/claim-shards/03/LOCK",
-            PhysicalObjectRole::IdDirectory,
+            "id-directory/claim-pages/03/STATE",
+            PhysicalObjectRole::IdDirectoryControl,
         ),
     ];
     for (path, expected) in cases {
@@ -95,6 +95,11 @@ fn unknown_paths_are_explicit_instead_of_misattributed() {
     assert_eq!(
         physical_object_role_for_path("scratch/temporary.bin"),
         PhysicalObjectRole::Unknown
+    );
+    assert_eq!(
+        physical_object_role_for_path("id-directory/claim-shards/03/LOCK"),
+        PhysicalObjectRole::Unknown,
+        "the removed experimental claim-shard classification must not survive as an alias"
     );
 }
 

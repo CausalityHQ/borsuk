@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Barrier},
 };
 
-use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, UInt64Array};
+use arrow_array::{Array, ArrayRef, FixedSizeBinaryArray, RecordBatch, StringArray, UInt64Array};
 use arrow_ipc::{
     CompressionType,
     writer::{IpcWriteOptions, StreamWriter},
@@ -23,7 +23,10 @@ use bytes::Bytes;
 use object_store::{
     ObjectStore, ObjectStoreExt, PutOptions, PutPayload, memory::InMemory, path::Path as ObjectPath,
 };
-use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
+use parquet::{
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    file::properties::WriterProperties,
+};
 
 const SCHEMA_FINGERPRINT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -124,6 +127,43 @@ fn payload(role: impl Into<String>, hlc: u64) -> PositionedMutationPayloadInput 
         bytes: arrow_payload(hlc),
         rows: 1,
     }
+}
+
+fn route_plan_payload(hlc: u64) -> PositionedMutationPayloadInput {
+    PositionedMutationPayloadInput {
+        modality: PositionedMutationModality::RoutePlan,
+        role: "route_plan_v1".to_owned(),
+        id_bloom: Vec::new(),
+        format: PositionedPayloadFormat::Parquet,
+        bytes: parquet_payload(hlc),
+        rows: 1,
+    }
+}
+
+fn envelope_identity(bytes: &[u8]) -> (String, u64) {
+    let batch = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
+        .unwrap()
+        .build()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    let request_digest = batch
+        .column_by_name("request_digest")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+        .value(0)
+        .to_owned();
+    let sequence = batch
+        .column_by_name("sequence")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap()
+        .value(0);
+    (request_digest, sequence)
 }
 
 fn create_writer(store: Arc<dyn ObjectStore>, epoch: u64) -> PositionedLogWriter {
@@ -513,6 +553,179 @@ fn retry_returns_the_same_position_without_duplicate_visibility() {
 
     assert_eq!(retry, first);
     assert_eq!(writer.reader().snapshot().unwrap().transactions.len(), 1);
+}
+
+#[test]
+fn same_position_retry_preserves_payload_request_and_envelope_bytes() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let writer = create_writer(Arc::new(traced), 7);
+    operations.clear();
+
+    let append = || {
+        writer.append(
+            "byte-stable-retry",
+            SCHEMA_FINGERPRINT,
+            vec![payload("primary", 11), route_plan_payload(12)],
+        )
+    };
+    let first = append().unwrap();
+    let first_operations = operations.entries();
+    let payload_paths = first_operations
+        .iter()
+        .filter(|entry| {
+            entry.operation == common::StoreOperation::Put
+                && entry.path.starts_with("positioned-log/payloads/")
+        })
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    let envelope_path = first_operations
+        .iter()
+        .find(|entry| {
+            entry.operation == common::StoreOperation::Put
+                && entry.path.starts_with("positioned-log/envelopes/")
+        })
+        .unwrap()
+        .path
+        .clone();
+    let head_path = format!("positioned-log/heads/{:02}.json", first.position.shard);
+    let payload_bytes = payload_paths
+        .iter()
+        .map(|path| read(&inner, path))
+        .collect::<Vec<_>>();
+    let envelope_bytes = read(&inner, &envelope_path);
+    let head_bytes = read(&inner, &head_path);
+    let (request_digest, sequence) = envelope_identity(&envelope_bytes);
+    assert_eq!(payload_paths.len(), 2);
+    assert_eq!(request_digest, first.request_digest);
+    assert_eq!(sequence, first.position.sequence);
+
+    operations.clear();
+    let retry = append().unwrap();
+
+    assert_eq!(retry.position, first.position);
+    assert_eq!(retry.request_digest, first.request_digest);
+    assert_eq!(retry.envelope_checksum, first.envelope_checksum);
+    assert_eq!(
+        payload_paths
+            .iter()
+            .map(|path| read(&inner, path))
+            .collect::<Vec<_>>(),
+        payload_bytes
+    );
+    assert_eq!(read(&inner, &envelope_path), envelope_bytes);
+    assert_eq!(read(&inner, &head_path), head_bytes);
+    assert_eq!(
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Put),
+        0
+    );
+}
+
+#[test]
+fn cas_rebase_preserves_payload_and_request_digest_but_rewrites_positioned_envelope() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    create_writer(Arc::clone(&inner), 7);
+    let shard = 21;
+    let ids = transaction_ids_for_shard(shard, 2);
+    let barrier = Arc::new(Barrier::new(2));
+    let target_store = common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_put_barrier(
+        Arc::clone(&barrier),
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/heads/")
+        },
+    );
+    let (target_store, operations) = target_store.with_operation_log();
+    let target =
+        PositionedLogWriter::open("memory:///positioned-log", Arc::new(target_store), 7).unwrap();
+    operations.clear();
+    let target_id = ids[1].clone();
+    let target_thread = std::thread::spawn(move || {
+        target.append(
+            &target_id,
+            SCHEMA_FINGERPRINT,
+            vec![payload("primary", 20), route_plan_payload(21)],
+        )
+    });
+    while operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+    }) == 0
+    {
+        std::thread::yield_now();
+    }
+    let first_envelope_path = operations
+        .matching_paths(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("positioned-log/envelopes/")
+        })
+        .into_iter()
+        .next()
+        .unwrap();
+    let first_envelope_bytes = read(&inner, &first_envelope_path);
+    let (first_request_digest, first_sequence) = envelope_identity(&first_envelope_bytes);
+
+    let intervening = PositionedLogWriter::open("memory:///positioned-log", Arc::clone(&inner), 7)
+        .unwrap()
+        .append(
+            &ids[0],
+            SCHEMA_FINGERPRINT,
+            vec![payload("primary", 1), route_plan_payload(2)],
+        )
+        .unwrap();
+    assert_eq!(intervening.position.sequence, 1);
+    barrier.wait();
+    let committed = target_thread.join().unwrap().unwrap();
+    assert_eq!(committed.position.sequence, 2);
+
+    let target_operations = operations.entries();
+    let payload_paths = target_operations
+        .iter()
+        .filter(|entry| {
+            entry.operation == common::StoreOperation::Put
+                && entry.path.starts_with("positioned-log/payloads/")
+        })
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    let envelope_paths = target_operations
+        .iter()
+        .filter(|entry| {
+            entry.operation == common::StoreOperation::Put
+                && entry.path.starts_with("positioned-log/envelopes/")
+        })
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    let second_envelope_bytes = read(&inner, envelope_paths.last().unwrap());
+    let (second_request_digest, second_sequence) = envelope_identity(&second_envelope_bytes);
+
+    assert_eq!(payload_paths.len(), 2, "payload objects upload only once");
+    assert_eq!(
+        envelope_paths.len(),
+        2,
+        "one envelope per attempted position"
+    );
+    assert_eq!(
+        target_operations
+            .iter()
+            .filter(|entry| {
+                entry.operation == common::StoreOperation::Put
+                    && entry.path.starts_with("positioned-log/heads/")
+            })
+            .count(),
+        2,
+        "the stale position and rebased position each attempt one CAS"
+    );
+    assert_eq!(first_sequence, 1);
+    assert_eq!(second_sequence, 2);
+    assert_eq!(first_request_digest, second_request_digest);
+    assert_eq!(second_request_digest, committed.request_digest);
+    assert_ne!(first_envelope_path, *envelope_paths.last().unwrap());
+    assert_ne!(first_envelope_bytes, second_envelope_bytes);
+    assert!(
+        payload_paths
+            .iter()
+            .all(|path| !read(&inner, path).is_empty())
+    );
 }
 
 #[test]

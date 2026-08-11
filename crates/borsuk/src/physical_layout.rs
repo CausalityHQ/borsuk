@@ -4,9 +4,9 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 
 use crate::{BorsukError, PhysicalObjectRole, Result};
 
-/// Fourth production layout-policy schema. Durable table roles are Parquet;
+/// Fifth production layout-policy schema. Durable table roles are Parquet;
 /// Arrow IPC and packed roles retain their fixed standard encodings.
-pub const CURRENT_LAYOUT_POLICY_VERSION: u32 = 4;
+pub const CURRENT_LAYOUT_POLICY_VERSION: u32 = 5;
 /// Physical codec selected for one immutable persisted object.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
@@ -97,9 +97,9 @@ impl PhysicalLayoutPolicy {
     pub fn production_baseline() -> Self {
         use PhysicalFormat::{ArrowIpc, Packed, Parquet};
         use PhysicalObjectRole::{
-            Catalog, CommitMarker, ExactVectors, FilterIndex, GraphIndex, IdDirectory, LaneHead,
-            LateInteraction, LexicalBlock, NormalSegment, ProductCodes, RoutingPage, Tombstone,
-            WalRun,
+            Catalog, CommitMarker, ExactVectors, FilterIndex, GraphIndex, IdDirectory,
+            IdDirectoryControl, LaneHead, LateInteraction, LexicalBlock, NormalSegment,
+            ProductCodes, RoutingPage, Tombstone, WalRun,
         };
         Self {
             version: CURRENT_LAYOUT_POLICY_VERSION,
@@ -117,7 +117,8 @@ impl PhysicalLayoutPolicy {
                 (LexicalBlock, Parquet),
                 (LateInteraction, ArrowIpc),
                 (Tombstone, Parquet),
-                (IdDirectory, Packed),
+                (IdDirectory, Parquet),
+                (IdDirectoryControl, Packed),
             ]),
         }
     }
@@ -211,14 +212,19 @@ fn validate_implemented_role_format(
 ) -> Result<()> {
     use PhysicalFormat::{ArrowIpc, Packed, Parquet};
     use PhysicalObjectRole::{
-        Catalog, CommitMarker, ExactVectors, FilterIndex, GraphIndex, IdDirectory, LaneHead,
-        LateInteraction, LexicalBlock, NormalSegment, PositionedEnvelope, PositionedHead,
-        PositionedPayload, ProductCodes, RoutingPage, Tombstone, WalRun, WriterDirectory,
+        Catalog, CommitMarker, ExactVectors, FilterIndex, GraphIndex, IdDirectory,
+        IdDirectoryControl, LaneHead, LateInteraction, LexicalBlock, NormalSegment,
+        PositionedEnvelope, PositionedHead, PositionedPayload, ProductCodes, RoutingPage,
+        Tombstone, WalRun, WriterDirectory,
     };
     let supported = match role {
-        Catalog | RoutingPage | GraphIndex | LexicalBlock | Tombstone => format == Parquet,
+        Catalog | RoutingPage | GraphIndex | LexicalBlock | Tombstone | IdDirectory => {
+            format == Parquet
+        }
         WalRun => format == Parquet,
-        LaneHead | WriterDirectory | CommitMarker | FilterIndex | IdDirectory => format == Packed,
+        LaneHead | WriterDirectory | CommitMarker | FilterIndex | IdDirectoryControl => {
+            format == Packed
+        }
         ExactVectors | ProductCodes | LateInteraction => format == ArrowIpc,
         PositionedPayload => matches!(format, ArrowIpc | Packed | Parquet),
         PositionedEnvelope => format == Parquet,
@@ -239,8 +245,9 @@ fn validate_implemented_role_format(
 #[must_use]
 pub fn production_object_roles() -> &'static [PhysicalObjectRole] {
     use PhysicalObjectRole::{
-        Catalog, CommitMarker, ExactVectors, FilterIndex, GraphIndex, IdDirectory, LaneHead,
-        LateInteraction, LexicalBlock, NormalSegment, ProductCodes, RoutingPage, Tombstone, WalRun,
+        Catalog, CommitMarker, ExactVectors, FilterIndex, GraphIndex, IdDirectory,
+        IdDirectoryControl, LaneHead, LateInteraction, LexicalBlock, NormalSegment, ProductCodes,
+        RoutingPage, Tombstone, WalRun,
     };
     &[
         Catalog,
@@ -257,5 +264,6 @@ pub fn production_object_roles() -> &'static [PhysicalObjectRole] {
         LateInteraction,
         Tombstone,
         IdDirectory,
+        IdDirectoryControl,
     ]
 }

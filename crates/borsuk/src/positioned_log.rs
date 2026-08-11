@@ -20,7 +20,7 @@ use crate::{
 pub const SOURCE_SHARD_COUNT: u8 = 64;
 pub(crate) const INITIAL_POSITIONED_SOURCE_EPOCH: u64 = 1;
 const MAX_COMMIT_SOURCE_RANGES: usize = SOURCE_SHARD_COUNT as usize * u64::BITS as usize;
-const POSITIONED_LOG_LAYOUT: u16 = 14;
+const POSITIONED_LOG_LAYOUT: u16 = 15;
 /// Maximum authoritative bytes in one serialized JSON shard head.
 pub const MAX_SHARD_HEAD_BYTES: usize = 64 * 1024;
 /// Maximum unmaterialized envelope references retained by one shard.
@@ -399,6 +399,8 @@ pub enum PositionedMutationModality {
     IdDirectory,
     /// Deletion/tombstone mutation rows.
     Tombstone,
+    /// Authenticated per-modality route assignments for the transaction.
+    RoutePlan,
 }
 
 impl PositionedMutationModality {
@@ -411,6 +413,7 @@ impl PositionedMutationModality {
             Self::LateInteraction => "late_interaction",
             Self::IdDirectory => "id_directory",
             Self::Tombstone => "tombstone",
+            Self::RoutePlan => "route_plan",
         }
     }
 
@@ -423,6 +426,7 @@ impl PositionedMutationModality {
             "late_interaction" => Ok(Self::LateInteraction),
             "id_directory" => Ok(Self::IdDirectory),
             "tombstone" => Ok(Self::Tombstone),
+            "route_plan" => Ok(Self::RoutePlan),
             _ => invalid(&format!("unknown positioned mutation modality `{value}`")),
         }
     }
@@ -2261,7 +2265,7 @@ mod tests {
         let head = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
         let mut bytes = shard_head_bytes(&head).unwrap();
         let json = std::str::from_utf8(&bytes).unwrap();
-        assert!(json.contains("\"layout\":14"), "{json}");
+        assert!(json.contains("\"layout\":15"), "{json}");
         assert!(
             json.contains(&format!("\"schema_fingerprint\":\"{}\"", "a".repeat(64))),
             "{json}"
@@ -2274,12 +2278,12 @@ mod tests {
     }
 
     #[test]
-    fn positioned_head_rejects_v13_layout_marker() {
+    fn positioned_head_rejects_v14_layout_marker() {
         let head = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
         let bytes = shard_head_bytes(&head).unwrap();
         let old = std::str::from_utf8(&bytes)
             .unwrap()
-            .replace("\"layout\":14", "\"layout\":13")
+            .replace("\"layout\":15", "\"layout\":14")
             .into_bytes();
         let error = shard_head_from_bytes(&old, 7, 3).unwrap_err().to_string();
         assert!(error.contains("unsupported layout marker"), "{error}");

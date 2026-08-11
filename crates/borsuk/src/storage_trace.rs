@@ -48,6 +48,8 @@ pub enum PhysicalObjectRole {
     Tombstone,
     /// Record-ID to logical-cell ownership mapping.
     IdDirectory,
+    /// Packed conditional coordination state for ID ownership claims.
+    IdDirectoryControl,
     /// Immutable typed payload in the positioned mutation log.
     PositionedPayload,
     /// Immutable commit envelope in the positioned mutation log.
@@ -123,7 +125,9 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         PhysicalObjectRole::LateInteraction
     } else if path.starts_with("tombstones/") {
         PhysicalObjectRole::Tombstone
-    } else if path.starts_with("id-directory/") {
+    } else if path.starts_with("id-directory/claim-pages/") {
+        PhysicalObjectRole::IdDirectoryControl
+    } else if path.starts_with("id-directory/") && path.ends_with(".parquet") {
         PhysicalObjectRole::IdDirectory
     } else if path.starts_with("positioned-log/heads/") {
         PhysicalObjectRole::PositionedHead
@@ -177,6 +181,7 @@ impl PhysicalObjectRole {
             Self::LateInteraction => "late_interaction",
             Self::Tombstone => "tombstone",
             Self::IdDirectory => "id_directory",
+            Self::IdDirectoryControl => "id_directory_control",
             Self::PositionedPayload => "positioned_payload",
             Self::PositionedEnvelope => "positioned_envelope",
             Self::PositionedHead => "positioned_head",

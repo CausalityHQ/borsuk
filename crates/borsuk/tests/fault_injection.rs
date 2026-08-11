@@ -10,7 +10,7 @@ use borsuk::{
 };
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 
-const LARGE_ID_BYTES: usize = 22 * 1024 * 1024;
+const LARGE_ID_BYTES: usize = 17 * 1024 * 1024;
 
 fn assert_no_legacy_mutation_authority(operations: &common::OperationLog) {
     assert_eq!(
@@ -876,12 +876,14 @@ fn large_segment_payloads_use_multipart_upload() {
     )
     .unwrap();
 
-    // Each positioned append stays below its 64 MiB encoded hard bound. Flush
-    // then coalesces the three incompressible IDs into one >64 MiB segment.
+    // Each ID appears in the primary, ID-directory, and route-plan payloads, so
+    // 17 MiB keeps one append near 51 MiB with comfortable room below 64 MiB.
+    // Flush coalesces four incompressible IDs into one >68 MiB segment.
     for (ordinal, seed) in [
         0x4d59_5df4_d0f3_3173_u64,
         0x9e37_79b9_7f4a_7c15_u64,
         0xd1b5_4a32_d192_ed03_u64,
+        0x94d0_49bb_1331_11eb_u64,
     ]
     .into_iter()
     .enumerate()
@@ -894,7 +896,7 @@ fn large_segment_payloads_use_multipart_upload() {
             )]) {
                 Ok(()) => break,
                 Err(error) if error.code() == "ingest_backpressure" && attempt < 127 => {
-                    // This fixture deliberately disables materialization so three
+                    // This fixture deliberately disables materialization so four
                     // large transactions can form one multipart segment. A random
                     // transaction ID may collide with an already-near-full source
                     // shard; retrying the uncommitted request selects a fresh shard.

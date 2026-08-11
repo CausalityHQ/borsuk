@@ -244,8 +244,8 @@ fn assert_s3_compatible_binary_layout(uri: &str) {
     assert!(
         objects
             .iter()
-            .any(|(path, _)| path.starts_with("id-directory/claim-shards/")),
-        "insert-only coordination must use sharded claim locks: {objects:?}"
+            .any(|(path, _)| path.starts_with("id-directory/claim-pages/")),
+        "insert-only coordination must use packed claim pages: {objects:?}"
     );
     assert!(
         objects
@@ -325,12 +325,10 @@ fn expected_magic(path: &str, role: PhysicalObjectRole) -> &'static [u8] {
         b"BWD1"
     } else if path.ends_with("/COMMIT") {
         b"BWC1"
+    } else if path.starts_with("id-directory/claim-pages/") && path.ends_with("/STATE") {
+        b"BCL1"
     } else if path.ends_with("/STATE") {
         b"BWS1"
-    } else if path.starts_with("id-directory/claim-shards/")
-        && (path.ends_with("/LOCK") || path.ends_with("/GATE"))
-    {
-        b"BCL1"
     } else {
         panic!(
             "role {} has no S3-compatible format assertion for {path}",
