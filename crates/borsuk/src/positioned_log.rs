@@ -967,13 +967,34 @@ impl PositionedLogWriter {
         schema_fingerprint: &str,
         payloads: Vec<PositionedMutationPayloadInput>,
     ) -> Result<CommittedPositionedMutation> {
+        let prepared = self.prepare_append(transaction_id, schema_fingerprint, payloads)?;
+        self.append_prepared(&prepared)
+    }
+
+    pub(crate) fn prepare_append(
+        &self,
+        transaction_id: &str,
+        schema_fingerprint: &str,
+        payloads: Vec<PositionedMutationPayloadInput>,
+    ) -> Result<PreparedPositionedAppend> {
         if schema_fingerprint != self.schema_fingerprint {
             return invalid(
                 "positioned append schema fingerprint differs from its shard authority",
             );
         }
+        prepare_positioned_append(transaction_id, schema_fingerprint, payloads)
+    }
+
+    pub(crate) fn append_prepared(
+        &self,
+        prepared: &PreparedPositionedAppend,
+    ) -> Result<CommittedPositionedMutation> {
+        if prepared.schema_fingerprint != self.schema_fingerprint {
+            return invalid(
+                "prepared positioned append schema fingerprint differs from its shard authority",
+            );
+        }
         let storage = self.storage.clone_with_independent_mutation_counters();
-        let prepared = prepare_append(transaction_id, schema_fingerprint, payloads)?;
         let shard = prepared.transaction_digest[0] % SOURCE_SHARD_COUNT;
         let mut pinned = self.heads[usize::from(shard)]
             .lock()
@@ -1179,6 +1200,38 @@ impl PositionedLogWriter {
         sequence: u64,
         collection_generation: u64,
     ) -> Result<()> {
+        self.checkpoint_materialized_through_inner(shard, sequence, collection_generation, false)
+    }
+
+    /// Repair a head only when its pinned materialized sequence is behind the
+    /// collection authority. An already-repaired head is a zero-I/O no-op even
+    /// when the caller's collection generation is newer; its recent receipts
+    /// retain the generation at which they actually became invisible.
+    pub(crate) fn checkpoint_materialized_through_if_behind(
+        &self,
+        shard: u8,
+        sequence: u64,
+        collection_generation: u64,
+    ) -> Result<()> {
+        validate_source_epoch_and_shard(self.source_epoch, shard)?;
+        {
+            let pinned = self.heads[usize::from(shard)]
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if pinned.head.materialized_sequence >= sequence {
+                return Ok(());
+            }
+        }
+        self.checkpoint_materialized_through_inner(shard, sequence, collection_generation, true)
+    }
+
+    fn checkpoint_materialized_through_inner(
+        &self,
+        shard: u8,
+        sequence: u64,
+        collection_generation: u64,
+        tolerate_already_materialized: bool,
+    ) -> Result<()> {
         validate_source_epoch_and_shard(self.source_epoch, shard)?;
         if sequence == 0 || collection_generation == 0 {
             return invalid(
@@ -1201,7 +1254,9 @@ impl PositionedLogWriter {
                 return invalid("positioned shard head schema fingerprint differs from its writer");
             }
             if pinned.head.materialized_sequence >= sequence {
-                if pinned.head.materialized_collection_generation >= collection_generation {
+                if tolerate_already_materialized
+                    || pinned.head.materialized_collection_generation >= collection_generation
+                {
                     return Ok(());
                 }
                 return invalid(
@@ -1302,9 +1357,25 @@ pub struct PositionedLogReader {
 }
 
 impl PositionedLogReader {
+    pub(crate) fn open_from_storage(
+        storage: Storage,
+        source_epoch: u64,
+        schema_fingerprint: &str,
+    ) -> Result<Self> {
+        if source_epoch == 0 {
+            return invalid("positioned source epoch must be positive");
+        }
+        validate_hex("schema fingerprint", schema_fingerprint)?;
+        Ok(Self {
+            storage,
+            source_epoch,
+            schema_fingerprint: schema_fingerprint.to_owned(),
+        })
+    }
+
     /// Read all heads and decode every currently pending transaction envelope.
     pub fn snapshot(&self) -> Result<PositionedLogSnapshot> {
-        self.load_snapshot(None, None)?.ok_or_else(|| {
+        self.load_snapshot(None, None, false)?.ok_or_else(|| {
             BorsukError::InvalidStorage(
                 "positioned snapshot unexpectedly reported unchanged".to_owned(),
             )
@@ -1316,7 +1387,7 @@ impl PositionedLogReader {
         &self,
         previous_head_checksums: &[String; SOURCE_SHARD_COUNT as usize],
     ) -> Result<Option<PositionedLogSnapshot>> {
-        self.load_snapshot(Some(previous_head_checksums), None)
+        self.load_snapshot(Some(previous_head_checksums), None, false)
     }
 
     /// Read mutations not visible at the caller's pinned collection generation.
@@ -1328,7 +1399,7 @@ impl PositionedLogReader {
         &self,
         pinned_collection_generation: u64,
     ) -> Result<PositionedLogSnapshot> {
-        self.load_snapshot(None, Some(pinned_collection_generation))?
+        self.load_snapshot(None, Some(pinned_collection_generation), false)?
             .ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "positioned generation snapshot unexpectedly reported unchanged".to_owned(),
@@ -1336,10 +1407,22 @@ impl PositionedLogReader {
             })
     }
 
+    /// Read every bounded recent receipt plus every pending transaction for GC.
+    /// Recent receipts are retained precisely because an older pinned reader may
+    /// still reference their immutable envelope and payload objects.
+    pub(crate) fn snapshot_with_recent_receipts(&self) -> Result<PositionedLogSnapshot> {
+        self.load_snapshot(None, None, true)?.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "positioned retained snapshot unexpectedly reported unchanged".to_owned(),
+            )
+        })
+    }
+
     fn load_snapshot(
         &self,
         previous: Option<&[String; SOURCE_SHARD_COUNT as usize]>,
         pinned_collection_generation: Option<u64>,
+        include_all_recent: bool,
     ) -> Result<Option<PositionedLogSnapshot>> {
         let loaded = load_all_heads(
             &self.storage,
@@ -1370,9 +1453,10 @@ impl PositionedLogReader {
                 head.recent
                     .iter()
                     .filter(move |reference| {
-                        pinned_collection_generation.is_some_and(|generation| {
-                            reference.materialized_collection_generation > generation
-                        })
+                        include_all_recent
+                            || pinned_collection_generation.is_some_and(|generation| {
+                                reference.materialized_collection_generation > generation
+                            })
                     })
                     .chain(head.pending.iter())
                     .map(move |reference| (head.shard, reference))
@@ -1409,7 +1493,7 @@ struct PreparedPayload {
     bytes: Vec<u8>,
 }
 
-struct PreparedAppend {
+pub(crate) struct PreparedPositionedAppend {
     transaction_id: String,
     schema_fingerprint: String,
     transaction_digest: [u8; 32],
@@ -1423,11 +1507,11 @@ struct PreparedAppend {
     encoded_bytes: u64,
 }
 
-fn prepare_append(
+fn prepare_positioned_append(
     transaction_id: &str,
     schema_fingerprint: &str,
     payloads: Vec<PositionedMutationPayloadInput>,
-) -> Result<PreparedAppend> {
+) -> Result<PreparedPositionedAppend> {
     validate_bounded_utf8("transaction ID", transaction_id)?;
     validate_hex("schema fingerprint", schema_fingerprint)?;
     if payloads.is_empty() || payloads.len() > MAX_PAYLOADS_PER_TRANSACTION {
@@ -1520,7 +1604,7 @@ fn prepare_append(
         max_stamp,
         &payload_refs,
     );
-    Ok(PreparedAppend {
+    Ok(PreparedPositionedAppend {
         transaction_id: transaction_id.to_owned(),
         schema_fingerprint: schema_fingerprint.to_owned(),
         transaction_digest,

@@ -15,7 +15,12 @@
 
 use std::time::Duration;
 
-use crate::{error::Result, storage::Storage};
+use object_store::UpdateVersion;
+
+use crate::{
+    error::{BorsukError, Result},
+    storage::Storage,
+};
 
 const INSTANCES_PREFIX: &str = "maintenance/instances/";
 const LEASES_PREFIX: &str = "maintenance/leases/";
@@ -148,35 +153,113 @@ pub(crate) fn owns_shard(key: &str, rank: usize, count: usize) -> bool {
     (hash_key(key) as usize % count) == rank
 }
 
-/// Try to acquire a lease on `key`. Returns `true` if this instance now holds it.
-/// Reclaims a lease whose expiry has passed.
+/// Try to acquire a lease on `key`. Returns the exact owned version, or `None`
+/// when another instance holds it. Reclaims an expired lease with one CAS.
 pub(crate) fn acquire_lease(
     storage: &Storage,
     key: &str,
     owner: &str,
     ttl_ms: i64,
     now_ms: i64,
-) -> Result<bool> {
+) -> Result<Option<MaintenanceLease>> {
     let path = lease_path(key);
-    let content = format!("{owner}\n{}", now_ms + ttl_ms);
-    if storage.try_create_object(&path, content.as_bytes())? {
-        return Ok(true);
+    let expiry_ms = now_ms.saturating_add(ttl_ms);
+    let content = lease_content(owner, expiry_ms);
+    if let Some(version) = storage.try_create_coordination_object(&path, content.as_bytes())? {
+        return Ok(Some(MaintenanceLease {
+            path,
+            owner: owner.to_string(),
+            expiry_ms,
+            version,
+        }));
     }
-    // Held by someone — reclaim only if their lease has expired.
-    if let Some(bytes) = storage.read_object_fresh(&path)?
-        && let Some(expiry) = parse_lease_expiry(&bytes)
-        && now_ms > expiry
-    {
-        storage.delete_object(&path)?;
-        return storage.try_create_object(&path, content.as_bytes());
+    // Held by someone — reclaim only by replacing the exact expired version.
+    // Never delete the stable path: an expired owner may resume after this CAS,
+    // and its stale release must be unable to mutate the replacement.
+    let Some(current) = storage.read_coordination_object(&path)? else {
+        return Ok(None);
+    };
+    let expiry = parse_lease_expiry(&current.bytes).ok_or_else(|| {
+        BorsukError::InvalidStorage(format!("maintenance lease `{path}` is malformed"))
+    })?;
+    if now_ms > expiry {
+        return match storage.write_coordination_object(
+            &path,
+            content.as_bytes(),
+            Some(current.version),
+        ) {
+            Ok(version) => Ok(Some(MaintenanceLease {
+                path,
+                owner: owner.to_string(),
+                expiry_ms,
+                version,
+            })),
+            Err(BorsukError::ConcurrentModification { .. }) => Ok(None),
+            Err(error) => Err(error),
+        };
     }
-    Ok(false)
+    Ok(None)
 }
 
-/// Release a lease this instance holds.
-pub(crate) fn release_lease(storage: &Storage, key: &str) -> Result<()> {
-    storage.delete_object(&lease_path(key))?;
-    Ok(())
+/// Exact coordination-object version owned by one successful lease acquisition.
+pub(crate) struct MaintenanceLease {
+    path: String,
+    owner: String,
+    expiry_ms: i64,
+    version: UpdateVersion,
+}
+
+/// Extend the exact lease version this instance owns.
+///
+/// An already-expired local lease must be reacquired rather than renewed. A
+/// `false` result means this holder expired or another instance replaced its
+/// version; in either case the current coordination record is left untouched.
+pub(crate) fn renew_lease(
+    storage: &Storage,
+    lease: &mut MaintenanceLease,
+    ttl_ms: i64,
+    now_ms: i64,
+) -> Result<bool> {
+    if now_ms > lease.expiry_ms {
+        return Ok(false);
+    }
+    let expiry_ms = now_ms.saturating_add(ttl_ms);
+    let renewed = lease_content(&lease.owner, expiry_ms);
+    match storage.write_coordination_object(
+        &lease.path,
+        renewed.as_bytes(),
+        Some(lease.version.clone()),
+    ) {
+        Ok(version) => {
+            lease.expiry_ms = expiry_ms;
+            lease.version = version;
+            Ok(true)
+        }
+        Err(BorsukError::ConcurrentModification { .. }) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Release the exact lease version this instance owns.
+///
+/// A released lease remains as an expired coordination record so the next
+/// acquisition can replace it with one CAS. Returning `false` means ownership
+/// changed and this stale holder left the current lease untouched.
+pub(crate) fn release_lease(storage: &Storage, lease: &MaintenanceLease) -> Result<bool> {
+    let released = lease_content(&lease.owner, i64::MIN);
+    match storage.write_coordination_object(
+        &lease.path,
+        released.as_bytes(),
+        Some(lease.version.clone()),
+    ) {
+        Ok(_) => Ok(true),
+        Err(BorsukError::ConcurrentModification { .. }) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn lease_content(owner: &str, expiry_ms: i64) -> String {
+    format!("{owner}\n{expiry_ms}")
 }
 
 fn parse_lease_expiry(bytes: &[u8]) -> Option<i64> {
@@ -265,5 +348,78 @@ mod tests {
         assert_eq!(parse_lease_expiry(b"owner\n123456"), Some(123456));
         assert_eq!(parse_lease_expiry(b"owner"), None);
         assert_eq!(parse_lease_expiry(b"owner\nnot-a-number"), None);
+    }
+
+    #[test]
+    fn expired_owner_cannot_release_reclaimed_lease() {
+        let storage = Storage::from_uri("memory:///maintenance-owner-fencing").unwrap();
+
+        let lease_a = acquire_lease(&storage, "compact", "a", 10, 0)
+            .unwrap()
+            .unwrap();
+        let lease_b = acquire_lease(&storage, "compact", "b", 10, 11)
+            .unwrap()
+            .unwrap();
+
+        // A resumes after B has reclaimed A's expired lease. A's stale release
+        // must not remove B's live ownership or admit a third worker.
+        assert!(!release_lease(&storage, &lease_a).unwrap());
+        assert!(
+            acquire_lease(&storage, "compact", "c", 10, 12)
+                .unwrap()
+                .is_none()
+        );
+
+        assert!(release_lease(&storage, &lease_b).unwrap());
+        assert!(
+            acquire_lease(&storage, "compact", "c", 10, 12)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn renewal_extends_only_the_exact_owned_lease_version() {
+        let storage = Storage::from_uri("memory:///maintenance-renewal-fencing").unwrap();
+        let mut lease_a = acquire_lease(&storage, "compact", "a", 10, 0)
+            .unwrap()
+            .unwrap();
+
+        assert!(renew_lease(&storage, &mut lease_a, 20, 5).unwrap());
+        assert!(
+            acquire_lease(&storage, "compact", "b", 10, 11)
+                .unwrap()
+                .is_none(),
+            "A's renewal must extend its lease through t=25"
+        );
+
+        let lease_b = acquire_lease(&storage, "compact", "b", 10, 26)
+            .unwrap()
+            .unwrap();
+        // Even if A resumes with a lagging clock that still considers its local
+        // expiry live, its old coordination-object version cannot renew over B.
+        assert!(!renew_lease(&storage, &mut lease_a, 20, 20).unwrap());
+        assert!(
+            acquire_lease(&storage, "compact", "c", 10, 27)
+                .unwrap()
+                .is_none(),
+            "A's stale renewal must leave B's live lease intact"
+        );
+        assert!(release_lease(&storage, &lease_b).unwrap());
+    }
+
+    #[test]
+    fn malformed_lease_fails_closed_instead_of_waiting_forever() {
+        let storage = Storage::from_uri("memory:///maintenance-malformed-lease").unwrap();
+        storage
+            .try_create_coordination_object(&lease_path("compact"), b"owner\nnot-a-timestamp")
+            .unwrap()
+            .unwrap();
+
+        let error = match acquire_lease(&storage, "compact", "replacement", 10, 20) {
+            Err(error) => error,
+            Ok(_) => panic!("malformed lease must fail closed"),
+        };
+        assert!(error.to_string().contains("malformed"), "{error}");
     }
 }

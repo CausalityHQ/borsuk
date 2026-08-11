@@ -6,7 +6,7 @@ use object_store::UpdateVersion;
 use rayon::prelude::*;
 
 use crate::positioned_log::{
-    authorized_transaction_receipt, validate_claim_authorization_envelope,
+    CommitSourcePosition, authorized_transaction_receipt, validate_claim_authorization_envelope,
 };
 use crate::storage::Storage;
 use crate::{BorsukError, Result};
@@ -201,6 +201,10 @@ pub(crate) struct CommittedCellWalTransaction {
     pub descriptor_path: String,
     /// Descriptor checksum pinned by the commit marker.
     pub descriptor_checksum: String,
+    /// Durable positioned source coordinate, absent only for the retired
+    /// descriptor authority while its deletion is completed.
+    #[serde(default)]
+    pub source_position: Option<CommitSourcePosition>,
     /// Runs made visible together.
     pub runs: Vec<PreparedCellWalRun>,
     /// Caller-owned metadata made visible atomically with every run.
@@ -576,6 +580,7 @@ impl CellWalStore {
             transaction_id: descriptor.transaction_id,
             descriptor_path: descriptor_path.to_string(),
             descriptor_checksum: descriptor_checksum.to_string(),
+            source_position: None,
             runs: descriptor.runs,
             metadata: descriptor.metadata,
         })
@@ -977,6 +982,7 @@ impl CellWalStore {
             transaction_id: descriptor.transaction_id,
             descriptor_path,
             descriptor_checksum,
+            source_position: None,
             runs: descriptor.runs,
             metadata: descriptor.metadata,
         }))

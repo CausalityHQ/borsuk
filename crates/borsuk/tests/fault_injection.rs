@@ -600,8 +600,8 @@ fn positioned_retirement_fences_survive_later_flush_and_gc_cycles() {
         operations.count_matching(|operation, path| {
             operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
         }),
-        2,
-        "transactions A and B must each publish one authoritative positioned head"
+        4,
+        "transactions A and B must each publish one head receipt and one materialization checkpoint"
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
@@ -887,9 +887,23 @@ fn large_segment_payloads_use_multipart_upload() {
     .enumerate()
     {
         let id = deterministic_bytes(LARGE_ID_BYTES, seed);
-        index
-            .add(vec![VectorRecord::new_bytes(id, vec![ordinal as f32])])
-            .unwrap_or_else(|error| panic!("bounded positioned append {ordinal} failed: {error}"));
+        for attempt in 0..128 {
+            match index.add(vec![VectorRecord::new_bytes(
+                id.clone(),
+                vec![ordinal as f32],
+            )]) {
+                Ok(()) => break,
+                Err(error) if error.code() == "ingest_backpressure" && attempt < 127 => {
+                    // This fixture deliberately disables materialization so three
+                    // large transactions can form one multipart segment. A random
+                    // transaction ID may collide with an already-near-full source
+                    // shard; retrying the uncommitted request selects a fresh shard.
+                }
+                Err(error) => {
+                    panic!("bounded positioned append {ordinal} failed: {error}")
+                }
+            }
+        }
     }
     operations.clear();
     let error = index.flush().unwrap_err();

@@ -2606,19 +2606,6 @@ impl Storage {
         }
     }
 
-    /// Create an object only if it does not already exist. Returns `true` when
-    /// this call created it and `false` when another writer already holds it.
-    /// Backs maintenance leases and instance membership (correctness of publishes
-    /// still rests on the `CURRENT` compare-and-swap; leases only avoid duplicated
-    /// maintenance work).
-    pub(crate) fn try_create_object(&self, relative: &str, bytes: &[u8]) -> Result<bool> {
-        match self.write_bytes_with_mode(relative, bytes, PutMode::Create) {
-            Ok(_) => Ok(true),
-            Err(BorsukError::ConcurrentModification { .. }) => Ok(false),
-            Err(err) => Err(err),
-        }
-    }
-
     /// Create a mutable coordination object and return the exact version owned
     /// by this caller. `None` means another writer already created the path.
     /// Callers use the returned version for rollback that cannot overwrite a

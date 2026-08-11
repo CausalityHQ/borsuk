@@ -77,9 +77,9 @@ use crate::{
     },
     observability,
     positioned_log::{
-        CommittedPositionedMutation, INITIAL_POSITIONED_SOURCE_EPOCH, PositionedLogWriter,
-        PositionedMutationModality, PositionedMutationPayloadInput, PositionedPayloadFormat,
-        canonical_envelope_path, canonical_payload_path,
+        CommittedPositionedMutation, INITIAL_POSITIONED_SOURCE_EPOCH, PositionedLogReader,
+        PositionedLogWriter, PositionedMutationModality, PositionedMutationPayloadInput,
+        PositionedPayloadFormat, canonical_envelope_path, canonical_payload_path,
     },
     quantizer_sidecar::{PersistedQuantizer, is_quantizer_path, quantizer_relative_path},
     record::{
@@ -731,6 +731,9 @@ pub struct BorsukIndex {
     /// Exact run identities reconstructed from this modality's authoritative
     /// positioned snapshot, including runs hidden by consumed markers.
     positioned_run_identities: BTreeSet<String>,
+    /// Source positions already consumed by every modality in the pinned
+    /// collection generation but not necessarily reclaimed from shard heads.
+    positioned_materialized_candidates: Vec<crate::CommitSourcePosition>,
     positioned_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
     /// HEAD-reachable records from the format-v25 fixed ownership lanes.
     lane_log_snapshot: Vec<crate::lane_log::LaneLogRecordBlock>,
@@ -842,6 +845,18 @@ pub struct BorsukIndex {
     /// reuse, preserving snapshot isolation without rebuilding the complete
     /// tail for every point lookup.
     live_wal_snapshot_cache: LiveWalSnapshotCache,
+}
+
+struct ScopedThreadStop<'a> {
+    stop: &'a std::sync::atomic::AtomicBool,
+    thread: std::thread::Thread,
+}
+
+impl Drop for ScopedThreadStop<'_> {
+    fn drop(&mut self) {
+        self.stop.store(true, AtomicOrdering::Relaxed);
+        self.thread.unpark();
+    }
 }
 
 type LiveWalSnapshotCache = Arc<Mutex<Option<([u8; 32], Arc<LiveWalSnapshot>)>>>;
@@ -1456,6 +1471,7 @@ struct PreparedPositionedSnapshot {
     primary: PreparedPositionedModalitySnapshot,
     named: BTreeMap<String, PreparedPositionedModalitySnapshot>,
     primary_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
+    fully_materialized_positions: Vec<crate::CommitSourcePosition>,
 }
 
 #[derive(Debug)]
@@ -3211,6 +3227,7 @@ impl BorsukIndex {
             mutation_clock_time_ms: Some(0),
             cell_wal_snapshot: Vec::new(),
             positioned_run_identities: BTreeSet::new(),
+            positioned_materialized_candidates: Vec::new(),
             positioned_bm25_deltas: BTreeMap::new(),
             lane_log_snapshot: Vec::new(),
             lane_log_committed_sequences: Vec::new(),
@@ -3305,6 +3322,9 @@ impl BorsukIndex {
                 generation: 1,
                 schema_fingerprint: collection_schema_fingerprint(&index.manifest),
                 previous_snapshot_checksum: None,
+                positioned_source_epoch: POSITIONED_SOURCE_EPOCH,
+                positioned_materialized_sequences: [0; crate::positioned_log::SOURCE_SHARD_COUNT
+                    as usize],
                 modalities,
             };
             let loaded = index.storage.create_collection_snapshot(&snapshot)?;
@@ -3389,8 +3409,8 @@ impl BorsukIndex {
 
     fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
         let resident_routing = options.resident_routing || options.preload;
-        let (loaded_snapshot, _commits, collection_wal_snapshot_retries) =
-            storage.load_collection_view()?;
+        let loaded_snapshot = storage.load_collection_snapshot()?;
+        let collection_wal_snapshot_retries = 0;
         let primary_reference = loaded_snapshot
             .snapshot
             .modalities
@@ -3542,6 +3562,7 @@ impl BorsukIndex {
             mutation_clock_time_ms: None,
             cell_wal_snapshot: Vec::new(),
             positioned_run_identities: BTreeSet::new(),
+            positioned_materialized_candidates: Vec::new(),
             positioned_bm25_deltas: BTreeMap::new(),
             lane_log_snapshot: Vec::new(),
             lane_log_committed_sequences: Vec::new(),
@@ -3601,6 +3622,13 @@ impl BorsukIndex {
         index.lane_log_snapshot.clear();
         index.lane_log_committed_sequences.clear();
         index.lane_log_head_checksums.clear();
+        if let Some(lane_log_snapshot) =
+            index.read_lane_log_snapshot_if_changed(index.manifest.version)?
+        {
+            index.lane_log_snapshot = lane_log_snapshot.record_blocks;
+            index.lane_log_committed_sequences = lane_log_snapshot.committed_sequences;
+            index.lane_log_head_checksums = lane_log_snapshot.head_checksums;
+        }
         index.manifest.cell_wal_visible_runs = cell_wal_run_count(&index.cell_wal_snapshot);
         index.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&index.cell_wal_snapshot);
@@ -4087,10 +4115,11 @@ impl BorsukIndex {
     /// Long-lived reader nodes call this at their preferred polling boundary to
     /// observe remote WAL/delta commits without reopening the library. Existing
     /// handles remain snapshot-isolated until they explicitly refresh. Returns
-    /// `true` when the manifest advanced.
+    /// `true` when the collection snapshot, a modality manifest, or the
+    /// positioned mutation tail advanced.
     pub fn refresh(&mut self) -> Result<bool> {
-        let (latest_collection, collection_wal_transaction_ids, collection_wal_snapshot_retries) =
-            self.collection_storage.load_collection_view()?;
+        let latest_collection = self.collection_storage.load_collection_snapshot()?;
+        let collection_wal_snapshot_retries = 0;
         let resident_routing = self.resident_routing_summaries().is_some();
         let collection_resident_bytes = collection_reference_resident_bytes(
             &latest_collection.snapshot.modalities,
@@ -4142,11 +4171,7 @@ impl BorsukIndex {
                 "named modality `{own_modality}` schema changed during refresh"
             )));
         }
-        let latest_cell_wal_snapshot = self.fetch_cell_wal_snapshot_for_transactions(
-            &latest,
-            &latest_collection,
-            &collection_wal_transaction_ids,
-        )?;
+        let latest_cell_wal_snapshot = Vec::new();
         let latest_lane_log_snapshot = self.read_lane_log_snapshot_if_changed(latest.version)?;
         self.prepare_manifest_mutation_frontier(&latest)?;
         let latest_global_ann_pins = self.preload_resident_global_ann_for_manifest(&latest)?;
@@ -4177,11 +4202,7 @@ impl BorsukIndex {
                 &manifest,
                 child.resident_routing_summaries().is_some(),
             )?;
-            let cell_wal_snapshot = child.fetch_cell_wal_snapshot_for_transactions(
-                &manifest,
-                &latest_collection,
-                &collection_wal_transaction_ids,
-            )?;
+            let cell_wal_snapshot = Vec::new();
             child.prepare_manifest_mutation_frontier(&manifest)?;
             let global_pq_pins = child.preload_resident_global_ann_for_manifest(&manifest)?;
             manifest.cell_wal_visible_runs = cell_wal_run_count(&cell_wal_snapshot);
@@ -4198,14 +4219,11 @@ impl BorsukIndex {
             .as_ref()
             .is_none_or(|current| current.checksum != latest_collection.checksum);
         let manifest_advanced = latest.version != self.manifest.version;
-        let cell_wal_advanced = latest_cell_wal_snapshot != self.cell_wal_snapshot;
         let lane_log_advanced = latest_lane_log_snapshot.is_some();
-        let named_advanced = prepared_named
-            .iter()
-            .any(|(name, (manifest, _, snapshot, _))| {
-                let child = &self.named[name];
-                manifest.version != child.manifest.version || snapshot != &child.cell_wal_snapshot
-            });
+        let named_advanced = prepared_named.iter().any(|(name, (manifest, _, _, _))| {
+            let child = &self.named[name];
+            manifest.version != child.manifest.version
+        });
         let named_manifests = prepared_named
             .iter()
             .map(|(name, (manifest, _, _, _))| (name.clone(), manifest.clone()))
@@ -4220,12 +4238,7 @@ impl BorsukIndex {
                 modality.transactions != child.cell_wal_snapshot
                     || modality.run_identities != child.positioned_run_identities
             });
-        if !collection_advanced
-            && !manifest_advanced
-            && !cell_wal_advanced
-            && !lane_log_advanced
-            && !named_advanced
-        {
+        if !collection_advanced && !manifest_advanced && !lane_log_advanced && !named_advanced {
             let derived = positioned_advanced
                 .then(|| {
                     self.prepare_positioned_derived_state(
@@ -4283,7 +4296,7 @@ impl BorsukIndex {
                 .store(collection_wal_snapshot_retries, AtomicOrdering::Relaxed);
             child.collection_snapshot = Some(latest_collection.clone());
         }
-        self.collection_snapshot = Some(latest_collection);
+        self.collection_snapshot = Some(latest_collection.clone());
         self.install_prepared_positioned_snapshot(prepared_positioned, derived);
         Ok(true)
     }
@@ -4872,6 +4885,7 @@ impl BorsukIndex {
                 transaction_id: batch.transaction_id.clone(),
                 descriptor_path: descriptor_path.clone(),
                 descriptor_checksum: committed.envelope_checksum.clone(),
+                source_position: Some(committed.position),
                 runs,
                 metadata: batch
                     .metadata
@@ -4904,6 +4918,7 @@ impl BorsukIndex {
                 &batch.transaction_id,
                 &descriptor_path,
                 &committed.envelope_checksum,
+                committed.position,
                 &primary_run,
                 &batch.metadata,
             )
@@ -4936,6 +4951,7 @@ impl BorsukIndex {
         transaction_id: &str,
         descriptor_path: &str,
         descriptor_checksum: &str,
+        source_position: crate::CommitSourcePosition,
         primary_run: &PreparedCellWalRun,
         transaction_metadata: &BTreeMap<String, StagedPositionedMetadata>,
     ) -> Result<()> {
@@ -4965,6 +4981,7 @@ impl BorsukIndex {
                 transaction_id: transaction_id.to_string(),
                 descriptor_path: descriptor_path.to_string(),
                 descriptor_checksum: descriptor_checksum.to_string(),
+                source_position: Some(source_position),
                 runs: vec![run],
                 metadata: Vec::new(),
             };
@@ -5037,6 +5054,7 @@ impl BorsukIndex {
             .into_iter()
             .zip(snapshot.envelope_checksums)
         {
+            let mut fully_materialized = true;
             if envelope.schema_fingerprint != collection_schema_fingerprint(primary_manifest) {
                 return Err(BorsukError::InvalidStorage(format!(
                     "positioned transaction `{}` has an incompatible schema fingerprint",
@@ -5272,6 +5290,7 @@ impl BorsukIndex {
                     transaction_id: envelope.transaction_id.clone(),
                     descriptor_path: descriptor_path.clone(),
                     descriptor_checksum: descriptor_checksum.clone(),
+                    source_position: Some(envelope.position),
                     runs,
                     metadata: transaction_metadata
                         .get(&modality)
@@ -5300,6 +5319,7 @@ impl BorsukIndex {
                 if let Some(transaction) =
                     Self::retain_unconsumed_cell_wal_transaction(target_manifest, transaction)?
                 {
+                    fully_materialized = false;
                     primary_retained |= is_primary;
                     target.transactions.push(transaction);
                 }
@@ -5363,6 +5383,7 @@ impl BorsukIndex {
                         transaction_id: envelope.transaction_id.clone(),
                         descriptor_path: descriptor_path.clone(),
                         descriptor_checksum: descriptor_checksum.clone(),
+                        source_position: Some(envelope.position),
                         runs: vec![run],
                         metadata: Vec::new(),
                     };
@@ -5372,9 +5393,15 @@ impl BorsukIndex {
                     if let Some(transaction) =
                         Self::retain_unconsumed_cell_wal_transaction(named_manifest, transaction)?
                     {
+                        fully_materialized = false;
                         target.transactions.push(transaction);
                     }
                 }
+            }
+            if fully_materialized {
+                prepared
+                    .fully_materialized_positions
+                    .push(envelope.position);
             }
         }
         prepared
@@ -5438,6 +5465,7 @@ impl BorsukIndex {
     ) {
         self.cell_wal_snapshot = prepared.primary.transactions;
         self.positioned_run_identities = prepared.primary.run_identities;
+        self.positioned_materialized_candidates = prepared.fully_materialized_positions;
         self.positioned_bm25_deltas = prepared.primary_bm25_deltas;
         self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
         self.manifest.cell_wal_visible_tombstone_runs =
@@ -5451,6 +5479,7 @@ impl BorsukIndex {
                 .expect("prepared positioned modality belongs to the current schema");
             child.cell_wal_snapshot = modality.transactions;
             child.positioned_run_identities = modality.run_identities;
+            child.positioned_materialized_candidates.clear();
             child.manifest.cell_wal_visible_runs = cell_wal_run_count(&child.cell_wal_snapshot);
             child.manifest.cell_wal_visible_tombstone_runs =
                 cell_wal_tombstone_run_count(&child.cell_wal_snapshot);
@@ -5644,13 +5673,47 @@ impl BorsukIndex {
                 bytes,
             });
         }
-        let writer = self.positioned_log.as_ref().ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "positioned mutation append requires the collection root".to_string(),
-            )
-        })?;
-        let committed =
-            writer.append(&batch.transaction_id, &batch.schema_fingerprint, payloads)?;
+        let prepared = self
+            .positioned_log
+            .as_ref()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned mutation append requires the collection root".to_string(),
+                )
+            })?
+            .prepare_append(&batch.transaction_id, &batch.schema_fingerprint, payloads)?;
+        let committed = match self
+            .positioned_log
+            .as_ref()
+            .expect("positioned writer was validated above")
+            .append_prepared(&prepared)
+        {
+            Ok(committed) => committed,
+            Err(BorsukError::IngestBackpressure { .. }) => {
+                // A process may observe a full pinned head after the collection
+                // authority durably advanced its materialization watermark but
+                // before crash-recoverable head cleanup completed. Repair only
+                // on backpressure so the normal two-wave append path gains no
+                // collection read, then retry the same content-addressed input.
+                let current = self.collection_storage.load_collection_snapshot()?;
+                self.repair_positioned_heads_from_collection_snapshot(&current)?;
+                self.refresh()?;
+                self.reload_positioned_snapshot()?;
+                let candidates = self
+                    .positioned_materialized_candidates
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>();
+                if !candidates.is_empty() {
+                    self.publish_positioned_materialization_watermarks(&candidates)?;
+                }
+                self.positioned_log
+                    .as_ref()
+                    .expect("positioned writer was validated above")
+                    .append_prepared(&prepared)?
+            }
+            Err(error) => return Err(error),
+        };
         self.install_committed_positioned_batch(&batch, &committed, tombstone_projections);
         let mut report = add_report_from_parts(
             0,
@@ -6808,7 +6871,7 @@ impl BorsukIndex {
         }
         if config.compaction && maintenance::owns_shard("compact", rank, count) {
             let compacted =
-                self.run_leased_unit(config, "compact", ttl_ms, now, &mut report, |index| {
+                self.run_leased_unit(config, "compact", ttl_ms, &mut report, |index| {
                     Ok(index
                         .compact_primary(CompactionOptions::default())?
                         .compacted)
@@ -6819,21 +6882,19 @@ impl BorsukIndex {
             && self.manifest.tombstone_id_count > 0
             && maintenance::owns_shard("purge", rank, count)
         {
-            let purged =
-                self.run_leased_unit(config, "purge", ttl_ms, now, &mut report, |index| {
-                    Ok(index.purge_primary_with_report()?.published)
-                })?;
+            let purged = self.run_leased_unit(config, "purge", ttl_ms, &mut report, |index| {
+                Ok(index.purge_primary_with_report()?.published)
+            })?;
             report.purged = purged;
         }
         if config.garbage_collection && maintenance::owns_shard("gc", rank, count) {
-            let collected =
-                self.run_leased_unit(config, "gc", ttl_ms, now, &mut report, |index| {
-                    let gc = index.gc_obsolete_segments_primary(GarbageCollectionOptions {
-                        dry_run: false,
-                        min_age: config.lease_ttl,
-                    })?;
-                    Ok(!gc.dry_run)
+            let collected = self.run_leased_unit(config, "gc", ttl_ms, &mut report, |index| {
+                let gc = index.gc_obsolete_segments_primary(GarbageCollectionOptions {
+                    dry_run: false,
+                    min_age: config.lease_ttl,
                 })?;
+                Ok(!gc.dry_run)
+            })?;
             report.garbage_collected = collected;
         }
         for child in self.named.values_mut() {
@@ -6850,17 +6911,70 @@ impl BorsukIndex {
         config: &MaintenanceConfig,
         key: &str,
         ttl_ms: i64,
-        now_ms: i64,
         report: &mut MaintenanceReport,
         work: impl FnOnce(&mut Self) -> Result<bool>,
     ) -> Result<bool> {
-        if !maintenance::acquire_lease(&self.storage, key, &config.instance_id, ttl_ms, now_ms)? {
+        let Some(lease) = maintenance::acquire_lease(
+            &self.storage,
+            key,
+            &config.instance_id,
+            ttl_ms,
+            Utc::now().timestamp_millis(),
+        )?
+        else {
             report.leases_contended += 1;
             return Ok(false);
+        };
+        if config.lease_ttl.is_zero() {
+            let _ = maintenance::release_lease(&self.storage, &lease);
+            return Err(BorsukError::InvalidStorage(
+                "maintenance lease TTL must be positive".to_string(),
+            ));
         }
-        let outcome = work(self);
-        let _ = maintenance::release_lease(&self.storage, key);
-        outcome
+        let renewal_interval = (config.lease_ttl / 3).max(Duration::from_millis(1));
+        let renewal_storage = self.storage.clone();
+        let lease = Mutex::new(lease);
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let renewer = scope.spawn(|| -> Result<()> {
+                loop {
+                    std::thread::park_timeout(renewal_interval);
+                    if stop.load(AtomicOrdering::Relaxed) {
+                        return Ok(());
+                    }
+                    let mut lease = lease.lock().unwrap_or_else(|error| error.into_inner());
+                    if !maintenance::renew_lease(
+                        &renewal_storage,
+                        &mut lease,
+                        ttl_ms,
+                        Utc::now().timestamp_millis(),
+                    )? {
+                        return Err(BorsukError::ConcurrentModification {
+                            path: format!("maintenance lease `{key}`"),
+                        });
+                    }
+                }
+            });
+            let stop_renewer = ScopedThreadStop {
+                stop: &stop,
+                thread: renewer.thread().clone(),
+            };
+            let outcome = work(self);
+            drop(stop_renewer);
+            let renewal = renewer.join().map_err(|_| {
+                BorsukError::InvalidStorage(format!(
+                    "maintenance lease renewer for `{key}` panicked"
+                ))
+            })?;
+            let release = {
+                let lease = lease.lock().unwrap_or_else(|error| error.into_inner());
+                maintenance::release_lease(&self.storage, &lease)
+            };
+            let work_result = outcome?;
+            renewal?;
+            release?;
+            Ok(work_result)
+        })
     }
 
     /// Run one incremental-maintenance pass: split oversized bubbles and merge
@@ -10132,24 +10246,16 @@ impl BorsukIndex {
             .map(|run| run.byte_len)
             .fold(0_u64, u64::saturating_add);
         let aggregate_crossed = aggregate_byte_cap > 0 && aggregate_bytes >= aggregate_byte_cap;
-        let (flush_attempted, flush_result) = if legacy_crossed || aggregate_crossed {
-            (true, self.flush_wal())
-        } else if !crossed_cells.is_empty() {
-            let selected_transactions = self
-                .cell_wal_snapshot
-                .iter()
-                .filter(|transaction| {
-                    transaction
-                        .runs
-                        .iter()
-                        .any(|run| crossed_cells.contains(&run.cell))
-                })
-                .map(|transaction| transaction.transaction_id.clone())
-                .collect::<BTreeSet<_>>();
-            (true, self.flush_wal_transactions(&selected_transactions))
-        } else {
-            (false, Ok(()))
-        };
+        let (flush_attempted, flush_result) =
+            if legacy_crossed || aggregate_crossed || !crossed_cells.is_empty() {
+                // Positioned source slots are reclaimed only after every modality
+                // has materialized one collection-wide prefix. Until row-level
+                // routed bundles land, a selective primary-only flush would either
+                // leak bounded head capacity or hide a named projection.
+                (true, self.flush())
+            } else {
+                (false, Ok(()))
+            };
         match flush_result {
             Ok(()) => return Ok(flush_attempted),
             Err(BorsukError::ConcurrentModification { .. }) => {
@@ -10176,12 +10282,197 @@ impl BorsukIndex {
         let legacy_transactions_before_flush = (!self.uses_positioned_mutation_authority())
             .then(|| self.collection_wal_transactions_by_modality());
         self.flush_wal()?;
+        let mut latest_collection = self.collection_snapshot.clone();
         for child in self.named.values_mut() {
+            child.collection_snapshot = latest_collection.clone();
             child.flush_wal()?;
+            latest_collection.clone_from(&child.collection_snapshot);
+        }
+        if let Some(latest_collection) = latest_collection {
+            self.collection_snapshot = Some(latest_collection.clone());
+            for child in self.named.values_mut() {
+                child.collection_snapshot = Some(latest_collection.clone());
+            }
         }
         if let Some(transactions) = legacy_transactions_before_flush {
             self.prune_fully_consumed_collection_transactions(&transactions)?;
         }
+        if self.positioned_log.is_some() {
+            // Rebuild candidates from the final collection generation rather
+            // than from the primary's pre-flush view. This preserves recovery
+            // across a prior partial root/named materialization: only a source
+            // position consumed by every modality becomes checkpointable.
+            self.reload_positioned_snapshot()?;
+            let positioned_candidates = self
+                .positioned_materialized_candidates
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>();
+            self.publish_positioned_materialization_watermarks(&positioned_candidates)?;
+        }
+        Ok(())
+    }
+
+    fn publish_positioned_materialization_watermarks(
+        &mut self,
+        candidates: &BTreeSet<crate::CommitSourcePosition>,
+    ) -> Result<()> {
+        const MAX_WATERMARK_CAS_ATTEMPTS: usize = 128;
+        let mut candidates = candidates.clone();
+        for _ in 0..MAX_WATERMARK_CAS_ATTEMPTS {
+            let current = self.collection_storage.load_collection_snapshot()?;
+            if current.snapshot.positioned_source_epoch != POSITIONED_SOURCE_EPOCH {
+                return Err(BorsukError::InvalidStorage(
+                    "collection positioned source epoch differs from the active writer".to_string(),
+                ));
+            }
+            let (pinned_checksum, pinned_modalities) = self
+                .collection_snapshot
+                .as_ref()
+                .map(|pinned| (pinned.checksum.clone(), pinned.snapshot.modalities.clone()))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "positioned materialization requires a pinned collection snapshot"
+                            .to_string(),
+                    )
+                })?;
+            if current.checksum != pinned_checksum {
+                let candidates_already_authorized = candidates.iter().all(|position| {
+                    position.source_epoch == current.snapshot.positioned_source_epoch
+                        && current.snapshot.positioned_materialized_sequences
+                            [usize::from(position.shard)]
+                            >= position.sequence
+                });
+                if candidates_already_authorized {
+                    self.repair_positioned_heads_from_collection_snapshot(&current)?;
+                    if current.snapshot.modalities == pinned_modalities {
+                        self.collection_snapshot = Some(current.clone());
+                        for child in self.named.values_mut() {
+                            child.collection_snapshot = Some(current.clone());
+                        }
+                    } else {
+                        self.refresh()?;
+                    }
+                    self.positioned_materialized_candidates.retain(|position| {
+                        current.snapshot.positioned_materialized_sequences
+                            [usize::from(position.shard)]
+                            < position.sequence
+                    });
+                    return Ok(());
+                }
+                if current.snapshot.modalities == pinned_modalities {
+                    self.collection_snapshot = Some(current.clone());
+                    for child in self.named.values_mut() {
+                        child.collection_snapshot = Some(current.clone());
+                    }
+                    continue;
+                }
+                self.refresh()?;
+                candidates.retain(|position| {
+                    self.collection_snapshot.as_ref().is_some_and(|collection| {
+                        collection.snapshot.positioned_source_epoch == position.source_epoch
+                            && collection.snapshot.positioned_materialized_sequences
+                                [usize::from(position.shard)]
+                                >= position.sequence
+                    }) || self.positioned_materialized_candidates.contains(position)
+                });
+                if candidates.is_empty() {
+                    return Ok(());
+                }
+                continue;
+            }
+
+            let mut sequences = current.snapshot.positioned_materialized_sequences;
+            for shard in 0..crate::positioned_log::SOURCE_SHARD_COUNT {
+                let slot = &mut sequences[usize::from(shard)];
+                let mut expected = slot.checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "collection positioned materialized sequence exceeds u64".to_string(),
+                    )
+                })?;
+                for position in candidates.iter().filter(|position| {
+                    position.source_epoch == POSITIONED_SOURCE_EPOCH && position.shard == shard
+                }) {
+                    if position.sequence < expected {
+                        continue;
+                    }
+                    if position.sequence != expected {
+                        break;
+                    }
+                    *slot = position.sequence;
+                    expected = expected.checked_add(1).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "collection positioned materialized sequence exceeds u64".to_string(),
+                        )
+                    })?;
+                }
+            }
+            let loaded = if sequences == current.snapshot.positioned_materialized_sequences {
+                current
+            } else {
+                let mut next = current.snapshot.clone();
+                next.generation = next.generation.checked_add(1).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "collection snapshot generation exceeds u64".to_string(),
+                    )
+                })?;
+                next.previous_snapshot_checksum = Some(current.checksum.clone());
+                next.positioned_materialized_sequences = sequences;
+                match self
+                    .collection_storage
+                    .compare_and_swap_collection_snapshot_with_report(
+                        current.current_version,
+                        &next,
+                        &mut StorageWriteReport::default(),
+                    ) {
+                    Ok(loaded) => loaded,
+                    Err(BorsukError::ConcurrentModification { .. }) => continue,
+                    Err(error) => return Err(error),
+                }
+            };
+            self.collection_snapshot = Some(loaded.clone());
+            for child in self.named.values_mut() {
+                child.collection_snapshot = Some(loaded.clone());
+            }
+            self.repair_positioned_heads_from_collection_snapshot(&loaded)?;
+            self.positioned_materialized_candidates.retain(|position| {
+                loaded.snapshot.positioned_materialized_sequences[usize::from(position.shard)]
+                    < position.sequence
+            });
+            return Ok(());
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: COLLECTION_CURRENT.to_string(),
+        })
+    }
+
+    fn repair_positioned_heads_from_collection_snapshot(
+        &self,
+        collection: &LoadedCollectionSnapshot,
+    ) -> Result<()> {
+        let Some(writer) = &self.positioned_log else {
+            return Ok(());
+        };
+        if collection.snapshot.positioned_source_epoch != POSITIONED_SOURCE_EPOCH {
+            return Err(BorsukError::InvalidStorage(
+                "collection positioned source epoch differs from the active writer".to_string(),
+            ));
+        }
+        collection
+            .snapshot
+            .positioned_materialized_sequences
+            .par_iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, sequence)| *sequence > 0)
+            .map(|(shard, sequence)| {
+                writer.checkpoint_materialized_through_if_behind(
+                    u8::try_from(shard).expect("fixed positioned shard index fits u8"),
+                    sequence,
+                    collection.snapshot.generation,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(())
     }
 
@@ -13483,13 +13774,47 @@ impl BorsukIndex {
             }
         }
         Self::extend_cell_wal_metadata_object_paths(&mut paths, &self.cell_wal_snapshot)?;
+        let mut positioned_retained_transaction_ids = BTreeSet::new();
+        let positioned_reader = if let Some(writer) = &self.positioned_log {
+            Some(writer.reader())
+        } else if let Some(collection) = &self.collection_snapshot {
+            Some(PositionedLogReader::open_from_storage(
+                self.collection_storage.clone(),
+                collection.snapshot.positioned_source_epoch,
+                &collection.snapshot.schema_fingerprint,
+            )?)
+        } else {
+            None
+        };
+        if let Some(reader) = positioned_reader {
+            let retained = reader.snapshot_with_recent_receipts()?;
+            for (transaction, envelope_checksum) in retained
+                .transactions
+                .iter()
+                .zip(retained.envelope_checksums.iter())
+            {
+                positioned_retained_transaction_ids.insert(transaction.transaction_id.clone());
+                paths.insert(canonical_envelope_path(envelope_checksum));
+                paths.extend(
+                    transaction
+                        .payloads
+                        .iter()
+                        .map(|payload| payload.path.clone()),
+                );
+            }
+        }
         let cell_wal = self.cell_wal_store()?;
         paths.extend(cell_wal.active_object_paths(self.manifest.logical_cells())?);
         let legacy_consumed_runs = self
             .manifest
             .cell_wal_consumed_runs
             .iter()
-            .filter(|identity| !self.positioned_run_identities.contains(*identity))
+            .filter(|identity| {
+                !self.positioned_run_identities.contains(*identity)
+                    && identity.split_once(':').is_none_or(|(transaction_id, _)| {
+                        !positioned_retained_transaction_ids.contains(transaction_id)
+                    })
+            })
             .cloned()
             .collect::<BTreeSet<_>>();
         let (retained_paths, retained_transactions) =
@@ -25594,19 +25919,18 @@ mod tests {
             .iter()
             .map(cell_wal_run_identity)
             .collect::<BTreeSet<_>>();
+        let generation_before_flush = index
+            .collection_snapshot
+            .as_ref()
+            .unwrap()
+            .snapshot
+            .generation;
         let positioned_before_flush = index
             .positioned_log
             .as_ref()
             .unwrap()
             .reader()
-            .snapshot_for_collection_generation(
-                index
-                    .collection_snapshot
-                    .as_ref()
-                    .unwrap()
-                    .snapshot
-                    .generation,
-            )
+            .snapshot_for_collection_generation(generation_before_flush)
             .unwrap();
         assert!(
             positioned_before_flush
@@ -25638,11 +25962,22 @@ mod tests {
             )
             .unwrap();
         assert!(
-            positioned_after_flush
+            positioned_after_flush.transactions.is_empty(),
+            "the current materialized generation must not rescan checkpointed transactions"
+        );
+        let positioned_for_pinned_reader = index
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot_for_collection_generation(generation_before_flush)
+            .unwrap();
+        assert!(
+            positioned_for_pinned_reader
                 .transactions
                 .iter()
                 .any(|transaction| transaction.transaction_id == transaction_id),
-            "explicit flush must not checkpoint the authoritative positioned source"
+            "the bounded recent receipt must preserve the pre-flush pinned generation"
         );
         assert_eq!(
             index
@@ -26229,20 +26564,834 @@ mod tests {
             positioned_run_identities
         );
         assert!(index.cell_wal_snapshot.is_empty());
+        let current_source = index
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot()
+            .unwrap();
+        assert_eq!(
+            current_source.materialized_sequences[usize::from(source_position.shard)],
+            source_position.sequence,
+            "a successful materialization must reclaim its bounded pending-head slot"
+        );
+        assert!(
+            current_source.transactions.is_empty(),
+            "the current collection generation must not rescan a materialized transaction"
+        );
         let source = index
             .positioned_log
             .as_ref()
             .unwrap()
             .reader()
-            .snapshot_for_collection_generation(materialized_generation)
+            .snapshot_for_collection_generation(materialized_generation - 1)
             .unwrap();
         assert!(
             source
                 .transactions
                 .iter()
                 .any(|transaction| transaction.position == source_position),
-            "the consumed fence must remain while its source position is authoritative"
+            "the bounded recent receipt must preserve the pre-watermark pinned generation"
         );
+    }
+
+    #[test]
+    fn unchanged_positioned_snapshot_refresh_is_a_noop() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        writer
+            .add(vec![VectorRecord::new("visible", vec![1.0, 0.0])])
+            .unwrap();
+
+        let mut reader = BorsukIndex::open(&uri).unwrap();
+        let collection = reader
+            .collection_storage
+            .load_collection_snapshot()
+            .unwrap();
+        assert_eq!(
+            reader.collection_snapshot.as_ref().unwrap().checksum,
+            collection.checksum
+        );
+        let prepared = reader
+            .prepare_positioned_snapshot(&collection, &reader.manifest, &BTreeMap::new())
+            .unwrap();
+        assert_eq!(prepared.primary.transactions, reader.cell_wal_snapshot);
+        assert_eq!(
+            prepared.primary.run_identities,
+            reader.positioned_run_identities
+        );
+        assert!(!reader.refresh().unwrap());
+        assert!(!reader.refresh().unwrap());
+    }
+
+    #[test]
+    fn leased_maintenance_renews_ownership_during_long_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let config = MaintenanceConfig {
+            instance_id: "owner-a".to_string(),
+            lease_ttl: Duration::from_millis(300),
+            incremental: false,
+            compaction: false,
+            garbage_collection: false,
+            purge: false,
+        };
+        let contender_storage = index.storage.clone();
+        let contender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            maintenance::acquire_lease(
+                &contender_storage,
+                "long-work",
+                "owner-b",
+                300,
+                Utc::now().timestamp_millis(),
+            )
+            .unwrap()
+            .is_some()
+        });
+        let mut report = MaintenanceReport::default();
+        let ran = index
+            .run_leased_unit(&config, "long-work", 300, &mut report, |_| {
+                std::thread::sleep(Duration::from_millis(800));
+                Ok(true)
+            })
+            .unwrap();
+        assert!(ran);
+        assert!(!contender.join().unwrap());
+    }
+
+    #[test]
+    fn leased_maintenance_panic_does_not_trap_the_scoped_renewer() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let config = MaintenanceConfig {
+            instance_id: "panic-owner".to_string(),
+            lease_ttl: Duration::from_millis(300),
+            incremental: false,
+            compaction: false,
+            garbage_collection: false,
+            purge: false,
+        };
+        let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut report = MaintenanceReport::default();
+                let _ = index.run_leased_unit(&config, "panic-work", 300, &mut report, |_| {
+                    panic!("injected maintenance panic")
+                });
+            }))
+            .is_err();
+            let _ = finished_tx.send(completed);
+        });
+
+        assert!(
+            finished_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "unwinding maintenance work must stop and join its renewer"
+        );
+    }
+
+    #[test]
+    fn leased_unit_uses_its_acquisition_time_not_the_pass_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let config = MaintenanceConfig {
+            instance_id: "fresh-clock-owner".to_string(),
+            lease_ttl: Duration::from_millis(90),
+            incremental: false,
+            compaction: false,
+            garbage_collection: false,
+            purge: false,
+        };
+        std::thread::sleep(Duration::from_millis(120));
+        let mut report = MaintenanceReport::default();
+        assert!(
+            index
+                .run_leased_unit(&config, "fresh-clock", 90, &mut report, |_| {
+                    std::thread::sleep(Duration::from_millis(45));
+                    Ok(true)
+                },)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn flush_reclaims_capacity_for_more_than_one_same_shard_head_window() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 128,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+        let transaction_ids = (0_u64..)
+            .map(|ordinal| format!("same-shard-{ordinal}"))
+            .filter(|transaction_id| {
+                blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                    .is_multiple_of(crate::positioned_log::SOURCE_SHARD_COUNT)
+            })
+            .take(crate::positioned_log::MAX_PENDING_ENVELOPES_PER_SHARD + 1)
+            .collect::<Vec<_>>();
+
+        for (ordinal, transaction_id) in transaction_ids.iter().take(64).enumerate() {
+            index.begin_collection_transaction().unwrap();
+            index
+                .active_collection_transaction
+                .as_mut()
+                .unwrap()
+                .id
+                .clone_from(transaction_id);
+            let result = index.add_collection_records(vec![VectorRecord::new(
+                format!("row-{ordinal}"),
+                vec![ordinal as f32, 0.0],
+            )]);
+            index.finish_collection_transaction(result).unwrap();
+        }
+        index.flush().unwrap();
+
+        let last_id = transaction_ids.last().unwrap();
+        index.begin_collection_transaction().unwrap();
+        index
+            .active_collection_transaction
+            .as_mut()
+            .unwrap()
+            .id
+            .clone_from(last_id);
+        let result =
+            index.add_collection_records(vec![VectorRecord::new("after-window", vec![65.0, 0.0])]);
+        index.finish_collection_transaction(result).unwrap();
+        drop(index);
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(
+            reopened.get_vector("after-window").unwrap(),
+            Some(vec![65.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn repeated_flushes_checkpoint_only_newly_advanced_shards() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let transaction_for_shard = |target: u8| {
+            (0_u64..)
+                .map(|ordinal| format!("two-flush-{target}-{ordinal}"))
+                .find(|transaction_id| {
+                    blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                        % crate::positioned_log::SOURCE_SHARD_COUNT
+                        == target
+                })
+                .unwrap()
+        };
+
+        for shard in [0_u8, 1] {
+            index.begin_collection_transaction().unwrap();
+            index.active_collection_transaction.as_mut().unwrap().id = transaction_for_shard(shard);
+            let result = index.add_collection_records(vec![VectorRecord::new(
+                format!("row-{shard}"),
+                vec![f32::from(shard), 0.0],
+            )]);
+            index.finish_collection_transaction(result).unwrap();
+            index.flush().unwrap();
+        }
+        drop(index);
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(reopened.get_vector("row-0").unwrap(), Some(vec![0.0, 0.0]));
+        assert_eq!(reopened.get_vector("row-1").unwrap(), Some(vec![1.0, 0.0]));
+    }
+
+    #[test]
+    fn explicit_flush_repairs_a_head_after_watermark_publication_crash() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let (_, report) = index
+            .add_with_report(vec![vec![1.0, 0.0]], Some(vec!["recovered".to_string()]))
+            .unwrap();
+        let position = report.positioned_position.unwrap();
+        index.flush_wal().unwrap();
+
+        let current = index.collection_storage.load_collection_snapshot().unwrap();
+        let mut next = current.snapshot.clone();
+        next.generation += 1;
+        next.previous_snapshot_checksum = Some(current.checksum.clone());
+        next.positioned_materialized_sequences[usize::from(position.shard)] = position.sequence;
+        index
+            .collection_storage
+            .compare_and_swap_collection_snapshot_with_report(
+                current.current_version,
+                &next,
+                &mut StorageWriteReport::default(),
+            )
+            .unwrap();
+        drop(index);
+
+        let mut reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(
+            reopened.get_vector("recovered").unwrap(),
+            Some(vec![1.0, 0.0])
+        );
+        let before_repair = reopened
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot()
+            .unwrap();
+        assert_eq!(
+            before_repair.materialized_sequences[usize::from(position.shard)],
+            0,
+            "open must remain read-only even when checkpoint cleanup is pending"
+        );
+
+        reopened.flush().unwrap();
+        let source = reopened
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot()
+            .unwrap();
+        assert_eq!(
+            source.materialized_sequences[usize::from(position.shard)],
+            position.sequence
+        );
+        assert!(source.transactions.is_empty());
+    }
+
+    #[test]
+    fn backpressured_append_repairs_a_published_materialization_watermark() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 128,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+        let transaction_ids = (0_u64..)
+            .map(|ordinal| format!("repair-on-append-{ordinal}"))
+            .filter(|transaction_id| {
+                blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                    .is_multiple_of(crate::positioned_log::SOURCE_SHARD_COUNT)
+            })
+            .take(crate::positioned_log::MAX_PENDING_ENVELOPES_PER_SHARD + 1)
+            .collect::<Vec<_>>();
+        for (ordinal, transaction_id) in transaction_ids.iter().take(64).enumerate() {
+            index.begin_collection_transaction().unwrap();
+            index
+                .active_collection_transaction
+                .as_mut()
+                .unwrap()
+                .id
+                .clone_from(transaction_id);
+            let result = index.add_collection_records(vec![VectorRecord::new(
+                format!("repair-row-{ordinal}"),
+                vec![ordinal as f32, 0.0],
+            )]);
+            index.finish_collection_transaction(result).unwrap();
+        }
+        let materialized_through = index
+            .cell_wal_snapshot
+            .iter()
+            .filter_map(|transaction| transaction.source_position)
+            .map(|position| position.sequence)
+            .max()
+            .unwrap();
+        index.flush_wal().unwrap();
+
+        // Simulate a crash after the collection authority published the
+        // materialized prefix but before this process checkpointed shard 0.
+        let current = index.collection_storage.load_collection_snapshot().unwrap();
+        let mut next = current.snapshot.clone();
+        next.generation += 1;
+        next.previous_snapshot_checksum = Some(current.checksum.clone());
+        next.positioned_materialized_sequences[0] = materialized_through;
+        index
+            .collection_storage
+            .compare_and_swap_collection_snapshot_with_report(
+                current.current_version,
+                &next,
+                &mut StorageWriteReport::default(),
+            )
+            .unwrap();
+
+        index.begin_collection_transaction().unwrap();
+        index
+            .active_collection_transaction
+            .as_mut()
+            .unwrap()
+            .id
+            .clone_from(transaction_ids.last().unwrap());
+        let result =
+            index.add_collection_records(vec![VectorRecord::new("after-repair", vec![65.0, 0.0])]);
+        index.finish_collection_transaction(result).unwrap();
+        assert_eq!(
+            index.get_vector("after-repair").unwrap(),
+            Some(vec![65.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn explicit_flush_publishes_a_missing_watermark_after_materialization_crash() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let (_, report) = index
+            .add_with_report(vec![vec![2.0, 0.0]], Some(vec!["recovered".to_string()]))
+            .unwrap();
+        let position = report.positioned_position.unwrap();
+        index.flush_wal().unwrap();
+        assert_eq!(
+            index
+                .collection_snapshot
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .positioned_materialized_sequences[usize::from(position.shard)],
+            0
+        );
+        drop(index);
+
+        let mut reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(
+            reopened
+                .collection_snapshot
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .positioned_materialized_sequences[usize::from(position.shard)],
+            0,
+            "open must not mutate collection authority"
+        );
+        assert_eq!(
+            reopened.get_vector("recovered").unwrap(),
+            Some(vec![2.0, 0.0])
+        );
+        reopened.flush().unwrap();
+        assert_eq!(
+            reopened
+                .collection_snapshot
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .positioned_materialized_sequences[usize::from(position.shard)],
+            position.sequence
+        );
+    }
+
+    #[test]
+    fn concurrent_watermark_publishers_converge_without_open_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut seed = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let (_, report) = seed
+            .add_with_report(vec![vec![3.0, 0.0]], Some(vec!["converged".to_string()]))
+            .unwrap();
+        let position = report.positioned_position.unwrap();
+        seed.flush_wal().unwrap();
+        drop(seed);
+
+        let first = BorsukIndex::open(&uri).unwrap();
+        let second = BorsukIndex::open(&uri).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let spawn = |mut index: BorsukIndex| {
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                index.flush()
+            })
+        };
+        let first = spawn(first);
+        let second = spawn(second);
+        barrier.wait();
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(
+            reopened.get_vector("converged").unwrap(),
+            Some(vec![3.0, 0.0])
+        );
+        assert_eq!(
+            reopened
+                .collection_snapshot
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .positioned_materialized_sequences[usize::from(position.shard)],
+            position.sequence
+        );
+    }
+
+    #[test]
+    fn disjoint_stale_watermark_publishers_converge() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut seed = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let transaction_for_shard = |target: u8| {
+            (0_u64..)
+                .map(|ordinal| format!("disjoint-watermark-{target}-{ordinal}"))
+                .find(|transaction_id| {
+                    blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                        % crate::positioned_log::SOURCE_SHARD_COUNT
+                        == target
+                })
+                .unwrap()
+        };
+        let mut positions = Vec::new();
+        for shard in [0_u8, 1] {
+            let transaction_id = transaction_for_shard(shard);
+            seed.begin_collection_transaction().unwrap();
+            seed.active_collection_transaction.as_mut().unwrap().id = transaction_id.clone();
+            let result = seed.add_collection_records(vec![VectorRecord::new(
+                format!("disjoint-{shard}"),
+                vec![f32::from(shard), 0.0],
+            )]);
+            seed.finish_collection_transaction(result).unwrap();
+            positions.push(
+                seed.cell_wal_snapshot
+                    .iter()
+                    .find(|transaction| transaction.transaction_id == transaction_id)
+                    .unwrap()
+                    .source_position
+                    .unwrap(),
+            );
+        }
+        seed.flush_wal().unwrap();
+        drop(seed);
+
+        let mut first = BorsukIndex::open(&uri).unwrap();
+        let mut second = BorsukIndex::open(&uri).unwrap();
+        assert!(
+            positions
+                .iter()
+                .all(|position| first.positioned_materialized_candidates.contains(position))
+        );
+        assert!(
+            positions
+                .iter()
+                .all(|position| second.positioned_materialized_candidates.contains(position))
+        );
+
+        first
+            .publish_positioned_materialization_watermarks(&BTreeSet::from([positions[0]]))
+            .unwrap();
+        second
+            .publish_positioned_materialization_watermarks(&BTreeSet::from([positions[1]]))
+            .unwrap();
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        let materialized = reopened
+            .collection_snapshot
+            .as_ref()
+            .unwrap()
+            .snapshot
+            .positioned_materialized_sequences;
+        for position in positions {
+            assert_eq!(materialized[usize::from(position.shard)], position.sequence);
+        }
+    }
+
+    #[test]
+    fn collection_watermark_advances_only_after_named_projection_materializes() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "image".to_string(),
+                VectorSpec {
+                    dimensions: 3,
+                    metric: VectorMetric::Euclidean,
+                    kind: VectorKind::Dense,
+                    element_type: crate::VectorElementType::Float32,
+                },
+            )]),
+        })
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("cross-modal", vec![1.0, 0.0])
+                    .with_named_vector("image", vec![0.0, 1.0, 0.0]),
+            ])
+            .unwrap();
+        let position = index.cell_wal_snapshot[0].source_position.unwrap();
+
+        index.flush().unwrap();
+        let source = index
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot()
+            .unwrap();
+        assert_eq!(
+            source.materialized_sequences[usize::from(position.shard)],
+            position.sequence
+        );
+        drop(index);
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(
+            reopened.get_vector("cross-modal").unwrap(),
+            Some(vec![1.0, 0.0])
+        );
+        assert_eq!(
+            reopened
+                .search_ids(
+                    &[0.0, 1.0, 0.0],
+                    SearchOptions::exact(1).with_vector_name("image"),
+                )
+                .unwrap(),
+            ["cross-modal"]
+        );
+    }
+
+    #[test]
+    fn retry_after_partial_named_flush_rederives_the_materialized_position() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "image".to_string(),
+                VectorSpec {
+                    dimensions: 3,
+                    metric: VectorMetric::Euclidean,
+                    kind: VectorKind::Dense,
+                    element_type: crate::VectorElementType::Float32,
+                },
+            )]),
+        })
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("partial", vec![1.0, 0.0])
+                    .with_named_vector("image", vec![0.0, 1.0, 0.0]),
+            ])
+            .unwrap();
+        let position = index.cell_wal_snapshot[0].source_position.unwrap();
+
+        // Model a failure after the primary manifest publishes but before the
+        // named child materializes, followed by a refresh of the partial view.
+        index.flush_wal().unwrap();
+        let root_collection = index.collection_snapshot.clone();
+        for child in index.named.values_mut() {
+            child.collection_snapshot.clone_from(&root_collection);
+        }
+        index.reload_positioned_snapshot().unwrap();
+        assert!(index.positioned_materialized_candidates.is_empty());
+
+        index.named.get_mut("image").unwrap().flush_wal().unwrap();
+        let final_collection = index.named["image"].collection_snapshot.clone();
+        index.collection_snapshot.clone_from(&final_collection);
+        for child in index.named.values_mut() {
+            child.collection_snapshot.clone_from(&final_collection);
+        }
+
+        index.flush().unwrap();
+        assert_eq!(
+            index
+                .collection_snapshot
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .positioned_materialized_sequences[usize::from(position.shard)],
+            position.sequence
+        );
+    }
+
+    #[test]
+    fn materialization_watermark_never_skips_an_earlier_same_shard_transaction() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 4,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+        let transaction_ids = (0_u64..)
+            .map(|ordinal| format!("gap-{ordinal}"))
+            .filter(|transaction_id| {
+                blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                    .is_multiple_of(crate::positioned_log::SOURCE_SHARD_COUNT)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+        for (ordinal, transaction_id) in transaction_ids.iter().enumerate() {
+            index.begin_collection_transaction().unwrap();
+            index
+                .active_collection_transaction
+                .as_mut()
+                .unwrap()
+                .id
+                .clone_from(transaction_id);
+            let result = index.add_collection_records(vec![VectorRecord::new(
+                format!("gap-row-{ordinal}"),
+                vec![ordinal as f32, 0.0],
+            )]);
+            index.finish_collection_transaction(result).unwrap();
+        }
+        let later = index
+            .cell_wal_snapshot
+            .iter()
+            .max_by_key(|transaction| transaction.source_position.unwrap().sequence)
+            .unwrap()
+            .clone();
+        index
+            .flush_wal_transactions(&BTreeSet::from([later.transaction_id.clone()]))
+            .unwrap();
+        index
+            .publish_positioned_materialization_watermarks(&BTreeSet::from([later
+                .source_position
+                .unwrap()]))
+            .unwrap();
+
+        let collection = index.collection_snapshot.as_ref().unwrap();
+        assert_eq!(collection.snapshot.positioned_materialized_sequences[0], 0);
+        let source = index
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot()
+            .unwrap();
+        assert_eq!(source.materialized_sequences[0], 0);
+        assert_eq!(source.transactions.len(), 2);
     }
 
     #[test]

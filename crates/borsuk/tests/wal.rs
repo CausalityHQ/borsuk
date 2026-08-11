@@ -614,7 +614,7 @@ fn mutation_wal_is_snapshot_isolated_across_reader_nodes() {
     );
     assert!(pinned_reader.refresh().unwrap());
     assert!(pinned_reader.get_vector("shared").unwrap().is_none());
-    assert!(pinned_reader.refresh().unwrap());
+    assert!(!pinned_reader.refresh().unwrap());
 }
 
 #[test]

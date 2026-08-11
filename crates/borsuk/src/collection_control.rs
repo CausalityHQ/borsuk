@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::{BorsukError, Result, manifest::Manifest, record::VectorKind};
 
-const COLLECTION_CODEC_VERSION: u8 = 3;
+const COLLECTION_CODEC_VERSION: u8 = 4;
 const COLLECTION_CHECKSUM_LEN: usize = 32;
 const COLLECTION_HEADER_LEN: usize = 4 + 1 + 4;
 const COLLECTION_CURRENT_MAGIC: &[u8; 4] = b"BCCP";
@@ -45,6 +45,8 @@ pub(crate) struct CollectionSnapshot {
     pub generation: u64,
     pub schema_fingerprint: String,
     pub previous_snapshot_checksum: Option<String>,
+    pub positioned_source_epoch: u64,
+    pub positioned_materialized_sequences: [u64; COLLECTION_WAL_FRONTIER_SHARDS as usize],
     pub modalities: Vec<CollectionManifestRef>,
 }
 
@@ -113,6 +115,10 @@ pub(crate) fn collection_snapshot_bytes(snapshot: &CollectionSnapshot) -> Result
         snapshot.previous_snapshot_checksum.as_deref(),
         "previous snapshot checksum",
     )?;
+    writer.write_u64(snapshot.positioned_source_epoch);
+    for sequence in snapshot.positioned_materialized_sequences {
+        writer.write_u64(sequence);
+    }
     writer.write_len(snapshot.modalities.len(), "snapshot modalities")?;
     for reference in &snapshot.modalities {
         write_manifest_ref(&mut writer, reference)?;
@@ -128,6 +134,11 @@ pub(crate) fn collection_snapshot_from_slice(
     let generation = reader.read_u64()?;
     let schema_fingerprint = reader.read_string("schema fingerprint")?;
     let previous_snapshot_checksum = reader.read_optional_string("previous snapshot checksum")?;
+    let positioned_source_epoch = reader.read_u64()?;
+    let mut positioned_materialized_sequences = [0_u64; COLLECTION_WAL_FRONTIER_SHARDS as usize];
+    for sequence in &mut positioned_materialized_sequences {
+        *sequence = reader.read_u64()?;
+    }
     let modality_count = reader.read_len("snapshot modalities")?;
     let mut modalities = Vec::with_capacity(modality_count.min(64));
     for _ in 0..modality_count {
@@ -138,6 +149,8 @@ pub(crate) fn collection_snapshot_from_slice(
         generation,
         schema_fingerprint,
         previous_snapshot_checksum,
+        positioned_source_epoch,
+        positioned_materialized_sequences,
         modalities,
     };
     validate_collection_snapshot(&snapshot)?;
@@ -367,6 +380,11 @@ fn validate_collection_wal_frontier_shard(shard: u8) -> Result<()> {
 
 fn validate_collection_snapshot(snapshot: &CollectionSnapshot) -> Result<()> {
     validate_checksum(&snapshot.schema_fingerprint, "schema fingerprint")?;
+    if snapshot.positioned_source_epoch == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "collection positioned source epoch must be positive".to_string(),
+        ));
+    }
     if let Some(checksum) = &snapshot.previous_snapshot_checksum {
         validate_checksum(checksum, "previous snapshot checksum")?;
     }
@@ -940,6 +958,8 @@ mod tests {
             generation: 7,
             schema_fingerprint: checksum('e'),
             previous_snapshot_checksum: Some(checksum('f')),
+            positioned_source_epoch: 3,
+            positioned_materialized_sequences: std::array::from_fn(|index| index as u64),
             modalities: vec![
                 manifest_ref(PRIMARY_MODALITY, "", 3),
                 manifest_ref("dense", "vectors/dense/", 4),
