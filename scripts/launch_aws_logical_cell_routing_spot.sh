@@ -9,6 +9,7 @@ SUBNET_ID="${BORSUK_ROUTING_SUBNET_ID:-subnet-034528fbd6977848f}"
 SECURITY_GROUP_ID="${BORSUK_ROUTING_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}"
 KEY_NAME="${BORSUK_ROUTING_KEY_NAME:-borsuk-bench}"
 INSTANCE_PROFILE="${BORSUK_ROUTING_INSTANCE_PROFILE:-borsuk-bench-profile}"
+RUST_TOOLCHAIN="${BORSUK_ROUTING_RUST_TOOLCHAIN:-1.91.0}"
 BUCKET="${BORSUK_ROUTING_BUCKET:-borsuk-bench-453182569524-euc1}"
 RUN_ID="${BORSUK_ROUTING_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-v12}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,10 +22,10 @@ RESULT_URI="s3://${BUCKET}/research/logical-cell-routing-positioned-v12/${RUN_ID
 INDEX_URI="s3://${BUCKET}/research/logical-cell-routing-positioned-v12/${RUN_ID}/index"
 
 if [[ "${BORSUK_LAUNCH_DRY_RUN:-0}" == "1" ]]; then
-  python3 - "$PROFILE" "$REGION" "$INSTANCE_TYPE" "$CAMPAIGN_ID" "$RUN_ID" "$RESULT_URI" "$INDEX_URI" "$CAMPAIGN_TIMEOUT_SECONDS" "$CLONE_TIMEOUT_SECONDS" "$SYSTEMD_STOP_SECONDS" <<'PY'
+  python3 - "$PROFILE" "$REGION" "$INSTANCE_TYPE" "$CAMPAIGN_ID" "$RUN_ID" "$RESULT_URI" "$INDEX_URI" "$CAMPAIGN_TIMEOUT_SECONDS" "$CLONE_TIMEOUT_SECONDS" "$SYSTEMD_STOP_SECONDS" "$RUST_TOOLCHAIN" <<'PY'
 import json
 import sys
-profile, region, instance_type, campaign, run_id, result_uri, index_uri, campaign_timeout, clone_timeout, stop_timeout = sys.argv[1:]
+profile, region, instance_type, campaign, run_id, result_uri, index_uri, campaign_timeout, clone_timeout, stop_timeout, rust_toolchain = sys.argv[1:]
 print(json.dumps({
     "profile": profile,
     "region": region,
@@ -37,6 +38,9 @@ print(json.dumps({
     "clone_timeout_seconds": int(clone_timeout),
     "systemd_timeout_stop_seconds": int(stop_timeout),
     "independent_shutdown_deadline": True,
+    "rust_toolchain": rust_toolchain,
+    "provisions_build_dependencies": True,
+    "preserves_campaign_log_on_failure": True,
     "campaign": campaign,
     "run_id": run_id,
     "result_uri": result_uri,
@@ -178,14 +182,17 @@ availability_zone='${availability_zone}'
 spot_price='${spot_price}'
 campaign_timeout_seconds='${CAMPAIGN_TIMEOUT_SECONDS}'
 clone_timeout_seconds='${CLONE_TIMEOUT_SECONDS}'
+rust_toolchain='${RUST_TOOLCHAIN}'
 workspace="/home/ec2-user/borsuk-routing-v12-source-${source_sha}"
 output="/home/ec2-user/borsuk-routing-v12-results-${RUN_ID}"
 archive="/tmp/borsuk-routing-v12-source-${source_sha}.tar"
+campaign_log="/home/ec2-user/borsuk-routing-v12-${RUN_ID}.campaign.log"
 
 finish() {
   status=\$?
   trap - EXIT
   mkdir -p "\$output"
+  if [[ -f "\$campaign_log" ]]; then cp "\$campaign_log" "\$output/campaign.log"; fi
   printf '%s\n' "\$status" > "\$output/runner-exit.txt"
   printf '%s\n' "launch_spot_price_usd_per_hour=\$spot_price" > "\$output/launch-cost.txt"
   if [[ -f "\$workspace/scripts/benchmark_s3.py" ]]; then
@@ -199,6 +206,7 @@ finish() {
 }
 trap finish EXIT
 [[ ! -e "\$workspace" && ! -e "\$output" ]] || { echo 'remote paths already exist' >&2; exit 5; }
+exec > >(tee -a "\$campaign_log") 2>&1
 if pgrep -af 'logical_cell_routing_bench|bench_group_commit|production_bench' >/dev/null; then
   echo 'another BORSUK benchmark process is active' >&2
   exit 5
@@ -213,7 +221,16 @@ aws s3 cp "\$source_uri" "\$archive" --only-show-errors
 tar -xf "\$archive" -C "\$workspace"
 cd "\$workspace"
 export HOME=/home/ec2-user
-if [[ -f /home/ec2-user/.cargo/env ]]; then source /home/ec2-user/.cargo/env; fi
+sudo dnf install -y gcc gcc-c++ make cmake perl pkgconf-pkg-config openssl-devel clang
+if [[ ! -x /home/ec2-user/.cargo/bin/rustup ]]; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal --default-toolchain "\$rust_toolchain"
+fi
+source /home/ec2-user/.cargo/env
+rustup toolchain install "\$rust_toolchain" --profile minimal
+rustup default "\$rust_toolchain"
+rustc --version
+cargo --version
 export AWS_REGION='${REGION}' AWS_DEFAULT_REGION='${REGION}'
 export CARGO_BUILD_JOBS=32 CARGO_INCREMENTAL=0
 export BORSUK_SOURCE_ARCHIVE="\$archive" BORSUK_SOURCE_SHA256="\$source_sha"
