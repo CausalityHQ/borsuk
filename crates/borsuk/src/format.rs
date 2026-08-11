@@ -6008,7 +6008,7 @@ fn validate_positioned_route_plan_row(row: &PositionedRoutePlanRow) -> Result<()
     Ok(())
 }
 
-fn validate_positioned_route_plan(rows: &[PositionedRoutePlanRow]) -> Result<()> {
+pub(crate) fn validate_positioned_route_plan(rows: &[PositionedRoutePlanRow]) -> Result<()> {
     if rows.is_empty() {
         return Err(BorsukError::InvalidStorage(
             "positioned route plan must contain at least one summary".to_string(),

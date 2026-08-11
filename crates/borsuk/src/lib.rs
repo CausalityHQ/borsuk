@@ -53,6 +53,11 @@ mod positioned_log;
 mod quantizer_sidecar;
 mod record;
 mod rotated_product_quantizer;
+#[allow(
+    dead_code,
+    reason = "pure row-bundle construction is wired only at the Task 4 atomic format switch"
+)]
+mod row_bundle;
 mod scalar_decode;
 mod segment;
 mod segment_cache;
