@@ -5724,6 +5724,578 @@ pub(crate) struct PositionedPayloadMetadata {
     pub(crate) version_digests: BTreeMap<(u64, [u8; 16]), [u8; 32]>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum PositionedRouteAssignmentKind {
+    Catalog,
+    Analyzer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum PositionedRouteProjectionKind {
+    Primary,
+    Dense,
+    Sparse,
+    Text,
+    LateInteraction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PositionedRouteAssignment {
+    pub(crate) kind: PositionedRouteAssignmentKind,
+    pub(crate) checksum: [u8; 32],
+    pub(crate) routing_epoch: Option<u64>,
+}
+
+impl PositionedRouteAssignment {
+    pub(crate) fn catalog(checksum: [u8; 32], routing_epoch: u64) -> Result<Self> {
+        if checksum == [0; 32] {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route catalog checksum must be nonzero".to_string(),
+            ));
+        }
+        if routing_epoch == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route catalog epoch must be positive".to_string(),
+            ));
+        }
+        Ok(Self {
+            kind: PositionedRouteAssignmentKind::Catalog,
+            checksum,
+            routing_epoch: Some(routing_epoch),
+        })
+    }
+
+    pub(crate) fn analyzer(checksum: [u8; 32]) -> Result<Self> {
+        if checksum == [0; 32] {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route analyzer checksum must be nonzero".to_string(),
+            ));
+        }
+        Ok(Self {
+            kind: PositionedRouteAssignmentKind::Analyzer,
+            checksum,
+            routing_epoch: None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PositionedRoutePlanRow {
+    pub(crate) record_id: Option<Vec<u8>>,
+    pub(crate) modality: String,
+    pub(crate) projection_kind: PositionedRouteProjectionKind,
+    pub(crate) projected_ordinal: Option<u32>,
+    pub(crate) assignment: PositionedRouteAssignment,
+    pub(crate) cell_ordinal: Option<u32>,
+    pub(crate) logical_row_count: u64,
+    pub(crate) stamp: MutationStamp,
+}
+
+impl PositionedRoutePlanRow {
+    pub(crate) fn summary(
+        modality: &str,
+        projection_kind: PositionedRouteProjectionKind,
+        assignment: PositionedRouteAssignment,
+        logical_row_count: u64,
+        stamp: MutationStamp,
+    ) -> Result<Self> {
+        let row = Self {
+            record_id: None,
+            modality: modality.to_string(),
+            projection_kind,
+            projected_ordinal: None,
+            assignment,
+            cell_ordinal: None,
+            logical_row_count,
+            stamp,
+        };
+        validate_positioned_route_plan_row(&row)?;
+        Ok(row)
+    }
+
+    pub(crate) fn routed(
+        record_id: Vec<u8>,
+        modality: &str,
+        projection_kind: PositionedRouteProjectionKind,
+        projected_ordinal: u32,
+        assignment: PositionedRouteAssignment,
+        cell_ordinal: u32,
+        stamp: MutationStamp,
+    ) -> Result<Self> {
+        let row = Self {
+            record_id: Some(record_id),
+            modality: modality.to_string(),
+            projection_kind,
+            projected_ordinal: Some(projected_ordinal),
+            assignment,
+            cell_ordinal: Some(cell_ordinal),
+            logical_row_count: 0,
+            stamp,
+        };
+        validate_positioned_route_plan_row(&row)?;
+        Ok(row)
+    }
+
+    pub(crate) fn term_partitioned(
+        record_id: Vec<u8>,
+        modality: &str,
+        projection_kind: PositionedRouteProjectionKind,
+        projected_ordinal: u32,
+        assignment: PositionedRouteAssignment,
+        stamp: MutationStamp,
+    ) -> Result<Self> {
+        let row = Self {
+            record_id: Some(record_id),
+            modality: modality.to_string(),
+            projection_kind,
+            projected_ordinal: Some(projected_ordinal),
+            assignment,
+            cell_ordinal: None,
+            logical_row_count: 0,
+            stamp,
+        };
+        validate_positioned_route_plan_row(&row)?;
+        Ok(row)
+    }
+
+    fn is_summary(&self) -> bool {
+        self.record_id.is_none()
+    }
+}
+
+fn validate_positioned_route_plan_row(row: &PositionedRoutePlanRow) -> Result<()> {
+    if row.modality.is_empty() || row.modality.len() > 256 {
+        return Err(BorsukError::InvalidStorage(
+            "positioned route modality length is outside 1..=256".to_string(),
+        ));
+    }
+    if row.assignment.checksum == [0; 32] {
+        return Err(BorsukError::InvalidStorage(
+            "positioned route assignment checksum must be nonzero".to_string(),
+        ));
+    }
+    if (row.projection_kind == PositionedRouteProjectionKind::Primary)
+        != (row.modality == "primary")
+    {
+        return Err(BorsukError::InvalidStorage(
+            "positioned primary route must use exactly the `primary` modality".to_string(),
+        ));
+    }
+    let expected_assignment = match row.projection_kind {
+        PositionedRouteProjectionKind::Primary
+        | PositionedRouteProjectionKind::Dense
+        | PositionedRouteProjectionKind::LateInteraction => PositionedRouteAssignmentKind::Catalog,
+        PositionedRouteProjectionKind::Sparse | PositionedRouteProjectionKind::Text => {
+            PositionedRouteAssignmentKind::Analyzer
+        }
+    };
+    if row.assignment.kind != expected_assignment {
+        return Err(BorsukError::InvalidStorage(
+            "positioned route projection uses the wrong assignment kind".to_string(),
+        ));
+    }
+    match row.assignment.kind {
+        PositionedRouteAssignmentKind::Catalog => {
+            if row.assignment.routing_epoch.is_none_or(|epoch| epoch == 0) {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned catalog route requires a positive epoch".to_string(),
+                ));
+            }
+            if !row.is_summary() && row.cell_ordinal.is_none() {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned catalog route requires a cell ordinal".to_string(),
+                ));
+            }
+        }
+        PositionedRouteAssignmentKind::Analyzer => {
+            if row.assignment.routing_epoch.is_some() || row.cell_ordinal.is_some() {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned analyzer route cannot carry an epoch or cell".to_string(),
+                ));
+            }
+        }
+    }
+    match (&row.record_id, row.projected_ordinal, row.cell_ordinal) {
+        (None, None, None) => {}
+        (Some(id), Some(_), _) if !id.is_empty() && row.logical_row_count == 0 => {}
+        _ => {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route row has an invalid summary/data shape".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_positioned_route_plan(rows: &[PositionedRoutePlanRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "positioned route plan must contain at least one summary".to_string(),
+        ));
+    }
+    for row in rows {
+        validate_positioned_route_plan_row(row)?;
+    }
+    for pair in rows.windows(2) {
+        let left = &pair[0];
+        let right = &pair[1];
+        if (
+            left.modality.as_str(),
+            u8::from(!left.is_summary()),
+            left.record_id.as_deref(),
+            left.projected_ordinal,
+        ) >= (
+            right.modality.as_str(),
+            u8::from(!right.is_summary()),
+            right.record_id.as_deref(),
+            right.projected_ordinal,
+        ) {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route plan rows are not canonical".to_string(),
+            ));
+        }
+    }
+    let mut summaries = BTreeMap::<
+        &str,
+        (
+            PositionedRouteProjectionKind,
+            &PositionedRouteAssignment,
+            u64,
+            MutationStamp,
+        ),
+    >::new();
+    let mut observed = BTreeMap::<&str, u64>::new();
+    let mut late_ordinals = BTreeMap::<(&str, &[u8]), u32>::new();
+    let mut version_digests = BTreeMap::<MutationVersion, [u8; 32]>::new();
+    let mut minimum_data_stamp = None::<MutationStamp>;
+    for row in rows {
+        if let Some(previous) = version_digests.insert(row.stamp.version(), row.stamp.digest())
+            && previous != row.stamp.digest()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route plan has conflicting digests for one mutation version"
+                    .to_string(),
+            ));
+        }
+        if row.is_summary() {
+            if summaries
+                .insert(
+                    row.modality.as_str(),
+                    (
+                        row.projection_kind,
+                        &row.assignment,
+                        row.logical_row_count,
+                        row.stamp,
+                    ),
+                )
+                .is_some()
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned route plan repeats a modality summary".to_string(),
+                ));
+            }
+            continue;
+        }
+        let Some((projection_kind, assignment, _, _)) = summaries.get(row.modality.as_str()) else {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route row precedes its modality summary".to_string(),
+            ));
+        };
+        if *projection_kind != row.projection_kind || *assignment != &row.assignment {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route row disagrees with its modality summary".to_string(),
+            ));
+        }
+        let count = observed.entry(row.modality.as_str()).or_default();
+        *count = count.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("positioned route row count overflow".to_string())
+        })?;
+        minimum_data_stamp = match minimum_data_stamp {
+            None => Some(row.stamp),
+            Some(current) if row.stamp.version() < current.version() => Some(row.stamp),
+            Some(current) => Some(current),
+        };
+        let ordinal = row.projected_ordinal.expect("data row shape was validated");
+        if row.projection_kind == PositionedRouteProjectionKind::LateInteraction {
+            let id = row
+                .record_id
+                .as_deref()
+                .expect("data row shape was validated");
+            let expected = late_ordinals
+                .entry((row.modality.as_str(), id))
+                .or_default();
+            if ordinal != *expected {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned late-interaction token ordinals are not contiguous".to_string(),
+                ));
+            }
+            *expected = expected.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned late-interaction token ordinal overflow".to_string(),
+                )
+            })?;
+        } else if ordinal != 0 {
+            return Err(BorsukError::InvalidStorage(
+                "positioned entity-level route ordinal must be zero".to_string(),
+            ));
+        }
+    }
+    let expected_summary_stamp = minimum_data_stamp.unwrap_or(rows[0].stamp);
+    for (modality, (_, _, expected, summary_stamp)) in summaries {
+        if observed.get(modality).copied().unwrap_or(0) != expected {
+            return Err(BorsukError::InvalidStorage(format!(
+                "positioned route modality `{modality}` row count does not match its summary"
+            )));
+        }
+        if summary_stamp != expected_summary_stamp {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route summaries must use the transaction minimum stamp".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn positioned_route_plan_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("format_version", DataType::UInt16, false),
+        Field::new("row_kind", DataType::UInt8, false),
+        Field::new("record_id", DataType::Binary, true),
+        Field::new("modality", DataType::Utf8, false),
+        Field::new("projection_kind", DataType::UInt8, false),
+        Field::new("projected_ordinal", DataType::UInt32, true),
+        Field::new("assignment_kind", DataType::UInt8, false),
+        Field::new("assignment_checksum", DataType::FixedSizeBinary(32), false),
+        Field::new("routing_epoch", DataType::UInt64, true),
+        Field::new("cell_ordinal", DataType::UInt32, true),
+        Field::new("logical_row_count", DataType::UInt64, false),
+        Field::new("mutation_hlc", DataType::UInt64, false),
+        Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+        Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+    ]))
+}
+
+pub(crate) fn positioned_route_plan_to_parquet(rows: &[PositionedRoutePlanRow]) -> Result<Vec<u8>> {
+    validate_positioned_route_plan(rows)?;
+    let batch = RecordBatch::try_new(
+        positioned_route_plan_schema(),
+        vec![
+            array(UInt16Array::from_iter_values(rows.iter().map(|_| 1))),
+            array(UInt8Array::from_iter_values(
+                rows.iter().map(|row| u8::from(!row.is_summary())),
+            )),
+            array(BinaryArray::from_iter(
+                rows.iter().map(|row| row.record_id.as_deref()),
+            )),
+            array(StringArray::from_iter_values(
+                rows.iter().map(|row| row.modality.as_str()),
+            )),
+            array(UInt8Array::from_iter_values(rows.iter().map(
+                |row| match row.projection_kind {
+                    PositionedRouteProjectionKind::Primary => 0,
+                    PositionedRouteProjectionKind::Dense => 1,
+                    PositionedRouteProjectionKind::Sparse => 2,
+                    PositionedRouteProjectionKind::Text => 3,
+                    PositionedRouteProjectionKind::LateInteraction => 4,
+                },
+            ))),
+            array(UInt32Array::from_iter(
+                rows.iter().map(|row| row.projected_ordinal),
+            )),
+            array(UInt8Array::from_iter_values(rows.iter().map(
+                |row| match row.assignment.kind {
+                    PositionedRouteAssignmentKind::Catalog => 0,
+                    PositionedRouteAssignmentKind::Analyzer => 1,
+                },
+            ))),
+            array(FixedSizeBinaryArray::try_from_iter(
+                rows.iter().map(|row| row.assignment.checksum),
+            )?),
+            array(UInt64Array::from_iter(
+                rows.iter().map(|row| row.assignment.routing_epoch),
+            )),
+            array(UInt32Array::from_iter(
+                rows.iter().map(|row| row.cell_ordinal),
+            )),
+            array(UInt64Array::from_iter_values(
+                rows.iter().map(|row| row.logical_row_count),
+            )),
+            array(UInt64Array::from_iter_values(
+                rows.iter().map(|row| row.stamp.version().hlc()),
+            )),
+            array(FixedSizeBinaryArray::try_from_iter(
+                rows.iter().map(|row| row.stamp.version().writer()),
+            )?),
+            array(FixedSizeBinaryArray::try_from_iter(
+                rows.iter().map(|row| row.stamp.digest()),
+            )?),
+        ],
+    )?;
+    write_batch(batch)
+}
+
+pub(crate) fn positioned_route_plan_from_parquet(
+    bytes: &[u8],
+) -> Result<Vec<PositionedRoutePlanRow>> {
+    catch_parquet_decode_panic(|| positioned_route_plan_from_parquet_inner(bytes))
+}
+
+fn positioned_route_plan_from_parquet_inner(bytes: &[u8]) -> Result<Vec<PositionedRoutePlanRow>> {
+    if bytes.len() as u64 > crate::positioned_log::MAX_APPEND_ENCODED_BYTES {
+        return Err(BorsukError::InvalidStorage(
+            "positioned route plan exceeds the append byte bound".to_string(),
+        ));
+    }
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    let physical_rows =
+        u64::try_from(builder.metadata().file_metadata().num_rows()).map_err(|_| {
+            BorsukError::InvalidStorage("positioned route plan row count exceeds u64".to_string())
+        })?;
+    if physical_rows == 0 || physical_rows > crate::positioned_log::MAX_APPEND_ROWS {
+        return Err(BorsukError::InvalidStorage(
+            "positioned route plan row count is outside the append bound".to_string(),
+        ));
+    }
+    drop(builder);
+    let mut rows = Vec::new();
+    for batch in read_batches(bytes)? {
+        if batch.schema().as_ref() != positioned_route_plan_schema().as_ref() {
+            return Err(BorsukError::InvalidStorage(
+                "positioned route plan schema is not exact".to_string(),
+            ));
+        }
+        let record_ids = batch
+            .column(column_index(&batch, "record_id")?)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("exact schema");
+        let modality_column = column_index(&batch, "modality")?;
+        for row in 0..batch.num_rows() {
+            if required_primitive_value::<UInt16Type>(
+                &batch,
+                column_index(&batch, "format_version")?,
+                row,
+                "format_version",
+            )? != 1
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned route plan format version is not 1".to_string(),
+                ));
+            }
+            let row_kind = required_primitive_value::<UInt8Type>(
+                &batch,
+                column_index(&batch, "row_kind")?,
+                row,
+                "row_kind",
+            )?;
+            let record_id = (!record_ids.is_null(row)).then(|| record_ids.value(row).to_vec());
+            let assignment_kind = match required_primitive_value::<UInt8Type>(
+                &batch,
+                column_index(&batch, "assignment_kind")?,
+                row,
+                "assignment_kind",
+            )? {
+                0 => PositionedRouteAssignmentKind::Catalog,
+                1 => PositionedRouteAssignmentKind::Analyzer,
+                _ => {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned route assignment kind is invalid".to_string(),
+                    ));
+                }
+            };
+            let assignment = PositionedRouteAssignment {
+                kind: assignment_kind,
+                checksum: fixed_size_binary_value::<32>(
+                    &batch,
+                    column_index(&batch, "assignment_checksum")?,
+                    row,
+                    "assignment_checksum",
+                )?,
+                routing_epoch: primitive_optional_value_by_name::<UInt64Type>(
+                    &batch,
+                    row,
+                    "routing_epoch",
+                )?,
+            };
+            let projection_kind = match required_primitive_value::<UInt8Type>(
+                &batch,
+                column_index(&batch, "projection_kind")?,
+                row,
+                "projection_kind",
+            )? {
+                0 => PositionedRouteProjectionKind::Primary,
+                1 => PositionedRouteProjectionKind::Dense,
+                2 => PositionedRouteProjectionKind::Sparse,
+                3 => PositionedRouteProjectionKind::Text,
+                4 => PositionedRouteProjectionKind::LateInteraction,
+                _ => {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned route projection kind is invalid".to_string(),
+                    ));
+                }
+            };
+            if batch.column(modality_column).is_null(row) {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned route modality contains a null value".to_string(),
+                ));
+            }
+            let stamp = MutationStamp::new(
+                MutationVersion::from_parts(
+                    required_primitive_value::<UInt64Type>(
+                        &batch,
+                        column_index(&batch, "mutation_hlc")?,
+                        row,
+                        "mutation_hlc",
+                    )?,
+                    fixed_size_binary_value::<16>(
+                        &batch,
+                        column_index(&batch, "mutation_writer")?,
+                        row,
+                        "mutation_writer",
+                    )?,
+                ),
+                fixed_size_binary_value::<32>(
+                    &batch,
+                    column_index(&batch, "mutation_digest")?,
+                    row,
+                    "mutation_digest",
+                )?,
+            );
+            let decoded = PositionedRoutePlanRow {
+                record_id,
+                modality: string_value(&batch, modality_column, row, "modality")?.to_string(),
+                projection_kind,
+                projected_ordinal: primitive_optional_value_by_name::<UInt32Type>(
+                    &batch,
+                    row,
+                    "projected_ordinal",
+                )?,
+                assignment,
+                cell_ordinal: primitive_optional_value_by_name::<UInt32Type>(
+                    &batch,
+                    row,
+                    "cell_ordinal",
+                )?,
+                logical_row_count: required_primitive_value::<UInt64Type>(
+                    &batch,
+                    column_index(&batch, "logical_row_count")?,
+                    row,
+                    "logical_row_count",
+                )?,
+                stamp,
+            };
+            if row_kind != u8::from(!decoded.is_summary()) {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned route row kind disagrees with its shape".to_string(),
+                ));
+            }
+            rows.push(decoded);
+        }
+    }
+    validate_positioned_route_plan(&rows)?;
+    Ok(rows)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PositionedTransactionMetadataRow {
     pub(crate) modality: String,
@@ -7671,6 +8243,388 @@ mod tests {
             positioned_transaction_metadata_from_parquet(&bytes).unwrap(),
             rows
         );
+    }
+
+    #[test]
+    fn positioned_route_plan_round_trips_catalog_analyzer_and_omitted_modalities() {
+        let stamp = MutationStamp::new(MutationVersion::from_parts(17, [4; 16]), [8; 32]);
+        let later_stamp = MutationStamp::new(MutationVersion::from_parts(18, [4; 16]), [9; 32]);
+        let rows = vec![
+            PositionedRoutePlanRow::summary(
+                "omitted",
+                PositionedRouteProjectionKind::Dense,
+                PositionedRouteAssignment::catalog([1; 32], 7).unwrap(),
+                0,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::summary(
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                PositionedRouteAssignment::catalog([2; 32], 7).unwrap(),
+                1,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                0,
+                PositionedRouteAssignment::catalog([2; 32], 7).unwrap(),
+                19,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::summary(
+                "text",
+                PositionedRouteProjectionKind::Text,
+                PositionedRouteAssignment::analyzer([3; 32]).unwrap(),
+                1,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::term_partitioned(
+                b"row-a".to_vec(),
+                "text",
+                PositionedRouteProjectionKind::Text,
+                0,
+                PositionedRouteAssignment::analyzer([3; 32]).unwrap(),
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::summary(
+                "tokens",
+                PositionedRouteProjectionKind::LateInteraction,
+                PositionedRouteAssignment::catalog([4; 32], 11).unwrap(),
+                2,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "tokens",
+                PositionedRouteProjectionKind::LateInteraction,
+                0,
+                PositionedRouteAssignment::catalog([4; 32], 11).unwrap(),
+                5,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "tokens",
+                PositionedRouteProjectionKind::LateInteraction,
+                1,
+                PositionedRouteAssignment::catalog([4; 32], 11).unwrap(),
+                8,
+                later_stamp,
+            )
+            .unwrap(),
+        ];
+
+        let bytes = positioned_route_plan_to_parquet(&rows).unwrap();
+        assert_eq!(positioned_route_plan_from_parquet(&bytes).unwrap(), rows);
+    }
+
+    #[test]
+    fn positioned_route_plan_rejects_noncanonical_rows_and_count_drift() {
+        let stamp = MutationStamp::new(MutationVersion::from_parts(17, [4; 16]), [8; 32]);
+        let assignment = PositionedRouteAssignment::catalog([2; 32], 7).unwrap();
+        let summary = PositionedRoutePlanRow::summary(
+            "primary",
+            PositionedRouteProjectionKind::Primary,
+            assignment.clone(),
+            2,
+            stamp,
+        )
+        .unwrap();
+        let routed = PositionedRoutePlanRow::routed(
+            b"row-a".to_vec(),
+            "primary",
+            PositionedRouteProjectionKind::Primary,
+            0,
+            assignment,
+            19,
+            stamp,
+        )
+        .unwrap();
+
+        assert!(positioned_route_plan_to_parquet(&[routed.clone(), summary.clone()]).is_err());
+        assert!(positioned_route_plan_to_parquet(&[summary, routed]).is_err());
+    }
+
+    #[test]
+    fn positioned_route_plan_rejects_zero_identity_and_mixed_assignment_kinds() {
+        assert!(PositionedRouteAssignment::catalog([0; 32], 7).is_err());
+        assert!(PositionedRouteAssignment::catalog([2; 32], 0).is_err());
+        assert!(PositionedRouteAssignment::analyzer([0; 32]).is_err());
+
+        let stamp = MutationStamp::new(MutationVersion::from_parts(17, [4; 16]), [8; 32]);
+        assert!(
+            PositionedRoutePlanRow::term_partitioned(
+                b"row-a".to_vec(),
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                0,
+                PositionedRouteAssignment::analyzer([2; 32]).unwrap(),
+                stamp,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn positioned_route_plan_rejects_bad_entity_and_token_ordinals() {
+        let stamp = MutationStamp::new(MutationVersion::from_parts(17, [4; 16]), [8; 32]);
+        let primary = PositionedRouteAssignment::catalog([2; 32], 7).unwrap();
+        let bad_entity = vec![
+            PositionedRoutePlanRow::summary(
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                primary.clone(),
+                1,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                1,
+                primary,
+                3,
+                stamp,
+            )
+            .unwrap(),
+        ];
+        assert!(positioned_route_plan_to_parquet(&bad_entity).is_err());
+
+        let tokens = PositionedRouteAssignment::catalog([3; 32], 9).unwrap();
+        let token_gap = vec![
+            PositionedRoutePlanRow::summary(
+                "tokens",
+                PositionedRouteProjectionKind::LateInteraction,
+                tokens.clone(),
+                2,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "tokens",
+                PositionedRouteProjectionKind::LateInteraction,
+                0,
+                tokens.clone(),
+                3,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "tokens",
+                PositionedRouteProjectionKind::LateInteraction,
+                2,
+                tokens,
+                4,
+                stamp,
+            )
+            .unwrap(),
+        ];
+        assert!(positioned_route_plan_to_parquet(&token_gap).is_err());
+    }
+
+    #[test]
+    fn positioned_route_plan_rejects_old_marker_and_conflicting_summary_stamp() {
+        let stamp = MutationStamp::new(MutationVersion::from_parts(17, [4; 16]), [8; 32]);
+        let later_stamp = MutationStamp::new(MutationVersion::from_parts(18, [4; 16]), [9; 32]);
+        let assignment = PositionedRouteAssignment::catalog([2; 32], 7).unwrap();
+        let rows = vec![
+            PositionedRoutePlanRow::summary(
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                assignment.clone(),
+                1,
+                later_stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                0,
+                assignment,
+                3,
+                stamp,
+            )
+            .unwrap(),
+        ];
+        assert!(positioned_route_plan_to_parquet(&rows).is_err());
+
+        let valid = vec![
+            PositionedRoutePlanRow::summary(
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                PositionedRouteAssignment::catalog([2; 32], 7).unwrap(),
+                1,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                0,
+                PositionedRouteAssignment::catalog([2; 32], 7).unwrap(),
+                3,
+                stamp,
+            )
+            .unwrap(),
+        ];
+        let bytes = positioned_route_plan_to_parquet(&valid).unwrap();
+        let batch = read_batches(&bytes).unwrap().remove(0);
+        let mut columns = batch.columns().to_vec();
+        columns[batch.schema().index_of("format_version").unwrap()] = array(
+            UInt16Array::from_iter_values((0..batch.num_rows()).map(|_| 0)),
+        );
+        let old = write_batch(RecordBatch::try_new(batch.schema(), columns).unwrap()).unwrap();
+        assert!(positioned_route_plan_from_parquet(&old).is_err());
+    }
+
+    #[test]
+    fn positioned_route_plan_decoder_rejects_null_and_invalid_discriminants() {
+        let stamp = MutationStamp::new(MutationVersion::from_parts(17, [4; 16]), [8; 32]);
+        let rows = vec![
+            PositionedRoutePlanRow::summary(
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                PositionedRouteAssignment::catalog([2; 32], 7).unwrap(),
+                1,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                0,
+                PositionedRouteAssignment::catalog([2; 32], 7).unwrap(),
+                3,
+                stamp,
+            )
+            .unwrap(),
+        ];
+        let bytes = positioned_route_plan_to_parquet(&rows).unwrap();
+        let batch = read_batches(&bytes).unwrap().remove(0);
+
+        let corrupt = |name: &str, values: ArrayRef| {
+            let mut columns = batch.columns().to_vec();
+            columns[batch.schema().index_of(name).unwrap()] = values;
+            write_batch(RecordBatch::try_new(batch.schema(), columns).unwrap()).unwrap()
+        };
+        let corrupt_nullable = |name: &str, values: ArrayRef| {
+            let nullable_column = batch.schema().index_of(name).unwrap();
+            let mut columns = batch.columns().to_vec();
+            columns[nullable_column] = values;
+            let schema = Arc::new(Schema::new(
+                batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        if index == nullable_column {
+                            Field::new(name, field.data_type().clone(), true)
+                        } else {
+                            field.as_ref().clone()
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ));
+            write_batch(RecordBatch::try_new(schema, columns).unwrap()).unwrap()
+        };
+        let null_version = corrupt_nullable(
+            "format_version",
+            array(UInt16Array::from(vec![None, Some(1)])),
+        );
+        assert!(positioned_route_plan_from_parquet(&null_version).is_err());
+
+        let null_hlc = corrupt_nullable(
+            "mutation_hlc",
+            array(UInt64Array::from(vec![None, Some(17)])),
+        );
+        assert!(positioned_route_plan_from_parquet(&null_hlc).is_err());
+
+        let null_projection = corrupt_nullable(
+            "projection_kind",
+            array(UInt8Array::from(vec![None, Some(0)])),
+        );
+        assert!(positioned_route_plan_from_parquet(&null_projection).is_err());
+
+        let invalid_assignment = corrupt(
+            "assignment_kind",
+            array(UInt8Array::from_iter_values([0, 9])),
+        );
+        assert!(positioned_route_plan_from_parquet(&invalid_assignment).is_err());
+
+        let invalid_projection = corrupt(
+            "projection_kind",
+            array(UInt8Array::from_iter_values([0, 9])),
+        );
+        assert!(positioned_route_plan_from_parquet(&invalid_projection).is_err());
+
+        let invalid_row_kind = corrupt("row_kind", array(UInt8Array::from_iter_values([1, 1])));
+        assert!(positioned_route_plan_from_parquet(&invalid_row_kind).is_err());
+    }
+
+    #[test]
+    fn positioned_route_plan_allows_summary_only_and_rejects_digest_conflict() {
+        let stamp = MutationStamp::new(MutationVersion::from_parts(17, [4; 16]), [8; 32]);
+        let summaries = vec![
+            PositionedRoutePlanRow::summary(
+                "omitted",
+                PositionedRouteProjectionKind::Dense,
+                PositionedRouteAssignment::catalog([2; 32], 7).unwrap(),
+                0,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::summary(
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                PositionedRouteAssignment::catalog([3; 32], 7).unwrap(),
+                0,
+                stamp,
+            )
+            .unwrap(),
+        ];
+        let bytes = positioned_route_plan_to_parquet(&summaries).unwrap();
+        assert_eq!(
+            positioned_route_plan_from_parquet(&bytes).unwrap(),
+            summaries
+        );
+
+        let conflicting = vec![
+            PositionedRoutePlanRow::summary(
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                PositionedRouteAssignment::catalog([3; 32], 7).unwrap(),
+                1,
+                stamp,
+            )
+            .unwrap(),
+            PositionedRoutePlanRow::routed(
+                b"row-a".to_vec(),
+                "primary",
+                PositionedRouteProjectionKind::Primary,
+                0,
+                PositionedRouteAssignment::catalog([3; 32], 7).unwrap(),
+                3,
+                MutationStamp::new(stamp.version(), [9; 32]),
+            )
+            .unwrap(),
+        ];
+        assert!(positioned_route_plan_to_parquet(&conflicting).is_err());
     }
 
     #[test]
