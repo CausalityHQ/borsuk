@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 TERMINAL_MARKERS = {
     "CELL_COMPLETE",
@@ -37,13 +38,34 @@ def run(command: list[str], timeout_seconds: int) -> subprocess.CompletedProcess
 
 
 def assert_empty(uri: str, profile: str | None, timeout_seconds: int) -> None:
+    location = urlsplit(uri)
+    if location.scheme != "s3" or not location.netloc:
+        raise ValueError(f"invalid S3 benchmark prefix: {uri}")
+    prefix = location.path.lstrip("/").rstrip("/")
+    if prefix:
+        prefix += "/"
     result = run(
-        [*aws_command(profile), "s3", "ls", f"{uri.rstrip('/')}/"], timeout_seconds
+        [
+            *aws_command(profile),
+            "s3api",
+            "list-objects-v2",
+            "--bucket",
+            location.netloc,
+            "--prefix",
+            prefix,
+            "--max-keys",
+            "1",
+            "--query",
+            "KeyCount",
+            "--output",
+            "text",
+        ],
+        timeout_seconds,
     )
     if result.returncode != 0:
         detail = result.stderr.strip() or f"exit {result.returncode}"
         raise RuntimeError(f"could not list benchmark prefix {uri}: {detail}")
-    if result.stdout.strip():
+    if result.stdout.strip() != "0":
         raise RuntimeError(f"refusing to reuse non-empty benchmark prefix: {uri}")
 
 

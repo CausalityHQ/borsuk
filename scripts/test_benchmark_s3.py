@@ -26,6 +26,10 @@ class BenchmarkS3Test(unittest.TestCase):
         aws.write_text(
             "#!/usr/bin/env bash\n"
             'printf \'%s\\n\' "$*" >> "$FAKE_AWS_CALLS"\n'
+            "if [[ \"$*\" == *'s3api list-objects-v2'* ]]; then\n"
+            '  [[ ${FAKE_AWS_LIST_STATUS:-0} == 0 ]] || exit "$FAKE_AWS_LIST_STATUS"\n'
+            "  printf '%s' \"${FAKE_AWS_KEY_COUNT:-0}\"\n"
+            "fi\n"
             "if [[ \"$*\" == *'s3 ls'* ]]; then\n"
             '  [[ ${FAKE_AWS_LS_STATUS:-0} == 0 ]] || exit "$FAKE_AWS_LS_STATUS"\n'
             "  printf '%s' \"${FAKE_AWS_LS_OUTPUT:-}\"\n"
@@ -58,17 +62,27 @@ class BenchmarkS3Test(unittest.TestCase):
             "assert-empty",
             "--uri",
             "s3://bucket/new-prefix",
-            FAKE_AWS_LS_STATUS="42",
+            FAKE_AWS_LIST_STATUS="42",
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("could not list", result.stderr)
+
+    def test_assert_empty_accepts_absent_prefix_when_high_level_ls_fails(self) -> None:
+        result = self.run_helper(
+            "assert-empty",
+            "--uri",
+            "s3://bucket/new-prefix",
+            FAKE_AWS_LS_STATUS="1",
+            FAKE_AWS_KEY_COUNT="0",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_assert_empty_rejects_existing_objects(self) -> None:
         result = self.run_helper(
             "assert-empty",
             "--uri",
             "s3://bucket/existing",
-            FAKE_AWS_LS_OUTPUT="2026-01-01 object\n",
+            FAKE_AWS_KEY_COUNT="1",
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("non-empty", result.stderr)
