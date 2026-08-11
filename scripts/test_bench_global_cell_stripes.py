@@ -2,7 +2,6 @@ import json
 import pathlib
 import unittest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "bench_global_cell_stripes.sh"
 LAUNCHER = ROOT / "scripts" / "launch_aws_global_cell_stripes.sh"

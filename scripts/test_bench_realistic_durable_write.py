@@ -5,14 +5,15 @@ import json
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "scripts/bench_realistic_durable_write.sh"
 MANIFEST = ROOT / "docs/research/realistic-durable-write-campaign.json"
 
 
 class RealisticDurableWriteRunnerTests(unittest.TestCase):
-    def test_preregistered_matrix_uses_realistic_dataset_and_batch_factors(self) -> None:
+    def test_preregistered_matrix_uses_realistic_dataset_and_batch_factors(
+        self,
+    ) -> None:
         self.assertTrue(MANIFEST.is_file())
         manifest = json.loads(MANIFEST.read_text())
         self.assertEqual(manifest["datasets"], ["cohere-medium-1M"])
@@ -55,10 +56,10 @@ class RealisticDurableWriteRunnerTests(unittest.TestCase):
 
     def test_smoke_uses_the_same_parquet_vector_shape_as_production(self) -> None:
         source = RUNNER.read_text()
-        self.assertIn('BORSUK_BENCH_PYTHON', source)
-        self.assertIn('train.parquet', source)
-        self.assertIn('neighbors.parquet', source)
-        self.assertIn('pa.list_(pa.float32())', source)
+        self.assertIn("BORSUK_BENCH_PYTHON", source)
+        self.assertIn("train.parquet", source)
+        self.assertIn("neighbors.parquet", source)
+        self.assertIn("pa.list_(pa.float32())", source)
 
 
 if __name__ == "__main__":

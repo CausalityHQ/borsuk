@@ -15,7 +15,9 @@ class ValidationError(RuntimeError):
     pass
 
 
-EXPECTED_MANIFEST_SHA256 = "f03dddd082d825743d4761f32114c6aaefdeb7cfc628cac50a19e7597e3efec4"
+EXPECTED_MANIFEST_SHA256 = (
+    "f03dddd082d825743d4761f32114c6aaefdeb7cfc628cac50a19e7597e3efec4"
+)
 
 
 def require(condition: bool, message: str) -> None:
@@ -47,7 +49,10 @@ def percentile(values: list[float], quantile: float) -> float:
 
 def validate(root: Path, manifest_path: Path) -> str:
     require((root / "OBJECT_STORE_FLOOR_COMPLETE").is_file(), "campaign is incomplete")
-    require(not (root / "OBJECT_STORE_FLOOR_FAILED").exists(), "campaign has a failure marker")
+    require(
+        not (root / "OBJECT_STORE_FLOOR_FAILED").exists(),
+        "campaign has a failure marker",
+    )
     frozen = manifest_path.read_bytes()
     manifest_sha256 = hashlib.sha256(frozen).hexdigest()
     require(manifest_sha256 == EXPECTED_MANIFEST_SHA256, "unrecognized frozen manifest")
@@ -62,8 +67,13 @@ def validate(root: Path, manifest_path: Path) -> str:
         "manifest SHA-256 mismatch",
     )
     require(len(identity.get("source_sha256", "")) == 64, "invalid source SHA-256")
-    require(identity.get("architecture") == manifest["architecture"], "architecture mismatch")
-    require(identity.get("instance_type") == manifest["instance_type"], "instance mismatch")
+    require(
+        identity.get("architecture") == manifest["architecture"],
+        "architecture mismatch",
+    )
+    require(
+        identity.get("instance_type") == manifest["instance_type"], "instance mismatch"
+    )
 
     protocol = dict(
         line.split("=", 1)
@@ -75,7 +85,9 @@ def validate(root: Path, manifest_path: Path) -> str:
         require(int(protocol[field]) == int(manifest[field]), f"{field} drift")
     require(protocol.get("region") == manifest["region"], "region drift")
     require(protocol.get("uri", "").startswith("s3://"), "production URI is not S3")
-    require(protocol.get("conditional_create_rejected") == "true", "create control failed")
+    require(
+        protocol.get("conditional_create_rejected") == "true", "create control failed"
+    )
     require(protocol.get("stale_update_rejected") == "true", "update control failed")
 
     samples = read_rows(root / "measurement" / "samples.csv")
@@ -99,16 +111,23 @@ def validate(root: Path, manifest_path: Path) -> str:
     summaries = read_rows(root / "measurement" / "summary.csv")
     require(len(summaries) == len(expected_operations), "summary row count mismatch")
     summary_by_operation = {row["operation"]: row for row in summaries}
-    require(set(summary_by_operation) == set(expected_operations), "summary operations drift")
+    require(
+        set(summary_by_operation) == set(expected_operations),
+        "summary operations drift",
+    )
     for operation, values in by_operation.items():
         row = summary_by_operation[operation]
-        require(int(row["samples"]) == expected_samples, "summary sample count mismatch")
+        require(
+            int(row["samples"]) == expected_samples, "summary sample count mismatch"
+        )
         for field, quantile in (("p50_ms", 0.50), ("p95_ms", 0.95), ("p99_ms", 0.99)):
             require(
                 abs(finite(row[field], field) - percentile(values, quantile)) <= 0.0015,
                 f"{operation} {field} does not reconcile",
             )
-        require(abs(finite(row["max_ms"], "max_ms") - max(values)) <= 0.0015, "max drift")
+        require(
+            abs(finite(row["max_ms"], "max_ms") - max(values)) <= 0.0015, "max drift"
+        )
 
     chained_p95 = finite(
         summary_by_operation["put_then_conditional_update"]["p95_ms"], "chained p95"

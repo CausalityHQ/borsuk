@@ -122,7 +122,7 @@ telemetry in the current promotion matrix.
 
 This is a 69.6× p95 reduction at unchanged recall from the historical row to
 the initialized current engine. Raw data and profiles are in
-[`graph-optimization`](../web/assets/benchmarks/raw/2026-07-21/graph-optimization/),
+`graph-optimization` (historical raw artifact not distributed),
 with the compact ablation in
 [`aws-graph-optimization-fashion-2026-07-21.csv`](../web/assets/benchmarks/aws-graph-optimization-fashion-2026-07-21.csv).
 
@@ -291,7 +291,7 @@ were 0.970/0.973. Only the 100-query numbers above are publication results.
 The older seven-method diagnostic remains available in
 [`aws-methods-fashion-2026-07-20.csv`](../web/assets/benchmarks/aws-methods-fashion-2026-07-20.csv)
 and its raw sweep under
-[`final-engine/standard-method-sweeps-v1`](../web/assets/benchmarks/raw/2026-07-20/final-engine/standard-method-sweeps-v1/).
+`final-engine/standard-method-sweeps-v1` (historical raw artifact not distributed).
 It is a historical baseline, not current graph performance.
 
 ## Parallel and routing configurations

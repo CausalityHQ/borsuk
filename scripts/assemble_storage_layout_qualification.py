@@ -20,7 +20,9 @@ except ModuleNotFoundError:
 try:
     from .production_bench_schema import validate_v10_query_sample_rows
 except ImportError:
-    from production_bench_schema import validate_v10_query_sample_rows  # type: ignore[no-redef]
+    from production_bench_schema import (
+        validate_v10_query_sample_rows,  # type: ignore[no-redef]
+    )
 
 FIELDS = [
     "dataset",

@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_publication_disk.py"
 
@@ -50,7 +49,9 @@ class PublicationDiskGuardTests(unittest.TestCase):
                 text=True,
             )
         self.assertEqual(completed.returncode, 1)
-        self.assertIn("insufficient publication disk before test-failure", completed.stderr)
+        self.assertIn(
+            "insufficient publication disk before test-failure", completed.stderr
+        )
         self.assertRegex(completed.stderr, r"free_bytes=[0-9]+")
         self.assertIn(f"required_bytes={2**63 - 1}", completed.stderr)
 

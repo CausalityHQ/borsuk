@@ -51,9 +51,9 @@ values are valid but their latency values are diagnostic only. The harness now
 emits explicit `uncached` and `disk_cached` rows for every frontier point,
 resetting the data cache before every uncached query and validating zero backing
 GETs for disk-cached rows. Raw evidence is under
-[`v8-global-coarse/fashion-mnist-784-r1`](../web/assets/benchmarks/raw/2026-07-21/v8-global-coarse/fashion-mnist-784-r1/)
+`v8-global-coarse/fashion-mnist-784-r1` (historical raw artifact not distributed)
 and
-[`v8-global-coarse/fashion-mnist-784-frontier-r2`](../web/assets/benchmarks/raw/2026-07-21/v8-global-coarse/fashion-mnist-784-frontier-r2/).
+`v8-global-coarse/fashion-mnist-784-frontier-r2` (historical raw artifact not distributed).
 
 ## Superseded pre-fixed-page v8 qualification
 
@@ -68,7 +68,7 @@ This r1 run is still diagnostic rather than promoted: it used the preceding
 473 MiB RSS and 819% sampled CPU. The production recreation uses 5,349-row
 physical segments, 32 MiB ingest checkpoints, four CPU workers, and persisted
 `8/320` defaults. Raw r1 evidence is under
-[`v8-vector-ivf/fashion-mnist-784-r1`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/fashion-mnist-784-r1/).
+`v8-vector-ivf/fashion-mnist-784-r1` (historical raw artifact not distributed).
 
 The production-shaped r2 curve selected `8 probes / 320 candidates`: 0.989
 recall, 202.0 ms uncached p95, and 2.43 ms disk-cached p95 with zero backing
@@ -84,7 +84,7 @@ the three runs sustain 590-616 QPS, with p95 28.5-31.4 ms and worst maximum
 tail. The consolidated evidence is
 [`aws-v8-vector-ivf-production-repetitions-2026-07-21.csv`](../web/assets/benchmarks/aws-v8-vector-ivf-production-repetitions-2026-07-21.csv);
 raw r2-r6 runs are under
-[`v8-vector-ivf`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/).
+`v8-vector-ivf` (historical raw artifact not distributed).
 
 ## Descriptor-v6 hierarchical fixed-page diagnostic
 
@@ -96,7 +96,7 @@ The complete sweep reaches 0.991 at 12 probes, but 16–32 probes do not improve
 recall, so they are dominated. Build plus the complete sweep peaked at 276 MiB
 RSS and 177.5 MiB sampled scratch. This row remains diagnostic until fresh
 reuse repetitions and bounded-concurrency measurements pass. Raw evidence:
-[`fashion-mnist-784-r7-hierarchical`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/fashion-mnist-784-r7-hierarchical/).
+`fashion-mnist-784-r7-hierarchical` (historical raw artifact not distributed).
 
 The fresh descriptor-v8 packed recreation selects the same `8/320` default at
 0.989 recall, again above the directly measured S3 Vectors 0.985 target. It
@@ -105,7 +105,7 @@ measures 186.4/1.68 ms uncached/disk-cached p95, 3.52/0.52 MB per query, and
 32, while latency and bytes rise, so the wider points are rejected. Source
 ingest took 26.1 s and bounded index finalization 19.9 s; the complete build and
 curve peaked at 258.2 MiB RSS and 163.3 MiB scratch. Raw evidence:
-[`fashion-mnist-784-r8-packed-adaptive`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/fashion-mnist-784-r8-packed-adaptive/).
+`fashion-mnist-784-r8-packed-adaptive` (historical raw artifact not distributed).
 
 Three clean-process Fashion production repetitions all return 0.989 recall.
 Median uncached/disk-cached p95 is 197.9/1.667 ms, worst serving RSS is
@@ -121,14 +121,14 @@ at `192 / 184`, with 759.1/25.8 ms p95 and 472.77 GETs/query. Build plus sweep
 peaked at 350.1 MiB RSS and 523.1 MiB scratch. This qualifies recall and the RAM
 envelope, but not uncached latency: packed code-slab experiments must reduce
 the hundreds of small object requests before promotion. Raw evidence:
-[`glove-100-r12-adaptive-flat256`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r12-adaptive-flat256/).
+`glove-100-r12-adaptive-flat256` (historical raw artifact not distributed).
 
 The corresponding fresh NYTimes adaptive rebuild reaches 0.958 at `192 / 320`
 and 0.976 at `256 / 320`. Their uncached p95s are 701.8 and 947.0 ms, while
 disk-cached p95s are 9.3 and 11.8 ms. Peak build-plus-sweep RSS is 262.0 MiB;
 the row is a recall/layout diagnostic, not a latency-qualified production row.
 Raw evidence:
-[`nytimes-256-r2-adaptive-flat256`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r2-adaptive-flat256/).
+`nytimes-256-r2-adaptive-flat256` (historical raw artifact not distributed).
 
 Descriptor-v8 packed recreations keep those recall values and materially reduce
 S3 request amplification. GloVe at 0.985 falls from 278.77 to 148.32 GETs/query
@@ -168,7 +168,7 @@ not improve recall. A one-cell boundary sweep then found 223 as the true first
 0.993 point: 220 reaches 0.985 and 221–222 reach 0.989. At 223, uncached and
 disk-cached p95 are 376.9 and 19.6 ms. Lower points remain explicit tuning
 choices, not the high-recall production default. Raw boundary evidence is in
-[`nytimes-256-r15-boundary-probes`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r15-boundary-probes/).
+`nytimes-256-r15-boundary-probes` (historical raw artifact not distributed).
 
 Three clean-process production repetitions qualify the selected NYTimes point.
 The first two used the adjacent 224-probe point and the third pins the final
@@ -192,7 +192,7 @@ state. The 96-probe research point reaches 0.999 at 241.3/6.63 ms; 128 probes
 stays at 0.999 while rising to 263.5/8.53 ms and is dominated. Source ingest
 took 83.5 s and bounded index finalization 66.4 s. The complete build and
 nine-point sweep peaked at 305.7 MiB RSS and 537.6 MiB scratch. Raw evidence:
-[`sift-128-r3-packed-adaptive`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/sift-128-r3-packed-adaptive/).
+`sift-128-r3-packed-adaptive` (historical raw artifact not distributed).
 
 Three clean-process SIFT production repetitions confirm the `64/184` default.
 All return 0.997 recall; median uncached/disk-cached p95 is 213.8/4.58 ms,
@@ -209,7 +209,7 @@ to 0.994 at 192 probes, 0.998 at 384, and 0.999 at 512; their uncached p95s are
 old product router at matched high recall and qualifies the hierarchy as the
 large-angular adaptive layout, while making the final 0.001 recall cost
 explicit. Raw evidence:
-[`deep-image-96-r4-packed-hierarchical64`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/deep-image-96-r4-packed-hierarchical64/).
+`deep-image-96-r4-packed-hierarchical64` (historical raw artifact not distributed).
 
 Three clean-process Deep production repetitions confirm the persisted
 `128/200` default. All return 0.990 recall on the full 100-query set; median
@@ -256,7 +256,7 @@ median p95 is 306.1 ms, and the worst maximum is 343.1 ms. There is no
 multi-second overload tail. Offline source ingest takes 635.9 s and final
 publication 322.0 s; sampled external scratch peaks at 3.80 GiB and returns to
 zero. Raw curves and repetitions are under
-[`gist-960-r9-code256` through `gist-960-r16-production-rep3`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/),
+`gist-960-r9-code256` through `gist-960-r16-production-rep3` (historical raw artifacts not distributed),
 with consolidated selected-point rows in
 [`aws-v8-packed-sift-deep-production-repetitions-2026-07-21.csv`](../web/assets/benchmarks/aws-v8-packed-sift-deep-production-repetitions-2026-07-21.csv).
 
@@ -268,7 +268,7 @@ code256 layout, and its ten-query smoke pass returns 1.000 recall with
 831.3/27.6 ms uncached/disk-cached p95. That small smoke set is only a persisted
 configuration check—the publication recall and latency remain the three full
 100-query repetitions above. R17 build RSS peaks at 328.1 MiB. Raw evidence:
-[`gist-960-r17-production-default-rebuild`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/gist-960-r17-production-default-rebuild/).
+`gist-960-r17-production-default-rebuild` (historical raw artifact not distributed).
 
 As everywhere else, 0.995 is empirical recall on the complete public query
 set—not a mathematical guarantee. Exact mode remains the formal 1.0 path and
@@ -300,7 +300,7 @@ that could not meet the gate. Standard million-row corpora now use one
 full-dimensional 256-centroid coarse quantizer; large normalized corpora use
 the separately qualified full-dimensional hierarchy rather than product cells.
 Raw partial evidence is under
-[`v8-vector-ivf/glove-100-r1-rejected-4096-cells`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r1-rejected-4096-cells/).
+`v8-vector-ivf/glove-100-r1-rejected-4096-cells` (historical raw artifact not distributed).
 
 ## Historical v7 global-PQ evidence
 

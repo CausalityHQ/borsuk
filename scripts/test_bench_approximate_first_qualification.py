@@ -5,7 +5,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = (ROOT / "scripts/bench_approximate_first_qualification.sh").read_text()
 MANIFEST = json.loads(
-    (ROOT / "docs/research/approximate-first-cohere-1m-local-qualification.json").read_text()
+    (
+        ROOT / "docs/research/approximate-first-cohere-1m-local-qualification.json"
+    ).read_text()
 )
 
 
@@ -31,7 +33,7 @@ class ApproximateFirstRunnerContractTest(unittest.TestCase):
             self.assertIn(evidence, RUNNER)
         self.assertLess(
             RUNNER.index("qualification_identity.json"),
-            RUNNER.index('BORSUK_BENCH_APPROXIMATE_FIRST_PAIR=1'),
+            RUNNER.index("BORSUK_BENCH_APPROXIMATE_FIRST_PAIR=1"),
         )
 
     def test_valid_rejection_is_terminal_not_infrastructure_failure(self):

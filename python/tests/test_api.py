@@ -1409,10 +1409,14 @@ class PythonApiTests(unittest.TestCase):
                 ids=[f"v{value}" for value in range(130)],
             )
             index.flush()
-            full_resident_bytes = borsuk.open(
-                uri,
-                resident_routing=True,
-            ).stats().resident_bytes_estimate
+            full_resident_bytes = (
+                borsuk.open(
+                    uri,
+                    resident_routing=True,
+                )
+                .stats()
+                .resident_bytes_estimate
+            )
 
             reopened = borsuk.open(
                 uri,

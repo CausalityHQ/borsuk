@@ -68,7 +68,9 @@ class RealisticDurableWriteValidatorTests(unittest.TestCase):
         self.temporary.cleanup()
 
     @staticmethod
-    def _write_csv(path: Path, fields: list[str], records: list[dict[str, str]]) -> None:
+    def _write_csv(
+        path: Path, fields: list[str], records: list[dict[str, str]]
+    ) -> None:
         with path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()
@@ -123,17 +125,28 @@ class RealisticDurableWriteValidatorTests(unittest.TestCase):
 
     def _write_resources(self) -> None:
         fields = [
-            "elapsed_ms", "cpu_percent", "rss_bytes", "vms_bytes",
-            "process_read_bytes", "process_write_bytes", "cache_disk_bytes",
-            "scratch_disk_bytes", "network_receive_bytes", "network_transmit_bytes",
-            "child_cpu_seconds", "child_max_rss_bytes",
+            "elapsed_ms",
+            "cpu_percent",
+            "rss_bytes",
+            "vms_bytes",
+            "process_read_bytes",
+            "process_write_bytes",
+            "cache_disk_bytes",
+            "scratch_disk_bytes",
+            "network_receive_bytes",
+            "network_transmit_bytes",
+            "child_cpu_seconds",
+            "child_max_rss_bytes",
         ]
         self._write_csv(
             self.cell / "resources.csv",
             fields,
             [
                 {field: "0" for field in fields},
-                {field: ("10000" if field == "elapsed_ms" else "1") for field in fields},
+                {
+                    field: ("10000" if field == "elapsed_ms" else "1")
+                    for field in fields
+                },
             ],
         )
 
@@ -187,8 +200,12 @@ class RealisticDurableWriteValidatorTests(unittest.TestCase):
         environment.write_text(
             environment.read_text().replace(self.dataset_sha, "c" * 64)
         )
-        with self.assertRaisesRegex(ValidationError, "dataset descriptor SHA-256 mismatch"):
-            validate(self.root, self.manifest_path, expected_dataset_sha=self.dataset_sha)
+        with self.assertRaisesRegex(
+            ValidationError, "dataset descriptor SHA-256 mismatch"
+        ):
+            validate(
+                self.root, self.manifest_path, expected_dataset_sha=self.dataset_sha
+            )
 
     def test_missing_copied_dataset_descriptor_fails(self) -> None:
         (self.root / "dataset.json").unlink()

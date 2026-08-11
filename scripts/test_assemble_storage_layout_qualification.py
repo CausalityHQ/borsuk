@@ -106,7 +106,9 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
             assemble._validate_segment_path(row, "case")
 
     def test_rejects_an_unversioned_production_benchmark_sample(self) -> None:
-        with self.assertRaisesRegex(ValueError, "unsupported production benchmark schema"):
+        with self.assertRaisesRegex(
+            ValueError, "unsupported production benchmark schema"
+        ):
             assemble._validate_segment_path(
                 {
                     "segments_searched": "8",
@@ -140,16 +142,12 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
             "phase": "disk_cached",
         }
         with self.assertRaisesRegex(ValueError, "schema"):
-            assemble._validate_query_sample_schema_rows(
-                [valid, off_cohort_v9], "case"
-            )
+            assemble._validate_query_sample_schema_rows([valid, off_cohort_v9], "case")
 
         missing_telemetry = valid.copy()
         missing_telemetry.pop("global_leaf_waves")
         with self.assertRaisesRegex(ValueError, "telemetry"):
-            assemble._validate_query_sample_schema_rows(
-                [missing_telemetry], "case"
-            )
+            assemble._validate_query_sample_schema_rows([missing_telemetry], "case")
 
     def test_rejects_raw_sample_identity_that_disagrees_with_schedule(self) -> None:
         row = {

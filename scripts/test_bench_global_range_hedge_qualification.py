@@ -4,7 +4,6 @@ import pathlib
 import subprocess
 import unittest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "bench_global_range_hedge_qualification.sh"
 LAUNCHER = ROOT / "scripts" / "launch_aws_global_range_hedge_qualification.sh"
@@ -31,7 +30,9 @@ class GlobalRangeHedgeHarnessTest(unittest.TestCase):
         self.assertFalse(manifest["disk_cache_enabled"])
         self.assertEqual(manifest["queries_per_arm"], 500)
         self.assertEqual(manifest["read_writer"], 0)
-        self.assertEqual(manifest["hedge_after_ms"], {"control": "none", "candidate": "75"})
+        self.assertEqual(
+            manifest["hedge_after_ms"], {"control": "none", "candidate": "75"}
+        )
 
     def test_shell_harnesses_parse_and_require_explicit_authority(self):
         for script in (RUNNER, LAUNCHER):

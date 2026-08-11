@@ -646,9 +646,7 @@ def _validate_distribution_rows(path: Path, rows: list[dict[str, str]]) -> None:
         }.issubset(row) and float(row["resident_bytes_estimate"]) != float(
             row["collection_resident_bytes"]
         ):
-            raise ValueError(
-                f"{path}:{line} resident byte aliases do not match"
-            )
+            raise ValueError(f"{path}:{line} resident byte aliases do not match")
 
 
 def _validate_sample_reconciliation(

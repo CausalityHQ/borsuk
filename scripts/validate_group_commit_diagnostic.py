@@ -79,9 +79,23 @@ def validate(root: Path, canonical_manifest: Path) -> None:
     for field, expected in identities.items():
         if summary.get(field) != expected:
             raise ValidationError(f"summary {field} mismatch")
-    for field in ("groups", "storage_requests", "storage_gets", "storage_puts", "storage_heads"):
+    for field in (
+        "groups",
+        "storage_requests",
+        "storage_gets",
+        "storage_puts",
+        "storage_heads",
+    ):
         integer(summary[field], field)
-    for field in ("mean_group_records", "elapsed_ms", "p50_ms", "p95_ms", "records_per_second", "requests_per_record", "exact_recall"):
+    for field in (
+        "mean_group_records",
+        "elapsed_ms",
+        "p50_ms",
+        "p95_ms",
+        "records_per_second",
+        "requests_per_record",
+        "exact_recall",
+    ):
         finite(summary[field], field)
     if finite(summary["exact_recall"], "exact_recall") != 1.0:
         raise ValidationError("exact recall gate failed")
@@ -107,7 +121,13 @@ def validate(root: Path, canonical_manifest: Path) -> None:
         sequence = integer(sample["commit_sequence"], "commit_sequence")
         evidence = tuple(
             integer(sample[field], field)
-            for field in ("committed_records", "group_requests", "group_gets", "group_puts", "group_heads")
+            for field in (
+                "committed_records",
+                "group_requests",
+                "group_gets",
+                "group_puts",
+                "group_heads",
+            )
         )
         if evidence[1] != sum(evidence[2:]):
             raise ValidationError("group request components do not reconcile")
@@ -121,13 +141,27 @@ def validate(root: Path, canonical_manifest: Path) -> None:
     if sum(group[0] for group in groups.values()) != expected_records:
         raise ValidationError("committed group records do not reconcile")
     totals = [sum(group[index] for group in groups.values()) for index in range(1, 5)]
-    summary_totals = [integer(summary[field], field) for field in ("storage_requests", "storage_gets", "storage_puts", "storage_heads")]
+    summary_totals = [
+        integer(summary[field], field)
+        for field in (
+            "storage_requests",
+            "storage_gets",
+            "storage_puts",
+            "storage_heads",
+        )
+    ]
     if totals != summary_totals:
         raise ValidationError("raw and summary request totals differ")
-    if integer(summary["storage_requests"], "storage_requests") != sum(summary_totals[1:]):
+    if integer(summary["storage_requests"], "storage_requests") != sum(
+        summary_totals[1:]
+    ):
         raise ValidationError("summary request components do not reconcile")
     expected_rpr = summary_totals[0] / expected_records
-    if not math.isclose(finite(summary["requests_per_record"], "requests_per_record"), expected_rpr, rel_tol=1e-9):
+    if not math.isclose(
+        finite(summary["requests_per_record"], "requests_per_record"),
+        expected_rpr,
+        rel_tol=1e-9,
+    ):
         raise ValidationError("requests_per_record does not reconcile")
     resources = (root / "resources.txt").read_text(encoding="utf-8")
     if "Exit status: 0" not in resources:
@@ -137,7 +171,11 @@ def validate(root: Path, canonical_manifest: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
-    parser.add_argument("--manifest", type=Path, default=Path("docs/research/group-commit-diagnostic.json"))
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("docs/research/group-commit-diagnostic.json"),
+    )
     args = parser.parse_args()
     try:
         validate(args.root, args.manifest)

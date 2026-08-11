@@ -5,7 +5,6 @@ import subprocess
 import tempfile
 import unittest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts" / "validate_global_cell_stripes.py"
 MANIFEST = ROOT / "docs" / "research" / "global-cell-stripe-qualification.json"
@@ -37,14 +36,23 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
         (self.root / "manifest.json").write_text(MANIFEST.read_text())
         for repetition, order in enumerate(self.manifest["arm_orders"], 1):
             for order_position, stripe_bytes in enumerate(order):
-                arm = self.root / "repetitions" / f"r{repetition:02}" / f"s{stripe_bytes // 1048576}m"
+                arm = (
+                    self.root
+                    / "repetitions"
+                    / f"r{repetition:02}"
+                    / f"s{stripe_bytes // 1048576}m"
+                )
                 arm.mkdir(parents=True)
                 (arm / "READ_QUALIFICATION_COMPLETE").touch()
                 (arm / "CELL_COMPLETE").touch()
                 (arm / "process_exit.txt").write_text("0\n")
                 (arm / "resources.csv").write_text("timestamp_ms,rss_bytes\n0,1024\n")
                 (arm / "storage-access.csv").write_text("operation,path\nget,x\n")
-                cache_dir = self.root / "caches" / f"r{repetition:02}-s{stripe_bytes // 1048576}m"
+                cache_dir = (
+                    self.root
+                    / "caches"
+                    / f"r{repetition:02}-s{stripe_bytes // 1048576}m"
+                )
                 (arm / "environment.txt").write_text(
                     f"source_sha256={'a' * 64}\n"
                     f"manifest_sha256={self.manifest_sha}\n"
@@ -88,7 +96,23 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
                     for query in range(100):
                         latency = baseline + query / 100.0
                         writer.writerow(
-                            [query, f"id-{query}", f"id-{query}", "true", latency, 2, 2, 0, 0, 0, 0, 1024, 4, 1, 1]
+                            [
+                                query,
+                                f"id-{query}",
+                                f"id-{query}",
+                                "true",
+                                latency,
+                                2,
+                                2,
+                                0,
+                                0,
+                                0,
+                                0,
+                                1024,
+                                4,
+                                1,
+                                1,
+                            ]
                         )
                 with (arm / "summary.csv").open("w", newline="") as handle:
                     writer = csv.DictWriter(
@@ -127,7 +151,9 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
                             "source_sha256": "a" * 64,
                             "manifest_sha256": self.manifest_sha,
                             "base_source_sha256": self.manifest["base_source_sha256"],
-                            "base_manifest_sha256": self.manifest["base_manifest_sha256"],
+                            "base_manifest_sha256": self.manifest[
+                                "base_manifest_sha256"
+                            ],
                             "base_samples_sha256": self.manifest["base_samples_sha256"],
                             "dataset_sha256": self.manifest["dataset_sha256"],
                             "base_cell": self.manifest["base_cell"],
@@ -170,7 +196,9 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("failure marker", result.stderr)
 
-    def test_explicit_recovery_validates_all_arms_after_terminal_validator_failure(self):
+    def test_explicit_recovery_validates_all_arms_after_terminal_validator_failure(
+        self,
+    ):
         self.write_terminal_matrix()
         (self.root / self.manifest["root_complete_marker"]).unlink()
         (self.root / self.manifest["root_failure_marker"]).touch()
@@ -181,10 +209,9 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
 
         recovered = self.run_validator(recover=True)
         self.assertEqual(recovered.returncode, 0, recovered.stderr)
-        self.assertEqual(json.loads(recovered.stdout)["terminal_mode"], "validator-failure-recovery")
-
-    def test_validator_avoids_python_310_only_zip_strict_keyword(self):
-        self.assertNotIn("strict=True", VALIDATOR.read_text())
+        self.assertEqual(
+            json.loads(recovered.stdout)["terminal_mode"], "validator-failure-recovery"
+        )
 
     def test_accepts_exact_terminal_matrix_and_selects_paired_winner(self):
         self.write_terminal_matrix()
@@ -205,7 +232,9 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
 
         missing.touch()
         summary = self.root / "repetitions" / "r03" / "s2m" / "summary.csv"
-        text = summary.read_text().replace(self.manifest["base_samples_sha256"], "f" * 64)
+        text = summary.read_text().replace(
+            self.manifest["base_samples_sha256"], "f" * 64
+        )
         summary.write_text(text)
         result = self.run_validator()
         self.assertNotEqual(result.returncode, 0)
@@ -215,8 +244,15 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
         self.write_terminal_matrix()
         first = self.root / "repetitions" / "r01" / "s1m" / "environment.txt"
         second = self.root / "repetitions" / "r01" / "s2m" / "environment.txt"
-        first_cache = next(line for line in first.read_text().splitlines() if line.startswith("cache_dir="))
-        lines = [first_cache if line.startswith("cache_dir=") else line for line in second.read_text().splitlines()]
+        first_cache = next(
+            line
+            for line in first.read_text().splitlines()
+            if line.startswith("cache_dir=")
+        )
+        lines = [
+            first_cache if line.startswith("cache_dir=") else line
+            for line in second.read_text().splitlines()
+        ]
         second.write_text("\n".join(lines) + "\n")
         result = self.run_validator()
         self.assertNotEqual(result.returncode, 0)

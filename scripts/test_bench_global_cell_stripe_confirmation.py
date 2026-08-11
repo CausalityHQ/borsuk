@@ -2,7 +2,6 @@ import json
 import pathlib
 import unittest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "bench_global_cell_stripe_confirmation.sh"
 COMMON_RUNNER = ROOT / "scripts" / "bench_global_cell_stripes.sh"
@@ -21,7 +20,13 @@ class GlobalCellStripeConfirmationRunnerTest(unittest.TestCase):
         self.assertEqual(manifest["stripe_bytes"], [mib, 4 * mib])
         self.assertEqual(
             manifest["arm_orders"],
-            [[mib, 4 * mib], [4 * mib, mib], [mib, 4 * mib], [4 * mib, mib], [mib, 4 * mib]],
+            [
+                [mib, 4 * mib],
+                [4 * mib, mib],
+                [mib, 4 * mib],
+                [4 * mib, mib],
+                [mib, 4 * mib],
+            ],
         )
         self.assertEqual(manifest["required_nonworse_paired_repetitions"], 4)
         self.assertEqual(manifest["minimum_pooled_p95_improvement_fraction"], 0.10)
@@ -33,7 +38,9 @@ class GlobalCellStripeConfirmationRunnerTest(unittest.TestCase):
         source = RUNNER.read_text() + COMMON_RUNNER.read_text()
         self.assertIn("GLOBAL_CELL_STRIPE_CONFIRMATION_FAILED", source)
         self.assertIn("GLOBAL_CELL_STRIPE_CONFIRMATION_COMPLETE", source)
-        self.assertIn('BORSUK_GLOBAL_CELL_STRIPE_PROTOCOL="read-stripe-confirmation"', source)
+        self.assertIn(
+            'BORSUK_GLOBAL_CELL_STRIPE_PROTOCOL="read-stripe-confirmation"', source
+        )
         self.assertIn('BORSUK_GROUP_COMMIT_PROTOCOL="$READ_PROTOCOL"', source)
         self.assertIn("BORSUK_GROUP_COMMIT_PREFETCH_STRIPE_BYTES", source)
         self.assertIn("BORSUK_GROUP_COMMIT_READ_REPETITION", source)

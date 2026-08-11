@@ -17,8 +17,7 @@ class BenchHybridRetrievalMatrixTests(unittest.TestCase):
         source = root / "source"
         (source / "qrels").mkdir(parents=True)
         (source / "corpus.jsonl").write_text(
-            json.dumps({"_id": "d1", "title": "Apple", "text": "orchard fruit"})
-            + "\n",
+            json.dumps({"_id": "d1", "title": "Apple", "text": "orchard fruit"}) + "\n",
             encoding="utf-8",
         )
         (source / "queries.jsonl").write_text(
@@ -193,9 +192,7 @@ done
             self.assertEqual(
                 {row["dense_element_type"] for row in rows}, {"float8-e4m3fn"}
             )
-            self.assertEqual(
-                {row["sparse_element_type"] for row in rows}, {"float16"}
-            )
+            self.assertEqual({row["sparse_element_type"] for row in rows}, {"float16"})
             self.assertTrue(
                 all(
                     "/dense-float8-e4m3fn/sparse-float16" in row["index_uri"]

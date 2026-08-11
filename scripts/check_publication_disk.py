@@ -27,9 +27,7 @@ def main() -> int:
     parser.add_argument("--phase", required=True)
     args = parser.parse_args()
     try:
-        free_bytes = require_free_disk(
-            args.root, args.minimum_free_bytes, args.phase
-        )
+        free_bytes = require_free_disk(args.root, args.minimum_free_bytes, args.phase)
     except (OSError, RuntimeError, ValueError) as error:
         parser.exit(1, f"{error}\n")
     print(f"publication_disk_free_bytes={free_bytes}")

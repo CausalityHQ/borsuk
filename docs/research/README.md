@@ -152,9 +152,9 @@ A production point must:
   fastest trial.
 
 The production campaign root is
-[`raw/2026-07-20`](../web/assets/benchmarks/raw/2026-07-20/); the graph profile,
+`raw/2026-07-20` (historical raw artifact not distributed); the graph profile,
 optimization ablation, recall curve, repetitions, and resource traces are under
-[`raw/2026-07-21`](../web/assets/benchmarks/raw/2026-07-21/).
+`raw/2026-07-21` (historical raw artifact not distributed).
 
 The current-result evidence manifest is
 [`current-results.csv`](../web/assets/benchmarks/current-results.csv). Current

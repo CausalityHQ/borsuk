@@ -58,7 +58,7 @@ class LaunchAwsPublicationV2Tests(unittest.TestCase):
             source,
         )
         self.assertIn("only live panes participate in contention", source)
-        self.assertIn("tmux kill-session -t \"$session\"", source)
+        self.assertIn('tmux kill-session -t "$session"', source)
         self.assertNotIn('tmux list-sessions -F "#S"', source)
 
 

@@ -109,7 +109,9 @@ def validate_local_files(dataset_dir: Path, expected: list[str]) -> None:
         if ".parquet" in path.name and path.name not in expected_set
     )
     if unexpected:
-        raise ValueError(f"unexpected downloaded Parquet source: {', '.join(unexpected)}")
+        raise ValueError(
+            f"unexpected downloaded Parquet source: {', '.join(unexpected)}"
+        )
 
 
 def source_uri(contract: DatasetContract) -> str:

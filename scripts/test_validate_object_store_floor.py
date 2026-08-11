@@ -3,9 +3,9 @@
 import csv
 import hashlib
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from validate_object_store_floor import ValidationError, validate
@@ -56,15 +56,21 @@ class ObjectStoreFloorValidatorTest(unittest.TestCase):
             "conditional_create_rejected=true\nstale_update_rejected=true\n",
             encoding="utf-8",
         )
-        with (measurement / "samples.csv").open("w", newline="", encoding="utf-8") as handle:
+        with (measurement / "samples.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as handle:
             writer = csv.writer(handle)
             writer.writerow(("operation", "sample", "latency_ms"))
             for operation in manifest["operations"]:
                 for sample, latency in enumerate((10.0, 20.0, 30.0, 40.0)):
                     writer.writerow((operation, sample, latency))
-        with (measurement / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
+        with (measurement / "summary.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as handle:
             writer = csv.writer(handle)
-            writer.writerow(("operation", "samples", "p50_ms", "p95_ms", "p99_ms", "max_ms"))
+            writer.writerow(
+                ("operation", "samples", "p50_ms", "p95_ms", "p99_ms", "max_ms")
+            )
             for operation in manifest["operations"]:
                 writer.writerow((operation, 4, 30.0, 40.0, 40.0, 40.0))
 

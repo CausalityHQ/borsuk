@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Regression tests for the group-commit fail-closed validator."""
 
-import csv
 import tempfile
 import unittest
 from pathlib import Path

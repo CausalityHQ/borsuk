@@ -44,7 +44,9 @@ class ApproximateFirstQualificationTest(unittest.TestCase):
             json.dumps(
                 {
                     "source_commit": "a" * 40,
-                    "manifest_sha256": hashlib.sha256(self.manifest_path.read_bytes()).hexdigest(),
+                    "manifest_sha256": hashlib.sha256(
+                        self.manifest_path.read_bytes()
+                    ).hexdigest(),
                     "dataset_descriptor_sha256": "d" * 64,
                     "binary_sha256": "b" * 64,
                     "source_tree_clean": True,
@@ -66,7 +68,9 @@ class ApproximateFirstQualificationTest(unittest.TestCase):
                 "query_seed": 17,
                 "sample_index": sample,
                 "query_source_index": sample,
-                "arm_order": "control,treatment" if sample % 2 == 0 else "treatment,control",
+                "arm_order": "control,treatment"
+                if sample % 2 == 0
+                else "treatment,control",
                 "scan_codec": "srht-pq-scan",
                 "cache_execution": "scan",
                 "nprobe": self.manifest["nprobes"][0],
@@ -134,7 +138,11 @@ class ApproximateFirstQualificationTest(unittest.TestCase):
     def test_rejects_quality_loss(self):
         def lower_recall(row, sample):
             if sample == 0:
-                row["treatment"]["ordered_ids"] = [str(value) for value in range(7)] + ["x", "y", "z"]
+                row["treatment"]["ordered_ids"] = [str(value) for value in range(7)] + [
+                    "x",
+                    "y",
+                    "z",
+                ]
                 row["treatment"]["recall_at_10"] = 0.7
 
         self.write_terminal(lower_recall)

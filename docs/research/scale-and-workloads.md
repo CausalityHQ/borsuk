@@ -121,7 +121,7 @@ The higher-probe rows add I/O and latency without recall and are rejected. The
 but its 0.91 s S3 p95 and four-hour build are a baseline to beat, not a
 production-latency claim. The raw build, recall, and 8 MiB resource timeline are
 under
-[`synthetic-clustered-100m-96-r2-default-build`](../web/assets/benchmarks/raw/2026-07-22/v8-vector-ivf/synthetic-clustered-100m-96-r2-default-build/),
+`synthetic-clustered-100m-96-r2-default-build` (historical raw artifact not distributed),
 with [recall/latency](../web/assets/charts/v8-vector-ivf/synthetic-clustered-100m-96-r2-default-build/recall-latency-synthetic-clustered-100m-96.svg)
 and [CPU/RAM/disk/cache](../web/assets/charts/v8-vector-ivf/synthetic-clustered-100m-96-r2-default-build/resources-experiment.svg)
 charts.

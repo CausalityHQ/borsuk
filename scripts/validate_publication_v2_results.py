@@ -148,7 +148,9 @@ def _read_embedded_manifest(path: Path) -> bytes:
                     "source archive must contain exactly one regular embedded manifest"
                 )
             if members[0].size > 1024 * 1024:
-                raise ValueError("source archive embedded manifest is unreasonably large")
+                raise ValueError(
+                    "source archive embedded manifest is unreasonably large"
+                )
             handle = archive.extractfile(members[0])
             if handle is None:
                 raise ValueError("source archive embedded manifest is unreadable")
@@ -168,8 +170,7 @@ def _require_measured_coverage(
     expected_row_count = len(expected_datasets) * rows_per_dataset
     if len(rows) != expected_row_count:
         raise ValueError(
-            f"{label} coverage row count differs: "
-            f"{len(rows)} != {expected_row_count}"
+            f"{label} coverage row count differs: {len(rows)} != {expected_row_count}"
         )
     actual_datasets = {row.get("dataset", "") for row in rows}
     if actual_datasets != expected_datasets:
@@ -199,9 +200,7 @@ def _require_hybrid_coverage(
     max_segments = str(search_config["max_segments"])
     hot_fractions = tuple(str(value) for value in search_config["hot_fractions"])
     rrf_k = str(search_config["rrf_k"])
-    campaign_repetition = str(
-        search_config["repetitions_per_campaign_repetition"]
-    )
+    campaign_repetition = str(search_config["repetitions_per_campaign_repetition"])
     for dataset in expected_datasets:
         expected.add(
             (
@@ -554,7 +553,10 @@ def validate_result_tree(
         raise ValueError("source_sha256 does not match the expected frozen source")
     if _sha256(root / "source-archive.tar.gz") != source_sha:
         raise ValueError("source archive digest does not match environment.txt")
-    if _read_embedded_manifest(root / "source-archive.tar.gz") != manifest_path.read_bytes():
+    if (
+        _read_embedded_manifest(root / "source-archive.tar.gz")
+        != manifest_path.read_bytes()
+    ):
         raise ValueError("source archive embedded manifest differs from manifest.json")
     if _sha256(manifest_path) != environment["manifest_sha256"]:
         raise ValueError("manifest digest does not match environment.txt")
@@ -618,8 +620,7 @@ def validate_result_tree(
         ):
             raise ValueError(f"{repetition_id} S3 Vectors coverage protocol drift")
         _require_nonempty_artifacts(
-            repetition_root
-            / f"amazon-s3-vectors/{direct_dataset}/{repetition_id}",
+            repetition_root / f"amazon-s3-vectors/{direct_dataset}/{repetition_id}",
             S3_VECTORS_MEASURED_ARTIFACTS,
         )
 

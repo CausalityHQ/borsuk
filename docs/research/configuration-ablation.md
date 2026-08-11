@@ -160,9 +160,9 @@ the next accepted experiment changes physical row locality to reduce range
 GETs rather than raising the global concurrency cap.
 
 Raw evidence:
-[`compute-pool I/O`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r4-rejected-cpu-bound-io/),
-[`I/O pool / width 8`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r5-io24-width8/), and
-[`I/O pool / width 16`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r6-io24-width16/).
+`compute-pool I/O` (historical raw artifact not distributed),
+`I/O pool / width 8` (historical raw artifact not distributed), and
+`I/O pool / width 16` (historical raw artifact not distributed).
 
 A fresh descriptor-v7 rebuild of the selected adaptive angular layout reproduced
 the quality curve rather than relying on the reused r6 index:
@@ -182,21 +182,21 @@ scratch disk. Whole-run mean sampled CPU was 86.7% of one core with a brief
 while the separate I/O pool waited on S3. This run confirms that the remaining
 uncached tail is request fan-out: local disk-cached compute is 9–26 ms, while
 the S3 path issues 212–473 GETs. Raw evidence and resource trace:
-[`glove-100-r12-adaptive-flat256`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r12-adaptive-flat256/).
+`glove-100-r12-adaptive-flat256` (historical raw artifact not distributed).
 
 The full bit-plane Morton recreation preserved the same 0.963/0.984 recall but
 also produced exactly the same 217.82/283.96 GETs and byte counts at 64/96
 probes. Its p95 did not improve, so row ordering alone is rejected as the
 solution: the 184-row shortlist is too sparse across cells for one ordering to
 make the ranges contiguous. Raw evidence is under
-[`glove-100-r7-rejected-full-morton`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r7-rejected-full-morton/).
+`glove-100-r7-rejected-full-morton` (historical raw artifact not distributed).
 The next recreation widened low-dimensional paged codes from 64 to 128 bytes.
 At `192 probes / 16 candidates` it retained 1.000 recall, but GETs fell only
 477.96→406.70 while bytes rose 63.71→120.26 MB, uncached p95 rose
 798.3→991.2 ms, disk-cached p95 rose 30.5→56.0 ms, and live RSS approached
 386 MiB. It is rejected: shortlist fidelity was not the limiting end-to-end
 resource. Raw evidence is under
-[`glove-100-r8-rejected-code128`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r8-rejected-code128/).
+`glove-100-r8-rejected-code128` (historical raw artifact not distributed).
 The remaining root cause is coarse routing: perfect recall on the 256-cell
 layout requires 192 probes, so the next engine experiment must reduce the
 fraction of code pages scanned rather than widening each page.
@@ -223,8 +223,8 @@ CPU; NYTimes uses 289.0 MiB scratch and 62.5% mean CPU. These first-pass rows
 qualify the packed mechanism and memory envelope. Production promotion still
 requires independent selected-point and bounded-concurrency repetitions. Raw
 evidence:
-[`glove-100-r14-packed-flat256`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r14-packed-flat256/) and
-[`nytimes-256-r4-packed-flat256`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r4-packed-flat256/).
+`glove-100-r14-packed-flat256` (historical raw artifact not distributed) and
+`nytimes-256-r4-packed-flat256` (historical raw artifact not distributed).
 
 Three independent clean-process GloVe serving repetitions at the empirical
 1.000 point (`192 / 184`) reproduce the first pass. Median uncached p95 is
@@ -244,7 +244,7 @@ p95 rises from 382.7 to 486.9 ms and exact-range GETs from 78.64 to 406.94.
 Because every coarse cell is already scanned, the missing neighbors are below
 the 64-byte product-PQ ranking cutoff; more routing probes cannot help. Raw
 evidence:
-[`nytimes-256-r5-packed-candidates`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r5-packed-candidates/).
+`nytimes-256-r5-packed-candidates` (historical raw artifact not distributed).
 
 A fresh 128-byte-code recreation isolates that variable. At the same all-cell
 route, recall reaches 0.993 with 288 candidates, 418.9 ms uncached p95,
@@ -256,8 +256,8 @@ one core. Thus 128 bytes improves the measured quality ceiling from 0.991 to
 0.993 without increasing process memory, but reranking beyond 288 is rejected.
 The remaining default-selection work is a probe sweep; 0.993 is empirical, not
 a formal perfect-recall claim. Raw evidence:
-[`nytimes-256-r6-packed-code128`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r6-packed-code128/) and
-[`nytimes-256-r7-code128-candidates`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r7-code128-candidates/).
+`nytimes-256-r6-packed-code128` (historical raw artifact not distributed) and
+`nytimes-256-r7-code128-candidates` (historical raw artifact not distributed).
 
 A ten-query exact control verifies the ground-truth path rather than silently
 assuming it. Exact and `256 / 288` code128 ANN both return 1.000 recall on that
@@ -266,7 +266,7 @@ query; ANN is 412/21.7 ms and reads 39.2/38.3 MB. This does not upgrade the
 100-query ANN result from empirical 0.993, but it confirms that formal 1.0 is
 available through lossless exhaustive verification and makes its CPU/I/O cost
 explicit. Raw evidence:
-[`nytimes-256-r8-exact-control`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r8-exact-control/).
+`nytimes-256-r8-exact-control` (historical raw artifact not distributed).
 
 The initial full probe sweep selected 224 rather than all 256 cells. Recall
 rises 0.888/0.906/0.935/0.953/0.974/0.993 at
@@ -276,14 +276,14 @@ and 38.9/38.3 MB at 256. This is the smallest measured point preserving the
 code128 ceiling, but scanning seven eighths of the cells also proves that
 flat-256 routing—not process memory—is now the dominant optimization target.
 Raw evidence:
-[`nytimes-256-r9-code128-probes`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r9-code128-probes/).
+`nytimes-256-r9-code128-probes` (historical raw artifact not distributed).
 
 A subsequent one-cell boundary sweep resolves the production setting: 220
 probes reaches 0.985, 221–222 reach 0.989, and 223 is the first point at the
 0.993 ceiling. Its uncached/disk-cached p95 is 376.9/19.6 ms with 37.7/37.0 MB
 read per query. The persisted default is therefore 223/288; 224 remains a
 repetition point rather than the minimum high-recall setting. Raw evidence:
-[`nytimes-256-r15-boundary-probes`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r15-boundary-probes/).
+`nytimes-256-r15-boundary-probes` (historical raw artifact not distributed).
 
 A final 256-byte control rejects the tempting assumption that still wider PQ
 codes automatically close the gap. At 224/288 it remains 0.993 but costs
@@ -294,8 +294,8 @@ and 37.7/37.1 MB for code128. Even all 256 cells and reranks of
 346.5 MiB scratch, and 139% mean CPU. Code256 is therefore a reproducible
 rejected ablation; it is not a default and it does not justify a staged
 refinement layer on this evidence. Raw evidence:
-[`nytimes-256-r10-packed-code256`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r10-packed-code256/) and
-[`nytimes-256-r11-code256-candidates`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r11-code256-candidates/).
+`nytimes-256-r10-packed-code256` (historical raw artifact not distributed) and
+`nytimes-256-r11-code256-candidates` (historical raw artifact not distributed).
 
 The same diagnosis holds at Deep-Image scale. A fresh 9.99M-row fixed-page
 build peaked at 348.6 MiB RSS and 4.21 GiB sampled scratch disk; the scratch is
@@ -306,9 +306,9 @@ GETs from 252 to 513. Disk-cached p95 was 45.7–85.9 ms. The recall regression
 is therefore fixed, while the product coarse router remains too weak near the
 top of the curve. Query-only peak RSS was 266.5 MiB; neither the build nor
 query retained the 9.99M-vector matrix. Raw evidence:
-[`Deep build`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/deep-image-96-r2-code64-old-locality-build/)
+`Deep build` (historical raw artifact not distributed)
 and
-[`Deep query curve`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/deep-image-96-r3-code64-io24-width16/).
+`Deep query curve` (historical raw artifact not distributed).
 
 The fresh descriptor-v8 hierarchy replaces those independent product cells
 with a 64-way full-dimensional parent and 64 full-dimensional local leaves per
@@ -327,8 +327,8 @@ the exact shortlist from 256 through 320, 384, and 512 leaves recall fixed at
 uncached/disk-cached p95 and from 344.39 to 392.75 GETs/query. The final 0.001
 is therefore not recoverable by retaining more exact-rerank rows from the same
 ADC ordering; widening candidates is rejected. Raw evidence:
-[`Deep candidate-width control`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/deep-image-96-r5-hierarchical-candidates/) and
-[`isolated 512-candidate point`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/deep-image-96-r5b-candidate512/).
+`Deep candidate-width control` (historical raw artifact not distributed) and
+`isolated 512-candidate point` (historical raw artifact not distributed).
 
 Fresh construction took 896 s ingest plus 653 s final publication. The entire
 build+sweep peaked at 461.4 MiB RSS, 4.20 GiB sampled scratch, and 96.4% mean
@@ -336,7 +336,7 @@ CPU (brief 524% sampler peak). Scratch returns to zero after immutable
 publication. At 50M+ rows the child fan-out increases under the same 32 MiB
 centroid-table cap so 100M does not simply put ten times as many rows in each
 Deep-scale cell. Raw evidence and resource trace:
-[`deep-image-96-r4-packed-hierarchical64`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/deep-image-96-r4-packed-hierarchical64/).
+`deep-image-96-r4-packed-hierarchical64` (historical raw artifact not distributed).
 
 The first hierarchical GloVe ablation intentionally tried 4,096 leaves at
 ordinary million scale. It cut disk-cached p95 to 1.1–2.8 ms and held uncached
@@ -346,7 +346,7 @@ scratch was 528.7 MiB; mean whole-run CPU was 34.8% with brief 100-ms sampler
 spikes. The layout is rejected because tiny cells did not qualify recall. It
 directly motivates the 1,024-leaf ordinary-million default now being recreated.
 Raw evidence:
-[`glove-100-r9-rejected-hierarchical-4096`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r9-rejected-hierarchical-4096/).
+`glove-100-r9-rejected-hierarchical-4096` (historical raw artifact not distributed).
 
 Reducing the hierarchy to 1,024 leaves improved GloVe recall at the same probe
 count, but the first implementation hard-assigned each corpus vector through
@@ -358,7 +358,7 @@ rejected on quality. Descriptor v7 now evaluates the four nearest parents
 during construction and selects the best full-dimensional child across them,
 removing the hard parent-boundary error without changing query-time memory or
 fan-out. Raw evidence:
-[`glove-100-r10-rejected-hard-parent-1024`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r10-rejected-hard-parent-1024/).
+`glove-100-r10-rejected-hard-parent-1024` (historical raw artifact not distributed).
 
 Checking four parents did not rescue the GloVe hierarchy: recall moved only
 0.843→0.851 at 32 probes, 0.896→0.899 at 64, and 0.936→0.940 at 128. This
@@ -369,8 +369,8 @@ hierarchy. A fresh NYTimes hierarchy independently confirmed the angular
 failure, reaching only 0.696 at 32 probes. A subsequent 2x64 product-routing
 control above 5M was also rejected; the separately measured full-dimensional
 hierarchy is the qualified large-angular layout described below. Raw evidence:
-[`glove-100-r11-rejected-parent4-1024`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r11-rejected-parent4-1024/) and
-[`nytimes-256-r1-rejected-parent4-1024`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r1-rejected-parent4-1024/).
+`glove-100-r11-rejected-parent4-1024` (historical raw artifact not distributed) and
+`nytimes-256-r1-rejected-parent4-1024` (historical raw artifact not distributed).
 
 The fresh adaptive NYTimes rebuild restores flat-256 and recovers 0.958 recall
 at `192 probes / 320 candidates`, but needs 435.11 GETs and 701.8 ms uncached
@@ -379,7 +379,7 @@ p95; its zero-GET disk-cached p95 is only 9.3 ms. Scanning all 256 cells reaches
 build-plus-sweep RSS is 262.0 MiB, scratch 298.4 MiB, and whole-run mean sampled
 CPU 53.1% of one core (brief 756.9% 100-ms peak). Thus flat routing fixes the
 hierarchy's quality regression but not object fan-out. Raw evidence:
-[`nytimes-256-r2-adaptive-flat256`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r2-adaptive-flat256/).
+`nytimes-256-r2-adaptive-flat256` (historical raw artifact not distributed).
 
 The completed fresh `Product2x64` ablation is rejected on both angular
 corpora. It creates 4,096 Cartesian cells, but matching the flat layout's
@@ -399,8 +399,8 @@ ablation; it must not be selected merely because a corpus crosses a row-count
 threshold. The scalable normalized-corpus successor must preserve
 full-dimensional neighborhoods, bound centroid memory, and be qualified on
 Deep-Image before it can become a default. Raw evidence and resource traces:
-[`glove-100-r13-product2x64`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/glove-100-r13-product2x64/) and
-[`nytimes-256-r3-product2x64`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/nytimes-256-r3-product2x64/).
+`glove-100-r13-product2x64` (historical raw artifact not distributed) and
+`nytimes-256-r3-product2x64` (historical raw artifact not distributed).
 
 The production candidate rule is evidence-based rather than one multiplier for
 every dimension. The first production-shaped vector-level IVF Fashion-MNIST
@@ -429,7 +429,7 @@ default is the knee: 128 adds only 0.001, while 384 more than doubles exact
 request fan-out for +0.002. A fast `16 probes / 96 candidates` profile remains
 documented at 0.985 recall and 303.8/22.0 ms uncached/disk-cached p95. Raw
 evidence is in
-[`gist-960-r10` through `gist-960-r13`](../web/assets/benchmarks/raw/2026-07-21/v8-vector-ivf/).
+`gist-960-r10` through `gist-960-r13` (historical raw artifacts not distributed).
 
 GloVe, SIFT, and Deep-Image retain their measured 184/184/200-candidate rules.
 
@@ -454,7 +454,7 @@ production latency claims. The 768-row requirement motivated the fresh
 On the legacy Fashion layout, fixing `nprobe=22` and sweeping 10–32 candidates
 found 0.981 recall at 11 candidates and 0.986 at 12. The 12-candidate row is the
 lowest point meeting S3 Vectors' 0.985. The raw fine sweeps are under
-[`s3-vectors-fashion/`](../web/assets/benchmarks/raw/2026-07-20/s3-vectors-fashion/).
+`s3-vectors-fashion/` (historical raw artifact not distributed).
 
 The 128/256/512/1024 layout directories contain broad and fine `nprobe ×
 candidates` grids. Layout selection always follows two stages: find the lowest
@@ -525,7 +525,7 @@ Every layout, recall, width, production, repeat, cap, uncapped, and S3-compariso
 experiment has a `resources.csv` with CPU, RSS/VMS, disk reads/writes, and cache
 footprint. Rendered timelines are in
 [`resources/`](../web/assets/benchmarks/resources/); raw samples are in
-[`raw/2026-07-20/`](../web/assets/benchmarks/raw/2026-07-20/).
+`raw/2026-07-20/` (historical raw artifact not distributed).
 
 Three older local-harness artifacts remain available for regression history:
 [`production_cold_warm.csv`](../web/assets/benchmarks/production_cold_warm.csv),

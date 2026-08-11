@@ -11,7 +11,6 @@ import pathlib
 import sys
 from collections.abc import Iterable
 
-
 QUALIFICATION_CAMPAIGN = "global-cell-stripe-qualification-v1"
 CONFIRMATION_CAMPAIGN = "global-cell-stripe-confirmation-v1"
 QUALIFICATION_COMPLETE = "GLOBAL_CELL_STRIPE_QUALIFICATION_COMPLETE"
@@ -91,8 +90,13 @@ def campaign_schema(manifest: dict[str, object]) -> tuple[str, str, list[int]]:
             [mib, 2 * mib, 4 * mib],
             [2 * mib, 4 * mib, mib],
         ]
-        require(manifest.get("protocol_kind") == "production-diagnostic", "qualification protocol changed")
-        require(manifest.get("queries_per_arm") == 100, "qualification query count changed")
+        require(
+            manifest.get("protocol_kind") == "production-diagnostic",
+            "qualification protocol changed",
+        )
+        require(
+            manifest.get("queries_per_arm") == 100, "qualification query count changed"
+        )
     elif campaign_id == CONFIRMATION_CAMPAIGN:
         complete = CONFIRMATION_COMPLETE
         failed = CONFIRMATION_FAILED
@@ -104,9 +108,17 @@ def campaign_schema(manifest: dict[str, object]) -> tuple[str, str, list[int]]:
             [4 * mib, mib],
             [mib, 4 * mib],
         ]
-        require(manifest.get("protocol_kind") == "stripe-confirmation", "confirmation protocol changed")
-        require(manifest.get("queries_per_arm") == 500, "confirmation query count changed")
-        require(manifest.get("max_pooled_p95_ms") == 200.0, "confirmation pooled p95 limit changed")
+        require(
+            manifest.get("protocol_kind") == "stripe-confirmation",
+            "confirmation protocol changed",
+        )
+        require(
+            manifest.get("queries_per_arm") == 500, "confirmation query count changed"
+        )
+        require(
+            manifest.get("max_pooled_p95_ms") == 200.0,
+            "confirmation pooled p95 limit changed",
+        )
         require(
             manifest.get("max_worst_repetition_p95_ms") == 200.0,
             "confirmation worst-repeat p95 limit changed",
@@ -156,13 +168,25 @@ def campaign_schema(manifest: dict[str, object]) -> tuple[str, str, list[int]]:
         ],
         "required artifact set changed",
     )
-    require(manifest.get("root_complete_marker") == complete, "manifest completion marker changed")
-    require(manifest.get("root_failure_marker") == failed, "manifest failure marker changed")
+    require(
+        manifest.get("root_complete_marker") == complete,
+        "manifest completion marker changed",
+    )
+    require(
+        manifest.get("root_failure_marker") == failed, "manifest failure marker changed"
+    )
     require(manifest.get("stripe_bytes") == stripes, "manifest stripe arms changed")
     require(manifest.get("repetitions") == 5, "manifest repetition count changed")
-    require(manifest.get("arm_orders") == expected_orders, "manifest arm orders changed")
-    require(manifest.get("fresh_process_per_arm") is True, "fresh-process requirement changed")
-    require(manifest.get("fresh_cache_per_arm") is True, "fresh-cache requirement changed")
+    require(
+        manifest.get("arm_orders") == expected_orders, "manifest arm orders changed"
+    )
+    require(
+        manifest.get("fresh_process_per_arm") is True,
+        "fresh-process requirement changed",
+    )
+    require(
+        manifest.get("fresh_cache_per_arm") is True, "fresh-cache requirement changed"
+    )
     require(manifest.get("required_recall_at_10") == 1.0, "recall requirement changed")
     require(
         manifest.get("required_nonworse_paired_repetitions") == 4,
@@ -182,8 +206,12 @@ def validate(
     manifest = json.loads(manifest_bytes)
     complete, failed, expected_stripes = campaign_schema(manifest)
     if recover_terminal_validator_failure:
-        require(not (root / complete).exists(), "recovery requires no completion marker")
-        require((root / failed).is_file(), "recovery requires the terminal failure marker")
+        require(
+            not (root / complete).exists(), "recovery requires no completion marker"
+        )
+        require(
+            (root / failed).is_file(), "recovery requires the terminal failure marker"
+        )
         terminal_mode = "validator-failure-recovery"
     else:
         require((root / complete).is_file(), "campaign is incomplete")
@@ -192,38 +220,64 @@ def validate(
 
     preserved_manifest = root / "manifest.json"
     require(preserved_manifest.is_file(), "missing preserved manifest.json")
-    require(preserved_manifest.read_bytes() == manifest_bytes, "preserved manifest differs")
+    require(
+        preserved_manifest.read_bytes() == manifest_bytes, "preserved manifest differs"
+    )
     manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
 
     required_artifacts = list(manifest["required_artifacts"])
     query_count = int(manifest["queries_per_arm"])
     repetitions = int(manifest["repetitions"])
     orders = manifest["arm_orders"]
-    require(len(orders) == repetitions, "manifest arm-order count differs from repetitions")
-    require(manifest["stripe_bytes"] == expected_stripes, "manifest stripe arms changed")
+    require(
+        len(orders) == repetitions, "manifest arm-order count differs from repetitions"
+    )
+    require(
+        manifest["stripe_bytes"] == expected_stripes, "manifest stripe arms changed"
+    )
 
     seen_caches: set[str] = set()
     source_sha: str | None = None
     paired_query_ids: tuple[str, ...] | None = None
-    arm_latencies: dict[str, list[float]] = {stripe_name(value): [] for value in manifest["stripe_bytes"]}
+    arm_latencies: dict[str, list[float]] = {
+        stripe_name(value): [] for value in manifest["stripe_bytes"]
+    }
     arm_gets: dict[str, int] = {name: 0 for name in arm_latencies}
     arm_bytes: dict[str, int] = {name: 0 for name in arm_latencies}
     arm_hits: dict[str, int] = {name: 0 for name in arm_latencies}
     repetition_p95: dict[str, list[float]] = {name: [] for name in arm_latencies}
 
     for repetition, order in enumerate(orders, 1):
-        require(sorted(order) == sorted(manifest["stripe_bytes"]), f"r{repetition:02} arm order changed")
+        require(
+            sorted(order) == sorted(manifest["stripe_bytes"]),
+            f"r{repetition:02} arm order changed",
+        )
         for order_position, stripe_bytes in enumerate(order):
             name = stripe_name(stripe_bytes)
             arm = root / "repetitions" / f"r{repetition:02}" / name
             for artifact in required_artifacts:
                 require((arm / artifact).is_file(), f"missing {artifact} in {arm}")
             require(not (arm / "CELL_FAILED").exists(), f"failure marker in {arm}")
-            require((arm / "process_exit.txt").read_text().strip() == "0", f"nonzero process exit in {arm}")
-            require((arm / "resources.csv").stat().st_size > 0, f"empty resources.csv in {arm}")
-            require((arm / "storage-access.csv").stat().st_size > 0, f"empty storage-access.csv in {arm}")
-            require(bool(read_csv(arm / "resources.csv")), f"resources.csv has no samples in {arm}")
-            require(bool(read_csv(arm / "storage-access.csv")), f"storage-access.csv has no events in {arm}")
+            require(
+                (arm / "process_exit.txt").read_text().strip() == "0",
+                f"nonzero process exit in {arm}",
+            )
+            require(
+                (arm / "resources.csv").stat().st_size > 0,
+                f"empty resources.csv in {arm}",
+            )
+            require(
+                (arm / "storage-access.csv").stat().st_size > 0,
+                f"empty storage-access.csv in {arm}",
+            )
+            require(
+                bool(read_csv(arm / "resources.csv")),
+                f"resources.csv has no samples in {arm}",
+            )
+            require(
+                bool(read_csv(arm / "storage-access.csv")),
+                f"storage-access.csv has no events in {arm}",
+            )
 
             environment = read_key_values(arm / "environment.txt")
             expected_environment = {
@@ -239,7 +293,9 @@ def validate(
                 "order_position": str(order_position),
             }
             for key, expected in expected_environment.items():
-                require(environment.get(key) == str(expected), f"{key} mismatch in {arm}")
+                require(
+                    environment.get(key) == str(expected), f"{key} mismatch in {arm}"
+                )
             cache_dir = environment.get("cache_dir", "")
             require(bool(cache_dir), f"missing cache_dir in {arm}")
             require(cache_dir not in seen_caches, f"reused cache_dir in {arm}")
@@ -262,17 +318,29 @@ def validate(
             # separately so an older binary cannot pass by omitting the field.
             expected_summary["order_position"] = str(order_position)
             for key, expected in expected_summary.items():
-                require(summary.get(key) == str(expected), f"{key} mismatch in {arm / 'summary.csv'}")
+                require(
+                    summary.get(key) == str(expected),
+                    f"{key} mismatch in {arm / 'summary.csv'}",
+                )
             require(
                 floating(summary, "inserted_id_recall_at_10", arm / "summary.csv")
                 == float(manifest["required_recall_at_10"]),
                 f"recall gate failed in {arm}",
             )
-            require(integer(summary, "read_storage_puts", arm / "summary.csv") == 0, f"PUT in {arm}")
-            require(integer(summary, "read_storage_deletes", arm / "summary.csv") == 0, f"DELETE in {arm}")
+            require(
+                integer(summary, "read_storage_puts", arm / "summary.csv") == 0,
+                f"PUT in {arm}",
+            )
+            require(
+                integer(summary, "read_storage_deletes", arm / "summary.csv") == 0,
+                f"DELETE in {arm}",
+            )
 
             reads = read_csv(arm / "reads.csv")
-            require(len(reads) == query_count, f"{arm / 'reads.csv'} has {len(reads)} queries")
+            require(
+                len(reads) == query_count,
+                f"{arm / 'reads.csv'} has {len(reads)} queries",
+            )
             latencies: list[float] = []
             query_ids: list[str] = []
             gets = 0
@@ -284,7 +352,10 @@ def validate(
             bytes_read = 0
             hits = 0
             for query, row in enumerate(reads):
-                require(integer(row, "query", arm / "reads.csv") == query, f"query order mismatch in {arm}")
+                require(
+                    integer(row, "query", arm / "reads.csv") == query,
+                    f"query order mismatch in {arm}",
+                )
                 contains = row.get("contains_record_id", "").lower() == "true"
                 require(contains, f"inserted ID recall miss in {arm} query {query}")
                 row_gets = integer(row, "gets", arm / "reads.csv")
@@ -296,7 +367,8 @@ def validate(
                 require(row_puts == 0, f"query PUT in {arm}")
                 require(row_deletes == 0, f"query DELETE in {arm}")
                 require(
-                    row_requests == row_gets + row_puts + row_deletes + row_heads + row_lists,
+                    row_requests
+                    == row_gets + row_puts + row_deletes + row_heads + row_lists,
                     f"query request total does not reconcile in {arm}",
                 )
                 query_ids.append(row.get("record_id", ""))
@@ -312,20 +384,52 @@ def validate(
             current_query_ids = tuple(query_ids)
             if paired_query_ids is None:
                 paired_query_ids = current_query_ids
-            require(current_query_ids == paired_query_ids, f"paired query IDs differ in {arm}")
+            require(
+                current_query_ids == paired_query_ids,
+                f"paired query IDs differ in {arm}",
+            )
             computed_p95 = percentile(latencies, 0.95)
             computed_p50 = percentile(latencies, 0.50)
             reported_p95 = floating(summary, "read_p95_ms", arm / "summary.csv")
             reported_p50 = floating(summary, "read_p50_ms", arm / "summary.csv")
-            require(abs(computed_p95 - reported_p95) <= 1e-6, f"read_p95_ms does not reconcile in {arm}")
-            require(abs(computed_p50 - reported_p50) <= 1e-6, f"read_p50_ms does not reconcile in {arm}")
-            require(integer(summary, "read_storage_gets", arm / "summary.csv") == gets, f"GET total mismatch in {arm}")
-            require(integer(summary, "read_storage_requests", arm / "summary.csv") == requests, f"request total mismatch in {arm}")
-            require(integer(summary, "read_storage_puts", arm / "summary.csv") == puts, f"PUT total mismatch in {arm}")
-            require(integer(summary, "read_storage_deletes", arm / "summary.csv") == deletes, f"DELETE total mismatch in {arm}")
-            require(integer(summary, "read_storage_heads", arm / "summary.csv") == heads, f"HEAD total mismatch in {arm}")
-            require(integer(summary, "read_storage_lists", arm / "summary.csv") == lists, f"LIST total mismatch in {arm}")
-            require(integer(summary, "read_bytes", arm / "summary.csv") == bytes_read, f"byte total mismatch in {arm}")
+            require(
+                abs(computed_p95 - reported_p95) <= 1e-6,
+                f"read_p95_ms does not reconcile in {arm}",
+            )
+            require(
+                abs(computed_p50 - reported_p50) <= 1e-6,
+                f"read_p50_ms does not reconcile in {arm}",
+            )
+            require(
+                integer(summary, "read_storage_gets", arm / "summary.csv") == gets,
+                f"GET total mismatch in {arm}",
+            )
+            require(
+                integer(summary, "read_storage_requests", arm / "summary.csv")
+                == requests,
+                f"request total mismatch in {arm}",
+            )
+            require(
+                integer(summary, "read_storage_puts", arm / "summary.csv") == puts,
+                f"PUT total mismatch in {arm}",
+            )
+            require(
+                integer(summary, "read_storage_deletes", arm / "summary.csv")
+                == deletes,
+                f"DELETE total mismatch in {arm}",
+            )
+            require(
+                integer(summary, "read_storage_heads", arm / "summary.csv") == heads,
+                f"HEAD total mismatch in {arm}",
+            )
+            require(
+                integer(summary, "read_storage_lists", arm / "summary.csv") == lists,
+                f"LIST total mismatch in {arm}",
+            )
+            require(
+                integer(summary, "read_bytes", arm / "summary.csv") == bytes_read,
+                f"byte total mismatch in {arm}",
+            )
             arm_latencies[name].extend(latencies)
             arm_gets[name] += gets
             arm_bytes[name] += bytes_read
@@ -336,7 +440,9 @@ def validate(
     for name in sorted(arm_latencies):
         values = arm_latencies[name]
         queries = len(values)
-        require(queries == query_count * repetitions, f"{name} pooled query count mismatch")
+        require(
+            queries == query_count * repetitions, f"{name} pooled query count mismatch"
+        )
         arms[name] = {
             "queries": queries,
             "recall_at_10": arm_hits[name] / queries,
@@ -361,13 +467,14 @@ def validate(
             )
             count = sum(
                 candidate <= baseline
-                for candidate, baseline in zip(repetition_p95[name], control)
+                for candidate, baseline in zip(
+                    repetition_p95[name], control, strict=True
+                )
             )
             paired_nonworse[name] = count
-            if (
-                arms[name]["pooled_p95_ms"] < float(manifest["max_pooled_p95_ms"])
-                and count >= int(manifest["required_nonworse_paired_repetitions"])
-            ):
+            if arms[name]["pooled_p95_ms"] < float(
+                manifest["max_pooled_p95_ms"]
+            ) and count >= int(manifest["required_nonworse_paired_repetitions"]):
                 promotable.append(name)
         if promotable:
             winner = min(
@@ -385,7 +492,7 @@ def validate(
         )
         count = sum(
             candidate <= baseline
-            for candidate, baseline in zip(repetition_p95[name], control)
+            for candidate, baseline in zip(repetition_p95[name], control, strict=True)
         )
         paired_nonworse[name] = count
         baseline_p95 = float(arms["s1m"]["pooled_p95_ms"])
@@ -393,8 +500,11 @@ def validate(
         require(baseline_p95 > 0.0, "control pooled p95 must be positive")
         improvement = (baseline_p95 - candidate_p95) / baseline_p95
         selection_criteria = {
-            "pooled_p95_below_limit": candidate_p95 < float(manifest["max_pooled_p95_ms"]),
-            "worst_repetition_p95_below_limit": float(arms[name]["worst_repetition_p95_ms"])
+            "pooled_p95_below_limit": candidate_p95
+            < float(manifest["max_pooled_p95_ms"]),
+            "worst_repetition_p95_below_limit": float(
+                arms[name]["worst_repetition_p95_ms"]
+            )
             < float(manifest["max_worst_repetition_p95_ms"]),
             "paired_nonworse_repetitions": count
             >= int(manifest["required_nonworse_paired_repetitions"]),

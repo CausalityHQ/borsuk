@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Static contract tests for bounded group-commit qualification."""
 
-from pathlib import Path
 import unittest
-
+from pathlib import Path
 
 SOURCE = (Path(__file__).parent / "bench_group_commit_diagnostic.sh").read_text()
 

@@ -155,7 +155,9 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ("missing", lambda rows: [row.pop("schema_version") for row in rows]),
             (
                 "unknown",
-                lambda rows: [row.__setitem__("schema_version", "unknown") for row in rows],
+                lambda rows: [
+                    row.__setitem__("schema_version", "unknown") for row in rows
+                ],
             ),
             (
                 "V9",
@@ -177,8 +179,12 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 with path.open(newline="") as handle:
                     rows = list(csv.DictReader(handle))
                 mutate(rows)
-                self.write_csv(root, path.name, list(rows[0]), [list(row.values()) for row in rows])
-                with self.assertRaisesRegex(ValueError, "schema|telemetry|required columns"):
+                self.write_csv(
+                    root, path.name, list(rows[0]), [list(row.values()) for row in rows]
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "schema|telemetry|required columns"
+                ):
                     validate_directory(root, None, ("bench_query_samples.csv",))
 
     def test_accepts_complete_distribution_artifacts_with_matching_codec(self) -> None:
@@ -322,7 +328,9 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             with path.open(newline="") as handle:
                 rows = list(csv.DictReader(handle))
             rows[0]["retained_peak_bytes"] = "2049"
-            self.write_csv(root, path.name, list(rows[0]), [list(row.values()) for row in rows])
+            self.write_csv(
+                root, path.name, list(rows[0]), [list(row.values()) for row in rows]
+            )
             with self.assertRaisesRegex(ValueError, "retained peak exceeds capacity"):
                 validate_directory(root, None, ("bench_query_samples.csv",))
 
@@ -330,8 +338,12 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             rows[0]["collection_resident_bytes"] = "2048"
             rows[0]["retained_capacity_bytes"] = "2048"
             rows[0]["transient_capacity_bytes"] = "1024"
-            self.write_csv(root, path.name, list(rows[0]), [list(row.values()) for row in rows])
-            with self.assertRaisesRegex(ValueError, "governed memory exceeds RAM budget"):
+            self.write_csv(
+                root, path.name, list(rows[0]), [list(row.values()) for row in rows]
+            )
+            with self.assertRaisesRegex(
+                ValueError, "governed memory exceeds RAM budget"
+            ):
                 validate_directory(root, None, ("bench_query_samples.csv",))
 
     def test_rejects_resource_timeline_without_process_and_disk_metrics(self) -> None:
@@ -371,7 +383,25 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     "gets",
                     "puts",
                 ],
-                [["upsert", 1024, 2048, 2, 20, 102400, 10, 1, 9, 11, 11, 11, 0.01, 2, 4]],
+                [
+                    [
+                        "upsert",
+                        1024,
+                        2048,
+                        2,
+                        20,
+                        102400,
+                        10,
+                        1,
+                        9,
+                        11,
+                        11,
+                        11,
+                        0.01,
+                        2,
+                        4,
+                    ]
+                ],
             )
             self.write_csv(
                 root,

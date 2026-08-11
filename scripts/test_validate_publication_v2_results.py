@@ -384,7 +384,9 @@ class ValidatePublicationV2ResultsTests(unittest.TestCase):
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 write_fixture(root)
-                path = root / "r01/borsuk-direct/fashion-mnist-784/bench_query_samples.csv"
+                path = (
+                    root / "r01/borsuk-direct/fashion-mnist-784/bench_query_samples.csv"
+                )
                 with path.open(newline="") as handle:
                     rows = list(csv.DictReader(handle))
                 if value is None:

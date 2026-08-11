@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import unittest
 import tempfile
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -67,7 +67,9 @@ class FetchVectorDbBenchDatasetTest(unittest.TestCase):
             ["neighbors.parquet", "test.parquet", "train.parquet"],
         )
 
-    def test_existing_download_validation_requires_every_exact_source_file(self) -> None:
+    def test_existing_download_validation_requires_every_exact_source_file(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             for name in ("neighbors.parquet", "test.parquet", "train.parquet"):
@@ -97,9 +99,7 @@ class FetchVectorDbBenchDatasetTest(unittest.TestCase):
                 dataset, dataset_dir, remote_files, contract
             )
             fetch.write_json(dataset_dir / "dataset.json", descriptor)
-            before = {
-                path.name: path.read_bytes() for path in dataset_dir.iterdir()
-            }
+            before = {path.name: path.read_bytes() for path in dataset_dir.iterdir()}
 
             with (
                 mock.patch.object(fetch, "list_remote", return_value=remote_files),

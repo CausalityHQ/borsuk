@@ -25,7 +25,10 @@ def validate(root, manifest_path):
         ]
         if source["control_mean_recall_at_10"] < manifest["required_mean_recall_at_10"]:
             failures.append("control mean recall")
-        if source["control_p05_recall_at_10"] < manifest["required_p05_query_recall_at_10"]:
+        if (
+            source["control_p05_recall_at_10"]
+            < manifest["required_p05_query_recall_at_10"]
+        ):
             failures.append("control p05 recall")
         if source["control_p95_ms"] > manifest["maximum_control_p95_ms"]:
             failures.append("control p95 ceiling")

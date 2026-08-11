@@ -6,7 +6,6 @@ import subprocess
 import tempfile
 import unittest
 
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts" / "validate_global_cell_stripes.py"
 MANIFEST = ROOT / "docs" / "research" / "global-cell-stripe-confirmation.json"
@@ -64,29 +63,81 @@ class GlobalCellStripeConfirmationValidatorTest(unittest.TestCase):
                     f"stripe_bytes={stripe_bytes}\n"
                     f"order_position={order_position}\n"
                 )
-                base_latency = 150.0 + repetition if stripe_bytes == 1048576 else 100.0 + repetition
+                base_latency = (
+                    150.0 + repetition
+                    if stripe_bytes == 1048576
+                    else 100.0 + repetition
+                )
                 gets = 2 if stripe_bytes == 1048576 else 1
-                latencies = [base_latency + query / 1000.0 for query in range(query_count)]
+                latencies = [
+                    base_latency + query / 1000.0 for query in range(query_count)
+                ]
                 with (arm / "reads.csv").open("w", newline="") as handle:
                     writer = csv.writer(handle)
                     writer.writerow(
                         [
-                            "query", "record_id", "hit_id", "contains_record_id", "latency_ms",
-                            "requests", "gets", "puts", "deletes", "heads", "lists", "bytes_read",
-                            "segments_searched", "global_base_approximate_us", "global_base_exact_rerank_us",
+                            "query",
+                            "record_id",
+                            "hit_id",
+                            "contains_record_id",
+                            "latency_ms",
+                            "requests",
+                            "gets",
+                            "puts",
+                            "deletes",
+                            "heads",
+                            "lists",
+                            "bytes_read",
+                            "segments_searched",
+                            "global_base_approximate_us",
+                            "global_base_exact_rerank_us",
                         ]
                     )
                     for query, latency in enumerate(latencies):
                         writer.writerow(
-                            [query, f"id-{query}", f"id-{query}", "true", latency, gets, gets, 0, 0, 0, 0, 1024, 4, 1, 1]
+                            [
+                                query,
+                                f"id-{query}",
+                                f"id-{query}",
+                                "true",
+                                latency,
+                                gets,
+                                gets,
+                                0,
+                                0,
+                                0,
+                                0,
+                                1024,
+                                4,
+                                1,
+                                1,
+                            ]
                         )
                 fields = [
-                    "protocol_kind", "source_sha256", "manifest_sha256", "base_source_sha256",
-                    "base_manifest_sha256", "base_samples_sha256", "dataset_sha256", "base_cell",
-                    "index_uri", "repetition", "order_position", "stripe_bytes", "queries",
-                    "inserted_id_recall_at_10", "read_p50_ms", "read_p95_ms", "read_storage_requests",
-                    "read_storage_gets", "read_storage_puts", "read_storage_deletes", "read_storage_heads",
-                    "read_storage_lists", "read_bytes", "read_segments_searched",
+                    "protocol_kind",
+                    "source_sha256",
+                    "manifest_sha256",
+                    "base_source_sha256",
+                    "base_manifest_sha256",
+                    "base_samples_sha256",
+                    "dataset_sha256",
+                    "base_cell",
+                    "index_uri",
+                    "repetition",
+                    "order_position",
+                    "stripe_bytes",
+                    "queries",
+                    "inserted_id_recall_at_10",
+                    "read_p50_ms",
+                    "read_p95_ms",
+                    "read_storage_requests",
+                    "read_storage_gets",
+                    "read_storage_puts",
+                    "read_storage_deletes",
+                    "read_storage_heads",
+                    "read_storage_lists",
+                    "read_bytes",
+                    "read_segments_searched",
                 ]
                 with (arm / "summary.csv").open("w", newline="") as handle:
                     writer = csv.DictWriter(handle, fieldnames=fields)
@@ -97,7 +148,9 @@ class GlobalCellStripeConfirmationValidatorTest(unittest.TestCase):
                             "source_sha256": "a" * 64,
                             "manifest_sha256": self.manifest_sha,
                             "base_source_sha256": self.manifest["base_source_sha256"],
-                            "base_manifest_sha256": self.manifest["base_manifest_sha256"],
+                            "base_manifest_sha256": self.manifest[
+                                "base_manifest_sha256"
+                            ],
                             "base_samples_sha256": self.manifest["base_samples_sha256"],
                             "dataset_sha256": self.manifest["dataset_sha256"],
                             "base_cell": self.manifest["base_cell"],
@@ -127,7 +180,7 @@ class GlobalCellStripeConfirmationValidatorTest(unittest.TestCase):
             rows = list(csv.DictReader(handle))
             fields = list(rows[0])
         self.assertEqual(len(rows), len(latencies))
-        for row, latency in zip(rows, latencies):
+        for row, latency in zip(rows, latencies, strict=True):
             row["latency_ms"] = str(latency)
             row["bytes_read"] = str(bytes_per_query)
         with reads_path.open("w", newline="") as handle:
@@ -179,7 +232,9 @@ class GlobalCellStripeConfirmationValidatorTest(unittest.TestCase):
     def test_does_not_promote_when_pooled_improvement_is_below_ten_percent(self):
         self.write_terminal_matrix()
         for repetition in range(1, 6):
-            self.rewrite_arm(repetition, "s4m", [145.0 + query / 1000 for query in range(500)])
+            self.rewrite_arm(
+                repetition, "s4m", [145.0 + query / 1000 for query in range(500)]
+            )
         result = self.run_validator()
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(result.stdout)
@@ -210,7 +265,9 @@ class GlobalCellStripeConfirmationValidatorTest(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertIsNone(report["winner"])
         self.assertTrue(report["selection_criteria"]["pooled_p95_below_limit"])
-        self.assertFalse(report["selection_criteria"]["worst_repetition_p95_below_limit"])
+        self.assertFalse(
+            report["selection_criteria"]["worst_repetition_p95_below_limit"]
+        )
 
     def test_does_not_promote_different_logical_bytes(self):
         self.write_terminal_matrix()
@@ -240,7 +297,9 @@ class GlobalCellStripeConfirmationValidatorTest(unittest.TestCase):
         self.root = pathlib.Path(self.temp.name)
         self.write_terminal_matrix()
         reads = self.root / "repetitions" / "r03" / "s4m" / "reads.csv"
-        reads.write_text(reads.read_text().replace(",1,1,0,0,0,0,1024,", ",2,1,1,0,0,0,1024,", 1))
+        reads.write_text(
+            reads.read_text().replace(",1,1,0,0,0,0,1024,", ",2,1,1,0,0,0,1024,", 1)
+        )
         result = self.run_validator()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("query PUT", result.stderr)
