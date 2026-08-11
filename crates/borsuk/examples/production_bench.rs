@@ -3255,11 +3255,11 @@ fn measure_deletes(
         let ids = (offset..end).map(|id| id.to_string()).collect::<Vec<_>>();
         let batch_requests_before = index.request_counts();
         let batch_started = Instant::now();
-        let report = index.delete_with_report(ids)?;
+        let report = index.delete(ids)?;
         samples.push(WriteSample {
             op: "delete",
             batch_index: samples.len(),
-            batch_records: report.deleted,
+            batch_records: report.ids_submitted,
             batch_latency_ms: elapsed_ms(batch_started),
             requests: index.request_counts().delta(&batch_requests_before),
         });

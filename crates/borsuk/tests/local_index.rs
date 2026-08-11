@@ -1,6 +1,5 @@
 #![allow(missing_docs)]
 
-#[allow(dead_code)]
 mod common;
 
 use std::{
@@ -16,9 +15,9 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    AddReport, BorsukError, BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
+    BorsukError, BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
     GarbageCollectionOptions, IndexConfig, LeafCapability, LeafMode, Manifest, OpenOptions,
-    QuantizerKind, RebuildOptions, RecallGuarantee, SearchMode, SearchOptions,
+    QuantizerKind, RebuildOptions, RecallGuarantee, RequestCounts, SearchMode, SearchOptions,
     SearchTerminationReason, SegmentSummary, VectorMetric, VectorRecord, WalConfig,
     leaf_mode_names, vector_records_to_parquet,
 };
@@ -104,7 +103,7 @@ fn shared_in_memory_store_handles_see_published_data() {
 }
 
 #[test]
-fn concurrent_adds_on_same_manifest_return_concurrent_modification() {
+fn independent_positioned_adds_compose_without_publishing_a_manifest() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let store: Arc<dyn ObjectStore> = Arc::new(common::FaultInjectingObjectStore::new(inner));
     let mut winner = BorsukIndex::create_with_object_store_and_wal(
@@ -127,24 +126,15 @@ fn concurrent_adds_on_same_manifest_return_concurrent_modification() {
     winner
         .add(vec![VectorRecord::new("winner", vec![0.0, 0.0])])
         .unwrap();
-    let error = loser
+    loser
         .add(vec![VectorRecord::new("loser", vec![9.0, 0.0])])
-        .unwrap_err();
+        .unwrap();
 
-    assert!(
-        matches!(error, BorsukError::ConcurrentModification { .. }),
-        "{error:?}"
-    );
     let reopened =
         BorsukIndex::open_with_object_store(Arc::clone(&store), "memory:///concurrent").unwrap();
-    assert_eq!(reopened.manifest().version, 2);
-    assert_eq!(
-        reopened
-            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
-            .unwrap(),
-        ["winner"]
-    );
-    assert_eq!(reopened.get_vector("loser").unwrap(), None);
+    assert_eq!(reopened.manifest().version, 1);
+    assert_eq!(reopened.get_vector("winner").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(reopened.get_vector("loser").unwrap(), Some(vec![9.0, 0.0]));
 }
 
 #[test]
@@ -166,9 +156,9 @@ fn concurrent_cell_wal_adds_do_not_contend_on_current() {
     )
     .unwrap();
 
-    // These barriers target the retired version-publish path. Cell-WAL adds do
-    // not touch it, so both independent handles must complete without waiting
-    // for or contending on CURRENT.
+    // These barriers target the retired version-publish path. Positioned adds
+    // do not touch it, so both independent handles must complete without
+    // waiting for or contending on CURRENT.
     let is_version_two_publish_object = |_: common::StoreOperation, path: &ObjectPath| {
         let path = path.as_ref();
         path.contains("-00000000000000000002.") || path.contains("/00000000000000000002/")
@@ -307,6 +297,7 @@ fn publish_crash_before_current_leaves_old_version_readable_and_skips_orphan_nam
     setup
         .add(vec![VectorRecord::new("base", vec![0.0, 0.0])])
         .unwrap();
+    setup.flush().unwrap();
     assert_eq!(setup.manifest().version, 2);
 
     let faulting_store: Arc<dyn ObjectStore> =
@@ -322,16 +313,16 @@ fn publish_crash_before_current_leaves_old_version_readable_and_skips_orphan_nam
         BorsukIndex::open_with_object_store(faulting_store, "memory:///orphan").unwrap();
     crashing
         .add(vec![VectorRecord::new("orphaned", vec![1.0, 0.0])])
-        .unwrap_err();
+        .unwrap();
+    crashing.flush().unwrap_err();
 
     let readable =
         BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///orphan").unwrap();
     assert_eq!(readable.manifest().version, 2);
+    assert_eq!(readable.get_vector("base").unwrap(), Some(vec![0.0, 0.0]));
     assert_eq!(
-        readable
-            .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
-            .unwrap(),
-        ["base"]
+        readable.get_vector("orphaned").unwrap(),
+        Some(vec![1.0, 0.0])
     );
     let objects = list_object_paths(Arc::clone(&inner));
     for path in [
@@ -351,6 +342,7 @@ fn publish_crash_before_current_leaves_old_version_readable_and_skips_orphan_nam
     recovered
         .add(vec![VectorRecord::new("recovered", vec![2.0, 0.0])])
         .unwrap();
+    recovered.flush().unwrap();
 
     assert_eq!(recovered.manifest().version, 4);
     let reopened =
@@ -359,6 +351,11 @@ fn publish_crash_before_current_leaves_old_version_readable_and_skips_orphan_nam
     assert_eq!(
         reopened.get_vector("recovered").unwrap(),
         Some(vec![2.0, 0.0])
+    );
+    assert_eq!(reopened.get_vector("base").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(
+        reopened.get_vector("orphaned").unwrap(),
+        Some(vec![1.0, 0.0])
     );
 }
 
@@ -748,7 +745,14 @@ fn generated_vector_add_does_not_scan_existing_segment_payloads() {
         .add_vectors(vec![vec![2.0, 0.0], vec![3.0, 0.0]])
         .unwrap();
 
-    assert_eq!(ids, ["2", "3"]);
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1]);
+    for id in &ids {
+        assert_generated_id(id);
+        assert_ne!(id, "1");
+    }
+    assert_eq!(index.get_vector(&ids[0]).unwrap(), Some(vec![2.0, 0.0]));
+    assert_eq!(index.get_vector(&ids[1]).unwrap(), Some(vec![3.0, 0.0]));
 }
 
 #[test]
@@ -855,6 +859,13 @@ fn local_index_reports_manifest_stats_without_scanning_storage() {
             VectorRecord::new("c", vec![10.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
+    let segment_path = dir.path().join(&index.manifest().segments[0].path);
+    fs::write(
+        segment_path,
+        b"corrupt segment payload that summary-only stats must not scan",
+    )
+    .unwrap();
     let stats = index.stats();
     assert_eq!(stats.metric, "euclidean");
     assert_eq!(stats.dimensions, 2);
@@ -2041,12 +2052,63 @@ fn routing_page_fanout_is_configurable_and_persisted() {
 }
 
 #[test]
-fn add_with_report_counts_written_objects_and_reused_routing_pages() {
+fn add_with_report_describes_positioned_append_telemetry() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (instrumented, operations) =
+        common::FaultInjectingObjectStore::new(inner).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(instrumented);
+    let mut index = BorsukIndex::create_with_object_store_wal_and_leaf_capability(
+        Arc::clone(&store),
+        IndexConfig {
+            uri: "memory:///add-report-positioned".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 1,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        WalConfig::disabled(),
+        LeafCapability::GraphEnabled,
+    )
+    .unwrap();
+    operations.clear();
+
+    let (ids, report) = index
+        .add_with_report(
+            (0..4).map(|value| vec![value as f32, 0.0]).collect(),
+            Some((0..4).map(|value| format!("v{value}")).collect()),
+        )
+        .unwrap();
+
+    assert_eq!(ids, ["v0", "v1", "v2", "v3"]);
+    assert!(report.positioned_position.is_some());
+    assert_lowercase_hex(&report.positioned_envelope_checksum, 64);
+    assert!(report.positioned_encoded_bytes > 0);
+    assert_eq!(report.requests, logged_request_counts(&operations));
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        1
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path == "collection/CURRENT"
+        }),
+        0
+    );
+    assert_eq!(report.segments_written, 0);
+    assert_eq!(report.graph_payloads_written, 0);
+    assert_eq!(report.manifest_tables_written, 0);
+    assert_eq!(report.routing_pages_written, 0);
+}
+
+#[test]
+fn explicit_flush_reuses_unaffected_routing_page_objects() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    // This test pins the SYNCHRONOUS per-add write accounting (segments/graph/
-    // routing objects written, byte deltas), so it runs with the WAL disabled.
     let mut index = BorsukIndex::create_with_wal_routing_page_fanout_and_leaf_capability(
         IndexConfig {
             uri,
@@ -2063,40 +2125,34 @@ fn add_with_report_counts_written_objects_and_reused_routing_pages() {
     )
     .unwrap();
 
-    let before = storage_file_sizes(dir.path());
-    let (ids, report) = index
+    let (ids, _) = index
         .add_with_report(
             (0..4).map(|value| vec![value as f32, 0.0]).collect(),
             Some((0..4).map(|value| format!("v{value}")).collect()),
         )
         .unwrap();
-    let after = storage_file_sizes(dir.path());
-
     assert_eq!(ids, ["v0", "v1", "v2", "v3"]);
-    assert_add_report_matches_storage_delta(dir.path(), &before, &after, &report, 4);
-    assert_eq!(report.segments_written, 4);
-    assert_eq!(report.graph_payloads_written, 4);
+    index.flush().unwrap();
+    let before_pages = current_routing_page_paths(dir.path(), index.manifest().version);
+    assert!(
+        before_pages.len() > 1,
+        "setup must build a paged routing tree"
+    );
 
-    let before_pages = routing_page_paths_in_storage(dir.path());
-    let before = storage_file_sizes(dir.path());
-    let (ids, report) = index
+    let (ids, _) = index
         .add_with_report(vec![vec![4.0, 0.0]], Some(vec!["v4".to_string()]))
         .unwrap();
-    let after = storage_file_sizes(dir.path());
-    let after_pages = routing_page_paths_in_storage(dir.path());
-
     assert_eq!(ids, ["v4"]);
-    assert_add_report_matches_storage_delta(dir.path(), &before, &after, &report, 1);
-    assert_eq!(report.segments_written, 1);
-    assert_eq!(report.graph_payloads_written, 1);
-    assert_eq!(
-        report.routing_pages_written,
-        after_pages.len() - before_pages.len(),
-        "reused content-addressed routing pages must not be counted as written"
-    );
+    index.flush().unwrap();
+    let after_pages = current_routing_page_paths(dir.path(), index.manifest().version);
+    let reused = before_pages.intersection(&after_pages).collect::<Vec<_>>();
     assert!(
-        report.routing_pages_written < index.stats().routing_pages,
-        "second add must report only newly written pages, not all live pages"
+        !reused.is_empty(),
+        "flush must reuse routing pages outside the changed right edge: before={before_pages:?}, after={after_pages:?}"
+    );
+    assert_ne!(
+        before_pages, after_pages,
+        "the changed edge must be rewritten"
     );
 }
 
@@ -2251,6 +2307,7 @@ fn approximate_search_skips_unrelated_routing_leaf_pages() {
             VectorRecord::new("near-b", vec![0.1, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
     assert_eq!(page_refs.len(), 2);
@@ -2310,6 +2367,7 @@ fn approximate_search_walks_parent_routing_pages_without_l0_index() {
             VectorRecord::new("near-b", vec![0.1, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
 
     let l1_page_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
     assert_eq!(l1_page_paths.len(), 1);
@@ -2833,11 +2891,33 @@ fn get_vector_uses_routing_pages_when_full_routing_table_is_empty() {
     index
         .add(vec![VectorRecord::new("target", vec![1.0, 2.0])])
         .unwrap();
+    index.flush().unwrap();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
+    let page_index = first_parquet_batch(&dir.path().join(format!(
+        "routing/layers/{:020}/L0/pages.parquet",
+        index.manifest().version
+    )));
+    let page_refs = page_paths_from_batch(&page_index);
     assert_eq!(page_refs.len(), 2);
+    let id_blooms = page_index
+        .column(
+            page_index
+                .schema()
+                .index_of("id_bloom")
+                .expect("routing page index must include id_bloom"),
+        )
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("id_bloom must be binary");
+    let unrelated_page = page_refs
+        .iter()
+        .enumerate()
+        .find_map(|(row, path)| {
+            (!routing_page_id_bloom_might_contain(id_blooms.value(row), b"target")).then_some(path)
+        })
+        .expect("one routing page must be provably unrelated to `target`");
     fs::write(
-        dir.path().join(&page_refs[0]),
+        dir.path().join(unrelated_page),
         b"corrupt unrelated routing page for get_vector",
     )
     .unwrap();
@@ -2940,23 +3020,25 @@ fn generated_id_add_after_empty_routing_table_does_not_read_unrelated_parent_pag
 
     let ids = reopened.add_vectors(vec![vec![999.0, 0.0]]).unwrap();
 
-    assert_eq!(ids, ["0"]);
+    assert_eq!(ids.len(), 1);
+    assert_generated_id(&ids[0]);
+    assert!(!(0..129).any(|old| ids[0] == format!("old-{old}")));
     assert!(
         reopened.manifest().segments.is_empty(),
         "append in non-resident mode should keep segment summaries out of the manifest"
     );
-    assert_eq!(reopened.get_vector("0").unwrap(), Some(vec![999.0, 0.0]));
+    assert_eq!(
+        reopened.get_vector(&ids[0]).unwrap(),
+        Some(vec![999.0, 0.0])
+    );
 }
 
 #[test]
-fn generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent() {
+fn generated_id_flush_reuses_pages_during_right_edge_growth() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    // Pins append-after-empty-routing-table behavior on the synchronous path;
-    // the WAL is disabled so adds build routing pages immediately (and the
-    // disabled config is inherited across reopen from the manifest).
-    let mut index = create_graph_enabled_with_wal(
+    let mut index = BorsukIndex::create_with_wal_routing_page_fanout_and_leaf_capability(
         IndexConfig {
             uri: uri.clone(),
             metric: VectorMetric::Euclidean,
@@ -2967,41 +3049,65 @@ fn generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent() {
             named_vectors: Default::default(),
         },
         WalConfig::disabled(),
+        2,
+        LeafCapability::GraphEnabled,
     )
     .unwrap();
 
-    let records = (0..129)
+    let records = (0..5)
         .map(|id| VectorRecord::new(format!("old-{id}"), vec![id as f32, 0.0]))
         .collect::<Vec<_>>();
     index.add(records).unwrap();
-    let top_parent_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1);
-    assert_eq!(top_parent_paths.len(), 1);
-    fs::write(
-        dir.path().join(&top_parent_paths[0]),
-        b"corrupt old parent page that repeated append must not read",
-    )
-    .unwrap();
-    rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+    index.flush().unwrap();
+    let seed_parent_paths = routing_layer_page_index_paths(dir.path(), index.manifest().version, 1)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(seed_parent_paths.len(), 2);
 
-    let mut reopened = BorsukIndex::open(&uri).unwrap();
-    assert_eq!(reopened.add_vectors(vec![vec![999.0, 0.0]]).unwrap(), ["0"]);
-    assert_eq!(
-        routing_layer_page_index_paths(dir.path(), reopened.manifest().version, 1).len(),
-        2,
-        "first sparse append should create one append parent beside the cold parent"
+    let first_ids = index.add_vectors(vec![vec![999.0, 0.0]]).unwrap();
+    assert_eq!(first_ids.len(), 1);
+    assert_generated_id(&first_ids[0]);
+    index.flush().unwrap();
+    let first_parent_paths =
+        routing_layer_page_index_paths(dir.path(), index.manifest().version, 1)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+    assert_eq!(first_parent_paths.len(), 2);
+    let unaffected_seed_parent_paths = seed_parent_paths
+        .intersection(&first_parent_paths)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !unaffected_seed_parent_paths.is_empty(),
+        "first right-edge flush must retain the unaffected seed L1 parent: seed={seed_parent_paths:?}, first={first_parent_paths:?}"
     );
 
-    assert_eq!(
-        reopened.add_vectors(vec![vec![1000.0, 0.0]]).unwrap(),
-        ["1"]
+    let second_ids = index.add_vectors(vec![vec![1000.0, 0.0]]).unwrap();
+    assert_eq!(second_ids.len(), 1);
+    assert_generated_id(&second_ids[0]);
+    assert_ne!(first_ids[0], second_ids[0]);
+    index.flush().unwrap();
+    let second_parent_paths =
+        routing_layer_page_index_paths(dir.path(), index.manifest().version, 1)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+    assert!(
+        unaffected_seed_parent_paths.is_subset(&second_parent_paths),
+        "second right-edge flush must preserve the same unaffected L1 parent: unaffected={unaffected_seed_parent_paths:?}, second={second_parent_paths:?}"
     );
     assert_eq!(
-        routing_layer_page_index_paths(dir.path(), reopened.manifest().version, 1).len(),
-        2,
-        "repeated small appends should reuse the rightmost append parent instead of growing one top ref per add"
+        second_parent_paths.len(),
+        first_parent_paths.len(),
+        "a second small append must reuse the right-edge parent instead of adding another L1 parent: first={first_parent_paths:?}, second={second_parent_paths:?}"
     );
-    assert_eq!(reopened.get_vector("0").unwrap(), Some(vec![999.0, 0.0]));
-    assert_eq!(reopened.get_vector("1").unwrap(), Some(vec![1000.0, 0.0]));
+    assert_eq!(
+        index.get_vector(&first_ids[0]).unwrap(),
+        Some(vec![999.0, 0.0])
+    );
+    assert_eq!(
+        index.get_vector(&second_ids[0]).unwrap(),
+        Some(vec![1000.0, 0.0])
+    );
 }
 
 #[test]
@@ -3030,11 +3136,33 @@ fn add_after_empty_routing_table_rejects_duplicate_ids_through_routing_pages() {
     index
         .add(vec![VectorRecord::new("dup", vec![0.0, 0.0])])
         .unwrap();
+    index.flush().unwrap();
 
-    let page_refs = routing_layer_page_index_paths(dir.path(), index.manifest().version, 0);
+    let page_index = first_parquet_batch(&dir.path().join(format!(
+        "routing/layers/{:020}/L0/pages.parquet",
+        index.manifest().version
+    )));
+    let page_refs = page_paths_from_batch(&page_index);
     assert_eq!(page_refs.len(), 2);
+    let id_blooms = page_index
+        .column(
+            page_index
+                .schema()
+                .index_of("id_bloom")
+                .expect("routing page index must include id_bloom"),
+        )
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .expect("id_bloom must be binary");
+    let unrelated_page = page_refs
+        .iter()
+        .enumerate()
+        .find_map(|(row, path)| {
+            (!routing_page_id_bloom_might_contain(id_blooms.value(row), b"dup")).then_some(path)
+        })
+        .expect("one routing page must be provably unrelated to `dup`");
     fs::write(
-        dir.path().join(&page_refs[0]),
+        dir.path().join(unrelated_page),
         b"corrupt unrelated routing page for duplicate validation",
     )
     .unwrap();
@@ -3078,7 +3206,41 @@ fn gc_preserves_active_objects_when_full_routing_table_is_empty() {
             VectorRecord::new("b", vec![1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     rewrite_current_with_empty_routing_table(dir.path(), index.manifest());
+
+    let segments_before = collect_files_with_extension(dir.path().join("segments"), "parquet");
+    let graphs_before = collect_files_with_extension(dir.path().join("graphs"), "parquet");
+    let vectors_before = collect_files_with_extension(dir.path().join("vectors"), "arrow");
+    let routing_pages_before = current_routing_page_paths(dir.path(), index.manifest().version);
+    let objects_before = storage_file_sizes(dir.path());
+    let active_materialized_metadata = current_metadata_table_paths(index.manifest().version)
+        .into_iter()
+        .chain(current_routing_layer_index_paths(
+            dir.path(),
+            index.manifest().version,
+        ))
+        .chain(routing_pages_before.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let materialized_metadata_before = objects_before
+        .keys()
+        .filter(|path| {
+            path.starts_with("manifests/")
+                || path.starts_with("routing/segments-")
+                || path.starts_with("routing/pivots-")
+                || path.starts_with("routing/layers/")
+                || path.starts_with("routing/pages/")
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let expected_obsolete_metadata = materialized_metadata_before
+        .difference(&active_materialized_metadata)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !expected_obsolete_metadata.is_empty(),
+        "setup must contain a superseded materialized metadata/routing generation"
+    );
 
     let mut reopened = BorsukIndex::open(&uri).unwrap();
     assert!(reopened.manifest().segments.is_empty());
@@ -3090,14 +3252,49 @@ fn gc_preserves_active_objects_when_full_routing_table_is_empty() {
         })
         .unwrap();
 
-    assert_eq!(deleted.objects_deleted, 4);
-    assert_eq!(deleted.routing_objects_deleted, 1);
-    assert_eq!(deleted.tables_deleted, 3);
+    let objects_after = storage_file_sizes(dir.path());
+    let actually_deleted = objects_before
+        .keys()
+        .filter(|path| !objects_after.contains_key(*path))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        deleted.candidates.iter().cloned().collect::<BTreeSet<_>>(),
+        actually_deleted
+    );
+    assert!(
+        expected_obsolete_metadata.is_subset(&actually_deleted),
+        "GC must reclaim every superseded materialized metadata/routing object: expected={expected_obsolete_metadata:?}, deleted={actually_deleted:?}"
+    );
+    assert!(
+        expected_obsolete_metadata
+            .iter()
+            .all(|path| !dir.path().join(path).exists())
+    );
+    assert_eq!(deleted.objects_deleted, deleted.candidates.len());
     assert_eq!(deleted.routing_page_indexes_read, 1);
     assert_eq!(deleted.routing_pages_read, 1);
     assert!(deleted.bytes_read > 0);
     assert_eq!(deleted.object_cache_hits, 0);
     assert_eq!(deleted.object_cache_misses, 2);
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("segments"), "parquet"),
+        segments_before
+    );
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("graphs"), "parquet"),
+        graphs_before
+    );
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("vectors"), "arrow"),
+        vectors_before
+    );
+    assert!(
+        routing_pages_before
+            .iter()
+            .all(|path| dir.path().join(path).exists()),
+        "GC must retain every routing page reachable from the active layer indexes"
+    );
     assert_eq!(reopened.get_vector("a").unwrap(), Some(vec![0.0, 0.0]));
     assert_eq!(
         reopened
@@ -3256,8 +3453,6 @@ fn gc_dry_run_reports_publish_orphans_newer_than_current() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let setup_store: Arc<dyn ObjectStore> =
         Arc::new(common::FaultInjectingObjectStore::new(Arc::clone(&inner)));
-    // The fault must fire during synchronous segment publication, so the WAL is
-    // disabled to keep the classic per-add publish path.
     let mut setup = BorsukIndex::create_with_object_store_and_wal(
         setup_store,
         IndexConfig {
@@ -3275,6 +3470,7 @@ fn gc_dry_run_reports_publish_orphans_newer_than_current() {
     setup
         .add(vec![VectorRecord::new("base", vec![0.0, 0.0])])
         .unwrap();
+    setup.flush().unwrap();
 
     let faulting_store: Arc<dyn ObjectStore> =
         Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
@@ -3289,11 +3485,17 @@ fn gc_dry_run_reports_publish_orphans_newer_than_current() {
         BorsukIndex::open_with_object_store(faulting_store, "memory:///gc-orphan").unwrap();
     crashing
         .add(vec![VectorRecord::new("orphaned", vec![1.0, 0.0])])
-        .unwrap_err();
+        .unwrap();
+    crashing.flush().unwrap_err();
 
     let mut reopened =
         BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///gc-orphan").unwrap();
     assert_eq!(reopened.manifest().version, 2);
+    assert_eq!(reopened.get_vector("base").unwrap(), Some(vec![0.0, 0.0]));
+    assert_eq!(
+        reopened.get_vector("orphaned").unwrap(),
+        Some(vec![1.0, 0.0])
+    );
     let dry_run = reopened
         .gc_obsolete_segments(GarbageCollectionOptions {
             dry_run: true,
@@ -3348,6 +3550,8 @@ fn current_rejects_valid_manifest_table_swapped_under_active_version() {
             VectorRecord::new("b", vec![1.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
+    assert_eq!(index.manifest().version, 2);
 
     let manifest_v1 = dir
         .path()
@@ -5605,6 +5809,7 @@ fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
             VectorRecord::new("far", vec![100.0, 100.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     index
         .compact(CompactionOptions {
             source_level: 0,
@@ -5618,6 +5823,7 @@ fn approximate_hybrid_dispatches_mixed_l0_graph_and_l1_vamana_pq_leaves() {
     index
         .add(vec![VectorRecord::new("fresh-l0-far", vec![50.0, 50.0])])
         .unwrap();
+    index.flush().unwrap();
     let leaf_modes = routing_leaf_page_segments(dir.path(), index.manifest().version)
         .into_iter()
         .map(|segment| segment.leaf_mode)
@@ -6745,6 +6951,7 @@ fn compact_from_empty_routing_table_skips_unrelated_routing_pages() {
             VectorRecord::new("tail-b", vec![1001.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     let page_refs = routing_leaf_page_paths(dir.path(), index.manifest().version);
     assert_eq!(page_refs.len(), 2);
     fs::write(
@@ -7097,6 +7304,7 @@ fn compact_reuses_unaffected_routing_layer_page_objects() {
             VectorRecord::new("tail-b", vec![1001.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
     let before_l0_page_objects =
         collect_files_with_extension(dir.path().join("routing/pages/L0"), "parquet");
     let before_l1_page_objects =
@@ -7182,6 +7390,22 @@ fn rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects_when_requ
             VectorRecord::new("d", vec![9.0, 0.0]),
         ])
         .unwrap();
+    index.flush().unwrap();
+
+    let l0_segments_before = relative_parquet_files(dir.path(), "segments/L0");
+    let l0_graphs_before = relative_parquet_files(dir.path(), "graphs/L0");
+    let vectors_before = collect_files_with_extension(dir.path().join("vectors"), "arrow")
+        .into_iter()
+        .map(|path| {
+            path.strip_prefix(dir.path())
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(l0_segments_before.len(), 4);
+    assert_eq!(l0_graphs_before.len(), 4);
+    assert_eq!(vectors_before.len(), 4);
 
     let report = index
         .rebuild(RebuildOptions {
@@ -7198,12 +7422,19 @@ fn rebuild_compacts_all_matching_segments_and_deletes_obsolete_objects_when_requ
     assert_eq!(report.compaction.segments_written, 2);
     assert_eq!(report.compaction.records_rewritten, 4);
     assert!(!report.garbage_collection.dry_run);
-    // The four L0 vector sidecars and four superseded global-scan artifacts are
-    // collected alongside the historical segment/graph/routing/table objects.
-    assert_eq!(report.garbage_collection.objects_deleted, 29);
-    assert_eq!(report.garbage_collection.routing_objects_deleted, 4);
-    assert_eq!(report.garbage_collection.tables_deleted, 9);
-    assert_eq!(report.garbage_collection.candidates.len(), 29);
+    let candidates = report
+        .garbage_collection
+        .candidates
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert!(l0_segments_before.is_subset(&candidates));
+    assert!(l0_graphs_before.is_subset(&candidates));
+    assert!(vectors_before.is_subset(&candidates));
+    assert_eq!(
+        report.garbage_collection.objects_deleted,
+        report.garbage_collection.candidates.len()
+    );
     assert!(
         report.garbage_collection.bytes_reclaimed > 0,
         "rebuild cleanup should reclaim obsolete L0 segment and graph bytes"
@@ -7256,6 +7487,10 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
             VectorRecord::new("d", vec![9.0, 0.0]),
         ])
         .unwrap();
+    // Positioned writes remain in the WAL frontier even when `WalConfig` is
+    // disabled. Materialize the frontier so compaction supersedes real L0
+    // segment, graph, and vector-sidecar objects for GC to inspect.
+    index.flush().unwrap();
     index
         .compact(CompactionOptions {
             source_level: 0,
@@ -7282,24 +7517,50 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
             min_age: Duration::ZERO,
         })
         .unwrap();
-    // Scanned/candidate counts now include the per-segment dense-vector Arrow
-    // sidecars (`vectors/<cs>.arrow`): 6 total (4 obsolete L0 + 2 live L1), of
-    // which the 4 orphaned L0 sidecars are additional deletion candidates.
-    assert_eq!(dry_run.objects_scanned, 38);
     assert_eq!(dry_run.objects_deleted, 0);
     assert_eq!(dry_run.routing_objects_deleted, 0);
     assert_eq!(dry_run.tables_deleted, 0);
-    assert_eq!(dry_run.candidates.len(), 25);
     assert!(dry_run.bytes_reclaimable > 0);
-    // The orphaned dense-vector sidecars are among the candidates; the two live
-    // L1 sidecars are not.
+    // The dry run must report every materialized, obsolete L0 object type while
+    // never offering active L1 objects for deletion. These counts derive from
+    // the objects this test created, rather than the wider managed-object layout.
+    assert_eq!(
+        dry_run
+            .candidates
+            .iter()
+            .filter(|path| path.starts_with("segments/L0/"))
+            .count(),
+        l0_before.len(),
+        "dry-run candidates: {:?}",
+        dry_run.candidates
+    );
+    assert_eq!(
+        dry_run
+            .candidates
+            .iter()
+            .filter(|path| path.starts_with("graphs/L0/"))
+            .count(),
+        l0_graphs_before.len(),
+        "dry-run candidates: {:?}",
+        dry_run.candidates
+    );
     assert_eq!(
         dry_run
             .candidates
             .iter()
             .filter(|path| path.ends_with(".arrow"))
             .count(),
-        4
+        l0_before.len(),
+        "dry-run candidates: {:?}",
+        dry_run.candidates
+    );
+    assert!(
+        !dry_run
+            .candidates
+            .iter()
+            .any(|path| { path.starts_with("segments/L1/") || path.starts_with("graphs/L1/") }),
+        "active L1 objects must not be GC candidates: {:?}",
+        dry_run.candidates
     );
     assert_eq!(
         collect_files_with_extension(dir.path().join("segments/L0"), "parquet"),
@@ -7316,11 +7577,8 @@ fn gc_obsolete_segments_dry_runs_and_deletes_inactive_segments_only() {
             min_age: Duration::ZERO,
         })
         .unwrap();
-    assert_eq!(deleted.objects_scanned, 38);
-    assert_eq!(deleted.objects_deleted, 25);
-    assert_eq!(deleted.routing_objects_deleted, 3);
-    assert_eq!(deleted.tables_deleted, 6);
     assert_eq!(deleted.candidates, dry_run.candidates);
+    assert_eq!(deleted.objects_deleted, deleted.candidates.len());
     assert_eq!(deleted.bytes_reclaimed, dry_run.bytes_reclaimable);
     assert!(collect_files_with_extension(dir.path().join("segments/L0"), "parquet").is_empty());
     assert!(collect_files_with_extension(dir.path().join("graphs/L0"), "parquet").is_empty());
@@ -7506,8 +7764,7 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
     let cache = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
-    // Pins the exact cached-object set GC evicts on the synchronous path; the
-    // WAL is disabled so adds write real segment/graph objects into the cache.
+    // Pins the exact cached-object set GC evicts on the synchronous path.
     let mut cached = BorsukIndex::create_with_cache_wal_and_leaf_capability(
         IndexConfig {
             uri,
@@ -7532,6 +7789,9 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
             VectorRecord::new("d", vec![9.0, 0.0]),
         ])
         .unwrap();
+    // `WalConfig::disabled()` does not bypass positioned writes. Flush before
+    // compaction so it leaves inactive cached L0 objects for GC to evict.
+    cached.flush().unwrap();
     cached
         .compact(CompactionOptions {
             source_level: 0,
@@ -7543,14 +7803,14 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
         })
         .unwrap();
 
-    assert_eq!(
-        collect_files_with_extension(cache.path().join("segments/L0"), "parquet").len(),
-        4
-    );
-    assert_eq!(
-        collect_files_with_extension(cache.path().join("graphs/L0"), "parquet").len(),
-        4
-    );
+    let cached_l0_segments =
+        collect_files_with_extension(cache.path().join("segments/L0"), "parquet");
+    let cached_l1_segments =
+        collect_files_with_extension(cache.path().join("segments/L1"), "parquet");
+    let cached_l0_graphs = collect_files_with_extension(cache.path().join("graphs/L0"), "parquet");
+    let cached_l1_graphs = collect_files_with_extension(cache.path().join("graphs/L1"), "parquet");
+    assert_eq!(cached_l0_segments.len(), 4);
+    assert_eq!(cached_l0_graphs.len(), 4);
 
     let deleted = cached
         .gc_obsolete_segments(GarbageCollectionOptions {
@@ -7559,25 +7819,52 @@ fn gc_obsolete_segments_removes_cached_inactive_objects() {
         })
         .unwrap();
 
-    // +4 orphaned dense-vector sidecars (`vectors/<cs>.arrow`) are now collected.
-    assert_eq!(deleted.objects_deleted, 25);
-    assert_eq!(deleted.routing_objects_deleted, 3);
-    assert_eq!(deleted.tables_deleted, 6);
+    assert_eq!(
+        deleted
+            .candidates
+            .iter()
+            .filter(|path| path.starts_with("segments/L0/"))
+            .count(),
+        cached_l0_segments.len()
+    );
+    assert_eq!(
+        deleted
+            .candidates
+            .iter()
+            .filter(|path| path.starts_with("graphs/L0/"))
+            .count(),
+        cached_l0_graphs.len()
+    );
+    assert_eq!(
+        deleted
+            .candidates
+            .iter()
+            .filter(|path| path.ends_with(".arrow"))
+            .count(),
+        cached_l0_segments.len()
+    );
+    assert_eq!(deleted.objects_deleted, deleted.candidates.len());
     assert!(collect_files_with_extension(cache.path().join("segments/L0"), "parquet").is_empty());
     assert!(collect_files_with_extension(cache.path().join("graphs/L0"), "parquet").is_empty());
     assert_eq!(
-        collect_files_with_extension(cache.path().join("segments/L1"), "parquet").len(),
-        2
+        collect_files_with_extension(cache.path().join("segments/L1"), "parquet"),
+        cached_l1_segments
     );
     assert_eq!(
-        collect_files_with_extension(cache.path().join("graphs/L1"), "parquet").len(),
-        2
+        collect_files_with_extension(cache.path().join("graphs/L1"), "parquet"),
+        cached_l1_graphs
     );
     // The two live L1 sidecars survive; the orphaned L0 sidecars (and their cache
     // copies) are gone.
     assert_eq!(
         collect_files_with_extension(cache.path().join("vectors"), "arrow").len(),
-        2
+        cached_l1_segments.len()
+    );
+    assert_eq!(
+        cached
+            .search_ids(&[8.5, 0.0], SearchOptions::exact(2))
+            .unwrap(),
+        ["c", "d"]
     );
 }
 
@@ -7765,16 +8052,15 @@ fn gc_preserves_all_live_objects_on_healthy_index() {
     );
 }
 
-/// Live tombstone runs are manifest-selected and must survive GC. Once flush
-/// consolidates them into stable hash pages, GC may reclaim the obsolete runs
-/// while preserving the stable page and delete visibility.
+/// Positioned deletes remain authoritative until flush materializes one stable
+/// hash page; generic GC must preserve both boundaries and delete visibility.
 #[test]
-fn gc_keeps_live_tombstone_runs_and_collects_them_after_consolidation() {
+fn gc_keeps_positioned_deletes_and_materialized_tombstone_page() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
     let mut index = create_graph_enabled(IndexConfig {
-        uri,
+        uri: uri.clone(),
         metric: VectorMetric::Euclidean,
         dimensions: 2,
         segment_max_vectors: 8,
@@ -7794,54 +8080,79 @@ fn gc_keeps_live_tombstone_runs_and_collects_them_after_consolidation() {
         ])
         .unwrap();
 
-    // Two deletes publish two live, content-addressed frontier runs.
+    // Foreground deletes commit only to the positioned log.
     index.delete([deleted_a.as_str()]).unwrap();
     index.delete([deleted_b.as_str()]).unwrap();
+    assert!(collect_files_with_extension(dir.path().join("tombstones"), "parquet").is_empty());
+    let positioned_objects = storage_file_sizes(dir.path())
+        .into_keys()
+        .filter(|path| {
+            path.starts_with("positioned-log/heads/")
+                || path.starts_with("positioned-log/envelopes/")
+                || path.starts_with("positioned-log/payloads/")
+        })
+        .collect::<BTreeSet<_>>();
+    assert!(
+        positioned_objects
+            .iter()
+            .any(|path| path.starts_with("positioned-log/heads/"))
+    );
+    assert!(
+        positioned_objects
+            .iter()
+            .any(|path| path.starts_with("positioned-log/envelopes/"))
+    );
+    assert!(
+        positioned_objects
+            .iter()
+            .any(|path| path.starts_with("positioned-log/payloads/"))
+    );
+    drop(index);
 
-    let tombstones_before = collect_files_with_extension(dir.path().join("tombstones"), "parquet");
-    assert_eq!(tombstones_before.len(), 2);
-
-    let live_report = index
+    let mut index = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(index.get_vector(&deleted_a).unwrap(), None);
+    assert_eq!(index.get_vector(&deleted_b).unwrap(), None);
+    index
         .gc_obsolete_segments(GarbageCollectionOptions {
             dry_run: false,
             min_age: Duration::ZERO,
         })
         .unwrap();
-    assert_eq!(
-        live_report
-            .candidates
-            .iter()
-            .filter(|path| path.starts_with("tombstones/"))
-            .count(),
-        0,
-        "GC must keep every run selected by the current manifest"
+    let objects_after_positioned_gc = storage_file_sizes(dir.path())
+        .into_keys()
+        .collect::<BTreeSet<_>>();
+    assert!(
+        positioned_objects.is_subset(&objects_after_positioned_gc),
+        "pre-flush GC must preserve every authoritative positioned object: captured={positioned_objects:?}, remaining={objects_after_positioned_gc:?}"
     );
+    drop(index);
+
+    let mut index = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(index.get_vector(&deleted_a).unwrap(), None);
+    assert_eq!(index.get_vector(&deleted_b).unwrap(), None);
 
     index.flush().unwrap();
-    index
-        .add(vec![VectorRecord::new(
-            "post-consolidation",
-            vec![20.0, 0.0],
-        )])
-        .unwrap();
+    let stable_pages = collect_files_with_extension(dir.path().join("tombstones"), "parquet");
+    assert_eq!(stable_pages.len(), 1);
     let report = index
         .gc_obsolete_segments(GarbageCollectionOptions {
             dry_run: false,
             min_age: Duration::ZERO,
         })
         .unwrap();
-
-    // Consolidation replaced both live runs with stable hash pages.
-    let deleted_tombstones = report
-        .candidates
-        .iter()
-        .filter(|path| path.starts_with("tombstones/"))
-        .count();
-    assert_eq!(deleted_tombstones, 2);
-
-    // Exactly one stable page survives, and delete visibility holds.
-    let tombstones_after = collect_files_with_extension(dir.path().join("tombstones"), "parquet");
-    assert_eq!(tombstones_after.len(), 1);
+    assert!(
+        report
+            .candidates
+            .iter()
+            .all(|path| !stable_pages.iter().any(|stable| {
+                stable.strip_prefix(dir.path()).unwrap().to_string_lossy() == path.as_str()
+            })),
+        "GC must retain the stable page selected by the active manifest"
+    );
+    assert_eq!(
+        collect_files_with_extension(dir.path().join("tombstones"), "parquet"),
+        stable_pages
+    );
     assert_eq!(index.get_vector(&deleted_a).unwrap(), None);
     assert_eq!(index.get_vector(&deleted_b).unwrap(), None);
     assert_eq!(index.get_vector("c").unwrap(), Some(vec![8.0, 0.0]));
@@ -7937,75 +8248,38 @@ fn storage_file_sizes(root: &std::path::Path) -> BTreeMap<String, u64> {
     files
 }
 
-fn assert_add_report_matches_storage_delta(
-    root: &std::path::Path,
-    before: &BTreeMap<String, u64>,
-    after: &BTreeMap<String, u64>,
-    report: &AddReport,
-    vectors_added: usize,
-) {
-    let added_paths = after
-        .keys()
-        // The filter index is built lazily and is outside the add report. The
-        // exact-vector Arrow sidecar is a required segment payload and must be
-        // included in the physical bytes written.
-        .filter(|path| !before.contains_key(*path) && !path.starts_with("fidx/"))
-        .cloned()
-        .collect::<Vec<_>>();
-    let added_bytes = added_paths
-        .iter()
-        .map(|path| after.get(path).copied().unwrap())
-        .sum::<u64>();
-    let current_bytes = fs::metadata(root.join("collection/CURRENT")).unwrap().len();
-    let expected_total_bytes = added_bytes + current_bytes;
+fn logged_request_counts(operations: &common::OperationLog) -> RequestCounts {
+    let mut counts = RequestCounts::default();
+    for entry in operations.entries() {
+        match entry.operation {
+            common::StoreOperation::Put | common::StoreOperation::MultipartPut => counts.puts += 1,
+            common::StoreOperation::Get => counts.gets += 1,
+            common::StoreOperation::Head => counts.heads += 1,
+            common::StoreOperation::Delete => counts.deletes += 1,
+            common::StoreOperation::List => counts.lists += 1,
+            common::StoreOperation::Copy | common::StoreOperation::Rename => {
+                panic!("add telemetry has no slot for {:?}", entry.operation)
+            }
+        }
+    }
+    counts
+}
 
-    assert_eq!(
-        report.segments_written,
-        added_paths
-            .iter()
-            .filter(|path| path.starts_with("segments/"))
-            .count()
-    );
-    assert_eq!(
-        report.graph_payloads_written,
-        added_paths
-            .iter()
-            .filter(|path| path.starts_with("graphs/"))
-            .count()
-    );
-    assert_eq!(
-        report.routing_pages_written,
-        added_paths
-            .iter()
-            .filter(|path| path.starts_with("routing/pages/"))
-            .count()
-    );
-    assert_eq!(
-        report.manifest_tables_written,
-        added_paths
-            .iter()
-            .filter(|path| {
-                path.starts_with("manifests/")
-                    || path.starts_with("routing/segments-")
-                    || path.starts_with("routing/pivots-")
-                    || (path.starts_with("routing/layers/") && path.ends_with("/pages.parquet"))
-                    || path.starts_with("collection/snapshots/")
-            })
-            .count()
-    );
-    // The report is a wire-write counter, while the storage delta is the
-    // surviving footprint. Root admission writes a bounded reservation HEAD
-    // that the final collection commit replaces, so honest write bytes may be
-    // slightly larger than the files left on disk.
-    assert!(report.total_bytes_written >= expected_total_bytes);
+fn assert_lowercase_hex(value: &str, expected_len: usize) {
+    assert_eq!(value.len(), expected_len, "unexpected hex value: {value}");
     assert!(
-        report.total_bytes_written - expected_total_bytes <= 4 * 1024,
-        "coordination overwrite amplification must remain bounded"
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "value must be lowercase hexadecimal: {value}"
     );
-    assert_eq!(
-        report.bytes_per_vector,
-        report.total_bytes_written as f64 / vectors_added as f64
-    );
+}
+
+fn assert_generated_id(id: &str) {
+    let digest = id
+        .strip_prefix('g')
+        .unwrap_or_else(|| panic!("generated id must start with `g`: {id}"));
+    assert_lowercase_hex(digest, 64);
 }
 
 fn relative_parquet_files(root: &std::path::Path, prefix: &str) -> BTreeSet<String> {
@@ -9193,6 +9467,23 @@ fn page_paths_from_batch(batch: &RecordBatch) -> Vec<String> {
         .collect()
 }
 
+fn routing_page_id_bloom_might_contain(bloom: &[u8], id: &[u8]) -> bool {
+    const SEGMENT_ID_BLOOM_BYTES: usize = 8 * 1024;
+    const SEGMENT_ID_BLOOM_HASHES: usize = 4;
+
+    if bloom.len() != SEGMENT_ID_BLOOM_BYTES {
+        return true;
+    }
+    let hash = blake3::hash(id);
+    (0..SEGMENT_ID_BLOOM_HASHES).all(|index| {
+        let start = index * 4;
+        let position = u32::from_le_bytes(hash.as_bytes()[start..start + 4].try_into().unwrap())
+            as usize
+            % (SEGMENT_ID_BLOOM_BYTES * 8);
+        bloom[position / 8] & (1_u8 << (position % 8)) != 0
+    })
+}
+
 struct RoutingLeafSegment {
     level: u8,
     size_bytes: u64,
@@ -9666,10 +9957,9 @@ fn delete_hides_records_from_search_and_get_and_keeps_tombstone_object() {
         ])
         .unwrap();
 
-    // Delete beta. Report reflects the newly tombstoned id.
-    let report = index.delete_with_report(["beta"]).unwrap();
-    assert_eq!(report.deleted, 1);
-    assert_eq!(report.total_tombstoned, 1);
+    // Delete beta. The receipt reflects the request-local canonical id count.
+    let report = index.delete(["beta"]).unwrap();
+    assert_eq!(report.ids_submitted, 1);
     assert!(report.published);
     assert!(report.requests.total() > 0);
 
@@ -9689,8 +9979,8 @@ fn delete_hides_records_from_search_and_get_and_keeps_tombstone_object() {
     assert!(ids.contains(&"gamma".to_string()));
 
     // Deleting again is a no-op (idempotent), no new version published.
-    let again = index.delete_with_report(["beta"]).unwrap();
-    assert_eq!(again.deleted, 0);
+    let again = index.delete(["beta"]).unwrap();
+    assert_eq!(again.ids_submitted, 1);
     assert!(!again.published);
 
     // Reopen (paged default) and confirm the tombstone survives + still filters.
@@ -10201,9 +10491,13 @@ fn incremental_maintenance_shards_split_in_parallel_across_nodes() {
         .unwrap();
 
     assert!(
-        report_a.published && report_b.published,
-        "both shards must publish: {report_a:?} {report_b:?}"
+        report_a.published || report_b.published,
+        "at least one shard must publish: {report_a:?} {report_b:?}"
     );
+    // Segment IDs are content-independent UUIDs, so a small eight-segment
+    // fixture can legitimately hash all work to one shard. Empty ownership is
+    // a valid scheduler result; the coverage and final manifest assertions
+    // below still require every segment to be processed exactly once.
     // Every original segment is split exactly once, and each shard handled a
     // disjoint subset — their split counts partition the eight segments.
     assert_eq!(

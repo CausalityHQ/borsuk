@@ -70,25 +70,31 @@ pub fn report_build_timing(label: &str) {
     build_timing::report_and_reset(label);
 }
 
+/// Public API policy checks.
+///
+/// Low-level mutation-log storage types are implementation details, not an
+/// alternate production durability API.
+///
+/// ```compile_fail
+/// use borsuk::{CellWalRunInput, CellWalStore};
+/// ```
+pub mod public_api_policy {}
+
 pub use cell_wal::{
-    CellWalConfig, CellWalObjectPaths, CellWalRunInput, CellWalRunKind, CellWalStore,
-    CellWalTransactionDescriptor, CommittedCellWalTransaction, DEFAULT_CELL_WAL_LANES,
-    LogicalCellId, MAX_CELL_WAL_LANES, PreparedCellWalRun, PreparedCellWalTransaction,
-    cell_wal_transaction_id,
+    CellWalConfig, CellWalRunKind, DEFAULT_CELL_WAL_LANES, LogicalCellId, MAX_CELL_WAL_LANES,
 };
 pub use error::{BorsukError, Result};
 pub use format::{vector_records_from_parquet, vector_records_to_parquet};
 pub use group_commit::{
-    GroupCommitConfig, GroupCommitLaneFailure, GroupCommitLaneReceipt, GroupCommitReceipt,
-    GroupCommitTicket, GroupCommitWriter,
+    GroupCommitConfig, GroupCommitReceipt, GroupCommitTicket, GroupCommitWriter,
 };
 pub use index::{
-    BorsukIndex, DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES, DEFAULT_MAX_CONCURRENT_CELL_DECODES,
-    DEFAULT_MAX_CONCURRENT_SEARCHES, DEFAULT_RAM_BUDGET_BYTES, DEFAULT_ROUTING_PAGE_CACHE_BYTES,
-    DEFAULT_TARGET_SEGMENT_VECTOR_BYTES, DEFAULT_WAL_TAIL_CACHE_BYTES,
-    DEFAULT_WAL_TAIL_DECODE_BYTES, IndexConfig, MAX_RECOMMENDED_SEGMENT_MAX_VECTORS,
-    MIN_RECOMMENDED_SEGMENT_MAX_VECTORS, OpenOptions, WarmReport, parse_byte_size,
-    parse_ram_budget, recommended_segment_max_vectors,
+    BorsukIndex, CanonicalMutationBatch, DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
+    DEFAULT_MAX_CONCURRENT_CELL_DECODES, DEFAULT_MAX_CONCURRENT_SEARCHES, DEFAULT_RAM_BUDGET_BYTES,
+    DEFAULT_ROUTING_PAGE_CACHE_BYTES, DEFAULT_TARGET_SEGMENT_VECTOR_BYTES,
+    DEFAULT_WAL_TAIL_CACHE_BYTES, DEFAULT_WAL_TAIL_DECODE_BYTES, IndexConfig,
+    MAX_RECOMMENDED_SEGMENT_MAX_VECTORS, MIN_RECOMMENDED_SEGMENT_MAX_VECTORS, OpenOptions,
+    WarmReport, parse_byte_size, parse_ram_budget, recommended_segment_max_vectors,
 };
 pub use lane_log::GROUP_COMMIT_STRIPE_COUNT;
 

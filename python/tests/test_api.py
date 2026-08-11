@@ -1035,9 +1035,6 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.segments_skipped, 0)
             self.assertEqual(report.global_base_approximate_us, 0)
             self.assertEqual(report.global_base_exact_rerank_us, 0)
-            self.assertEqual(report.global_delta_approximate_us, 0)
-            self.assertEqual(report.global_delta_exact_rerank_us, 0)
-            self.assertEqual(report.global_delta_wait_us, 0)
 
     def test_open_with_cache_reads_fresh_current_after_external_publish(self) -> None:
         with (
@@ -2496,8 +2493,7 @@ class PythonApiTests(unittest.TestCase):
             index.add([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]], ids=["a", "b", "c"])
 
             report = index.delete(["b"])
-            self.assertEqual(report.deleted, 1)
-            self.assertEqual(report.total_tombstoned, 1)
+            self.assertEqual(report.ids_submitted, 1)
             self.assertTrue(report.published)
             self.assertGreater(report.requests.total, 0)
 
@@ -2508,7 +2504,7 @@ class PythonApiTests(unittest.TestCase):
 
             # Idempotent: deleting again publishes nothing new.
             again = index.delete(["b"])
-            self.assertEqual(again.deleted, 0)
+            self.assertEqual(again.ids_submitted, 1)
             self.assertFalse(again.published)
 
             # Tombstone survives a reopen.

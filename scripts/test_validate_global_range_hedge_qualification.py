@@ -133,9 +133,6 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
                     "segments_searched",
                     "global_base_approximate_us",
                     "global_base_exact_rerank_us",
-                    "global_delta_approximate_us",
-                    "global_delta_exact_rerank_us",
-                    "global_delta_wait_us",
                 ]
             )
             for query, latency in enumerate(latencies):
@@ -165,9 +162,6 @@ class GlobalRangeHedgeValidatorTest(unittest.TestCase):
                         4,
                         1,
                         2,
-                        3,
-                        4,
-                        5,
                     ]
                 )
                 total_gets += gets

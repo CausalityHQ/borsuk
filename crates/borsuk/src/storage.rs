@@ -44,24 +44,21 @@ use url::Url;
 
 use crate::{
     collection_control::{
-        COLLECTION_CURRENT, COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD,
-        COLLECTION_WAL_FRONTIER_SHARDS, COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD,
-        COLLECTION_WAL_RESERVATION_TTL_MS, CollectionCommit, CollectionCurrent,
-        CollectionManifestRef, CollectionSnapshot, CollectionWalFrontierHead,
-        CollectionWalReservation, PendingCollectionCommit, collection_current_bytes,
+        COLLECTION_CURRENT, COLLECTION_WAL_FRONTIER_SHARDS, CollectionCommit, CollectionCurrent,
+        CollectionManifestRef, CollectionSnapshot, collection_current_bytes,
         collection_current_from_slice, collection_modality_prefix, collection_snapshot_bytes,
         collection_snapshot_from_slice, collection_wal_frontier_head_bytes,
         collection_wal_frontier_head_from_slice, collection_wal_frontier_head_path,
         collection_wal_frontier_shard, consumed_wal_frontier_checksum,
-        pending_collection_commit_bytes, pending_collection_commit_from_slice,
-        pending_collection_commit_path, validate_collection_manifest_ref,
+        pending_collection_commit_from_slice, pending_collection_commit_path,
+        validate_collection_manifest_ref,
     },
     error::{BorsukError, Result},
     format::{
         manifest_from_parquet, manifest_has_next_generated_id, manifest_metadata_from_parquet,
         manifest_to_parquet, pivots_from_parquet, pivots_to_parquet,
         routing_layer_page_index_from_parquet, routing_layer_page_index_to_parquet,
-        routing_layer_page_to_parquet, routing_to_parquet,
+        routing_layer_page_to_parquet, routing_parent_page_to_parquet, routing_to_parquet,
     },
     manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
     observability,
@@ -263,13 +260,29 @@ where
 /// Atomic per-operation object-store request tallies shared by every clone of the
 /// wrapped store, so parallel prefetch tasks and the main runtime accumulate into
 /// one place. Snapshot into [`RequestCounts`] to report deltas around an operation.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct RequestCounters {
     gets: AtomicU64,
     puts: AtomicU64,
+    put_payload_bytes: AtomicU64,
+    account_put_payload_bytes: bool,
     deletes: AtomicU64,
     heads: AtomicU64,
     lists: AtomicU64,
+}
+
+impl Default for RequestCounters {
+    fn default() -> Self {
+        Self {
+            gets: AtomicU64::new(0),
+            puts: AtomicU64::new(0),
+            put_payload_bytes: AtomicU64::new(0),
+            account_put_payload_bytes: true,
+            deletes: AtomicU64::new(0),
+            heads: AtomicU64::new(0),
+            lists: AtomicU64::new(0),
+        }
+    }
 }
 
 /// Successful bytes served by the local read-through cache versus the backing
@@ -324,6 +337,13 @@ impl CacheReadCounters {
 }
 
 impl RequestCounters {
+    fn request_only() -> Self {
+        Self {
+            account_put_payload_bytes: false,
+            ..Self::default()
+        }
+    }
+
     fn snapshot(&self) -> RequestCounts {
         RequestCounts {
             gets: self.gets.load(Ordering::Relaxed),
@@ -332,6 +352,23 @@ impl RequestCounters {
             heads: self.heads.load(Ordering::Relaxed),
             lists: self.lists.load(Ordering::Relaxed),
         }
+    }
+
+    fn record_put_payload(&self, bytes: usize) -> std::result::Result<(), ()> {
+        if !self.account_put_payload_bytes {
+            return Ok(());
+        }
+        let bytes = u64::try_from(bytes).map_err(|_| ())?;
+        self.put_payload_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(bytes)
+            })
+            .map(|_| ())
+            .map_err(|_| ())
+    }
+
+    fn put_payload_bytes(&self) -> u64 {
+        self.put_payload_bytes.load(Ordering::Relaxed)
     }
 }
 
@@ -465,6 +502,12 @@ impl ObjectStore for CountingObjectStore {
         Self: Sync + 'async_trait,
     {
         Box::pin(async move {
+            self.counters
+                .record_put_payload(payload.content_length())
+                .map_err(|()| object_store::Error::Generic {
+                    store: "borsuk",
+                    source: Box::new(io::Error::other("PUT payload byte counter overflow")),
+                })?;
             self.counters.puts.fetch_add(1, Ordering::Relaxed);
             self.inner.put_opts(location, payload, opts).await
         })
@@ -795,6 +838,10 @@ impl Storage {
         self.isolated_read_scope()
     }
 
+    pub(crate) fn clone_with_independent_mutation_counters(&self) -> Self {
+        self.isolated_mutation_scope()
+    }
+
     pub(crate) fn clone_with_request_counters_from(&self, source: &Self) -> Self {
         self.with_read_scope_of(source)
     }
@@ -840,28 +887,6 @@ pub(crate) struct LoadedCollectionSnapshot {
     pub(crate) snapshot: CollectionSnapshot,
     pub(crate) checksum: String,
     pub(crate) current_version: UpdateVersion,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct CollectionWalReservationReceipt {
-    shard: u8,
-    head: CollectionWalFrontierHead,
-    version: UpdateVersion,
-    #[allow(
-        dead_code,
-        reason = "retained only until the v2 frontier admission primitive is deleted"
-    )]
-    pub(crate) admission_bytes_written: u64,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct CollectionWalCommitOutcome {
-    pub(crate) root_pressure: bool,
-    #[allow(
-        dead_code,
-        reason = "retained only until the v2 frontier primitive is deleted in the format cutover"
-    )]
-    pub(crate) successor: Option<CollectionWalReservationReceipt>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1400,6 +1425,16 @@ impl Storage {
     /// outer decorator prevents overlapping searches from attributing each
     /// other's I/O to their per-query reports.
     pub(crate) fn isolated_read_scope(&self) -> Self {
+        let request_counters = Arc::new(RequestCounters::request_only());
+        let cache_read_counters = Arc::new(CacheReadCounters::default());
+        self.with_read_scope_counters(request_counters, cache_read_counters)
+    }
+
+    /// Return a temporary logical mutation scope that accounts for every
+    /// direct PUT attempt exactly once. Long-lived lifetime/read scopes leave
+    /// payload accounting disabled so their counters cannot accumulate toward
+    /// overflow between unrelated public mutations.
+    pub(crate) fn isolated_mutation_scope(&self) -> Self {
         let request_counters = Arc::new(RequestCounters::default());
         let cache_read_counters = Arc::new(CacheReadCounters::default());
         self.with_read_scope_counters(request_counters, cache_read_counters)
@@ -1467,7 +1502,7 @@ impl Storage {
     ) -> Result<Self> {
         let runtime = process_storage_runtime()?;
 
-        let request_counters = Arc::new(RequestCounters::default());
+        let request_counters = Arc::new(RequestCounters::request_only());
         let cache_read_counters = Arc::new(CacheReadCounters::default());
         let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore::with_get_admission(
             store,
@@ -1494,6 +1529,14 @@ impl Storage {
     /// Callers diff two snapshots to attribute requests to a single operation.
     pub(crate) fn request_counts(&self) -> RequestCounts {
         self.request_counters.snapshot()
+    }
+
+    /// Payload bytes submitted to direct backing-store PUT attempts in this
+    /// counter scope. Positioned mutations use direct bounded PUTs for typed
+    /// payloads, envelopes, and shard-head CAS writes, so their operation-local
+    /// delta is exact and includes retries.
+    pub(crate) fn put_payload_bytes(&self) -> u64 {
+        self.request_counters.put_payload_bytes()
     }
 
     pub(crate) fn cache_read_counts(&self) -> CacheReadCounts {
@@ -1612,408 +1655,6 @@ impl Storage {
             });
         }
         Ok(snapshot.generation)
-    }
-
-    pub(crate) fn reserve_collection_wal_transaction(
-        &self,
-        transaction_id: &str,
-        schema_fingerprint: &str,
-    ) -> Result<CollectionWalReservationReceipt> {
-        const MAX_CAS_ATTEMPTS: usize = 128;
-        let shard = collection_wal_frontier_shard(transaction_id)?;
-        let head_path = collection_wal_frontier_head_path(shard)?;
-        let now_ms = collection_wal_now_ms()?;
-        let expires_at_ms = now_ms
-            .checked_add(COLLECTION_WAL_RESERVATION_TTL_MS)
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "collection WAL reservation expiry exceeds u64".to_string(),
-                )
-            })?;
-        for _ in 0..MAX_CAS_ATTEMPTS {
-            let current = match self.read_coordination_object(&head_path) {
-                Ok(current) => current,
-                Err(BorsukError::ObjectStoreRetryable { .. }) => continue,
-                Err(error) => return Err(error),
-            };
-            let (mut head, version) = match current {
-                Some(current) => (
-                    collection_wal_frontier_head_from_slice(&current.bytes, &head_path, shard)?,
-                    Some(current.version),
-                ),
-                None => (
-                    CollectionWalFrontierHead {
-                        generation: 0,
-                        reservations: Vec::new(),
-                        transactions: Vec::new(),
-                    },
-                    None,
-                ),
-            };
-            if let Some(existing) = head
-                .transactions
-                .iter()
-                .find(|commit| commit.transaction_id == transaction_id)
-            {
-                if existing.schema_fingerprint != schema_fingerprint {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "collection transaction `{transaction_id}` conflicts with its published schema"
-                    )));
-                }
-                let version = version.ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "collection transaction `{transaction_id}` exists without a root version"
-                    ))
-                })?;
-                return Ok(CollectionWalReservationReceipt {
-                    shard,
-                    head,
-                    version,
-                    admission_bytes_written: 0,
-                });
-            }
-            if let Some(existing) = head
-                .reservations
-                .iter()
-                .find(|reservation| reservation.transaction_id == transaction_id)
-            {
-                if existing.schema_fingerprint != schema_fingerprint {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "collection transaction `{transaction_id}` conflicts with its root reservation"
-                    )));
-                }
-                if existing.expires_at_ms > now_ms {
-                    let version = version.ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "collection transaction `{transaction_id}` is reserved without a root version"
-                        ))
-                    })?;
-                    return Ok(CollectionWalReservationReceipt {
-                        shard,
-                        head,
-                        version,
-                        admission_bytes_written: 0,
-                    });
-                }
-            }
-            head.reservations
-                .retain(|reservation| reservation.expires_at_ms > now_ms);
-            if head
-                .reservations
-                .len()
-                .saturating_add(head.transactions.len())
-                >= COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize
-            {
-                return Err(BorsukError::ConcurrentModification {
-                    path: format!("{head_path}/CAPACITY"),
-                });
-            }
-            head.reservations.push(CollectionWalReservation {
-                transaction_id: transaction_id.to_string(),
-                schema_fingerprint: schema_fingerprint.to_string(),
-                expires_at_ms,
-            });
-            head.reservations
-                .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
-            head.generation = head.generation.checked_add(1).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "collection WAL frontier generation exceeds u64".to_string(),
-                )
-            })?;
-            let bytes = collection_wal_frontier_head_bytes(&head, shard)?;
-            match self.write_coordination_object(&head_path, &bytes, version) {
-                Ok(version) => {
-                    return Ok(CollectionWalReservationReceipt {
-                        shard,
-                        head,
-                        version,
-                        admission_bytes_written: bytes.len() as u64,
-                    });
-                }
-                Err(
-                    BorsukError::ConcurrentModification { .. }
-                    | BorsukError::ObjectStoreRetryable { .. },
-                ) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(BorsukError::ConcurrentModification { path: head_path })
-    }
-
-    pub(crate) fn cancel_collection_wal_reservation(&self, transaction_id: &str) -> Result<()> {
-        const MAX_CAS_ATTEMPTS: usize = 128;
-        let shard = collection_wal_frontier_shard(transaction_id)?;
-        let head_path = collection_wal_frontier_head_path(shard)?;
-        for _ in 0..MAX_CAS_ATTEMPTS {
-            let current = match self.read_coordination_object(&head_path) {
-                Ok(current) => current,
-                Err(BorsukError::ObjectStoreRetryable { .. }) => continue,
-                Err(error) => return Err(error),
-            };
-            let Some(current) = current else {
-                return Ok(());
-            };
-            let mut head =
-                collection_wal_frontier_head_from_slice(&current.bytes, &head_path, shard)?;
-            if head
-                .transactions
-                .iter()
-                .any(|commit| commit.transaction_id == transaction_id)
-            {
-                return Ok(());
-            }
-            let previous_len = head.reservations.len();
-            head.reservations
-                .retain(|reservation| reservation.transaction_id != transaction_id);
-            if head.reservations.len() == previous_len {
-                return Ok(());
-            }
-            head.generation = head.generation.checked_add(1).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "collection WAL frontier generation exceeds u64".to_string(),
-                )
-            })?;
-            let bytes = collection_wal_frontier_head_bytes(&head, shard)?;
-            match self.write_coordination_object(&head_path, &bytes, Some(current.version)) {
-                Ok(_) => return Ok(()),
-                Err(
-                    BorsukError::ConcurrentModification { .. }
-                    | BorsukError::ObjectStoreRetryable { .. },
-                ) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(BorsukError::ConcurrentModification { path: head_path })
-    }
-
-    /// Returns whether this append crossed the cooperative per-shard
-    /// maintenance threshold.
-    pub(crate) fn create_collection_commit_from_reservation(
-        &self,
-        commit: &CollectionCommit,
-        receipt: &CollectionWalReservationReceipt,
-        successor_transaction_id: Option<&str>,
-    ) -> Result<CollectionWalCommitOutcome> {
-        let shard = collection_wal_frontier_shard(&commit.transaction_id)?;
-        if shard != receipt.shard {
-            return Err(BorsukError::InvalidStorage(format!(
-                "collection transaction `{}` does not match its reservation shard",
-                commit.transaction_id
-            )));
-        }
-        let head_path = collection_wal_frontier_head_path(shard)?;
-        let mut head = receipt.head.clone();
-        if let Some(existing) = head
-            .transactions
-            .iter()
-            .find(|existing| existing.transaction_id == commit.transaction_id)
-        {
-            if existing != commit {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "collection transaction `{}` conflicts with its published frontier entry",
-                    commit.transaction_id
-                )));
-            }
-            return Ok(CollectionWalCommitOutcome {
-                root_pressure: head.transactions.len()
-                    >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize,
-                successor: None,
-            });
-        }
-        let Some(reservation) = head
-            .reservations
-            .iter()
-            .find(|reservation| reservation.transaction_id == commit.transaction_id)
-        else {
-            return self
-                .append_collection_wal_transaction(commit)
-                .map(|root_pressure| CollectionWalCommitOutcome {
-                    root_pressure,
-                    successor: None,
-                });
-        };
-        if reservation.schema_fingerprint != commit.schema_fingerprint {
-            return Err(BorsukError::InvalidStorage(format!(
-                "collection transaction `{}` conflicts with its root reservation schema",
-                commit.transaction_id
-            )));
-        }
-        if reservation.expires_at_ms <= collection_wal_now_ms()? {
-            return Err(BorsukError::ConcurrentModification {
-                path: format!("{head_path}/EXPIRED"),
-            });
-        }
-        let mut successor = successor_transaction_id
-            .map(|transaction_id| -> Result<CollectionWalReservation> {
-                if transaction_id == commit.transaction_id {
-                    return Err(BorsukError::InvalidStorage(
-                        "collection WAL successor must use a new transaction id".to_string(),
-                    ));
-                }
-                if collection_wal_frontier_shard(transaction_id)? != shard {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "collection WAL successor `{transaction_id}` does not match shard {shard}"
-                    )));
-                }
-                if head
-                    .reservations
-                    .iter()
-                    .any(|entry| entry.transaction_id == transaction_id)
-                    || head
-                        .transactions
-                        .iter()
-                        .any(|entry| entry.transaction_id == transaction_id)
-                {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "collection WAL successor `{transaction_id}` already exists"
-                    )));
-                }
-                let expires_at_ms = collection_wal_now_ms()?
-                    .checked_add(COLLECTION_WAL_RESERVATION_TTL_MS)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "collection WAL reservation expiry exceeds u64".to_string(),
-                        )
-                    })?;
-                Ok(CollectionWalReservation {
-                    transaction_id: transaction_id.to_string(),
-                    schema_fingerprint: commit.schema_fingerprint.clone(),
-                    expires_at_ms,
-                })
-            })
-            .transpose()?;
-        if head
-            .reservations
-            .len()
-            .saturating_add(head.transactions.len())
-            >= COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize
-        {
-            successor = None;
-        }
-        head.generation = head.generation.checked_add(1).ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "collection WAL frontier generation exceeds u64".to_string(),
-            )
-        })?;
-        head.reservations
-            .retain(|reservation| reservation.transaction_id != commit.transaction_id);
-        if let Some(successor) = &successor {
-            head.reservations.push(successor.clone());
-            head.reservations
-                .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
-        }
-        head.transactions.push(commit.clone());
-        head.transactions
-            .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
-        let head_bytes = collection_wal_frontier_head_bytes(&head, shard)?;
-        match self.write_coordination_object(&head_path, &head_bytes, Some(receipt.version.clone()))
-        {
-            Ok(version) => Ok(CollectionWalCommitOutcome {
-                root_pressure: head.transactions.len()
-                    >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize,
-                successor: successor.map(|_| CollectionWalReservationReceipt {
-                    shard,
-                    head,
-                    version,
-                    admission_bytes_written: 0,
-                }),
-            }),
-            Err(
-                BorsukError::ConcurrentModification { .. }
-                | BorsukError::ObjectStoreRetryable { .. },
-            ) => self
-                .append_collection_wal_transaction(commit)
-                .map(|root_pressure| CollectionWalCommitOutcome {
-                    root_pressure,
-                    successor: None,
-                }),
-            Err(error) => Err(error),
-        }
-    }
-
-    fn append_collection_wal_transaction(&self, commit: &CollectionCommit) -> Result<bool> {
-        const MAX_CAS_ATTEMPTS: usize = 128;
-        let shard = collection_wal_frontier_shard(&commit.transaction_id)?;
-        let head_path = collection_wal_frontier_head_path(shard)?;
-        for _ in 0..MAX_CAS_ATTEMPTS {
-            let current = match self.read_coordination_object(&head_path) {
-                Ok(current) => current,
-                Err(BorsukError::ObjectStoreRetryable { .. }) => continue,
-                Err(error) => return Err(error),
-            };
-            let (mut head, version) = match current {
-                Some(current) => {
-                    let head =
-                        collection_wal_frontier_head_from_slice(&current.bytes, &head_path, shard)?;
-                    (head, Some(current.version))
-                }
-                None => (
-                    CollectionWalFrontierHead {
-                        generation: 0,
-                        reservations: Vec::new(),
-                        transactions: Vec::new(),
-                    },
-                    None,
-                ),
-            };
-            if let Some(existing) = head
-                .transactions
-                .iter()
-                .find(|existing| existing.transaction_id == commit.transaction_id)
-            {
-                if existing != commit {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "collection transaction `{}` conflicts with its published frontier entry",
-                        commit.transaction_id
-                    )));
-                }
-                return Ok(head.transactions.len()
-                    >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize);
-            }
-            let Some(reservation) = head
-                .reservations
-                .iter()
-                .find(|reservation| reservation.transaction_id == commit.transaction_id)
-            else {
-                return Err(BorsukError::ConcurrentModification {
-                    path: format!("{head_path}/RESERVATION"),
-                });
-            };
-            if reservation.schema_fingerprint != commit.schema_fingerprint {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "collection transaction `{}` conflicts with its root reservation schema",
-                    commit.transaction_id
-                )));
-            }
-            if reservation.expires_at_ms <= collection_wal_now_ms()? {
-                return Err(BorsukError::ConcurrentModification {
-                    path: format!("{head_path}/EXPIRED"),
-                });
-            }
-            head.generation = head.generation.checked_add(1).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "collection WAL frontier generation exceeds u64".to_string(),
-                )
-            })?;
-            head.reservations
-                .retain(|reservation| reservation.transaction_id != commit.transaction_id);
-            head.transactions.push(commit.clone());
-            head.transactions
-                .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
-            let head_bytes = collection_wal_frontier_head_bytes(&head, shard)?;
-            match self.write_coordination_object(&head_path, &head_bytes, version) {
-                Ok(_) => {
-                    return Ok(head.transactions.len()
-                        >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize);
-                }
-                Err(
-                    BorsukError::ConcurrentModification { .. }
-                    | BorsukError::ObjectStoreRetryable { .. },
-                ) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(BorsukError::ConcurrentModification { path: head_path })
     }
 
     pub(crate) fn collection_wal_transactions_snapshot_with_retries(
@@ -2609,7 +2250,7 @@ impl Storage {
         let child_routing_level = routing_level.checked_sub(1).ok_or_else(|| {
             BorsukError::InvalidStorage("parent routing layer must be above L0".to_string())
         })?;
-        let bytes = routing_layer_page_index_to_parquet(manifest, child_routing_level, child_refs)?;
+        let bytes = routing_parent_page_to_parquet(manifest, child_routing_level, child_refs)?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
         let path = Manifest::routing_layer_page_content_file_name(routing_level, &checksum);
         if !self.exists(&path)? {
@@ -2823,43 +2464,6 @@ impl Storage {
         self.write_bytes_with_mode(relative, bytes, PutMode::Create)
     }
 
-    pub(crate) fn create_pending_collection_commit(
-        &self,
-        pending: &PendingCollectionCommit,
-    ) -> Result<()> {
-        let path = pending_collection_commit_path(&pending.epoch, &pending.commit.transaction_id)?;
-        let bytes = pending_collection_commit_bytes(pending)?;
-        match self.write_bytes_if_absent(&path, &bytes) {
-            Ok(_) => Ok(()),
-            Err(
-                error @ (BorsukError::ConcurrentModification { .. }
-                | BorsukError::ObjectStoreRetryable { .. }),
-            ) => {
-                let Some(existing) = self.read_coordination_object(&path)? else {
-                    return Err(error);
-                };
-                let existing = pending_collection_commit_from_slice(&existing.bytes, &path)?;
-                if existing.epoch == pending.epoch && existing.commit == pending.commit {
-                    Ok(())
-                } else {
-                    Err(BorsukError::InvalidStorage(format!(
-                        "pending collection commit `{path}` conflicts with existing content"
-                    )))
-                }
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    /// Write a content-addressed object: the caller guarantees `relative` is
-    /// derived from a hash of `bytes`, so any object already living at that path
-    /// is byte-identical. Two writers racing to publish the same logical write
-    /// (e.g. concurrent WAL appends at the same version/seq) therefore target
-    /// distinct paths, and a benign re-write of an existing content-addressed
-    /// object is a no-op rather than a clobber. Uses write-if-absent so a loser
-    /// never overwrites (and corrupts) a winner's committed object; an
-    /// `AlreadyExists` conflict is expected and swallowed. Large objects fall
-    /// back to multipart — an overwrite there is still safe because the content
     /// (hence the bytes on disk) is identical.
     pub(crate) fn write_bytes_content_addressed(&self, relative: &str, bytes: &[u8]) -> Result<()> {
         if bytes.len() > MULTIPART_WRITE_THRESHOLD_BYTES {
@@ -4700,11 +4304,9 @@ mod tests {
     };
     use crate::{
         collection_control::{
-            COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD,
-            COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD, CollectionCommit,
-            CollectionDescriptorRef, CollectionWalFrontierHead, CollectionWalReservation,
-            PRIMARY_MODALITY, PendingCollectionCommit, collection_wal_frontier_head_bytes,
-            collection_wal_frontier_head_path, collection_wal_frontier_shard,
+            CollectionWalFrontierHead, CollectionWalReservation, PRIMARY_MODALITY,
+            collection_wal_frontier_head_bytes, collection_wal_frontier_head_path,
+            collection_wal_frontier_shard,
         },
         error::Result,
         index::IndexConfig,
@@ -4729,6 +4331,41 @@ mod tests {
         let first = super::process_backing_get_admission();
         let second = super::process_backing_get_admission();
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn direct_put_payload_counter_overflow_fails_before_forwarding() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let inner = Arc::new(InMemory::new());
+            let counters = Arc::new(RequestCounters::default());
+            counters
+                .put_payload_bytes
+                .store(u64::MAX - 1, Ordering::Relaxed);
+            let store = super::CountingObjectStore::new(
+                Arc::clone(&inner) as Arc<dyn ObjectStore>,
+                Arc::clone(&counters),
+                Arc::new(CacheReadCounters::default()),
+            );
+            let path = object_store::path::Path::from("overflow-must-not-land");
+
+            let error = store
+                .put(&path, bytes::Bytes::from_static(b"xx").into())
+                .await
+                .unwrap_err();
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("PUT payload byte counter overflow")
+            );
+            assert!(inner.head(&path).await.is_err());
+            assert_eq!(counters.put_payload_bytes(), u64::MAX - 1);
+            assert_eq!(counters.snapshot().puts, 0);
+        });
     }
 
     #[test]
@@ -5380,22 +5017,6 @@ mod tests {
         );
     }
 
-    fn root_commit(transaction_id: &str) -> CollectionCommit {
-        CollectionCommit {
-            transaction_id: transaction_id.to_string(),
-            snapshot_generation: 1,
-            schema_fingerprint: "a".repeat(64),
-            descriptors: vec![CollectionDescriptorRef {
-                modality: PRIMARY_MODALITY.to_string(),
-                prefix: String::new(),
-                descriptor_path: format!(
-                    "transactions/{transaction_id}/descriptors/descriptor.bin"
-                ),
-                descriptor_checksum: "b".repeat(64),
-            }],
-        }
-    }
-
     #[test]
     fn exact_manifest_ref_survives_newer_manifest_staging() {
         let dir = tempfile::tempdir().unwrap();
@@ -5421,51 +5042,6 @@ mod tests {
             staged.reference.resident_routing_bytes_estimate >= loaded.resident_bytes_estimate()
         );
         assert!(staged.reference.resident_bytes_estimate >= paged.resident_bytes_estimate());
-    }
-
-    #[test]
-    fn pending_collection_commit_create_is_one_immutable_put() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = file_uri(dir.path());
-        let storage = Storage::from_uri(&uri).unwrap();
-        let pending = PendingCollectionCommit {
-            epoch: "epoch-1".to_string(),
-            created_at_ms: 123_456,
-            commit: root_commit("pending-1"),
-        };
-        let before = storage.request_counts();
-
-        storage.create_pending_collection_commit(&pending).unwrap();
-
-        let first = storage.request_counts().delta(&before);
-        assert_eq!(first.puts, 1);
-        assert_eq!(first.gets, 0);
-        assert_eq!(first.heads, 0);
-        storage.create_pending_collection_commit(&pending).unwrap();
-
-        let mut retry = pending.clone();
-        retry.created_at_ms += 1;
-        storage.create_pending_collection_commit(&retry).unwrap();
-
-        let mut conflict = pending.clone();
-        conflict.commit.descriptors[0].descriptor_checksum = "c".repeat(64);
-        let error = storage
-            .create_pending_collection_commit(&conflict)
-            .unwrap_err();
-        assert!(error.to_string().contains("conflicts"), "{error}");
-
-        let path = crate::collection_control::pending_collection_commit_path(
-            &pending.epoch,
-            &pending.commit.transaction_id,
-        )
-        .unwrap();
-        let stored = storage.read_coordination_object(&path).unwrap().unwrap();
-        assert_eq!(
-            crate::collection_control::pending_collection_commit_from_slice(&stored.bytes, &path,)
-                .unwrap(),
-            pending,
-            "a retry or conflicting create must not replace the first durable object"
-        );
     }
 
     #[test]
@@ -5601,250 +5177,6 @@ mod tests {
         assert_eq!(second.bytes, b"immutable bytes");
         assert_eq!(second_requests.heads, 0);
         assert_eq!(second_requests.gets, 1);
-    }
-
-    #[test]
-    fn pending_collection_commit_discovery_fails_closed_above_hard_bound() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = file_uri(dir.path());
-        let storage = Storage::from_uri(&uri).unwrap();
-        let schema_fingerprint = "a".repeat(64);
-        let epoch = format!("schema-{schema_fingerprint}");
-        for ordinal in 0..=2_000 {
-            storage
-                .create_pending_collection_commit(&PendingCollectionCommit {
-                    epoch: epoch.clone(),
-                    created_at_ms: 1,
-                    commit: root_commit(&format!("bounded-pending-{ordinal}")),
-                })
-                .unwrap();
-        }
-
-        let error = storage
-            .pending_collection_commits_for_schema(&schema_fingerprint)
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("backlog exceeds 2000"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn collection_wal_frontier_soft_pressure_and_hard_admission_are_exact() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = file_uri(dir.path());
-        let storage = Storage::from_uri(&uri).unwrap();
-        let target_shard = 0;
-        let transaction_ids = (0_u64..)
-            .map(|value| format!("bounded-root-{value}"))
-            .filter(|transaction_id| {
-                collection_wal_frontier_shard(transaction_id).unwrap() == target_shard
-            })
-            .take(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize + 1)
-            .collect::<Vec<_>>();
-
-        for (ordinal, transaction_id) in transaction_ids
-            .iter()
-            .take(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize)
-            .enumerate()
-        {
-            storage
-                .reserve_collection_wal_transaction(transaction_id, &"a".repeat(64))
-                .unwrap();
-            let pressure = storage
-                .append_collection_wal_transaction(&root_commit(transaction_id))
-                .unwrap();
-            assert_eq!(
-                pressure,
-                ordinal + 1 >= COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD as usize
-            );
-        }
-
-        let error = storage
-            .reserve_collection_wal_transaction(
-                &transaction_ids[COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize],
-                &"a".repeat(64),
-            )
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            crate::BorsukError::ConcurrentModification { path }
-                if path.ends_with("/CAPACITY")
-        ));
-
-        let consumed = transaction_ids
-            .iter()
-            .take(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize)
-            .cloned()
-            .collect();
-        storage
-            .prune_collection_wal_transactions(&consumed)
-            .unwrap();
-        storage
-            .reserve_collection_wal_transaction(
-                &transaction_ids[COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize],
-                &"a".repeat(64),
-            )
-            .unwrap();
-        assert!(
-            !storage
-                .append_collection_wal_transaction(&root_commit(
-                    &transaction_ids[COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize],
-                ),)
-                .unwrap(),
-            "pruning must reset the exact shard count below soft pressure"
-        );
-    }
-
-    #[test]
-    fn collection_commit_requires_a_live_root_reservation() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = file_uri(dir.path());
-        let storage = Storage::from_uri(&uri).unwrap();
-        let commit = root_commit("reservation-fence");
-
-        let error = storage
-            .append_collection_wal_transaction(&commit)
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            crate::BorsukError::ConcurrentModification { path }
-                if path.ends_with("/RESERVATION")
-        ));
-
-        storage
-            .reserve_collection_wal_transaction(&commit.transaction_id, &commit.schema_fingerprint)
-            .unwrap();
-        storage.append_collection_wal_transaction(&commit).unwrap();
-    }
-
-    #[test]
-    fn reservation_receipt_commits_without_rereading_the_root_head() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = file_uri(dir.path());
-        let storage = Storage::from_uri(&uri).unwrap();
-        let commit = root_commit("reservation-receipt");
-        let receipt = storage
-            .reserve_collection_wal_transaction(&commit.transaction_id, &commit.schema_fingerprint)
-            .unwrap();
-
-        let before = storage.request_counts();
-        storage
-            .create_collection_commit_from_reservation(&commit, &receipt, None)
-            .unwrap();
-        let requests = storage.request_counts().delta(&before);
-
-        assert_eq!(requests.gets, 0, "happy-path commit must reuse its receipt");
-    }
-
-    #[test]
-    fn commit_carries_one_successor_reservation_without_a_root_reread() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = file_uri(dir.path());
-        let storage = Storage::from_uri(&uri).unwrap();
-        let first = root_commit("carried-reservation-first");
-        let shard = collection_wal_frontier_shard(&first.transaction_id).unwrap();
-        let successor_id = (0_u64..)
-            .map(|value| format!("carried-reservation-next-{value}"))
-            .find(|candidate| collection_wal_frontier_shard(candidate).unwrap() == shard)
-            .unwrap();
-        let successor = root_commit(&successor_id);
-        let first_receipt = storage
-            .reserve_collection_wal_transaction(&first.transaction_id, &first.schema_fingerprint)
-            .unwrap();
-
-        let before = storage.request_counts();
-        let outcome = storage
-            .create_collection_commit_from_reservation(
-                &first,
-                &first_receipt,
-                Some(&successor.transaction_id),
-            )
-            .unwrap();
-        let requests = storage.request_counts().delta(&before);
-        assert_eq!(requests.gets, 0);
-        let successor_receipt = outcome.successor.unwrap();
-
-        let before_successor = storage.request_counts();
-        storage
-            .create_collection_commit_from_reservation(&successor, &successor_receipt, None)
-            .unwrap();
-        let successor_requests = storage.request_counts().delta(&before_successor);
-        assert_eq!(successor_requests.gets, 0);
-    }
-
-    #[test]
-    fn commit_at_hard_capacity_drops_successor_without_failing() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = file_uri(dir.path());
-        let storage = Storage::from_uri(&uri).unwrap();
-        let shard = 0;
-        let transaction_ids = (0_u64..)
-            .map(|value| format!("carried-capacity-{value}"))
-            .filter(|transaction_id| {
-                collection_wal_frontier_shard(transaction_id).unwrap() == shard
-            })
-            .take(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize + 1)
-            .collect::<Vec<_>>();
-        for transaction_id in transaction_ids
-            .iter()
-            .take(COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize - 1)
-        {
-            let commit = root_commit(transaction_id);
-            let receipt = storage
-                .reserve_collection_wal_transaction(transaction_id, &commit.schema_fingerprint)
-                .unwrap();
-            storage
-                .create_collection_commit_from_reservation(&commit, &receipt, None)
-                .unwrap();
-        }
-        let current = root_commit(
-            &transaction_ids[COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize - 1],
-        );
-        let receipt = storage
-            .reserve_collection_wal_transaction(
-                &current.transaction_id,
-                &current.schema_fingerprint,
-            )
-            .unwrap();
-        let outcome = storage
-            .create_collection_commit_from_reservation(
-                &current,
-                &receipt,
-                Some(
-                    &transaction_ids[COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize],
-                ),
-            )
-            .unwrap();
-
-        assert!(outcome.successor.is_none());
-    }
-
-    #[test]
-    fn stale_reservation_receipt_rebases_after_same_shard_contention() {
-        let dir = tempfile::tempdir().unwrap();
-        let uri = file_uri(dir.path());
-        let storage = Storage::from_uri(&uri).unwrap();
-        let first = root_commit("reservation-rebase-first");
-        let shard = collection_wal_frontier_shard(&first.transaction_id).unwrap();
-        let second_id = (0_u64..)
-            .map(|value| format!("reservation-rebase-second-{value}"))
-            .find(|candidate| collection_wal_frontier_shard(candidate).unwrap() == shard)
-            .unwrap();
-        let second = root_commit(&second_id);
-        let first_receipt = storage
-            .reserve_collection_wal_transaction(&first.transaction_id, &first.schema_fingerprint)
-            .unwrap();
-        let second_receipt = storage
-            .reserve_collection_wal_transaction(&second.transaction_id, &second.schema_fingerprint)
-            .unwrap();
-
-        storage
-            .create_collection_commit_from_reservation(&first, &first_receipt, None)
-            .unwrap();
-        storage
-            .create_collection_commit_from_reservation(&second, &second_receipt, None)
-            .unwrap();
     }
 
     #[test]

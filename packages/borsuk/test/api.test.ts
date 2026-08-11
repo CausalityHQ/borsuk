@@ -1446,9 +1446,6 @@ test("searchWithReport exposes query counters", async () => {
   assert.ok(report.elapsedMs >= 0);
   assert.equal(report.globalBaseApproximateUs, 0);
   assert.equal(report.globalBaseExactRerankUs, 0);
-  assert.equal(report.globalDeltaApproximateUs, 0);
-  assert.equal(report.globalDeltaExactRerankUs, 0);
-  assert.equal(report.globalDeltaWaitUs, 0);
 });
 
 test("searchWithReportBuffer accepts contiguous Float32Array query", async () => {
@@ -2504,7 +2501,7 @@ test("gcObsoleteSegments removes cached inactive objects", async () => {
   assert.equal(parquetFiles(join(cache, "graphs", "L1")).length, 0);
 });
 
-test("delete hides records and reports tombstones", async () => {
+test("delete hides records and returns a request-local idempotent receipt", async () => {
   const dir = mkdtempSync(join(tmpdir(), "borsuk-ts-delete-"));
   const uri = localUri(dir);
   const index = await create({ uri, metric: "euclidean", dimensions: 2, segmentMaxVectors: 4 });
@@ -2517,9 +2514,8 @@ test("delete hides records and reports tombstones", async () => {
     { ids: ["a", "b", "c"] },
   );
 
-  const report = await index.delete(["b"]);
-  assert.equal(report.deleted, 1);
-  assert.equal(report.totalTombstoned, 1);
+  const report = await index.delete(["b", "b"]);
+  assert.equal(report.idsSubmitted, 1);
   assert.equal(report.published, true);
   assert.ok(report.requests.total > 0);
 
@@ -2529,7 +2525,7 @@ test("delete hides records and reports tombstones", async () => {
 
   // Idempotent: re-deleting publishes nothing new.
   const again = await index.delete(["b"]);
-  assert.equal(again.deleted, 0);
+  assert.equal(again.idsSubmitted, 1);
   assert.equal(again.published, false);
 
   // Tombstone survives a reopen.

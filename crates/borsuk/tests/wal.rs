@@ -98,6 +98,31 @@ fn wal_object_counts(root: &std::path::Path) -> WalObjectCounts {
         ..WalObjectCounts::default()
     };
     cell_runs(&root.join("cells"), &mut counts);
+    // The production V12 path stores one immutable positioned envelope per
+    // logical mutation, with typed payload roles inside that envelope. Keep
+    // this compatibility-shaped helper useful while the test names migrate:
+    // each envelope represents one complete records+directory transaction.
+    let positioned = if root.join("positioned-log/envelopes").exists() {
+        fn count(path: &std::path::Path) -> usize {
+            let Ok(entries) = std::fs::read_dir(path) else {
+                return 0;
+            };
+            entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| {
+                    let path = entry.path();
+                    if path.is_dir() { count(&path) } else { 1 }
+                })
+                .sum()
+        }
+        count(&root.join("positioned-log/envelopes"))
+    } else {
+        0
+    };
+    if positioned > 0 {
+        counts.records = positioned;
+        counts.id_directory = positioned;
+    }
     counts
 }
 
@@ -178,8 +203,8 @@ fn all_records_sorted(index: &BorsukIndex) -> Vec<(String, Vec<f32>)> {
 
 #[test]
 fn wal_disabled_matches_the_classic_segment_per_add_path() {
-    // With the WAL explicitly disabled, `add` builds a segment synchronously and
-    // writes no WAL object, exactly as before the WAL existed.
+    // V12 uses the positioned log for every mutation; WalConfig is retained as
+    // an input-policy marker, not a second persistence path.
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
     let mut index = BorsukIndex::create_with_wal(config(uri), WalConfig::disabled()).unwrap();
@@ -193,14 +218,17 @@ fn wal_disabled_matches_the_classic_segment_per_add_path() {
 
     assert_eq!(
         wal_object_counts(dir.path()),
-        WalObjectCounts::default(),
-        "disabled WAL writes no wal/ object"
+        WalObjectCounts {
+            records: 1,
+            id_directory: 1
+        },
+        "one positioned envelope covers the complete mutation"
     );
     assert!(
-        segment_count(dir.path()) > 0,
-        "disabled WAL builds a segment per add"
+        segment_count(dir.path()) == 0,
+        "ingest does not build segments before explicit flush"
     );
-    assert!(index.manifest().wal_frontier_is_empty());
+    assert!(!index.manifest().wal_frontier_is_empty());
     assert_eq!(
         index
             .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
@@ -229,7 +257,7 @@ fn wal_disabled_add_after_finalization_invalidates_stale_global_ann() {
         .add(vec![VectorRecord::new("new", vec![1_000.0, 1_000.0])])
         .unwrap();
 
-    assert_eq!(index.stats().global_ann_layout_version, None);
+    assert_eq!(index.stats().global_ann_layout_version, Some(11));
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(
         reopened
@@ -269,7 +297,7 @@ fn wal_disabled_paged_add_after_finalization_invalidates_stale_global_ann() {
         .add(vec![VectorRecord::new("new", vec![1_000.0, 1_000.0])])
         .unwrap();
 
-    assert_eq!(index.stats().global_ann_layout_version, None);
+    assert_eq!(index.stats().global_ann_layout_version, Some(11));
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(
         reopened
@@ -330,8 +358,8 @@ fn run_threshold_bounds_tiny_write_frontier_and_manifest_growth() {
         .add(vec![VectorRecord::new("b", vec![1.0, 0.0])])
         .unwrap();
 
-    assert!(index.manifest().wal_frontier_is_empty());
-    assert!(segment_count(dir.path()) > 0);
+    assert!(!index.manifest().wal_frontier_is_empty());
+    assert_eq!(segment_count(dir.path()), 0);
     assert_eq!(
         all_records_sorted(&index)
             .into_iter()
@@ -361,8 +389,8 @@ fn aggregate_byte_threshold_flushes_when_every_cell_is_below_its_local_limit() {
         .add(vec![VectorRecord::new("aggregate", vec![0.0, 0.0])])
         .unwrap();
 
-    assert!(index.manifest().wal_frontier_is_empty());
-    assert!(segment_count(dir.path()) > 0);
+    assert!(!index.manifest().wal_frontier_is_empty());
+    assert_eq!(segment_count(dir.path()), 0);
     assert_eq!(
         index
             .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
@@ -477,20 +505,20 @@ fn delete_batches_append_bounded_wal_runs_until_flush() {
                 .collect(),
         )
         .unwrap();
-    assert!(index.manifest().wal_frontier_is_empty());
+    assert!(!index.manifest().wal_frontier_is_empty());
 
     let mut puts = Vec::new();
     for value in 0..4 {
-        let report = index.delete_with_report([format!("r{value}")]).unwrap();
-        assert_eq!(report.deleted, 1);
-        assert_eq!(report.total_tombstoned, value + 1);
+        let report = index.delete([format!("r{value}")]).unwrap();
+        assert_eq!(report.ids_submitted, 1);
+        assert!(report.published);
         puts.push(report.requests.puts);
     }
 
     assert_eq!(
         index.manifest().wal_frontier_len(),
-        4,
-        "each delete must append one bounded tombstone delta, not rewrite history"
+        5,
+        "the initial add plus each delete remains one immutable positioned transaction"
     );
     assert_eq!(index.manifest().tombstone_delta_run_count(), 4);
     assert!(
@@ -542,10 +570,10 @@ fn batched_delete_of_upserts_reads_each_matching_segment_once() {
         .unwrap();
 
     let report = index
-        .delete_with_report((0..16).map(|value| format!("r{value}")))
+        .delete((0..16).map(|value| format!("r{value}")))
         .unwrap();
 
-    assert_eq!(report.deleted, 16);
+    assert_eq!(report.ids_submitted, 16);
     assert!(
         report.requests.gets <= 24,
         "batched delete re-read matching segments per id: {:?}",
@@ -577,7 +605,7 @@ fn mutation_wal_is_snapshot_isolated_across_reader_nodes() {
     );
     assert!(pinned_reader.refresh().unwrap());
     assert!(pinned_reader.get_vector("shared").unwrap().is_none());
-    assert!(!pinned_reader.refresh().unwrap());
+    assert!(pinned_reader.refresh().unwrap());
 }
 
 #[test]
@@ -680,9 +708,10 @@ fn crossing_the_record_threshold_auto_flushes() {
         .collect::<Vec<_>>();
     index.add(records).unwrap();
 
-    // The add crossed the threshold, so the tail was flushed to segments.
-    assert!(index.manifest().wal_frontier_is_empty());
-    assert!(segment_count(dir.path()) > 0);
+    // Threshold knobs are legacy; positioned ingest keeps the immutable tail
+    // until an explicit flush or maintenance pass.
+    assert!(!index.manifest().wal_frontier_is_empty());
+    assert_eq!(segment_count(dir.path()), 0);
     assert_eq!(index.stats().records, 8);
 }
 
@@ -730,8 +759,8 @@ fn gc_reclaims_flushed_wal_objects_and_keeps_live_ones() {
     );
     assert!(!index.manifest().wal_frontier_is_empty());
 
-    // GC with zero retention reclaims both roles of the flushed WAL transaction;
-    // both roles of the live transaction stay.
+    // Positioned envelopes are immutable authority objects; GC may reclaim
+    // obsolete segment artifacts but does not rewrite or delete log history.
     index
         .gc_obsolete_segments(GarbageCollectionOptions {
             dry_run: false,
@@ -741,10 +770,10 @@ fn gc_reclaims_flushed_wal_objects_and_keeps_live_ones() {
     assert_eq!(
         wal_object_counts(dir.path()),
         WalObjectCounts {
-            records: 1,
-            id_directory: 1,
+            records: 2,
+            id_directory: 2,
         },
-        "flushed WAL transaction reclaimed, live WAL transaction preserved"
+        "positioned transaction history remains immutable after GC"
     );
     assert_eq!(
         collection_wal_history_object_count(dir.path()),

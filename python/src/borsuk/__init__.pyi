@@ -286,9 +286,6 @@ class SearchReport:
     global_scan_chunks_searched: int
     global_base_approximate_us: int
     global_base_exact_rerank_us: int
-    global_delta_approximate_us: int
-    global_delta_exact_rerank_us: int
-    global_delta_wait_us: int
     resident_bytes_estimate: int
     collection_resident_bytes: int
     retained_bytes: int
@@ -346,8 +343,7 @@ class RebuildReport:
     def __repr__(self) -> str: ...
 
 class DeleteReport:
-    deleted: int
-    total_tombstoned: int
+    ids_submitted: int
     published: bool
     requests: RequestCounts
     def __repr__(self) -> str: ...

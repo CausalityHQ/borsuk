@@ -284,8 +284,8 @@ fn real_index_writes_are_traced_at_the_common_storage_boundary() {
                     })
             })
             .count(),
-        1,
-        "one logical mutation publishes exactly one immutable collection commit"
+        0,
+        "the S3-only positioned path must not publish a legacy collection commit marker"
     );
     assert_eq!(
         csv.lines()
@@ -300,13 +300,16 @@ fn real_index_writes_are_traced_at_the_common_storage_boundary() {
         0,
         "ordinary publication must not coordinate through a mutable WAL frontier"
     );
-    assert!(csv.lines().any(|line| {
-        let fields = line.split(',').collect::<Vec<_>>();
-        fields.get(1) == Some(&"wal_run")
-            && fields
-                .get(2)
-                .is_some_and(|path| path.starts_with("cells/") && path.contains("/wal/"))
-    }));
+    assert!(
+        !csv.lines().any(|line| {
+            let fields = line.split(',').collect::<Vec<_>>();
+            fields.get(1) == Some(&"wal_run")
+                && fields
+                    .get(2)
+                    .is_some_and(|path| path.starts_with("cells/") && path.contains("/wal/"))
+        }),
+        "local publication must not use the retired Cell-WAL write path"
+    );
     assert!(csv.contains(",normal_segment,segments/"));
     assert!(csv.contains(",graph_index,graphs/"));
     assert!(csv.contains(",exact_vectors,vectors/"));

@@ -5,6 +5,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use object_store::UpdateVersion;
 use rayon::prelude::*;
 
+use crate::positioned_log::{
+    authorized_transaction_receipt, validate_claim_authorization_envelope,
+};
 use crate::storage::Storage;
 use crate::{BorsukError, Result};
 
@@ -89,7 +92,7 @@ impl CellWalConfig {
 
 /// Stable object paths for one logical cell WAL lane.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CellWalObjectPaths {
+pub(crate) struct CellWalObjectPaths {
     cell: LogicalCellId,
     lane: u8,
 }
@@ -118,26 +121,6 @@ impl CellWalObjectPaths {
         format!("{}/HEAD", self.prefix())
     }
 
-    /// Transaction-scoped content-addressed immutable mutation run.
-    ///
-    /// The transaction namespace is correctness-critical: a new root
-    /// reservation must not reuse an old orphan with an expired object-store
-    /// timestamp while concurrent GC is deciding whether to reclaim it.
-    #[must_use]
-    pub fn run(
-        &self,
-        transaction_id: &str,
-        kind: CellWalRunKind,
-        checksum: &str,
-        extension: &str,
-    ) -> String {
-        format!(
-            "{}/runs/{}/transactions/{transaction_id}/{checksum}.{extension}",
-            self.prefix(),
-            kind.as_str()
-        )
-    }
-
     /// Transaction-scoped node linking a prepared run to the preceding head.
     #[must_use]
     pub fn frontier_node(&self, transaction_id: &str, checksum: &str) -> String {
@@ -150,7 +133,7 @@ impl CellWalObjectPaths {
 
 /// One immutable mutation run prepared in a cell lane.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct PreparedCellWalRun {
+pub(crate) struct PreparedCellWalRun {
     /// Transaction that owns this prepared run.
     pub transaction_id: String,
     /// Stable logical cell receiving the mutation.
@@ -176,7 +159,7 @@ pub struct PreparedCellWalRun {
 
 /// Content-addressed reference to one persistent frontier node.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CellWalFrontierRef {
+pub(crate) struct CellWalFrontierRef {
     /// Immutable node path.
     pub path: String,
     /// BLAKE3 checksum of the serialized node.
@@ -197,7 +180,7 @@ struct CellWalLaneHead {
 
 /// Immutable descriptor that becomes visible through one commit marker.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CellWalTransactionDescriptor {
+pub(crate) struct CellWalTransactionDescriptor {
     /// Stable transaction identity, derived from an idempotency key when given.
     pub transaction_id: String,
     /// Every prepared cell run made visible by the commit.
@@ -209,25 +192,9 @@ pub struct CellWalTransactionDescriptor {
     pub metadata: Vec<u8>,
 }
 
-/// Prepared transaction whose lane entries are reachable but not yet visible.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct PreparedCellWalTransaction {
-    /// Transaction identity.
-    pub transaction_id: String,
-    /// Immutable descriptor path.
-    pub descriptor_path: String,
-    /// Descriptor checksum to pin in the commit marker.
-    pub descriptor_checksum: String,
-    /// Prepared runs awaiting one atomic commit marker.
-    pub runs: Vec<PreparedCellWalRun>,
-    /// Caller-owned metadata pinned by the descriptor checksum.
-    #[serde(default)]
-    pub metadata: Vec<u8>,
-}
-
 /// Reference returned after an atomic cell-WAL commit.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CommittedCellWalTransaction {
+pub(crate) struct CommittedCellWalTransaction {
     /// Transaction identity.
     pub transaction_id: String,
     /// Immutable descriptor path.
@@ -276,7 +243,7 @@ struct CellWalClaimPage {
 
 /// Encoded mutation payload to prepare in one logical cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CellWalRunInput {
+pub(crate) struct CellWalRunInput {
     /// Logical cell receiving the run.
     pub cell: LogicalCellId,
     /// Logical payload role.
@@ -333,10 +300,10 @@ impl CellWalRunKind {
 ///
 /// This low-level handle is public so concurrency and failure-injection
 /// harnesses can verify the persistence protocol independently of indexing.
-pub struct CellWalStore {
+pub(crate) struct CellWalStore {
     storage: Storage,
     config: CellWalConfig,
-    writer_id: Vec<u8>,
+    source_epoch: u64,
 }
 
 pub(crate) struct CellWalClaimGuard {
@@ -344,6 +311,7 @@ pub(crate) struct CellWalClaimGuard {
     transaction_id: String,
     locks: Vec<CellWalHeldClaim>,
     transaction_committed: bool,
+    source_epoch: u64,
 }
 
 #[derive(Debug)]
@@ -390,15 +358,32 @@ impl CellWalClaimGuard {
                 })
                 .collect::<Result<Vec<_>>>()
         })?;
-        let mut checkpoint = pages
+        let mut checkpoint = CellWalClaimCheckpoint::new();
+        let mut owner_revisions = BTreeMap::<String, Option<String>>::new();
+        for (shard, lock) in pages
             .into_iter()
             .flatten()
             .flat_map(|page| page.slots.into_iter())
-            .filter_map(|(shard, lock)| match lock {
-                CellWalClaimLock::Available { revision } => Some((shard, revision)),
-                CellWalClaimLock::Owned { .. } => None,
-            })
-            .collect::<CellWalClaimCheckpoint>();
+        {
+            match lock {
+                CellWalClaimLock::Available { revision } => {
+                    checkpoint.insert(shard, revision);
+                }
+                CellWalClaimLock::Owned { transaction_id } => {
+                    let revision = if let Some(revision) = owner_revisions.get(&transaction_id) {
+                        revision.clone()
+                    } else {
+                        let revision =
+                            reclaim_claim_owner(&self.storage, self.source_epoch, &transaction_id)?;
+                        owner_revisions.insert(transaction_id.clone(), revision.clone());
+                        revision
+                    };
+                    if let Some(revision) = revision {
+                        checkpoint.insert(shard, revision);
+                    }
+                }
+            }
+        }
 
         // The current guard owns its slots, so the page snapshot cannot expose
         // their predecessors. Merge those fenced observations explicitly.
@@ -422,9 +407,56 @@ impl CellWalClaimGuard {
         self.release()
     }
 
+    /// Release exact-ID claims with the checksum of the positioned root that
+    /// authorizes the mutation as the durable revision.
+    pub(crate) fn finish_authorized(
+        &mut self,
+        source_epoch: u64,
+        shard: u8,
+        sequence: u64,
+        positioned_envelope_checksum: &str,
+    ) -> Result<CellWalClaimCheckpoint> {
+        // The positioned head CAS is irreversible: from this point Drop must
+        // never abort STATE or restore the predecessor revisions.
+        self.transaction_committed = true;
+        if source_epoch != self.source_epoch {
+            return Err(BorsukError::InvalidStorage(format!(
+                "positioned claim source epoch {source_epoch} differs from guard epoch {}",
+                self.source_epoch
+            )));
+        }
+        let claims = self.locks.drain(..).collect::<Vec<_>>();
+        let expected = claims
+            .iter()
+            .flat_map(|claim| claim.previous_revisions.iter().map(|(shard, _)| *shard))
+            .collect::<BTreeSet<_>>();
+        let released = release_claims(
+            &self.storage,
+            &self.transaction_id,
+            positioned_envelope_checksum,
+            claims,
+        );
+        if released.len() == expected.len() {
+            return Ok(released);
+        }
+        write_claim_authorization_receipt(
+            &self.storage,
+            source_epoch,
+            shard,
+            sequence,
+            &self.transaction_id,
+            positioned_envelope_checksum,
+        )?;
+        Ok(expected
+            .into_iter()
+            .map(|shard| (shard, positioned_envelope_checksum.to_string()))
+            .collect())
+    }
+
     fn release(&mut self) -> CellWalClaimCheckpoint {
         release_claims(
             &self.storage,
+            &self.transaction_id,
             &self.transaction_id,
             self.locks.drain(..).collect(),
         )
@@ -435,48 +467,33 @@ impl Drop for CellWalClaimGuard {
     fn drop(&mut self) {
         if !self.transaction_committed {
             let _ = abort_prepared_transaction(&self.storage, &self.transaction_id);
+            let _ = restore_claims(
+                &self.storage,
+                &self.transaction_id,
+                self.locks.drain(..).collect(),
+            );
+            return;
         }
         let _ = self.release();
     }
 }
 
 impl CellWalStore {
-    /// Construct a protocol handle for one stable writer identity.
-    pub fn new(
-        store: std::sync::Arc<dyn object_store::ObjectStore>,
-        uri: impl Into<String>,
-        config: CellWalConfig,
-        writer_id: impl Into<Vec<u8>>,
-    ) -> Result<Self> {
-        config.validate()?;
-        let writer_id = writer_id.into();
-        if writer_id.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "cell WAL writer id must not be empty".to_string(),
-            ));
-        }
-        Ok(Self {
-            storage: Storage::from_object_store(uri.into(), store)?,
-            config,
-            writer_id,
-        })
-    }
-
     pub(crate) fn from_storage(
         storage: Storage,
         config: CellWalConfig,
-        writer_id: Vec<u8>,
+        source_epoch: u64,
     ) -> Result<Self> {
         config.validate()?;
-        if writer_id.is_empty() {
+        if source_epoch == 0 {
             return Err(BorsukError::InvalidStorage(
-                "cell WAL writer id must not be empty".to_string(),
+                "cell WAL positioned source epoch must be positive".to_string(),
             ));
         }
         Ok(Self {
             storage,
             config,
-            writer_id,
+            source_epoch,
         })
     }
 
@@ -492,119 +509,11 @@ impl CellWalStore {
             transaction_id: transaction_id.to_string(),
             locks: Vec::with_capacity(shards.len()),
             transaction_committed: false,
+            source_epoch: self.source_epoch,
         };
-        guard.locks = acquire_claim_shards(&self.storage, transaction_id, &shards)?;
+        guard.locks =
+            acquire_claim_shards(&self.storage, self.source_epoch, transaction_id, &shards)?;
         Ok(guard)
-    }
-
-    /// Prepare every run and atomically expose the transaction.
-    pub fn commit(
-        &self,
-        transaction_id: &str,
-        inputs: &[CellWalRunInput],
-    ) -> Result<CommittedCellWalTransaction> {
-        self.commit_with_metadata(transaction_id, inputs, &[])
-    }
-
-    /// Prepare and atomically expose runs plus caller-owned metadata.
-    pub fn commit_with_metadata(
-        &self,
-        transaction_id: &str,
-        inputs: &[CellWalRunInput],
-        metadata: &[u8],
-    ) -> Result<CommittedCellWalTransaction> {
-        let prepared = self.prepare_transaction_with_metadata(transaction_id, inputs, metadata)?;
-        self.commit_prepared(&prepared)
-    }
-
-    /// Stage immutable runs and one checked descriptor for collection-root
-    /// authorization. The collection frontier is the visibility authority, so
-    /// this path deliberately omits lane heads and a second commit marker.
-    pub(crate) fn stage_root_authorized_with_metadata(
-        &self,
-        transaction_id: &str,
-        inputs: &[CellWalRunInput],
-        metadata: &[u8],
-        transaction_state_prepared: bool,
-    ) -> Result<CommittedCellWalTransaction> {
-        validate_transaction_id(transaction_id)?;
-        if inputs.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "cell WAL transaction must contain at least one run".to_string(),
-            ));
-        }
-        for input in inputs {
-            validate_cell_wal_run_extension(input.kind, &input.extension)?;
-        }
-        if !transaction_state_prepared {
-            ensure_prepared_transaction(&self.storage, transaction_id)?;
-        }
-        let lane = self.config.lane_for_writer(&self.writer_id)?;
-        let mut prepared = inputs
-            .iter()
-            .map(|input| {
-                let checksum = blake3::hash(&input.bytes).to_hex().to_string();
-                let paths = CellWalObjectPaths::new(input.cell, lane)?;
-                let path = paths.run(transaction_id, input.kind, &checksum, &input.extension);
-                Ok((
-                    PreparedCellWalRun {
-                        transaction_id: transaction_id.to_string(),
-                        cell: input.cell,
-                        lane,
-                        kind: input.kind,
-                        metadata: input.metadata.clone(),
-                        path,
-                        checksum,
-                        record_count: input.record_count,
-                        byte_len: input.bytes.len() as u64,
-                    },
-                    input.bytes.as_slice(),
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        prepared.sort_by_key(|(run, _)| (run.cell, run.lane, run.checksum.clone()));
-        let runs = prepared
-            .iter()
-            .map(|(run, _)| run.clone())
-            .collect::<Vec<_>>();
-        let descriptor = CellWalTransactionDescriptor {
-            transaction_id: transaction_id.to_string(),
-            runs: runs.clone(),
-            metadata: metadata.to_vec(),
-        };
-        let descriptor_bytes = transaction_descriptor_bytes(&descriptor)?;
-        let descriptor_checksum = blake3::hash(&descriptor_bytes).to_hex().to_string();
-        let descriptor_path =
-            format!("transactions/{transaction_id}/descriptors/{descriptor_checksum}.bin");
-        // Every immutable path and checksum is known before upload. Publish the
-        // checked descriptor alongside its payloads rather than after them; the
-        // later collection-root CAS still waits for both branches and remains
-        // the sole visibility boundary.
-        let (payloads, descriptor_upload) = crate::parallel::install_io(|| {
-            rayon::join(
-                || {
-                    prepared
-                        .par_iter()
-                        .map(|(run, bytes)| {
-                            self.storage.write_bytes_content_addressed(&run.path, bytes)
-                        })
-                        .collect::<Result<Vec<_>>>()
-                },
-                || {
-                    self.storage
-                        .write_bytes_content_addressed(&descriptor_path, &descriptor_bytes)
-                },
-            )
-        });
-        payloads?;
-        descriptor_upload?;
-        Ok(CommittedCellWalTransaction {
-            transaction_id: transaction_id.to_string(),
-            descriptor_path,
-            descriptor_checksum,
-            runs,
-            metadata: metadata.to_vec(),
-        })
     }
 
     pub(crate) fn live_staging_transaction_ids(&self) -> Result<BTreeSet<String>> {
@@ -638,481 +547,8 @@ impl CellWalStore {
         Ok(transaction_ids)
     }
 
-    /// Best-effort claim-owner finalization after collection-root visibility.
-    pub(crate) fn mark_root_authorized(
-        &self,
-        transaction: &CommittedCellWalTransaction,
-    ) -> Result<()> {
-        let state_path = transaction_state_path(&transaction.transaction_id);
-        let Some(state) = self.storage.read_coordination_object(&state_path)? else {
-            return Ok(());
-        };
-        let committed = CellWalTransactionState::Committed {
-            descriptor_path: transaction.descriptor_path.clone(),
-            descriptor_checksum: transaction.descriptor_checksum.clone(),
-        };
-        match transaction_state_from_slice(&state.bytes, &state_path)? {
-            CellWalTransactionState::Prepared { .. } => {
-                match self.storage.write_coordination_object(
-                    &state_path,
-                    &transaction_state_bytes(&committed)?,
-                    Some(state.version),
-                ) {
-                    Ok(_) | Err(BorsukError::ConcurrentModification { .. }) => Ok(()),
-                    Err(error) => Err(error),
-                }
-            }
-            CellWalTransactionState::Committed {
-                descriptor_path,
-                descriptor_checksum,
-            } if descriptor_path == transaction.descriptor_path
-                && descriptor_checksum == transaction.descriptor_checksum =>
-            {
-                Ok(())
-            }
-            other => Err(BorsukError::InvalidStorage(format!(
-                "root-authorized transaction `{}` has conflicting state {other:?}",
-                transaction.transaction_id
-            ))),
-        }
-    }
-
     /// Publish prepared lane entries and their immutable descriptor without
     /// making any run visible to readers.
-    pub fn prepare_transaction(
-        &self,
-        transaction_id: &str,
-        inputs: &[CellWalRunInput],
-    ) -> Result<PreparedCellWalTransaction> {
-        self.prepare_transaction_with_metadata(transaction_id, inputs, &[])
-    }
-
-    /// Publish prepared lane entries and a descriptor containing immutable
-    /// caller metadata without making the transaction visible.
-    pub fn prepare_transaction_with_metadata(
-        &self,
-        transaction_id: &str,
-        inputs: &[CellWalRunInput],
-        metadata: &[u8],
-    ) -> Result<PreparedCellWalTransaction> {
-        self.prepare_transaction_with_metadata_inner(transaction_id, inputs, metadata, true)
-    }
-
-    fn prepare_transaction_with_metadata_inner(
-        &self,
-        transaction_id: &str,
-        inputs: &[CellWalRunInput],
-        metadata: &[u8],
-        ensure_state: bool,
-    ) -> Result<PreparedCellWalTransaction> {
-        validate_transaction_id(transaction_id)?;
-        if inputs.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "cell WAL transaction must contain at least one run".to_string(),
-            ));
-        }
-        for input in inputs {
-            validate_cell_wal_run_extension(input.kind, &input.extension)?;
-        }
-        if ensure_state {
-            ensure_prepared_transaction(&self.storage, transaction_id)?;
-        }
-        let lane = self.config.lane_for_writer(&self.writer_id)?;
-        let mut prepared = inputs
-            .iter()
-            .map(|input| {
-                let checksum = blake3::hash(&input.bytes).to_hex().to_string();
-                let paths = CellWalObjectPaths::new(input.cell, lane)?;
-                let path = paths.run(transaction_id, input.kind, &checksum, &input.extension);
-                Ok((
-                    PreparedCellWalRun {
-                        transaction_id: transaction_id.to_string(),
-                        cell: input.cell,
-                        lane,
-                        kind: input.kind,
-                        metadata: input.metadata.clone(),
-                        path,
-                        checksum,
-                        record_count: input.record_count,
-                        byte_len: input.bytes.len() as u64,
-                    },
-                    input.bytes.as_slice(),
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        prepared.sort_by_key(|(run, _)| (run.cell, run.lane, run.checksum.clone()));
-        let runs = prepared
-            .iter()
-            .map(|(run, _)| run.clone())
-            .collect::<Vec<_>>();
-
-        if let Some(committed) = self.load_committed_transaction(transaction_id)? {
-            if committed.runs != runs || committed.metadata != metadata {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "idempotency transaction `{transaction_id}` was retried with different runs or metadata"
-                )));
-            }
-            return Ok(PreparedCellWalTransaction {
-                transaction_id: committed.transaction_id,
-                descriptor_path: committed.descriptor_path,
-                descriptor_checksum: committed.descriptor_checksum,
-                runs: committed.runs,
-                metadata: committed.metadata,
-            });
-        }
-
-        crate::parallel::install_io(|| {
-            prepared
-                .par_iter()
-                .map(|(run, bytes)| self.storage.write_bytes_content_addressed(&run.path, bytes))
-                .collect::<Result<Vec<_>>>()
-        })?;
-        let mut lane_groups = BTreeMap::<(LogicalCellId, u8), Vec<&PreparedCellWalRun>>::new();
-        for (run, _) in &prepared {
-            lane_groups
-                .entry((run.cell, run.lane))
-                .or_default()
-                .push(run);
-        }
-        let lane_groups = lane_groups.into_values().collect::<Vec<_>>();
-        let publication_results = crate::parallel::install_io(|| {
-            lane_groups
-                .par_iter()
-                .map(|runs| self.publish_prepared_runs(runs))
-                .collect::<Vec<_>>()
-        });
-        if publication_results.iter().any(Result::is_err) {
-            let published_runs = lane_groups
-                .iter()
-                .zip(&publication_results)
-                .filter(|(_, result)| result.is_ok())
-                .flat_map(|(runs, _)| runs.iter().copied())
-                .collect::<Vec<_>>();
-            let mut error = publication_results
-                .into_iter()
-                .find_map(Result::err)
-                .expect("at least one lane publication failed");
-            if let Err(cleanup_error) = self.rollback_prepared_runs(transaction_id, &published_runs)
-            {
-                error = cleanup_error;
-            }
-            return Err(error);
-        }
-
-        let descriptor = CellWalTransactionDescriptor {
-            transaction_id: transaction_id.to_string(),
-            runs: runs.clone(),
-            metadata: metadata.to_vec(),
-        };
-        let descriptor_bytes = transaction_descriptor_bytes(&descriptor)?;
-        let descriptor_checksum = blake3::hash(&descriptor_bytes).to_hex().to_string();
-        let descriptor_path =
-            format!("transactions/{transaction_id}/descriptors/{descriptor_checksum}.bin");
-        if let Err(error) = self
-            .storage
-            .write_bytes_content_addressed(&descriptor_path, &descriptor_bytes)
-        {
-            return match self
-                .rollback_prepared_runs(transaction_id, &runs.iter().collect::<Vec<_>>())
-            {
-                Ok(()) => Err(error),
-                Err(cleanup_error) => Err(cleanup_error),
-            };
-        }
-        Ok(PreparedCellWalTransaction {
-            transaction_id: transaction_id.to_string(),
-            descriptor_path,
-            descriptor_checksum,
-            runs,
-            metadata: metadata.to_vec(),
-        })
-    }
-
-    /// Atomically expose every run listed by a prepared descriptor.
-    pub fn commit_prepared(
-        &self,
-        prepared: &PreparedCellWalTransaction,
-    ) -> Result<CommittedCellWalTransaction> {
-        validate_transaction_id(&prepared.transaction_id)?;
-        let descriptor = self.storage.read_bytes_with_cache_status_and_checksum(
-            &prepared.descriptor_path,
-            &prepared.descriptor_checksum,
-        )?;
-        let descriptor =
-            transaction_descriptor_from_slice(&descriptor.bytes, &prepared.descriptor_path)?;
-        if descriptor.transaction_id != prepared.transaction_id
-            || descriptor.runs != prepared.runs
-            || descriptor.metadata != prepared.metadata
-        {
-            return Err(BorsukError::InvalidStorage(format!(
-                "prepared transaction `{}` does not match its descriptor",
-                prepared.transaction_id
-            )));
-        }
-        let committing = CellWalTransactionState::Committing {
-            descriptor_path: prepared.descriptor_path.clone(),
-            descriptor_checksum: prepared.descriptor_checksum.clone(),
-        };
-        let state_path = transaction_state_path(&prepared.transaction_id);
-        let state = self
-            .storage
-            .read_coordination_object(&state_path)?
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(format!(
-                    "prepared transaction `{}` has no fenced state",
-                    prepared.transaction_id
-                ))
-            })?;
-        let committing_version = match transaction_state_from_slice(&state.bytes, &state_path)? {
-            CellWalTransactionState::Prepared { .. } => self.storage.write_coordination_object(
-                &state_path,
-                &transaction_state_bytes(&committing)?,
-                Some(state.version),
-            )?,
-            CellWalTransactionState::Committing {
-                descriptor_path,
-                descriptor_checksum,
-            }
-            | CellWalTransactionState::Committed {
-                descriptor_path,
-                descriptor_checksum,
-            } if descriptor_path == prepared.descriptor_path
-                && descriptor_checksum == prepared.descriptor_checksum =>
-            {
-                state.version
-            }
-            CellWalTransactionState::Aborted => {
-                return Err(BorsukError::ConcurrentModification { path: state_path });
-            }
-            other => {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "transaction `{}` has conflicting fenced state {other:?}",
-                    prepared.transaction_id
-                )));
-            }
-        };
-        let marker = CellWalCommitMarker {
-            descriptor_path: prepared.descriptor_path.clone(),
-            descriptor_checksum: prepared.descriptor_checksum.clone(),
-        };
-        let marker_bytes = commit_marker_bytes(&marker)?;
-        let marker_path = commit_marker_path(&prepared.transaction_id);
-        match self
-            .storage
-            .write_coordination_object(&marker_path, &marker_bytes, None)
-        {
-            Ok(_) => {}
-            Err(BorsukError::ConcurrentModification { .. }) => {
-                let existing = self
-                    .storage
-                    .read_coordination_object(&marker_path)?
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(format!(
-                            "commit marker `{marker_path}` disappeared after create conflict"
-                        ))
-                    })?;
-                if existing.bytes != marker_bytes {
-                    return Err(BorsukError::InvalidStorage(format!(
-                        "transaction `{}` has a conflicting commit marker",
-                        prepared.transaction_id
-                    )));
-                }
-            }
-            Err(error) => return Err(error),
-        }
-        let committed = CellWalTransactionState::Committed {
-            descriptor_path: prepared.descriptor_path.clone(),
-            descriptor_checksum: prepared.descriptor_checksum.clone(),
-        };
-        let _ = self.storage.write_coordination_object(
-            &state_path,
-            &transaction_state_bytes(&committed)?,
-            Some(committing_version),
-        );
-        Ok(CommittedCellWalTransaction {
-            transaction_id: prepared.transaction_id.clone(),
-            descriptor_path: prepared.descriptor_path.clone(),
-            descriptor_checksum: prepared.descriptor_checksum.clone(),
-            runs: prepared.runs.clone(),
-            metadata: prepared.metadata.clone(),
-        })
-    }
-
-    fn publish_prepared_runs(&self, runs: &[&PreparedCellWalRun]) -> Result<()> {
-        const MAX_CAS_ATTEMPTS: usize = 128;
-        let Some(first) = runs.first() else {
-            return Ok(());
-        };
-        if runs
-            .iter()
-            .any(|run| run.cell != first.cell || run.lane != first.lane)
-        {
-            return Err(BorsukError::InvalidStorage(
-                "one lane publication group contains mixed cell or lane identities".to_string(),
-            ));
-        }
-        let paths = CellWalObjectPaths::new(first.cell, first.lane)?;
-        let head_path = paths.head();
-        let target_identities = runs
-            .iter()
-            .map(|run| cell_wal_run_identity(run))
-            .collect::<BTreeSet<_>>();
-        for _ in 0..MAX_CAS_ATTEMPTS {
-            let current = match self.storage.read_coordination_object(&head_path) {
-                Ok(current) => current,
-                Err(BorsukError::ObjectStoreRetryable { .. }) => continue,
-                Err(error) => return Err(error),
-            };
-            let (generation, mut previous, version) = match current {
-                Some(current) => {
-                    let head = lane_head_from_slice(&current.bytes, &head_path)?;
-                    if let Some(node) = &head.node {
-                        let mut current_runs = Vec::new();
-                        self.collect_frontier_runs(node, &mut current_runs)?;
-                        let matching_identities = current_runs
-                            .iter()
-                            .filter(|run| {
-                                run.transaction_id == first.transaction_id
-                                    && run.cell == first.cell
-                                    && run.lane == first.lane
-                            })
-                            .map(cell_wal_run_identity)
-                            .collect::<BTreeSet<_>>();
-                        if target_identities == matching_identities {
-                            return Ok(());
-                        }
-                        if !matching_identities.is_empty() {
-                            return Err(BorsukError::InvalidStorage(format!(
-                                "cell WAL transaction `{}` was retried with conflicting runs in cell {:?} lane {}",
-                                first.transaction_id, first.cell, first.lane
-                            )));
-                        }
-                    }
-                    (
-                        head.generation.checked_add(1).ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "cell WAL lane generation exceeds u64".to_string(),
-                            )
-                        })?,
-                        head.node,
-                        Some(current.version),
-                    )
-                }
-                None => (1, None, None),
-            };
-            for run in runs {
-                let node = CellWalFrontierNode {
-                    run: (*run).clone(),
-                    previous,
-                };
-                let node_bytes = frontier_node_bytes(&node)?;
-                let node_checksum = blake3::hash(&node_bytes).to_hex().to_string();
-                let node_ref = CellWalFrontierRef {
-                    path: paths.frontier_node(&run.transaction_id, &node_checksum),
-                    checksum: node_checksum,
-                };
-                self.storage
-                    .write_bytes_content_addressed(&node_ref.path, &node_bytes)?;
-                previous = Some(node_ref);
-            }
-            let head_bytes = lane_head_bytes(&CellWalLaneHead {
-                generation,
-                node: previous,
-            })?;
-            match self
-                .storage
-                .write_coordination_object(&head_path, &head_bytes, version)
-            {
-                Ok(_) => return Ok(()),
-                Err(
-                    BorsukError::ConcurrentModification { .. }
-                    | BorsukError::ObjectStoreRetryable { .. },
-                ) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(BorsukError::ConcurrentModification { path: head_path })
-    }
-
-    fn rollback_prepared_runs(
-        &self,
-        transaction_id: &str,
-        runs: &[&PreparedCellWalRun],
-    ) -> Result<()> {
-        let cells = runs
-            .iter()
-            .map(|run| run.cell)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let identities = runs
-            .iter()
-            .map(|run| cell_wal_run_identity(run))
-            .collect::<BTreeSet<_>>();
-        let prune_result = self.prune_consumed_runs(&cells, &identities);
-        let abort_result = abort_prepared_transaction(&self.storage, transaction_id);
-        prune_result?;
-        abort_result?;
-        Ok(())
-    }
-
-    /// Double-collect lane heads and return only atomically committed runs.
-    pub fn committed_runs_snapshot(
-        &self,
-        cells: &[LogicalCellId],
-    ) -> Result<Vec<PreparedCellWalRun>> {
-        Ok(self
-            .committed_transactions_snapshot(cells)?
-            .into_iter()
-            .flat_map(|transaction| transaction.runs)
-            .collect())
-    }
-
-    /// Double-collect lane heads and return complete committed transactions.
-    ///
-    /// A descriptor is admitted only when every run it lists is reachable in
-    /// the collected frontier. This prevents a reader from exposing a partial
-    /// multi-cell transaction if the supplied catalog omits a required cell or
-    /// a frontier is corrupt.
-    pub fn committed_transactions_snapshot(
-        &self,
-        cells: &[LogicalCellId],
-    ) -> Result<Vec<CommittedCellWalTransaction>> {
-        self.committed_transactions_snapshot_with_retries(cells)
-            .map(|(transactions, _)| transactions)
-    }
-
-    /// Double-collect committed transactions and report how many unstable
-    /// observations were retried before the returned snapshot stabilized.
-    pub fn committed_transactions_snapshot_with_retries(
-        &self,
-        cells: &[LogicalCellId],
-    ) -> Result<(Vec<CommittedCellWalTransaction>, usize)> {
-        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
-        for retries in 0..MAX_SNAPSHOT_ATTEMPTS {
-            let first = self.collect_heads(cells)?;
-            let mut prepared_runs = Vec::new();
-            for (_, head) in &first {
-                if let Some(node) = head.as_ref().and_then(|head| head.node.as_ref()) {
-                    self.collect_frontier_runs(node, &mut prepared_runs)?;
-                }
-            }
-            let mut transactions = self.filter_committed_transactions(&prepared_runs)?;
-            let second = self.collect_heads(cells)?;
-            if heads_match(&first, &second) {
-                transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
-                transactions.dedup_by(|left, right| left.transaction_id == right.transaction_id);
-                return Ok((transactions, retries));
-            }
-        }
-        Err(BorsukError::ConcurrentModification {
-            path: "cell WAL snapshot".to_string(),
-        })
-    }
-
-    /// Load an exact descriptor authorized by the collection frontier. The
-    /// descriptor itself does not grant visibility; the caller must have
-    /// validated the frontier entry that supplied this path and checksum.
     pub(crate) fn load_authorized_descriptor(
         &self,
         transaction_id: &str,
@@ -1501,26 +937,6 @@ impl CellWalStore {
         })
     }
 
-    fn filter_committed_transactions(
-        &self,
-        prepared_runs: &[PreparedCellWalRun],
-    ) -> Result<Vec<CommittedCellWalTransaction>> {
-        let reachable = prepared_runs.iter().collect::<HashSet<_>>();
-        let transaction_ids = prepared_runs
-            .iter()
-            .map(|run| run.transaction_id.clone())
-            .collect::<BTreeSet<_>>();
-        let mut committed = Vec::new();
-        for transaction_id in transaction_ids {
-            if let Some(transaction) = self.load_committed_transaction(&transaction_id)?
-                && transaction.runs.iter().all(|run| reachable.contains(run))
-            {
-                committed.push(transaction);
-            }
-        }
-        Ok(committed)
-    }
-
     fn load_committed_transaction(
         &self,
         transaction_id: &str,
@@ -1676,7 +1092,164 @@ fn finish_committing_transaction(
     Ok(())
 }
 
-fn reclaim_claim_owner(storage: &Storage, transaction_id: &str) -> Result<bool> {
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct PositionedClaimAuthorization {
+    layout: u16,
+    source_epoch: u64,
+    transaction_id: String,
+    transaction_digest: String,
+    shard: u8,
+    sequence: u64,
+    envelope_checksum: String,
+}
+
+fn claim_authorization_path(source_epoch: u64, transaction_id: &str) -> String {
+    let digest = blake3::hash(transaction_id.as_bytes()).to_hex().to_string();
+    format!(
+        "positioned-log/claim-authorizations/{source_epoch}/{}/{}.json",
+        &digest[..2],
+        digest
+    )
+}
+
+fn claim_authorization_bytes(
+    source_epoch: u64,
+    shard: u8,
+    sequence: u64,
+    transaction_id: &str,
+    envelope_checksum: &str,
+) -> Result<Vec<u8>> {
+    validate_transaction_id(transaction_id)?;
+    validate_cell_wal_checksum(
+        envelope_checksum,
+        "positioned envelope",
+        "claim authorization",
+    )?;
+    if source_epoch == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "positioned claim authorization source epoch must be positive".to_string(),
+        ));
+    }
+    if shard >= crate::positioned_log::SOURCE_SHARD_COUNT || sequence == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "positioned claim authorization has an invalid source position".to_string(),
+        ));
+    }
+    serde_json::to_vec(&PositionedClaimAuthorization {
+        layout: 1,
+        source_epoch,
+        transaction_id: transaction_id.to_string(),
+        transaction_digest: blake3::hash(transaction_id.as_bytes()).to_hex().to_string(),
+        shard,
+        sequence,
+        envelope_checksum: envelope_checksum.to_string(),
+    })
+    .map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "failed to encode positioned claim authorization: {error}"
+        ))
+    })
+}
+
+fn write_claim_authorization_receipt(
+    storage: &Storage,
+    source_epoch: u64,
+    shard: u8,
+    sequence: u64,
+    transaction_id: &str,
+    envelope_checksum: &str,
+) -> Result<()> {
+    let path = claim_authorization_path(source_epoch, transaction_id);
+    let bytes = claim_authorization_bytes(
+        source_epoch,
+        shard,
+        sequence,
+        transaction_id,
+        envelope_checksum,
+    )?;
+    match storage.write_coordination_object(&path, &bytes, None) {
+        Ok(_) => Ok(()),
+        Err(BorsukError::ConcurrentModification { .. }) => {
+            let existing = storage
+                .read_coordination_object(&path)?
+                .ok_or_else(|| BorsukError::ConcurrentModification { path: path.clone() })?;
+            if existing.bytes == bytes {
+                Ok(())
+            } else {
+                Err(BorsukError::InvalidStorage(format!(
+                    "positioned claim authorization `{path}` conflicts"
+                )))
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn read_claim_authorization_receipt(
+    storage: &Storage,
+    source_epoch: u64,
+    transaction_id: &str,
+) -> Result<Option<String>> {
+    let path = claim_authorization_path(source_epoch, transaction_id);
+    let Some(stored) = storage.read_coordination_object(&path)? else {
+        return Ok(None);
+    };
+    let receipt: PositionedClaimAuthorization =
+        serde_json::from_slice(&stored.bytes).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "positioned claim authorization `{path}` is invalid: {error}"
+            ))
+        })?;
+    if receipt.layout != 1
+        || receipt.source_epoch != source_epoch
+        || receipt.transaction_id != transaction_id
+        || receipt.transaction_digest
+            != blake3::hash(transaction_id.as_bytes()).to_hex().to_string()
+        || receipt.shard
+            != blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                % crate::positioned_log::SOURCE_SHARD_COUNT
+        || receipt.sequence == 0
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "positioned claim authorization `{path}` has conflicting identity"
+        )));
+    }
+    validate_cell_wal_checksum(&receipt.envelope_checksum, "positioned envelope", &path)?;
+    validate_claim_authorization_envelope(
+        storage,
+        receipt.source_epoch,
+        receipt.shard,
+        receipt.sequence,
+        &receipt.transaction_id,
+        &receipt.envelope_checksum,
+    )?;
+    Ok(Some(receipt.envelope_checksum))
+}
+
+fn reclaim_claim_owner(
+    storage: &Storage,
+    source_epoch: u64,
+    transaction_id: &str,
+) -> Result<Option<String>> {
+    if let Some(envelope_checksum) =
+        read_claim_authorization_receipt(storage, source_epoch, transaction_id)?
+    {
+        return Ok(Some(envelope_checksum));
+    }
+    if let Some((position, envelope_checksum)) =
+        authorized_transaction_receipt(storage, source_epoch, transaction_id)?
+    {
+        write_claim_authorization_receipt(
+            storage,
+            position.source_epoch,
+            position.shard,
+            position.sequence,
+            transaction_id,
+            &envelope_checksum,
+        )?;
+        return Ok(Some(envelope_checksum));
+    }
     let state_path = transaction_state_path(transaction_id);
     let Some(current) = storage.read_coordination_object(&state_path)? else {
         return Err(BorsukError::InvalidStorage(format!(
@@ -1685,7 +1258,7 @@ fn reclaim_claim_owner(storage: &Storage, transaction_id: &str) -> Result<bool> 
     };
     match transaction_state_from_slice(&current.bytes, &state_path)? {
         CellWalTransactionState::Prepared { expires_at_ms } if now_unix_ms() <= expires_at_ms => {
-            Ok(false)
+            Ok(None)
         }
         CellWalTransactionState::Prepared { .. } => {
             match storage.write_coordination_object(
@@ -1693,8 +1266,8 @@ fn reclaim_claim_owner(storage: &Storage, transaction_id: &str) -> Result<bool> 
                 &transaction_state_bytes(&CellWalTransactionState::Aborted)?,
                 Some(current.version),
             ) {
-                Ok(_) => Ok(true),
-                Err(BorsukError::ConcurrentModification { .. }) => Ok(false),
+                Ok(_) => Ok(Some(transaction_id.to_string())),
+                Err(BorsukError::ConcurrentModification { .. }) => Ok(None),
                 Err(error) => Err(error),
             }
         }
@@ -1710,9 +1283,13 @@ fn reclaim_claim_owner(storage: &Storage, transaction_id: &str) -> Result<bool> 
                 descriptor_path,
                 descriptor_checksum,
             )?;
-            Ok(true)
+            Ok(Some(transaction_id.to_string()))
         }
-        CellWalTransactionState::Committed { .. } | CellWalTransactionState::Aborted => Ok(true),
+        CellWalTransactionState::Committed {
+            descriptor_checksum,
+            ..
+        } => Ok(Some(descriptor_checksum)),
+        CellWalTransactionState::Aborted => Ok(Some(transaction_id.to_string())),
     }
 }
 
@@ -1723,6 +1300,8 @@ enum ClaimAcquireAttempt {
 
 fn try_acquire_claim_page(
     storage: &Storage,
+    source_epoch: u64,
+    owner_revisions: &mut BTreeMap<String, Option<String>>,
     transaction_id: &str,
     page_index: u8,
     path: &str,
@@ -1747,10 +1326,17 @@ fn try_acquire_claim_page(
             Some(CellWalClaimLock::Owned {
                 transaction_id: owner,
             }) => {
-                if !reclaim_claim_owner(storage, owner)? {
+                let revision = if let Some(revision) = owner_revisions.get(owner) {
+                    revision.clone()
+                } else {
+                    let revision = reclaim_claim_owner(storage, source_epoch, owner)?;
+                    owner_revisions.insert(owner.clone(), revision.clone());
+                    revision
+                };
+                let Some(revision) = revision else {
                     return Ok(ClaimAcquireAttempt::Contended);
-                }
-                Some(owner.clone())
+                };
+                Some(revision)
             }
         };
         previous_revisions.push((shard, previous));
@@ -1784,6 +1370,7 @@ fn try_acquire_claim_page(
 
 fn release_claim_page(
     storage: &Storage,
+    owner: &str,
     revision: &str,
     claim: CellWalHeldClaim,
 ) -> Result<CellWalClaimCheckpoint> {
@@ -1800,7 +1387,7 @@ fn release_claim_page(
     let release_slots = |page: &mut CellWalClaimPage| -> Result<bool> {
         for &(shard, _) in &claim.previous_revisions {
             match page.slots.get(&shard) {
-                Some(CellWalClaimLock::Owned { transaction_id }) if transaction_id == revision => {}
+                Some(CellWalClaimLock::Owned { transaction_id }) if transaction_id == owner => {}
                 _ => return Ok(false),
             }
             page.slots.insert(
@@ -1855,13 +1442,81 @@ fn release_claim_page(
 
 fn release_claims(
     storage: &Storage,
+    owner: &str,
     revision: &str,
     claims: Vec<CellWalHeldClaim>,
 ) -> CellWalClaimCheckpoint {
     crate::parallel::install_io(|| {
         claims
             .into_par_iter()
-            .filter_map(|claim| release_claim_page(storage, revision, claim).ok())
+            .filter_map(|claim| release_claim_page(storage, owner, revision, claim).ok())
+            .flatten()
+            .collect()
+    })
+}
+
+fn restore_claim_page(
+    storage: &Storage,
+    owner: &str,
+    claim: CellWalHeldClaim,
+) -> Result<CellWalClaimCheckpoint> {
+    const MAX_ATTEMPTS: usize = 128;
+    let page_index = u8::try_from(claim.previous_revisions[0].0 / CELL_WAL_CLAIM_PAGE_SLOTS)
+        .expect("claim page index fits u8");
+    for _ in 0..MAX_ATTEMPTS {
+        let current = storage
+            .read_coordination_object(&claim.path)?
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(format!("claim page `{}` disappeared", claim.path))
+            })?;
+        let mut page = claim_page_from_slice(&current.bytes, &claim.path, page_index)?;
+        for (shard, previous) in &claim.previous_revisions {
+            match page.slots.get(shard) {
+                Some(CellWalClaimLock::Owned { transaction_id }) if transaction_id == owner => {}
+                _ => return Ok(CellWalClaimCheckpoint::new()),
+            }
+            match previous {
+                Some(revision) => {
+                    page.slots.insert(
+                        *shard,
+                        CellWalClaimLock::Available {
+                            revision: revision.clone(),
+                        },
+                    );
+                }
+                None => {
+                    page.slots.remove(shard);
+                }
+            }
+        }
+        match storage.write_coordination_object(
+            &claim.path,
+            &claim_page_bytes(&page)?,
+            Some(current.version),
+        ) {
+            Ok(_) => {
+                return Ok(claim
+                    .previous_revisions
+                    .into_iter()
+                    .filter_map(|(shard, revision)| revision.map(|revision| (shard, revision)))
+                    .collect());
+            }
+            Err(BorsukError::ConcurrentModification { .. }) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(BorsukError::ConcurrentModification { path: claim.path })
+}
+
+fn restore_claims(
+    storage: &Storage,
+    owner: &str,
+    claims: Vec<CellWalHeldClaim>,
+) -> CellWalClaimCheckpoint {
+    crate::parallel::install_io(|| {
+        claims
+            .into_par_iter()
+            .filter_map(|claim| restore_claim_page(storage, owner, claim).ok())
             .flatten()
             .collect()
     })
@@ -1874,6 +1529,7 @@ fn claim_retry_delay(transaction_id: &str, attempt: usize) -> std::time::Duratio
 
 fn acquire_claim_shards(
     storage: &Storage,
+    source_epoch: u64,
     transaction_id: &str,
     shards: &BTreeSet<u16>,
 ) -> Result<Vec<CellWalHeldClaim>> {
@@ -1894,9 +1550,18 @@ fn acquire_claim_shards(
     for attempt in 0..MAX_ATTEMPTS {
         let mut acquired = Vec::with_capacity(pages.len());
         let mut contended = false;
+        let mut owner_revisions = BTreeMap::new();
         for (&page, shards) in &pages {
             let path = claim_page_path(page);
-            match try_acquire_claim_page(storage, transaction_id, page, &path, shards) {
+            match try_acquire_claim_page(
+                storage,
+                source_epoch,
+                &mut owner_revisions,
+                transaction_id,
+                page,
+                &path,
+                shards,
+            ) {
                 Ok(ClaimAcquireAttempt::Acquired(claim)) => acquired.push(claim),
                 Ok(ClaimAcquireAttempt::Contended) => {
                     last_contended_path = path;
@@ -1904,7 +1569,7 @@ fn acquire_claim_shards(
                     break;
                 }
                 Err(error) => {
-                    let _ = release_claims(storage, transaction_id, acquired);
+                    let _ = restore_claims(storage, transaction_id, acquired);
                     return Err(error);
                 }
             }
@@ -1912,7 +1577,7 @@ fn acquire_claim_shards(
         if !contended {
             return Ok(acquired);
         }
-        let _ = release_claims(storage, transaction_id, acquired);
+        let _ = restore_claims(storage, transaction_id, acquired);
         std::thread::sleep(claim_retry_delay(transaction_id, attempt));
     }
     Err(BorsukError::ConcurrentModification {
@@ -1948,26 +1613,6 @@ fn validate_transaction_id(transaction_id: &str) -> Result<()> {
             "cell WAL transaction id must contain only ASCII letters, digits, '-' or '_'"
                 .to_string(),
         ));
-    }
-    Ok(())
-}
-
-fn validate_cell_wal_run_extension(kind: CellWalRunKind, extension: &str) -> Result<()> {
-    let valid = match kind {
-        CellWalRunKind::Records => extension == "parquet",
-        CellWalRunKind::Tombstones => extension == "parquet",
-        CellWalRunKind::IdDirectory => extension == "parquet",
-    };
-    if !valid {
-        let expected = match kind {
-            CellWalRunKind::Records => "parquet",
-            CellWalRunKind::Tombstones => "parquet",
-            CellWalRunKind::IdDirectory => "parquet",
-        };
-        return Err(BorsukError::InvalidStorage(format!(
-            "cell WAL {} run extension must be `{expected}`, got `{extension}`",
-            kind.as_str()
-        )));
     }
     Ok(())
 }
@@ -2262,20 +1907,6 @@ fn frontier_node_from_slice(bytes: &[u8], path: &str) -> Result<CellWalFrontierN
     Ok(CellWalFrontierNode { run, previous })
 }
 
-fn transaction_descriptor_bytes(descriptor: &CellWalTransactionDescriptor) -> Result<Vec<u8>> {
-    validate_transaction_id(&descriptor.transaction_id)?;
-    let mut writer = PackedWalWriter::new(CELL_WAL_DESCRIPTOR_MAGIC);
-    writer.write_string(&descriptor.transaction_id, "transaction id")?;
-    writer.write_u32(u32::try_from(descriptor.runs.len()).map_err(|_| {
-        BorsukError::InvalidStorage("cell WAL transaction contains too many runs".to_string())
-    })?);
-    for run in &descriptor.runs {
-        write_prepared_run(&mut writer, run)?;
-    }
-    writer.write_bytes(&descriptor.metadata, "transaction metadata")?;
-    Ok(writer.finish())
-}
-
 fn transaction_descriptor_from_slice(
     bytes: &[u8],
     path: &str,
@@ -2466,19 +2097,12 @@ fn validate_cell_wal_checksum(checksum: &str, label: &str, path: &str) -> Result
     Ok(())
 }
 
-/// Derive a filesystem-safe stable transaction ID from an idempotency key.
-pub fn cell_wal_transaction_id(idempotency_key: &[u8]) -> Result<String> {
-    if idempotency_key.is_empty() {
-        return Err(BorsukError::InvalidStorage(
-            "cell WAL idempotency key must not be empty".to_string(),
-        ));
-    }
-    Ok(blake3::hash(idempotency_key).to_hex().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::positioned_log::INITIAL_POSITIONED_SOURCE_EPOCH;
+    use object_store::memory::InMemory;
+    use std::sync::Arc;
 
     fn run() -> PreparedCellWalRun {
         PreparedCellWalRun {
@@ -2498,6 +2122,387 @@ mod tests {
     }
 
     #[test]
+    fn aborted_claim_restores_exact_prior_revision_or_absence() {
+        let storage = Storage::from_object_store(
+            "memory:///claim-abort-restore".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let shard = 7_u16;
+        let page = u8::try_from(shard / CELL_WAL_CLAIM_PAGE_SLOTS).unwrap();
+        let path = claim_page_path(page);
+
+        ensure_prepared_transaction(&storage, "first-attempt").unwrap();
+        let first = match try_acquire_claim_page(
+            &storage,
+            INITIAL_POSITIONED_SOURCE_EPOCH,
+            &mut BTreeMap::new(),
+            "first-attempt",
+            page,
+            &path,
+            &[shard],
+        )
+        .unwrap()
+        {
+            ClaimAcquireAttempt::Acquired(claim) => claim,
+            ClaimAcquireAttempt::Contended => panic!("fresh claim unexpectedly contended"),
+        };
+        restore_claims(&storage, "first-attempt", vec![first]);
+        let restored = storage.read_coordination_object(&path).unwrap().unwrap();
+        assert!(
+            !claim_page_from_slice(&restored.bytes, &path, page)
+                .unwrap()
+                .slots
+                .contains_key(&shard)
+        );
+
+        let revision = "ab".repeat(32);
+        let mut available = CellWalClaimPage::default();
+        available.slots.insert(
+            shard,
+            CellWalClaimLock::Available {
+                revision: revision.clone(),
+            },
+        );
+        storage
+            .write_coordination_object(
+                &path,
+                &claim_page_bytes(&available).unwrap(),
+                Some(restored.version),
+            )
+            .unwrap();
+        ensure_prepared_transaction(&storage, "second-attempt").unwrap();
+        let second = match try_acquire_claim_page(
+            &storage,
+            INITIAL_POSITIONED_SOURCE_EPOCH,
+            &mut BTreeMap::new(),
+            "second-attempt",
+            page,
+            &path,
+            &[shard],
+        )
+        .unwrap()
+        {
+            ClaimAcquireAttempt::Acquired(claim) => claim,
+            ClaimAcquireAttempt::Contended => panic!("available claim unexpectedly contended"),
+        };
+        restore_claims(&storage, "second-attempt", vec![second]);
+        let restored = storage.read_coordination_object(&path).unwrap().unwrap();
+        assert_eq!(
+            claim_page_from_slice(&restored.bytes, &path, page)
+                .unwrap()
+                .slots
+                .get(&shard),
+            Some(&CellWalClaimLock::Available { revision })
+        );
+    }
+
+    #[test]
+    fn positioned_claim_authorization_is_idempotent_and_epoch_scoped() {
+        let storage = Storage::from_object_store(
+            "memory:///claim-authorization".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let transaction_id = "positioned-transaction";
+        let shard = blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+            % crate::positioned_log::SOURCE_SHARD_COUNT;
+        let checksum = "ab".repeat(32);
+        write_claim_authorization_receipt(&storage, 7, shard, 3, transaction_id, &checksum)
+            .unwrap();
+        write_claim_authorization_receipt(&storage, 7, shard, 3, transaction_id, &checksum)
+            .unwrap();
+        write_claim_authorization_receipt(&storage, 8, shard, 4, transaction_id, &"cd".repeat(32))
+            .unwrap();
+        let epoch_seven = storage
+            .read_coordination_object(&claim_authorization_path(7, transaction_id))
+            .unwrap()
+            .unwrap();
+        let epoch_eight = storage
+            .read_coordination_object(&claim_authorization_path(8, transaction_id))
+            .unwrap()
+            .unwrap();
+        assert_ne!(epoch_seven.bytes, epoch_eight.bytes);
+    }
+
+    #[test]
+    fn positioned_claim_authorization_requires_exact_envelope_identity() {
+        let storage = Storage::from_object_store(
+            "memory:///claim-authorization-envelope".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let owner = "positioned-owner";
+        let other = "other-positioned-owner";
+        let stamp = crate::mutation::MutationStamp::new(
+            crate::mutation::MutationVersion::from_parts(1, [1; 16]),
+            [2; 32],
+        );
+        let payload = |id: &[u8]| {
+            crate::format::tombstone_ids_to_parquet(&[(
+                id.to_vec(),
+                crate::mutation::MutationState::new(stamp, crate::mutation::MutationOperation::Put),
+            )])
+            .unwrap()
+        };
+        let positioned =
+            crate::positioned_log::PositionedLogWriter::create_from_storage(storage.clone(), 7)
+                .unwrap();
+        let committed = positioned
+            .append(
+                owner,
+                &"ab".repeat(32),
+                vec![crate::positioned_log::PositionedMutationPayloadInput {
+                    modality: crate::positioned_log::PositionedMutationModality::Tombstone,
+                    role: "owner".to_string(),
+                    format: crate::positioned_log::PositionedPayloadFormat::Parquet,
+                    rows: 1,
+                    bytes: payload(b"owner"),
+                }],
+            )
+            .unwrap();
+        let other_committed = positioned
+            .append(
+                other,
+                &"ab".repeat(32),
+                vec![crate::positioned_log::PositionedMutationPayloadInput {
+                    modality: crate::positioned_log::PositionedMutationModality::Tombstone,
+                    role: "other".to_string(),
+                    format: crate::positioned_log::PositionedPayloadFormat::Parquet,
+                    rows: 1,
+                    bytes: payload(b"other"),
+                }],
+            )
+            .unwrap();
+        let path = claim_authorization_path(7, owner);
+        let transaction_digest = blake3::hash(owner.as_bytes()).to_hex().to_string();
+        let exact = PositionedClaimAuthorization {
+            layout: 1,
+            source_epoch: 7,
+            transaction_id: owner.to_string(),
+            transaction_digest: transaction_digest.clone(),
+            shard: committed.position.shard,
+            sequence: committed.position.sequence,
+            envelope_checksum: committed.envelope_checksum.clone(),
+        };
+        let replace = |receipt: &PositionedClaimAuthorization| {
+            let bytes = serde_json::to_vec(receipt).unwrap();
+            let current = storage.read_coordination_object(&path).unwrap();
+            storage
+                .write_coordination_object(&path, &bytes, current.map(|stored| stored.version))
+                .unwrap();
+        };
+
+        replace(&exact);
+        let before = storage.request_counts();
+        assert_eq!(
+            read_claim_authorization_receipt(&storage, 7, owner).unwrap(),
+            Some(committed.envelope_checksum.clone())
+        );
+        let delta = storage.request_counts().delta(&before);
+        assert_eq!(delta.gets, 2, "receipt plus authoritative envelope");
+
+        let mut wrong_sequence = exact;
+        wrong_sequence.sequence += 1;
+        replace(&wrong_sequence);
+        assert!(read_claim_authorization_receipt(&storage, 7, owner).is_err());
+
+        let mut wrong_envelope = wrong_sequence;
+        wrong_envelope.sequence = committed.position.sequence;
+        wrong_envelope.envelope_checksum = other_committed.envelope_checksum;
+        replace(&wrong_envelope);
+        assert!(read_claim_authorization_receipt(&storage, 7, owner).is_err());
+
+        let mut missing_envelope = wrong_envelope;
+        missing_envelope.envelope_checksum = "ef".repeat(32);
+        replace(&missing_envelope);
+        assert!(read_claim_authorization_receipt(&storage, 7, owner).is_err());
+
+        let corrupt = b"not a parquet envelope";
+        let corrupt_checksum = blake3::hash(corrupt).to_hex().to_string();
+        storage
+            .write_bytes(
+                &crate::positioned_log::canonical_envelope_path(&corrupt_checksum),
+                corrupt,
+            )
+            .unwrap();
+        let mut corrupt_envelope = missing_envelope;
+        corrupt_envelope.envelope_checksum = corrupt_checksum;
+        replace(&corrupt_envelope);
+        assert!(read_claim_authorization_receipt(&storage, 7, owner).is_err());
+    }
+
+    #[test]
+    fn normal_one_page_claim_has_exact_counts_and_no_authorization_object() {
+        let storage = Storage::from_object_store(
+            "memory:///claim-normal-counts".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let store =
+            CellWalStore::from_storage(storage.clone(), CellWalConfig::default(), 7).unwrap();
+        let before = storage.request_counts();
+        let mut guard = store.claim_ids("normal-claim", [b"id".as_slice()]).unwrap();
+        let transaction_hash = blake3::hash(b"normal-claim");
+        let shard = transaction_hash.as_bytes()[0] % crate::positioned_log::SOURCE_SHARD_COUNT;
+        guard
+            .finish_authorized(7, shard, 1, &"ab".repeat(32))
+            .unwrap();
+        let delta = storage.request_counts().delta(&before);
+        assert_eq!(delta.gets, 1);
+        assert_eq!(delta.puts, 3);
+        assert!(
+            storage
+                .read_coordination_object(&claim_authorization_path(7, "normal-claim"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn one_authorized_owner_across_twenty_two_pages_resolves_once() {
+        let storage = Storage::from_object_store(
+            "memory:///claim-owner-resolution".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let owner = "wide-owner";
+        let stamp = crate::mutation::MutationStamp::new(
+            crate::mutation::MutationVersion::from_parts(1, [1; 16]),
+            [2; 32],
+        );
+        let bytes = crate::format::tombstone_ids_to_parquet(&[(
+            b"wide-id".to_vec(),
+            crate::mutation::MutationState::new(stamp, crate::mutation::MutationOperation::Put),
+        )])
+        .unwrap();
+        let committed =
+            crate::positioned_log::PositionedLogWriter::create_from_storage(storage.clone(), 7)
+                .unwrap()
+                .append(
+                    owner,
+                    &"ab".repeat(32),
+                    vec![crate::positioned_log::PositionedMutationPayloadInput {
+                        modality: crate::positioned_log::PositionedMutationModality::Tombstone,
+                        role: "wide-owner".to_string(),
+                        format: crate::positioned_log::PositionedPayloadFormat::Parquet,
+                        rows: 1,
+                        bytes,
+                    }],
+                )
+                .unwrap();
+        write_claim_authorization_receipt(
+            &storage,
+            committed.position.source_epoch,
+            committed.position.shard,
+            committed.position.sequence,
+            owner,
+            &committed.envelope_checksum,
+        )
+        .unwrap();
+        let page_count = CELL_WAL_CLAIM_SHARDS.div_ceil(CELL_WAL_CLAIM_PAGE_SLOTS);
+        for page in 0..page_count {
+            let page = u8::try_from(page).unwrap();
+            let claim_shard = u16::from(page) * CELL_WAL_CLAIM_PAGE_SLOTS;
+            let mut claim_page = CellWalClaimPage::default();
+            claim_page.slots.insert(
+                claim_shard,
+                CellWalClaimLock::Owned {
+                    transaction_id: owner.to_string(),
+                },
+            );
+            storage
+                .write_coordination_object(
+                    &claim_page_path(page),
+                    &claim_page_bytes(&claim_page).unwrap(),
+                    None,
+                )
+                .unwrap();
+        }
+        let guard = CellWalClaimGuard {
+            storage: storage.clone(),
+            transaction_id: "observer".to_string(),
+            locks: Vec::new(),
+            transaction_committed: true,
+            source_epoch: 7,
+        };
+        let before = storage.request_counts();
+        let checkpoint = guard.synchronized_checkpoint().unwrap();
+        let delta = storage.request_counts().delta(&before);
+        assert_eq!(checkpoint.len(), usize::from(page_count));
+        assert_eq!(delta.gets, u64::from(page_count) + 2);
+        assert_eq!(delta.puts, 0);
+    }
+
+    #[test]
+    fn crash_gap_recovers_from_one_head_and_backfills_authorization() {
+        let storage = Storage::from_object_store(
+            "memory:///claim-crash-gap".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let store =
+            CellWalStore::from_storage(storage.clone(), CellWalConfig::default(), 7).unwrap();
+        let owner = "crashed-after-positioned-cas";
+        let guard = store.claim_ids(owner, [b"same-id".as_slice()]).unwrap();
+        let stamp = crate::mutation::MutationStamp::new(
+            crate::mutation::MutationVersion::from_parts(1, [1; 16]),
+            [2; 32],
+        );
+        let bytes = crate::format::tombstone_ids_to_parquet(&[(
+            b"same-id".to_vec(),
+            crate::mutation::MutationState::new(stamp, crate::mutation::MutationOperation::Put),
+        )])
+        .unwrap();
+        let positioned =
+            crate::positioned_log::PositionedLogWriter::create_from_storage(storage.clone(), 7)
+                .unwrap();
+        positioned
+            .append(
+                owner,
+                &"ab".repeat(32),
+                vec![crate::positioned_log::PositionedMutationPayloadInput {
+                    modality: crate::positioned_log::PositionedMutationModality::Tombstone,
+                    role: "claim-crash-gap".to_string(),
+                    format: crate::positioned_log::PositionedPayloadFormat::Parquet,
+                    rows: 1,
+                    bytes,
+                }],
+            )
+            .unwrap();
+        std::mem::forget(guard);
+
+        let before = storage.request_counts();
+        let recovered = store
+            .claim_ids("recovery-attempt", [b"same-id".as_slice()])
+            .unwrap();
+        let delta = storage.request_counts().delta(&before);
+        assert_eq!(delta.gets, 4);
+        assert_eq!(delta.puts, 3);
+        assert!(
+            storage
+                .read_coordination_object(&claim_authorization_path(7, owner))
+                .unwrap()
+                .is_some()
+        );
+        std::mem::forget(recovered);
+    }
+
+    #[test]
+    fn corrupt_claim_authorization_fails_closed() {
+        let storage = Storage::from_object_store(
+            "memory:///claim-corrupt-authorization".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let owner = "corrupt-owner";
+        storage
+            .write_coordination_object(&claim_authorization_path(7, owner), b"{}", None)
+            .unwrap();
+        assert!(read_claim_authorization_receipt(&storage, 7, owner).is_err());
+    }
+
+    #[test]
     fn packed_control_records_round_trip_with_distinct_magic() {
         let reference = CellWalFrontierRef {
             path: format!("cells/7/9/wal/3/frontier/{}.bin", "cd".repeat(32)),
@@ -2511,11 +2516,6 @@ mod tests {
             run: run(),
             previous: Some(reference),
         };
-        let descriptor = CellWalTransactionDescriptor {
-            transaction_id: "transaction-1".to_string(),
-            runs: vec![run()],
-            metadata: vec![4, 5, 6],
-        };
         let marker = CellWalCommitMarker {
             descriptor_path: format!(
                 "transactions/transaction-1/descriptors/{}.bin",
@@ -2526,18 +2526,12 @@ mod tests {
 
         let head_bytes = lane_head_bytes(&head).unwrap();
         let node_bytes = frontier_node_bytes(&node).unwrap();
-        let descriptor_bytes = transaction_descriptor_bytes(&descriptor).unwrap();
         let marker_bytes = commit_marker_bytes(&marker).unwrap();
         assert!(head_bytes.starts_with(CELL_WAL_HEAD_MAGIC));
         assert!(node_bytes.starts_with(CELL_WAL_NODE_MAGIC));
-        assert!(descriptor_bytes.starts_with(CELL_WAL_DESCRIPTOR_MAGIC));
         assert!(marker_bytes.starts_with(CELL_WAL_COMMIT_MAGIC));
         assert_eq!(lane_head_from_slice(&head_bytes, "HEAD").unwrap(), head);
         assert_eq!(frontier_node_from_slice(&node_bytes, "node").unwrap(), node);
-        assert_eq!(
-            transaction_descriptor_from_slice(&descriptor_bytes, "descriptor").unwrap(),
-            descriptor
-        );
         assert_eq!(
             commit_marker_from_slice(&marker_bytes, "COMMIT").unwrap(),
             marker
@@ -2636,11 +2630,15 @@ mod tests {
 
     #[test]
     fn refreshed_claims_synchronize_the_writer_checkpoint() {
-        let store = CellWalStore::new(
-            std::sync::Arc::new(object_store::memory::InMemory::new()),
-            "memory:///claim-checkpoint-synchronization",
+        let storage = Storage::from_object_store(
+            "memory:///claim-checkpoint-synchronization".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let store = CellWalStore::from_storage(
+            storage,
             CellWalConfig::default(),
-            b"writer".to_vec(),
+            INITIAL_POSITIONED_SOURCE_EPOCH,
         )
         .unwrap();
         let mut first = store
@@ -2657,163 +2655,6 @@ mod tests {
         assert!(second.matches_checkpoint(&reopened_writer_checkpoint));
 
         second.finish();
-    }
-
-    #[test]
-    fn one_lane_group_publishes_one_head_update() {
-        let store = CellWalStore::new(
-            std::sync::Arc::new(object_store::memory::InMemory::new()),
-            "memory:///grouped-lane-publication",
-            CellWalConfig::default(),
-            b"writer".to_vec(),
-        )
-        .unwrap();
-        let cell = LogicalCellId::new(1, 0);
-        let inputs = [
-            b"first".as_slice(),
-            b"second".as_slice(),
-            b"third".as_slice(),
-        ]
-        .map(|bytes| CellWalRunInput {
-            cell,
-            kind: CellWalRunKind::Records,
-            metadata: Vec::new(),
-            bytes: bytes.to_vec(),
-            record_count: 1,
-            extension: "parquet".to_string(),
-        });
-        let before = store.storage.request_counts();
-
-        store
-            .prepare_transaction("grouped-publication", &inputs)
-            .unwrap();
-
-        let requests = store.storage.request_counts().delta(&before);
-        assert_eq!(
-            requests.puts, 9,
-            "three immutable payloads and frontier nodes need one state, one HEAD, and one descriptor PUT: {requests:?}"
-        );
-    }
-
-    #[test]
-    fn root_authorization_filter_identifies_and_detaches_crash_orphans() {
-        let store = CellWalStore::new(
-            std::sync::Arc::new(object_store::memory::InMemory::new()),
-            "memory:///root-authorization-prune",
-            CellWalConfig::default(),
-            b"writer".to_vec(),
-        )
-        .unwrap();
-        let cell = LogicalCellId::new(3, 4);
-        store
-            .commit(
-                "orphaned-before-root-cas",
-                &[CellWalRunInput {
-                    cell,
-                    kind: CellWalRunKind::Records,
-                    metadata: Vec::new(),
-                    bytes: b"orphan".to_vec(),
-                    record_count: 1,
-                    extension: "parquet".to_string(),
-                }],
-            )
-            .unwrap();
-
-        let unrooted = store
-            .run_identities_without_root_authorization(&[cell], &BTreeSet::new())
-            .unwrap();
-        assert_eq!(unrooted.len(), 1);
-        store.prune_consumed_runs(&[cell], &unrooted).unwrap();
-        assert!(
-            store
-                .run_identities_without_root_authorization(&[cell], &BTreeSet::new())
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn retained_manifest_recovers_root_authorized_descriptor_without_legacy_marker() {
-        let store = CellWalStore::new(
-            std::sync::Arc::new(object_store::memory::InMemory::new()),
-            "memory:///retained-root-authorized-descriptor",
-            CellWalConfig::default(),
-            b"writer".to_vec(),
-        )
-        .unwrap();
-        let transaction = store
-            .stage_root_authorized_with_metadata(
-                "root-authorized",
-                &[CellWalRunInput {
-                    cell: LogicalCellId::new(3, 4),
-                    kind: CellWalRunKind::Records,
-                    metadata: Vec::new(),
-                    bytes: b"retained".to_vec(),
-                    record_count: 1,
-                    extension: "parquet".to_string(),
-                }],
-                b"metadata",
-                true,
-            )
-            .unwrap();
-        let consumed = transaction
-            .runs
-            .iter()
-            .map(cell_wal_run_identity)
-            .collect::<BTreeSet<_>>();
-
-        let (paths, recovered) = store.retained_consumed_objects(&consumed).unwrap();
-
-        assert_eq!(recovered, vec![transaction.clone()]);
-        assert!(paths.contains(&transaction.descriptor_path));
-        assert!(paths.contains(&transaction.runs[0].path));
-    }
-
-    #[test]
-    fn retained_manifest_rejects_ambiguous_root_authorized_descriptors() {
-        let store = CellWalStore::new(
-            std::sync::Arc::new(object_store::memory::InMemory::new()),
-            "memory:///ambiguous-retained-descriptor",
-            CellWalConfig::default(),
-            b"writer".to_vec(),
-        )
-        .unwrap();
-        let input = CellWalRunInput {
-            cell: LogicalCellId::new(3, 4),
-            kind: CellWalRunKind::Records,
-            metadata: Vec::new(),
-            bytes: b"retained".to_vec(),
-            record_count: 1,
-            extension: "parquet".to_string(),
-        };
-        let first = store
-            .stage_root_authorized_with_metadata(
-                "ambiguous-root-authorized",
-                std::slice::from_ref(&input),
-                b"first",
-                true,
-            )
-            .unwrap();
-        store
-            .stage_root_authorized_with_metadata(
-                "ambiguous-root-authorized",
-                &[input],
-                b"second",
-                true,
-            )
-            .unwrap();
-        let consumed = first
-            .runs
-            .iter()
-            .map(cell_wal_run_identity)
-            .collect::<BTreeSet<_>>();
-
-        let error = store.retained_consumed_objects(&consumed).unwrap_err();
-
-        assert!(
-            error.to_string().contains("2 matching descriptors"),
-            "{error}"
-        );
     }
 
     #[test]

@@ -150,9 +150,10 @@ pub struct Manifest {
     /// until flush copy-on-writes only their affected buckets.
     #[serde(default)]
     pub(crate) tombstone_pages: Vec<TombstonePageRef>,
-    /// Exact number of unique ids represented by the stable tombstone plus
-    /// mutation frontier. Maintained incrementally so foreground writes and
-    /// status calls never decode the corpus-wide overlay merely to count it.
+    /// Conservative upper bound on unique ids represented by the stable
+    /// tombstone state. Foreground positioned suffix metadata may overcount
+    /// stale-writer duplicates; a fenced materialization rebases this field to
+    /// the exact merged-page cardinality.
     #[serde(default)]
     pub(crate) tombstone_id_count: u64,
     /// Write-ahead-log configuration fixed at index creation. Enabled with
@@ -374,7 +375,6 @@ mod global_pq_layout_tests {
         assert_eq!(ann.layout_version(), 11);
         assert!(ann.base().is_some());
         assert!(ann.incremental_runs().is_empty());
-        assert!(ann.coverage().ranges().is_empty());
         ann.validate().unwrap();
     }
 

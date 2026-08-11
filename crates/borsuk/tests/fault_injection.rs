@@ -1,18 +1,39 @@
 #![allow(missing_docs)]
 
-#[allow(dead_code)]
 mod common;
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use borsuk::{
-    BorsukIndex, GarbageCollectionOptions, IndexConfig, SearchOptions, VectorMetric, VectorRecord,
-    VectorSpec, WalConfig,
+    BorsukIndex, GarbageCollectionOptions, IndexConfig, PositionedLogWriter,
+    PositionedMutationModality, SearchOptions, VectorMetric, VectorRecord, VectorSpec, WalConfig,
 };
-use futures_util::TryStreamExt;
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 
-const LARGE_OBJECT_BYTES: usize = 64 * 1024 * 1024 + 1;
+const LARGE_ID_BYTES: usize = 22 * 1024 * 1024;
+
+fn assert_no_legacy_mutation_authority(operations: &common::OperationLog) {
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            matches!(
+                operation,
+                common::StoreOperation::Put | common::StoreOperation::MultipartPut
+            ) && (path.starts_with("collection/write-epochs/")
+                || path.starts_with("collection/wal")
+                || path.starts_with("lane-log/")
+                || path.starts_with("cell-wal/")
+                || (path.starts_with("transactions/") && !path.ends_with("/STATE"))
+                || (path.starts_with("cells/") && path.contains("/wal/"))
+                || path.starts_with("tombstones/")
+                || path.starts_with("bm25/")
+                || path.starts_with("lexical/stats-delta/")
+                || path == "id-directory/generated/NEXT")
+        }),
+        0,
+        "a positioned mutation must not publish a second legacy authority: {:?}",
+        operations.entries()
+    );
+}
 
 #[test]
 fn multimodal_collection_transaction_is_invisible_when_root_publication_fails() {
@@ -46,25 +67,34 @@ fn multimodal_collection_transaction_is_invisible_when_root_publication_fails() 
         .unwrap();
     drop(setup);
 
-    let faulting: Arc<dyn ObjectStore> =
-        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
-            Arc::clone(&inner),
-            1,
-            false,
-            |operation, path| {
-                operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("collection/write-epochs/")
-                    && path.as_ref().contains("/pending/")
-                    && path.as_ref().ends_with(".commit")
-            },
-        ));
-    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
-    writer
+    let faulting = common::FaultInjectingObjectStore::fail_nth_matching_with_error(
+        Arc::clone(&inner),
+        1,
+        false,
+        common::InjectedErrorKind::PermissionDenied,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/heads/")
+        },
+    );
+    let (faulting, operations) = faulting.with_operation_log();
+    let mut writer = BorsukIndex::open_with_object_store(Arc::new(faulting), uri).unwrap();
+    operations.clear();
+    let error = writer
         .add(vec![
             VectorRecord::new("uncommitted", vec![0.0, 0.0])
                 .with_named_vector("named", vec![0.0, 0.0]),
         ])
         .unwrap_err();
+    assert_eq!(error.code(), "object_store_permission_denied", "{error:?}");
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        1,
+        "the injected positioned head publication fault must be exercised exactly once"
+    );
+    assert_no_legacy_mutation_authority(&operations);
     drop(writer);
 
     let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
@@ -83,6 +113,13 @@ fn multimodal_collection_transaction_is_invisible_when_root_publication_fails() 
             .unwrap(),
         ["base"]
     );
+    assert_eq!(reopened.get_vector("uncommitted").unwrap(), None);
+    let snapshot = PositionedLogWriter::open(uri, inner, 1)
+        .unwrap()
+        .reader()
+        .snapshot()
+        .unwrap();
+    assert_eq!(snapshot.transactions.len(), 1);
 }
 
 #[test]
@@ -105,21 +142,43 @@ fn transient_root_publication_error_is_resolved_before_returning() {
         .unwrap(),
     );
 
-    let faulting: Arc<dyn ObjectStore> =
-        Arc::new(common::FaultInjectingObjectStore::accept_then_fail_nth_put(
-            Arc::clone(&inner),
-            1,
-            |operation, path| {
-                operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("collection/write-epochs/")
-                    && path.as_ref().contains("/pending/")
-                    && path.as_ref().ends_with(".commit")
-            },
-        ));
-    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
-    writer
-        .add(vec![VectorRecord::new("committed", vec![0.0, 0.0])])
+    let faulting = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        Arc::clone(&inner),
+        1,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/heads/")
+        },
+    );
+    let (faulting, operations) = faulting.with_operation_log();
+    let mut writer = BorsukIndex::open_with_object_store(Arc::new(faulting), uri).unwrap();
+    operations.clear();
+    let (ids, report) = writer
+        .add_with_report(vec![vec![0.0, 0.0]], Some(vec!["committed".to_string()]))
         .unwrap();
+    assert_eq!(ids, ["committed"]);
+    let position = report
+        .positioned_position
+        .expect("reconciled append must return its authoritative position");
+    assert_eq!(position.source_epoch, 1);
+    assert_eq!(position.sequence, 1);
+    assert_eq!(report.positioned_envelope_checksum.len(), 64);
+    assert!(report.positioned_encoded_bytes > 0);
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        1,
+        "an accepted head PUT must reconcile without a second publication"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get && path.starts_with("positioned-log/heads/")
+        }),
+        1,
+        "the accepted-then-error response must reconcile from the authoritative head"
+    );
+    assert_no_legacy_mutation_authority(&operations);
     drop(writer);
 
     let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
@@ -129,10 +188,29 @@ fn transient_root_publication_error_is_resolved_before_returning() {
             .unwrap(),
         ["committed"]
     );
+    assert_eq!(reopened.list_records(0, 10).unwrap().len(), 1);
+    let snapshot = PositionedLogWriter::open(uri, inner, 1)
+        .unwrap()
+        .reader()
+        .snapshot()
+        .unwrap();
+    assert_eq!(snapshot.transactions.len(), 1);
+    assert_eq!(snapshot.transactions[0].position, position);
+    assert_eq!(
+        snapshot.envelope_checksums,
+        [report.positioned_envelope_checksum]
+    );
+    let primary = snapshot.transactions[0]
+        .payloads
+        .iter()
+        .filter(|payload| payload.modality == PositionedMutationModality::PrimaryDense)
+        .collect::<Vec<_>>();
+    assert_eq!(primary.len(), 1);
+    assert_eq!(primary[0].rows, 1);
 }
 
 #[test]
-fn vector_report_api_does_not_ack_when_pending_publication_fails() {
+fn vector_report_api_does_not_ack_when_positioned_envelope_upload_fails() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///vector-report-root-reservation-order";
     drop(
@@ -151,39 +229,54 @@ fn vector_report_api_does_not_ack_when_pending_publication_fails() {
         .unwrap(),
     );
 
-    let faulting: Arc<dyn ObjectStore> =
-        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
-            Arc::clone(&inner),
-            1,
-            false,
-            |operation, path| {
-                operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("collection/write-epochs/")
-                    && path.as_ref().contains("/pending/")
-                    && path.as_ref().ends_with(".commit")
-            },
-        ));
-    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
-    writer
+    let faulting = common::FaultInjectingObjectStore::fail_nth_matching_with_error(
+        Arc::clone(&inner),
+        1,
+        false,
+        common::InjectedErrorKind::PermissionDenied,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/envelopes/")
+        },
+    );
+    let (faulting, operations) = faulting.with_operation_log();
+    let mut writer = BorsukIndex::open_with_object_store(Arc::new(faulting), uri).unwrap();
+    operations.clear();
+    let error = writer
         .add_with_report(vec![vec![0.0, 0.0]], Some(vec!["uncommitted".to_string()]))
         .unwrap_err();
+    assert_eq!(error.code(), "object_store_permission_denied", "{error:?}");
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("positioned-log/envelopes/")
+        }),
+        1,
+        "the injected immutable envelope PUT fault must be exercised"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        0,
+        "an envelope failure must happen before positioned head authority"
+    );
+    assert_no_legacy_mutation_authority(&operations);
     drop(writer);
 
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let objects = runtime
-        .block_on(inner.list(None).try_collect::<Vec<_>>())
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(reopened.get_vector("uncommitted").unwrap(), None);
+    assert!(reopened.list_records(0, 10).unwrap().is_empty());
+    let snapshot = PositionedLogWriter::open(uri, inner, 1)
+        .unwrap()
+        .reader()
+        .snapshot()
         .unwrap();
-    assert!(objects.iter().all(|object| {
-        !object
-            .location
-            .as_ref()
-            .starts_with("collection/write-epochs/")
-            || !object.location.as_ref().contains("/pending/")
-    }));
+    assert!(snapshot.transactions.is_empty());
 }
 
 #[test]
-fn collection_transaction_is_invisible_when_pending_publication_fails() {
+fn collection_transaction_is_invisible_when_positioned_head_publication_fails() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///collection-frontier-failure";
     let mut setup = BorsukIndex::create_with_object_store(
@@ -204,22 +297,31 @@ fn collection_transaction_is_invisible_when_pending_publication_fails() {
         .unwrap();
     drop(setup);
 
-    let faulting: Arc<dyn ObjectStore> =
-        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
-            Arc::clone(&inner),
-            1,
-            false,
-            |operation, path| {
-                operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("collection/write-epochs/")
-                    && path.as_ref().contains("/pending/")
-                    && path.as_ref().ends_with(".commit")
-            },
-        ));
-    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
-    writer
+    let faulting = common::FaultInjectingObjectStore::fail_nth_matching_with_error(
+        Arc::clone(&inner),
+        1,
+        false,
+        common::InjectedErrorKind::PermissionDenied,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/heads/")
+        },
+    );
+    let (faulting, operations) = faulting.with_operation_log();
+    let mut writer = BorsukIndex::open_with_object_store(Arc::new(faulting), uri).unwrap();
+    operations.clear();
+    let error = writer
         .add(vec![VectorRecord::new("uncommitted", vec![0.0, 0.0])])
         .unwrap_err();
+    assert_eq!(error.code(), "object_store_permission_denied", "{error:?}");
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        1,
+        "the injected positioned head publication fault must be exercised exactly once"
+    );
+    assert_no_legacy_mutation_authority(&operations);
     drop(writer);
 
     let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
@@ -245,10 +347,11 @@ fn collection_transaction_is_invisible_when_pending_publication_fails() {
             .unwrap(),
         ["base"]
     );
+    assert_eq!(reopened.get_vector("uncommitted").unwrap(), None);
 }
 
 #[test]
-fn modality_prepare_failure_prunes_already_prepared_primary_lane_history() {
+fn multimodal_payload_wave_failure_never_resurrects_after_reopen_flush_and_gc() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let uri = "memory:///collection-modality-prepare-failure";
     drop(
@@ -275,27 +378,59 @@ fn modality_prepare_failure_prunes_already_prepared_primary_lane_history() {
         .unwrap(),
     );
 
-    let faulting: Arc<dyn ObjectStore> =
-        Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
-            Arc::clone(&inner),
-            1,
-            true,
-            |operation, path| {
-                operation == common::StoreOperation::Put
-                    && path.as_ref().starts_with("vectors/named/cells/")
-                    && path.as_ref().contains("/runs/records/")
-            },
-        ));
-    let mut writer = BorsukIndex::open_with_object_store(faulting, uri).unwrap();
-    writer
+    let faulting = common::FaultInjectingObjectStore::fail_nth_matching(
+        Arc::clone(&inner),
+        1,
+        true,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/payloads/")
+        },
+    );
+    let (faulting, operations) = faulting.with_operation_log();
+    let mut writer = BorsukIndex::open_with_object_store(Arc::new(faulting), uri).unwrap();
+    operations.clear();
+    let error = writer
         .add(vec![
             VectorRecord::new("uncommitted", vec![0.0, 0.0])
                 .with_named_vector("named", vec![0.0, 0.0]),
         ])
         .unwrap_err();
+    assert_eq!(error.code(), "object_store_retryable", "{error:?}");
+    assert!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/payloads/")
+        }) >= 1,
+        "the injected immutable payload-wave fault must match a payload PUT"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        0,
+        "payload-wave failure must precede the positioned head CAS"
+    );
+    assert_no_legacy_mutation_authority(&operations);
     drop(writer);
 
     let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert!(
+        reopened
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(2))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        reopened
+            .search_ids(
+                &[0.0, 0.0],
+                SearchOptions::exact(2).with_vector_name("named"),
+            )
+            .unwrap()
+            .is_empty()
+    );
+    // Parallel immutable uploads may leave content-addressed orphans. They are
+    // non-authoritative and need not be synchronously removed by this failure.
     reopened
         .add(vec![
             VectorRecord::new("fence", vec![1.0, 0.0]).with_named_vector("named", vec![1.0, 0.0]),
@@ -308,6 +443,10 @@ fn modality_prepare_failure_prunes_already_prepared_primary_lane_history() {
             min_age: Duration::ZERO,
         })
         .unwrap();
+    drop(reopened);
+
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(reopened.get_vector("uncommitted").unwrap(), None);
     assert_eq!(
         reopened
             .search_ids(&[0.0, 0.0], SearchOptions::exact(2))
@@ -323,6 +462,162 @@ fn modality_prepare_failure_prunes_already_prepared_primary_lane_history() {
             .unwrap(),
         ["fence"]
     );
+}
+
+#[test]
+fn positioned_retirement_fences_survive_later_flush_and_gc_cycles() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///positioned-retirement-repeated-cycles";
+    drop(
+        BorsukIndex::create_with_object_store(
+            Arc::clone(&inner),
+            IndexConfig {
+                uri: uri.to_string(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 16,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::from([(
+                    "named".to_string(),
+                    VectorSpec {
+                        dimensions: 2,
+                        metric: VectorMetric::Euclidean,
+                        kind: Default::default(),
+                        element_type: Default::default(),
+                    },
+                )]),
+            },
+        )
+        .unwrap(),
+    );
+
+    let faulting = common::FaultInjectingObjectStore::fail_nth_matching_with_error(
+        Arc::clone(&inner),
+        1,
+        false,
+        common::InjectedErrorKind::PermissionDenied,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/heads/")
+        },
+    );
+    let (faulting, failed_operations) = faulting.with_operation_log();
+    let mut failed_writer = BorsukIndex::open_with_object_store(Arc::new(faulting), uri).unwrap();
+    let error = failed_writer
+        .add(vec![
+            VectorRecord::new("uncommitted", vec![9.0, 0.0])
+                .with_named_vector("named", vec![9.0, 0.0]),
+        ])
+        .unwrap_err();
+    assert_eq!(error.code(), "object_store_permission_denied", "{error:?}");
+    assert_eq!(
+        failed_operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        1,
+        "the failed transaction must reach the positioned head publication path"
+    );
+    assert_no_legacy_mutation_authority(&failed_operations);
+    drop(failed_writer);
+
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let traced: Arc<dyn ObjectStore> = Arc::new(traced);
+    let mut writer = BorsukIndex::open_with_object_store(Arc::clone(&traced), uri).unwrap();
+
+    writer
+        .add(vec![
+            VectorRecord::new("a", vec![0.0, 0.0]).with_named_vector("named", vec![0.0, 0.0]),
+        ])
+        .unwrap();
+    writer.flush().unwrap();
+    assert_eq!(
+        writer
+            .search_ids(&[0.0, 0.0], SearchOptions::exact(8))
+            .unwrap(),
+        ["a"]
+    );
+    assert_eq!(
+        writer
+            .search_ids(
+                &[0.0, 0.0],
+                SearchOptions::exact(8).with_vector_name("named"),
+            )
+            .unwrap(),
+        ["a"]
+    );
+
+    writer
+        .add(vec![
+            VectorRecord::new("b", vec![1.0, 0.0]).with_named_vector("named", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+    writer.flush().unwrap();
+    writer
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+    writer.refresh().unwrap();
+
+    let assert_exact_state = |index: &BorsukIndex| {
+        assert_eq!(
+            index
+                .search_ids(&[0.0, 0.0], SearchOptions::exact(8))
+                .unwrap(),
+            ["a", "b"]
+        );
+        assert_eq!(
+            index
+                .search_ids(
+                    &[0.0, 0.0],
+                    SearchOptions::exact(8).with_vector_name("named"),
+                )
+                .unwrap(),
+            ["a", "b"]
+        );
+        assert_eq!(index.get_vector("uncommitted").unwrap(), None);
+    };
+    assert_exact_state(&writer);
+    drop(writer);
+
+    let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&traced), uri).unwrap();
+    assert_exact_state(&reopened);
+    reopened.refresh().unwrap();
+    reopened
+        .gc_obsolete_segments(GarbageCollectionOptions {
+            dry_run: false,
+            min_age: Duration::ZERO,
+        })
+        .unwrap();
+    drop(reopened);
+
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&traced), uri).unwrap();
+    assert_exact_state(&reopened);
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        2,
+        "transactions A and B must each publish one authoritative positioned head"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("positioned-log/envelopes/")
+        }),
+        2,
+        "transactions A and B must each publish one immutable positioned envelope"
+    );
+    assert!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/payloads/")
+        }) >= 4,
+        "transactions A and B must publish real primary and named positioned payloads"
+    );
+    assert_no_legacy_mutation_authority(&operations);
 }
 
 #[test]
@@ -370,7 +665,7 @@ fn collection_open_does_not_read_obsolete_wal_frontier_heads() {
 }
 
 #[test]
-fn corrupt_active_pending_commit_is_hard_corruption() {
+fn corrupt_authoritative_positioned_head_is_hard_corruption() {
     let directory = tempfile::tempdir().unwrap();
     let uri = directory.path().to_string_lossy().into_owned();
     let mut index = BorsukIndex::create(IndexConfig {
@@ -383,32 +678,28 @@ fn corrupt_active_pending_commit_is_hard_corruption() {
         named_vectors: BTreeMap::new(),
     })
     .unwrap();
-    index
-        .add(vec![VectorRecord::new("committed", vec![0.0, 0.0])])
+    let (_, report) = index
+        .add_with_report(vec![vec![0.0, 0.0]], Some(vec!["committed".to_string()]))
         .unwrap();
+    let position = report
+        .positioned_position
+        .expect("committed record must report its authoritative shard");
     drop(index);
-    let epoch = std::fs::read_dir(directory.path().join("collection/write-epochs"))
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .find(|path| path.is_dir())
-        .unwrap();
-    let pending = std::fs::read_dir(epoch.join("pending"))
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "commit")
-        })
-        .unwrap();
-    std::fs::write(pending, b"corrupt-pending-commit").unwrap();
+    let authoritative_head = directory
+        .path()
+        .join("positioned-log/heads")
+        .join(format!("{:02}.json", position.shard));
+    assert!(
+        authoritative_head.is_file(),
+        "reported shard head must select the current authority deterministically"
+    );
+    std::fs::write(&authoritative_head, b"corrupt-positioned-head").unwrap();
 
     let error = BorsukIndex::open(&uri).unwrap_err();
 
+    assert_eq!(error.code(), "invalid_storage", "{error:?}");
     assert!(
-        error.to_string().contains("collection control object")
-            || error.to_string().contains("checksum"),
+        error.to_string().contains("positioned shard head"),
         "{error}"
     );
 }
@@ -551,7 +842,7 @@ fn permission_denied_during_search_returns_storage_permission_denied() {
 #[test]
 fn large_segment_payloads_use_multipart_upload() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let faulting_store: Arc<dyn ObjectStore> =
+    let injected: Arc<dyn ObjectStore> =
         Arc::new(common::FaultInjectingObjectStore::fail_nth_matching(
             Arc::clone(&inner),
             1,
@@ -560,13 +851,17 @@ fn large_segment_payloads_use_multipart_upload() {
                 operation == common::StoreOperation::MultipartPut && is_segment_path(path)
             },
         ));
+    // Trace outside the injector so the rejected multipart attempt itself is
+    // recorded even though the inner fault fires before forwarding the upload.
+    let (faulting_store, operations) =
+        common::FaultInjectingObjectStore::new(injected).with_operation_log();
     let mut index = BorsukIndex::create_with_object_store_and_wal(
-        faulting_store,
+        Arc::new(faulting_store),
         IndexConfig {
             uri: "memory:///multipart".to_string(),
             metric: VectorMetric::Euclidean,
             dimensions: 1,
-            segment_max_vectors: 1,
+            segment_max_vectors: 16,
             ram_budget_bytes: None,
             text: false,
             named_vectors: Default::default(),
@@ -580,17 +875,33 @@ fn large_segment_payloads_use_multipart_upload() {
         },
     )
     .unwrap();
-    let large_id = deterministic_bytes(LARGE_OBJECT_BYTES);
 
-    // The default WAL keeps `add` append-only (a `wal/` object, not a `segments/`
-    // path), so the large-segment multipart upload — and its injected fault — is
-    // triggered by the flush that materializes the tail into a segment.
-    index
-        .add(vec![VectorRecord::new_bytes(large_id, vec![0.0])])
-        .unwrap();
+    // Each positioned append stays below its 64 MiB encoded hard bound. Flush
+    // then coalesces the three incompressible IDs into one >64 MiB segment.
+    for (ordinal, seed) in [
+        0x4d59_5df4_d0f3_3173_u64,
+        0x9e37_79b9_7f4a_7c15_u64,
+        0xd1b5_4a32_d192_ed03_u64,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = deterministic_bytes(LARGE_ID_BYTES, seed);
+        index
+            .add(vec![VectorRecord::new_bytes(id, vec![ordinal as f32])])
+            .unwrap_or_else(|error| panic!("bounded positioned append {ordinal} failed: {error}"));
+    }
+    operations.clear();
     let error = index.flush().unwrap_err();
 
     assert_eq!(error.code(), "object_store_retryable", "{error:?}");
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::MultipartPut && path.starts_with("segments/")
+        }),
+        1,
+        "the injected multipart segment PUT must be exercised exactly once"
+    );
 }
 
 fn seeded_index(uri: &str) -> Arc<dyn ObjectStore> {
@@ -626,8 +937,7 @@ fn is_segment_path(path: &ObjectPath) -> bool {
     path.as_ref().starts_with("segments/")
 }
 
-fn deterministic_bytes(len: usize) -> Vec<u8> {
-    let mut state = 0x4d59_5df4_d0f3_3173_u64;
+fn deterministic_bytes(len: usize, mut state: u64) -> Vec<u8> {
     (0..len)
         .map(|_| {
             state ^= state << 13;

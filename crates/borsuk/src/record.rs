@@ -880,12 +880,10 @@ impl RequestCounts {
 /// space is reclaimed later by compaction or an explicit purge.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DeleteReport {
-    /// Record ids that were newly tombstoned by this call (already-deleted ids
-    /// and re-requests are not counted).
-    pub deleted: usize,
-    /// Total record ids across stable tombstone pages and live deltas.
-    pub total_tombstoned: usize,
-    /// True when this delete changed the index (published a new version).
+    /// Unique record ids in this request after canonical deduplication.
+    pub ids_submitted: usize,
+    /// True when this handle emitted a positioned mutation. Another stale
+    /// writer may independently emit a redundant convergent delete.
     pub published: bool,
     /// Object-store requests issued while publishing this delete.
     #[serde(default)]
@@ -971,14 +969,25 @@ pub struct AddReport {
     pub manifest_tables_written: usize,
     /// Content-addressed routing page objects written.
     pub routing_pages_written: usize,
-    /// Total payload bytes written by the add publish, including exact-vector
-    /// sidecars and the CURRENT pointer.
+    /// Total payload bytes submitted to backing PUT attempts by the add publish,
+    /// including immutable data, commit envelopes, coordination heads, and
+    /// retry amplification.
     pub total_bytes_written: u64,
     /// Total written bytes divided by the number of vectors accepted by this add.
     pub bytes_per_vector: f64,
     /// Object-store requests issued while publishing this add.
     #[serde(default)]
     pub requests: RequestCounts,
+    /// Durable V12 source position assigned to this mutation, when it
+    /// published a non-empty positioned transaction.
+    #[serde(default)]
+    pub positioned_position: Option<crate::CommitSourcePosition>,
+    /// Checksum of the authoritative position-bearing V12 envelope.
+    #[serde(default)]
+    pub positioned_envelope_checksum: String,
+    /// Aggregate encoded typed payload bytes covered by the positioned commit.
+    #[serde(default)]
+    pub positioned_encoded_bytes: u64,
 }
 
 /// Search hits plus execution measurements useful for performance smoke tests and tuning.
@@ -1072,12 +1081,12 @@ pub struct SearchReport {
     /// Critical-path V11 Arrow page-fetch waves.
     #[serde(default)]
     pub global_leaf_waves: usize,
-    /// Microseconds spent routing and producing approximate candidates in the
-    /// stable global ANN base.
+    /// Aggregate microseconds spent routing and producing approximate candidates
+    /// across every merged immutable global ANN execution.
     #[serde(default)]
     pub global_base_approximate_us: u64,
-    /// Microseconds spent fetching and exact-scoring the stable base's global
-    /// shortlist.
+    /// Aggregate microseconds spent fetching and exact-scoring global shortlists
+    /// across every merged immutable global ANN execution.
     #[serde(default)]
     pub global_base_exact_rerank_us: u64,
     /// Collection-wide resident manifest/config/routing/pivot bytes.

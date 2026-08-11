@@ -13,16 +13,9 @@ const PENDING_COLLECTION_COMMIT_MAGIC: &[u8; 4] = b"BCPC";
 pub(crate) const PRIMARY_MODALITY: &str = "@primary";
 pub(crate) const COLLECTION_CURRENT: &str = "collection/CURRENT";
 pub(crate) const COLLECTION_WAL_FRONTIER_SHARDS: u8 = 64;
-/// Cooperative maintenance begins at this many live root transactions in one
-/// shard. With uniform transaction ids this is roughly 512 collection-wide.
-pub(crate) const COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD: u32 = 8;
 /// Hard admission bound for one root shard. A stalled maintenance subsystem
 /// cannot make reader traversal grow without limit.
 pub(crate) const COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD: u32 = 64;
-/// A root reservation fences lane preparation against crash cleanup. Writers
-/// must replace it with a commit before this lease expires.
-pub(crate) const COLLECTION_WAL_RESERVATION_TTL_MS: u64 = 60 * 60 * 1_000;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CollectionCurrent {
     pub snapshot_path: String,
@@ -190,23 +183,6 @@ pub(crate) fn pending_collection_commit_path(epoch: &str, transaction_id: &str) 
     Ok(format!(
         "collection/write-epochs/{epoch}/pending/{transaction_id}.commit"
     ))
-}
-
-pub(crate) fn pending_collection_commit_bytes(
-    pending: &PendingCollectionCommit,
-) -> Result<Vec<u8>> {
-    validate_transaction_id(&pending.epoch)?;
-    if pending.created_at_ms == 0 {
-        return Err(BorsukError::InvalidStorage(
-            "pending collection commit creation time must be non-zero".to_string(),
-        ));
-    }
-    validate_collection_commit(&pending.commit)?;
-    let mut writer = PackedCollectionWriter::new(PENDING_COLLECTION_COMMIT_MAGIC);
-    writer.write_string(&pending.epoch, "write epoch")?;
-    writer.write_u64(pending.created_at_ms);
-    write_collection_commit_fields(&mut writer, &pending.commit)?;
-    writer.finish()
 }
 
 pub(crate) fn pending_collection_commit_from_slice(
@@ -991,52 +967,6 @@ mod tests {
                 descriptor_ref("dense", "vectors/dense/"),
             ],
         }
-    }
-
-    #[test]
-    fn pending_collection_commit_codec_is_canonical() {
-        let pending = PendingCollectionCommit {
-            epoch: "epoch-7".to_string(),
-            created_at_ms: 123_456,
-            commit: sample_commit(),
-        };
-        let path = pending_collection_commit_path(&pending.epoch, "txn-1").unwrap();
-        let bytes = pending_collection_commit_bytes(&pending).unwrap();
-
-        assert_eq!(
-            pending_collection_commit_from_slice(&bytes, &path).unwrap(),
-            pending
-        );
-
-        let wrong_path = pending_collection_commit_path(&pending.epoch, "txn-2").unwrap();
-        let mismatch = pending_collection_commit_from_slice(&bytes, &wrong_path).unwrap_err();
-        assert!(
-            mismatch.to_string().contains("does not match"),
-            "{mismatch}"
-        );
-        let wrong_epoch = pending_collection_commit_path("epoch-8", "txn-1").unwrap();
-        assert!(
-            pending_collection_commit_from_slice(&bytes, &wrong_epoch)
-                .unwrap_err()
-                .to_string()
-                .contains("does not match")
-        );
-
-        let mut old_version = bytes.clone();
-        old_version[4] = 2;
-        assert!(
-            pending_collection_commit_from_slice(&old_version, &path)
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported codec version 2")
-        );
-
-        let mut damaged = bytes.clone();
-        damaged[9] ^= 1;
-        assert!(pending_collection_commit_from_slice(&damaged, &path).is_err());
-        let mut trailing = bytes;
-        trailing.push(0);
-        assert!(pending_collection_commit_from_slice(&trailing, &path).is_err());
     }
 
     #[test]

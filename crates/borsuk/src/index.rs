@@ -25,18 +25,19 @@ use crate::{
     },
     centroid_hnsw::CentroidHnsw,
     collection_control::{
-        COLLECTION_CURRENT, CollectionCommit, CollectionDescriptorRef, CollectionManifestRef,
-        CollectionSnapshot, PRIMARY_MODALITY, PendingCollectionCommit,
-        collection_schema_fingerprint, pending_collection_commit_path,
+        COLLECTION_CURRENT, CollectionCommit, CollectionManifestRef, CollectionSnapshot,
+        PRIMARY_MODALITY, collection_schema_fingerprint, pending_collection_commit_path,
     },
     error::{BorsukError, Result},
     format::{
-        bm25_postings_from_batches, bm25_stats_delta_page_from_parquet,
-        bm25_stats_delta_page_to_parquet, graph_from_parquet, graph_to_parquet,
-        id_directory_states_from_parquet, id_directory_states_to_parquet,
+        PositionedTombstoneRow, PositionedTransactionMetadataRow, bm25_postings_from_batches,
+        bm25_stats_delta_page_from_parquet, bm25_stats_delta_page_to_parquet, graph_from_parquet,
+        graph_to_parquet, id_directory_states_from_parquet, id_directory_states_to_parquet,
         lean_segment_from_parquet, lexical_root_from_parquet, lexical_root_to_parquet,
         lexical_row_metadata_from_batches, lexical_term_page_from_batches,
-        lexical_term_page_from_parquet, lexical_term_page_to_parquet,
+        lexical_term_page_from_parquet, lexical_term_page_to_parquet, positioned_payload_metadata,
+        positioned_tombstones_from_parquet, positioned_tombstones_to_parquet,
+        positioned_transaction_metadata_from_parquet, positioned_transaction_metadata_to_parquet,
         routing_layer_page_from_parquet,
         routing_layer_page_index_from_parquet_relaxed_manifest_version, segment_from_parquet,
         segment_to_parquet, sparse_postings_from_batches, tombstone_ids_from_parquet,
@@ -44,8 +45,7 @@ use crate::{
     },
     global_leaf_run::{
         GlobalAnnRef, GlobalCodebookRef, GlobalLeafPersistenceWriter, GlobalLeafRunRef,
-        LeafRunBuildConfig, ResidentGlobalLeafRun, SourceRangeSet, UnpublishedGlobalLeafRun,
-        build_unpublished_leaf_run_from_records, persist_unpublished_leaf_run_directory,
+        ResidentGlobalLeafRun,
     },
     global_pq_sidecar::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCoarseQuantizer, GlobalCodebookDescriptor,
@@ -76,6 +76,11 @@ use crate::{
         MutationVersion,
     },
     observability,
+    positioned_log::{
+        CommittedPositionedMutation, INITIAL_POSITIONED_SOURCE_EPOCH, PositionedLogWriter,
+        PositionedMutationModality, PositionedMutationPayloadInput, PositionedPayloadFormat,
+        canonical_envelope_path, canonical_payload_path,
+    },
     quantizer_sidecar::{PersistedQuantizer, is_quantizer_path, quantizer_relative_path},
     record::{
         AddReport, BuildConfig, CompactionOptions, CompactionReport, DEFAULT_SEARCH_PREFETCH_DEPTH,
@@ -98,9 +103,8 @@ use crate::{
     },
     sparse::{SparseVector, sparse_dot},
     storage::{
-        CollectionWalCommitOutcome, CollectionWalReservationReceipt, LoadedCollectionSnapshot,
-        PrefetchedRead, RangedColumns, ReadBytes, RoutingLayerPageIndexRead, StagedManifest,
-        Storage, StorageWriteReport, StoredObject,
+        LoadedCollectionSnapshot, PrefetchedRead, RangedColumns, ReadBytes,
+        RoutingLayerPageIndexRead, StagedManifest, Storage, StorageWriteReport, StoredObject,
     },
     storage_trace::{StorageAccessEvent, physical_format_for_path},
     text::{Tokenizer, UnicodeWordLowercase, term_frequencies},
@@ -111,11 +115,16 @@ const ROUTING_SEARCH_PAGE_OVERFETCH: usize = 8;
 /// Hard entry-count guard for one global term page.
 const DEFAULT_LEXICAL_TERM_PAGE_ENTRIES: usize = 4096;
 const TOMBSTONE_BUCKETS: u16 = 4096;
-const COORDINATION_COUNTER_MAGIC: &[u8; 4] = b"BCN1";
 const CELL_WAL_MUTATION_METADATA_MAGIC: &[u8; 4] = b"BMM1";
 const CELL_WAL_TOMBSTONE_METADATA_MAGIC: &[u8; 4] = b"BTM1";
 const PACKED_INDEX_CONTROL_VERSION: u8 = 1;
 const PACKED_INDEX_CONTROL_CHECKSUM_LEN: usize = 32;
+const POSITIONED_PROJECTION_MAGIC: &[u8; 4] = b"BPR1";
+const POSITIONED_TOMBSTONE_PROJECTION_SEPARATOR: char = '\0';
+/// Stable authority epoch for the first production positioned-log incarnation.
+/// A future epoch transition must publish an explicit collection-level marker;
+/// it must never be derived from mutable manifest or snapshot generations.
+const POSITIONED_SOURCE_EPOCH: u64 = INITIAL_POSITIONED_SOURCE_EPOCH;
 /// Target decoded metadata working set of one global term page. The actual
 /// builder accounts for variable paths/checksums, so high segment counts do not
 /// turn a nominal page into an unbounded allocation.
@@ -487,11 +496,6 @@ pub const MIN_RECOMMENDED_SEGMENT_MAX_VECTORS: usize = 64;
 /// Largest automatically selected cell row count, limiting build batches while
 /// avoiding excessive routing metadata and object counts at 100M scale.
 pub const MAX_RECOMMENDED_SEGMENT_MAX_VECTORS: usize = 131_072;
-// Group-commit WAL extents are already immutable and independently fenced;
-// materialization should coalesce them into object-store-sized segments even
-// when a research routing fixture intentionally uses one-vector base segments.
-const LANE_LOG_MATERIALIZATION_SEGMENT_MAX_VECTORS: usize = 4_096;
-
 /// Recommend a dimension-aware immutable-cell row count for TurboQuant pq-scan.
 ///
 /// Keeping `rows * dimensions * sizeof(float32)` near 16 MiB makes the largest
@@ -695,18 +699,6 @@ pub struct WarmReport {
     pub bytes_resident: u64,
 }
 
-#[allow(
-    dead_code,
-    reason = "Task 6 consumes resident records and source coverage from the materialization plan"
-)]
-pub(crate) struct PlannedLaneMaterialization {
-    pub(crate) records: Vec<VectorRecord>,
-    pub(crate) source_ranges: SourceRangeSet,
-    pub(crate) committed_sequences: Vec<u64>,
-    pub(crate) segment_summaries: Vec<SegmentSummary>,
-    pub(crate) leaf_run: Option<UnpublishedGlobalLeafRun>,
-}
-
 /// A BORSUK index handle.
 #[derive(Clone)]
 pub struct BorsukIndex {
@@ -715,6 +707,9 @@ pub struct BorsukIndex {
     manifest: Manifest,
     manifest_reference: CollectionManifestRef,
     collection_snapshot: Option<LoadedCollectionSnapshot>,
+    /// Warm root-owned V12 appender. Named children stage into the root's shared
+    /// transaction and therefore never own a second positioned authority.
+    positioned_log: Option<PositionedLogWriter>,
     /// Shared transaction identity while one public collection mutation is
     /// preparing primary and named modality descriptors.
     active_collection_transaction: Option<ActiveCollectionTransaction>,
@@ -733,6 +728,10 @@ pub struct BorsukIndex {
     /// Double-collected complete committed transactions pinned by this reader
     /// snapshot.
     cell_wal_snapshot: Vec<CommittedCellWalTransaction>,
+    /// Exact run identities reconstructed from this modality's authoritative
+    /// positioned snapshot, including runs hidden by consumed markers.
+    positioned_run_identities: BTreeSet<String>,
+    positioned_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
     /// HEAD-reachable records from the format-v25 fixed ownership lanes.
     lane_log_snapshot: Vec<crate::lane_log::LaneLogRecordBlock>,
     lane_log_committed_sequences: Vec<u64>,
@@ -1076,12 +1075,6 @@ fn decoded_vector_sidecar_bytes(vectors: &[Vec<f32>], dimensions: usize) -> u64 
         .saturating_mul(std::mem::size_of::<f32>() as u64)
 }
 
-#[derive(Clone, Copy)]
-struct CellWalAppendTransaction<'a> {
-    id: &'a str,
-    state_prepared: bool,
-}
-
 #[derive(Debug, Clone)]
 struct ActiveCollectionTransaction {
     id: String,
@@ -1089,14 +1082,126 @@ struct ActiveCollectionTransaction {
     snapshot_checksum: String,
     snapshot_generation: u64,
     validated_snapshot_generation: Arc<Mutex<Option<u64>>>,
-    reservation: Option<Arc<Mutex<CollectionWalReservationReceipt>>>,
-    admission_bytes_written: u64,
-    defer_maintenance: bool,
+    positioned: Arc<Mutex<Vec<StagedPositionedRun>>>,
+    positioned_metadata: Arc<Mutex<BTreeMap<String, StagedPositionedMetadata>>>,
 }
 
-struct CollectionWalSnapshot {
-    commits: BTreeMap<String, CollectionCommit>,
-    retries: usize,
+#[derive(Debug, Clone)]
+struct StagedPositionedRun {
+    modality: String,
+    input: CellWalRunInput,
+}
+
+#[derive(Debug, Clone)]
+struct StagedTombstone {
+    entries: Vec<(Vec<u8>, MutationState)>,
+    created_at: DateTime<Utc>,
+    new_tombstone_ids: u64,
+}
+
+/// One canonical collection mutation prepared for the sole V12 durability API.
+///
+/// Construction remains internal: public mutation facades validate, stamp, and
+/// normalize records before producing this batch.
+#[derive(Debug)]
+pub struct CanonicalMutationBatch {
+    transaction_id: String,
+    schema_fingerprint: String,
+    snapshot_checksum: String,
+    snapshot_generation: u64,
+    runs: Vec<StagedPositionedRun>,
+    metadata: BTreeMap<String, StagedPositionedMetadata>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct PositionedRunRole {
+    version: u8,
+    modality: String,
+    kind: CellWalRunKind,
+    routing_epoch: u64,
+    cell_ordinal: u32,
+    #[serde(default)]
+    tombstone_created_at_seconds: Option<i64>,
+    #[serde(default)]
+    tombstone_created_at_nanos: Option<u32>,
+}
+
+fn positioned_projection_metadata(name: &str, kind: VectorKind) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(7 + name.len());
+    bytes.extend_from_slice(POSITIONED_PROJECTION_MAGIC);
+    bytes.push(match kind {
+        VectorKind::Dense => 0,
+        VectorKind::Sparse => 1,
+        VectorKind::LateInteraction => 2,
+    });
+    bytes.extend_from_slice(
+        &u16::try_from(name.len())
+            .map_err(|_| BorsukError::InvalidStorage("named vector name is too long".to_string()))?
+            .to_le_bytes(),
+    );
+    bytes.extend_from_slice(name.as_bytes());
+    Ok(bytes)
+}
+
+fn positioned_projection_from_metadata(metadata: &[u8]) -> Result<Option<(VectorKind, &str)>> {
+    if !metadata.starts_with(POSITIONED_PROJECTION_MAGIC) {
+        return Ok(None);
+    }
+    if metadata.len() < 7 {
+        return Err(BorsukError::InvalidStorage(
+            "positioned named projection metadata is truncated".to_string(),
+        ));
+    }
+    let kind = match metadata[4] {
+        0 => VectorKind::Dense,
+        1 => VectorKind::Sparse,
+        2 => VectorKind::LateInteraction,
+        _ => {
+            return Err(BorsukError::InvalidStorage(
+                "positioned named projection kind is invalid".to_string(),
+            ));
+        }
+    };
+    let len = usize::from(u16::from_le_bytes([metadata[5], metadata[6]]));
+    let name = metadata.get(7..7 + len).ok_or_else(|| {
+        BorsukError::InvalidStorage("positioned named projection metadata is truncated".to_string())
+    })?;
+    if metadata.len() != 7 + len {
+        return Err(BorsukError::InvalidStorage(
+            "positioned named projection metadata has trailing bytes".to_string(),
+        ));
+    }
+    Ok(Some((
+        kind,
+        std::str::from_utf8(name).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "positioned projection name is invalid UTF-8: {error}"
+            ))
+        })?,
+    )))
+}
+
+fn positioned_tombstone_projection_path(
+    payload_path: &str,
+    payload_checksum: &str,
+    modality: &str,
+) -> String {
+    format!(
+        "{payload_path}{POSITIONED_TOMBSTONE_PROJECTION_SEPARATOR}PTP1:{payload_checksum}:{}:{modality}",
+        modality.len()
+    )
+}
+
+fn positioned_tombstone_projection_from_path(path: &str) -> Option<(&str, &str, &str)> {
+    let (payload_path, projection) = path.rsplit_once(POSITIONED_TOMBSTONE_PROJECTION_SEPARATOR)?;
+    let projection = projection.strip_prefix("PTP1:")?;
+    let (payload_checksum, rest) = projection.split_once(':')?;
+    let (length, modality) = rest.split_once(':')?;
+    (length.parse::<usize>().ok()? == modality.len()).then_some((
+        payload_path,
+        payload_checksum,
+        modality,
+    ))
 }
 
 #[derive(Debug)]
@@ -1337,6 +1442,33 @@ struct Bm25StatsDelta {
     document_frequencies: BTreeMap<u32, i64>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct StagedPositionedMetadata {
+    logical_record_count: u64,
+    new_tombstone_ids: u64,
+    next_generated_id_floor: u64,
+    bm25_stats_delta: Bm25StatsDelta,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PreparedPositionedModalitySnapshot {
+    transactions: Vec<CommittedCellWalTransaction>,
+    run_identities: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PreparedPositionedSnapshot {
+    primary: PreparedPositionedModalitySnapshot,
+    named: BTreeMap<String, PreparedPositionedModalitySnapshot>,
+    primary_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
+}
+
+#[derive(Debug)]
+struct PreparedPositionedDerivedState {
+    primary_resident_global_mutations: Option<Arc<ResidentGlobalMutationOverlay>>,
+    named_resident_global_mutations: BTreeMap<String, Option<Arc<ResidentGlobalMutationOverlay>>>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct CellWalMutationMetadata {
     new_tombstone_ids: u64,
@@ -1412,16 +1544,6 @@ fn cell_wal_id_directory_from_slice(
             )
             .collect()
     })
-}
-
-fn coordination_counter_bytes(value: u64) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(
-        COORDINATION_COUNTER_MAGIC.len() + 1 + 8 + PACKED_INDEX_CONTROL_CHECKSUM_LEN,
-    );
-    bytes.extend_from_slice(COORDINATION_COUNTER_MAGIC);
-    bytes.push(PACKED_INDEX_CONTROL_VERSION);
-    bytes.extend_from_slice(&value.to_le_bytes());
-    finish_packed_index_control(bytes)
 }
 
 fn cell_wal_mutation_metadata_bytes(metadata: &CellWalMutationMetadata) -> Result<Vec<u8>> {
@@ -1572,17 +1694,6 @@ fn cell_wal_tombstone_metadata_from_slice(
         id_bloom,
         created_at,
     })
-}
-
-fn coordination_counter_from_slice(bytes: &[u8], path: &str) -> Result<u64> {
-    let payload = checked_packed_index_control_payload(bytes, COORDINATION_COUNTER_MAGIC, path)?;
-    if payload.len() != COORDINATION_COUNTER_MAGIC.len() + 1 + 8 {
-        return Err(BorsukError::InvalidStorage(format!(
-            "coordination counter `{path}` has invalid packed length"
-        )));
-    }
-    let mut cursor = COORDINATION_COUNTER_MAGIC.len() + 1;
-    read_packed_index_u64(payload, &mut cursor, path)
 }
 
 fn checked_packed_index_control_payload<'a>(
@@ -2202,282 +2313,6 @@ impl BorsukIndex {
         &self.manifest
     }
 
-    pub(crate) fn ensure_lane_log_payloads_supported(&self) -> Result<()> {
-        if self.manifest.config.text || !self.manifest.config.named_vectors.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "lane-log group commit does not yet materialize text or named vector modalities"
-                    .to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn acquire_lane_log_upsert_writer(
-        &self,
-        lane: u16,
-        now_ms: u64,
-        ttl_ms: u64,
-    ) -> Result<crate::lane_log::LaneEpochWriter> {
-        let lane_count = crate::lane_log::GROUP_COMMIT_STRIPE_COUNT;
-        if lane >= lane_count {
-            return Err(BorsukError::InvalidStorage(format!(
-                "lane-log worker {lane} exceeds persisted lane count {lane_count}"
-            )));
-        }
-        let total_budget = self
-            .effective_ram_budget_bytes()
-            .unwrap_or(DEFAULT_RAM_BUDGET_BYTES);
-        let lane_budget = total_budget / u64::from(lane_count);
-        let mut writer = crate::lane_log::LaneEpochWriter::acquire_with_storage(
-            self.collection_storage
-                .clone_with_independent_request_counters(),
-            lane,
-            *Uuid::new_v4().as_bytes(),
-            now_ms,
-            ttl_ms,
-            lane_budget,
-        )?;
-        writer.activate_directory(lane_count)?;
-        Ok(writer)
-    }
-
-    pub(crate) fn primary_dimensions(&self) -> usize {
-        self.manifest.config.dimensions
-    }
-
-    pub(crate) fn lane_log_lane_count(&self) -> u16 {
-        crate::lane_log::GROUP_COMMIT_STRIPE_COUNT
-    }
-
-    pub(crate) fn lane_log_claim_candidates(&self, start: u16) -> Result<Vec<u16>> {
-        crate::lane_log::stripe_claim_candidates(
-            &self.collection_storage,
-            crate::lane_log::GROUP_COMMIT_STRIPE_COUNT,
-            start,
-        )
-    }
-
-    pub(crate) fn materialize_lane_log_tail(&mut self) -> Result<(Vec<u64>, u64)> {
-        // Drain is a maintenance boundary, not the acknowledgement path. Load
-        // the winning collection manifest before selecting WAL work: a reader
-        // pinned before a peer's materialization must retain that peer's WAL
-        // for queries, but must not rematerialize it into the same routing
-        // generation during a later independent drain.
-        self.refresh()?;
-        let committed_sequences = self.lane_log_committed_sequences.clone();
-        if self.lane_log_snapshot.is_empty() {
-            return Ok((committed_sequences, self.manifest.version));
-        }
-
-        let source_ranges = SourceRangeSet::new(
-            self.lane_log_snapshot
-                .iter()
-                .map(crate::lane_log::LaneLogRecordBlock::source_range)
-                .collect::<Result<Vec<_>>>()?,
-        )?;
-        let previous_global_ann = self.manifest.global_ann_ref.clone();
-        if previous_global_ann.as_ref().is_some_and(|reference| {
-            reference
-                .incremental_runs()
-                .iter()
-                .any(|run| run.level() == 0)
-        }) {
-            return Err(BorsukError::InvalidStorage(
-                "V11 leaf-run level zero is occupied; binary carry maintenance is required"
-                    .to_owned(),
-            ));
-        }
-        let resident_codebook = previous_global_ann
-            .as_ref()
-            .map(|reference| self.load_resident_global_codebook(reference.codebook()))
-            .transpose()?;
-
-        let generation_fence_ids = self
-            .lane_log_snapshot
-            .iter()
-            .flat_map(|block| block.generation_fence_ids.iter().cloned())
-            .collect::<HashSet<_>>();
-        let mut newest = HashMap::<Vec<u8>, VectorRecord>::new();
-        for record in self
-            .lane_log_snapshot
-            .iter()
-            .flat_map(|block| block.records.iter())
-        {
-            let key = record.id.as_bytes().to_vec();
-            match newest.entry(key) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(record.clone());
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    if record.compare_mutation(entry.get())?.is_ge() {
-                        entry.insert(record.clone());
-                    }
-                }
-            }
-        }
-        let mut records = newest.into_values().collect::<Vec<_>>();
-        records.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
-
-        let mut overlay = BTreeMap::new();
-        let mut new_tombstone_ids = 0_u64;
-        for record in &records {
-            if !generation_fence_ids.contains(record.id.as_bytes()) {
-                continue;
-            }
-            if !self.id_is_tombstoned(record.id.as_bytes())? {
-                new_tombstone_ids = new_tombstone_ids.checked_add(1).ok_or_else(|| {
-                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
-                })?;
-            }
-            let stamp = record.mutation_stamp().ok_or_else(|| {
-                BorsukError::InvalidStorage(format!(
-                    "lane record `{}` is missing its canonical mutation stamp",
-                    record.id
-                ))
-            })?;
-            overlay.insert(
-                record.id.as_bytes().to_vec(),
-                MutationState::new(stamp, MutationOperation::Put),
-            );
-        }
-        let tombstone = self.write_tombstone(overlay)?;
-
-        let active_summaries = self.active_segment_summaries()?;
-        let previous = self.manifest.clone();
-        let paged_manifest = previous.segments.is_empty()
-            && previous.routing_max_level > 0
-            && !self.manifest.config.text;
-        let mut manifest = self.manifest.next_version();
-        manifest.segments = active_summaries;
-        // The persisted fallback quantizer embeds the previous segment set.
-        // Invalidate it in the same publication that adds materialized lane
-        // segments so no reader can route on stale centroids. Global ANN search
-        // is refreshed below; other modes safely use the authoritative routing
-        // tree until explicit/background maintenance rebuilds this optimization.
-        manifest.quantizer_ref = None;
-        manifest.global_ann_ref = previous_global_ann.clone();
-        if let Some(tombstone) = tombstone {
-            manifest.tombstone_frontier.push(tombstone);
-            manifest.tombstone_id_count = manifest
-                .tombstone_id_count
-                .checked_add(new_tombstone_ids)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
-                })?;
-        }
-        // Keep lane-drain generation fences as immutable frontier runs. Folding
-        // them into stable hash pages here would read and rewrite every touched
-        // bucket on the latency-sensitive drain path. Explicit maintenance can
-        // consolidate these runs later; readers already merge pages and
-        // frontiers with newest-generation-wins semantics.
-        let segment_max_vectors = manifest
-            .config
-            .segment_max_vectors
-            .max(LANE_LOG_MATERIALIZATION_SEGMENT_MAX_VECTORS);
-        let write_batch_size = parallel_segment_write_batch_size(segment_max_vectors);
-        let planned_segments = records
-            .chunks(segment_max_vectors)
-            .map(|chunk| (Uuid::new_v4().to_string(), chunk.len()))
-            .collect::<Vec<_>>();
-        // Persist materialized segments before deriving global-PQ coverage.
-        // Both references are published atomically below. The bounded delta
-        // build reuses the stable base and never promotes it on this path.
-        let index_ref: &BorsukIndex = &*self;
-        let segment_summaries = {
-            let mut segments_to_write = Vec::with_capacity(write_batch_size);
-            let mut new_summaries = Vec::with_capacity(planned_segments.len());
-            for (chunk, (id, _)) in records.chunks(segment_max_vectors).zip(&planned_segments) {
-                segments_to_write.push(Segment::from_records_with_quantizer_and_geometry(
-                    id.clone(),
-                    0,
-                    manifest.config.metric.clone(),
-                    manifest.config.dimensions,
-                    chunk.to_vec(),
-                    QuantizerKind::ScalarBounds,
-                    manifest.build_config.normalized_angular_coarse_geometry,
-                )?);
-                if segments_to_write.len() == write_batch_size {
-                    new_summaries.extend(index_ref.write_segment_batch(&mut segments_to_write)?);
-                }
-            }
-            new_summaries.extend(index_ref.write_segment_batch(&mut segments_to_write)?);
-            new_summaries
-        };
-        let leaf_run = match (&previous_global_ann, &resident_codebook) {
-            (Some(reference), Some(codebook)) => Some(build_unpublished_leaf_run_from_records(
-                &self.storage,
-                codebook,
-                reference.codebook(),
-                &records,
-                source_ranges.clone(),
-                0,
-                LeafRunBuildConfig {
-                    dimensions: manifest.config.dimensions,
-                    element_type: manifest.build_config.vector_element_type,
-                    normalize: manifest.config.metric.uses_normalized_euclidean_geometry(),
-                },
-            )?),
-            (None, None) => None,
-            _ => {
-                return Err(BorsukError::InvalidStorage(
-                    "V11 lane materialization lost its resident codebook".to_owned(),
-                ));
-            }
-        };
-        let plan = PlannedLaneMaterialization {
-            records,
-            source_ranges,
-            committed_sequences,
-            segment_summaries,
-            leaf_run,
-        };
-        if let (Some(reference), Some(unpublished)) = (previous_global_ann.as_ref(), plan.leaf_run)
-        {
-            let reconstruction_errors = unpublished.reconstruction_errors_micros().to_vec();
-            let run = persist_unpublished_leaf_run_directory(&self.storage, unpublished)?;
-            manifest.global_ann_ref =
-                Some(reference.with_level_zero_run(run, &reconstruction_errors)?);
-        }
-        let mut routing_summaries = manifest.segments.clone();
-        routing_summaries.extend(plan.segment_summaries.iter().cloned());
-        if paged_manifest {
-            // Paged indexes keep segment summaries and routing pivots in
-            // immutable pages. Keep the new manifest metadata-only; the page
-            // builder receives the resolved summaries separately, avoiding a
-            // corpus-sized manifest/routing/pivot rewrite on every drain.
-            manifest.segments.clear();
-            manifest.pivots.clear();
-        } else {
-            manifest.segments = routing_summaries.clone();
-            manifest.rebuild_pivots();
-        }
-        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
-        let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
-        self.manifest = if paged_manifest {
-            self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
-                manifest,
-                Some(&previous),
-                &routing_summaries,
-            )?
-        } else {
-            self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
-        };
-        self.resident_global_ann_pins = prepared_global_ann_pins;
-        Ok((plan.committed_sequences, self.manifest.version))
-    }
-
-    pub(crate) fn checkpoint_lane_log_materialized_through(
-        &self,
-        sequences: &[u64],
-        manifest_version: u64,
-    ) -> Result<()> {
-        crate::lane_log::LaneLogReader::from_storage(
-            self.collection_storage.clone(),
-            crate::lane_log::GROUP_COMMIT_STRIPE_COUNT,
-        )?
-        .mark_materialized_through(sequences, manifest_version)
-    }
-
     fn read_lane_log_snapshot_if_changed(
         &self,
         manifest_version: u64,
@@ -2505,8 +2340,65 @@ impl BorsukIndex {
         cloned.storage = self
             .storage
             .clone_with_request_counters_from(&cloned.collection_storage);
+        cloned.positioned_log = self
+            .positioned_log
+            .as_ref()
+            .map(|writer| writer.with_storage_scope(cloned.collection_storage.clone()));
         cloned.reset_independent_writer_state(&cloned.collection_storage.clone());
         cloned
+    }
+
+    fn with_mutation_report_scope<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        let mutation_scope = self
+            .collection_storage
+            .clone_with_independent_mutation_counters();
+        let mut scoped = self.clone();
+        scoped.reset_operation_claim_state();
+        scoped.rebind_storage_scope(&mutation_scope);
+        let result = operation(&mut scoped);
+        scoped.restore_storage_bindings_from(self);
+        *self = scoped;
+        result
+    }
+
+    fn reset_operation_claim_state(&mut self) {
+        self.pending_collection_claim = Arc::new(Mutex::new(None));
+        for child in self.named.values_mut() {
+            child.reset_operation_claim_state();
+        }
+    }
+
+    fn rebind_storage_scope(&mut self, request_counter_source: &Storage) {
+        self.collection_storage = self
+            .collection_storage
+            .clone_with_request_counters_from(request_counter_source);
+        self.storage = self
+            .storage
+            .clone_with_request_counters_from(request_counter_source);
+        self.positioned_log = self
+            .positioned_log
+            .as_ref()
+            .map(|writer| writer.with_storage_scope(self.collection_storage.clone()));
+        for child in self.named.values_mut() {
+            child.rebind_storage_scope(request_counter_source);
+        }
+    }
+
+    fn restore_storage_bindings_from(&mut self, previous: &Self) {
+        self.collection_storage = previous.collection_storage.clone();
+        self.storage = previous.storage.clone();
+        self.positioned_log = self
+            .positioned_log
+            .as_ref()
+            .map(|writer| writer.with_storage_scope(self.collection_storage.clone()));
+        for (name, child) in &mut self.named {
+            if let Some(previous_child) = previous.named.get(name) {
+                child.restore_storage_bindings_from(previous_child);
+            }
+        }
     }
 
     fn reset_independent_writer_state(&mut self, request_counter_source: &Storage) {
@@ -3211,12 +3103,15 @@ impl BorsukIndex {
             manifest,
             manifest_reference,
             collection_snapshot: None,
+            positioned_log: None,
             active_collection_transaction: None,
             pending_collection_claim: Arc::new(Mutex::new(None)),
             writer_id: writer.to_vec(),
             mutation_clock: Arc::new(MutationClock::new([0; 16])),
             mutation_clock_time_ms: Some(0),
             cell_wal_snapshot: Vec::new(),
+            positioned_run_identities: BTreeSet::new(),
+            positioned_bm25_deltas: BTreeMap::new(),
             lane_log_snapshot: Vec::new(),
             lane_log_committed_sequences: Vec::new(),
             lane_log_head_checksums: Vec::new(),
@@ -3318,6 +3213,12 @@ impl BorsukIndex {
                 child.collection_snapshot = Some(loaded.clone());
             }
             index.collection_snapshot = Some(loaded);
+            index.positioned_log = Some(PositionedLogWriter::create_from_storage(
+                index
+                    .collection_storage
+                    .clone_with_independent_request_counters(),
+                POSITIONED_SOURCE_EPOCH,
+            )?);
         }
         Ok(index)
     }
@@ -3387,8 +3288,8 @@ impl BorsukIndex {
 
     fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
         let resident_routing = options.resident_routing || options.preload;
-        let (loaded_snapshot, commits, retries) = storage.load_collection_view()?;
-        let collection_wal_snapshot = CollectionWalSnapshot { commits, retries };
+        let (loaded_snapshot, _commits, collection_wal_snapshot_retries) =
+            storage.load_collection_view()?;
         let primary_reference = loaded_snapshot
             .snapshot
             .modalities
@@ -3476,19 +3377,26 @@ impl BorsukIndex {
             manifest,
             primary_reference,
             loaded_snapshot.clone(),
-            &collection_wal_snapshot,
+            collection_wal_snapshot_retries,
             options.clone(),
             Arc::clone(&read_runtime),
         )?;
+        index.positioned_log = Some(PositionedLogWriter::open_from_storage(
+            index
+                .collection_storage
+                .clone_with_independent_request_counters(),
+            POSITIONED_SOURCE_EPOCH,
+        )?);
         index.named = index.open_named_indexes(
             &primary_uri,
             &named_specs,
             &loaded_snapshot,
-            &collection_wal_snapshot,
+            collection_wal_snapshot_retries,
             loaded_named,
             options,
             read_runtime,
         )?;
+        index.reload_positioned_snapshot()?;
         Ok(index)
     }
 
@@ -3499,7 +3407,7 @@ impl BorsukIndex {
         manifest: Manifest,
         manifest_reference: CollectionManifestRef,
         collection_snapshot: LoadedCollectionSnapshot,
-        collection_wal_snapshot: &CollectionWalSnapshot,
+        collection_wal_snapshot_retries: usize,
         mut options: OpenOptions,
         read_runtime: Arc<CollectionReadRuntime>,
     ) -> Result<Self> {
@@ -3524,12 +3432,15 @@ impl BorsukIndex {
             manifest,
             manifest_reference,
             collection_snapshot: Some(collection_snapshot.clone()),
+            positioned_log: None,
             active_collection_transaction: None,
             pending_collection_claim: Arc::new(Mutex::new(None)),
             writer_id: writer.to_vec(),
             mutation_clock: Arc::new(MutationClock::new(writer)),
             mutation_clock_time_ms: None,
             cell_wal_snapshot: Vec::new(),
+            positioned_run_identities: BTreeSet::new(),
+            positioned_bm25_deltas: BTreeMap::new(),
             lane_log_snapshot: Vec::new(),
             lane_log_committed_sequences: Vec::new(),
             lane_log_head_checksums: Vec::new(),
@@ -3583,22 +3494,11 @@ impl BorsukIndex {
         };
         index
             .cell_wal_snapshot_retries
-            .store(collection_wal_snapshot.retries, AtomicOrdering::Relaxed);
-        index.cell_wal_snapshot = index.fetch_cell_wal_snapshot_for_transactions(
-            &index.manifest,
-            &collection_snapshot,
-            &collection_wal_snapshot.commits,
-        )?;
-        let lane_log_snapshot = index
-            .read_lane_log_snapshot_if_changed(index.manifest.version)?
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "new index handle did not receive an initial lane-log snapshot".to_string(),
-                )
-            })?;
-        index.lane_log_snapshot = lane_log_snapshot.record_blocks;
-        index.lane_log_committed_sequences = lane_log_snapshot.committed_sequences;
-        index.lane_log_head_checksums = lane_log_snapshot.head_checksums;
+            .store(collection_wal_snapshot_retries, AtomicOrdering::Relaxed);
+        index.cell_wal_snapshot.clear();
+        index.lane_log_snapshot.clear();
+        index.lane_log_committed_sequences.clear();
+        index.lane_log_head_checksums.clear();
         index.manifest.cell_wal_visible_runs = cell_wal_run_count(&index.cell_wal_snapshot);
         index.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&index.cell_wal_snapshot);
@@ -3624,8 +3524,7 @@ impl BorsukIndex {
         index.resident_global_ann_pins =
             index.preload_resident_global_ann_for_manifest(&manifest)?;
         let _ = index.load_resident_lexical_roots()?;
-        index.prepare_mutation_frontier(&index.manifest)?;
-        index.resident_global_mutations = index.prepare_resident_global_mutations()?;
+        index.prepare_manifest_mutation_frontier(&index.manifest)?;
         if options.preload {
             index.warm()?;
         }
@@ -3671,7 +3570,7 @@ impl BorsukIndex {
         primary_uri: &str,
         named_specs: &BTreeMap<String, VectorSpec>,
         collection_snapshot: &LoadedCollectionSnapshot,
-        collection_wal_snapshot: &CollectionWalSnapshot,
+        collection_wal_snapshot_retries: usize,
         mut loaded_named: BTreeMap<String, (Manifest, CollectionManifestRef)>,
         options: OpenOptions,
         read_runtime: Arc<CollectionReadRuntime>,
@@ -3695,7 +3594,7 @@ impl BorsukIndex {
                 manifest,
                 reference,
                 collection_snapshot.clone(),
-                collection_wal_snapshot,
+                collection_wal_snapshot_retries,
                 options.clone(),
                 Arc::clone(&read_runtime),
             )?;
@@ -3885,11 +3784,18 @@ impl BorsukIndex {
     }
 
     fn global_leaf_mutation_state_required(&self) -> bool {
-        self.manifest.tombstone_id_count > 0
-            || self.manifest.tombstone.is_some()
-            || !self.manifest.tombstone_pages.is_empty()
-            || !self.manifest.tombstone_frontier.is_empty()
-            || self.cell_wal_snapshot.iter().any(|transaction| {
+        Self::global_leaf_mutation_state_required_for(&self.manifest, &self.cell_wal_snapshot)
+    }
+
+    fn global_leaf_mutation_state_required_for(
+        manifest: &Manifest,
+        cell_wal_snapshot: &[CommittedCellWalTransaction],
+    ) -> bool {
+        manifest.tombstone_id_count > 0
+            || manifest.tombstone.is_some()
+            || !manifest.tombstone_pages.is_empty()
+            || !manifest.tombstone_frontier.is_empty()
+            || cell_wal_snapshot.iter().any(|transaction| {
                 transaction
                     .runs
                     .iter()
@@ -3914,21 +3820,36 @@ impl BorsukIndex {
     /// request. Refuse large snapshots by declared ID count before reading any
     /// tombstone object, reserve the full fixed cap before decoding, and keep
     /// that reservation pinned with the exact snapshot key.
+    #[cfg(test)]
     fn prepare_resident_global_mutations(
         &self,
     ) -> Result<Option<Arc<ResidentGlobalMutationOverlay>>> {
-        if self.manifest.global_ann_ref.is_none() || !self.global_leaf_mutation_state_required() {
+        self.prepare_resident_global_mutations_for_snapshot(
+            &self.manifest,
+            &self.cell_wal_snapshot,
+            &self.lane_log_head_checksums,
+        )
+    }
+
+    fn prepare_resident_global_mutations_for_snapshot(
+        &self,
+        manifest: &Manifest,
+        cell_wal_snapshot: &[CommittedCellWalTransaction],
+        lane_log_head_checksums: &[[u8; 32]],
+    ) -> Result<Option<Arc<ResidentGlobalMutationOverlay>>> {
+        if manifest.global_ann_ref.is_none()
+            || !Self::global_leaf_mutation_state_required_for(manifest, cell_wal_snapshot)
+        {
             return Ok(None);
         }
-        let visible_ids = self.visible_tombstone_id_count()?;
-        let referenced_ids = self
-            .manifest
+        let visible_ids = Self::visible_tombstone_id_count_for(manifest, cell_wal_snapshot)?;
+        let referenced_ids = manifest
             .tombstone
             .iter()
             .map(|summary| summary.count)
-            .chain(self.manifest.tombstone_pages.iter().map(|page| page.count))
+            .chain(manifest.tombstone_pages.iter().map(|page| page.count))
             .chain(
-                self.manifest
+                manifest
                     .tombstone_frontier
                     .iter()
                     .map(|summary| summary.count),
@@ -3944,7 +3865,7 @@ impl BorsukIndex {
         let Some(retained) = retained_pool.try_reserve(GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES) else {
             return Ok(None);
         };
-        let Some(states) = self.tombstone_overlay_for_manifest(&self.manifest)? else {
+        let Some(states) = self.tombstone_overlay_for_snapshot(manifest, cell_wal_snapshot)? else {
             return Ok(None);
         };
         let Ok(states) = Arc::try_unwrap(states) else {
@@ -3961,7 +3882,11 @@ impl BorsukIndex {
             return Ok(None);
         }
         Ok(Some(Arc::new(ResidentGlobalMutationOverlay {
-            snapshot_key: self.live_wal_snapshot_key(),
+            snapshot_key: Self::live_wal_snapshot_key_for(
+                manifest.version,
+                lane_log_head_checksums,
+                cell_wal_snapshot,
+            ),
             states,
             _retained: retained,
         })))
@@ -4120,7 +4045,6 @@ impl BorsukIndex {
         )?;
         let latest_lane_log_snapshot = self.read_lane_log_snapshot_if_changed(latest.version)?;
         self.prepare_manifest_mutation_frontier(&latest)?;
-        self.prepare_cell_mutation_frontier(&latest_cell_wal_snapshot)?;
         let latest_global_ann_pins = self.preload_resident_global_ann_for_manifest(&latest)?;
         latest.cell_wal_visible_runs = cell_wal_run_count(&latest_cell_wal_snapshot);
         latest.cell_wal_visible_tombstone_runs =
@@ -4153,7 +4077,6 @@ impl BorsukIndex {
                 &collection_wal_transaction_ids,
             )?;
             child.prepare_manifest_mutation_frontier(&manifest)?;
-            child.prepare_cell_mutation_frontier(&cell_wal_snapshot)?;
             let global_pq_pins = child.preload_resident_global_ann_for_manifest(&manifest)?;
             manifest.cell_wal_visible_runs = cell_wal_run_count(&cell_wal_snapshot);
             manifest.cell_wal_visible_tombstone_runs =
@@ -4177,12 +4100,36 @@ impl BorsukIndex {
                 let child = &self.named[name];
                 manifest.version != child.manifest.version || snapshot != &child.cell_wal_snapshot
             });
+        let named_manifests = prepared_named
+            .iter()
+            .map(|(name, (manifest, _, _, _))| (name.clone(), manifest.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let prepared_positioned =
+            self.prepare_positioned_snapshot(&latest_collection, &latest, &named_manifests)?;
+        let positioned_advanced = prepared_positioned.primary.transactions
+            != self.cell_wal_snapshot
+            || prepared_positioned.primary.run_identities != self.positioned_run_identities
+            || prepared_positioned.named.iter().any(|(name, modality)| {
+                let child = &self.named[name];
+                modality.transactions != child.cell_wal_snapshot
+                    || modality.run_identities != child.positioned_run_identities
+            });
         if !collection_advanced
             && !manifest_advanced
             && !cell_wal_advanced
             && !lane_log_advanced
             && !named_advanced
         {
+            let derived = positioned_advanced
+                .then(|| {
+                    self.prepare_positioned_derived_state(
+                        &latest,
+                        &named_manifests,
+                        &prepared_positioned,
+                        &self.lane_log_head_checksums,
+                    )
+                })
+                .transpose()?;
             self.resident_global_ann_pins = latest_global_ann_pins;
             for (name, (_, _, _, global_pq_pins)) in prepared_named {
                 self.named
@@ -4190,13 +4137,26 @@ impl BorsukIndex {
                     .expect("prepared named modality belongs to the current schema")
                     .resident_global_ann_pins = global_pq_pins;
             }
-            return Ok(false);
+            if let Some(derived) = derived {
+                self.install_prepared_positioned_snapshot(prepared_positioned, derived);
+            }
+            return Ok(positioned_advanced);
         }
+
+        let candidate_lane_log_head_checksums = latest_lane_log_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.head_checksums.clone())
+            .unwrap_or_else(|| self.lane_log_head_checksums.clone());
+        let derived = self.prepare_positioned_derived_state(
+            &latest,
+            &named_manifests,
+            &prepared_positioned,
+            &candidate_lane_log_head_checksums,
+        )?;
 
         self.manifest = latest;
         self.resident_global_ann_pins = latest_global_ann_pins;
         self.manifest_reference = own_reference;
-        self.cell_wal_snapshot = latest_cell_wal_snapshot;
         if let Some(latest_lane_log_snapshot) = latest_lane_log_snapshot {
             self.lane_log_snapshot = latest_lane_log_snapshot.record_blocks;
             self.lane_log_committed_sequences = latest_lane_log_snapshot.committed_sequences;
@@ -4204,9 +4164,7 @@ impl BorsukIndex {
         }
         self.cell_wal_snapshot_retries
             .store(collection_wal_snapshot_retries, AtomicOrdering::Relaxed);
-        self.resident_global_mutations = None;
-        self.resident_global_mutations = self.prepare_resident_global_mutations()?;
-        for (name, (manifest, reference, cell_wal_snapshot, global_pq_pins)) in prepared_named {
+        for (name, (manifest, reference, _cell_wal_snapshot, global_pq_pins)) in prepared_named {
             let child = self
                 .named
                 .get_mut(&name)
@@ -4214,15 +4172,13 @@ impl BorsukIndex {
             child.manifest = manifest;
             child.resident_global_ann_pins = global_pq_pins;
             child.manifest_reference = reference;
-            child.cell_wal_snapshot = cell_wal_snapshot;
             child
                 .cell_wal_snapshot_retries
                 .store(collection_wal_snapshot_retries, AtomicOrdering::Relaxed);
-            child.resident_global_mutations = None;
-            child.resident_global_mutations = child.prepare_resident_global_mutations()?;
             child.collection_snapshot = Some(latest_collection.clone());
         }
         self.collection_snapshot = Some(latest_collection);
+        self.install_prepared_positioned_snapshot(prepared_positioned, derived);
         Ok(true)
     }
 
@@ -4531,10 +4487,6 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return Ok(());
         }
-        self.begin_pending_collection_transaction(false).map(|_| ())
-    }
-
-    fn begin_pending_collection_transaction(&mut self, defer_maintenance: bool) -> Result<u8> {
         let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
         let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage(
@@ -4547,207 +4499,20 @@ impl BorsukIndex {
             snapshot_checksum: collection.checksum.clone(),
             snapshot_generation: collection.snapshot.generation,
             validated_snapshot_generation: Arc::new(Mutex::new(None)),
-            reservation: None,
-            admission_bytes_written: 0,
-            defer_maintenance,
+            positioned: Arc::new(Mutex::new(Vec::new())),
+            positioned_metadata: Arc::new(Mutex::new(BTreeMap::new())),
         };
         self.active_collection_transaction = Some(transaction.clone());
         for child in self.named.values_mut() {
             child.active_collection_transaction = Some(transaction.clone());
         }
-        Ok(0)
-    }
-
-    #[allow(
-        dead_code,
-        reason = "retained only until the v2 frontier primitive and its saturation test are deleted"
-    )]
-    fn begin_collection_transaction_from_candidates(
-        &mut self,
-        transaction_ids: impl IntoIterator<Item = String>,
-    ) -> Result<()> {
-        if self.active_collection_transaction.is_some() {
-            return Ok(());
-        }
-        // This handle already validated and pinned the collection schema at
-        // create/open/refresh. The final root publication revalidates it against
-        // the current collection snapshot, so rereading CURRENT plus its
-        // immutable snapshot here added latency without strengthening safety.
-        let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
-        let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "collection transaction requires a pinned collection snapshot".to_string(),
-            )
-        })?;
-        for transaction_id in transaction_ids {
-            match self
-                .collection_storage
-                .reserve_collection_wal_transaction(&transaction_id, &schema_fingerprint)
-            {
-                Ok(reservation) => {
-                    let admission_bytes_written = reservation.admission_bytes_written;
-                    let transaction = ActiveCollectionTransaction {
-                        id: transaction_id,
-                        schema_fingerprint,
-                        snapshot_checksum: collection.checksum.clone(),
-                        snapshot_generation: collection.snapshot.generation,
-                        validated_snapshot_generation: Arc::new(Mutex::new(None)),
-                        reservation: Some(Arc::new(Mutex::new(reservation))),
-                        admission_bytes_written,
-                        defer_maintenance: false,
-                    };
-                    self.active_collection_transaction = Some(transaction.clone());
-                    for child in self.named.values_mut() {
-                        child.active_collection_transaction = Some(transaction.clone());
-                    }
-                    return Ok(());
-                }
-                Err(BorsukError::ConcurrentModification { path })
-                    if path.ends_with("/CAPACITY") =>
-                {
-                    // The transaction id has not published any immutable lane
-                    // state yet, so selecting another bounded root shard is a
-                    // retry-safe admission decision. This avoids exposing one
-                    // hot shard's internal capacity sentinel to callers while
-                    // preserving the hard per-shard reader bound.
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        Err(BorsukError::ConcurrentModification {
-            path: "collection/wal-frontier/CAPACITY".to_string(),
-        })
+        Ok(())
     }
 
     fn active_collection_transaction_id(&self) -> Option<&str> {
         self.active_collection_transaction
             .as_ref()
             .map(|transaction| transaction.id.as_str())
-    }
-
-    fn reserve_active_collection_transaction(&self) -> Result<()> {
-        let Some(transaction) = &self.active_collection_transaction else {
-            return Ok(());
-        };
-        let Some(reservation) = &transaction.reservation else {
-            return Ok(());
-        };
-        let receipt = self
-            .collection_storage
-            .reserve_collection_wal_transaction(&transaction.id, &transaction.schema_fingerprint)?;
-        *reservation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = receipt;
-        Ok(())
-    }
-
-    fn cancel_active_collection_transaction_reservation(&self) -> Result<()> {
-        let Some(transaction) = &self.active_collection_transaction else {
-            return Ok(());
-        };
-        if transaction.reservation.is_some() {
-            self.collection_storage
-                .cancel_collection_wal_reservation(&transaction.id)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn collection_descriptor_for_transaction(
-        &self,
-        transaction_id: &str,
-    ) -> Option<CollectionDescriptorRef> {
-        self.cell_wal_snapshot
-            .iter()
-            .find(|transaction| transaction.transaction_id == transaction_id)
-            .map(|transaction| CollectionDescriptorRef {
-                modality: self.manifest_reference.modality.clone(),
-                prefix: self.manifest_reference.prefix.clone(),
-                descriptor_path: format!(
-                    "{}{}",
-                    self.manifest_reference.prefix, transaction.descriptor_path
-                ),
-                descriptor_checksum: transaction.descriptor_checksum.clone(),
-            })
-    }
-
-    /// Publish collection root truth and report whether its shard crossed the
-    /// cooperative maintenance threshold.
-    fn publish_active_collection_transaction(&self) -> Result<CollectionWalCommitOutcome> {
-        let transaction = self.active_collection_transaction.as_ref().ok_or_else(|| {
-            BorsukError::InvalidStorage("no active collection transaction".to_string())
-        })?;
-        let validated_snapshot_generation = *transaction
-            .validated_snapshot_generation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let snapshot_generation = match validated_snapshot_generation {
-            Some(generation) => generation,
-            None => self
-                .collection_storage
-                .collection_snapshot_generation_if_schema_compatible(
-                    &transaction.snapshot_checksum,
-                    transaction.snapshot_generation,
-                    &transaction.schema_fingerprint,
-                )?,
-        };
-        let mut descriptors = Vec::with_capacity(self.named.len() + 1);
-        if let Some(reference) = self.collection_descriptor_for_transaction(&transaction.id) {
-            descriptors.push(reference);
-        }
-        for child in self.named.values() {
-            if let Some(reference) = child.collection_descriptor_for_transaction(&transaction.id) {
-                descriptors.push(reference);
-            }
-        }
-        if descriptors.is_empty() {
-            self.cancel_active_collection_transaction_reservation()?;
-            return Ok(CollectionWalCommitOutcome {
-                root_pressure: false,
-                successor: None,
-            });
-        }
-        if descriptors[0].modality != PRIMARY_MODALITY {
-            return Err(BorsukError::InvalidStorage(format!(
-                "collection transaction `{}` has named descriptors without a primary descriptor; primary snapshot transactions: {:?}",
-                transaction.id,
-                self.cell_wal_snapshot
-                    .iter()
-                    .map(|entry| entry.transaction_id.as_str())
-                    .collect::<Vec<_>>()
-            )));
-        }
-        let commit = CollectionCommit {
-            transaction_id: transaction.id.clone(),
-            // Foreground commits and manifest maintenance use independent root
-            // paths. Re-pin the latest compatible snapshot at the final
-            // visibility write so an intervening checkpoint cannot reject or
-            // lose an otherwise valid WAL append.
-            snapshot_generation,
-            schema_fingerprint: transaction.schema_fingerprint.clone(),
-            descriptors,
-        };
-        let outcome = if let Some(reservation) = &transaction.reservation {
-            let receipt = reservation
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone();
-            self.collection_storage
-                .create_collection_commit_from_reservation(&commit, &receipt, None)?
-        } else {
-            self.collection_storage
-                .create_pending_collection_commit(&PendingCollectionCommit {
-                    epoch: format!("schema-{}", transaction.schema_fingerprint),
-                    created_at_ms: crate::storage::collection_wal_now_ms()?,
-                    commit,
-                })?;
-            CollectionWalCommitOutcome {
-                root_pressure: false,
-                successor: None,
-            }
-        };
-        Ok(outcome)
     }
 
     fn finish_pending_collection_claim(&mut self) {
@@ -4760,6 +4525,49 @@ impl BorsukIndex {
         if let Some(mut claim) = claim {
             self.cell_wal_claim_checkpoint.extend(claim.finish());
         }
+    }
+
+    fn authorize_pending_collection_claim(
+        &mut self,
+        source_epoch: u64,
+        shard: u8,
+        sequence: u64,
+        envelope_checksum: &str,
+    ) -> Result<()> {
+        let claim = self
+            .pending_collection_claim
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if let Some(mut claim) = claim {
+            self.cell_wal_claim_checkpoint
+                .extend(claim.finish_authorized(
+                    source_epoch,
+                    shard,
+                    sequence,
+                    envelope_checksum,
+                )?);
+        }
+        Ok(())
+    }
+
+    fn authorize_collection_claims(
+        &mut self,
+        source_epoch: u64,
+        shard: u8,
+        sequence: u64,
+        envelope_checksum: &str,
+    ) -> Result<()> {
+        self.authorize_pending_collection_claim(source_epoch, shard, sequence, envelope_checksum)?;
+        for child in self.named.values_mut() {
+            child.authorize_pending_collection_claim(
+                source_epoch,
+                shard,
+                sequence,
+                envelope_checksum,
+            )?;
+        }
+        Ok(())
     }
 
     fn clear_collection_transaction(&mut self, committed: bool) {
@@ -4787,47 +4595,954 @@ impl BorsukIndex {
         }
     }
 
-    fn finish_collection_transaction(&mut self, result: Result<()>) -> Result<()> {
-        self.finish_collection_transaction_value(result)
+    fn positioned_modality_for_run(&self, run: &StagedPositionedRun) -> PositionedMutationModality {
+        match run.input.kind {
+            CellWalRunKind::Tombstones => PositionedMutationModality::Tombstone,
+            CellWalRunKind::IdDirectory => PositionedMutationModality::IdDirectory,
+            CellWalRunKind::Records if run.modality == PRIMARY_MODALITY => {
+                PositionedMutationModality::PrimaryDense
+            }
+            CellWalRunKind::Records => self
+                .manifest
+                .config
+                .named_vectors
+                .get(&run.modality)
+                .map_or(PositionedMutationModality::NamedDense, |spec| {
+                    match spec.kind {
+                        VectorKind::Dense => PositionedMutationModality::NamedDense,
+                        VectorKind::Sparse => PositionedMutationModality::Sparse,
+                        VectorKind::LateInteraction => PositionedMutationModality::LateInteraction,
+                    }
+                }),
+        }
     }
 
-    fn prune_unpublished_collection_transaction_from_modality(
+    fn positioned_role(run: &StagedPositionedRun) -> Result<String> {
+        let tombstone_created_at = (run.input.kind == CellWalRunKind::Tombstones)
+            .then(|| {
+                cell_wal_tombstone_metadata_from_slice(&run.input.metadata, "positioned tombstone")
+            })
+            .transpose()?
+            .map(|metadata| metadata.created_at);
+        serde_json::to_string(&PositionedRunRole {
+            version: 1,
+            modality: run.modality.clone(),
+            kind: run.input.kind,
+            routing_epoch: run.input.cell.routing_epoch,
+            cell_ordinal: run.input.cell.cell_ordinal,
+            tombstone_created_at_seconds: tombstone_created_at.map(|value| value.timestamp()),
+            tombstone_created_at_nanos: tombstone_created_at
+                .map(|value| value.timestamp_subsec_nanos()),
+        })
+        .map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "failed to encode positioned mutation role: {error}"
+            ))
+        })
+    }
+
+    fn positioned_payload_path(input: &CellWalRunInput) -> String {
+        let checksum = blake3::hash(&input.bytes).to_hex().to_string();
+        canonical_payload_path(PositionedPayloadFormat::Parquet, &checksum)
+    }
+
+    fn prepare_positioned_tombstone_projections(
+        &self,
+        transaction_id: &str,
+        rows: &[PositionedTombstoneRow],
+        payload_path: &str,
+        payload_checksum: &str,
+        payload_bytes: u64,
+    ) -> Result<Vec<(String, PreparedCellWalRun)>> {
+        let mut grouped = BTreeMap::<String, Vec<&PositionedTombstoneRow>>::new();
+        for row in rows {
+            grouped.entry(row.modality.clone()).or_default().push(row);
+        }
+        grouped
+            .into_iter()
+            .map(|(modality, rows)| {
+                let first = rows[0];
+                if rows.iter().any(|row| {
+                    row.created_at_seconds != first.created_at_seconds
+                        || row.created_at_nanos != first.created_at_nanos
+                }) {
+                    return Err(BorsukError::InvalidStorage(
+                        "one positioned tombstone modality has mixed created-at values".to_string(),
+                    ));
+                }
+                let created_at = DateTime::<Utc>::from_timestamp(
+                    first.created_at_seconds,
+                    first.created_at_nanos,
+                )
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "positioned tombstone has an invalid created-at timestamp".to_string(),
+                    )
+                })?;
+                let mut checksum_hasher = blake3::Hasher::new();
+                checksum_hasher.update(b"borsuk-positioned-tombstone-projection-v1\0");
+                checksum_hasher.update(payload_checksum.as_bytes());
+                checksum_hasher.update(modality.as_bytes());
+                Ok((
+                    modality.clone(),
+                    PreparedCellWalRun {
+                        transaction_id: transaction_id.to_string(),
+                        cell: LogicalCellId::new(self.manifest.routing_epoch, 0),
+                        lane: 0,
+                        kind: CellWalRunKind::Tombstones,
+                        metadata: cell_wal_tombstone_metadata_bytes(&CellWalTombstoneMetadata {
+                            id_bloom: crate::manifest::tombstone_id_bloom(
+                                rows.iter().map(|row| row.record_id.as_slice()),
+                            ),
+                            created_at,
+                        })?,
+                        path: positioned_tombstone_projection_path(
+                            payload_path,
+                            payload_checksum,
+                            &modality,
+                        ),
+                        checksum: checksum_hasher.finalize().to_hex().to_string(),
+                        record_count: rows.len(),
+                        byte_len: payload_bytes,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    fn install_committed_positioned_batch(
+        &mut self,
+        batch: &CanonicalMutationBatch,
+        committed: &CommittedPositionedMutation,
+        tombstone_projections: Vec<(String, PreparedCellWalRun)>,
+    ) {
+        if let Some(metadata) = batch.metadata.get(PRIMARY_MODALITY)
+            && !metadata.bm25_stats_delta.is_empty()
+        {
+            self.positioned_bm25_deltas.insert(
+                batch.transaction_id.clone(),
+                metadata.bm25_stats_delta.clone(),
+            );
+        }
+        let mut by_modality = BTreeMap::<String, Vec<PreparedCellWalRun>>::new();
+        for staged in batch.runs.iter().filter(|staged| {
+            staged.modality == PRIMARY_MODALITY && staged.input.kind != CellWalRunKind::Tombstones
+        }) {
+            let checksum = blake3::hash(&staged.input.bytes).to_hex().to_string();
+            by_modality
+                .entry(staged.modality.clone())
+                .or_default()
+                .push(PreparedCellWalRun {
+                    transaction_id: batch.transaction_id.clone(),
+                    cell: staged.input.cell,
+                    lane: 0,
+                    kind: staged.input.kind,
+                    metadata: staged.input.metadata.clone(),
+                    path: Self::positioned_payload_path(&staged.input),
+                    checksum,
+                    record_count: staged.input.record_count,
+                    byte_len: staged.input.bytes.len() as u64,
+                });
+        }
+        for (modality, run) in tombstone_projections {
+            by_modality.entry(modality).or_default().push(run);
+        }
+        let descriptor_path = canonical_envelope_path(&committed.envelope_checksum);
+        let primary_record_run = by_modality
+            .get(PRIMARY_MODALITY)
+            .and_then(|runs| runs.iter().find(|run| run.kind == CellWalRunKind::Records))
+            .cloned();
+        for (modality, mut runs) in by_modality {
+            runs.sort_by(|left, right| {
+                (left.kind, left.cell, &left.checksum).cmp(&(
+                    right.kind,
+                    right.cell,
+                    &right.checksum,
+                ))
+            });
+            let transaction = CommittedCellWalTransaction {
+                transaction_id: batch.transaction_id.clone(),
+                descriptor_path: descriptor_path.clone(),
+                descriptor_checksum: committed.envelope_checksum.clone(),
+                runs,
+                metadata: batch
+                    .metadata
+                    .get(&modality)
+                    .map(|metadata| {
+                        cell_wal_mutation_metadata_bytes(&CellWalMutationMetadata {
+                            new_tombstone_ids: metadata.new_tombstone_ids,
+                            next_generated_id_floor: metadata.next_generated_id_floor,
+                            bm25_stats_delta: None,
+                        })
+                    })
+                    .transpose()
+                    .expect("positioned metadata was validated before the head CAS")
+                    .unwrap_or_default(),
+            };
+            if modality == PRIMARY_MODALITY {
+                Self::register_positioned_run_identities(self, &transaction);
+                Self::push_positioned_overlay(self, transaction);
+            } else {
+                let target = self
+                    .named
+                    .get_mut(&modality)
+                    .expect("positioned modalities are prevalidated before the head CAS");
+                Self::register_positioned_run_identities(target, &transaction);
+                Self::push_positioned_overlay(target, transaction);
+            }
+        }
+        if let Some(primary_run) = primary_record_run {
+            self.install_named_positioned_projections(
+                &batch.transaction_id,
+                &descriptor_path,
+                &committed.envelope_checksum,
+                &primary_run,
+                &batch.metadata,
+            )
+            .expect("named projection metadata is prevalidated before the head CAS");
+        }
+    }
+
+    fn register_positioned_run_identities(
+        target: &mut BorsukIndex,
+        transaction: &CommittedCellWalTransaction,
+    ) {
+        target
+            .positioned_run_identities
+            .extend(transaction.runs.iter().map(cell_wal_run_identity));
+    }
+
+    fn push_positioned_overlay(target: &mut BorsukIndex, transaction: CommittedCellWalTransaction) {
+        target.cell_wal_snapshot.push(transaction);
+        target
+            .cell_wal_snapshot
+            .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+        target.manifest.cell_wal_visible_runs = cell_wal_run_count(&target.cell_wal_snapshot);
+        target.manifest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&target.cell_wal_snapshot);
+        target.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
+    }
+
+    fn install_named_positioned_projections(
         &mut self,
         transaction_id: &str,
+        descriptor_path: &str,
+        descriptor_checksum: &str,
+        primary_run: &PreparedCellWalRun,
+        transaction_metadata: &BTreeMap<String, StagedPositionedMetadata>,
     ) -> Result<()> {
-        let transactions = self
-            .cell_wal_snapshot
-            .iter()
-            .filter(|transaction| transaction.transaction_id == transaction_id)
-            .collect::<Vec<_>>();
-        let consumed = transactions
-            .iter()
-            .flat_map(|transaction| transaction.runs.iter().map(cell_wal_run_identity))
-            .collect::<BTreeSet<_>>();
-        if !consumed.is_empty() {
-            let cells = transactions
-                .iter()
-                .flat_map(|transaction| transaction.runs.iter().map(|run| run.cell))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            self.cell_wal_store()?
-                .prune_consumed_runs(&cells, &consumed)?;
+        let specs = self.manifest.config.named_vectors.clone();
+        for (name, spec) in specs {
+            if spec.kind == VectorKind::Sparse {
+                continue;
+            }
+            let mut run = primary_run.clone();
+            run.metadata = positioned_projection_metadata(&name, spec.kind)?;
+            run.record_count = usize::try_from(
+                transaction_metadata
+                    .get(&name)
+                    .map(|metadata| metadata.logical_record_count)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned primary run is missing `{name}` projection cardinality"
+                        ))
+                    })?,
+            )
+            .map_err(|_| {
+                BorsukError::InvalidStorage(format!(
+                    "positioned `{name}` projection cardinality exceeds usize"
+                ))
+            })?;
+            let transaction = CommittedCellWalTransaction {
+                transaction_id: transaction_id.to_string(),
+                descriptor_path: descriptor_path.to_string(),
+                descriptor_checksum: descriptor_checksum.to_string(),
+                runs: vec![run],
+                metadata: Vec::new(),
+            };
+            let child = self.named.get_mut(&name).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "positioned projection references missing modality `{name}`"
+                ))
+            })?;
+            Self::register_positioned_run_identities(child, &transaction);
+            if let Some(transaction) =
+                Self::retain_unconsumed_cell_wal_transaction(&child.manifest, transaction)?
+            {
+                Self::push_positioned_overlay(child, transaction);
+            }
         }
-        self.cell_wal_snapshot
-            .retain(|transaction| transaction.transaction_id != transaction_id);
+        Ok(())
+    }
+
+    fn reload_positioned_snapshot(&mut self) -> Result<()> {
+        let collection_snapshot = self.collection_snapshot.clone().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "positioned snapshot requires a pinned collection generation".to_string(),
+            )
+        })?;
+        let primary_manifest = self.manifest.clone();
+        let named_manifests = self
+            .named
+            .iter()
+            .map(|(name, child)| (name.clone(), child.manifest.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let prepared = self.prepare_positioned_snapshot(
+            &collection_snapshot,
+            &primary_manifest,
+            &named_manifests,
+        )?;
+        let derived = self.prepare_positioned_derived_state(
+            &primary_manifest,
+            &named_manifests,
+            &prepared,
+            &self.lane_log_head_checksums,
+        )?;
+        self.install_prepared_positioned_snapshot(prepared, derived);
+        Ok(())
+    }
+
+    fn prepare_positioned_snapshot(
+        &self,
+        collection_snapshot: &LoadedCollectionSnapshot,
+        primary_manifest: &Manifest,
+        named_manifests: &BTreeMap<String, Manifest>,
+    ) -> Result<PreparedPositionedSnapshot> {
+        let generation = collection_snapshot.snapshot.generation;
+        let writer = self.positioned_log.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "positioned snapshot requires the collection root".to_string(),
+            )
+        })?;
+        let snapshot = writer
+            .reader()
+            .snapshot_for_collection_generation(generation)?;
+        let mut prepared = PreparedPositionedSnapshot {
+            named: named_manifests
+                .keys()
+                .map(|name| (name.clone(), PreparedPositionedModalitySnapshot::default()))
+                .collect(),
+            ..PreparedPositionedSnapshot::default()
+        };
+        for (envelope, descriptor_checksum) in snapshot
+            .transactions
+            .into_iter()
+            .zip(snapshot.envelope_checksums)
+        {
+            if envelope.schema_fingerprint != collection_schema_fingerprint(primary_manifest) {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "positioned transaction `{}` has an incompatible schema fingerprint",
+                    envelope.transaction_id
+                )));
+            }
+            let mut by_modality = BTreeMap::<String, Vec<PreparedCellWalRun>>::new();
+            let mut transaction_metadata = BTreeMap::<String, StagedPositionedMetadata>::new();
+            for payload in &envelope.payloads {
+                if payload.role == "transaction_metadata_v2" {
+                    let bytes = self
+                        .collection_storage
+                        .read_bytes_with_cache_status_and_checksum(
+                            &payload.path,
+                            &payload.checksum,
+                        )?
+                        .bytes;
+                    let mut active_modality = None::<String>;
+                    let mut last_term = None::<u32>;
+                    for row in positioned_transaction_metadata_from_parquet(&bytes)? {
+                        if row.term.is_none() {
+                            if transaction_metadata.contains_key(&row.modality)
+                                || row.document_frequency_delta != 0
+                            {
+                                return Err(BorsukError::InvalidStorage(
+                                    "positioned metadata has a duplicate or invalid header row"
+                                        .to_string(),
+                                ));
+                            }
+                            active_modality = Some(row.modality.clone());
+                            last_term = None;
+                            transaction_metadata.insert(
+                                row.modality,
+                                StagedPositionedMetadata {
+                                    logical_record_count: row.logical_record_count,
+                                    next_generated_id_floor: row.next_generated_id_floor,
+                                    new_tombstone_ids: row.new_tombstone_ids,
+                                    bm25_stats_delta: Bm25StatsDelta {
+                                        document_count: row.document_count_delta,
+                                        total_document_length: row.total_document_length_delta,
+                                        document_frequencies: BTreeMap::new(),
+                                    },
+                                },
+                            );
+                            continue;
+                        }
+                        let term = row.term.expect("term row checked");
+                        if active_modality.as_deref() != Some(row.modality.as_str())
+                            || last_term.is_some_and(|previous| previous >= term)
+                            || row.next_generated_id_floor != 0
+                            || row.new_tombstone_ids != 0
+                            || row.logical_record_count != 0
+                            || row.document_count_delta != 0
+                            || row.total_document_length_delta != 0
+                            || row.document_frequency_delta == 0
+                        {
+                            return Err(BorsukError::InvalidStorage(
+                                "positioned metadata term rows are not canonical".to_string(),
+                            ));
+                        }
+                        transaction_metadata
+                            .get_mut(&row.modality)
+                            .expect("term row follows its header")
+                            .bm25_stats_delta
+                            .document_frequencies
+                            .insert(term, row.document_frequency_delta);
+                        last_term = Some(term);
+                    }
+                    continue;
+                }
+                if payload.role == "tombstones_by_modality_v1" {
+                    let bytes = self
+                        .collection_storage
+                        .read_bytes_with_cache_status_and_checksum(
+                            &payload.path,
+                            &payload.checksum,
+                        )?
+                        .bytes;
+                    let mut grouped = BTreeMap::<String, Vec<PositionedTombstoneRow>>::new();
+                    for row in positioned_tombstones_from_parquet(&bytes)? {
+                        grouped.entry(row.modality.clone()).or_default().push(row);
+                    }
+                    for (modality, rows) in grouped {
+                        let first = rows.first().expect("grouped tombstones are nonempty");
+                        if rows.iter().any(|row| {
+                            row.created_at_seconds != first.created_at_seconds
+                                || row.created_at_nanos != first.created_at_nanos
+                        }) {
+                            return Err(BorsukError::InvalidStorage(
+                                "one positioned tombstone modality has mixed created-at values"
+                                    .to_string(),
+                            ));
+                        }
+                        let created_at = DateTime::<Utc>::from_timestamp(
+                            first.created_at_seconds,
+                            first.created_at_nanos,
+                        )
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "positioned tombstone has an invalid created-at timestamp"
+                                    .to_string(),
+                            )
+                        })?;
+                        let mut checksum_hasher = blake3::Hasher::new();
+                        checksum_hasher.update(b"borsuk-positioned-tombstone-projection-v1\0");
+                        checksum_hasher.update(payload.checksum.as_bytes());
+                        checksum_hasher.update(modality.as_bytes());
+                        let projection_checksum = checksum_hasher.finalize().to_hex().to_string();
+                        by_modality
+                            .entry(modality.clone())
+                            .or_default()
+                            .push(PreparedCellWalRun {
+                                transaction_id: envelope.transaction_id.clone(),
+                                cell: LogicalCellId::new(primary_manifest.routing_epoch, 0),
+                                lane: 0,
+                                kind: CellWalRunKind::Tombstones,
+                                metadata: cell_wal_tombstone_metadata_bytes(
+                                    &CellWalTombstoneMetadata {
+                                        id_bloom: crate::manifest::tombstone_id_bloom(
+                                            rows.iter().map(|row| row.record_id.as_slice()),
+                                        ),
+                                        created_at,
+                                    },
+                                )?,
+                                path: positioned_tombstone_projection_path(
+                                    &payload.path,
+                                    &payload.checksum,
+                                    &modality,
+                                ),
+                                checksum: projection_checksum,
+                                record_count: rows.len(),
+                                byte_len: payload.encoded_bytes,
+                            });
+                    }
+                    continue;
+                }
+                let role: PositionedRunRole =
+                    serde_json::from_str(&payload.role).map_err(|error| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned payload role is invalid: {error}"
+                        ))
+                    })?;
+                if role.version != 1 {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned payload role has an unsupported version".to_string(),
+                    ));
+                }
+                let metadata = if role.kind == CellWalRunKind::Tombstones {
+                    let bytes = self
+                        .collection_storage
+                        .read_bytes_with_cache_status_and_checksum(
+                            &payload.path,
+                            &payload.checksum,
+                        )?
+                        .bytes;
+                    let entries = tombstone_ids_from_parquet(&bytes)?;
+                    let seconds = role.tombstone_created_at_seconds.ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "positioned tombstone role is missing created-at seconds".to_string(),
+                        )
+                    })?;
+                    let nanos = role.tombstone_created_at_nanos.ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "positioned tombstone role is missing created-at nanoseconds"
+                                .to_string(),
+                        )
+                    })?;
+                    let created_at =
+                        DateTime::<Utc>::from_timestamp(seconds, nanos).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "positioned tombstone role has an invalid created-at timestamp"
+                                    .to_string(),
+                            )
+                        })?;
+                    cell_wal_tombstone_metadata_bytes(&CellWalTombstoneMetadata {
+                        id_bloom: crate::manifest::tombstone_id_bloom(
+                            entries.iter().map(|(id, _)| id),
+                        ),
+                        created_at,
+                    })?
+                } else {
+                    Vec::new()
+                };
+                by_modality
+                    .entry(role.modality)
+                    .or_default()
+                    .push(PreparedCellWalRun {
+                        transaction_id: envelope.transaction_id.clone(),
+                        cell: LogicalCellId::new(role.routing_epoch, role.cell_ordinal),
+                        lane: 0,
+                        kind: role.kind,
+                        metadata,
+                        path: payload.path.clone(),
+                        checksum: payload.checksum.clone(),
+                        record_count: usize::try_from(payload.rows).map_err(|_| {
+                            BorsukError::InvalidStorage(
+                                "positioned payload rows exceed usize".to_string(),
+                            )
+                        })?,
+                        byte_len: payload.encoded_bytes,
+                    });
+            }
+            let primary_record_run = by_modality
+                .get(PRIMARY_MODALITY)
+                .and_then(|runs| runs.iter().find(|run| run.kind == CellWalRunKind::Records))
+                .cloned();
+            let descriptor_path = canonical_envelope_path(&descriptor_checksum);
+            let mut primary_retained = false;
+            for (modality, runs) in by_modality {
+                let is_primary = modality == PRIMARY_MODALITY;
+                let target_manifest = if is_primary {
+                    primary_manifest
+                } else {
+                    named_manifests.get(&modality).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned transaction references unknown modality `{modality}`"
+                        ))
+                    })?
+                };
+                let transaction = CommittedCellWalTransaction {
+                    transaction_id: envelope.transaction_id.clone(),
+                    descriptor_path: descriptor_path.clone(),
+                    descriptor_checksum: descriptor_checksum.clone(),
+                    runs,
+                    metadata: transaction_metadata
+                        .get(&modality)
+                        .map(|metadata| {
+                            cell_wal_mutation_metadata_bytes(&CellWalMutationMetadata {
+                                new_tombstone_ids: metadata.new_tombstone_ids,
+                                next_generated_id_floor: metadata.next_generated_id_floor,
+                                bm25_stats_delta: None,
+                            })
+                        })
+                        .transpose()?
+                        .unwrap_or_default(),
+                };
+                let target = if is_primary {
+                    &mut prepared.primary
+                } else {
+                    prepared.named.get_mut(&modality).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned transaction references unknown modality `{modality}`"
+                        ))
+                    })?
+                };
+                target
+                    .run_identities
+                    .extend(transaction.runs.iter().map(cell_wal_run_identity));
+                if let Some(transaction) =
+                    Self::retain_unconsumed_cell_wal_transaction(target_manifest, transaction)?
+                {
+                    primary_retained |= is_primary;
+                    target.transactions.push(transaction);
+                }
+            }
+            if primary_retained
+                && let Some(metadata) = transaction_metadata.get(PRIMARY_MODALITY)
+                && !metadata.bm25_stats_delta.is_empty()
+            {
+                prepared.primary_bm25_deltas.insert(
+                    envelope.transaction_id.clone(),
+                    metadata.bm25_stats_delta.clone(),
+                );
+            }
+            if let Some(primary_run) = primary_record_run {
+                let primary_logical_count = transaction_metadata
+                    .get(PRIMARY_MODALITY)
+                    .map(|metadata| metadata.logical_record_count)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "positioned primary run is missing transaction metadata".to_string(),
+                        )
+                    })?;
+                if primary_logical_count != primary_run.record_count as u64 {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned primary logical record count does not match its payload"
+                            .to_string(),
+                    ));
+                }
+                for (name, spec) in &primary_manifest.config.named_vectors {
+                    if spec.kind == VectorKind::Sparse {
+                        continue;
+                    }
+                    let named_manifest = named_manifests.get(name).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned projection references missing modality `{name}`"
+                        ))
+                    })?;
+                    let target = prepared.named.get_mut(name).ok_or_else(|| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned projection references missing modality `{name}`"
+                        ))
+                    })?;
+                    let mut run = primary_run.clone();
+                    run.metadata = positioned_projection_metadata(name, spec.kind)?;
+                    run.record_count = usize::try_from(
+                        transaction_metadata
+                            .get(name)
+                            .map(|metadata| metadata.logical_record_count)
+                            .ok_or_else(|| {
+                            BorsukError::InvalidStorage(format!(
+                                "positioned primary run is missing `{name}` projection cardinality"
+                            ))
+                        })?,
+                    )
+                    .map_err(|_| {
+                        BorsukError::InvalidStorage(format!(
+                            "positioned `{name}` projection cardinality exceeds usize"
+                        ))
+                    })?;
+                    let transaction = CommittedCellWalTransaction {
+                        transaction_id: envelope.transaction_id.clone(),
+                        descriptor_path: descriptor_path.clone(),
+                        descriptor_checksum: descriptor_checksum.clone(),
+                        runs: vec![run],
+                        metadata: Vec::new(),
+                    };
+                    target
+                        .run_identities
+                        .extend(transaction.runs.iter().map(cell_wal_run_identity));
+                    if let Some(transaction) =
+                        Self::retain_unconsumed_cell_wal_transaction(named_manifest, transaction)?
+                    {
+                        target.transactions.push(transaction);
+                    }
+                }
+            }
+        }
+        prepared
+            .primary
+            .transactions
+            .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+        for modality in prepared.named.values_mut() {
+            modality
+                .transactions
+                .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+        }
+        Ok(prepared)
+    }
+
+    fn prepare_positioned_derived_state(
+        &self,
+        primary_manifest: &Manifest,
+        named_manifests: &BTreeMap<String, Manifest>,
+        prepared: &PreparedPositionedSnapshot,
+        primary_lane_log_head_checksums: &[[u8; 32]],
+    ) -> Result<PreparedPositionedDerivedState> {
+        self.prepare_cell_mutation_frontier(&prepared.primary.transactions)?;
+        let primary_resident_global_mutations = self
+            .prepare_resident_global_mutations_for_snapshot(
+                primary_manifest,
+                &prepared.primary.transactions,
+                primary_lane_log_head_checksums,
+            )?;
+        let mut named_resident_global_mutations = BTreeMap::new();
+        for (name, modality) in &prepared.named {
+            let child = self.named.get(name).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "positioned projection references missing modality `{name}`"
+                ))
+            })?;
+            let manifest = named_manifests.get(name).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "positioned projection references missing manifest for modality `{name}`"
+                ))
+            })?;
+            child.prepare_cell_mutation_frontier(&modality.transactions)?;
+            named_resident_global_mutations.insert(
+                name.clone(),
+                child.prepare_resident_global_mutations_for_snapshot(
+                    manifest,
+                    &modality.transactions,
+                    &child.lane_log_head_checksums,
+                )?,
+            );
+        }
+        Ok(PreparedPositionedDerivedState {
+            primary_resident_global_mutations,
+            named_resident_global_mutations,
+        })
+    }
+
+    fn install_prepared_positioned_snapshot(
+        &mut self,
+        prepared: PreparedPositionedSnapshot,
+        mut derived: PreparedPositionedDerivedState,
+    ) {
+        self.cell_wal_snapshot = prepared.primary.transactions;
+        self.positioned_run_identities = prepared.primary.run_identities;
+        self.positioned_bm25_deltas = prepared.primary_bm25_deltas;
         self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
         self.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
-        Ok(())
+        self.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
+        self.resident_global_mutations = derived.primary_resident_global_mutations;
+        for (name, modality) in prepared.named {
+            let child = self
+                .named
+                .get_mut(&name)
+                .expect("prepared positioned modality belongs to the current schema");
+            child.cell_wal_snapshot = modality.transactions;
+            child.positioned_run_identities = modality.run_identities;
+            child.manifest.cell_wal_visible_runs = cell_wal_run_count(&child.cell_wal_snapshot);
+            child.manifest.cell_wal_visible_tombstone_runs =
+                cell_wal_tombstone_run_count(&child.cell_wal_snapshot);
+            child.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
+            child.resident_global_mutations = derived
+                .named_resident_global_mutations
+                .remove(&name)
+                .expect("prepared positioned modality has derived state");
+        }
+        debug_assert!(derived.named_resident_global_mutations.is_empty());
     }
 
-    fn prune_unpublished_collection_transaction(&mut self, transaction_id: &str) -> Result<()> {
-        self.prune_unpublished_collection_transaction_from_modality(transaction_id)?;
-        for child in self.named.values_mut() {
-            child.prune_unpublished_collection_transaction_from_modality(transaction_id)?;
+    /// Append one validated canonical collection mutation through the sole V12
+    /// durable mutation protocol.
+    pub fn append_positioned_mutation(
+        &mut self,
+        batch: CanonicalMutationBatch,
+    ) -> Result<AddReport> {
+        for (name, spec) in &self.manifest.config.named_vectors {
+            if spec.kind != VectorKind::Sparse {
+                positioned_projection_metadata(name, spec.kind)?;
+            }
         }
-        Ok(())
+        // Primary rows carry every named/text value. Child record and
+        // ownership tables are read-time projections, so payload cardinality
+        // is independent of declared named-vector count.
+        for run in &batch.runs {
+            if run.modality != PRIMARY_MODALITY && !self.named.contains_key(&run.modality) {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "positioned transaction references unknown modality `{}`",
+                    run.modality
+                )));
+            }
+        }
+        self.collection_storage
+            .collection_snapshot_generation_if_schema_compatible(
+                &batch.snapshot_checksum,
+                batch.snapshot_generation,
+                &batch.schema_fingerprint,
+            )?;
+        let vectors_added = batch
+            .runs
+            .iter()
+            .filter(|run| {
+                run.modality == PRIMARY_MODALITY && run.input.kind == CellWalRunKind::Records
+            })
+            .map(|run| run.input.record_count)
+            .sum();
+        let mut payloads = batch
+            .runs
+            .iter()
+            .filter(|run| {
+                run.modality == PRIMARY_MODALITY && run.input.kind != CellWalRunKind::Tombstones
+            })
+            .map(|run| {
+                Ok(PositionedMutationPayloadInput {
+                    modality: self.positioned_modality_for_run(run),
+                    role: Self::positioned_role(run)?,
+                    format: PositionedPayloadFormat::Parquet,
+                    bytes: run.input.bytes.clone(),
+                    rows: u64::try_from(run.input.record_count).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "positioned mutation row count exceeds u64".to_string(),
+                        )
+                    })?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut positioned_tombstones = Vec::new();
+        for run in batch
+            .runs
+            .iter()
+            .filter(|run| run.input.kind == CellWalRunKind::Tombstones)
+        {
+            let metadata = cell_wal_tombstone_metadata_from_slice(
+                &run.input.metadata,
+                "positioned tombstone",
+            )?;
+            positioned_tombstones.extend(
+                tombstone_ids_from_parquet(&run.input.bytes)?
+                    .into_iter()
+                    .map(|(record_id, state)| PositionedTombstoneRow {
+                        modality: run.modality.clone(),
+                        record_id,
+                        state,
+                        created_at_seconds: metadata.created_at.timestamp(),
+                        created_at_nanos: metadata.created_at.timestamp_subsec_nanos(),
+                    }),
+            );
+        }
+        let mut merged_tombstones = BTreeMap::<(String, Vec<u8>), PositionedTombstoneRow>::new();
+        for row in positioned_tombstones {
+            let key = (row.modality.clone(), row.record_id.clone());
+            match merged_tombstones.entry(key) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(row);
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    let winner = entry.get().state.greatest(row.state)?;
+                    let created_at = (entry.get().created_at_seconds, entry.get().created_at_nanos)
+                        .max((row.created_at_seconds, row.created_at_nanos));
+                    let current = entry.get_mut();
+                    current.state = winner;
+                    current.created_at_seconds = created_at.0;
+                    current.created_at_nanos = created_at.1;
+                }
+            }
+        }
+        let positioned_tombstones = merged_tombstones.into_values().collect::<Vec<_>>();
+        let mut tombstone_projections = Vec::new();
+        if !positioned_tombstones.is_empty() {
+            let rows = positioned_tombstones.len() as u64;
+            let bytes = positioned_tombstones_to_parquet(&positioned_tombstones)?;
+            let checksum = blake3::hash(&bytes).to_hex().to_string();
+            let path = canonical_payload_path(PositionedPayloadFormat::Parquet, &checksum);
+            tombstone_projections = self.prepare_positioned_tombstone_projections(
+                &batch.transaction_id,
+                &positioned_tombstones,
+                &path,
+                &checksum,
+                bytes.len() as u64,
+            )?;
+            payloads.push(PositionedMutationPayloadInput {
+                modality: PositionedMutationModality::Tombstone,
+                role: "tombstones_by_modality_v1".to_string(),
+                format: PositionedPayloadFormat::Parquet,
+                bytes,
+                rows,
+            });
+        }
+        let stamp = payloads
+            .first()
+            .map(|payload| {
+                positioned_payload_metadata(&payload.bytes, payload.format, payload.rows)
+            })
+            .transpose()?
+            .map(|metadata| {
+                MutationStamp::new(
+                    MutationVersion::from_parts(metadata.min_stamp.hlc, metadata.min_stamp.writer),
+                    metadata.min_stamp.digest,
+                )
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned mutation has no typed mutation rows".to_string(),
+                )
+            })?;
+        let metadata_rows = batch
+            .metadata
+            .iter()
+            .flat_map(|(modality, metadata)| {
+                std::iter::once(PositionedTransactionMetadataRow {
+                    modality: modality.clone(),
+                    logical_record_count: metadata.logical_record_count,
+                    next_generated_id_floor: metadata.next_generated_id_floor,
+                    new_tombstone_ids: metadata.new_tombstone_ids,
+                    document_count_delta: metadata.bm25_stats_delta.document_count,
+                    total_document_length_delta: metadata.bm25_stats_delta.total_document_length,
+                    term: None,
+                    document_frequency_delta: 0,
+                    stamp,
+                })
+                .chain(metadata.bm25_stats_delta.document_frequencies.iter().map(
+                    move |(&term, &document_frequency_delta)| PositionedTransactionMetadataRow {
+                        modality: modality.clone(),
+                        logical_record_count: 0,
+                        next_generated_id_floor: 0,
+                        new_tombstone_ids: 0,
+                        document_count_delta: 0,
+                        total_document_length_delta: 0,
+                        term: Some(term),
+                        document_frequency_delta,
+                        stamp,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        if !metadata_rows.is_empty() {
+            let bytes = positioned_transaction_metadata_to_parquet(&metadata_rows)?;
+            payloads.push(PositionedMutationPayloadInput {
+                modality: PositionedMutationModality::IdDirectory,
+                role: "transaction_metadata_v2".to_string(),
+                format: PositionedPayloadFormat::Parquet,
+                rows: metadata_rows.len() as u64,
+                bytes,
+            });
+        }
+        let writer = self.positioned_log.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "positioned mutation append requires the collection root".to_string(),
+            )
+        })?;
+        let committed =
+            writer.append(&batch.transaction_id, &batch.schema_fingerprint, payloads)?;
+        self.install_committed_positioned_batch(&batch, &committed, tombstone_projections);
+        let mut report = add_report_from_parts(
+            0,
+            0,
+            committed.put_payload_bytes,
+            StorageWriteReport::default(),
+            vectors_added,
+        );
+        report.requests = committed.requests;
+        report.positioned_position = Some(committed.position);
+        report.positioned_envelope_checksum = committed.envelope_checksum;
+        report.positioned_encoded_bytes = committed.encoded_bytes;
+        Ok(report)
+    }
+
+    fn finish_collection_transaction(&mut self, result: Result<()>) -> Result<()> {
+        self.finish_collection_transaction_value(result)
+            .map(|((), _)| ())
     }
 
     fn cell_wal_run_identities_without_root_authorization(
@@ -4967,11 +5682,10 @@ impl BorsukIndex {
             }
         }
 
-        // Once root truth no longer exposes a fully materialized transaction,
-        // its per-run consumed markers are no longer needed to prevent
-        // resurrection. Retain only markers belonging to transactions still in
-        // the authoritative root frontier, so manifest metadata stays bounded
-        // across repeated flush/compaction cycles.
+        // Once neither positioned truth nor the legacy collection frontier
+        // exposes a fully materialized run, its consumed marker is no longer
+        // needed to prevent resurrection. Both authorities are exact and
+        // bounded, so marker metadata stays bounded across repeated cycles.
         let (collection, active_transaction_ids, _) =
             self.collection_storage.load_collection_view()?;
         self.compact_consumed_cell_wal_markers(&collection, &active_transaction_ids)?;
@@ -4994,8 +5708,13 @@ impl BorsukIndex {
         if self.manifest.cell_wal_consumed_runs.is_empty() {
             return Ok(());
         }
+        let mut active_run_identities = self
+            .manifest
+            .cell_wal_consumed_runs
+            .intersection(&self.positioned_run_identities)
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let cell_wal = self.cell_wal_store()?;
-        let mut active_run_identities = BTreeSet::new();
         for commit in active_transactions.values() {
             if let Some(transaction) =
                 self.load_collection_wal_transaction(&cell_wal, commit, collection)?
@@ -5021,130 +5740,81 @@ impl BorsukIndex {
         Ok(())
     }
 
-    fn finish_collection_transaction_value<T>(&mut self, result: Result<T>) -> Result<T> {
+    fn finish_collection_transaction_value<T>(
+        &mut self,
+        result: Result<T>,
+    ) -> Result<(T, AddReport)> {
         let value = match result {
             Ok(value) => value,
             Err(error) => {
-                let transaction_id = self
-                    .active_collection_transaction_id()
-                    .expect("collection transaction remains active after preparation failure")
-                    .to_string();
-                let cleanup = self.prune_unpublished_collection_transaction(&transaction_id);
-                let cancellation = cleanup
-                    .as_ref()
-                    .map(|_| self.cancel_active_collection_transaction_reservation())
-                    .unwrap_or(Ok(()));
                 self.clear_collection_transaction(false);
-                let _ = self.refresh();
-                return match cleanup.and(cancellation) {
-                    Ok(()) => Err(error),
-                    Err(cleanup_error) => Err(cleanup_error),
-                };
+                return Err(error);
             }
         };
-        let defer_maintenance = self
+        let transaction = self
             .active_collection_transaction
             .as_ref()
-            .is_some_and(|transaction| transaction.defer_maintenance);
-        let publication = match self.publish_active_collection_transaction() {
-            Ok(publication) => publication,
-            Err(error) => {
-                let transaction_id = self
-                    .active_collection_transaction_id()
-                    .expect("collection transaction remains active after publication failure")
-                    .to_string();
-                let visible = self
-                    .collection_storage
-                    .collection_wal_transactions_snapshot_with_retries()
-                    .map(|(transactions, _)| transactions.contains_key(&transaction_id));
-                match visible {
-                    // An object-store error can be ambiguous after the remote
-                    // side accepted the head CAS. Root reachability is the
-                    // durability authority. Conservatively request maintenance
-                    // because the append's returned shard count is unknown.
-                    Ok(true) => CollectionWalCommitOutcome {
-                        root_pressure: true,
-                        successor: None,
-                    },
-                    Ok(false) => {
-                        if let Err(cleanup_error) =
-                            self.prune_unpublished_collection_transaction(&transaction_id)
-                        {
-                            self.clear_collection_transaction(false);
-                            let _ = self.refresh();
-                            return Err(cleanup_error);
-                        }
-                        if let Err(cleanup_error) =
-                            self.cancel_active_collection_transaction_reservation()
-                        {
-                            self.clear_collection_transaction(false);
-                            let _ = self.refresh();
-                            return Err(cleanup_error);
-                        }
-                        self.clear_collection_transaction(false);
-                        let _ = self.refresh();
-                        return Err(error);
-                    }
-                    // If visibility cannot be established, retain immutable
-                    // lane history for safety. A later recovery/GC pass may
-                    // reclaim it; never prune a transaction that might have
-                    // become visible.
-                    Err(_) => {
-                        self.clear_collection_transaction(false);
-                        let _ = self.refresh();
-                        return Err(error);
-                    }
-                }
-            }
-        };
-        if defer_maintenance {
+            .expect("collection transaction remains active through positioned publication")
+            .clone();
+        let runs = transaction
+            .positioned
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let mut metadata = transaction
+            .positioned_metadata
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if runs.is_empty() {
             self.clear_collection_transaction(true);
-            return Ok(value);
+            return Ok((value, AddReport::default()));
         }
-        self.clear_collection_transaction(true);
-        let root_pressure = publication.root_pressure;
-        let maintenance = (|| -> Result<()> {
-            if root_pressure {
-                // Re-open one shared root snapshot before global maintenance so
-                // the materialization sees transactions appended by every handle,
-                // not merely this handle's locally accumulated tail.
-                self.refresh()?;
+        for (name, spec) in &self.manifest.config.named_vectors {
+            if spec.kind != VectorKind::Sparse {
+                metadata.entry(name.clone()).or_default();
             }
-            let transactions_before_flush = self.collection_wal_transactions_by_modality();
-            let modality_count =
-                u64::try_from(self.named.len().saturating_add(1)).unwrap_or(u64::MAX);
-            let collection_cap = self.manifest.wal_config.collection_flush_threshold_bytes;
-            let modality_share = if collection_cap == 0 {
-                0
-            } else {
-                (collection_cap / modality_count).max(1)
-            };
-            let mut maintenance_published = root_pressure;
-            if root_pressure {
-                self.flush_wal()?;
-                for child in self.named.values_mut() {
-                    child.flush_wal()?;
-                }
-            } else {
-                maintenance_published = self.maybe_flush_wal_with_aggregate_cap(modality_share)?;
-                for child in self.named.values_mut() {
-                    maintenance_published |=
-                        child.maybe_flush_wal_with_aggregate_cap(modality_share)?;
-                }
-            }
-            if maintenance_published {
-                self.prune_fully_consumed_collection_transactions(&transactions_before_flush)?;
-            }
-            Ok(())
-        })();
-        if let Err(error) = maintenance {
-            // Root publication is the public durability boundary. Automatic
-            // materialization is cooperative follow-up work and must never turn
-            // an acknowledged, retry-unsafe mutation into an error result.
-            observability::post_commit_maintenance_error(&error);
-            let _ = self.refresh();
         }
-        Ok(value)
+        let batch = CanonicalMutationBatch {
+            transaction_id: transaction.id,
+            schema_fingerprint: transaction.schema_fingerprint,
+            snapshot_checksum: transaction.snapshot_checksum,
+            snapshot_generation: transaction.snapshot_generation,
+            runs,
+            metadata,
+        };
+        match self.append_positioned_mutation(batch) {
+            Ok(report) => {
+                // Foreground durability ends at the positioned head CAS; leaf
+                // materialization remains outside the ingest critical path.
+                let committed = report.positioned_position.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "non-empty positioned append returned no source position".to_string(),
+                    )
+                })?;
+                let cleanup = self.authorize_collection_claims(
+                    committed.source_epoch,
+                    committed.shard,
+                    committed.sequence,
+                    &report.positioned_envelope_checksum,
+                );
+                self.clear_collection_transaction(true);
+                if let Err(error) = cleanup {
+                    return Err(BorsukError::PositionedCommitCleanupFailed {
+                        source_epoch: committed.source_epoch,
+                        shard: committed.shard,
+                        sequence: committed.sequence,
+                        envelope_checksum: report.positioned_envelope_checksum.clone(),
+                        cleanup: error.to_string(),
+                    });
+                }
+                Ok((value, report))
+            }
+            Err(error) => {
+                self.clear_collection_transaction(false);
+                Err(error)
+            }
+        }
     }
 
     /// Add records by writing one or more immutable L0 segments and publishing a new manifest.
@@ -5152,6 +5822,10 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return self.add_collection_records(records);
         }
+        self.with_mutation_report_scope(move |scoped| scoped.add_in_scope(records))
+    }
+
+    fn add_in_scope(&mut self, records: Vec<VectorRecord>) -> Result<()> {
         self.begin_collection_transaction()?;
         let result = self.add_collection_records(records);
         self.finish_collection_transaction(result)
@@ -5181,9 +5855,28 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return self.upsert_collection_records(records);
         }
+        self.upsert_with_report(records).map(|_| ())
+    }
+
+    /// Insert or replace records and return the positioned commit report.
+    pub fn upsert_with_report(&mut self, records: Vec<VectorRecord>) -> Result<AddReport> {
+        if self.active_collection_transaction.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "positioned upsert report requires the collection transaction boundary".to_string(),
+            ));
+        }
+        self.with_mutation_report_scope(move |scoped| scoped.upsert_with_report_in_scope(records))
+    }
+
+    fn upsert_with_report_in_scope(&mut self, records: Vec<VectorRecord>) -> Result<AddReport> {
         self.begin_collection_transaction()?;
         let result = self.upsert_collection_records(records);
-        self.finish_collection_transaction(result)
+        self.finish_collection_transaction_value(result)
+            .map(|((), mut report)| {
+                report.requests = self.storage.request_counts();
+                report.total_bytes_written = self.storage.put_payload_bytes();
+                report
+            })
     }
 
     /// Insert or replace primary dense records through the low-amplification
@@ -5203,6 +5896,10 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return self.put_primary_records(records);
         }
+        self.with_mutation_report_scope(move |scoped| scoped.put_in_scope(records))
+    }
+
+    fn put_in_scope(&mut self, records: Vec<VectorRecord>) -> Result<()> {
         self.begin_collection_transaction()?;
         let result = self.put_primary_records(records);
         self.finish_collection_transaction(result)
@@ -5222,9 +5919,7 @@ impl BorsukIndex {
         )?;
         let new_tombstone_ids = u64::try_from(overlay.len())
             .map_err(|_| BorsukError::InvalidStorage("put id count exceeds u64".to_string()))?;
-        let tombstone = self
-            .write_tombstone_with_persistence(overlay, false)?
-            .map(|summary| (summary, new_tombstone_ids));
+        let tombstone = Self::stage_tombstone(overlay, new_tombstone_ids);
         self.add_records_with_report_and_tombstone(
             records,
             false,
@@ -5265,7 +5960,7 @@ impl BorsukIndex {
                 }
             }
         }
-        let bm25_stats_delta = self.persist_bm25_stats_delta(&bm25_stats_delta_change)?;
+        let bm25_stats_delta = bm25_stats_delta_change;
 
         let new_overlay_ids = u64::try_from(
             prior_states
@@ -5281,13 +5976,11 @@ impl BorsukIndex {
             self.cell_wal_next_generated_id_floor()?,
             &records,
         )?;
-        let tombstone = self
-            .write_tombstone(overlay_delta)?
-            .map(|summary| (summary, new_overlay_ids));
+        let tombstone = Self::stage_tombstone(overlay_delta, new_overlay_ids);
         self.add_records_with_report_and_tombstone(
             records,
             false,
-            true,
+            false,
             next_generated_id,
             tombstone,
             Some(bm25_stats_delta),
@@ -5341,24 +6034,21 @@ impl BorsukIndex {
         records: Vec<VectorRecord>,
         previous_token_ids: &[RecordId],
     ) -> Result<()> {
-        let mut entity_versions = BTreeMap::<Vec<u8>, MutationVersion>::new();
+        let mut entity_stamps = BTreeMap::<Vec<u8>, MutationStamp>::new();
         let mut replacement_ids = BTreeSet::<Vec<u8>>::new();
         for record in &records {
             let (entity_id, _, _) = decode_late_interaction_token_id(record.id.as_bytes())?;
-            let version = record
-                .mutation_stamp()
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(format!(
-                        "late-interaction replacement token {:?} is missing its parent mutation stamp",
-                        record.id.as_bytes()
-                    ))
-                })?
-                .version();
-            match entity_versions.entry(entity_id.to_vec()) {
+            let stamp = record.mutation_stamp().ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "late-interaction replacement token {:?} is missing its parent mutation stamp",
+                    record.id.as_bytes()
+                ))
+            })?;
+            match entity_stamps.entry(entity_id.to_vec()) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(version);
+                    entry.insert(stamp);
                 }
-                std::collections::btree_map::Entry::Occupied(entry) if *entry.get() == version => {}
+                std::collections::btree_map::Entry::Occupied(entry) if *entry.get() == stamp => {}
                 std::collections::btree_map::Entry::Occupied(_) => {
                     return Err(BorsukError::InvalidStorage(
                         "one late-interaction entity received conflicting replacement versions"
@@ -5388,7 +6078,7 @@ impl BorsukIndex {
         }
         for id in removed_token_ids {
             let (entity_id, _, _) = decode_late_interaction_token_id(id.as_bytes())?;
-            let version = entity_versions.get(entity_id).copied().ok_or_else(|| {
+            let stamp = entity_stamps.get(entity_id).copied().ok_or_else(|| {
                 BorsukError::InvalidStorage(format!(
                     "late-interaction replacement has no parent version for entity {:?}",
                     entity_id
@@ -5396,7 +6086,7 @@ impl BorsukIndex {
             })?;
             states.insert(
                 id.as_bytes().to_vec(),
-                CanonicalMutation::delete(version, id).state(),
+                MutationState::new(stamp, MutationOperation::Delete),
             );
         }
         let mut new_overlay_ids = 0_u64;
@@ -5411,9 +6101,7 @@ impl BorsukIndex {
                 current.greatest(*state)?;
             }
         }
-        let tombstone = self
-            .write_tombstone(states)?
-            .map(|summary| (summary, new_overlay_ids));
+        let tombstone = Self::stage_tombstone(states, new_overlay_ids);
         let next_generated_id = next_generated_id_after_explicit_records(
             self.cell_wal_next_generated_id_floor()?,
             &records,
@@ -5421,7 +6109,7 @@ impl BorsukIndex {
         self.add_records_with_report_and_tombstone(
             records,
             true,
-            true,
+            false,
             next_generated_id,
             tombstone,
             None,
@@ -5438,23 +6126,27 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return self.add_with_report_inner(vectors, ids);
         }
-        let requests_before = self.storage.request_counts();
+        self.with_mutation_report_scope(move |scoped| scoped.add_with_report_in_scope(vectors, ids))
+    }
+
+    fn add_with_report_in_scope(
+        &mut self,
+        vectors: Vec<Vec<f32>>,
+        ids: Option<Vec<String>>,
+    ) -> Result<(Vec<String>, AddReport)> {
         self.begin_collection_transaction()?;
-        let admission_bytes_written = self
-            .active_collection_transaction
-            .as_ref()
-            .map_or(0, |transaction| transaction.admission_bytes_written);
         let result = self.add_with_report_inner(vectors, ids);
-        let (ids, mut report) = self.finish_collection_transaction_value(result)?;
-        report.total_bytes_written = report
-            .total_bytes_written
-            .saturating_add(admission_bytes_written);
+        let ((ids, mut report), positioned) = self.finish_collection_transaction_value(result)?;
+        report.positioned_position = positioned.positioned_position;
+        report.positioned_envelope_checksum = positioned.positioned_envelope_checksum;
+        report.positioned_encoded_bytes = positioned.positioned_encoded_bytes;
+        report.total_bytes_written = self.storage.put_payload_bytes();
         report.bytes_per_vector = if ids.is_empty() {
             0.0
         } else {
             report.total_bytes_written as f64 / ids.len() as f64
         };
-        report.requests = self.storage.request_counts().delta(&requests_before);
+        report.requests = self.storage.request_counts();
         Ok((ids, report))
     }
 
@@ -5489,23 +6181,28 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return self.add_vectors_with_report_inner(vectors);
         }
-        let requests_before = self.storage.request_counts();
+        self.with_mutation_report_scope(move |scoped| {
+            scoped.add_vectors_with_report_in_scope(vectors)
+        })
+    }
+
+    fn add_vectors_with_report_in_scope(
+        &mut self,
+        vectors: Vec<Vec<f32>>,
+    ) -> Result<(Vec<String>, AddReport)> {
         self.begin_collection_transaction()?;
-        let admission_bytes_written = self
-            .active_collection_transaction
-            .as_ref()
-            .map_or(0, |transaction| transaction.admission_bytes_written);
         let result = self.add_vectors_with_report_inner(vectors);
-        let (ids, mut report) = self.finish_collection_transaction_value(result)?;
-        report.total_bytes_written = report
-            .total_bytes_written
-            .saturating_add(admission_bytes_written);
+        let ((ids, mut report), positioned) = self.finish_collection_transaction_value(result)?;
+        report.positioned_position = positioned.positioned_position;
+        report.positioned_envelope_checksum = positioned.positioned_envelope_checksum;
+        report.positioned_encoded_bytes = positioned.positioned_encoded_bytes;
+        report.total_bytes_written = self.storage.put_payload_bytes();
         report.bytes_per_vector = if ids.is_empty() {
             0.0
         } else {
             report.total_bytes_written as f64 / ids.len() as f64
         };
-        report.requests = self.storage.request_counts().delta(&requests_before);
+        report.requests = self.storage.request_counts();
         Ok((ids, report))
     }
 
@@ -5519,7 +6216,14 @@ impl BorsukIndex {
             self.cell_wal_next_generated_id_floor()?,
             &records,
         )?;
-        let report = self.add_records_with_report(records, false, next_generated_id)?;
+        let report = self.add_records_with_report_and_tombstone(
+            records,
+            false,
+            false,
+            next_generated_id,
+            None,
+            None,
+        )?;
         Ok((ids, report))
     }
 
@@ -5533,23 +6237,14 @@ impl BorsukIndex {
         Ok(ids)
     }
 
-    /// Logically delete records by id and return how many were newly tombstoned.
+    /// Logically delete records by id and return a request-local receipt.
     ///
     /// Deletes are soft: ids are appended to immutable tombstone deltas and
     /// consolidated into hash-routed pages, so search and `get_vector` skip them
     /// immediately while underlying rows remain in immutable segments until
     /// compaction or [`BorsukIndex::purge`] physically rewrites them. Re-adding a
     /// deleted id revives it.
-    pub fn delete<I, R>(&mut self, ids: I) -> Result<usize>
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<RecordId>,
-    {
-        Ok(self.delete_with_report(ids)?.deleted)
-    }
-
-    /// Logically delete records by id and return a [`DeleteReport`].
-    pub fn delete_with_report<I, R>(&mut self, ids: I) -> Result<DeleteReport>
+    pub fn delete<I, R>(&mut self, ids: I) -> Result<DeleteReport>
     where
         I: IntoIterator<Item = R>,
         R: Into<RecordId>,
@@ -5558,9 +6253,17 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return self.delete_collection_records(ids);
         }
+        self.with_mutation_report_scope(move |scoped| scoped.delete_in_scope(ids))
+    }
+
+    fn delete_in_scope(&mut self, ids: Vec<RecordId>) -> Result<DeleteReport> {
         self.begin_collection_transaction()?;
         let result = self.delete_collection_records(ids);
         self.finish_collection_transaction_value(result)
+            .map(|(mut report, _)| {
+                report.requests = self.storage.request_counts();
+                report
+            })
     }
 
     fn delete_collection_records(&mut self, ids: Vec<RecordId>) -> Result<DeleteReport> {
@@ -5584,7 +6287,7 @@ impl BorsukIndex {
                                 decode_late_interaction_token_id(token_id.as_bytes())?;
                             Ok(delete_states
                                 .get(entity_id)
-                                .map(|state| (token_id.clone(), state.stamp().version())))
+                                .map(|state| (token_id.clone(), state.stamp())))
                         })
                         .collect::<Result<Vec<_>>>()?
                         .into_iter()
@@ -5598,7 +6301,7 @@ impl BorsukIndex {
                     .filter_map(|id| {
                         delete_states
                             .get(id.as_bytes())
-                            .map(|state| (id.clone(), state.stamp().version()))
+                            .map(|state| (id.clone(), state.stamp()))
                     })
                     .collect::<Vec<_>>();
                 child.apply_parent_delete_versions(targets)?;
@@ -5616,11 +6319,13 @@ impl BorsukIndex {
         R: Into<RecordId>,
     {
         let requests_before = self.storage.request_counts();
-        let before = usize::try_from(self.visible_tombstone_id_count()?).unwrap_or(usize::MAX);
         let ids = ids
             .into_iter()
             .map(|id| id.into().as_bytes().to_vec())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect::<Vec<_>>();
+        let ids_submitted = ids.len();
         let states = self.mutation_states(ids.iter().map(Vec::as_slice))?;
         let live_targets = states
             .iter()
@@ -5629,7 +6334,6 @@ impl BorsukIndex {
             .collect::<BTreeMap<_, _>>();
         let live_records = self.live_delete_records(&live_targets)?;
         let mut delete_ids = Vec::new();
-        let mut newly = 0usize;
         let mut new_overlay_ids = 0_u64;
         let mut bm25_stats_delta_change = Bm25StatsDelta::default();
         for key in ids {
@@ -5644,13 +6348,12 @@ impl BorsukIndex {
                         bm25_stats_delta_change.suppress_document(terms)?;
                     }
                     delete_ids.push(RecordId::from_bytes(key));
-                    newly += 1;
                     new_overlay_ids = new_overlay_ids.checked_add(1).ok_or_else(|| {
                         BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
                     })?;
                 }
                 Some(state) => {
-                    if !state.is_deleted() || live_records.contains_key(&key) {
+                    if !state.is_deleted() {
                         if self.manifest.config.text
                             && let Some(live) = live_records.get(&key)
                             && live.persisted
@@ -5659,16 +6362,14 @@ impl BorsukIndex {
                             bm25_stats_delta_change.suppress_document(terms)?;
                         }
                         delete_ids.push(RecordId::from_bytes(key));
-                        newly += 1;
                     }
                 }
             }
         }
-        if newly == 0 {
+        if delete_ids.is_empty() {
             return Ok((
                 DeleteReport {
-                    deleted: 0,
-                    total_tombstoned: before,
+                    ids_submitted,
                     published: false,
                     requests: self.storage.request_counts().delta(&requests_before),
                 },
@@ -5677,30 +6378,21 @@ impl BorsukIndex {
         }
         let deleted_delta = self.allocate_delete_states(delete_ids)?;
         let published_states = deleted_delta.clone();
-        let bm25_stats_delta = self.persist_bm25_stats_delta(&bm25_stats_delta_change)?;
-        let tombstone = self.write_tombstone(deleted_delta)?;
-        let transaction_id = self
-            .active_collection_transaction_id()
-            .map_or_else(|| Uuid::new_v4().simple().to_string(), str::to_string);
+        let bm25_stats_delta = bm25_stats_delta_change;
+        let tombstone = Self::stage_tombstone(deleted_delta, new_overlay_ids);
         self.append_wal_and_publish(
             Vec::new(),
             self.cell_wal_next_generated_id_floor()?,
-            tombstone.map(|summary| (summary, new_overlay_ids)),
+            tombstone,
             Some(bm25_stats_delta),
             &requests_before,
-            CellWalAppendTransaction {
-                id: &transaction_id,
-                state_prepared: false,
-            },
         )?;
         if self.active_collection_transaction.is_none() {
             self.maybe_flush_wal()?;
         }
         Ok((
             DeleteReport {
-                deleted: newly,
-                total_tombstoned: usize::try_from(self.visible_tombstone_id_count()?)
-                    .unwrap_or(usize::MAX),
+                ids_submitted,
                 published: true,
                 requests: self.storage.request_counts().delta(&requests_before),
             },
@@ -5708,13 +6400,13 @@ impl BorsukIndex {
         ))
     }
 
-    /// Apply parent-allocated entity versions to one physical modality. The
-    /// child recomputes its canonical digest for its own physical id, but never
-    /// allocates a second clock value. This keeps dense, sparse, text, and
-    /// late-interaction visibility on one logical entity order.
+    /// Apply the parent-allocated canonical stamp to one derived physical
+    /// modality. Derived rows are projections of the same logical collection
+    /// mutation, so they allocate neither a second clock value nor a second
+    /// digest.
     fn apply_parent_delete_versions(
         &mut self,
-        targets: Vec<(RecordId, MutationVersion)>,
+        targets: Vec<(RecordId, MutationStamp)>,
     ) -> Result<()> {
         if targets.is_empty() {
             return Ok(());
@@ -5724,13 +6416,13 @@ impl BorsukIndex {
                 "derived modality delete unexpectedly targets a text-owning child".to_string(),
             ));
         }
-        let mut versions = BTreeMap::<Vec<u8>, MutationVersion>::new();
-        for (id, version) in targets {
-            match versions.entry(id.as_bytes().to_vec()) {
+        let mut stamps = BTreeMap::<Vec<u8>, MutationStamp>::new();
+        for (id, stamp) in targets {
+            match stamps.entry(id.as_bytes().to_vec()) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(version);
+                    entry.insert(stamp);
                 }
-                std::collections::btree_map::Entry::Occupied(entry) if *entry.get() == version => {}
+                std::collections::btree_map::Entry::Occupied(entry) if *entry.get() == stamp => {}
                 std::collections::btree_map::Entry::Occupied(_) => {
                     return Err(BorsukError::InvalidStorage(
                         "one derived delete id received conflicting parent versions".to_string(),
@@ -5738,12 +6430,11 @@ impl BorsukIndex {
                 }
             }
         }
-        let current = self.mutation_states(versions.keys().map(Vec::as_slice))?;
+        let current = self.mutation_states(stamps.keys().map(Vec::as_slice))?;
         let mut new_overlay_ids = 0_u64;
         let mut states = BTreeMap::new();
-        for (id, version) in versions {
-            let state =
-                CanonicalMutation::delete(version, RecordId::from_bytes(id.clone())).state();
+        for (id, stamp) in stamps {
+            let state = MutationState::new(stamp, MutationOperation::Delete);
             let previous = current.get(&id).copied().flatten();
             if previous.is_none() {
                 new_overlay_ids = new_overlay_ids.checked_add(1).ok_or_else(|| {
@@ -5761,20 +6452,13 @@ impl BorsukIndex {
             return Ok(());
         }
         let requests_before = self.storage.request_counts();
-        let tombstone = self.write_tombstone(states)?;
-        let transaction_id = self
-            .active_collection_transaction_id()
-            .map_or_else(|| Uuid::new_v4().simple().to_string(), str::to_string);
+        let tombstone = Self::stage_tombstone(states, new_overlay_ids);
         self.append_wal_and_publish(
             Vec::new(),
             self.cell_wal_next_generated_id_floor()?,
-            tombstone.map(|summary| (summary, new_overlay_ids)),
+            tombstone,
             None,
             &requests_before,
-            CellWalAppendTransaction {
-                id: &transaction_id,
-                state_prepared: false,
-            },
         )?;
         Ok(())
     }
@@ -6351,6 +7035,17 @@ impl BorsukIndex {
 
     /// Write one sorted convergent mutation-state run and return its summary,
     /// or `None` when the batch is empty.
+    fn stage_tombstone(
+        states: BTreeMap<Vec<u8>, MutationState>,
+        new_tombstone_ids: u64,
+    ) -> Option<StagedTombstone> {
+        (!states.is_empty()).then(|| StagedTombstone {
+            entries: states.into_iter().collect(),
+            created_at: Utc::now(),
+            new_tombstone_ids,
+        })
+    }
+
     fn write_tombstone(
         &self,
         states: BTreeMap<Vec<u8>, MutationState>,
@@ -6393,13 +7088,12 @@ impl BorsukIndex {
         }))
     }
 
-    /// Load and cache the merged stable tombstone plus foreground delta runs.
-    /// Runs are applied in manifest order and generations merge by maximum.
-    fn tombstone_overlay_for_manifest(
+    fn tombstone_overlay_for_snapshot(
         &self,
         manifest: &Manifest,
+        cell_wal_snapshot: &[CommittedCellWalTransaction],
     ) -> Result<Option<Arc<TombstoneOverlay>>> {
-        let cell_tombstones = self.cell_wal_tombstone_summaries()?;
+        let cell_tombstones = Self::cell_wal_tombstone_summaries_for(cell_wal_snapshot)?;
         if manifest.tombstone.is_none()
             && manifest.tombstone_pages.is_empty()
             && manifest.tombstone_frontier.is_empty()
@@ -6453,6 +7147,26 @@ impl BorsukIndex {
         if let Some(run) = self.tombstone_cache.get(checksum) {
             return Ok(run);
         }
+        if let Some((payload_path, payload_checksum, modality)) =
+            positioned_tombstone_projection_from_path(path)
+        {
+            let read = self
+                .collection_storage
+                .read_bytes_with_cache_status_and_checksum(payload_path, payload_checksum)?;
+            let run = Arc::new(
+                positioned_tombstones_from_parquet(&read.bytes)?
+                    .into_iter()
+                    .filter(|row| row.modality == modality)
+                    .map(|row| (row.record_id, row.state))
+                    .collect::<HashMap<_, _>>(),
+            );
+            self.tombstone_cache.insert(
+                checksum.to_string(),
+                Arc::clone(&run),
+                decoded_tombstone_overlay_bytes(&run),
+            );
+            return Ok(run);
+        }
         let read = self
             .storage
             .read_bytes_with_cache_status_and_checksum(path, checksum)?;
@@ -6485,13 +7199,39 @@ impl BorsukIndex {
                 references.push(reference);
             }
         }
-        if references.is_empty() {
+        if references.is_empty() && self.positioned_bm25_deltas.is_empty() {
             return Ok((0, 0, BTreeMap::new(), 0));
         }
         let mut deltas = BTreeMap::new();
         let mut bytes_read = 0_u64;
         let mut document_count_delta = 0_i64;
         let mut total_document_length_delta = 0_i64;
+        for delta in self.positioned_bm25_deltas.values() {
+            document_count_delta = document_count_delta
+                .checked_add(delta.document_count)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "positioned BM25 document-count delta exceeds i64".to_string(),
+                    )
+                })?;
+            total_document_length_delta = total_document_length_delta
+                .checked_add(delta.total_document_length)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "positioned BM25 document-length delta exceeds i64".to_string(),
+                    )
+                })?;
+            for (&term, &value) in &delta.document_frequencies {
+                if terms.contains(&term) {
+                    let accumulated = deltas.entry(term).or_insert(0_i64);
+                    *accumulated = accumulated.checked_add(value).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "positioned BM25 document-frequency delta exceeds i64".to_string(),
+                        )
+                    })?;
+                }
+            }
+        }
         for reference in &references {
             document_count_delta = document_count_delta
                 .checked_add(reference.document_count_delta)
@@ -6585,10 +7325,6 @@ impl BorsukIndex {
                 "BM25 statistics delta may only suppress physical generations".to_string(),
             ));
         }
-        // The pages below become reachable only through cell-WAL transaction
-        // metadata. Install root truth before their first immutable upload so
-        // concurrent GC can recognize the owning transaction.
-        self.reserve_active_collection_transaction()?;
         let entries = delta
             .document_frequencies
             .iter()
@@ -6676,6 +7412,15 @@ impl BorsukIndex {
             manifest.tombstone_frontier.clear();
             manifest.tombstone_pages = pages.into_values().collect();
         }
+        manifest.tombstone_id_count =
+            manifest
+                .tombstone_pages
+                .iter()
+                .try_fold(0_u64, |total, page| {
+                    total.checked_add(page.count).ok_or_else(|| {
+                        BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+                    })
+                })?;
         if lexical_roots_will_rebuild {
             // The rebuild derives corrections from the now-consolidated
             // tombstone and the final physical segment set. This also catches
@@ -6868,7 +7613,11 @@ impl BorsukIndex {
         if !manifest.config.text {
             return Ok(None);
         }
-        let Some(overlay) = self.tombstone_overlay_for_manifest(manifest)? else {
+        // Only candidate-manifest tombstones may own a persisted physical
+        // correction. Unconsumed positioned transactions remain read-time
+        // overlays with their own inline correction until their runs are
+        // materialized; folding them here would double-apply that correction.
+        let Some(overlay) = self.tombstone_overlay_for_snapshot(manifest, &[])? else {
             return Ok(None);
         };
         let mut delta = Bm25StatsDelta::default();
@@ -7205,12 +7954,10 @@ impl BorsukIndex {
                 }
                 let child = VectorRecord::new(record.id.clone(), vector.clone())
                     .with_metadata(record.metadata.clone());
-                let child = match record.mutation_stamp() {
-                    Some(stamp) => CanonicalMutation::put(stamp.version(), child)?
-                        .into_record()
-                        .expect("canonical put mutation contains a record"),
-                    None => child,
-                };
+                let mut child = child;
+                if let Some(stamp) = record.mutation_stamp() {
+                    child.set_mutation_stamp(stamp);
+                }
                 named_records.entry(name.clone()).or_default().push(child);
             }
             for (name, matrix) in &record.extra_multi_vectors {
@@ -7236,17 +7983,62 @@ impl BorsukIndex {
                         token.to_vec(),
                     )
                     .with_metadata(record.metadata.clone());
-                    let child = match record.mutation_stamp() {
-                        Some(stamp) => CanonicalMutation::put(stamp.version(), child)?
-                            .into_record()
-                            .expect("canonical put mutation contains a record"),
-                        None => child,
-                    };
+                    let mut child = child;
+                    if let Some(stamp) = record.mutation_stamp() {
+                        child.set_mutation_stamp(stamp);
+                    }
                     named_records.entry(name.clone()).or_default().push(child);
                 }
             }
         }
         Ok(named_records)
+    }
+
+    fn positioned_named_projection(
+        records: Vec<VectorRecord>,
+        name: &str,
+        kind: VectorKind,
+    ) -> Result<Vec<VectorRecord>> {
+        let mut projected = Vec::new();
+        for record in records {
+            match kind {
+                VectorKind::Dense => {
+                    let Some(vector) = record.extra_vectors.get(name) else {
+                        continue;
+                    };
+                    let child = VectorRecord::new(record.id.clone(), vector.clone())
+                        .with_metadata(record.metadata.clone());
+                    let mut child = child;
+                    if let Some(stamp) = record.mutation_stamp() {
+                        child.set_mutation_stamp(stamp);
+                    }
+                    projected.push(child);
+                }
+                VectorKind::LateInteraction => {
+                    let Some(matrix) = record.extra_multi_vectors.get(name) else {
+                        continue;
+                    };
+                    for (token_index, token) in matrix.tokens().enumerate() {
+                        let child = VectorRecord::new_bytes(
+                            encode_late_interaction_token_id(
+                                record.id.as_bytes(),
+                                record.generation,
+                                token_index,
+                            )?,
+                            token.to_vec(),
+                        )
+                        .with_metadata(record.metadata.clone());
+                        let mut child = child;
+                        if let Some(stamp) = record.mutation_stamp() {
+                            child.set_mutation_stamp(stamp);
+                        }
+                        projected.push(child);
+                    }
+                }
+                VectorKind::Sparse => {}
+            }
+        }
+        Ok(projected)
     }
 
     fn add_named_records(
@@ -7266,7 +8058,14 @@ impl BorsukIndex {
                 child.cell_wal_next_generated_id_floor()?,
                 &records,
             )?;
-            child.add_records_with_report(records, true, next_generated_id)?;
+            child.add_records_with_report_and_tombstone(
+                records,
+                true,
+                false,
+                next_generated_id,
+                None,
+                None,
+            )?;
         }
         Ok(())
     }
@@ -8181,8 +8980,8 @@ impl BorsukIndex {
         scan_existing_ids: bool,
         coordinate_ids: bool,
         next_generated_id: u64,
-        tombstone_update: Option<(TombstoneSummary, u64)>,
-        bm25_stats_delta_update: Option<Option<Bm25StatsDeltaRef>>,
+        tombstone_update: Option<StagedTombstone>,
+        bm25_stats_delta_update: Option<Bm25StatsDelta>,
     ) -> Result<AddReport> {
         let vectors_added = records.len();
         let span = observability::add_span(vectors_added, self.manifest.version);
@@ -8196,7 +8995,7 @@ impl BorsukIndex {
 
         self.prepare_primary_records(&mut records)?;
         self.stamp_put_records(&mut records)?;
-        let coordinated_write = self.manifest.wal_config.enabled;
+        let coordinated_write = true;
         self.validate_record_ids_allowing_existing(
             &records,
             scan_existing_ids && !coordinated_write,
@@ -8242,27 +9041,22 @@ impl BorsukIndex {
             None
         };
 
-        // WAL fast path: route records to immutable cell-local runs and publish
-        // one atomic transaction commit marker without swapping the collection
-        // manifest. The tail is flushed into a real segment once it crosses the
-        // configured threshold (checked below).
+        // Mutation-log fast path: encode immutable typed payloads and stage one
+        // positioned transaction without swapping the collection manifest. The
+        // tail is flushed into a real segment once it crosses the configured
+        // threshold (checked below).
         //
         // The WAL codec preserves forced storage and every named payload, so all
         // normal writes share the append-only path. Sparse/text reads union the
         // bounded live tail; flush/compaction builds their immutable posting
         // shards once.
-        if self.manifest.wal_config.enabled {
-            let transaction_state_prepared = write_claims.is_some();
+        if coordinated_write {
             let mut report = self.append_wal_and_publish(
                 records,
                 next_generated_id,
                 tombstone_update,
                 bm25_stats_delta_update,
                 &requests_before,
-                CellWalAppendTransaction {
-                    id: &transaction_id,
-                    state_prepared: transaction_state_prepared,
-                },
             )?;
             if let Some(mut claims) = write_claims.take() {
                 if self.active_collection_transaction.is_some() {
@@ -8326,18 +9120,8 @@ impl BorsukIndex {
         // newly published segment.
         manifest.global_ann_ref = None;
         manifest.next_generated_id = next_generated_id;
-        if let Some((tombstone, new_tombstone_ids)) = tombstone_update {
-            manifest.tombstone_frontier.push(tombstone);
-            manifest.tombstone_id_count = manifest
-                .tombstone_id_count
-                .checked_add(new_tombstone_ids)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
-                })?;
-        }
-        if let Some(Some(update)) = bm25_stats_delta_update {
-            manifest.bm25_stats_delta_frontier.push(update);
-        }
+        let _ = tombstone_update;
+        let _ = bm25_stats_delta_update;
         let mut segments_written = 0_usize;
         let mut graph_payloads_written = 0_usize;
         let mut payload_bytes_written = 0_u64;
@@ -8392,7 +9176,7 @@ impl BorsukIndex {
         CellWalStore::from_storage(
             self.storage.clone(),
             self.manifest.cell_wal_config,
-            self.writer_id.clone(),
+            POSITIONED_SOURCE_EPOCH,
         )
     }
 
@@ -8499,58 +9283,6 @@ impl BorsukIndex {
         cells[ordinal as usize]
     }
 
-    fn reserve_coordination_counter(
-        &self,
-        path: &str,
-        minimum_start: u64,
-        count: u64,
-    ) -> Result<u64> {
-        Self::reserve_coordination_counter_on(&self.storage, path, minimum_start, count)
-    }
-
-    fn reserve_coordination_counter_on(
-        storage: &Storage,
-        path: &str,
-        minimum_start: u64,
-        count: u64,
-    ) -> Result<u64> {
-        const MAX_ATTEMPTS: usize = 128;
-        for _ in 0..MAX_ATTEMPTS {
-            let current = storage.read_coordination_object(path)?;
-            let (stored, expected) = match current {
-                Some(current) => {
-                    let stored = coordination_counter_from_slice(&current.bytes, path)?;
-                    (stored, Some(current.version))
-                }
-                None => (0, None),
-            };
-            // A zero-width reservation is an ensure-at-least operation. Once
-            // another allocator has already established that floor, do not
-            // rewrite the shared coordination object: doing so would make
-            // unrelated cell-local WAL appends contend on a collection-wide
-            // CAS for no state change.
-            if count == 0 && stored >= minimum_start {
-                return Ok(stored);
-            }
-            let start = stored.max(minimum_start);
-            let next = start.checked_add(count).ok_or_else(|| {
-                BorsukError::InvalidStorage(format!("coordination counter `{path}` exceeds u64"))
-            })?;
-            match storage.write_coordination_object(
-                path,
-                &coordination_counter_bytes(next),
-                expected,
-            ) {
-                Ok(_) => return Ok(start),
-                Err(BorsukError::ConcurrentModification { .. }) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(BorsukError::ConcurrentModification {
-            path: path.to_string(),
-        })
-    }
-
     fn cell_wal_metadata(
         transaction: &CommittedCellWalTransaction,
     ) -> Result<CellWalMutationMetadata> {
@@ -8573,25 +9305,30 @@ impl BorsukIndex {
     }
 
     fn cell_wal_next_generated_id_floor(&self) -> Result<u64> {
-        self.cell_wal_snapshot.iter().try_fold(
+        let visible = self.cell_wal_snapshot.iter().try_fold(
             self.manifest.next_generated_id,
             |floor, transaction| {
-                Ok(floor.max(Self::cell_wal_metadata(transaction)?.next_generated_id_floor))
+                Ok::<u64, BorsukError>(
+                    floor.max(Self::cell_wal_metadata(transaction)?.next_generated_id_floor),
+                )
             },
-        )
+        )?;
+        Ok(visible)
     }
 
-    fn visible_tombstone_id_count(&self) -> Result<u64> {
-        self.cell_wal_snapshot.iter().try_fold(
-            self.manifest.tombstone_id_count,
-            |total, transaction| {
+    fn visible_tombstone_id_count_for(
+        manifest: &Manifest,
+        cell_wal_snapshot: &[CommittedCellWalTransaction],
+    ) -> Result<u64> {
+        cell_wal_snapshot
+            .iter()
+            .try_fold(manifest.tombstone_id_count, |total, transaction| {
                 total
                     .checked_add(Self::cell_wal_metadata(transaction)?.new_tombstone_ids)
                     .ok_or_else(|| {
                         BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
                     })
-            },
-        )
+            })
     }
 
     fn apply_cell_mutation_metadata_to_manifest(
@@ -8672,7 +9409,7 @@ impl BorsukIndex {
         let cell_wal = CellWalStore::from_storage(
             self.storage.clone(),
             manifest.cell_wal_config,
-            self.writer_id.clone(),
+            POSITIONED_SOURCE_EPOCH,
         )?;
         let mut transactions = Vec::new();
         for commit in commits.values() {
@@ -8686,27 +9423,38 @@ impl BorsukIndex {
         transactions
             .into_iter()
             .filter_map(|transaction| {
-                let consumed = transaction
-                    .runs
-                    .iter()
-                    .filter(|run| {
-                        manifest
-                            .cell_wal_consumed_runs
-                            .contains(&cell_wal_run_identity(run))
-                    })
-                    .count();
-                if consumed == 0 {
-                    Some(Ok(transaction))
-                } else if consumed == transaction.runs.len() {
-                    None
-                } else {
-                    Some(Err(BorsukError::InvalidStorage(format!(
-                        "cell WAL transaction `{}` is only partially consumed",
-                        transaction.transaction_id
-                    ))))
+                match Self::retain_unconsumed_cell_wal_transaction(manifest, transaction) {
+                    Ok(Some(transaction)) => Some(Ok(transaction)),
+                    Ok(None) => None,
+                    Err(error) => Some(Err(error)),
                 }
             })
             .collect()
+    }
+
+    fn retain_unconsumed_cell_wal_transaction(
+        manifest: &Manifest,
+        transaction: CommittedCellWalTransaction,
+    ) -> Result<Option<CommittedCellWalTransaction>> {
+        let consumed = transaction
+            .runs
+            .iter()
+            .filter(|run| {
+                manifest
+                    .cell_wal_consumed_runs
+                    .contains(&cell_wal_run_identity(run))
+            })
+            .count();
+        if consumed == 0 {
+            Ok(Some(transaction))
+        } else if consumed == transaction.runs.len() {
+            Ok(None)
+        } else {
+            Err(BorsukError::InvalidStorage(format!(
+                "cell WAL transaction `{}` is only partially consumed",
+                transaction.transaction_id
+            )))
+        }
     }
 
     fn load_collection_wal_transaction(
@@ -8774,7 +9522,13 @@ impl BorsukIndex {
     }
 
     fn cell_wal_tombstone_summaries(&self) -> Result<Vec<TombstoneSummary>> {
-        self.cell_wal_snapshot
+        Self::cell_wal_tombstone_summaries_for(&self.cell_wal_snapshot)
+    }
+
+    fn cell_wal_tombstone_summaries_for(
+        cell_wal_snapshot: &[CommittedCellWalTransaction],
+    ) -> Result<Vec<TombstoneSummary>> {
+        cell_wal_snapshot
             .iter()
             .flat_map(|transaction| transaction.runs.iter())
             .filter(|run| run.kind == CellWalRunKind::Tombstones)
@@ -8828,17 +9582,11 @@ impl BorsukIndex {
         if target_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let target_partitions = target_ids
-            .iter()
-            .map(|id| self.id_directory_partition(id))
-            .collect::<BTreeSet<_>>();
         let runs = self
             .cell_wal_snapshot
             .iter()
             .flat_map(|transaction| &transaction.runs)
-            .filter(|run| {
-                run.kind == CellWalRunKind::IdDirectory && target_partitions.contains(&run.cell)
-            })
+            .filter(|run| run.kind == CellWalRunKind::IdDirectory)
             .cloned()
             .collect::<Vec<_>>();
         let decoded = crate::parallel::install_io(|| {
@@ -8897,23 +9645,19 @@ impl BorsukIndex {
         Ok((bytes, format.extension().to_string()))
     }
 
-    /// Route and commit one complete mutation through cell-local lanes. Records,
-    /// tombstones, ownership updates, and lexical-statistics metadata become
-    /// visible through one transaction commit marker; `CURRENT` is untouched.
+    /// Stage one complete mutation in the active positioned transaction.
+    /// Records, tombstones, ownership updates, and lexical-statistics metadata
+    /// become visible together when the positioned head advances; `CURRENT` is
+    /// untouched.
     fn append_wal_and_publish(
         &mut self,
         records: Vec<VectorRecord>,
         next_generated_id: u64,
-        tombstone_update: Option<(TombstoneSummary, u64)>,
-        bm25_stats_delta_update: Option<Option<Bm25StatsDeltaRef>>,
+        tombstone_update: Option<StagedTombstone>,
+        bm25_stats_delta_update: Option<Bm25StatsDelta>,
         requests_before: &RequestCounts,
-        transaction: CellWalAppendTransaction<'_>,
     ) -> Result<AddReport> {
         let vectors_added = records.len();
-        let visible_generated_id_floor = self.cell_wal_next_generated_id_floor()?;
-        if next_generated_id > visible_generated_id_floor {
-            self.reserve_coordination_counter("id-directory/generated/NEXT", next_generated_id, 0)?;
-        }
         let mut inputs = Vec::new();
         let bundle_cell = self
             .manifest
@@ -8954,14 +9698,12 @@ impl BorsukIndex {
             });
         }
 
-        let (tombstone, new_tombstone_ids) =
-            tombstone_update.map_or((None, 0), |(summary, count)| (Some(summary), count));
+        let (tombstone, new_tombstone_ids) = tombstone_update.map_or((None, 0), |staged| {
+            let count = staged.new_tombstone_ids;
+            (Some(staged), count)
+        });
         if let Some(tombstone) = tombstone {
-            let mut tombstone_entries = self
-                .load_tombstone_run(&tombstone)?
-                .iter()
-                .map(|(id, state)| (id.clone(), *state))
-                .collect::<Vec<_>>();
+            let mut tombstone_entries = tombstone.entries;
             tombstone_entries.sort_by(|left, right| left.0.cmp(&right.0));
             let tombstone_only_ids = tombstone_entries
                 .iter()
@@ -9003,75 +9745,112 @@ impl BorsukIndex {
             }
         }
         if !bundled_directory.is_empty() {
-            let mut directory_by_partition =
-                BTreeMap::<LogicalCellId, Vec<CellWalIdDirectoryEntry>>::new();
-            for entry in bundled_directory {
-                directory_by_partition
-                    .entry(self.id_directory_partition(&entry.id))
-                    .or_default()
-                    .push(entry);
-            }
-            for (cell, mut entries) in directory_by_partition {
-                entries.sort_by(|left, right| left.id.cmp(&right.id));
-                let bytes = cell_wal_id_directory_bytes(&entries)?;
-                inputs.push(CellWalRunInput {
-                    cell,
-                    kind: CellWalRunKind::IdDirectory,
-                    metadata: Vec::new(),
-                    record_count: entries.len(),
-                    bytes,
-                    extension: "parquet".to_string(),
-                });
-            }
+            // V12 partitions ownership row-by-row inside one typed table. A
+            // transaction touching thousands of claim/cell partitions still
+            // consumes one bounded payload reference, never one object per
+            // routing partition.
+            bundled_directory.sort_by(|left, right| left.id.cmp(&right.id));
+            let bytes = cell_wal_id_directory_bytes(&bundled_directory)?;
+            inputs.push(CellWalRunInput {
+                cell: bundle_cell,
+                kind: CellWalRunKind::IdDirectory,
+                metadata: Vec::new(),
+                record_count: bundled_directory.len(),
+                bytes,
+                extension: "parquet".to_string(),
+            });
         }
-        let metadata = CellWalMutationMetadata {
+        let metadata = StagedPositionedMetadata {
+            logical_record_count: u64::try_from(bundled_records.len()).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "positioned logical record count exceeds u64".to_string(),
+                )
+            })?,
             new_tombstone_ids,
             next_generated_id_floor: next_generated_id,
-            bm25_stats_delta: bm25_stats_delta_update.flatten(),
+            bm25_stats_delta: bm25_stats_delta_update.unwrap_or_default(),
         };
-        let metadata = cell_wal_mutation_metadata_bytes(&metadata)?;
         let payload_bytes = inputs.iter().map(|input| input.bytes.len() as u64).sum();
         if self.active_collection_transaction.is_none() {
             return Err(BorsukError::InvalidStorage(
-                "cell WAL publication requires an active collection transaction".to_string(),
+                "positioned mutation staging requires an active collection transaction".to_string(),
             ));
         }
-        let cell_wal = self.cell_wal_store()?;
         let active = self
             .active_collection_transaction
             .as_ref()
-            .expect("cell WAL publication checked the active transaction above");
-        let (committed, validated_generation) = crate::parallel::install_io(|| {
-            rayon::join(
-                || {
-                    cell_wal.stage_root_authorized_with_metadata(
-                        transaction.id,
-                        &inputs,
-                        &metadata,
-                        transaction.state_prepared,
-                    )
-                },
-                || {
-                    self.collection_storage
-                        .collection_snapshot_generation_if_schema_compatible(
-                            &active.snapshot_checksum,
-                            active.snapshot_generation,
-                            &active.schema_fingerprint,
-                        )
-                },
-            )
-        });
-        let committed = committed?;
+            .expect("positioned mutation staging checked the active transaction above");
+        let validated_generation = self
+            .collection_storage
+            .collection_snapshot_generation_if_schema_compatible(
+                &active.snapshot_checksum,
+                active.snapshot_generation,
+                &active.schema_fingerprint,
+            )?;
         *active
             .validated_snapshot_generation
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(validated_generation?);
-        self.cell_wal_snapshot.push(committed);
-        self.cell_wal_snapshot
-            .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
-        self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
-        self.manifest.cell_wal_visible_tombstone_runs =
-            cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
+            .unwrap_or_else(|error| error.into_inner()) = Some(validated_generation);
+        active
+            .positioned
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .extend(inputs.into_iter().map(|input| StagedPositionedRun {
+                modality: self.manifest_reference.modality.clone(),
+                input,
+            }));
+        let mut positioned_metadata = active
+            .positioned_metadata
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let entry = positioned_metadata
+            .entry(self.manifest_reference.modality.clone())
+            .or_default();
+        entry.logical_record_count = entry
+            .logical_record_count
+            .checked_add(metadata.logical_record_count)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned logical record count exceeds u64".to_string(),
+                )
+            })?;
+        entry.next_generated_id_floor = entry
+            .next_generated_id_floor
+            .max(metadata.next_generated_id_floor);
+        entry.new_tombstone_ids = entry
+            .new_tombstone_ids
+            .checked_add(metadata.new_tombstone_ids)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
+            })?;
+        entry.bm25_stats_delta.document_count = entry
+            .bm25_stats_delta
+            .document_count
+            .checked_add(metadata.bm25_stats_delta.document_count)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("BM25 document delta exceeds i64".to_string())
+            })?;
+        entry.bm25_stats_delta.total_document_length = entry
+            .bm25_stats_delta
+            .total_document_length
+            .checked_add(metadata.bm25_stats_delta.total_document_length)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("BM25 length delta exceeds i64".to_string())
+            })?;
+        for (term, delta) in metadata.bm25_stats_delta.document_frequencies {
+            let current = entry
+                .bm25_stats_delta
+                .document_frequencies
+                .entry(term)
+                .or_default();
+            *current = current.checked_add(delta).ok_or_else(|| {
+                BorsukError::InvalidStorage("BM25 term delta exceeds i64".to_string())
+            })?;
+        }
+        entry
+            .bm25_stats_delta
+            .document_frequencies
+            .retain(|_, delta| *delta != 0);
         let mut report = add_report_from_parts(
             0,
             0,
@@ -9186,16 +9965,7 @@ impl BorsukIndex {
                 // any still-unconsumed transaction in its lane for the next
                 // threshold check. Explicit flush() continues to surface CAS
                 // conflicts to maintenance callers.
-                let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "WAL refresh requires a loaded collection snapshot".to_string(),
-                    )
-                })?;
-                self.cell_wal_snapshot =
-                    self.fetch_cell_wal_snapshot(&self.manifest, collection)?;
-                self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
-                self.manifest.cell_wal_visible_tombstone_runs =
-                    cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
+                self.reload_mutation_snapshot_after_manifest_change()?;
             }
             Err(error) => return Err(error),
         }
@@ -9208,12 +9978,15 @@ impl BorsukIndex {
     /// WAL is flushed in lockstep so a flush is atomic across modalities from a
     /// reader's perspective (each sub-index publishes its own manifest).
     pub fn flush(&mut self) -> Result<()> {
-        let transactions_before_flush = self.collection_wal_transactions_by_modality();
+        let legacy_transactions_before_flush = (!self.uses_positioned_mutation_authority())
+            .then(|| self.collection_wal_transactions_by_modality());
         self.flush_wal()?;
         for child in self.named.values_mut() {
             child.flush_wal()?;
         }
-        self.prune_fully_consumed_collection_transactions(&transactions_before_flush)?;
+        if let Some(transactions) = legacy_transactions_before_flush {
+            self.prune_fully_consumed_collection_transactions(&transactions)?;
+        }
         Ok(())
     }
 
@@ -9241,15 +10014,6 @@ impl BorsukIndex {
             .filter(|transaction| selected_transaction_ids.contains(&transaction.transaction_id))
             .cloned()
             .collect::<Vec<_>>();
-        if !selected_transactions.is_empty() {
-            let cell_wal = self.cell_wal_store()?;
-            crate::parallel::install_io(|| {
-                selected_transactions
-                    .par_iter()
-                    .map(|transaction| cell_wal.mark_root_authorized(transaction))
-                    .collect::<Result<Vec<_>>>()
-            })?;
-        }
         let cell_runs = selected_transactions
             .iter()
             .flat_map(|transaction| transaction.runs.iter().cloned())
@@ -9305,10 +10069,7 @@ impl BorsukIndex {
             let mut pending = Vec::with_capacity(segment_max_vectors);
             let mut pending_ids = HashSet::with_capacity(segment_max_vectors);
             for entry in entries {
-                let read = self
-                    .storage
-                    .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
-                let mut records = wal_records_from_table(read.bytes, &entry.path)?;
+                let mut records = self.load_wal_tail_records(std::slice::from_ref(entry))?;
                 if records.len() > segment_max_vectors {
                     sort_records_by_vector_locality(
                         &mut records,
@@ -9406,8 +10167,8 @@ impl BorsukIndex {
         } else {
             manifest.rebuild_pivots();
         }
-        // Task 3 has only an offline base run. A segment-changing online flush
-        // invalidates it atomically; Task 4 will publish direct incremental runs.
+        // A segment-changing online flush invalidates the offline base run;
+        // this path does not publish incremental V11 leaf runs.
         manifest.global_ann_ref = None;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let published = if paged_manifest {
@@ -9421,7 +10182,50 @@ impl BorsukIndex {
         };
         self.manifest = published;
         self.resident_global_ann_pins = None;
-        self.prune_consumed_cell_wal()?;
+        if !self.uses_positioned_mutation_authority() {
+            self.prune_consumed_cell_wal()?;
+        }
+        self.install_remaining_mutation_snapshot_after_flush(remaining_transactions)?;
+        // The flush materialized the WAL tail into cells; refresh the persisted
+        // cold quantizer so a cold/paged query routes over the current cell set.
+        self.refresh_persisted_quantizer()?;
+        Ok(())
+    }
+
+    fn install_remaining_mutation_snapshot_after_flush(
+        &mut self,
+        remaining_transactions: Vec<CommittedCellWalTransaction>,
+    ) -> Result<()> {
+        if !self.uses_positioned_mutation_authority() {
+            return self.reload_mutation_snapshot_after_manifest_change();
+        }
+        let remaining_ids = remaining_transactions
+            .iter()
+            .map(|transaction| transaction.transaction_id.as_str())
+            .collect::<HashSet<_>>();
+        self.positioned_bm25_deltas
+            .retain(|transaction_id, _| remaining_ids.contains(transaction_id.as_str()));
+        self.cell_wal_snapshot = remaining_transactions;
+        self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
+        self.manifest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
+        self.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
+        self.resident_global_mutations = self.prepare_resident_global_mutations_for_snapshot(
+            &self.manifest,
+            &self.cell_wal_snapshot,
+            &self.lane_log_head_checksums,
+        )?;
+        Ok(())
+    }
+
+    fn uses_positioned_mutation_authority(&self) -> bool {
+        self.positioned_log.is_some() || self.manifest_reference.modality != PRIMARY_MODALITY
+    }
+
+    fn reload_mutation_snapshot_after_manifest_change(&mut self) -> Result<()> {
+        if self.positioned_log.is_some() {
+            return self.reload_positioned_snapshot();
+        }
         let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage(
                 "WAL refresh requires a loaded collection snapshot".to_string(),
@@ -9431,9 +10235,6 @@ impl BorsukIndex {
         self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
         self.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&self.cell_wal_snapshot);
-        // The flush materialized the WAL tail into cells; refresh the persisted
-        // cold quantizer so a cold/paged query routes over the current cell set.
-        self.refresh_persisted_quantizer()?;
         Ok(())
     }
 
@@ -9446,15 +10247,38 @@ impl BorsukIndex {
             if entry.kind != CellWalRunKind::Records {
                 continue;
             }
-            let key = cell_wal_run_identity(entry);
+            let projection = positioned_projection_from_metadata(&entry.metadata)?;
+            let mut key = cell_wal_run_identity(entry);
+            if projection.is_some() {
+                // Root and every named child share one decoded-run cache, but
+                // positioned children project different logical records from
+                // the same root payload. Keep those decoded views distinct.
+                key.push(':');
+                key.push_str(&blake3::hash(&entry.metadata).to_hex());
+            }
             let decode_bytes = entry.byte_len.max(1);
             let decoded = self
                 .wal_tail_runtime
                 .load_record_run(&key, decode_bytes, || {
-                    let read = self
-                        .storage
-                        .read_bytes_with_cache_status_and_checksum(&entry.path, &entry.checksum)?;
-                    wal_records_from_table(read.bytes, &entry.path)
+                    let read = if projection.is_some() {
+                        self.collection_storage
+                            .read_bytes_with_cache_status_and_checksum(
+                                &entry.path,
+                                &entry.checksum,
+                            )?
+                    } else {
+                        self.storage.read_bytes_with_cache_status_and_checksum(
+                            &entry.path,
+                            &entry.checksum,
+                        )?
+                    };
+                    let records = wal_records_from_table(read.bytes, &entry.path)?;
+                    match projection {
+                        Some((kind, name)) => {
+                            Self::positioned_named_projection(records, name, kind)
+                        }
+                        None => Ok(records),
+                    }
                 })?;
             records.extend(decoded.iter().cloned());
         }
@@ -9590,12 +10414,24 @@ impl BorsukIndex {
     }
 
     fn live_wal_snapshot_key(&self) -> [u8; 32] {
+        Self::live_wal_snapshot_key_for(
+            self.manifest.version,
+            &self.lane_log_head_checksums,
+            &self.cell_wal_snapshot,
+        )
+    }
+
+    fn live_wal_snapshot_key_for(
+        manifest_version: u64,
+        lane_log_head_checksums: &[[u8; 32]],
+        cell_wal_snapshot: &[CommittedCellWalTransaction],
+    ) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&self.manifest.version.to_le_bytes());
-        for checksum in &self.lane_log_head_checksums {
+        hasher.update(&manifest_version.to_le_bytes());
+        for checksum in lane_log_head_checksums {
             hasher.update(checksum);
         }
-        for transaction in &self.cell_wal_snapshot {
+        for transaction in cell_wal_snapshot {
             for run in &transaction.runs {
                 hasher.update(run.transaction_id.as_bytes());
                 hasher.update(&run.cell.routing_epoch.to_le_bytes());
@@ -10105,8 +10941,8 @@ impl BorsukIndex {
         next_generated_id: u64,
         top_routing_level: u8,
         mut top_page_refs: Vec<RoutingLayerPageRef>,
-        tombstone_update: Option<(TombstoneSummary, u64)>,
-        bm25_stats_delta_update: Option<Option<Bm25StatsDeltaRef>>,
+        tombstone_update: Option<StagedTombstone>,
+        bm25_stats_delta_update: Option<Bm25StatsDelta>,
     ) -> Result<AddReport> {
         let vectors_added = records.len();
         if top_page_refs
@@ -10126,18 +10962,8 @@ impl BorsukIndex {
         manifest.segments.clear();
         manifest.pivots.clear();
         manifest.next_generated_id = next_generated_id;
-        if let Some((tombstone, new_tombstone_ids)) = tombstone_update {
-            manifest.tombstone_frontier.push(tombstone);
-            manifest.tombstone_id_count = manifest
-                .tombstone_id_count
-                .checked_add(new_tombstone_ids)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
-                })?;
-        }
-        if let Some(Some(update)) = bm25_stats_delta_update {
-            manifest.bm25_stats_delta_frontier.push(update);
-        }
+        let _ = tombstone_update;
+        let _ = bm25_stats_delta_update;
 
         let mut new_summaries = Vec::<SegmentSummary>::new();
         let mut segments_written = 0_usize;
@@ -10297,18 +11123,23 @@ impl BorsukIndex {
         Ok(())
     }
 
-    /// Generate collision-free numeric string ids without scanning segment payloads.
+    /// Generate collision-resistant retry-stable IDs without a collection-wide
+    /// S3 counter. Within a collection transaction the transaction id and row
+    /// ordinal deterministically identify every generated record.
     pub fn generate_ids(&self, count: usize) -> Result<Vec<String>> {
-        let count_u64 = u64::try_from(count).map_err(|_| {
-            BorsukError::InvalidRecordInput("generated id count does not fit u64".to_string())
-        })?;
-        let start = self.reserve_coordination_counter(
-            "id-directory/generated/NEXT",
-            self.cell_wal_next_generated_id_floor()?,
-            count_u64,
-        )?;
-        let end = advance_generated_id(start, count)?;
-        Ok((start..end).map(|id| id.to_string()).collect())
+        let seed = self
+            .active_collection_transaction_id()
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+        Ok((0..count)
+            .map(|ordinal| {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(b"borsuk-generated-id-v12\0");
+                hasher.update(seed.as_bytes());
+                hasher.update(&(ordinal as u64).to_le_bytes());
+                format!("g{}", hasher.finalize().to_hex())
+            })
+            .collect())
     }
 
     /// Load a stored vector by its identifier.
@@ -11961,7 +12792,12 @@ impl BorsukIndex {
         &mut self,
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
-        self.refresh()?;
+        // The collection root refreshes every modality and reconstructs named
+        // positioned projections before dispatching child GC. Named children
+        // do not own a positioned reader and must use that prepared snapshot.
+        if self.positioned_log.is_some() {
+            self.refresh()?;
+        }
         let snapshot_manifest_version = self.manifest.version;
         let now = Utc::now();
         let mut retained_manifests = Vec::new();
@@ -11980,6 +12816,7 @@ impl BorsukIndex {
                     .iter()
                     .flat_map(|manifest| manifest.cell_wal_consumed_runs.iter().cloned()),
             )
+            .filter(|identity| !self.positioned_run_identities.contains(identity))
             .collect::<BTreeSet<_>>();
         let simulated_detached_paths = if options.dry_run {
             self.cell_wal_object_paths_detached_without_root_authorization(
@@ -12447,8 +13284,15 @@ impl BorsukIndex {
         Self::extend_cell_wal_metadata_object_paths(&mut paths, &self.cell_wal_snapshot)?;
         let cell_wal = self.cell_wal_store()?;
         paths.extend(cell_wal.active_object_paths(&self.manifest.logical_cells)?);
+        let legacy_consumed_runs = self
+            .manifest
+            .cell_wal_consumed_runs
+            .iter()
+            .filter(|identity| !self.positioned_run_identities.contains(*identity))
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let (retained_paths, retained_transactions) =
-            cell_wal.retained_consumed_objects(&self.manifest.cell_wal_consumed_runs)?;
+            cell_wal.retained_consumed_objects(&legacy_consumed_runs)?;
         paths.extend(retained_paths);
         Self::extend_cell_wal_metadata_object_paths(&mut paths, &retained_transactions)?;
 
@@ -20798,6 +21642,9 @@ fn add_report_from_parts(
             total_bytes_written as f64 / vectors_added as f64
         },
         requests: RequestCounts::default(),
+        positioned_position: None,
+        positioned_envelope_checksum: String::new(),
+        positioned_encoded_bytes: 0,
     }
 }
 
@@ -20933,15 +21780,6 @@ fn next_generated_id_after_explicit_records(current: u64, records: &[VectorRecor
         }
     }
     Ok(next)
-}
-
-fn advance_generated_id(current: u64, count: usize) -> Result<u64> {
-    let count = u64::try_from(count).map_err(|_| {
-        BorsukError::InvalidRecordInput("generated id count does not fit u64".to_string())
-    })?;
-    current.checked_add(count).ok_or_else(|| {
-        BorsukError::InvalidRecordInput("generated id exceeds u64 range".to_string())
-    })
 }
 
 fn count_cache_read(cache_hit: bool, hits: &mut usize, misses: &mut usize) {
@@ -23302,22 +24140,6 @@ mod tests {
 
     use super::*;
     use std::sync::{Barrier, Mutex};
-    #[allow(dead_code, reason = "Task 4 direct lane-run search fixture")]
-    fn assert_v11_leaf_hit(uri: &str, query: &[f32], expected: &str) -> SearchReport {
-        let report = BorsukIndex::open(uri)
-            .unwrap()
-            .search_with_report(
-                query,
-                SearchOptions::approx(3, LeafMode::SrhtPqScan).with_max_segments(32),
-            )
-            .unwrap();
-        assert_eq!(report.hits[0].id, RecordId::from(expected));
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
-        assert!(report.global_leaf_pages_read > 0);
-        assert!(report.global_leaf_exact_scores <= report.records_scored);
-        report
-    }
-
     fn build_finished_resident_global_v11_index() -> (tempfile::TempDir, BorsukIndex) {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -23378,6 +24200,63 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    fn staged_mutation_object_paths(index: &BorsukIndex) -> Vec<String> {
+        let mut paths = Vec::new();
+        index
+            .collection_storage
+            .for_each_object("", |object| {
+                if object.path.starts_with("positioned-log/payloads/")
+                    || object.path.starts_with("positioned-log/envelopes/")
+                    || (object.path.starts_with("lane-log/lanes/")
+                        && object.path.contains("/extents/"))
+                    || is_cell_wal_immutable_path(&object.path)
+                    || is_cell_wal_transaction_path(&object.path)
+                {
+                    paths.push(object.path);
+                }
+                Ok(())
+            })
+            .unwrap();
+        paths.sort();
+        paths
+    }
+
+    fn positioned_metadata_rows_for_position(
+        index: &BorsukIndex,
+        position: crate::CommitSourcePosition,
+    ) -> Vec<crate::format::PositionedTransactionMetadataRow> {
+        let snapshot = index
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot_for_collection_generation(
+                index
+                    .collection_snapshot
+                    .as_ref()
+                    .unwrap()
+                    .snapshot
+                    .generation,
+            )
+            .unwrap();
+        let envelope = snapshot
+            .transactions
+            .iter()
+            .find(|transaction| transaction.position == position)
+            .expect("the reported positioned source must remain authoritative");
+        let metadata = envelope
+            .payloads
+            .iter()
+            .find(|payload| payload.role == "transaction_metadata_v2")
+            .expect("a text replacement must carry typed transaction metadata");
+        let bytes = index
+            .collection_storage
+            .read_bytes_with_cache_status_and_checksum(&metadata.path, &metadata.checksum)
+            .unwrap()
+            .bytes;
+        positioned_transaction_metadata_from_parquet(&bytes).unwrap()
+    }
+
     #[test]
     fn collection_delete_uses_one_mutation_version_for_primary_and_named_dense() {
         let dir = tempfile::tempdir().unwrap();
@@ -23427,7 +24306,7 @@ mod tests {
     }
 
     #[test]
-    fn collection_delete_uses_parent_version_for_late_interaction_tokens() {
+    fn collection_delete_uses_parent_stamp_for_late_interaction_tokens() {
         let dir = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: dir.path().to_string_lossy().into_owned(),
@@ -23467,8 +24346,7 @@ mod tests {
         for token_id in token_ids {
             let token = child.mutation_state(token_id.as_bytes()).unwrap().unwrap();
             assert!(token.is_deleted());
-            assert_eq!(primary.stamp().version(), token.stamp().version());
-            assert_ne!(primary.stamp().digest(), token.stamp().digest());
+            assert_eq!(primary.stamp(), token.stamp());
         }
     }
 
@@ -23709,8 +24587,6 @@ mod tests {
         assert_eq!(zero.len(), 64);
         assert_ne!(zero, one);
     }
-    use crate::collection_control::collection_wal_frontier_shard;
-
     #[test]
     fn recursive_search_receives_only_the_request_remaining_budgets() {
         let mut remaining = SearchOptions::approx(10, LeafMode::SrhtPqScan)
@@ -23764,90 +24640,6 @@ mod tests {
             ),
             SearchTerminationReason::MaxSegments
         );
-    }
-
-    #[test]
-    fn collection_transaction_admission_skips_a_saturated_frontier_shard() {
-        let directory = tempfile::tempdir().unwrap();
-        let uri = directory.path().to_string_lossy().into_owned();
-        let mut index = BorsukIndex::create(IndexConfig {
-            uri,
-            metric: VectorMetric::Euclidean,
-            dimensions: 2,
-            segment_max_vectors: 4,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: BTreeMap::new(),
-        })
-        .unwrap();
-        let saturated_shard = 0;
-        let transaction_ids = (0_u64..)
-            .map(|value| format!("saturated-root-{value}"))
-            .filter(|transaction_id| {
-                collection_wal_frontier_shard(transaction_id).unwrap() == saturated_shard
-            })
-            .take(
-                crate::collection_control::COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD
-                    as usize
-                    + 1,
-            )
-            .collect::<Vec<_>>();
-        let schema_fingerprint = index
-            .collection_storage
-            .load_collection_snapshot()
-            .unwrap()
-            .snapshot
-            .schema_fingerprint;
-        for transaction_id in transaction_ids.iter().take(
-            crate::collection_control::COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD as usize,
-        ) {
-            let receipt = index
-                .collection_storage
-                .reserve_collection_wal_transaction(transaction_id, &schema_fingerprint)
-                .unwrap();
-            index
-                .collection_storage
-                .create_collection_commit_from_reservation(
-                    &CollectionCommit {
-                        transaction_id: transaction_id.clone(),
-                        snapshot_generation: 1,
-                        schema_fingerprint: schema_fingerprint.clone(),
-                        descriptors: vec![CollectionDescriptorRef {
-                            modality: PRIMARY_MODALITY.to_string(),
-                            prefix: String::new(),
-                            descriptor_path: format!(
-                                "transactions/{transaction_id}/descriptors/descriptor.bin"
-                            ),
-                            descriptor_checksum: "a".repeat(64),
-                        }],
-                    },
-                    &receipt,
-                    None,
-                )
-                .unwrap();
-        }
-        let available_transaction_id = (0_u64..)
-            .map(|value| format!("available-root-{value}"))
-            .find(|transaction_id| {
-                collection_wal_frontier_shard(transaction_id).unwrap() != saturated_shard
-            })
-            .unwrap();
-
-        index
-            .begin_collection_transaction_from_candidates([
-                transaction_ids.last().unwrap().clone(),
-                available_transaction_id.clone(),
-            ])
-            .unwrap();
-
-        assert_eq!(
-            index.active_collection_transaction_id(),
-            Some(available_transaction_id.as_str())
-        );
-        index
-            .cancel_active_collection_transaction_reservation()
-            .unwrap();
-        index.clear_collection_transaction(false);
     }
 
     #[test]
@@ -24063,7 +24855,7 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &advanced));
         assert_eq!(index.get_vector("row").unwrap(), Some(vec![3.0, 4.0]));
 
-        assert_eq!(index.delete(["row"]).unwrap(), 1);
+        assert_eq!(index.delete(["row"]).unwrap().ids_submitted, 1);
         let deleted = index.live_wal_snapshot().unwrap();
         assert!(!Arc::ptr_eq(&advanced, &deleted));
         assert_eq!(index.get_vector("row").unwrap(), None);
@@ -24303,7 +25095,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_flush_prunes_fully_consumed_collection_wal_transactions() {
+    fn explicit_flush_materializes_and_fences_positioned_transactions() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -24319,24 +25111,64 @@ mod tests {
         index
             .add(vec![VectorRecord::new("tail", vec![0.0, 0.0])])
             .unwrap();
-        let before = index
-            .collection_storage
-            .collection_wal_transactions_snapshot_with_retries()
+        assert_eq!(index.cell_wal_snapshot.len(), 1);
+        assert!(index.active_segment_summaries().unwrap().is_empty());
+        let transaction_id = index.cell_wal_snapshot[0].transaction_id.clone();
+        let positioned_run_identities = index.cell_wal_snapshot[0]
+            .runs
+            .iter()
+            .map(cell_wal_run_identity)
+            .collect::<BTreeSet<_>>();
+        let positioned_before_flush = index
+            .positioned_log
+            .as_ref()
             .unwrap()
-            .0;
-        assert_eq!(before.len(), 1);
+            .reader()
+            .snapshot_for_collection_generation(
+                index
+                    .collection_snapshot
+                    .as_ref()
+                    .unwrap()
+                    .snapshot
+                    .generation,
+            )
+            .unwrap();
+        assert!(
+            positioned_before_flush
+                .transactions
+                .iter()
+                .any(|transaction| transaction.transaction_id == transaction_id)
+        );
 
         index.flush().unwrap();
 
-        assert!(
-            index
-                .collection_storage
-                .collection_wal_transactions_snapshot_with_retries()
-                .unwrap()
-                .0
-                .is_empty()
+        assert!(index.cell_wal_snapshot.is_empty());
+        assert_eq!(index.active_segment_summaries().unwrap().len(), 1);
+        assert_eq!(
+            index.manifest.cell_wal_consumed_runs, positioned_run_identities,
+            "the materialized manifest must fence every run still authorized by the positioned head"
         );
-        assert!(index.manifest.cell_wal_consumed_runs.is_empty());
+        let positioned_after_flush = index
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot_for_collection_generation(
+                index
+                    .collection_snapshot
+                    .as_ref()
+                    .unwrap()
+                    .snapshot
+                    .generation,
+            )
+            .unwrap();
+        assert!(
+            positioned_after_flush
+                .transactions
+                .iter()
+                .any(|transaction| transaction.transaction_id == transaction_id),
+            "explicit flush must not checkpoint the authoritative positioned source"
+        );
         assert_eq!(
             index
                 .search_ids(&[0.0, 0.0], SearchOptions::exact(1))
@@ -24455,7 +25287,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_log_materialization_uses_cheap_scalar_segment_codes() {
+    fn group_drain_is_append_only_and_explicit_flush_uses_configured_segment_codes() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let index = BorsukIndex::create(IndexConfig {
@@ -24489,26 +25321,39 @@ mod tests {
             )
             .unwrap();
         group.drain().unwrap();
+        drop(group);
 
-        let materialized = BorsukIndex::open(&uri).unwrap();
+        let mut materialized = BorsukIndex::open(&uri).unwrap();
+        assert!(materialized.active_segment_summaries().unwrap().is_empty());
+        assert_eq!(
+            materialized.get_vector("scalar-0").unwrap(),
+            Some((0..8).map(|dimension| dimension as f32).collect())
+        );
+        assert_eq!(materialized.cell_wal_snapshot.len(), 1);
+
+        materialized.flush().unwrap();
         let summary = materialized
             .active_segment_summaries()
             .unwrap()
             .pop()
             .unwrap();
         let (segment, _, _, _) = materialized.read_segment(&summary).unwrap();
-        let scalar = Segment::from_records_with_quantizer(
+        let configured = Segment::from_records_with_quantizer_and_geometry(
             "expected".to_string(),
             segment.level,
             segment.metric.clone(),
             segment.dimensions,
             segment.records.clone(),
-            QuantizerKind::ScalarBounds,
+            materialized.manifest.build_config.quantizer,
+            materialized
+                .manifest
+                .build_config
+                .normalized_angular_coarse_geometry,
         )
         .unwrap();
-        assert_eq!(segment.pq_min, scalar.pq_min);
-        assert_eq!(segment.pq_max, scalar.pq_max);
-        assert_eq!(segment.pq_codes, scalar.pq_codes);
+        assert_eq!(segment.pq_min, configured.pq_min);
+        assert_eq!(segment.pq_max, configured.pq_max);
+        assert_eq!(segment.pq_codes, configured.pq_codes);
     }
 
     #[test]
@@ -24623,7 +25468,7 @@ mod tests {
         assert!(resident.resident_routing_summaries().is_some());
     }
     #[test]
-    fn gc_preserves_pre_ack_payloads_with_a_live_staging_state() {
+    fn gc_is_harmless_while_collection_mutation_is_staged_only_in_memory() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut writer = BorsukIndex::create(IndexConfig {
@@ -24638,67 +25483,24 @@ mod tests {
         .unwrap();
         writer.begin_collection_transaction().unwrap();
         writer
-            .add_collection_records(vec![VectorRecord::new("in-flight", vec![0.0, 0.0])])
+            .put_primary_records(vec![VectorRecord::new("in-flight", vec![0.0, 0.0])])
             .unwrap();
-        let staged = writer.cell_wal_snapshot.last().unwrap();
-        let run = staged.runs.first().unwrap();
-        std::fs::File::open(directory.path().join(&run.path))
-            .unwrap()
-            .set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH))
-            .unwrap();
-
-        let mut collector = BorsukIndex::open(&uri).unwrap();
-        collector
-            .gc_obsolete_segments(GarbageCollectionOptions {
-                dry_run: false,
-                min_age: Duration::ZERO,
-            })
-            .unwrap();
-
+        assert!(writer.cell_wal_snapshot.is_empty());
         assert!(
-            writer
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&run.path, &run.checksum)
-                .is_ok(),
-            "GC must retain pre-ACK payloads while their staging state is live"
-        );
-    }
-
-    #[test]
-    fn gc_reclaims_abandoned_staging_from_store_object_age() {
-        let directory = tempfile::tempdir().unwrap();
-        let uri = directory.path().to_string_lossy().into_owned();
-        let mut writer = BorsukIndex::create(IndexConfig {
-            uri: uri.clone(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 2,
-            segment_max_vectors: 4,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: BTreeMap::new(),
-        })
-        .unwrap();
-        writer.begin_collection_transaction().unwrap();
-        writer
-            .add_collection_records(vec![VectorRecord::new("abandoned", vec![0.0, 0.0])])
-            .unwrap();
-        let transaction_id = writer.active_collection_transaction_id().unwrap();
-        let run = writer
-            .cell_wal_snapshot
-            .last()
-            .unwrap()
-            .runs
-            .first()
-            .unwrap();
-        let state_path = format!("transactions/{transaction_id}/STATE");
-        for path in [&run.path, &state_path] {
-            std::fs::File::open(directory.path().join(path))
+            !writer
+                .active_collection_transaction
+                .as_ref()
                 .unwrap()
-                .set_times(
-                    std::fs::FileTimes::new().set_modified(std::time::SystemTime::UNIX_EPOCH),
-                )
-                .unwrap();
-        }
+                .positioned
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+        let staged_paths = staged_mutation_object_paths(&writer);
+        assert!(
+            staged_paths.is_empty(),
+            "in-memory staging published mutation objects: {staged_paths:?}"
+        );
 
         let mut collector = BorsukIndex::open(&uri).unwrap();
         collector
@@ -24709,20 +25511,56 @@ mod tests {
             .unwrap();
 
         assert!(
-            writer
-                .storage
-                .read_bytes_with_cache_status_and_checksum(&run.path, &run.checksum)
-                .is_err(),
-            "GC must reclaim an abandoned staging payload from store-assigned object age"
+            staged_mutation_object_paths(&writer).is_empty(),
+            "an uncommitted collection mutation must expose no object for GC to race"
         );
+        writer.clear_collection_transaction(false);
     }
 
     #[test]
-    fn gc_keeps_bm25_pages_referenced_only_by_cell_wal_metadata() {
+    fn aborted_in_memory_collection_staging_publishes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        writer.begin_collection_transaction().unwrap();
+        writer
+            .put_primary_records(vec![VectorRecord::new("abandoned", vec![0.0, 0.0])])
+            .unwrap();
+        let staged_paths = staged_mutation_object_paths(&writer);
+        assert!(
+            staged_paths.is_empty(),
+            "in-memory staging published mutation objects: {staged_paths:?}"
+        );
+        writer.clear_collection_transaction(false);
+        assert!(staged_mutation_object_paths(&writer).is_empty());
+
+        let mut collector = BorsukIndex::open(&uri).unwrap();
+        collector
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+
+        assert!(staged_mutation_object_paths(&collector).is_empty());
+        assert_eq!(collector.get_vector("abandoned").unwrap(), None);
+    }
+
+    #[test]
+    fn gc_keeps_inline_positioned_bm25_metadata_authorized_by_the_head() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
-            uri,
+            uri: uri.clone(),
             metric: VectorMetric::Euclidean,
             dimensions: 2,
             segment_max_vectors: 4,
@@ -24737,37 +25575,29 @@ mod tests {
             ])
             .unwrap();
         index.flush().unwrap();
-        index
-            .upsert(vec![
+        let report = index
+            .upsert_with_report(vec![
                 VectorRecord::new("document", vec![1.0, 0.0]).with_text("new term"),
             ])
             .unwrap();
-
-        let pages = index
-            .cell_wal_snapshot
-            .iter()
-            .filter_map(|transaction| {
-                BorsukIndex::cell_wal_metadata(transaction)
-                    .unwrap()
-                    .bm25_stats_delta
-            })
-            .flat_map(|delta| delta.pages)
-            .collect::<Vec<_>>();
+        let source_position = report.positioned_position.unwrap();
+        let metadata_before_gc = positioned_metadata_rows_for_position(&index, source_position);
         assert!(
-            !pages.is_empty(),
-            "replacement must persist a BM25 correction page"
-        );
-        assert!(
-            pages
+            metadata_before_gc
                 .iter()
-                .all(|page| page.path.contains("/transactions/")),
-            "WAL-owned external pages must carry their root transaction namespace"
+                .any(|row| row.modality == PRIMARY_MODALITY
+                    && row.term.is_none()
+                    && row.document_count_delta < 0
+                    && row.total_document_length_delta < 0),
+            "replacement metadata must inline its stable-corpus correction"
         );
-
-        let active = index.active_segment_object_paths().unwrap().paths;
         assert!(
-            pages.iter().all(|page| active.contains(&page.path)),
-            "GC keep-set must follow immutable paths referenced by transaction metadata"
+            metadata_before_gc
+                .iter()
+                .any(|row| row.modality == PRIMARY_MODALITY
+                    && row.term.is_some()
+                    && row.document_frequency_delta < 0),
+            "replacement metadata must inline per-term corrections"
         );
         index
             .gc_obsolete_segments(GarbageCollectionOptions {
@@ -24775,47 +25605,110 @@ mod tests {
                 min_age: Duration::ZERO,
             })
             .unwrap();
-        for page in &pages {
-            assert_eq!(
-                index
-                    .storage
-                    .read_bytes_with_cache_status_and_checksum(&page.path, &page.checksum)
-                    .unwrap()
-                    .bytes
-                    .len() as u64,
-                page.encoded_bytes
-            );
-        }
-
-        let pinned = BorsukIndex::open(&index.manifest.config.uri).unwrap();
-        let retention = Duration::from_millis(100);
-        thread::sleep(retention + Duration::from_millis(25));
-        index.flush().unwrap();
-        index
-            .gc_obsolete_segments(GarbageCollectionOptions {
-                dry_run: false,
-                min_age: retention,
-            })
-            .unwrap();
-        for page in &pages {
-            assert!(
-                index
-                    .storage
-                    .read_bytes_with_cache_status_and_checksum(&page.path, &page.checksum)
-                    .is_ok(),
-                "a retained pre-flush manifest must keep metadata-owned WAL objects"
-            );
-        }
+        let reopened = BorsukIndex::open(&uri).unwrap();
         assert_eq!(
-            pinned
-                .search_ids(&[1.0, 0.0], SearchOptions::exact(1))
-                .unwrap(),
-            ["document"]
+            positioned_metadata_rows_for_position(&reopened, source_position),
+            metadata_before_gc
+        );
+        assert_eq!(
+            reopened.search_text("new", 1).unwrap().hits[0].id,
+            RecordId::from("document")
         );
     }
 
     #[test]
-    fn coherent_collection_view_advances_before_omitting_a_pruned_transaction() {
+    fn partial_text_flush_keeps_persisted_and_positioned_statistics_disjoint() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+            text: true,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("a-doc", vec![0.0, 0.0]).with_text("alpha"),
+                VectorRecord::new("b-doc", vec![1.0, 0.0]).with_text("beta"),
+            ])
+            .unwrap();
+        index.flush().unwrap();
+        index
+            .upsert(vec![
+                VectorRecord::new("a-doc", vec![0.0, 1.0]).with_text("fresh-a"),
+            ])
+            .unwrap();
+        index
+            .upsert(vec![
+                VectorRecord::new("b-doc", vec![1.0, 1.0]).with_text("fresh-b"),
+            ])
+            .unwrap();
+        assert_eq!(index.cell_wal_snapshot.len(), 2);
+        assert_eq!(index.positioned_bm25_deltas.len(), 2);
+
+        let selected_id = index.cell_wal_snapshot[0].transaction_id.clone();
+        let selected_delta = index.positioned_bm25_deltas[&selected_id].clone();
+        let (remaining_id, remaining_delta) = index
+            .positioned_bm25_deltas
+            .iter()
+            .find(|(transaction_id, _)| *transaction_id != &selected_id)
+            .map(|(transaction_id, delta)| (transaction_id.clone(), delta.clone()))
+            .unwrap();
+        let selected = BTreeSet::from([selected_id]);
+        index.flush_wal_transactions(&selected).unwrap();
+
+        assert_eq!(
+            index
+                .cell_wal_snapshot
+                .iter()
+                .map(|transaction| transaction.transaction_id.clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([remaining_id.clone()])
+        );
+        assert_eq!(
+            index.positioned_bm25_deltas,
+            BTreeMap::from([(remaining_id.clone(), remaining_delta.clone())])
+        );
+        assert_eq!(
+            index
+                .load_bm25_stats_delta_ref(index.manifest.bm25_stats_delta.as_ref().unwrap())
+                .unwrap(),
+            selected_delta
+        );
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        for current in [&index, &reopened] {
+            assert_eq!(
+                current
+                    .cell_wal_snapshot
+                    .iter()
+                    .map(|transaction| transaction.transaction_id.clone())
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([remaining_id.clone()])
+            );
+            assert_eq!(
+                current.positioned_bm25_deltas,
+                BTreeMap::from([(remaining_id.clone(), remaining_delta.clone())])
+            );
+            let ids = current
+                .search_text("alpha beta fresh-a fresh-b", 4)
+                .unwrap()
+                .hits
+                .into_iter()
+                .map(|hit| hit.id)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                ids,
+                BTreeSet::from([RecordId::from("a-doc"), RecordId::from("b-doc")])
+            );
+        }
+    }
+
+    #[test]
+    fn materialized_collection_generation_fences_its_positioned_source() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -24828,80 +25721,53 @@ mod tests {
         })
         .unwrap();
 
-        index
-            .add(vec![VectorRecord::new("tail", vec![0.0, 0.0])])
+        let generation_before_flush = index
+            .collection_snapshot
+            .as_ref()
+            .unwrap()
+            .snapshot
+            .generation;
+        let (_, report) = index
+            .add_with_report(vec![vec![0.0, 0.0]], Some(vec!["tail".to_string()]))
             .unwrap();
-        let (tail_view, transactions, _) = index.collection_storage.load_collection_view().unwrap();
-        assert_eq!(transactions.len(), 1);
+        let source_position = report.positioned_position.unwrap();
+        let positioned_run_identities = index
+            .cell_wal_snapshot
+            .iter()
+            .flat_map(|transaction| transaction.runs.iter().map(cell_wal_run_identity))
+            .collect::<BTreeSet<_>>();
 
         index.flush().unwrap();
 
-        let (materialized_view, transactions, _) =
-            index.collection_storage.load_collection_view().unwrap();
-        assert!(transactions.is_empty());
+        let materialized_generation = index
+            .collection_snapshot
+            .as_ref()
+            .unwrap()
+            .snapshot
+            .generation;
         assert!(
-            materialized_view.snapshot.generation > tail_view.snapshot.generation,
-            "a view may omit the transaction only after pinning the materialized catalog"
+            materialized_generation > generation_before_flush,
+            "a manifest may fence positioned rows only in a newer collection generation"
         );
-    }
-
-    #[test]
-    fn immutable_pending_commits_do_not_trigger_obsolete_frontier_pressure() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut index = BorsukIndex::create(IndexConfig {
-            uri: directory.path().to_string_lossy().into_owned(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 2,
-            segment_max_vectors: 32,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: BTreeMap::new(),
-        })
-        .unwrap();
-        let target_shard = 0;
-        let transaction_ids = (0_u64..)
-            .map(|value| format!("pressure-{value}"))
-            .filter(|transaction_id| {
-                crate::collection_control::collection_wal_frontier_shard(transaction_id).unwrap()
-                    == target_shard
-            })
-            .take(
-                crate::collection_control::COLLECTION_WAL_FRONTIER_SOFT_TRANSACTIONS_PER_SHARD
-                    as usize,
-            )
-            .collect::<Vec<_>>();
-
-        for (ordinal, transaction_id) in transaction_ids.iter().enumerate() {
-            index.begin_collection_transaction().unwrap();
-            index
-                .active_collection_transaction
-                .as_mut()
-                .unwrap()
-                .id
-                .clone_from(transaction_id);
-            let result = index.add_collection_records(vec![VectorRecord::new(
-                format!("pressure-row-{ordinal}"),
-                vec![ordinal as f32, 0.0],
-            )]);
-            index.finish_collection_transaction(result).unwrap();
-        }
-
         assert_eq!(
-            index
-                .collection_storage
-                .collection_wal_transactions_snapshot_with_retries()
-                .unwrap()
-                .0
-                .len(),
-            transaction_ids.len(),
-            "the immutable pending log has no shared frontier-pressure threshold"
+            index.manifest.cell_wal_consumed_runs,
+            positioned_run_identities
         );
-        assert!(index.manifest.cell_wal_consumed_runs.is_empty());
-        assert_eq!(
-            index.list_records(0, transaction_ids.len()).unwrap().len(),
-            transaction_ids.len()
+        assert!(index.cell_wal_snapshot.is_empty());
+        let source = index
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot_for_collection_generation(materialized_generation)
+            .unwrap();
+        assert!(
+            source
+                .transactions
+                .iter()
+                .any(|transaction| transaction.position == source_position),
+            "the consumed fence must remain while its source position is authoritative"
         );
-        assert_eq!(index.stats().segments, 0);
     }
 
     #[test]
@@ -24936,7 +25802,7 @@ mod tests {
     }
 
     #[test]
-    fn parquet_id_directory_and_coordination_counters_round_trip_and_reject_corruption() {
+    fn parquet_id_directory_round_trips_and_rejects_corruption() {
         let entries = vec![
             CellWalIdDirectoryEntry {
                 id: vec![0, 255, 1],
@@ -24966,13 +25832,6 @@ mod tests {
         assert_eq!(
             cell_wal_id_directory_from_slice(&encoded, "id-directory.parquet").unwrap(),
             entries
-        );
-
-        let counter = coordination_counter_bytes(42);
-        assert!(counter.starts_with(COORDINATION_COUNTER_MAGIC));
-        assert_eq!(
-            coordination_counter_from_slice(&counter, "NEXT").unwrap(),
-            42
         );
 
         let mut corrupted = encoded;
@@ -25020,92 +25879,6 @@ mod tests {
         corrupted[12] ^= 1;
         let error = cell_wal_mutation_metadata_from_slice(&corrupted, "descriptor").unwrap_err();
         assert!(error.to_string().contains("checksum mismatch"), "{error}");
-    }
-
-    #[test]
-    fn cell_wal_id_directory_lookup_reads_only_its_hash_partition() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut index = BorsukIndex::create(IndexConfig {
-            uri: directory.path().to_string_lossy().into_owned(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 2,
-            segment_max_vectors: 4,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: BTreeMap::new(),
-        })
-        .unwrap();
-        let left = LogicalCellId::new(1, 0);
-        let right = LogicalCellId::new(1, 1);
-        index.manifest.logical_cells = vec![left, right];
-        let (left_id, right_id) = (0_u64..10_000)
-            .map(|ordinal| format!("partition-{ordinal}").into_bytes())
-            .fold((None, None), |(left_id, right_id), id| {
-                match index.id_directory_partition(&id) {
-                    cell if cell == left && left_id.is_none() => (Some(id), right_id),
-                    cell if cell == right && right_id.is_none() => (left_id, Some(id)),
-                    _ => (left_id, right_id),
-                }
-            });
-        let left_id = left_id.unwrap();
-        let right_id = right_id.unwrap();
-        let run = |id: Vec<u8>, owner| {
-            cell_wal_id_directory_bytes(&[CellWalIdDirectoryEntry {
-                id,
-                owner,
-                state: MutationState::new(
-                    MutationStamp::new(
-                        crate::mutation::MutationVersion::from_parts(1, [1; 16]),
-                        [2; 32],
-                    ),
-                    MutationOperation::Put,
-                ),
-            }])
-            .unwrap()
-        };
-        let metadata =
-            cell_wal_mutation_metadata_bytes(&CellWalMutationMetadata::default()).unwrap();
-        let committed = index
-            .cell_wal_store()
-            .unwrap()
-            .commit_with_metadata(
-                "partitioned-directory",
-                &[
-                    CellWalRunInput {
-                        cell: left,
-                        kind: CellWalRunKind::IdDirectory,
-                        metadata: Vec::new(),
-                        bytes: run(left_id.clone(), left),
-                        record_count: 1,
-                        extension: "parquet".to_string(),
-                    },
-                    CellWalRunInput {
-                        cell: right,
-                        kind: CellWalRunKind::IdDirectory,
-                        metadata: Vec::new(),
-                        bytes: run(right_id, right),
-                        record_count: 1,
-                        extension: "parquet".to_string(),
-                    },
-                ],
-                &metadata,
-            )
-            .unwrap();
-        index.cell_wal_snapshot = vec![committed];
-
-        let before = index.storage.request_counts();
-        let found = index
-            .cell_wal_id_directory_entries(std::iter::once(left_id.as_slice()))
-            .unwrap()
-            .remove(&left_id)
-            .unwrap();
-        let requests = index.storage.request_counts().delta(&before);
-
-        assert_eq!(found.owner, left);
-        assert_eq!(
-            requests.gets, 1,
-            "lookup fetched an unrelated ID-directory partition"
-        );
     }
 
     #[test]
@@ -25702,7 +26475,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_stats_and_resident_bytes_are_exact() {
+    fn resident_global_v11_stats_are_exact() {
         let dir = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: dir.path().to_string_lossy().into_owned(),
@@ -25725,15 +26498,6 @@ mod tests {
 
         let reference = index.manifest.global_ann_ref.as_ref().unwrap();
         reference.validate().unwrap();
-        let base = reference.base().unwrap();
-        let codebook = index
-            .load_resident_global_codebook(reference.codebook())
-            .unwrap();
-        let run = index.load_resident_global_leaf_run(base, None).unwrap();
-        assert_eq!(
-            reference.resident_bytes(),
-            u64::try_from(codebook.resident_bytes() + run.resident_bytes()).unwrap()
-        );
 
         let stats = index.stats();
         assert_eq!(stats.global_ann_layout_version, Some(11));
@@ -25746,7 +26510,7 @@ mod tests {
         assert_eq!(stats.global_leaf_max_level, Some(0));
         assert_eq!(
             stats.global_leaf_partial_pages,
-            usize::try_from(base.partial_pages()).unwrap()
+            usize::try_from(reference.base().unwrap().partial_pages()).unwrap()
         );
     }
 
@@ -26025,6 +26789,156 @@ mod tests {
         let error = reader.refresh().unwrap_err();
         assert!(error.to_string().contains("not found"), "{error}");
         assert_eq!(reader.manifest.version, version);
+    }
+
+    #[test]
+    fn unchanged_manifest_refresh_rejects_missing_eager_positioned_metadata_without_swapping_view()
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "image".to_string(),
+                VectorSpec {
+                    dimensions: 8,
+                    metric: VectorMetric::Euclidean,
+                    kind: VectorKind::Dense,
+                    element_type: crate::VectorElementType::Float32,
+                },
+            )]),
+        })
+        .unwrap();
+        writer
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(format!("base-{row}"), vec![row as f32; 8])
+                            .with_named_vector("image", vec![row as f32 + 1_000.0; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        writer.finish_bulk_load().unwrap();
+        writer
+            .upsert_with_report(vec![
+                VectorRecord::new("overlay", vec![0.25; 8])
+                    .with_named_vector("image", vec![1_000.25; 8]),
+            ])
+            .unwrap();
+        writer.delete(["base-0"]).unwrap();
+
+        let mut reader = BorsukIndex::open(&uri).unwrap();
+        let primary_before = reader.cell_wal_snapshot.clone();
+        let primary_identities_before = reader.positioned_run_identities.clone();
+        let primary_manifest_before = serde_json::to_value(&reader.manifest).unwrap();
+        let primary_reference_before = reader.manifest_reference.clone();
+        let collection_before = reader
+            .collection_snapshot
+            .as_ref()
+            .map(|snapshot| (snapshot.checksum.clone(), snapshot.snapshot.clone()));
+        let named_before = reader.named["image"].cell_wal_snapshot.clone();
+        let named_identities_before = reader.named["image"].positioned_run_identities.clone();
+        let named_manifest_before = serde_json::to_value(&reader.named["image"].manifest).unwrap();
+        let named_reference_before = reader.named["image"].manifest_reference.clone();
+        let resident_before = Arc::clone(
+            reader
+                .resident_global_mutations
+                .as_ref()
+                .expect("the positioned tombstone must prepare a resident V11 overlay"),
+        );
+        let resident_snapshot_key_before = resident_before.snapshot_key;
+        let primary_hits_before = reader
+            .search_ids(&[0.25; 8], SearchOptions::exact(256))
+            .unwrap();
+        let named_hits_before = reader.named["image"]
+            .search_ids(&[1_000.25; 8], SearchOptions::exact(256))
+            .unwrap();
+        assert!(primary_hits_before.contains(&"overlay".to_string()));
+        assert!(!primary_hits_before.contains(&"base-0".to_string()));
+        assert!(named_hits_before.contains(&"overlay".to_string()));
+        assert!(!named_hits_before.contains(&"base-0".to_string()));
+
+        let positioned = reader
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot_for_collection_generation(
+                reader
+                    .collection_snapshot
+                    .as_ref()
+                    .unwrap()
+                    .snapshot
+                    .generation,
+            )
+            .unwrap();
+        let broken_payload = positioned
+            .transactions
+            .iter()
+            .flat_map(|transaction| &transaction.payloads)
+            .find(|payload| payload.role == "tombstones_by_modality_v1")
+            .expect("the loaded delete transaction must reference eager tombstone metadata");
+        std::fs::remove_file(directory.path().join(&broken_payload.path)).unwrap();
+
+        let error = reader.refresh().unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error}");
+        assert_eq!(
+            serde_json::to_value(&reader.manifest).unwrap(),
+            primary_manifest_before
+        );
+        assert_eq!(reader.manifest_reference, primary_reference_before);
+        assert_eq!(
+            reader
+                .collection_snapshot
+                .as_ref()
+                .map(|snapshot| (snapshot.checksum.clone(), snapshot.snapshot.clone())),
+            collection_before
+        );
+        assert_eq!(reader.cell_wal_snapshot, primary_before);
+        assert_eq!(reader.positioned_run_identities, primary_identities_before);
+        assert_eq!(
+            serde_json::to_value(&reader.named["image"].manifest).unwrap(),
+            named_manifest_before
+        );
+        assert_eq!(
+            reader.named["image"].manifest_reference,
+            named_reference_before
+        );
+        assert_eq!(reader.named["image"].cell_wal_snapshot, named_before);
+        assert_eq!(
+            reader.named["image"].positioned_run_identities,
+            named_identities_before
+        );
+        assert!(Arc::ptr_eq(
+            reader.resident_global_mutations.as_ref().unwrap(),
+            &resident_before
+        ));
+        assert_eq!(
+            reader
+                .resident_global_mutations
+                .as_ref()
+                .unwrap()
+                .snapshot_key,
+            resident_snapshot_key_before
+        );
+        assert_eq!(
+            reader
+                .search_ids(&[0.25; 8], SearchOptions::exact(256))
+                .unwrap(),
+            primary_hits_before
+        );
+        assert_eq!(
+            reader.named["image"]
+                .search_ids(&[1_000.25; 8], SearchOptions::exact(256))
+                .unwrap(),
+            named_hits_before
+        );
     }
 
     #[test]
@@ -26395,15 +27309,22 @@ mod tests {
         index.delete([ids[0].as_str()]).unwrap();
         drop(index);
 
-        let report = BorsukIndex::open(&uri)
-            .unwrap()
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert!(
+            reopened
+                .resident_global_mutations_for_current_snapshot()
+                .is_some(),
+            "open must prepare the resident MVCC overlay after positioned tombstones"
+        );
+        let report = reopened
             .search_with_report(
                 &[0.0; 8],
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
-        assert_eq!(report.global_leaf_continuations, 1);
+        assert_eq!(report.global_leaf_continuations, 1, "{report:?}");
         assert_eq!(report.global_leaf_waves, 2);
         assert!(report.global_leaf_pages_read <= 4);
         assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
@@ -26435,7 +27356,10 @@ mod tests {
             byte_exhausted.termination_reason,
             SearchTerminationReason::MaxBytes
         );
-        assert_eq!(byte_exhausted.global_leaf_pages_read, 1);
+        // The cap uses the prior two-page average, while physical leaf pages
+        // may have different encoded sizes. It can therefore admit zero or one
+        // complete page, but never a second page or a partial read.
+        assert!(byte_exhausted.global_leaf_pages_read <= 1);
         assert!(byte_exhausted.bytes_read <= max_bytes);
 
         let exhausted = BorsukIndex::open(&uri)
@@ -26579,21 +27503,17 @@ mod tests {
         );
     }
     #[test]
-    fn bulk_direct_add_locality_orders_records_before_segmenting() {
+    fn positioned_flush_locality_orders_records_before_segmenting() {
         let dir = tempfile::tempdir().unwrap();
-        let mut index = BorsukIndex::create_with_wal_and_leaf_capability(
-            IndexConfig {
-                uri: dir.path().to_string_lossy().into_owned(),
-                metric: VectorMetric::Euclidean,
-                dimensions: 2,
-                segment_max_vectors: 4,
-                ram_budget_bytes: None,
-                text: false,
-                named_vectors: Default::default(),
-            },
-            WalConfig::disabled(),
-            LeafCapability::PqScanOnly,
-        )
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
         .unwrap();
         let records = (0..8)
             .map(|row| {
@@ -26606,6 +27526,11 @@ mod tests {
             .collect();
 
         index.add(records).unwrap();
+        assert!(index.active_segment_summaries().unwrap().is_empty());
+        assert_eq!(index.cell_wal_snapshot.len(), 1);
+        assert_eq!(index.get_vector("row-0").unwrap(), Some(vec![-10.0, -10.0]));
+
+        index.flush().unwrap();
 
         let summaries = index.active_segment_summaries().unwrap();
         assert_eq!(summaries.len(), 2);

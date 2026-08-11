@@ -76,17 +76,23 @@ pub enum BorsukError {
         max_records: u64,
     },
 
-    /// A multi-lane group append committed at least zero lanes and failed at
-    /// least one. The durable subset is explicit so callers can retry only the
-    /// failed lanes without pretending the call was atomic.
+    /// The positioned head CAS committed, but post-commit claim cleanup could
+    /// not be completed. The durable identity is returned so callers can
+    /// recover without retrying the mutation as though it were uncommitted.
     #[error(
-        "group commit failed on {failed_lanes:?}; already committed {committed_lane_receipts:?}"
+        "positioned commit {source_epoch}/{shard}/{sequence} ({envelope_checksum}) is durable, but claim cleanup failed: {cleanup}"
     )]
-    PartialGroupCommit {
-        /// Receipts for ownership lanes that are already durably visible.
-        committed_lane_receipts: Vec<crate::group_commit::GroupCommitLaneReceipt>,
-        /// Ownership lanes that did not acknowledge.
-        failed_lanes: Vec<crate::group_commit::GroupCommitLaneFailure>,
+    PositionedCommitCleanupFailed {
+        /// Durable source epoch containing the committed mutation.
+        source_epoch: u64,
+        /// Durable source shard containing the committed mutation.
+        shard: u8,
+        /// Durable source sequence containing the committed mutation.
+        sequence: u64,
+        /// Checksum of the authoritative position-bearing envelope.
+        envelope_checksum: String,
+        /// Post-commit cleanup error; durability is unaffected.
+        cleanup: String,
     },
 
     /// Guaranteed-recall search could not honor a hard search budget.
@@ -188,7 +194,7 @@ impl BorsukError {
             Self::LeafModeNotConfigured { .. } => "leaf_mode_not_configured",
             Self::RamBudgetExceeded { .. } => "ram_budget_exceeded",
             Self::IngestBackpressure { .. } => "ingest_backpressure",
-            Self::PartialGroupCommit { .. } => "partial_group_commit",
+            Self::PositionedCommitCleanupFailed { .. } => "positioned_commit_cleanup_failed",
             Self::RecallGuaranteeViolated { .. } => "recall_guarantee_violated",
             Self::InvalidStorage(_) => "invalid_storage",
             Self::IndexNotFound(_) => "index_not_found",

@@ -1218,6 +1218,28 @@ pub(crate) fn routing_layer_page_index_to_parquet(
     routing_level: u8,
     page_refs: &[RoutingLayerPageRef],
 ) -> Result<Vec<u8>> {
+    routing_layer_page_index_to_parquet_with_manifest_version(
+        manifest,
+        manifest.version,
+        routing_level,
+        page_refs,
+    )
+}
+
+pub(crate) fn routing_parent_page_to_parquet(
+    manifest: &Manifest,
+    routing_level: u8,
+    page_refs: &[RoutingLayerPageRef],
+) -> Result<Vec<u8>> {
+    routing_layer_page_index_to_parquet_with_manifest_version(manifest, 0, routing_level, page_refs)
+}
+
+fn routing_layer_page_index_to_parquet_with_manifest_version(
+    manifest: &Manifest,
+    encoded_manifest_version: u64,
+    routing_level: u8,
+    page_refs: &[RoutingLayerPageRef],
+) -> Result<Vec<u8>> {
     validate_routing_layer_page_refs(page_refs)?;
 
     let schema = routing_layer_page_index_schema(manifest.config.dimensions);
@@ -1241,7 +1263,7 @@ pub(crate) fn routing_layer_page_index_to_parquet(
                 page_refs.iter().map(|_| CURRENT_VERSION),
             )),
             array(UInt64Array::from_iter_values(
-                page_refs.iter().map(|_| manifest.version),
+                page_refs.iter().map(|_| encoded_manifest_version),
             )),
             array(UInt8Array::from_iter_values(
                 page_refs.iter().map(|_| routing_level),
@@ -5398,6 +5420,126 @@ pub(crate) fn tombstone_ids_from_parquet(bytes: &[u8]) -> Result<Vec<(Vec<u8>, M
     Ok(entries)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PositionedTombstoneRow {
+    pub(crate) modality: String,
+    pub(crate) record_id: Vec<u8>,
+    pub(crate) state: MutationState,
+    pub(crate) created_at_seconds: i64,
+    pub(crate) created_at_nanos: u32,
+}
+
+fn positioned_tombstone_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("modality", DataType::Utf8, false),
+        Field::new("record_id", DataType::Binary, false),
+        Field::new("mutation_hlc", DataType::UInt64, false),
+        Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+        Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+        Field::new("deleted", DataType::Boolean, false),
+        Field::new("created_at_seconds", DataType::Int64, false),
+        Field::new("created_at_nanos", DataType::UInt32, false),
+    ]))
+}
+
+pub(crate) fn positioned_tombstones_to_parquet(rows: &[PositionedTombstoneRow]) -> Result<Vec<u8>> {
+    if rows.is_empty()
+        || rows
+            .iter()
+            .any(|row| row.modality.is_empty() || row.record_id.is_empty())
+        || rows.windows(2).any(|pair| {
+            (&pair[0].modality, pair[0].record_id.as_slice())
+                >= (&pair[1].modality, pair[1].record_id.as_slice())
+        })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "positioned tombstones must be non-empty and strictly sorted by modality and id"
+                .to_string(),
+        ));
+    }
+    let batch = RecordBatch::try_new(
+        positioned_tombstone_schema(),
+        vec![
+            array(StringArray::from_iter_values(
+                rows.iter().map(|row| row.modality.as_str()),
+            )),
+            array(BinaryArray::from_iter_values(
+                rows.iter().map(|row| row.record_id.as_slice()),
+            )),
+            array(UInt64Array::from_iter_values(
+                rows.iter().map(|row| row.state.stamp().version().hlc()),
+            )),
+            array(FixedSizeBinaryArray::try_from_iter(
+                rows.iter().map(|row| row.state.stamp().version().writer()),
+            )?),
+            array(FixedSizeBinaryArray::try_from_iter(
+                rows.iter().map(|row| row.state.stamp().digest()),
+            )?),
+            array(BooleanArray::from_iter(
+                rows.iter().map(|row| Some(row.state.is_deleted())),
+            )),
+            array(Int64Array::from_iter_values(
+                rows.iter().map(|row| row.created_at_seconds),
+            )),
+            array(UInt32Array::from_iter_values(
+                rows.iter().map(|row| row.created_at_nanos),
+            )),
+        ],
+    )?;
+    write_batch(batch)
+}
+
+pub(crate) fn positioned_tombstones_from_parquet(
+    bytes: &[u8],
+) -> Result<Vec<PositionedTombstoneRow>> {
+    let mut rows = Vec::new();
+    for batch in read_batches(bytes)? {
+        if batch.schema().as_ref() != positioned_tombstone_schema().as_ref() {
+            return Err(BorsukError::InvalidStorage(
+                "positioned tombstone schema is not exact".to_string(),
+            ));
+        }
+        let stamp_columns = mutation_stamp_columns(batch.schema().as_ref())?.expect("exact schema");
+        for row in 0..batch.num_rows() {
+            let stamp =
+                mutation_stamp_value(&batch, Some(stamp_columns), row)?.expect("exact schema");
+            rows.push(PositionedTombstoneRow {
+                modality: string_value_by_name(&batch, row, "modality")?.to_string(),
+                record_id: binary_value_by_name(&batch, row, "record_id")?.to_vec(),
+                state: MutationState::new(
+                    stamp,
+                    if boolean_value(&batch, column_index(&batch, "deleted")?, row, "deleted")? {
+                        MutationOperation::Delete
+                    } else {
+                        MutationOperation::Put
+                    },
+                ),
+                created_at_seconds: primitive_value_by_name::<Int64Type>(
+                    &batch,
+                    row,
+                    "created_at_seconds",
+                )?,
+                created_at_nanos: primitive_value_by_name::<UInt32Type>(
+                    &batch,
+                    row,
+                    "created_at_nanos",
+                )?,
+            });
+        }
+    }
+    if rows.is_empty()
+        || rows.windows(2).any(|pair| {
+            (&pair[0].modality, pair[0].record_id.as_slice())
+                >= (&pair[1].modality, pair[1].record_id.as_slice())
+        })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "positioned tombstones are empty or not canonically sorted".to_string(),
+        ));
+    }
+    Ok(rows)
+}
+
 fn validate_mutation_state_entries(entries: &[(Vec<u8>, MutationState)]) -> Result<()> {
     if entries.iter().any(|(id, _)| id.is_empty())
         || entries
@@ -5589,6 +5731,141 @@ pub(crate) struct PositionedPayloadMetadata {
     pub(crate) min_stamp: PositionedMutationStamp,
     pub(crate) max_stamp: PositionedMutationStamp,
     pub(crate) version_digests: BTreeMap<(u64, [u8; 16]), [u8; 32]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PositionedTransactionMetadataRow {
+    pub(crate) modality: String,
+    pub(crate) logical_record_count: u64,
+    pub(crate) next_generated_id_floor: u64,
+    pub(crate) new_tombstone_ids: u64,
+    pub(crate) document_count_delta: i64,
+    pub(crate) total_document_length_delta: i64,
+    pub(crate) term: Option<u32>,
+    pub(crate) document_frequency_delta: i64,
+    pub(crate) stamp: MutationStamp,
+}
+
+fn positioned_transaction_metadata_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("modality", DataType::Utf8, false),
+        Field::new("logical_record_count", DataType::UInt64, false),
+        Field::new("next_generated_id_floor", DataType::UInt64, false),
+        Field::new("new_tombstone_ids", DataType::UInt64, false),
+        Field::new("document_count_delta", DataType::Int64, false),
+        Field::new("total_document_length_delta", DataType::Int64, false),
+        Field::new("term", DataType::UInt32, true),
+        Field::new("document_frequency_delta", DataType::Int64, false),
+        Field::new("mutation_hlc", DataType::UInt64, false),
+        Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+        Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+    ]))
+}
+
+pub(crate) fn positioned_transaction_metadata_to_parquet(
+    rows: &[PositionedTransactionMetadataRow],
+) -> Result<Vec<u8>> {
+    if rows.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "positioned transaction metadata must contain at least one row".to_string(),
+        ));
+    }
+    let schema = positioned_transaction_metadata_schema();
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            array(StringArray::from_iter_values(
+                rows.iter().map(|row| row.modality.as_str()),
+            )),
+            array(UInt64Array::from_iter_values(
+                rows.iter().map(|row| row.logical_record_count),
+            )),
+            array(UInt64Array::from_iter_values(
+                rows.iter().map(|row| row.next_generated_id_floor),
+            )),
+            array(UInt64Array::from_iter_values(
+                rows.iter().map(|row| row.new_tombstone_ids),
+            )),
+            array(Int64Array::from_iter_values(
+                rows.iter().map(|row| row.document_count_delta),
+            )),
+            array(Int64Array::from_iter_values(
+                rows.iter().map(|row| row.total_document_length_delta),
+            )),
+            array(UInt32Array::from_iter(rows.iter().map(|row| row.term))),
+            array(Int64Array::from_iter_values(
+                rows.iter().map(|row| row.document_frequency_delta),
+            )),
+            array(UInt64Array::from_iter_values(
+                rows.iter().map(|row| row.stamp.version().hlc()),
+            )),
+            array(FixedSizeBinaryArray::try_from_iter(
+                rows.iter().map(|row| row.stamp.version().writer()),
+            )?),
+            array(FixedSizeBinaryArray::try_from_iter(
+                rows.iter().map(|row| row.stamp.digest()),
+            )?),
+        ],
+    )?;
+    write_batch(batch)
+}
+
+pub(crate) fn positioned_transaction_metadata_from_parquet(
+    bytes: &[u8],
+) -> Result<Vec<PositionedTransactionMetadataRow>> {
+    let mut rows = Vec::new();
+    for batch in read_batches(bytes)? {
+        if batch.schema().as_ref() != positioned_transaction_metadata_schema().as_ref() {
+            return Err(BorsukError::InvalidStorage(
+                "positioned transaction metadata schema is not exact".to_string(),
+            ));
+        }
+        let stamp_columns = mutation_stamp_columns(batch.schema().as_ref())?.expect("exact schema");
+        for row in 0..batch.num_rows() {
+            rows.push(PositionedTransactionMetadataRow {
+                modality: string_value_by_name(&batch, row, "modality")?.to_string(),
+                logical_record_count: primitive_value_by_name::<UInt64Type>(
+                    &batch,
+                    row,
+                    "logical_record_count",
+                )?,
+                next_generated_id_floor: primitive_value_by_name::<UInt64Type>(
+                    &batch,
+                    row,
+                    "next_generated_id_floor",
+                )?,
+                new_tombstone_ids: primitive_value_by_name::<UInt64Type>(
+                    &batch,
+                    row,
+                    "new_tombstone_ids",
+                )?,
+                document_count_delta: primitive_value_by_name::<Int64Type>(
+                    &batch,
+                    row,
+                    "document_count_delta",
+                )?,
+                total_document_length_delta: primitive_value_by_name::<Int64Type>(
+                    &batch,
+                    row,
+                    "total_document_length_delta",
+                )?,
+                term: primitive_optional_value_by_name::<UInt32Type>(&batch, row, "term")?,
+                document_frequency_delta: primitive_value_by_name::<Int64Type>(
+                    &batch,
+                    row,
+                    "document_frequency_delta",
+                )?,
+                stamp: mutation_stamp_value(&batch, Some(stamp_columns), row)?
+                    .expect("exact schema"),
+            });
+        }
+    }
+    if rows.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "positioned transaction metadata is empty".to_string(),
+        ));
+    }
+    Ok(rows)
 }
 
 pub(crate) fn positioned_payload_metadata(
@@ -7347,6 +7624,40 @@ mod tests {
         );
         assert!(schema.field_with_name("min_visible_generation").is_err());
         assert_eq!(tombstone_ids_from_parquet(&bytes).unwrap(), entries);
+    }
+
+    #[test]
+    fn positioned_transaction_metadata_round_trips_exact_header_and_terms() {
+        let stamp = MutationStamp::new(MutationVersion::from_parts(7, [3; 16]), [9; 32]);
+        let rows = vec![
+            PositionedTransactionMetadataRow {
+                modality: "primary".to_string(),
+                logical_record_count: 3,
+                next_generated_id_floor: 11,
+                new_tombstone_ids: 2,
+                document_count_delta: -1,
+                total_document_length_delta: -4,
+                term: None,
+                document_frequency_delta: 0,
+                stamp,
+            },
+            PositionedTransactionMetadataRow {
+                modality: "primary".to_string(),
+                logical_record_count: 0,
+                next_generated_id_floor: 0,
+                new_tombstone_ids: 0,
+                document_count_delta: 0,
+                total_document_length_delta: 0,
+                term: Some(5),
+                document_frequency_delta: -1,
+                stamp,
+            },
+        ];
+        let bytes = positioned_transaction_metadata_to_parquet(&rows).unwrap();
+        assert_eq!(
+            positioned_transaction_metadata_from_parquet(&bytes).unwrap(),
+            rows
+        );
     }
 
     #[test]

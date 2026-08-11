@@ -5,7 +5,6 @@
 //! 100k-term vocabulary while every record and query carries only ~15
 //! non-zeros. Results are cross-checked against an exact brute-force sparse dot.
 
-#[allow(dead_code)]
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

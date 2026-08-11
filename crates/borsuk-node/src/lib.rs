@@ -235,9 +235,6 @@ pub struct SearchReportJs {
     pub global_scan_chunks_searched: u32,
     pub global_base_approximate_us: f64,
     pub global_base_exact_rerank_us: f64,
-    pub global_delta_approximate_us: f64,
-    pub global_delta_exact_rerank_us: f64,
-    pub global_delta_wait_us: f64,
     pub resident_bytes_estimate: f64,
     pub collection_resident_bytes: f64,
     pub retained_bytes: f64,
@@ -355,8 +352,7 @@ pub struct RebuildReportJs {
 
 #[napi(object)]
 pub struct DeleteReportJs {
-    pub deleted: u32,
-    pub total_tombstoned: u32,
+    pub ids_submitted: u32,
     pub published: bool,
     pub requests: RequestCountsJs,
 }
@@ -1286,7 +1282,7 @@ impl JsIndex {
             .inner
             .lock()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
-            .delete_with_report(ids)
+            .delete(ids)
             .map_err(to_js_error)?;
         delete_report_to_js(report)
     }
@@ -1891,9 +1887,6 @@ fn search_report_to_js(report: borsuk::SearchReport) -> Result<SearchReportJs> {
         global_scan_chunks_searched: usize_to_u32(report.global_scan_chunks_searched)?,
         global_base_approximate_us: report.global_base_approximate_us as f64,
         global_base_exact_rerank_us: report.global_base_exact_rerank_us as f64,
-        global_delta_approximate_us: report.global_delta_approximate_us as f64,
-        global_delta_exact_rerank_us: report.global_delta_exact_rerank_us as f64,
-        global_delta_wait_us: report.global_delta_wait_us as f64,
         resident_bytes_estimate: report.resident_bytes_estimate as f64,
         collection_resident_bytes: report.collection_resident_bytes as f64,
         retained_bytes: report.retained_bytes as f64,
@@ -1943,8 +1936,7 @@ fn add_report_to_js(report: borsuk::AddReport) -> Result<AddReportJs> {
 
 fn delete_report_to_js(report: borsuk::DeleteReport) -> Result<DeleteReportJs> {
     Ok(DeleteReportJs {
-        deleted: usize_to_u32(report.deleted)?,
-        total_tombstoned: usize_to_u32(report.total_tombstoned)?,
+        ids_submitted: usize_to_u32(report.ids_submitted)?,
         published: report.published,
         requests: request_counts_to_js(report.requests),
     })

@@ -162,7 +162,7 @@ fn compaction_handles_a_fully_deleted_source_without_building_empty_segments() {
 
     // Delete every record, then compact: the source rewrite sees no survivors.
     let all_ids: Vec<String> = records.iter().map(|record| record.id.to_string()).collect();
-    index.delete_with_report(all_ids).unwrap();
+    index.delete(all_ids).unwrap();
     // Must not error with "segments must contain at least one record".
     index.compact(CompactionOptions::default()).unwrap();
     index.purge_with_report().unwrap();

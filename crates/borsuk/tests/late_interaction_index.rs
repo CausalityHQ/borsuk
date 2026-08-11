@@ -157,6 +157,24 @@ fn token_ann_maxsim_survives_wal_flush_reopen_upsert_and_delete() {
     assert!(bounded.transient_bytes <= bounded.transient_capacity_bytes);
     assert!(bounded.transient_peak_bytes <= bounded.transient_capacity_bytes);
 
+    drop(index);
+    let mut index = BorsukIndex::open(&uri).unwrap();
+    let cold_bounded = index
+        .search_late_interaction_with_report(
+            "tokens",
+            query.clone(),
+            LateInteractionSearchOptions::bounded(2, 2),
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            bounded.wal_records_examined,
+            cold_bounded.wal_records_examined
+        ),
+        (9, 9),
+        "foreground and cold-open reports must count 3 entity rows plus 6 token rows"
+    );
+
     index.flush().unwrap();
     drop(index);
     let mut reopened = BorsukIndex::open(&uri).unwrap();
@@ -197,4 +215,30 @@ fn token_ann_maxsim_survives_wal_flush_reopen_upsert_and_delete() {
         .unwrap();
     assert_eq!(ids(&after_delete), ["alpha", "noise"]);
     assert!(!after_delete.iter().any(|hit| hit.id.as_str() == "beta"));
+}
+
+#[test]
+fn omitted_late_interaction_field_persists_zero_logical_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index = BorsukIndex::create(config(uri.clone())).unwrap();
+
+    index
+        .add(vec![VectorRecord::new("primary-only", vec![0.0, 0.0])])
+        .unwrap();
+    assert!(
+        index
+            .search_late_interaction("tokens", vec![vec![1.0, 0.0]], 1)
+            .unwrap()
+            .is_empty()
+    );
+
+    drop(index);
+    let reopened = BorsukIndex::open(&uri).unwrap();
+    assert!(
+        reopened
+            .search_late_interaction("tokens", vec![vec![1.0, 0.0]], 1)
+            .unwrap()
+            .is_empty()
+    );
 }

@@ -645,8 +645,8 @@ fn run_mixture(mix: &Mixture, records: usize, rounds: usize) -> MixtureRow {
         let write_started = Instant::now();
         let deleted = index.delete(delete_ids.iter().map(String::as_str)).unwrap();
         write_seconds += write_started.elapsed().as_secs_f64();
-        assert_eq!(deleted, delete_ids.len());
-        write_ops += deleted;
+        assert_eq!(deleted.ids_submitted, delete_ids.len());
+        write_ops += deleted.ids_submitted;
         for id in delete_ids {
             assert!(live.remove(&id).is_some());
         }

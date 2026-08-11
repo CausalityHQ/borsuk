@@ -341,14 +341,6 @@ pub(crate) const fn segment_skip_event(_reason: SearchTerminationReason, _segmen
 }
 
 #[cfg(feature = "tracing")]
-pub(crate) fn post_commit_maintenance_error(error: &crate::BorsukError) {
-    tracing::warn!(error = %error, "post_commit_maintenance_failed");
-}
-
-#[cfg(not(feature = "tracing"))]
-pub(crate) const fn post_commit_maintenance_error(_error: &crate::BorsukError) {}
-
-#[cfg(feature = "tracing")]
 fn search_mode_name(mode: &SearchMode) -> &'static str {
     match mode {
         SearchMode::Exact => "exact",

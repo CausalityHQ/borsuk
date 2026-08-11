@@ -7,6 +7,14 @@ use borsuk::{
     BorsukIndex, GlobalScanCodec, VectorElementType, VectorRecord, vector_records_to_parquet,
 };
 
+fn flush_cli(uri: &str) {
+    Command::cargo_bin("borsuk")
+        .unwrap()
+        .args(["flush", "--uri", uri])
+        .assert()
+        .success();
+}
+
 #[test]
 fn cli_creates_adds_and_searches_local_index() {
     let dir = tempfile::tempdir().unwrap();
@@ -618,6 +626,7 @@ fn cli_search_obeys_approx_byte_budget() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
 
     let output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -735,6 +744,7 @@ fn cli_search_can_report_query_counters() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
 
     let output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -993,6 +1003,7 @@ fn cli_search_accepts_vamana_pq_leaf_mode() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
 
     let output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1058,6 +1069,7 @@ fn cli_search_accepts_hybrid_leaf_mode() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
 
     let output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1197,6 +1209,7 @@ fn cli_reports_manifest_stats() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
 
     let output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1296,6 +1309,7 @@ fn cli_create_supports_routing_page_fanout() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
 
     let output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1344,6 +1358,7 @@ fn cli_stats_can_use_paged_routing_without_resident_segment_summaries() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
 
     let resident_output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1404,6 +1419,7 @@ fn cli_compacts_local_index() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
 
     let compact_output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1479,6 +1495,7 @@ fn cli_rebuild_compacts_and_deletes_obsolete_objects_when_requested() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
 
     let output = Command::cargo_bin("borsuk")
         .unwrap()
@@ -1637,6 +1654,7 @@ fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
         .args(["add", "--uri", &uri, "--input", records.to_str().unwrap()])
         .assert()
         .success();
+    flush_cli(&uri);
     Command::cargo_bin("borsuk")
         .unwrap()
         .args([

@@ -934,15 +934,12 @@ class ValidatorTests(unittest.TestCase):
             (
                 "global_base_approximate_us",
                 "global_base_exact_rerank_us",
-                "global_delta_approximate_us",
-                "global_delta_exact_rerank_us",
-                "global_delta_wait_us",
             )
         )
         for record in records:
-            for field in fields[-5:]:
+            for field in fields[-2:]:
                 record[field] = "0"
-        records[0]["global_delta_exact_rerank_us"] = "-1"
+        records[0]["global_base_exact_rerank_us"] = "-1"
         self._write_csv(reads_path, fields, records)
         with self.assertRaisesRegex(ValidationError, "negative global phase telemetry"):
             validate(self.root, self.manifest_path)
@@ -1230,9 +1227,6 @@ class ResidualPqTerminalRootTests(unittest.TestCase):
                 "segments_searched",
                 "global_base_approximate_us",
                 "global_base_exact_rerank_us",
-                "global_delta_approximate_us",
-                "global_delta_exact_rerank_us",
-                "global_delta_wait_us",
                 *exact.keys(),
             ]
             reads = [
@@ -1253,9 +1247,6 @@ class ResidualPqTerminalRootTests(unittest.TestCase):
                     "segments_searched": "4",
                     "global_base_approximate_us": "100",
                     "global_base_exact_rerank_us": "1000",
-                    "global_delta_approximate_us": "0",
-                    "global_delta_exact_rerank_us": "0",
-                    "global_delta_wait_us": "0",
                     **exact,
                 }
                 for query in range(20)

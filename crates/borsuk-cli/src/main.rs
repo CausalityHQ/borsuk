@@ -302,6 +302,14 @@ fn run() -> Result<()> {
             index.upsert(records)?;
             Ok(())
         }
+        Commands::Flush {
+            uri,
+            resident_routing,
+        } => {
+            let mut index = open_index(&uri, None, resident_routing, false)?;
+            index.flush()?;
+            Ok(())
+        }
         Commands::Search {
             uri,
             query,
@@ -625,7 +633,7 @@ fn run() -> Result<()> {
             resident_routing,
         } => {
             let mut index = open_index(&uri, cache_dir, resident_routing, false)?;
-            let report = index.delete_with_report(ids)?;
+            let report = index.delete(ids)?;
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
@@ -770,6 +778,15 @@ enum Commands {
         input_format: CliInputFormat,
         /// Keep routing summaries resident in RAM for lower latency on small, hot
         /// indexes. Default is paged routing (minimal RAM).
+        #[arg(long)]
+        resident_routing: bool,
+    },
+    /// Materialize the positioned mutation tail into immutable search segments.
+    Flush {
+        /// Existing index URI.
+        #[arg(long)]
+        uri: String,
+        /// Keep routing summaries resident while materializing.
         #[arg(long)]
         resident_routing: bool,
     },

@@ -249,7 +249,7 @@ fn deleted_document_never_appears_in_search_text_results() {
             text_record("live-last", 2, "rareterm"),
         ])
         .unwrap();
-    assert_eq!(index.delete(["deleted-best"]).unwrap(), 1);
+    assert_eq!(index.delete(["deleted-best"]).unwrap().ids_submitted, 1);
 
     let report = index.search_text("rareterm", 3).unwrap();
 

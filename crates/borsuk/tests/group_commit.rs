@@ -1,24 +1,15 @@
-//! Process-local WAL group-commit integration coverage.
+//! Public positioned group-commit equivalence coverage.
 
-#[allow(dead_code)]
 mod common;
 
-use std::{
-    collections::HashSet,
-    io::Cursor,
-    sync::{Arc, Barrier},
-};
+use std::{collections::BTreeMap, sync::Arc, thread, time::Duration};
 
-use arrow_ipc::reader::StreamReader;
-use arrow_schema::DataType;
 use borsuk::{
-    BorsukIndex, GROUP_COMMIT_STRIPE_COUNT, GroupCommitConfig, GroupCommitWriter,
-    IncrementalMaintenanceOptions, IndexConfig, LeafMode, SearchOptions, SearchTerminationReason,
-    VectorMetric, VectorRecord,
+    BorsukError, BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, ObjectStore,
+    PositionedLogWriter, PositionedMutationModality, RequestCounts, SearchOptions,
+    VectorElementType, VectorKind, VectorMetric, VectorRecord, VectorSpec,
 };
-use bytes::Bytes;
-use futures_util::TryStreamExt;
-use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory};
+use object_store::memory::InMemory;
 
 fn config(uri: &str) -> IndexConfig {
     IndexConfig {
@@ -32,2480 +23,1086 @@ fn config(uri: &str) -> IndexConfig {
     }
 }
 
-fn ids_in_ownership_lane(lane: usize, count: usize) -> Vec<String> {
-    let mut ids = Vec::with_capacity(count);
-    for ordinal in 0.. {
-        let id = format!("ownership-{lane}-{ordinal}");
-        let digest = blake3::hash(id.as_bytes());
-        let hash = u64::from_le_bytes(digest.as_bytes()[..8].try_into().unwrap());
-        if hash as usize % 8 == lane {
-            ids.push(id);
-            if ids.len() == count {
-                return ids;
+fn writer(index: BorsukIndex, workers: usize) -> GroupCommitWriter {
+    GroupCommitWriter::new(
+        index,
+        GroupCommitConfig {
+            max_delay: Duration::from_millis(2),
+            max_records: 1_024,
+            workers,
+        },
+    )
+    .unwrap()
+}
+
+fn logged_request_counts(operations: &common::OperationLog) -> RequestCounts {
+    let mut counts = RequestCounts::default();
+    for entry in operations.entries() {
+        match entry.operation {
+            common::StoreOperation::Put | common::StoreOperation::MultipartPut => counts.puts += 1,
+            common::StoreOperation::Get => counts.gets += 1,
+            common::StoreOperation::Head => counts.heads += 1,
+            common::StoreOperation::Delete => counts.deletes += 1,
+            common::StoreOperation::List => counts.lists += 1,
+            common::StoreOperation::Copy | common::StoreOperation::Rename => {
+                panic!("mutation telemetry has no slot for {:?}", entry.operation)
             }
         }
     }
-    unreachable!()
+    counts
 }
 
-#[test]
-fn drain_materializes_one_record_directly_into_v11() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///group-drain-global-delta";
-    let mut index = BorsukIndex::create_with_object_store(
-        Arc::new(traced),
-        IndexConfig {
-            uri: uri.to_string(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 16,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        },
-    )
-    .unwrap();
-    index
-        .add(
-            (0..128)
-                .map(|row| {
-                    VectorRecord::new(
-                        format!("base-{row}"),
-                        (0..8)
-                            .map(|dimension| ((row * 17 + dimension * 11) % 101) as f32 / 101.0)
-                            .collect(),
-                    )
-                })
-                .collect(),
-        )
-        .unwrap();
-    index.finish_bulk_load().unwrap();
-    operations.clear();
+fn logged_put_payload_bytes(operations: &common::OperationLog) -> u64 {
+    operations
+        .entries()
+        .into_iter()
+        .filter_map(|entry| entry.payload_bytes)
+        .sum()
+}
 
-    let delta = vec![10.0; 8];
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    writer
-        .append(vec![VectorRecord::new("delta", delta.clone())])
-        .unwrap();
-    let tail_report = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri)
-        .unwrap()
-        .search_with_report(
-            &[9.9; 8],
-            SearchOptions::approx(5, LeafMode::SrhtPqScan)
-                .with_max_segments(4)
-                .with_max_candidates_per_segment(8)
-                .with_max_bytes(1),
-        )
-        .unwrap();
-    assert_eq!(tail_report.hits[0].id.as_str(), "delta");
-    assert!(tail_report.bytes_read > 0);
-    assert_eq!(
-        tail_report.global_scan_chunks_searched, 0,
-        "lane-log bytes must consume the shared request budget before immutable search: {tail_report:?}"
-    );
-    writer.drain().unwrap();
+fn sum_request_counts(left: RequestCounts, right: RequestCounts) -> RequestCounts {
+    RequestCounts {
+        gets: left.gets + right.gets,
+        puts: left.puts + right.puts,
+        deletes: left.deletes + right.deletes,
+        heads: left.heads + right.heads,
+        lists: left.lists + right.lists,
+    }
+}
 
+fn assert_no_legacy_mutation_writes(operations: &common::OperationLog) {
     assert_eq!(
         operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put && path.starts_with("global-pq/")
+            matches!(
+                operation,
+                common::StoreOperation::Put | common::StoreOperation::MultipartPut
+            ) && (path.starts_with("lane-log/")
+                || path.starts_with("cell-wal/")
+                || path.starts_with("transactions/")
+                || (path.starts_with("cells/") && path.contains("/wal/"))
+                || path.starts_with("tombstones/")
+                || path.starts_with("bm25/")
+                || path.starts_with("lexical/stats-delta/")
+                || path == "id-directory/generated/NEXT")
         }),
         0,
-        "drain must not rebuild the corpus-wide global PQ artifact"
+        "public V12 mutation facades must not write legacy durability objects"
     );
-    let report = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri)
-        .unwrap()
-        .search_with_report(
-            &delta,
-            SearchOptions::approx(1, LeafMode::SrhtPqScan)
-                .with_max_segments(4)
-                .with_max_candidates_per_segment(8),
-        )
-        .unwrap();
-    assert_eq!(report.hits[0].id.as_str(), "delta");
-    assert_eq!(report.hits[0].distance, 0.0);
-    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
-    assert_eq!(report.segments_searched, 0);
-    assert_eq!(report.global_leaf_directory_reads, 0, "{report:?}");
-    assert_eq!(report.global_leaf_directory_bytes, 0, "{report:?}");
-    assert!(report.global_leaf_pages_read > 0, "{report:?}");
-    assert!(report.global_leaf_page_bytes > 0, "{report:?}");
-    assert!(report.global_leaf_exact_scores > 0, "{report:?}");
-
-    let byte_limited = BorsukIndex::open_with_object_store(inner, uri)
-        .unwrap()
-        .search_with_report(
-            &delta,
-            SearchOptions::approx(1, LeafMode::SrhtPqScan)
-                .with_max_segments(4)
-                .with_max_bytes(1),
-        )
-        .unwrap();
-    assert!(byte_limited.hits.is_empty(), "{byte_limited:?}");
-    assert_eq!(byte_limited.segments_searched, 0, "{byte_limited:?}");
-    assert_eq!(
-        byte_limited.termination_reason,
-        SearchTerminationReason::MaxBytes
-    );
-    assert_eq!(byte_limited.global_leaf_directory_bytes, 0);
-    assert_eq!(byte_limited.global_leaf_pages_read, 0);
 }
 
 #[test]
-fn drains_one_through_fifteen_rows_without_segment_fallback() {
-    for rows in 1..=15 {
-        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let uri = format!("memory:///group-drain-direct-v11-{rows}");
-        let mut index = BorsukIndex::create_with_object_store(
-            Arc::clone(&inner),
-            IndexConfig {
-                uri: uri.clone(),
-                metric: VectorMetric::Euclidean,
-                dimensions: 8,
-                segment_max_vectors: 16,
-                ram_budget_bytes: None,
-                text: false,
-                named_vectors: Default::default(),
-            },
-        )
-        .unwrap();
-        index
-            .add(
-                (0..128)
-                    .map(|row| {
-                        VectorRecord::new(format!("base-{row}"), vec![row as f32 / 128.0; 8])
-                    })
-                    .collect(),
-            )
-            .unwrap();
-        index.finish_bulk_load().unwrap();
-
-        let target = vec![10_000.0 + rows as f32; 8];
-        let writer = GroupCommitWriter::new(
-            index,
-            GroupCommitConfig {
-                max_delay: std::time::Duration::ZERO,
-                max_records: 16,
-                worker_lanes: 1,
-            },
-        )
-        .unwrap();
-        writer
-            .append(
-                (0..rows)
-                    .map(|row| {
-                        let vector = if row + 1 == rows {
-                            target.clone()
-                        } else {
-                            vec![1_000.0 + row as f32; 8]
-                        };
-                        VectorRecord::new(format!("delta-{rows}-{row}"), vector)
-                    })
-                    .collect(),
-            )
-            .unwrap();
-        writer.drain().unwrap();
-        drop(writer);
-
-        let report = BorsukIndex::open_with_object_store(inner, &uri)
-            .unwrap()
-            .search_with_report(
-                &target,
-                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
-            )
-            .unwrap();
-        assert_eq!(
-            report.hits[0].id.as_str(),
-            format!("delta-{rows}-{}", rows - 1),
-            "rows={rows}: {report:?}"
-        );
-        assert_eq!(report.hits[0].distance, 0.0, "rows={rows}: {report:?}");
-        assert_eq!(
-            report.leaf_mode, "bounded-arrow-leaf-v11",
-            "rows={rows}: {report:?}"
-        );
-        assert_eq!(report.segments_searched, 0, "rows={rows}: {report:?}");
-        assert_eq!(
-            report.global_leaf_directory_reads, 0,
-            "rows={rows}: {report:?}"
-        );
-        assert!(report.global_leaf_pages_read > 0, "rows={rows}: {report:?}");
-    }
-}
-
-#[test]
-fn drain_encodes_one_record_without_segment_get_or_codebook_put() {
+fn positioned_flush_never_reads_or_rewrites_legacy_cell_wal_lanes() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///group-drain-direct-v11-record";
-    let mut index = BorsukIndex::create_with_object_store(
-        Arc::new(traced),
-        IndexConfig {
-            uri: uri.to_string(),
+    let (traced, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
+    let uri = "memory:///positioned-flush-skips-legacy-cell-wal";
+    let mut index_config = config(uri);
+    index_config.named_vectors.insert(
+        "image".to_string(),
+        VectorSpec {
+            dimensions: 2,
             metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 16,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
+            kind: VectorKind::Dense,
+            element_type: VectorElementType::Float32,
         },
-    )
-    .unwrap();
+    );
+    let mut index = BorsukIndex::create_with_object_store(Arc::new(traced), index_config).unwrap();
     index
-        .add(
-            (0..128)
-                .map(|row| {
-                    VectorRecord::new(
-                        format!("base-{row}"),
-                        (0..8)
-                            .map(|dimension| ((row * 17 + dimension * 11) % 101) as f32 / 101.0)
-                            .collect(),
-                    )
-                })
-                .collect(),
-        )
-        .unwrap();
-    index.finish_bulk_load().unwrap();
-    operations.clear();
-
-    let delta = VectorRecord::new("delta", vec![10.0; 8]);
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    writer.append(vec![delta]).unwrap();
-    writer.drain().unwrap();
-
-    let new_segment_paths = operations
-        .matching_paths(|operation, path| {
-            operation == common::StoreOperation::Put && path.starts_with("segments/")
-        })
-        .into_iter()
-        .collect::<HashSet<_>>();
-    assert!(!new_segment_paths.is_empty());
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put && path.starts_with("manifests/")
-        }),
-        1,
-        "segments and the level-zero V11 run must publish atomically in one manifest"
-    );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Get && new_segment_paths.contains(path)
-        }),
-        0,
-        "direct leaf encoding must consume resident records without rereading new segments"
-    );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put && path.contains("/codebooks/")
-        }),
-        0,
-        "a direct drain must reuse the leaf epoch's resident codebook"
-    );
-    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
-    assert_eq!(reopened.stats().global_ann_layout_version, Some(11));
-    assert_eq!(reopened.stats().global_leaf_runs, 2);
-    assert_eq!(reopened.stats().global_leaf_max_level, Some(0));
-}
-
-#[test]
-fn drain_fails_closed_when_the_incremental_run_manifest_cannot_be_published() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///group-drain-global-delta-fail-closed";
-    let mut index = BorsukIndex::create_with_object_store(
-        Arc::clone(&inner),
-        IndexConfig {
-            uri: uri.to_string(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 16,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        },
-    )
-    .unwrap();
-    index
-        .add(
-            (0..128)
-                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
-                .collect(),
-        )
-        .unwrap();
-    index.finish_bulk_load().unwrap();
-    let manifest_version_before_drain = index.stats().manifest_version;
-    drop(index);
-
-    let faulted = common::FaultInjectingObjectStore::fail_nth_matching(
-        Arc::clone(&inner),
-        1,
-        true,
-        |operation, path| {
-            operation == common::StoreOperation::Put && path.as_ref().starts_with("manifests/")
-        },
-    );
-    let index = BorsukIndex::open_with_object_store(Arc::new(faulted), uri).unwrap();
-
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 32,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    writer
-        .append(
-            (0..32)
-                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![1_000.0; 8]))
-                .collect(),
-        )
-        .unwrap();
-
-    let error = writer
-        .drain()
-        .expect_err("drain must not expose an incremental run without its manifest");
-    assert!(
-        error.to_string().contains("injected Put failure"),
-        "{error}"
-    );
-    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
-    assert_eq!(
-        reopened.stats().manifest_version,
-        manifest_version_before_drain
-    );
-    assert!(reopened.get_vector("delta-0").unwrap().is_some());
-}
-
-#[test]
-fn cold_search_fuses_v11_base_and_incremental_run() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///parallel-global-base-delta-search";
-    let mut index = BorsukIndex::create_with_object_store(
-        Arc::clone(&inner),
-        IndexConfig {
-            uri: uri.to_string(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 16,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        },
-    )
-    .unwrap();
-    index
-        .add(
-            (0..128)
-                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32 / 128.0; 8]))
-                .collect(),
-        )
-        .unwrap();
-    index.finish_bulk_load().unwrap();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let base_paths = runtime
-        .block_on(
-            inner
-                .list(Some(&"global-leaf".into()))
-                .try_collect::<Vec<_>>(),
-        )
-        .unwrap()
-        .into_iter()
-        .map(|meta| meta.location.to_string())
-        .collect::<HashSet<_>>();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 64,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    writer
-        .append(
-            (0..32)
-                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![10.0 + row as f32; 8]))
-                .collect(),
-        )
-        .unwrap();
-    writer.drain().unwrap();
-    drop(writer);
-
-    let all_paths = runtime
-        .block_on(
-            inner
-                .list(Some(&"global-leaf".into()))
-                .try_collect::<Vec<_>>(),
-        )
-        .unwrap()
-        .into_iter()
-        .map(|meta| meta.location.to_string())
-        .collect::<HashSet<_>>();
-    let delta_paths = all_paths
-        .difference(&base_paths)
-        .cloned()
-        .collect::<HashSet<_>>();
-    assert!(!base_paths.is_empty());
-    assert!(!delta_paths.is_empty());
-
-    let delayed = common::FaultInjectingObjectStore::new(inner)
-        .with_latency(std::time::Duration::from_millis(25));
-    let (delayed, gets) = delayed.with_get_group_concurrency_probe(base_paths, delta_paths);
-    let reader = BorsukIndex::open_with_object_store(Arc::new(delayed), uri).unwrap();
-    assert!(
-        gets.overlapped(),
-        "manifest preload serialized the base and incremental run roots"
-    );
-    let report = reader
-        .search_with_report(
-            &[27.0; 8],
-            SearchOptions::approx(40, LeafMode::SrhtPqScan)
-                .with_max_segments(4)
-                .with_max_candidates_per_segment(32),
-        )
-        .unwrap();
-
-    assert_eq!(report.hits[0].id.as_str(), "delta-17");
-    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
-    assert_eq!(report.global_leaf_directory_reads, 0);
-    assert_eq!(report.global_leaf_directory_bytes, 0);
-    assert!(report.global_leaf_pages_read >= 2);
-    assert!(report.global_leaf_pages_read <= 4);
-    assert_eq!(report.segments_searched, 0);
-    assert!(report.global_leaf_page_bytes > 0);
-    assert!(report.global_leaf_exact_scores > 0);
-    assert_eq!(
-        report.bytes_read,
-        report.global_leaf_directory_bytes + report.global_leaf_page_bytes
-    );
-    assert!(
-        report.global_base_approximate_us > 0,
-        "cold base+delta search must report base routing/code-scan work: {report:?}"
-    );
-    assert!(
-        report.global_base_exact_rerank_us > 0,
-        "cold base+delta search must report base exact-rerank work: {report:?}"
-    );
-    assert!(
-        gets.overlapped(),
-        "cold base and immutable-delta reads remained serial: {report:?}"
-    );
-}
-
-#[test]
-fn concurrent_drains_serialize_one_materialization_frontier() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create(config(&uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 4,
-        },
-    )
-    .unwrap();
-    writer
-        .append(
-            (0..32)
-                .map(|ordinal| {
-                    VectorRecord::new(
-                        format!("concurrent-drain-{ordinal}"),
-                        vec![ordinal as f32, 0.0],
-                    )
-                })
-                .collect(),
-        )
-        .unwrap();
-    let first = writer.clone();
-    let second = writer.clone();
-    let barrier = Arc::new(Barrier::new(2));
-    let drains = [first, second]
-        .into_iter()
-        .map(|writer| {
-            let barrier = Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                barrier.wait();
-                writer.drain()
-            })
-        })
-        .collect::<Vec<_>>();
-
-    for drain in drains {
-        drain.join().unwrap().unwrap();
-    }
-    assert_eq!(
-        BorsukIndex::open(&uri)
-            .unwrap()
-            .list_records(0, 64)
-            .unwrap()
-            .len(),
-        32
-    );
-}
-
-#[test]
-fn repeated_upsert_drains_do_not_multiply_visible_ids() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create(config(&uri)).unwrap(),
-        GroupCommitConfig::default(),
-    )
-    .unwrap();
-    for generation in 0..5 {
-        writer
-            .append(
-                (0..32)
-                    .map(|ordinal| {
-                        VectorRecord::new(
-                            format!("repeated-{ordinal}"),
-                            vec![generation as f32, ordinal as f32],
-                        )
-                    })
-                    .collect(),
-            )
-            .unwrap();
-        writer.drain().unwrap();
-    }
-
-    let reopened = BorsukIndex::open(&uri).unwrap();
-    assert_eq!(reopened.list_records(0, 1_000).unwrap().len(), 32);
-    assert_eq!(
-        reopened.get_vector("repeated-7").unwrap(),
-        Some(vec![4.0, 7.0])
-    );
-}
-
-#[test]
-fn concurrent_appends_share_one_durable_wal_transaction() {
-    const WRITERS: usize = 8;
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::from_millis(100),
-            max_records: WRITERS,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    let barrier = Arc::new(Barrier::new(WRITERS));
-    let handles = ids_in_ownership_lane(0, WRITERS)
-        .into_iter()
-        .enumerate()
-        .map(|(ordinal, id)| {
-            let writer = writer.clone();
-            let barrier = Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                barrier.wait();
-                writer
-                    .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
-                    .unwrap()
-            })
-        })
-        .collect::<Vec<_>>();
-    let mut commit_sequences = Vec::new();
-    let mut request_totals = Vec::new();
-    for handle in handles {
-        let receipt = handle.join().unwrap();
-        assert_eq!(receipt.records, 1);
-        assert_eq!(receipt.committed_records, WRITERS);
-        commit_sequences.push(receipt.commit_sequence);
-        request_totals.push(receipt.requests.total());
-    }
-    assert!(commit_sequences.iter().all(|sequence| *sequence == 1));
-    assert!(
-        request_totals
-            .iter()
-            .all(|requests| *requests == request_totals[0])
-    );
-    assert!(request_totals[0] > 0);
-
-    let reopened = BorsukIndex::open(&uri).unwrap();
-    assert_eq!(reopened.list_records(0, WRITERS).unwrap().len(), WRITERS);
-    assert!(
-        !directory.path().join("id-directory/claim-pages").exists(),
-        "the production group-commit path must not acquire strict-insert claims"
-    );
-}
-
-#[test]
-fn lane_log_ack_publishes_extent_and_stripe_head_without_global_coordination() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///group-lane-log-cutover";
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-
-    let receipt = writer
-        .append(vec![VectorRecord::new("durable", vec![1.0, 2.0])])
-        .unwrap();
-
-    assert_eq!(receipt.lane_receipts.len(), 1);
-    assert!(receipt.lane_receipts[0].lease_epoch > 0);
-    assert_eq!(receipt.requests.puts, 2);
-    assert_eq!(receipt.requests.gets, 0);
-    assert_eq!(receipt.requests.heads, 0);
-    assert_eq!(receipt.requests.lists, 0);
-    drop(writer);
-    assert_eq!(
-        BorsukIndex::open_with_object_store(inner, uri)
-            .unwrap()
-            .get_vector("durable")
-            .unwrap(),
-        Some(vec![1.0, 2.0])
-    );
-}
-
-#[test]
-fn lane_log_ack_persists_a_stock_readable_arrow_mutation_extent() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///group-standard-arrow-extent";
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 2,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-
-    let receipt = writer
-        .append(vec![
-            VectorRecord::new("first", vec![1.0, 2.0]),
-            VectorRecord::new("second", vec![3.0, 4.0]),
+        .add(vec![
+            VectorRecord::new("row", vec![1.0, 0.0]).with_named_vector("image", vec![0.0, 1.0]),
         ])
         .unwrap();
-    assert_eq!(receipt.requests.puts, 2);
-    assert_eq!(receipt.requests.gets, 0);
-    assert_eq!(receipt.requests.heads, 0);
-    assert_eq!(receipt.requests.lists, 0);
-
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let extent = runtime
-        .block_on(
-            inner
-                .list(Some(&"lane-log/lanes".into()))
-                .try_collect::<Vec<_>>(),
-        )
-        .unwrap()
-        .into_iter()
-        .find(|object| {
-            object.location.as_ref().contains("/extents/")
-                && object.location.as_ref().ends_with(".arrow")
-        })
-        .expect("group commit must persist one standard Arrow extent");
-    let bytes = runtime
-        .block_on(async { inner.get(&extent.location).await?.bytes().await })
-        .unwrap();
-    let lane_receipt = &receipt.lane_receipts[0];
-    assert_eq!(
-        blake3::hash(&bytes).as_bytes(),
-        &lane_receipt.extent_checksum,
-        "receipt must authenticate the exact immutable extent"
-    );
-    let head_path = format!("lane-log/lanes/{:04}/HEAD", lane_receipt.commit_lane);
-    let head_bytes = runtime
-        .block_on(async { inner.get(&head_path.into()).await?.bytes().await })
-        .unwrap();
-    assert_eq!(
-        blake3::hash(&head_bytes).as_bytes(),
-        &lane_receipt.published_head_checksum,
-        "receipt must authenticate the exact published stripe head"
-    );
-    let mut reader = StreamReader::try_new(Cursor::new(bytes), None).unwrap();
-    let schema = reader.schema();
-
-    assert_eq!(
-        schema
-            .metadata()
-            .get("borsuk.object_role")
-            .map(String::as_str),
-        Some("mutation_extent")
-    );
-    assert_eq!(
-        schema.field_with_name("mutation_hlc").unwrap().data_type(),
-        &DataType::UInt64
-    );
-    assert_eq!(
-        schema.field_with_name("id_state").unwrap().data_type(),
-        &DataType::Utf8
-    );
-    assert_eq!(
-        schema
-            .field_with_name("mutation_writer")
-            .unwrap()
-            .data_type(),
-        &DataType::FixedSizeBinary(16)
-    );
-    assert_eq!(
-        schema
-            .field_with_name("mutation_digest")
-            .unwrap()
-            .data_type(),
-        &DataType::FixedSizeBinary(32)
-    );
-    assert_eq!(reader.next().unwrap().unwrap().num_rows(), 2);
-    assert!(reader.next().is_none());
-}
-
-#[test]
-fn one_producer_can_pipeline_a_durable_group() {
-    const RECORDS: usize = 8;
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::from_millis(100),
-            max_records: RECORDS,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    let tickets = ids_in_ownership_lane(0, RECORDS)
-        .into_iter()
-        .enumerate()
-        .map(|(ordinal, id)| {
-            writer
-                .append_async(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
-                .unwrap()
-        })
-        .collect::<Vec<_>>();
-
-    let receipts = tickets
-        .into_iter()
-        .map(|ticket| ticket.wait().unwrap())
-        .collect::<Vec<_>>();
-    assert!(
-        receipts
-            .iter()
-            .all(|receipt| receipt.committed_records == RECORDS)
-    );
-    assert!(
-        receipts
-            .iter()
-            .all(|receipt| receipt.commit_sequence == receipts[0].commit_sequence)
-    );
-    assert!(
-        receipts
-            .iter()
-            .all(|receipt| receipt.commit_lane == receipts[0].commit_lane),
-        "one producer must retain lane affinity so its pipeline forms groups"
-    );
-    drop(writer);
-    assert_eq!(
-        BorsukIndex::open(&uri)
-            .unwrap()
-            .list_records(0, RECORDS)
-            .unwrap()
-            .len(),
-        RECORDS
-    );
-}
-
-#[test]
-fn independent_commit_lanes_publish_every_concurrent_append() {
-    const LANES: usize = 4;
-    const RECORDS: usize = 32;
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: LANES,
-        },
-    )
-    .unwrap();
-    let barrier = Arc::new(Barrier::new(RECORDS));
-    let handles = (0..RECORDS)
-        .map(|ordinal| {
-            let writer = writer.clone();
-            let barrier = Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                barrier.wait();
-                writer
-                    .append(vec![VectorRecord::new(
-                        format!("lane-{ordinal}"),
-                        vec![ordinal as f32, 0.0],
-                    )])
-                    .unwrap();
-            })
-        })
-        .collect::<Vec<_>>();
-    for handle in handles {
-        handle.join().unwrap();
-    }
-    drop(writer);
-
-    let reopened = BorsukIndex::open(&uri).unwrap();
-    assert_eq!(reopened.list_records(0, RECORDS).unwrap().len(), RECORDS);
-}
-
-#[test]
-fn independent_group_writers_can_share_one_collection() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///independent-group-writers";
-    let first_index =
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap();
-    let writer_config = GroupCommitConfig {
-        max_delay: std::time::Duration::ZERO,
-        max_records: 1,
-        worker_lanes: 1,
-    };
-    let first = GroupCommitWriter::new(first_index, writer_config).unwrap();
-    let second = GroupCommitWriter::new(
-        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
-        writer_config,
-    )
-    .unwrap();
-    let ids = ids_in_ownership_lane(0, 2);
-    let barrier = Arc::new(Barrier::new(2));
-    let handles = [
-        (first, ids[0].clone(), vec![1.0, 0.0]),
-        (second, ids[1].clone(), vec![2.0, 0.0]),
-    ]
-    .into_iter()
-    .map(|(writer, id, vector)| {
-        let barrier = Arc::clone(&barrier);
-        std::thread::spawn(move || {
-            barrier.wait();
-            writer.append(vec![VectorRecord::new(id, vector)]).unwrap();
-        })
-    })
-    .collect::<Vec<_>>();
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
-    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
-    assert_eq!(reopened.get_vector(&ids[0]).unwrap(), Some(vec![1.0, 0.0]));
-    assert_eq!(reopened.get_vector(&ids[1]).unwrap(), Some(vec![2.0, 0.0]));
-}
-
-#[test]
-fn thirty_two_independent_group_writers_share_one_collection() {
-    const WRITERS: usize = 32;
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///thirty-two-independent-group-writers";
-    let writer_config = GroupCommitConfig {
-        max_delay: std::time::Duration::ZERO,
-        max_records: 1,
-        worker_lanes: 1,
-    };
-    let first_index =
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap();
-    let mut writers = vec![GroupCommitWriter::new(first_index, writer_config).unwrap()];
-    for _ in 1..WRITERS {
-        writers.push(
-            GroupCommitWriter::new(
-                BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
-                writer_config,
-            )
-            .unwrap(),
-        );
-    }
-
-    for (ordinal, writer) in writers.iter().enumerate() {
-        writer
-            .append(vec![VectorRecord::new(
-                format!("writer-{ordinal:02}"),
-                vec![ordinal as f32, 0.0],
-            )])
-            .unwrap();
-    }
-
-    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
-    assert_eq!(reopened.list_records(0, WRITERS).unwrap().len(), WRITERS);
-}
-
-#[test]
-fn thirty_two_writer_startup_reads_one_candidate_head_per_instance() {
-    const WRITERS: usize = 32;
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
-    let store: Arc<dyn ObjectStore> = Arc::new(traced);
-    let uri = "memory:///thirty-two-writer-startup-cost";
-    let mut indexes =
-        vec![BorsukIndex::create_with_object_store(Arc::clone(&store), config(uri)).unwrap()];
-    for _ in 1..WRITERS {
-        indexes.push(BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap());
-    }
     operations.clear();
 
-    let writer_config = GroupCommitConfig {
-        max_delay: std::time::Duration::ZERO,
-        max_records: 1,
-        worker_lanes: 1,
-    };
-    let writers = indexes
-        .into_iter()
-        .map(|index| GroupCommitWriter::new(index, writer_config).unwrap())
-        .collect::<Vec<_>>();
+    index.flush().unwrap();
 
-    assert_eq!(writers.len(), WRITERS);
     assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Get
-                && path.starts_with("lane-log/lanes/")
-                && path.ends_with("/HEAD")
-        }),
-        WRITERS,
-        "fresh independent writers must consult one inactive stripe HEAD each"
-    );
-}
-
-#[test]
-fn one_writer_can_drain_while_another_writer_remains_live() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///independent-group-writer-drain";
-    let writer_config = GroupCommitConfig {
-        max_delay: std::time::Duration::ZERO,
-        max_records: 1,
-        worker_lanes: 1,
-    };
-    let first = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
-        writer_config,
-    )
-    .unwrap();
-    let second = GroupCommitWriter::new(
-        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
-        writer_config,
-    )
-    .unwrap();
-
-    first
-        .append(vec![VectorRecord::new("shared", vec![1.0, 0.0])])
-        .unwrap();
-    second
-        .append(vec![VectorRecord::new("second-only", vec![2.0, 0.0])])
-        .unwrap();
-    first.drain().unwrap();
-    second
-        .append(vec![VectorRecord::new("shared", vec![3.0, 0.0])])
-        .unwrap();
-
-    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
-    assert_eq!(reopened.get_vector("shared").unwrap(), Some(vec![3.0, 0.0]));
-    assert_eq!(
-        reopened.get_vector("second-only").unwrap(),
-        Some(vec![2.0, 0.0])
-    );
-}
-
-#[test]
-fn drain_retires_owned_stripe_without_hiding_it_from_a_stale_reader() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let store: Arc<dyn ObjectStore> = Arc::new(traced);
-    let uri = "memory:///drain-retired-stripe-manifest-fence";
-    let index = BorsukIndex::create_with_object_store(Arc::clone(&store), config(uri)).unwrap();
-    let mut stale = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    writer
-        .append(vec![VectorRecord::new("retired", vec![1.0, 0.0])])
-        .unwrap();
-    writer.drain().unwrap();
-
-    assert!(stale.refresh_wal_tail().unwrap());
-    assert_eq!(stale.get_vector("retired").unwrap(), Some(vec![1.0, 0.0]));
-
-    operations.clear();
-    let current = BorsukIndex::open_with_object_store(store, uri).unwrap();
-    assert_eq!(current.get_vector("retired").unwrap(), Some(vec![1.0, 0.0]));
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Get
-                && path.starts_with("lane-log/lanes/")
-                && path.ends_with("/HEAD")
+        operations.count_matching(|_, path| {
+            path.starts_with("cell-wal/")
+                || (path.starts_with("cells/") && path.contains("/wal/"))
+                || path.starts_with("collection/wal")
+                || path.starts_with("collection/write-epochs/")
         }),
         0,
-        "a reader at the materializing manifest must omit the retired stripe HEAD"
+        "the positioned flush path must not consult retired Cell-WAL lanes: {:?}",
+        operations.entries()
     );
 }
 
 #[test]
-fn append_after_drain_reactivates_the_retired_stripe_before_acknowledgement() {
+fn generated_add_reconciles_an_accepted_positioned_head_error_once() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///append-after-retired-stripe";
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    writer
-        .append(vec![VectorRecord::new("before-drain", vec![1.0, 0.0])])
-        .unwrap();
-    writer.drain().unwrap();
-
-    writer
-        .append(vec![VectorRecord::new("after-drain", vec![2.0, 0.0])])
-        .unwrap();
-
-    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
-    assert_eq!(
-        reopened.get_vector("after-drain").unwrap(),
-        Some(vec![2.0, 0.0]),
-        "an acknowledgement after retirement requires prior directory reactivation"
-    );
-}
-
-#[test]
-fn every_independent_group_writer_can_drain_after_a_peer_publishes() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///independent-group-writer-sequential-drains";
-    let writer_config = GroupCommitConfig {
-        max_delay: std::time::Duration::ZERO,
-        max_records: 1,
-        worker_lanes: 1,
-    };
-    let first = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
-        writer_config,
-    )
-    .unwrap();
-    let second = GroupCommitWriter::new(
-        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap(),
-        writer_config,
-    )
-    .unwrap();
-
-    first
-        .append(vec![VectorRecord::new("first", vec![1.0, 0.0])])
-        .unwrap();
-    second
-        .append(vec![VectorRecord::new("second", vec![2.0, 0.0])])
-        .unwrap();
-    first.drain().unwrap();
-    second.drain().unwrap();
-
-    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
-    assert_eq!(reopened.list_records(0, 10).unwrap().len(), 2);
-}
-
-#[test]
-fn released_peer_retires_a_tail_materialized_by_another_writer() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let store: Arc<dyn ObjectStore> = Arc::new(traced);
-    let uri = "memory:///released-peer-retirement";
-    let writer_config = GroupCommitConfig {
-        max_delay: std::time::Duration::ZERO,
-        max_records: 1,
-        worker_lanes: 1,
-    };
-    let first = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&store), config(uri)).unwrap(),
-        writer_config,
-    )
-    .unwrap();
-    let second = GroupCommitWriter::new(
-        BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap(),
-        writer_config,
-    )
-    .unwrap();
-    let first_lane = first
-        .append(vec![VectorRecord::new("first", vec![1.0, 0.0])])
-        .unwrap()
-        .commit_lane;
-    let second_lane = second
-        .append(vec![VectorRecord::new("second", vec![2.0, 0.0])])
-        .unwrap()
-        .commit_lane;
-    first.drain().unwrap();
-    drop(second);
-
-    operations.clear();
-    let reopened = BorsukIndex::open_with_object_store(store, uri).unwrap();
-    assert_eq!(reopened.list_records(0, 10).unwrap().len(), 2);
-    let lane_head_reads = operations.matching_paths(|operation, path| {
-        operation == common::StoreOperation::Get
-            && path.starts_with("lane-log/lanes/")
-            && path.ends_with("/HEAD")
-    });
-    assert_eq!(
-        lane_head_reads.len(),
-        0,
-        "normal release must retire a peer stripe already covered by the published manifest; first={first_lane} second={second_lane} reads={lane_head_reads:?}"
-    );
-}
-
-#[test]
-fn group_writer_startup_fails_when_every_persisted_stripe_is_leased() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///group-writer-stripe-exhaustion";
-    let first = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 64,
-        },
-    )
-    .unwrap();
-    let result = GroupCommitWriter::new(
-        BorsukIndex::open_with_object_store(inner, uri).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    );
-    let error = match result {
-        Ok(_) => panic!("a sixty-fifth live worker stripe must not steal an active lease"),
-        Err(error) => error,
-    };
-    assert!(
-        error
-            .to_string()
-            .contains("persisted stripes are available")
-    );
-    drop(first);
-}
-
-#[test]
-fn producer_clones_route_the_same_id_to_one_ownership_lane() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create(config(&uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 4,
-        },
-    )
-    .unwrap();
-    let first = writer.clone();
-    let second = writer.clone();
-
-    let first_receipt = first
-        .append(vec![VectorRecord::new("shared-id", vec![1.0, 0.0])])
-        .unwrap();
-    let second_receipt = second
-        .append(vec![VectorRecord::new("shared-id", vec![2.0, 0.0])])
-        .unwrap();
-
-    assert_eq!(
-        first_receipt.commit_lane, second_receipt.commit_lane,
-        "producer identity must not change the ownership lane for an id"
-    );
-}
-
-#[test]
-fn one_append_fans_records_out_to_their_ownership_lanes() {
-    let probe_directory = tempfile::tempdir().unwrap();
-    let probe_uri = probe_directory.path().to_string_lossy().into_owned();
-    let probe = GroupCommitWriter::new(
-        BorsukIndex::create(config(&probe_uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 4,
-        },
-    )
-    .unwrap();
-    let mut ids_by_lane = std::collections::BTreeMap::new();
-    for ordinal in 0..64 {
-        let id = format!("probe-{ordinal}");
-        let receipt = probe
-            .append(vec![VectorRecord::new(
-                id.clone(),
-                vec![ordinal as f32, 0.0],
-            )])
-            .unwrap();
-        ids_by_lane.entry(receipt.commit_lane).or_insert(id);
-        if ids_by_lane.len() == 4 {
-            break;
-        }
-    }
-    assert_eq!(ids_by_lane.len(), 4, "probe ids must cover every test lane");
-    let selected = ids_by_lane.into_iter().take(2).collect::<Vec<_>>();
-
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create(config(&uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 4,
-        },
-    )
-    .unwrap();
-    let receipt = writer
-        .append(
-            selected
-                .iter()
-                .enumerate()
-                .map(|(ordinal, (_, id))| VectorRecord::new(id.clone(), vec![ordinal as f32, 0.0]))
-                .collect(),
-        )
-        .unwrap();
-
-    assert_eq!(receipt.records, 2);
-    assert_eq!(receipt.lane_receipts.len(), 2);
-    assert_eq!(
-        receipt
-            .lane_receipts
-            .iter()
-            .map(|lane| lane.commit_lane)
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        2,
-        "records assigned to distinct local workers must use distinct claimed stripes"
-    );
-}
-
-#[test]
-fn one_worker_coalesces_cross_ownership_records_into_one_stripe_extent() {
-    const LANES: usize = 4;
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (instrumented, concurrency) = common::FaultInjectingObjectStore::new(inner)
-        .with_latency(std::time::Duration::from_millis(25))
-        .with_put_concurrency_probe();
-    let uri = "memory:///group-parallel-epoch-extents";
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::new(instrumented), config(uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::from_millis(10),
-            max_records: LANES,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    let records = (0..LANES)
-        .map(|lane| {
-            VectorRecord::new(
-                ids_in_ownership_lane(lane, 1).pop().unwrap(),
-                vec![lane as f32, 0.0],
-            )
-        })
-        .collect();
-
-    let receipt = writer.append(records).unwrap();
-
-    assert_eq!(receipt.lane_receipts.len(), 1);
-    assert_eq!(receipt.requests.puts, 2);
-    assert_eq!(
-        concurrency.peak(),
+    let uri = "memory:///positioned-generated-ambiguous-head";
+    BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap();
+    let faulted = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        Arc::clone(&inner),
         1,
-        "one local worker stripe must persist one grouped extent"
-    );
-}
-
-#[test]
-fn independent_commit_lanes_report_lane_local_requests() {
-    const LANES: usize = 4;
-    const RECORDS: usize = 64;
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
-    let uri = "memory:///group-lane-local-request-counts";
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: LANES,
-        },
-    )
-    .unwrap();
-    operations.clear();
-    let barrier = Arc::new(Barrier::new(RECORDS));
-    let handles = (0..RECORDS)
-        .map(|ordinal| {
-            let writer = writer.clone();
-            let barrier = Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                barrier.wait();
-                writer
-                    .append(vec![VectorRecord::new(
-                        format!("request-lane-{ordinal}"),
-                        vec![ordinal as f32, 0.0],
-                    )])
-                    .unwrap()
-            })
-        })
-        .collect::<Vec<_>>();
-    let receipts = handles
-        .into_iter()
-        .map(|handle| handle.join().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        receipts
-            .iter()
-            .map(|receipt| receipt.commit_lane)
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        LANES
-    );
-    assert!(receipts.iter().all(|receipt| {
-        receipt.requests.gets == 0
-            && receipt.requests.puts == 2
-            && receipt.requests.deletes == 0
-            && receipt.requests.heads == 0
-            && receipt.requests.lists == 0
-    }));
-    assert_eq!(
-        receipts
-            .iter()
-            .map(|receipt| receipt.requests.gets)
-            .sum::<u64>(),
-        operations.count_matching(|operation, _| operation == common::StoreOperation::Get) as u64,
-        "steady-state stripes must not read a global coordination object"
-    );
-    assert_eq!(
-        receipts
-            .iter()
-            .map(|receipt| receipt.requests.puts)
-            .sum::<u64>(),
-        operations.count_matching(|operation, _| operation == common::StoreOperation::Put) as u64,
-        "one extent PUT plus one stripe-head PUT must reconcile exactly"
-    );
-}
-
-#[test]
-fn repeated_groups_publish_a_fenced_head_after_the_extent() {
-    const GROUPS: usize = 12;
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///group-generation-lease";
-    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
-    operations.clear();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    operations.clear();
-    let mut receipts = Vec::with_capacity(GROUPS);
-    for ordinal in 0..GROUPS {
-        receipts.push(
-            writer
-                .append(vec![VectorRecord::new(
-                    format!("leased-{ordinal}"),
-                    vec![ordinal as f32, 0.0],
-                )])
-                .unwrap(),
-        );
-    }
-
-    assert!(receipts.iter().all(|receipt| receipt.requests.puts == 2));
-    assert!(receipts.iter().all(|receipt| receipt.requests.gets == 0));
-    assert!(receipts.iter().all(|receipt| receipt.requests.heads == 0));
-    assert!(receipts.iter().all(|receipt| receipt.requests.lists == 0));
-
-    assert_eq!(
-        operations.count_matching(|operation, _| operation == common::StoreOperation::Get),
-        0
-    );
-    assert_eq!(
-        operations.count_matching(|operation, _| operation == common::StoreOperation::Head),
-        0
-    );
-    assert_eq!(
-        operations.count_matching(|operation, _| operation == common::StoreOperation::List),
-        0
-    );
-    assert_eq!(
-        operations.count_matching(|operation, _| operation == common::StoreOperation::Put),
-        GROUPS * 2,
-        "each group must create one extent and publish one stripe head"
-    );
-    assert_eq!(
-        operations.count_matching(|_, path| { path.contains("id-directory/last-write-wins/NEXT") }),
-        0,
-        "ordinary group commit must never coordinate through a collection-wide counter"
-    );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
+        |operation, path| {
             operation == common::StoreOperation::Put
-                && path.contains("/extents/")
-                && path.ends_with(".arrow")
-        }),
-        GROUPS,
-        "every acknowledgement PUT must create exactly one immutable extent"
-    );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put
-                && path.starts_with("lane-log/lanes/")
-                && path.ends_with("/HEAD")
-        }),
-        GROUPS,
-        "every acknowledgement must publish exactly one writer-stripe head"
-    );
-    drop(writer);
-    assert_eq!(
-        BorsukIndex::open_with_object_store(Arc::clone(&inner), uri)
-            .unwrap()
-            .list_records(0, GROUPS)
-            .unwrap()
-            .len(),
-        GROUPS
-    );
-}
-
-#[test]
-fn small_groups_publish_only_immutable_extents_before_release() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///group-inline-spill";
-    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
+                && path.as_ref().starts_with("positioned-log/heads/")
         },
-    )
-    .unwrap();
+    );
+    let (faulted, operations) = faulted.with_operation_log();
+    let mut index = BorsukIndex::open_with_object_store(Arc::new(faulted), uri).unwrap();
     operations.clear();
-    let ids = (0_u64..)
-        .map(|ordinal| format!("spill-{ordinal}"))
-        .filter(|id| {
-            let digest = blake3::hash(id.as_bytes());
-            let mut prefix = [0_u8; 8];
-            prefix.copy_from_slice(&digest.as_bytes()[..8]);
-            u64::from_le_bytes(prefix) % 8 == 0
-        })
-        .take(5)
-        .collect::<Vec<_>>();
 
-    for (ordinal, id) in ids.iter().enumerate() {
-        let receipt = writer
-            .append(vec![VectorRecord::new(id, vec![ordinal as f32, 0.0])])
-            .unwrap();
-        assert_eq!(
-            receipt.requests.puts, 2,
-            "immutable extent plus fenced stripe-head publication"
-        );
-    }
+    let (ids, report) = index
+        .add_vectors_with_report(vec![vec![1.0, 0.0], vec![0.0, 1.0]])
+        .unwrap();
 
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1]);
+    let position = report
+        .positioned_position
+        .expect("reconciled append must return its current source position");
+    assert_eq!(report.positioned_envelope_checksum.len(), 64);
+    assert!(report.positioned_encoded_bytes > 0);
+    assert_eq!(report.requests, logged_request_counts(&operations));
     assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put && path.contains("/blocks/")
-        }),
-        0,
-        "v29 must never publish legacy mutable blocks"
+        report.total_bytes_written,
+        logged_put_payload_bytes(&operations),
+        "an accepted ambiguous head attempt must retain its submitted bytes"
+    );
+    assert_eq!(
+        report.bytes_per_vector,
+        report.total_bytes_written as f64 / 2.0
     );
     assert_eq!(
         operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put
-                && path.contains("/extents/")
-                && path.ends_with(".arrow")
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
         }),
-        5,
-        "each small group must create exactly one immutable extent"
+        1,
+        "an accepted ambiguous head PUT must reconcile instead of publishing again"
     );
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put && path.ends_with("/HEAD")
-        }),
-        5,
-        "every extent must be discoverable through a conditionally published stripe head before acknowledgement"
-    );
-    drop(writer);
-    assert_eq!(
-        BorsukIndex::open_with_object_store(inner, uri)
-            .unwrap()
-            .list_records(0, ids.len())
-            .unwrap()
-            .len(),
-        ids.len()
-    );
-}
-
-#[test]
-fn background_materialization_keeps_sustained_ingest_below_the_hard_tail_bound() {
-    const GROUPS: usize = 600;
-    const RECORDS_PER_GROUP: usize = 4;
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, _operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///pending-group-constant-cost";
-    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: RECORDS_PER_GROUP,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-
-    for group in 0..GROUPS {
-        let records = (0..RECORDS_PER_GROUP)
-            .map(|record| {
-                let ordinal = group * RECORDS_PER_GROUP + record;
-                VectorRecord::new(format!("pending-{ordinal}"), vec![ordinal as f32, 0.0])
-            })
-            .collect();
-        writer.append(records).unwrap();
-    }
-    writer.drain().unwrap();
-    drop(writer);
+    assert_no_legacy_mutation_writes(&operations);
+    drop(index);
 
     let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(reopened.list_records(0, 10).unwrap().len(), 2);
+    assert_eq!(reopened.get_vector(&ids[0]).unwrap(), Some(vec![1.0, 0.0]));
+    assert_eq!(reopened.get_vector(&ids[1]).unwrap(), Some(vec![0.0, 1.0]));
+    let snapshot = PositionedLogWriter::open(uri, inner, 1)
+        .unwrap()
+        .reader()
+        .snapshot()
+        .unwrap();
+    assert_eq!(snapshot.transactions.len(), 1);
+    assert_eq!(snapshot.transactions[0].position, position);
     assert_eq!(
-        reopened
-            .list_records(0, GROUPS * RECORDS_PER_GROUP)
-            .unwrap()
-            .len(),
-        GROUPS * RECORDS_PER_GROUP
+        snapshot.envelope_checksums,
+        [report.positioned_envelope_checksum]
     );
+    let primary_batches = snapshot.transactions[0]
+        .payloads
+        .iter()
+        .filter(|payload| payload.modality == PositionedMutationModality::PrimaryDense)
+        .collect::<Vec<_>>();
+    assert_eq!(primary_batches.len(), 1);
+    assert_eq!(primary_batches[0].rows, 2);
 }
 
 #[test]
-fn ordinary_put_publishes_without_mutable_frontier_coordination() {
+fn grouped_append_reconciles_an_accepted_positioned_head_error_once() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///positioned-grouped-ambiguous-head";
+    BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap();
+    let faulted = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        Arc::clone(&inner),
+        1,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/heads/")
+        },
+    );
+    let (faulted, operations) = faulted.with_operation_log();
+    let index = BorsukIndex::open_with_object_store(Arc::new(faulted), uri).unwrap();
+    let grouped = writer(index, 1);
+    operations.clear();
+
+    let receipt = grouped
+        .append(vec![
+            VectorRecord::new("group-a", vec![1.0, 0.0]),
+            VectorRecord::new("group-b", vec![0.0, 1.0]),
+        ])
+        .unwrap();
+
+    let position = receipt
+        .position
+        .expect("reconciled group append must return its current source position");
+    assert_eq!(receipt.records, 2);
+    assert_eq!(receipt.committed_records, 2);
+    assert_eq!(receipt.envelope_checksum.len(), 64);
+    assert!(receipt.encoded_bytes > 0);
+    assert_eq!(receipt.requests, logged_request_counts(&operations));
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        1,
+        "an accepted ambiguous group head PUT must reconcile instead of publishing again"
+    );
+    assert_no_legacy_mutation_writes(&operations);
+    drop(grouped);
+
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(reopened.list_records(0, 10).unwrap().len(), 2);
+    assert_eq!(
+        reopened.get_vector("group-a").unwrap(),
+        Some(vec![1.0, 0.0])
+    );
+    assert_eq!(
+        reopened.get_vector("group-b").unwrap(),
+        Some(vec![0.0, 1.0])
+    );
+    let snapshot = PositionedLogWriter::open(uri, inner, 1)
+        .unwrap()
+        .reader()
+        .snapshot()
+        .unwrap();
+    assert_eq!(snapshot.transactions.len(), 1);
+    assert_eq!(snapshot.transactions[0].position, position);
+    assert_eq!(snapshot.envelope_checksums, [receipt.envelope_checksum]);
+    let primary_batches = snapshot.transactions[0]
+        .payloads
+        .iter()
+        .filter(|payload| payload.modality == PositionedMutationModality::PrimaryDense)
+        .collect::<Vec<_>>();
+    assert_eq!(primary_batches.len(), 1);
+    assert_eq!(primary_batches[0].rows, 2);
+}
+
+#[test]
+fn ordinary_and_group_writes_share_one_positioned_protocol() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) =
         common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///ordinary-put-pending";
+    let uri = "memory:///ordinary-group-positioned-protocol";
     let mut index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
     operations.clear();
 
     index
-        .put(vec![VectorRecord::new("ordinary", vec![1.0, 0.0])])
+        .add(vec![VectorRecord::new("ordinary", vec![1.0, 0.0])])
         .unwrap();
+    let grouped = writer(index, 1);
+    let receipt = grouped
+        .append(vec![VectorRecord::new("grouped", vec![0.0, 1.0])])
+        .unwrap();
+    assert!(receipt.position.is_some());
+    assert_eq!(receipt.envelope_checksum.len(), 64);
 
     assert_eq!(
-        operations.count_matching(|_, path| path.starts_with("collection/wal-frontier/")),
-        0,
-        "ordinary mutations must use the same immutable publication path as group commit"
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
+        }),
+        2
     );
     assert_eq!(
+        operations.count_matching(|_, path| path.starts_with("lane-log/")),
+        0
+    );
+    assert_eq!(
+        operations.count_matching(|_, path| path.contains("cell-wal/commits/")),
+        0
+    );
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(
+        reopened.get_vector("ordinary").unwrap(),
+        Some(vec![1.0, 0.0])
+    );
+    assert_eq!(
+        reopened.get_vector("grouped").unwrap(),
+        Some(vec![0.0, 1.0])
+    );
+}
+
+#[test]
+fn grouped_upsert_is_last_write_wins_and_reopens() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///positioned-group-lww";
+    let index = BorsukIndex::create_with_object_store(Arc::clone(&store), config(uri)).unwrap();
+    let grouped = writer(index, 1);
+    grouped
+        .append(vec![VectorRecord::new("same", vec![1.0, 0.0])])
+        .unwrap();
+    grouped
+        .append(vec![VectorRecord::new("same", vec![9.0, 0.0])])
+        .unwrap();
+    let reopened = BorsukIndex::open_with_object_store(store, uri).unwrap();
+    assert_eq!(reopened.get_vector("same").unwrap(), Some(vec![9.0, 0.0]));
+}
+
+#[test]
+fn ordinary_insert_still_rejects_duplicates() {
+    let uri = "memory:///positioned-add-duplicate";
+    let mut index = BorsukIndex::create(config(uri)).unwrap();
+    index
+        .add(vec![VectorRecord::new("duplicate", vec![1.0, 0.0])])
+        .unwrap();
+    assert!(
+        index
+            .add(vec![VectorRecord::new("duplicate", vec![2.0, 0.0])])
+            .is_err()
+    );
+}
+
+#[test]
+fn one_caller_batch_has_one_atomic_position() {
+    let uri = "memory:///positioned-one-caller-one-position";
+    let index = BorsukIndex::create(config(uri)).unwrap();
+    let grouped = writer(index, 8);
+    let receipt = grouped
+        .append(
+            (0..128)
+                .map(|row| VectorRecord::new(format!("id-{row}"), vec![row as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+    assert_eq!(receipt.records, 128);
+    assert_eq!(receipt.committed_records, 128);
+    assert!(receipt.position.is_some());
+}
+
+#[test]
+fn one_eight_and_thirty_two_producers_converge_after_reopen() {
+    for producers in [1, 8, 32] {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let uri = format!("memory:///positioned-producers-{producers}");
+        let index =
+            BorsukIndex::create_with_object_store(Arc::clone(&store), config(&uri)).unwrap();
+        let grouped = writer(index, producers.min(8));
+        let mut handles = Vec::new();
+        for producer in 0..producers {
+            let grouped = grouped.clone();
+            handles.push(thread::spawn(move || {
+                grouped
+                    .append(vec![VectorRecord::new(
+                        format!("producer-{producer}"),
+                        vec![producer as f32, 1.0],
+                    )])
+                    .unwrap()
+            }));
+        }
+        for handle in handles {
+            assert!(handle.join().unwrap().position.is_some());
+        }
+        grouped.drain().unwrap();
+        let reopened = BorsukIndex::open_with_object_store(store, &uri).unwrap();
+        assert_eq!(
+            reopened.list_records(0, producers + 1).unwrap().len(),
+            producers
+        );
+    }
+}
+
+#[test]
+fn warm_grouped_upsert_does_not_use_exact_id_claim_pages() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///positioned-group-no-claims";
+    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    let grouped = writer(index, 1);
+    operations.clear();
+    grouped
+        .append(
+            (0..64)
+                .map(|row| VectorRecord::new(format!("id-{row}"), vec![row as f32, 0.0]))
+                .collect(),
+        )
+        .unwrap();
+    assert_eq!(
+        operations.count_matching(|_, path| {
+            path.starts_with("id-directory/claim-pages/")
+                || path.starts_with("transactions/")
+                || path.starts_with("positioned-log/claim-authorizations/")
+        }),
+        0
+    );
+}
+
+#[test]
+fn drain_is_only_a_barrier_and_writes_no_checkpoint() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///positioned-drain-barrier";
+    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    let grouped = writer(index, 2);
+    grouped
+        .append(vec![VectorRecord::new("row", vec![1.0, 1.0])])
+        .unwrap();
+    operations.clear();
+    grouped.drain().unwrap();
+    assert_eq!(
+        operations.count_matching(|operation, _| operation == common::StoreOperation::Put),
+        0
+    );
+}
+
+#[test]
+fn sixty_five_id_partitions_stay_in_one_bounded_positioned_transaction() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///positioned-bundled-id-directory";
+    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    let grouped = writer(index, 1);
+    let mut partitions = std::collections::BTreeSet::new();
+    let mut records = Vec::new();
+    for ordinal in 0.. {
+        let id = format!("partition-{ordinal}");
+        let digest = blake3::hash(id.as_bytes());
+        let partition = u16::from_le_bytes([digest.as_bytes()[0], digest.as_bytes()[1]]) % 4_096;
+        if partitions.insert(partition) {
+            records.push(VectorRecord::new(id, vec![ordinal as f32, 0.0]));
+            if records.len() == 65 {
+                break;
+            }
+        }
+    }
+    operations.clear();
+    grouped.append(records).unwrap();
+    assert_eq!(
         operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put
-                && path.starts_with("collection/write-epochs/")
-                && path.contains("/pending/")
-                && path.ends_with(".commit")
+            operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
         }),
         1
+    );
+    let snapshot = PositionedLogWriter::open(uri, inner, 1)
+        .unwrap()
+        .reader()
+        .snapshot()
+        .unwrap();
+    assert_eq!(snapshot.transactions.len(), 1);
+    assert!(snapshot.transactions[0].payloads.len() <= 64);
+    assert_eq!(
+        snapshot.transactions[0]
+            .payloads
+            .iter()
+            .filter(|payload| payload.role.contains("id-directory"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn sixty_five_named_modalities_and_tombstones_stay_bounded_and_reopen() {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///positioned-sixty-five-modalities";
+    let mut collection = config(uri);
+    for ordinal in 0..65 {
+        collection.named_vectors.insert(
+            format!("named-{ordinal:02}"),
+            VectorSpec {
+                dimensions: 2,
+                metric: VectorMetric::Euclidean,
+                kind: Default::default(),
+                element_type: Default::default(),
+            },
+        );
+    }
+    let record = |value: f32| {
+        let mut record = VectorRecord::new("entity", vec![value, 0.0]);
+        for ordinal in 0..65 {
+            record = record
+                .with_named_vector(format!("named-{ordinal:02}"), vec![value, ordinal as f32]);
+        }
+        record
+    };
+    let mut index = BorsukIndex::create_with_object_store(Arc::clone(&store), collection).unwrap();
+    index.add(vec![record(1.0)]).unwrap();
+    index.upsert(vec![record(9.0)]).unwrap();
+    drop(index);
+
+    let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+    assert_eq!(reopened.get_vector("entity").unwrap(), Some(vec![9.0, 0.0]));
+    assert_eq!(
+        reopened
+            .search_with_report(
+                &[9.0, 0.0],
+                SearchOptions::exact(1).with_vector_name("named-00"),
+            )
+            .unwrap()
+            .hits[0]
+            .id
+            .as_str(),
+        "entity"
+    );
+    reopened.delete(["entity"]).unwrap();
+    drop(reopened);
+
+    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+    assert_eq!(reopened.get_vector("entity").unwrap(), None);
+    let snapshot = PositionedLogWriter::open(uri, store, 1)
+        .unwrap()
+        .reader()
+        .snapshot()
+        .unwrap();
+    assert!(
+        snapshot
+            .transactions
+            .iter()
+            .all(|transaction| transaction.payloads.len() <= 64)
+    );
+}
+
+#[test]
+fn generated_ids_use_only_positioned_truth_and_reopen_exactly() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///positioned-generated-ids";
+    let mut index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    operations.clear();
+    let ids = index
+        .add_vectors(vec![vec![1.0, 0.0], vec![0.0, 1.0]])
+        .unwrap();
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(
+        operations.count_matching(|_, path| path == "id-directory/generated/NEXT"),
+        0
+    );
+    drop(index);
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    assert_eq!(reopened.get_vector(&ids[0]).unwrap(), Some(vec![1.0, 0.0]));
+    assert_eq!(reopened.get_vector(&ids[1]).unwrap(), Some(vec![0.0, 1.0]));
+}
+
+#[test]
+fn upsert_and_delete_do_not_prewrite_legacy_mutation_objects() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///positioned-no-prewrite";
+    let mut index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    index
+        .add(vec![VectorRecord::new("row", vec![1.0, 0.0])])
+        .unwrap();
+    operations.clear();
+    index
+        .upsert(vec![VectorRecord::new("row", vec![2.0, 0.0])])
+        .unwrap();
+    index.delete(["row"]).unwrap();
+
+    assert_eq!(
+        operations.count_matching(|_, path| {
+            path.starts_with("lane-log/")
+                || path.starts_with("cell-wal/")
+                || path.starts_with("transactions/")
+                || (path.starts_with("cells/") && path.contains("/wal/"))
+                || path.starts_with("tombstones/")
+                || path.starts_with("bm25/")
+                || path.starts_with("lexical/stats-delta/")
+                || path == "id-directory/generated/NEXT"
+        }),
+        0
     );
     drop(index);
     assert_eq!(
         BorsukIndex::open_with_object_store(inner, uri)
             .unwrap()
-            .list_records(0, 10)
+            .get_vector("row")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn accepted_release_loss_still_allows_exactly_one_concurrent_add() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let faulted = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        Arc::clone(&inner),
+        2,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("id-directory/claim-pages/")
+        },
+    );
+    let (faulted, operations) = faulted.with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(faulted);
+    let uri = "memory:///positioned-release-loss-concurrent-add";
+    BorsukIndex::create_with_object_store(Arc::clone(&store), config(uri)).unwrap();
+    let left = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+    let right = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
+    operations.clear();
+    let start = Arc::new(std::sync::Barrier::new(2));
+    let handles = [left, right].map(|mut index| {
+        let start = Arc::clone(&start);
+        thread::spawn(move || {
+            start.wait();
+            index.add(vec![VectorRecord::new("same-id", vec![1.0, 0.0])])
+        })
+    });
+    let results = handles.map(|handle| handle.join().unwrap());
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+    assert!(
+        results
+            .iter()
+            .find_map(|result| result.as_ref().err())
             .unwrap()
-            .len(),
+            .to_string()
+            .contains("already exists")
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("positioned-log/claim-authorizations/")
+        }),
         1
     );
-}
-
-#[test]
-fn drain_checkpoints_every_preceding_group_and_removes_pending_objects() {
-    const GROUPS: usize = 600;
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///group-drain-checkpoint";
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap(),
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 4,
-        },
-    )
-    .unwrap();
-    for ordinal in 0..GROUPS {
-        writer
-            .append(vec![VectorRecord::new(
-                format!("drained-{ordinal}"),
-                vec![ordinal as f32, 0.0],
-            )])
-            .unwrap();
-    }
-
-    writer.drain().unwrap();
-
-    let reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
-    assert_eq!(reopened.list_records(0, GROUPS).unwrap().len(), GROUPS);
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let pending = runtime
-        .block_on(
-            inner
-                .list(Some(&"collection/write-epochs".into()))
-                .try_collect::<Vec<_>>(),
-        )
-        .unwrap()
-        .into_iter()
-        .filter(|object| object.location.as_ref().contains("/pending/"))
-        .count();
-    assert_eq!(
-        pending, 0,
-        "drain must retire every captured pending commit"
-    );
-}
-
-#[test]
-fn alternating_writer_lanes_preserve_sequential_last_write_wins() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 2,
-        },
-    )
-    .unwrap();
-    let first_lane = writer.clone();
-    let second_lane = writer.clone();
-    first_lane
-        .append(vec![VectorRecord::new("same", vec![1.0, 0.0])])
-        .unwrap();
-    second_lane
-        .append(vec![VectorRecord::new("same", vec![2.0, 0.0])])
-        .unwrap();
-    first_lane
-        .append(vec![VectorRecord::new("same", vec![3.0, 0.0])])
-        .unwrap();
-
-    assert_eq!(
-        BorsukIndex::open(&uri).unwrap().get_vector("same").unwrap(),
-        Some(vec![3.0, 0.0]),
-        "the latest acknowledged sequential append must win across lanes"
-    );
-}
-
-#[test]
-fn preregistered_worker_lane_factors_preserve_ack_reopen_last_write_and_drain() {
-    for worker_lanes in [1, 2, 4, 8] {
-        let directory = tempfile::tempdir().unwrap();
-        let uri = directory.path().to_string_lossy().into_owned();
-        let writer = GroupCommitWriter::new(
-            BorsukIndex::create(config(&uri)).unwrap(),
-            GroupCommitConfig {
-                max_delay: std::time::Duration::ZERO,
-                max_records: 1,
-                worker_lanes,
-            },
-        )
-        .unwrap();
-
-        let receipt = writer
-            .append(vec![VectorRecord::new("same", vec![1.0, 0.0])])
-            .unwrap();
-        assert_eq!(receipt.records, 1);
-        assert!(
-            receipt.commit_lane < usize::from(GROUP_COMMIT_STRIPE_COUNT),
-            "receipt identifies a persisted lane"
-        );
-        assert_eq!(
-            BorsukIndex::open(&uri).unwrap().get_vector("same").unwrap(),
-            Some(vec![1.0, 0.0]),
-            "worker_lanes={worker_lanes} must expose acknowledged data after reopen"
-        );
-
-        writer
-            .append(vec![VectorRecord::new("same", vec![2.0, 0.0])])
-            .unwrap();
-        writer.drain().unwrap();
-        drop(writer);
-        let reopened = BorsukIndex::open(&uri).unwrap();
-        assert_eq!(
-            reopened.get_vector("same").unwrap(),
-            Some(vec![2.0, 0.0]),
-            "worker_lanes={worker_lanes} must preserve last-write-wins through drain"
-        );
-        assert_eq!(reopened.list_records(0, 10).unwrap().len(), 1);
-    }
-}
-
-#[test]
-fn group_writer_observes_later_external_put_generation() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    writer
-        .append(vec![VectorRecord::new("same", vec![1.0, 0.0])])
-        .unwrap();
-    let mut external = BorsukIndex::open(&uri).unwrap();
-    external
-        .put(vec![VectorRecord::new("same", vec![2.0, 0.0])])
-        .unwrap();
-    writer
-        .append(vec![VectorRecord::new("same", vec![3.0, 0.0])])
-        .unwrap();
-
-    assert_eq!(
-        BorsukIndex::open(&uri).unwrap().get_vector("same").unwrap(),
-        Some(vec![3.0, 0.0]),
-        "a group writer must advance past a separately acknowledged put"
-    );
-}
-
-#[test]
-fn lane_append_revives_an_id_deleted_by_the_manifest_writer() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(config(&uri)).unwrap();
-    index
-        .put(vec![VectorRecord::new("revived", vec![1.0, 0.0])])
-        .unwrap();
-    index.delete(["revived"]).unwrap();
-    let writer = GroupCommitWriter::new(index, GroupCommitConfig::default()).unwrap();
-
-    writer
-        .append(vec![VectorRecord::new("revived", vec![7.0, 0.0])])
-        .unwrap();
-    drop(writer);
-
-    assert_eq!(
-        BorsukIndex::open(&uri)
-            .unwrap()
-            .get_vector("revived")
-            .unwrap(),
-        Some(vec![7.0, 0.0])
-    );
-}
-
-#[test]
-fn live_lane_writer_does_not_recreate_a_disappeared_head_and_reopen_fails_closed() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 1,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    let receipt = writer
-        .append(vec![VectorRecord::new("before-loss", vec![1.0, 0.0])])
-        .unwrap();
-    std::fs::remove_file(
-        directory
-            .path()
-            .join(format!("lane-log/lanes/{:04}/HEAD", receipt.commit_lane)),
-    )
-    .unwrap();
-
-    assert!(
-        writer
-            .append(vec![VectorRecord::new("before-loss", vec![2.0, 0.0])])
-            .is_err(),
-        "an append cannot be acknowledged without its stripe-head publication fence"
-    );
-    assert!(
-        !directory
-            .path()
-            .join(format!("lane-log/lanes/{:04}/HEAD", receipt.commit_lane))
-            .exists()
-    );
-    drop(writer);
-    assert!(
-        BorsukIndex::open(&uri).is_err(),
-        "a missing lease authority must fail closed during reopen"
-    );
-}
-
-#[test]
-fn reopened_group_writer_advances_past_abandoned_generation_lease() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let writer = GroupCommitWriter::new(index, GroupCommitConfig::default()).unwrap();
-    writer
-        .append(vec![VectorRecord::new("same", vec![1.0, 0.0])])
-        .unwrap();
-    drop(writer);
-    let reopened = BorsukIndex::open(&uri).unwrap();
-    let writer = GroupCommitWriter::new(reopened, GroupCommitConfig::default()).unwrap();
-    writer
-        .append(vec![VectorRecord::new("same", vec![2.0, 0.0])])
-        .unwrap();
-    drop(writer);
-
-    assert_eq!(
-        BorsukIndex::open(&uri).unwrap().get_vector("same").unwrap(),
-        Some(vec![2.0, 0.0])
-    );
-}
-
-#[test]
-fn group_commit_configuration_fails_closed() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let error = match GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 0,
-            worker_lanes: 1,
-        },
-    ) {
-        Ok(_) => panic!("zero-sized groups must be rejected"),
-        Err(error) => error,
-    };
-    assert!(error.to_string().contains("max_records must be positive"));
-}
-
-#[test]
-fn group_writer_rejects_modalities_not_yet_materialized_by_lane_log() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let result = GroupCommitWriter::new(
-        BorsukIndex::create(IndexConfig {
-            text: true,
-            ..config(&uri)
-        })
-        .unwrap(),
-        GroupCommitConfig::default(),
-    );
-    let error = match result {
-        Ok(_) => panic!("unsupported modality must fail closed"),
-        Err(error) => error,
-    };
-
-    assert!(error.to_string().contains("text or named"), "{error}");
-}
-
-#[test]
-fn same_id_upserts_in_one_group_commit_in_submission_order() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::from_millis(100),
-            max_records: 2,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    let first = writer
-        .append_async(vec![VectorRecord::new("duplicate", vec![1.0, 0.0])])
-        .unwrap();
-    let second = writer
-        .append_async(vec![VectorRecord::new("duplicate", vec![2.0, 0.0])])
-        .unwrap();
-    first.wait().unwrap();
-    second.wait().unwrap();
-
-    let reopened = BorsukIndex::open(&uri).unwrap();
-    assert_eq!(
-        reopened.get_vector("duplicate").unwrap(),
-        Some(vec![2.0, 0.0])
-    );
-}
-
-#[test]
-fn cross_cell_group_uses_one_record_bundle_and_preserves_exact_recall() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        segment_max_vectors: 1,
-        ..config(&uri)
-    })
-    .unwrap();
-    index
-        .add(vec![
-            VectorRecord::new("base-left", vec![0.0, 0.0]),
-            VectorRecord::new("base-right", vec![100.0, 0.0]),
-        ])
-        .unwrap();
-    index.finish_bulk_load().unwrap();
-    let writer = GroupCommitWriter::new(
-        index,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::from_millis(100),
-            max_records: 2,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    let barrier = Arc::new(Barrier::new(2));
-    let handles = [("new-left", vec![0.1, 0.0]), ("new-right", vec![99.9, 0.0])]
-        .into_iter()
-        .map(|(id, vector)| {
-            let writer = writer.clone();
-            let barrier = Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                barrier.wait();
-                writer.append(vec![VectorRecord::new(id, vector)]).unwrap()
-            })
-        })
-        .collect::<Vec<_>>();
-    for handle in handles {
-        let receipt = handle.join().unwrap();
-        assert!((1..=2).contains(&receipt.committed_records));
-        assert!(receipt.requests.total() < 100);
-    }
-    drop(writer);
-
-    let reopened = BorsukIndex::open(&uri).unwrap();
-    for (id, vector) in [("new-left", [0.1, 0.0]), ("new-right", [99.9, 0.0])] {
-        let report = reopened
-            .search_with_report(&vector, SearchOptions::exact(1))
-            .unwrap();
-        assert_eq!(report.hits[0].id.as_str(), id);
-    }
-}
-
-#[test]
-fn sequential_groups_replace_the_same_id() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let writer = GroupCommitWriter::new(index, GroupCommitConfig::default()).unwrap();
-
-    writer
-        .append(vec![VectorRecord::new("shared", vec![1.0, 0.0])])
-        .unwrap();
-    writer
-        .append(vec![VectorRecord::new("shared", vec![0.0, 1.0])])
-        .unwrap();
-    drop(writer);
-
-    let reopened = BorsukIndex::open(&uri).unwrap();
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
     assert_eq!(reopened.list_records(0, 10).unwrap().len(), 1);
-    assert_eq!(reopened.get_vector("shared").unwrap(), Some(vec![0.0, 1.0]));
-}
-
-#[test]
-fn unchanged_refresh_cost_does_not_scale_with_committed_lane_blocks() {
-    let empty_directory = tempfile::tempdir().unwrap();
-    let empty_uri = empty_directory.path().to_string_lossy().into_owned();
-    let empty_writer = GroupCommitWriter::new(
-        BorsukIndex::create(config(&empty_uri)).unwrap(),
-        GroupCommitConfig::default(),
-    )
-    .unwrap();
-    drop(empty_writer);
-    let mut empty = BorsukIndex::open(&empty_uri).unwrap();
-    let empty_before = empty.request_counts();
-    assert!(!empty.refresh().unwrap());
-    let empty_refresh = empty.request_counts().delta(&empty_before);
-
-    let tail_directory = tempfile::tempdir().unwrap();
-    let tail_uri = tail_directory.path().to_string_lossy().into_owned();
-    let writer = GroupCommitWriter::new(
-        BorsukIndex::create(config(&tail_uri)).unwrap(),
-        GroupCommitConfig::default(),
-    )
-    .unwrap();
-    writer
-        .append(vec![VectorRecord::new("tail", vec![1.0, 0.0])])
-        .unwrap();
-    drop(writer);
-    let mut with_tail = BorsukIndex::open(&tail_uri).unwrap();
-    let tail_before = with_tail.request_counts();
-    with_tail.refresh().unwrap();
-    let tail_refresh = with_tail.request_counts().delta(&tail_before);
-
-    assert_eq!(tail_refresh.gets, empty_refresh.gets);
-    assert_eq!(tail_refresh.heads, empty_refresh.heads);
-}
-
-#[test]
-fn wal_tail_refresh_observes_acknowledged_records_without_manifest_reload() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let index = BorsukIndex::create(config(&uri)).unwrap();
-    let mut reader = BorsukIndex::open(&uri).unwrap();
-    let writer = GroupCommitWriter::new(index, GroupCommitConfig::default()).unwrap();
-    writer
-        .append(vec![VectorRecord::new("tail-fast", vec![1.0, 0.0])])
-        .unwrap();
-    drop(writer);
-
-    assert!(reader.refresh_wal_tail().unwrap());
     assert_eq!(
-        reader.get_vector("tail-fast").unwrap(),
+        reopened.get_vector("same-id").unwrap(),
         Some(vec![1.0, 0.0])
     );
 }
 
 #[test]
-fn future_segment_size_can_change_without_rebuilding_logical_cell_topology() {
-    let directory = tempfile::tempdir().unwrap();
-    let uri = directory.path().to_string_lossy().into_owned();
-    let mut index = BorsukIndex::create(IndexConfig {
-        segment_max_vectors: 1,
-        ..config(&uri)
-    })
-    .unwrap();
+fn text_upsert_and_delete_reopen_without_legacy_delta_writes() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///positioned-text-reopen";
+    let mut text_config = config(uri);
+    text_config.text = true;
+    let traced: Arc<dyn ObjectStore> = Arc::new(traced);
+    let mut index =
+        BorsukIndex::create_with_object_store(Arc::clone(&traced), text_config).unwrap();
     index
         .add(vec![
-            VectorRecord::new("left", vec![1.0, 0.0]),
-            VectorRecord::new("right", vec![0.0, 1.0]),
+            VectorRecord::new("doc", vec![1.0, 0.0]).with_text("oldterm stable"),
         ])
         .unwrap();
-    index.finish_bulk_load().unwrap();
-    let logical_cells = index.manifest().logical_cells().to_vec();
-
-    index.set_segment_max_vectors(128).unwrap();
-    drop(index);
-    let reopened = BorsukIndex::open(&uri).unwrap();
-
-    assert_eq!(reopened.manifest().logical_cells(), logical_cells);
-    assert_eq!(reopened.manifest().segment_max_vectors(), 128);
-}
-
-#[test]
-fn resident_v11_does_not_schedule_a_continuation_after_its_deadline() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///resident-v11-continuation-deadline";
-    let suffix = "x".repeat(100 * 1024);
-    let ids = (0..64)
-        .map(|row| format!("row-{row:02}-{suffix}"))
-        .collect::<Vec<_>>();
-    let mut index = BorsukIndex::create_with_object_store(
-        Arc::clone(&inner),
-        IndexConfig {
-            uri: uri.to_string(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 256,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        },
-    )
-    .unwrap();
+    operations.clear();
     index
-        .add(
-            ids.iter()
-                .enumerate()
-                .map(|(row, id)| VectorRecord::new(id.clone(), vec![row as f32; 8]))
-                .collect(),
-        )
+        .upsert(vec![
+            VectorRecord::new("doc", vec![2.0, 0.0]).with_text("newterm stable"),
+        ])
         .unwrap();
-    index.finish_bulk_load().unwrap();
-    index.delete([ids[0].as_str()]).unwrap();
     drop(index);
-
-    let delayed = common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_get_latency_for(
-        std::time::Duration::from_millis(40),
-        |operation, path| {
-            operation == common::StoreOperation::Get
-                && (path.as_ref().contains("global-leaf/directories/")
-                    || path.as_ref().contains("global-leaf/bundles/"))
-        },
+    let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&traced), uri).unwrap();
+    assert!(reopened.search_text("oldterm", 5).unwrap().hits.is_empty());
+    assert_eq!(
+        reopened.search_text("newterm", 5).unwrap().hits[0]
+            .id
+            .as_str(),
+        "doc"
     );
-    let (delayed, operations) = delayed.with_operation_log();
-    let reader = BorsukIndex::open_with_object_store(Arc::new(delayed), uri).unwrap();
-    operations.clear();
-
-    let report = reader
-        .search_with_report(
-            &[0.0; 8],
-            SearchOptions::approx(1, LeafMode::SrhtPqScan)
-                .with_max_segments(4)
-                .with_max_latency_ms(60),
-        )
-        .unwrap();
-
+    reopened.delete(["doc"]).unwrap();
+    drop(reopened);
     assert!(
-        report.hits.is_empty(),
-        "deadline search returned {} hits",
-        report.hits.len()
+        BorsukIndex::open_with_object_store(inner, uri)
+            .unwrap()
+            .search_text("newterm", 5)
+            .unwrap()
+            .hits
+            .is_empty()
     );
     assert_eq!(
-        report.termination_reason,
-        SearchTerminationReason::MaxLatency
-    );
-    assert_eq!(report.global_leaf_waves, 1);
-    assert_eq!(report.global_leaf_continuations, 0);
-    assert_eq!(report.global_leaf_pages_read, 1);
-    let bundle_gets = operations.count_matching(|operation, path| {
-        operation == common::StoreOperation::Get && path.contains("global-leaf/bundles/")
-    });
-    assert_eq!(bundle_gets, 1, "deadline scheduled an extra page wave");
-}
-
-#[test]
-fn refresh_rejects_an_invalid_next_v11_before_publishing_it() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let store: Arc<dyn ObjectStore> = Arc::new(traced);
-    let uri = "memory:///refresh-invalid-next-v11";
-    let mut writer = BorsukIndex::create_with_object_store(
-        Arc::clone(&store),
-        IndexConfig {
-            uri: uri.to_string(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 16,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        },
-    )
-    .unwrap();
-    writer
-        .add(
-            (0..128)
-                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
-                .collect(),
-        )
-        .unwrap();
-    writer.finish_bulk_load().unwrap();
-    let mut reader = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
-    let old_version = reader.manifest().version;
-    operations.clear();
-
-    let group_writer = GroupCommitWriter::new(
-        writer,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 64,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    group_writer
-        .append(
-            (0..32)
-                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![256.0 + row as f32; 8]))
-                .collect(),
-        )
-        .unwrap();
-    group_writer.drain().unwrap();
-    drop(group_writer);
-    let next_directory = operations
-        .matching_paths(|operation, path| {
-            operation == common::StoreOperation::Put
-                && path.starts_with("global-leaf/v11/directories/")
-        })
-        .pop()
-        .expect("online publication writes a V11 incremental directory");
-    runtime
-        .block_on(inner.put(
-            &next_directory.into(),
-            Bytes::from_static(b"corrupt").into(),
-        ))
-        .unwrap();
-
-    assert!(reader.refresh().is_err());
-    assert_eq!(reader.manifest().version, old_version);
-    let report = reader
-        .search_with_report(
-            &[0.0; 8],
-            SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
-        )
-        .unwrap();
-    assert_eq!(report.hits[0].id.as_str(), "base-0");
-    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
-}
-
-#[test]
-fn refresh_preloads_v11_once_before_concurrent_queries_and_preserves_old_snapshot() {
-    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let store: Arc<dyn ObjectStore> = Arc::new(traced);
-    let uri = "memory:///refresh-preloads-next-v11";
-    let mut writer = BorsukIndex::create_with_object_store(
-        Arc::clone(&store),
-        IndexConfig {
-            uri: uri.to_string(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 16,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        },
-    )
-    .unwrap();
-    writer
-        .add(
-            (0..128)
-                .map(|row| VectorRecord::new(format!("base-{row}"), vec![row as f32; 8]))
-                .collect(),
-        )
-        .unwrap();
-    writer.finish_bulk_load().unwrap();
-    let mut reader = BorsukIndex::open_with_object_store(Arc::clone(&store), uri).unwrap();
-    let old_snapshot = reader.clone();
-    let group_writer = GroupCommitWriter::new(
-        writer,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 64,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    group_writer
-        .append(
-            (0..32)
-                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![256.0 + row as f32; 8]))
-                .collect(),
-        )
-        .unwrap();
-    group_writer.drain().unwrap();
-    drop(group_writer);
-    operations.clear();
-
-    assert!(reader.refresh().unwrap());
-    let setup_gets = operations.count_matching(|operation, path| {
-        operation == common::StoreOperation::Get
-            && (path.starts_with("global-leaf/v11/codebooks/")
-                || path.starts_with("global-leaf/v11/directories/"))
-    });
-    assert_eq!(
-        setup_gets, 3,
-        "refresh did not preload one codebook plus base and incremental directories"
-    );
-    operations.clear();
-
-    std::thread::scope(|scope| {
-        for _ in 0..2 {
-            let query_reader = reader.clone();
-            scope.spawn(move || {
-                let report = query_reader
-                    .search_with_report(
-                        &[270.0; 8],
-                        SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
-                    )
-                    .unwrap();
-                assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
-            });
-        }
-    });
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Get
-                && (path.starts_with("global-leaf/v11/codebooks/")
-                    || path.starts_with("global-leaf/v11/directories/"))
+        operations.count_matching(|_, path| {
+            path.starts_with("transactions/")
+                || (path.starts_with("cells/") && path.contains("/wal/"))
+                || path.starts_with("tombstones/")
+                || path.starts_with("lexical/stats-delta/")
+                || path == "id-directory/generated/NEXT"
         }),
-        0,
-        "first queries repeated codebook/directory setup I/O after refresh"
+        0
     );
-    let old_report = old_snapshot
-        .search_with_report(
-            &[0.0; 8],
-            SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
-        )
-        .unwrap();
-    assert_eq!(old_report.hits[0].id.as_str(), "base-0");
 }
 
 #[test]
-fn maintenance_setup_read_failure_does_not_publish_or_advance_the_handle() {
+fn late_interaction_replacement_and_delete_reopen_from_one_positioned_log() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///maintenance-prepare-resident-pins-failure";
-    let mut writer = BorsukIndex::create_with_object_store(
-        Arc::clone(&inner),
-        IndexConfig {
-            uri: uri.to_string(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 16,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///positioned-late-reopen";
+    let mut late_config = config(uri);
+    late_config.named_vectors = BTreeMap::from([(
+        "tokens".to_string(),
+        VectorSpec {
+            dimensions: 2,
+            metric: VectorMetric::InnerProduct,
+            kind: VectorKind::LateInteraction,
+            element_type: VectorElementType::Float32,
         },
-    )
-    .unwrap();
-    writer
-        .add(
-            (0..128)
-                .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
-                .collect(),
-        )
+    )]);
+    let record = |value: f32, tokens: Vec<Vec<f32>>| {
+        VectorRecord::new("entity", vec![value, 0.0])
+            .with_late_interaction("tokens", tokens)
+            .unwrap()
+    };
+    let traced: Arc<dyn ObjectStore> = Arc::new(traced);
+    let mut index =
+        BorsukIndex::create_with_object_store(Arc::clone(&traced), late_config).unwrap();
+    index
+        .add(vec![record(1.0, vec![vec![1.0, 0.0], vec![0.0, 1.0]])])
         .unwrap();
-    writer.finish_bulk_load().unwrap();
-    let group_writer = GroupCommitWriter::new(
-        writer,
-        GroupCommitConfig {
-            max_delay: std::time::Duration::ZERO,
-            max_records: 64,
-            worker_lanes: 1,
-        },
-    )
-    .unwrap();
-    group_writer
-        .append(
-            (0..64)
-                .map(|row| VectorRecord::new(format!("delta-{row}"), vec![1_000.0 + row as f32; 8]))
-                .collect(),
-        )
+    operations.clear();
+    index
+        .upsert(vec![record(2.0, vec![vec![-1.0, 0.0]])])
         .unwrap();
-    group_writer.drain().unwrap();
-    drop(group_writer);
-    let mut writer = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
-    writer
-        .delete(
-            (0..64)
-                .filter(|row| row % 8 != 0)
-                .map(|row| format!("delta-{row}"))
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-    writer.flush().unwrap();
-    let old_version = writer.manifest().version;
-    drop(writer);
+    drop(index);
+    let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&traced), uri).unwrap();
+    assert_eq!(
+        reopened
+            .search_late_interaction("tokens", vec![vec![-1.0, 0.0]], 1)
+            .unwrap()[0]
+            .id
+            .as_str(),
+        "entity"
+    );
+    reopened.delete(["entity"]).unwrap();
+    drop(reopened);
+    assert!(
+        BorsukIndex::open_with_object_store(inner, uri)
+            .unwrap()
+            .search_late_interaction("tokens", vec![vec![-1.0, 0.0]], 1)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        operations.count_matching(|_, path| {
+            path.starts_with("transactions/")
+                || (path.starts_with("cells/") && path.contains("/wal/"))
+                || path.starts_with("tombstones/")
+                || path.starts_with("lexical/stats-delta/")
+                || path == "id-directory/generated/NEXT"
+        }),
+        0
+    );
+}
 
-    let faulted = common::FaultInjectingObjectStore::fail_nth_matching(
+#[test]
+fn committed_cleanup_failure_clears_transaction_and_reports_position() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let auth_fault = common::FaultInjectingObjectStore::fail_nth_matching(
         Arc::clone(&inner),
-        2,
+        1,
         true,
         |operation, path| {
-            operation == common::StoreOperation::Get
-                && path.as_ref().starts_with("global-leaf/v11/codebooks/")
+            operation == common::StoreOperation::Put
+                && path
+                    .as_ref()
+                    .contains("positioned-log/claim-authorizations/")
         },
     );
-    let mut maintainer = BorsukIndex::open_with_object_store(Arc::new(faulted), uri).unwrap();
-
-    let error = maintainer
-        .run_incremental_maintenance(IncrementalMaintenanceOptions {
-            max_segment_vectors: usize::MAX,
-            max_segment_radius: None,
-            min_segment_vectors: 17,
-            max_operations: 1,
-        })
-        .unwrap_err();
-    assert!(error.to_string().contains("injected Get failure"));
-    assert_eq!(
-        maintainer.manifest().version,
-        old_version,
-        "failed setup advanced the publishing handle"
+    let release_fault = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        Arc::new(auth_fault),
+        2,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("id-directory/claim-pages/")
+        },
     );
-    let current = BorsukIndex::open_with_object_store(inner, uri).unwrap();
+    let uri = "memory:///positioned-committed-cleanup-error";
+    let mut index =
+        BorsukIndex::create_with_object_store(Arc::new(release_fault), config(uri)).unwrap();
+
+    let error = index
+        .add(vec![VectorRecord::new("committed", vec![1.0, 0.0])])
+        .unwrap_err();
+    let BorsukError::PositionedCommitCleanupFailed {
+        source_epoch,
+        shard: _,
+        sequence,
+        envelope_checksum,
+        cleanup,
+    } = error
+    else {
+        panic!("unexpected error after positioned commit: {error}");
+    };
+    assert_eq!(source_epoch, 1);
+    assert!(sequence > 0);
+    assert_eq!(envelope_checksum.len(), 64);
+    assert!(!cleanup.is_empty());
+
+    index
+        .add(vec![VectorRecord::new("after", vec![0.0, 1.0])])
+        .unwrap();
+    assert!(
+        index
+            .add(vec![VectorRecord::new("committed", vec![9.0, 0.0])])
+            .unwrap_err()
+            .to_string()
+            .contains("already exists")
+    );
+    drop(index);
+
+    let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
     assert_eq!(
-        current.manifest().version,
-        old_version,
-        "failed setup advanced CURRENT"
+        reopened.get_vector("committed").unwrap(),
+        Some(vec![1.0, 0.0])
+    );
+    assert_eq!(reopened.get_vector("after").unwrap(), Some(vec![0.0, 1.0]));
+}
+
+#[test]
+fn facades_return_current_seam_receipt_and_group_failure_cannot_reuse_one() {
+    let uri = "memory:///positioned-single-append-seam";
+    let mut index = BorsukIndex::create(config(uri)).unwrap();
+    let (_, ordinary) = index
+        .add_with_report(vec![vec![1.0, 0.0]], Some(vec!["ordinary".to_string()]))
+        .unwrap();
+    assert!(ordinary.positioned_position.is_some());
+    assert_eq!(ordinary.positioned_envelope_checksum.len(), 64);
+    assert!(ordinary.positioned_encoded_bytes > 0);
+
+    let grouped = writer(index, 1);
+    let first = grouped
+        .append(vec![VectorRecord::new("first", vec![0.0, 1.0])])
+        .unwrap();
+    assert!(
+        grouped
+            .append(vec![VectorRecord::new("invalid", vec![1.0])])
+            .is_err()
+    );
+    let second = grouped
+        .append(vec![VectorRecord::new("second", vec![2.0, 0.0])])
+        .unwrap();
+    assert_ne!(first.position, second.position);
+    assert_ne!(first.envelope_checksum, second.envelope_checksum);
+}
+
+#[test]
+fn mutation_facades_report_each_physical_request_exactly_once() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///positioned-request-telemetry";
+    let mut index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+
+    operations.clear();
+    let (_, ordinary) = index
+        .add_with_report(vec![vec![1.0, 0.0]], Some(vec!["ordinary".to_string()]))
+        .unwrap();
+    assert_eq!(ordinary.requests, logged_request_counts(&operations));
+
+    operations.clear();
+    let (_, generated) = index.add_vectors_with_report(vec![vec![0.0, 1.0]]).unwrap();
+    assert_eq!(generated.requests, logged_request_counts(&operations));
+
+    operations.clear();
+    let upsert = index
+        .upsert_with_report(vec![VectorRecord::new("ordinary", vec![2.0, 0.0])])
+        .unwrap();
+    assert_eq!(upsert.requests, logged_request_counts(&operations));
+
+    operations.clear();
+    let deleted = index.delete(["ordinary"]).unwrap();
+    assert_eq!(deleted.requests, logged_request_counts(&operations));
+
+    let grouped = writer(index, 1);
+    operations.clear();
+    let grouped = grouped
+        .append(vec![VectorRecord::new("grouped", vec![3.0, 0.0])])
+        .unwrap();
+    assert_eq!(grouped.requests, logged_request_counts(&operations));
+}
+
+#[test]
+fn mutation_facades_report_each_submitted_put_payload_byte_exactly_once() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) =
+        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
+    let uri = "memory:///positioned-write-byte-telemetry";
+    let mut index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+
+    operations.clear();
+    let (_, ordinary) = index
+        .add_with_report(
+            vec![vec![1.0, 0.0], vec![2.0, 0.0], vec![3.0, 0.0]],
+            Some(vec![
+                "ordinary-a".to_string(),
+                "ordinary-b".to_string(),
+                "ordinary-c".to_string(),
+            ]),
+        )
+        .unwrap();
+    assert_eq!(
+        ordinary.total_bytes_written,
+        logged_put_payload_bytes(&operations)
+    );
+    assert_eq!(
+        ordinary.bytes_per_vector,
+        ordinary.total_bytes_written as f64 / 3.0
+    );
+
+    operations.clear();
+    let (_, generated) = index
+        .add_vectors_with_report(vec![vec![0.0, 1.0], vec![0.0, 2.0]])
+        .unwrap();
+    assert_eq!(
+        generated.total_bytes_written,
+        logged_put_payload_bytes(&operations)
+    );
+    assert_eq!(
+        generated.bytes_per_vector,
+        generated.total_bytes_written as f64 / 2.0
+    );
+
+    operations.clear();
+    let upsert = index
+        .upsert_with_report(vec![
+            VectorRecord::new("ordinary-a", vec![4.0, 0.0]),
+            VectorRecord::new("ordinary-b", vec![5.0, 0.0]),
+            VectorRecord::new("ordinary-c", vec![6.0, 0.0]),
+        ])
+        .unwrap();
+    assert_eq!(
+        upsert.total_bytes_written,
+        logged_put_payload_bytes(&operations)
+    );
+    assert_eq!(
+        upsert.bytes_per_vector,
+        upsert.total_bytes_written as f64 / 3.0
     );
 }
 
 #[test]
-fn successful_purge_installs_prepared_pins_without_post_publish_setup_gets() {
+fn overlapping_cloned_mutation_handles_have_disjoint_exact_report_scopes() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let (traced, operations) =
-        common::FaultInjectingObjectStore::new(Arc::clone(&inner)).with_operation_log();
-    let uri = "memory:///purge-installs-prepared-resident-pins";
-    let mut index = BorsukIndex::create_with_object_store(
-        Arc::new(traced),
-        IndexConfig {
-            uri: uri.to_string(),
-            metric: VectorMetric::Euclidean,
-            dimensions: 8,
-            segment_max_vectors: 16,
-            ram_budget_bytes: None,
-            text: false,
-            named_vectors: Default::default(),
-        },
-    )
-    .unwrap();
-    index
-        .add(
-            (0..128)
-                .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
-                .collect(),
-        )
-        .unwrap();
-    index.finish_bulk_load().unwrap();
-    index.delete(["row-0"]).unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let traced = common::FaultInjectingObjectStore::new(Arc::clone(&inner))
+        .with_first_matching_puts_barrier(Arc::clone(&barrier), 2, |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("id-directory/claim-pages/")
+        });
+    let (traced, overlap) = traced.with_put_concurrency_probe();
+    let (traced, operations) = traced.with_operation_log();
+    let uri = "memory:///positioned-overlapping-report-scopes";
+    let index = BorsukIndex::create_with_object_store(Arc::new(traced), config(uri)).unwrap();
+    let left = index.clone();
+    let right = index;
+    operations.clear();
+    let mutations = [(left, "left"), (right, "right")].map(|(mut handle, id)| {
+        thread::spawn(move || {
+            handle
+                .add_with_report(vec![vec![1.0, 0.0]], Some(vec![id.to_string()]))
+                .map(|(_, report)| report)
+        })
+    });
+    let [left, right] = mutations.map(|handle| handle.join().unwrap().unwrap());
 
-    operations.clear();
-    index.purge_with_report().unwrap();
-    assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Get
-                && (path.starts_with("global-leaf/v11/codebooks/")
-                    || path.starts_with("global-leaf/v11/directories/"))
-        }),
-        2,
-        "purge must validate one shared codebook and one base directory before publication"
+    assert!(
+        overlap.peak() >= 2,
+        "the fault barrier must prove the two public mutations overlapped"
     );
-    operations.clear();
-    let report = index
-        .search_with_report(
-            &[1.0; 8],
-            SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
-        )
-        .unwrap();
-    assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
     assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Get
-                && (path.starts_with("global-leaf/v11/codebooks/")
-                    || path.starts_with("global-leaf/v11/directories/"))
-        }),
-        0,
-        "first post-purge query repeated setup reads"
+        sum_request_counts(left.requests, right.requests),
+        logged_request_counts(&operations)
+    );
+    assert_eq!(
+        left.total_bytes_written + right.total_bytes_written,
+        logged_put_payload_bytes(&operations)
+    );
+}
+
+#[test]
+fn delete_receipts_are_request_local_across_stale_writers_and_reopen() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///positioned-delete-request-local";
+    let mut index = BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap();
+    index
+        .add(vec![
+            VectorRecord::new("alpha", vec![0.0, 0.0]),
+            VectorRecord::new("beta", vec![1.0, 0.0]),
+        ])
+        .unwrap();
+
+    let first = index.delete(["beta", "beta"]).unwrap();
+    assert_eq!(first.ids_submitted, 1);
+    assert!(first.published);
+    assert_eq!(index.get_vector("beta").unwrap(), None);
+
+    let repeated = index.delete(["beta"]).unwrap();
+    assert_eq!(repeated.ids_submitted, 1);
+    assert!(!repeated.published);
+    drop(index);
+
+    let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    let reopened_repeat = reopened.delete(["beta"]).unwrap();
+    assert_eq!(reopened_repeat.ids_submitted, 1);
+    assert!(!reopened_repeat.published);
+    assert_eq!(reopened.get_vector("beta").unwrap(), None);
+
+    let mut same_left = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    let mut same_right = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    let same_left_report = same_left.delete(["alpha"]).unwrap();
+    let same_right_report = same_right.delete(["alpha"]).unwrap();
+    assert_eq!(same_left_report.ids_submitted, 1);
+    assert_eq!(same_right_report.ids_submitted, 1);
+    assert!(same_left_report.published);
+    assert!(same_right_report.published);
+    let same_final = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(same_final.get_vector("alpha").unwrap(), None);
+
+    let different_inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let different_uri = "memory:///positioned-delete-stale-different";
+    let mut seed =
+        BorsukIndex::create_with_object_store(Arc::clone(&different_inner), config(different_uri))
+            .unwrap();
+    seed.add(vec![
+        VectorRecord::new("left", vec![1.0, 0.0]),
+        VectorRecord::new("right", vec![0.0, 1.0]),
+    ])
+    .unwrap();
+    let mut different_left =
+        BorsukIndex::open_with_object_store(Arc::clone(&different_inner), different_uri).unwrap();
+    let mut different_right =
+        BorsukIndex::open_with_object_store(Arc::clone(&different_inner), different_uri).unwrap();
+    assert!(different_left.delete(["left"]).unwrap().published);
+    assert!(different_right.delete(["right"]).unwrap().published);
+    let different_final =
+        BorsukIndex::open_with_object_store(different_inner, different_uri).unwrap();
+    assert_eq!(different_final.get_vector("left").unwrap(), None);
+    assert_eq!(different_final.get_vector("right").unwrap(), None);
+
+    let put_inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let put_uri = "memory:///positioned-delete-report-after-put";
+    let mut put_index = BorsukIndex::create_with_object_store(put_inner, config(put_uri)).unwrap();
+    put_index
+        .put(vec![VectorRecord::new("put-row", vec![3.0, 0.0])])
+        .unwrap();
+    let after_put = put_index.delete(["put-row"]).unwrap();
+    assert_eq!(after_put.ids_submitted, 1);
+    assert!(after_put.published);
+    assert_eq!(put_index.get_vector("put-row").unwrap(), None);
+
+    put_index
+        .upsert(vec![VectorRecord::new("put-row", vec![4.0, 0.0])])
+        .unwrap();
+    assert_eq!(
+        put_index.get_vector("put-row").unwrap(),
+        Some(vec![4.0, 0.0])
+    );
+    let after_upsert = put_index.delete(["put-row", "put-row"]).unwrap();
+    assert_eq!(after_upsert.ids_submitted, 1);
+    assert!(after_upsert.published);
+    assert_eq!(put_index.get_vector("put-row").unwrap(), None);
+}
+
+#[test]
+fn materialization_rebases_duplicate_delete_upper_bound_to_page_cardinality() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///positioned-delete-materialization-rebase";
+    let mut seed = BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap();
+    seed.add(vec![VectorRecord::new("victim", vec![1.0, 0.0])])
+        .unwrap();
+    seed.flush().unwrap();
+
+    let mut left = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    let mut right = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert!(left.delete(["victim"]).unwrap().published);
+    assert!(right.delete(["victim"]).unwrap().published);
+
+    let mut materializer = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(materializer.get_vector("victim").unwrap(), None);
+    materializer.flush().unwrap();
+    let purge = materializer.purge_with_report().unwrap();
+    assert_eq!(purge.records_purged, 1);
+    assert_eq!(
+        purge.tombstones_cleared, 1,
+        "the fenced stable page cardinality must replace duplicate tail contributions"
     );
 }

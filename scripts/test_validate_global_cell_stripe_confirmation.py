@@ -74,12 +74,11 @@ class GlobalCellStripeConfirmationValidatorTest(unittest.TestCase):
                             "query", "record_id", "hit_id", "contains_record_id", "latency_ms",
                             "requests", "gets", "puts", "deletes", "heads", "lists", "bytes_read",
                             "segments_searched", "global_base_approximate_us", "global_base_exact_rerank_us",
-                            "global_delta_approximate_us", "global_delta_exact_rerank_us", "global_delta_wait_us",
                         ]
                     )
                     for query, latency in enumerate(latencies):
                         writer.writerow(
-                            [query, f"id-{query}", f"id-{query}", "true", latency, gets, gets, 0, 0, 0, 0, 1024, 4, 1, 1, 1, 1, 1]
+                            [query, f"id-{query}", f"id-{query}", "true", latency, gets, gets, 0, 0, 0, 0, 1024, 4, 1, 1]
                         )
                 fields = [
                     "protocol_kind", "source_sha256", "manifest_sha256", "base_source_sha256",

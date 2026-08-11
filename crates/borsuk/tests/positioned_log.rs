@@ -5,7 +5,6 @@ mod common;
 use std::{
     io::Cursor,
     sync::{Arc, Barrier},
-    time::Duration,
 };
 
 use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, UInt64Array};
@@ -339,9 +338,12 @@ fn stale_writer_accepts_same_request_committed_at_rebased_position_after_cas_los
 fn append_uses_parallel_payload_wave_then_one_conditional_head_cas() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let (traced, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
-    let (traced, concurrency) = traced
-        .with_latency(Duration::from_millis(10))
-        .with_put_concurrency_probe();
+    let overlap = Arc::new(Barrier::new(2));
+    let traced =
+        traced.with_first_matching_puts_barrier(Arc::clone(&overlap), 2, |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("positioned-log/payloads/")
+        });
     let writer = create_writer(Arc::new(traced), 7);
     operations.clear();
 
@@ -365,10 +367,6 @@ fn append_uses_parallel_payload_wave_then_one_conditional_head_cas() {
     }));
     assert_eq!(head, entries.len() - 1);
     assert_eq!(entries[head].put_mode, Some(common::LoggedPutMode::Update));
-    assert!(
-        concurrency.peak() > 1,
-        "immutable wave did not overlap PUTs"
-    );
     assert_eq!(committed.requests.gets, 0);
     assert_eq!(committed.requests.heads, 0);
     assert_eq!(committed.requests.lists, 0);

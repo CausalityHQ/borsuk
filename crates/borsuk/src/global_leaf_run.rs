@@ -1,47 +1,13 @@
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::{
-    BorsukError, Result,
-    global_pq_sidecar::ResidentGlobalCodebook,
-    lane_log::GROUP_COMMIT_STRIPE_COUNT,
-    metric::VectorMetric,
-    mutation::MutationStamp,
-    record::{VectorElementType, VectorRecord},
-    storage::Storage,
+    BorsukError, Result, lane_log::GROUP_COMMIT_STRIPE_COUNT, metric::VectorMetric,
+    mutation::MutationStamp, record::VectorElementType, storage::Storage,
 };
 
 pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 11;
 pub(crate) const MAX_GLOBAL_LEAF_LEVELS: usize = u64::BITS as usize;
 pub(crate) const DRIFT_WINDOW_ROWS: usize = 4096;
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct LeafRunBuildConfig {
-    pub(crate) dimensions: usize,
-    pub(crate) element_type: VectorElementType,
-    pub(crate) normalize: bool,
-}
-
-#[derive(Debug)]
-pub(crate) struct UnpublishedGlobalLeafRun {
-    level: u8,
-    codebook_checksum: String,
-    page_refs: Vec<crate::global_leaf::GlobalLeafPageRef>,
-    bundles: Vec<crate::global_leaf::GlobalLeafBundleRef>,
-    rows: u64,
-    sealed_pages: u64,
-    partial_pages: u64,
-    bundle_bytes: u64,
-    min_stamp: Option<MutationStamp>,
-    max_stamp: Option<MutationStamp>,
-    source_ranges: SourceRangeSet,
-    reconstruction_errors_micros: Vec<u64>,
-}
-
-impl UnpublishedGlobalLeafRun {
-    pub(crate) fn reconstruction_errors_micros(&self) -> &[u64] {
-        &self.reconstruction_errors_micros
-    }
-}
 
 #[derive(
     Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
@@ -55,23 +21,6 @@ pub(crate) struct LaneSourceRange {
 }
 
 impl LaneSourceRange {
-    #[allow(dead_code, reason = "Task 4 direct lane-run publication constructor")]
-    pub(crate) fn new(
-        lane: u16,
-        lease_epoch: u64,
-        first_sequence: u64,
-        last_sequence: u64,
-    ) -> Result<Self> {
-        let range = Self {
-            lane,
-            lease_epoch,
-            first_sequence,
-            last_sequence,
-        };
-        range.validate()?;
-        Ok(range)
-    }
-
     fn validate(&self) -> Result<()> {
         if self.lane >= GROUP_COMMIT_STRIPE_COUNT {
             return invalid("V11 source-range lane is outside the group-commit stripe count");
@@ -129,85 +78,6 @@ impl SourceRangeSet {
         Ok(Self { ranges: canonical })
     }
 
-    #[allow(dead_code, reason = "Task 4 direct lane-run publication inspection")]
-    pub(crate) fn ranges(&self) -> &[LaneSourceRange] {
-        &self.ranges
-    }
-
-    #[allow(dead_code, reason = "Task 4 source-range coverage subtraction")]
-    pub(crate) fn subtract(&self, covered: &Self) -> Result<CoverageDifference> {
-        self.validate_canonical()?;
-        covered.validate_canonical()?;
-        let mut any_overlap = false;
-        let mut remaining = Vec::new();
-        for candidate in &self.ranges {
-            let mut fragments = vec![*candidate];
-            for cover in covered.ranges.iter().filter(|cover| {
-                cover.lane == candidate.lane && cover.lease_epoch == candidate.lease_epoch
-            }) {
-                let mut next_fragments =
-                    Vec::with_capacity(fragments.len().checked_add(1).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "V11 source-range fragment count overflow".to_owned(),
-                        )
-                    })?);
-                for fragment in fragments {
-                    if cover.last_sequence < fragment.first_sequence
-                        || cover.first_sequence > fragment.last_sequence
-                    {
-                        next_fragments.push(fragment);
-                        continue;
-                    }
-                    any_overlap = true;
-                    if fragment.first_sequence < cover.first_sequence {
-                        next_fragments.push(LaneSourceRange::new(
-                            fragment.lane,
-                            fragment.lease_epoch,
-                            fragment.first_sequence,
-                            cover.first_sequence.checked_sub(1).ok_or_else(|| {
-                                BorsukError::InvalidStorage(
-                                    "V11 source-range subtraction underflow".to_owned(),
-                                )
-                            })?,
-                        )?);
-                    }
-                    if cover.last_sequence < fragment.last_sequence {
-                        next_fragments.push(LaneSourceRange::new(
-                            fragment.lane,
-                            fragment.lease_epoch,
-                            cover.last_sequence.checked_add(1).ok_or_else(|| {
-                                BorsukError::InvalidStorage(
-                                    "V11 source-range subtraction overflow".to_owned(),
-                                )
-                            })?,
-                            fragment.last_sequence,
-                        )?);
-                    }
-                }
-                fragments = next_fragments;
-            }
-            remaining.extend(fragments);
-        }
-        if remaining.is_empty() {
-            Ok(CoverageDifference::FullyCovered)
-        } else {
-            let difference = Self::new(remaining)?;
-            Ok(if any_overlap {
-                CoverageDifference::Partial(difference)
-            } else {
-                CoverageDifference::Disjoint(difference)
-            })
-        }
-    }
-
-    #[allow(dead_code, reason = "Task 4 source-range coverage validation")]
-    pub(crate) fn covers(&self, candidate: &Self) -> bool {
-        matches!(
-            candidate.subtract(self),
-            Ok(CoverageDifference::FullyCovered)
-        )
-    }
-
     pub(crate) fn union_disjoint(&self, other: &Self) -> Result<Self> {
         let mut ranges = Vec::with_capacity(
             self.ranges
@@ -229,14 +99,6 @@ impl SourceRangeSet {
         }
         Ok(())
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code, reason = "Task 4 direct lane-run publication result")]
-pub(crate) enum CoverageDifference {
-    FullyCovered,
-    Disjoint(SourceRangeSet),
-    Partial(SourceRangeSet),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -763,41 +625,6 @@ pub(crate) struct GlobalDriftState {
     consecutive_breaches: u8,
 }
 
-impl GlobalDriftState {
-    fn observe(
-        &mut self,
-        errors_micros: impl IntoIterator<Item = u64>,
-        baseline_p95_micros: u64,
-    ) -> Result<bool> {
-        self.pending_reconstruction_errors_micros
-            .extend(errors_micros);
-        while self.pending_reconstruction_errors_micros.len() >= DRIFT_WINDOW_ROWS {
-            let mut window = self
-                .pending_reconstruction_errors_micros
-                .drain(..DRIFT_WINDOW_ROWS)
-                .collect::<Vec<_>>();
-            window.sort_unstable();
-            let rank = DRIFT_WINDOW_ROWS
-                .checked_mul(95)
-                .and_then(|scaled| scaled.checked_add(99))
-                .map(|scaled| scaled / 100)
-                .and_then(|rank| rank.checked_sub(1))
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "V11 drift nearest-rank p95 calculation overflowed".to_owned(),
-                    )
-                })?;
-            let window_p95 = window[rank];
-            if window_p95.saturating_mul(4) > baseline_p95_micros.saturating_mul(5) {
-                self.consecutive_breaches = self.consecutive_breaches.saturating_add(1).min(3);
-            } else {
-                self.consecutive_breaches = 0;
-            }
-        }
-        Ok(self.consecutive_breaches >= 3)
-    }
-}
-
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GlobalAnnRef {
@@ -873,32 +700,12 @@ impl GlobalAnnRef {
         &self.incremental_runs
     }
 
-    #[allow(dead_code, reason = "Task 4 incremental run publication")]
-    pub(crate) fn coverage(&self) -> &SourceRangeSet {
-        &self.coverage
-    }
-
-    #[allow(dead_code, reason = "Task 5 purge-compaction accounting")]
-    pub(crate) fn base_rows(&self) -> u64 {
-        self.base_rows
-    }
-
-    #[allow(dead_code, reason = "Task 5 purge-compaction accounting")]
-    pub(crate) fn appended_live_rows(&self) -> u64 {
-        self.appended_live_rows
-    }
-
     pub(crate) fn leaf_epoch(&self) -> u64 {
         self.leaf_epoch
     }
 
     pub(crate) fn storage_bytes(&self) -> u64 {
         self.storage_bytes
-    }
-
-    #[allow(dead_code, reason = "Task 4 resident run publication accounting")]
-    pub(crate) fn resident_bytes(&self) -> u64 {
-        self.resident_bytes
     }
 
     pub(crate) fn resident_bytes_estimate(&self) -> u64 {
@@ -950,65 +757,6 @@ impl GlobalAnnRef {
             .chain(self.incremental_runs.iter())
             .map(GlobalLeafRunRef::runtime_resident_overhead)
             .fold(0_u64, u64::saturating_add)
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code, reason = "Task 5 purge-compaction fixture mutation")]
-    pub(crate) fn set_appended_live_rows(&mut self, appended_live_rows: u64) {
-        self.appended_live_rows = appended_live_rows;
-    }
-
-    pub(crate) fn with_level_zero_run(
-        &self,
-        run: GlobalLeafRunRef,
-        reconstruction_errors_micros: &[u64],
-    ) -> Result<Self> {
-        self.validate()?;
-        if run.level != 0 {
-            return Err(BorsukError::InvalidStorage(
-                "direct V11 lane materialization requires a level-zero run".to_owned(),
-            ));
-        }
-        if self
-            .incremental_runs
-            .iter()
-            .any(|existing| existing.level == 0)
-        {
-            return Err(BorsukError::InvalidStorage(
-                "V11 leaf-run level zero is occupied; binary carry maintenance is required"
-                    .to_owned(),
-            ));
-        }
-        let mut candidate = self.clone();
-        candidate.coverage = candidate.coverage.union_disjoint(&run.source_ranges)?;
-        candidate.appended_live_rows = checked_add(
-            candidate.appended_live_rows,
-            run.rows,
-            "appended live-row total",
-        )?;
-        candidate.rows = checked_add(candidate.rows, run.rows, "row total")?;
-        candidate.storage_bytes =
-            checked_add(candidate.storage_bytes, run.encoded_bytes, "storage total")?;
-        candidate.resident_bytes = checked_add(
-            candidate.resident_bytes,
-            run.resident_bytes,
-            "resident total",
-        )?;
-        if usize::try_from(run.rows).ok() != Some(reconstruction_errors_micros.len()) {
-            return Err(BorsukError::InvalidStorage(
-                "V11 leaf-run reconstruction-error count does not match rows".to_owned(),
-            ));
-        }
-        let _drift_rebuild_required = candidate.drift.observe(
-            reconstruction_errors_micros.iter().copied(),
-            candidate.codebook.reconstruction_error_p95_micros,
-        )?;
-        candidate.incremental_runs.push(run);
-        candidate
-            .incremental_runs
-            .sort_unstable_by_key(|run| run.level);
-        candidate.validate()?;
-        Ok(candidate)
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
@@ -1350,32 +1098,6 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
         Ok(())
     }
 
-    fn push_direct_pages(
-        &mut self,
-        pages: Vec<crate::global_leaf::GlobalLeafPageInput>,
-    ) -> Result<()> {
-        if self.active_cell.is_some() || self.last_finalized_cell.is_some() {
-            return Err(BorsukError::InvalidStorage(
-                "direct global leaf pages cannot mix with cell continuations".to_owned(),
-            ));
-        }
-        self.add_page_totals(&pages)?;
-        let exact_row_bytes = self.element_type.fixed_width_bytes(self.dimensions)?;
-        for page in pages {
-            let exact_payload = page
-                .rows
-                .len()
-                .checked_mul(exact_row_bytes)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("global leaf exact payload overflows".to_owned())
-                })?;
-            let partial_run_count =
-                u8::from(exact_payload != crate::global_leaf::GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES);
-            self.push_page(page, partial_run_count)?;
-        }
-        Ok(())
-    }
-
     fn add_page_totals(&mut self, pages: &[crate::global_leaf::GlobalLeafPageInput]) -> Result<()> {
         self.page_count = self.page_count.checked_add(pages.len()).ok_or_else(|| {
             BorsukError::InvalidStorage("global leaf page count overflows".to_owned())
@@ -1567,250 +1289,6 @@ fn persist_directory_artifacts(
     })
 }
 
-struct DirectEncodedRecord {
-    cell: u16,
-    scan_code: Vec<u8>,
-    row: crate::global_leaf::GlobalLeafRowInput,
-    reconstruction_error_micros: u64,
-}
-
-pub(crate) fn build_unpublished_leaf_run_from_records(
-    storage: &Storage,
-    codebook: &ResidentGlobalCodebook,
-    codebook_ref: &GlobalCodebookRef,
-    records: &[VectorRecord],
-    source_ranges: SourceRangeSet,
-    level: u8,
-    config: LeafRunBuildConfig,
-) -> Result<UnpublishedGlobalLeafRun> {
-    if source_ranges.ranges().is_empty() {
-        return Err(BorsukError::InvalidStorage(
-            "direct V11 leaf run requires nonempty source coverage".to_owned(),
-        ));
-    }
-    source_ranges.validate_canonical()?;
-    if usize::from(level) >= MAX_GLOBAL_LEAF_LEVELS {
-        return Err(BorsukError::InvalidStorage(
-            "direct V11 leaf-run level exceeds the supported level count".to_owned(),
-        ));
-    }
-    if config.dimensions != codebook.dimensions()
-        || config.dimensions != codebook_ref.dimensions()
-        || config.element_type != codebook.vector_element_type()
-        || config.element_type != codebook_ref.element_type()
-        || config.normalize != codebook.metric().uses_normalized_euclidean_geometry()
-        || codebook.metric() != codebook_ref.metric()
-        || codebook.code_bytes_per_vector() != codebook_ref.code_width()
-    {
-        return Err(BorsukError::InvalidStorage(
-            "direct V11 leaf build config does not match the resident codebook".to_owned(),
-        ));
-    }
-    let mut encoded_records = Vec::with_capacity(records.len());
-    let mut min_stamp = None;
-    let mut max_stamp = None;
-    for record in records {
-        if record.vector.len() != config.dimensions {
-            return Err(BorsukError::InvalidStorage(format!(
-                "direct V11 leaf record `{}` has the wrong dimensions",
-                record.id
-            )));
-        }
-        let stamp = record.mutation_stamp().ok_or_else(|| {
-            BorsukError::InvalidStorage(format!(
-                "direct V11 leaf record `{}` has no mutation stamp",
-                record.id
-            ))
-        })?;
-        let geometry = if config.normalize {
-            crate::metric::unit_l2_normalized(&record.vector)
-        } else {
-            record.vector.clone()
-        };
-        let encoded = codebook.encode_record(&geometry)?;
-        let mut exact = Vec::new();
-        config
-            .element_type
-            .encode_canonical_fixed_width_into(&record.vector, &mut exact)?;
-        encoded_records.push(DirectEncodedRecord {
-            cell: encoded.cell,
-            scan_code: encoded.scan_code,
-            row: crate::global_leaf::GlobalLeafRowInput {
-                id: record.id.clone(),
-                stamp,
-                exact,
-            },
-            reconstruction_error_micros: encoded.reconstruction_error_micros,
-        });
-        min_stamp = Some(min_stamp.map_or(stamp, |current: MutationStamp| {
-            if stamp.version() < current.version() {
-                stamp
-            } else {
-                current
-            }
-        }));
-        max_stamp = Some(max_stamp.map_or(stamp, |current: MutationStamp| {
-            if stamp.version() > current.version() {
-                stamp
-            } else {
-                current
-            }
-        }));
-    }
-    encoded_records.sort_unstable_by(|left, right| {
-        left.cell
-            .cmp(&right.cell)
-            .then_with(|| left.scan_code.cmp(&right.scan_code))
-            .then_with(|| left.row.id.as_bytes().cmp(right.row.id.as_bytes()))
-    });
-
-    let mut pages = Vec::new();
-    let mut cell_start = 0_usize;
-    while cell_start < encoded_records.len() {
-        let cell = encoded_records[cell_start].cell;
-        let cell_end = encoded_records[cell_start..]
-            .iter()
-            .position(|record| record.cell != cell)
-            .map_or(encoded_records.len(), |offset| cell_start + offset);
-        let rows = encoded_records[cell_start..cell_end]
-            .iter()
-            .map(|record| record.row.clone())
-            .collect::<Vec<_>>();
-        for (leaf_ordinal, range) in crate::global_leaf::fit_global_leaf_page_ranges(
-            &rows,
-            config.dimensions,
-            config.element_type,
-        )?
-        .into_iter()
-        .enumerate()
-        {
-            let middle = cell_start + range.start + range.len() / 2;
-            pages.push(crate::global_leaf::GlobalLeafPageInput {
-                cell_index: cell,
-                leaf_ordinal: u32::try_from(leaf_ordinal).map_err(|_| {
-                    BorsukError::InvalidStorage("direct V11 leaf ordinal exceeds u32".to_owned())
-                })?,
-                centroid_code: encoded_records[middle].scan_code.clone(),
-                rows: rows[range].to_vec(),
-            });
-        }
-        cell_start = cell_end;
-    }
-
-    let reconstruction_errors_micros = encoded_records
-        .iter()
-        .map(|record| record.reconstruction_error_micros)
-        .collect::<Vec<_>>();
-    let mut writer = GlobalLeafPersistenceWriter::new(
-        storage,
-        config.dimensions,
-        config.element_type,
-        codebook_ref.descriptor_checksum().to_owned(),
-    )?;
-    writer.push_direct_pages(pages)?;
-    writer.flush_bundle()?;
-    let sealed_pages = u64::try_from(
-        writer
-            .page_refs
-            .iter()
-            .filter(|page| page.partial_run_count == 0)
-            .count(),
-    )
-    .map_err(|_| BorsukError::InvalidStorage("V11 sealed page count exceeds u64".to_owned()))?;
-    let page_count = u64::try_from(writer.page_refs.len())
-        .map_err(|_| BorsukError::InvalidStorage("V11 page count exceeds u64".to_owned()))?;
-    let partial_pages = page_count.checked_sub(sealed_pages).ok_or_else(|| {
-        BorsukError::InvalidStorage("V11 partial page count underflows".to_owned())
-    })?;
-    let rows = u64::try_from(writer.rows)
-        .map_err(|_| BorsukError::InvalidStorage("V11 leaf row count exceeds u64".to_owned()))?;
-    let run = UnpublishedGlobalLeafRun {
-        level,
-        codebook_checksum: writer.codebook_checksum,
-        page_refs: writer.page_refs,
-        bundles: writer.bundles,
-        rows,
-        sealed_pages,
-        partial_pages,
-        bundle_bytes: writer.storage_bytes,
-        min_stamp,
-        max_stamp,
-        source_ranges,
-        reconstruction_errors_micros,
-    };
-    validate_unpublished_run(&run)?;
-    Ok(run)
-}
-
-fn validate_unpublished_run(run: &UnpublishedGlobalLeafRun) -> Result<()> {
-    if run.source_ranges.ranges().is_empty() {
-        return invalid("unpublished V11 leaf run has empty source coverage");
-    }
-    let pages = u64::try_from(run.page_refs.len()).unwrap_or(u64::MAX);
-    let bundles = u64::try_from(run.bundles.len()).unwrap_or(u64::MAX);
-    let directory_rows = run.page_refs.iter().try_fold(0_u64, |total, page| {
-        total.checked_add(u64::from(page.rows)).ok_or_else(|| {
-            BorsukError::InvalidStorage("unpublished V11 leaf row count overflows".to_owned())
-        })
-    })?;
-    let bundle_bytes = run.bundles.iter().try_fold(0_u64, |total, bundle| {
-        total.checked_add(bundle.encoded_bytes).ok_or_else(|| {
-            BorsukError::InvalidStorage("unpublished V11 leaf bytes overflow".to_owned())
-        })
-    })?;
-    if directory_rows != run.rows
-        || bundle_bytes != run.bundle_bytes
-        || run.sealed_pages.checked_add(run.partial_pages) != Some(pages)
-        || run.reconstruction_errors_micros.len() != usize::try_from(run.rows).unwrap_or(usize::MAX)
-    {
-        return invalid("unpublished V11 leaf totals are inconsistent");
-    }
-    let has_rows = run.rows > 0;
-    if has_rows != (pages > 0)
-        || has_rows != (bundles > 0)
-        || has_rows != run.min_stamp.is_some()
-        || has_rows != run.max_stamp.is_some()
-    {
-        return invalid("unpublished V11 leaf row artifacts are incomplete");
-    }
-    Ok(())
-}
-
-pub(crate) fn persist_unpublished_leaf_run_directory(
-    storage: &Storage,
-    run: UnpublishedGlobalLeafRun,
-) -> Result<GlobalLeafRunRef> {
-    validate_unpublished_run(&run)?;
-    let persistence = persist_directory_artifacts(
-        storage,
-        &run.codebook_checksum,
-        &run.page_refs,
-        &run.bundles,
-        run.bundle_bytes,
-    )?;
-    let reference = GlobalLeafRunRef {
-        layout_version: GLOBAL_PQ_REF_LAYOUT_VERSION,
-        level: run.level,
-        codebook_checksum: run.codebook_checksum,
-        directory: persistence.directory,
-        rows: run.rows,
-        pages: u64::try_from(run.page_refs.len())
-            .map_err(|_| BorsukError::InvalidStorage("V11 page count exceeds u64".to_owned()))?,
-        bundles: u64::try_from(run.bundles.len())
-            .map_err(|_| BorsukError::InvalidStorage("V11 bundle count exceeds u64".to_owned()))?,
-        sealed_pages: run.sealed_pages,
-        partial_pages: run.partial_pages,
-        encoded_bytes: persistence.storage_bytes,
-        resident_bytes: persistence.resident_bytes,
-        min_stamp: run.min_stamp.map(MutationStampRef::from_stamp),
-        max_stamp: run.max_stamp.map(MutationStampRef::from_stamp),
-        source_ranges: run.source_ranges,
-    };
-    let codebook_checksum = reference.codebook_checksum.clone();
-    validate_run_against_checksum(&reference, &codebook_checksum, false)?;
-    Ok(reference)
-}
-
 fn checked_add(left: u64, right: u64, label: &str) -> Result<u64> {
     left.checked_add(right)
         .ok_or_else(|| BorsukError::InvalidStorage(format!("V11 global ANN {label} overflow")))
@@ -1831,19 +1309,8 @@ mod tests {
         time::Duration,
     };
 
-    use futures_util::TryStreamExt;
-    use object_store::{ObjectStore, memory::InMemory};
-
     use super::*;
-    use crate::{
-        VectorElementType,
-        global_pq_sidecar::GlobalCodebookDescriptor,
-        metric::VectorMetric,
-        mutation::{CanonicalMutation, MutationVersion},
-        rotated_product_quantizer::{
-            ProductQuantizerConfig, ProductRotation, RotatedProductQuantizer,
-        },
-    };
+    use crate::{VectorElementType, metric::VectorMetric};
 
     fn range(
         lane: u16,
@@ -1851,7 +1318,14 @@ mod tests {
         first_sequence: u64,
         last_sequence: u64,
     ) -> LaneSourceRange {
-        LaneSourceRange::new(lane, lease_epoch, first_sequence, last_sequence).unwrap()
+        let range = LaneSourceRange {
+            lane,
+            lease_epoch,
+            first_sequence,
+            last_sequence,
+        };
+        range.validate().unwrap();
+        range
     }
 
     fn valid_ann_ref() -> GlobalAnnRef {
@@ -1976,7 +1450,7 @@ mod tests {
         sharded.incremental_runs[0].directory.shard_count = 3;
         sharded.validate().unwrap();
 
-        assert_eq!(sharded.resident_bytes(), inline.resident_bytes());
+        assert_eq!(sharded.resident_bytes, inline.resident_bytes);
         assert!(
             sharded.resident_bytes_estimate() > inline.resident_bytes_estimate(),
             "runtime estimate ignored two authenticated fixed shard slots"
@@ -1985,54 +1459,10 @@ mod tests {
         assert!(
             sharded.resident_bytes_estimate()
                 >= sharded
-                    .resident_bytes()
+                    .resident_bytes
                     .saturating_add(run.runtime_resident_overhead()),
             "runtime estimate does not cover the derived fixed-slot reservation"
         );
-    }
-
-    fn resident_codebook() -> (ResidentGlobalCodebook, GlobalCodebookRef) {
-        let training = (0..16)
-            .map(|row| vec![row as f32, (row * 3) as f32])
-            .collect::<Vec<_>>();
-        let config = ProductQuantizerConfig {
-            rotation: ProductRotation::Identity,
-            seed: 17,
-            dimensions: 2,
-            subspaces: 1,
-            centroids: 4,
-            sample_limit: training.len(),
-            iterations: 2,
-        };
-        let scan = RotatedProductQuantizer::fit(config, &training).unwrap();
-        let coarse = RotatedProductQuantizer::fit(config, &training).unwrap();
-        let descriptor = GlobalCodebookDescriptor::new(
-            scan.state(),
-            coarse.state(),
-            VectorMetric::Euclidean,
-            VectorElementType::Float32,
-            4,
-            4,
-            2,
-            0,
-        )
-        .unwrap();
-        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
-        let reference = GlobalCodebookRef::new(
-            "global-leaf/v11/codebooks/ab/codebook.parquet".to_owned(),
-            "ab".repeat(32),
-            VectorMetric::Euclidean,
-            2,
-            VectorElementType::Float32,
-            resident.code_bytes_per_vector(),
-            4,
-            4,
-            2,
-            0,
-            u64::try_from(resident.resident_bytes()).unwrap(),
-            1,
-        );
-        (resident, reference)
     }
 
     #[test]
@@ -2142,19 +1572,6 @@ mod tests {
     }
 
     #[test]
-    fn source_ranges_reject_overlap_and_preserve_partial_difference() {
-        let covered = SourceRangeSet::new(vec![range(3, 7, 4, 8)]).unwrap();
-        let candidate = SourceRangeSet::new(vec![range(3, 7, 1, 12)]).unwrap();
-        assert_eq!(
-            candidate.subtract(&covered).unwrap(),
-            CoverageDifference::Partial(
-                SourceRangeSet::new(vec![range(3, 7, 1, 3), range(3, 7, 9, 12),]).unwrap()
-            )
-        );
-        assert!(SourceRangeSet::new(vec![range(3, 7, 1, 4), range(3, 7, 4, 5)]).is_err());
-    }
-
-    #[test]
     fn source_ranges_coalesce_adjacent_sequences_per_lane_epoch() {
         let ranges = SourceRangeSet::new(vec![
             range(3, 7, 9, 12),
@@ -2164,7 +1581,7 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(ranges.ranges(), &[range(3, 7, 1, 12), range(3, 8, 1, 1)]);
+        assert_eq!(ranges.ranges, [range(3, 7, 1, 12), range(3, 8, 1, 1)]);
 
         let noncanonical: SourceRangeSet = serde_json::from_str(
             r#"{"ranges":[
@@ -2174,21 +1591,6 @@ mod tests {
         )
         .unwrap();
         assert!(noncanonical.validate_canonical().is_err());
-    }
-
-    #[test]
-    fn source_range_subtraction_rejects_malformed_deserialized_operands() {
-        let malformed: SourceRangeSet = serde_json::from_str(
-            r#"{"ranges":[
-                {"lane":3,"lease_epoch":7,"first_sequence":1,"last_sequence":4},
-                {"lane":3,"lease_epoch":7,"first_sequence":4,"last_sequence":5}
-            ]}"#,
-        )
-        .unwrap();
-        let canonical = SourceRangeSet::new(vec![range(3, 7, 1, 5)]).unwrap();
-
-        assert!(malformed.subtract(&canonical).is_err());
-        assert!(canonical.subtract(&malformed).is_err());
     }
 
     #[test]
@@ -2254,19 +1656,6 @@ mod tests {
     }
 
     #[test]
-    fn level_zero_run_accepts_and_bounds_a_full_drift_window() {
-        let mut ann = valid_offline_ann_ref();
-        let mut incremental = valid_ann_ref().incremental_runs.remove(0);
-        incremental.codebook_checksum = ann.codebook.descriptor_checksum.clone();
-        incremental.rows = u64::try_from(DRIFT_WINDOW_ROWS).unwrap();
-        let errors = vec![ann.codebook.reconstruction_error_p95_micros; DRIFT_WINDOW_ROWS];
-
-        ann = ann.with_level_zero_run(incremental, &errors).unwrap();
-
-        assert!(ann.drift.pending_reconstruction_errors_micros.is_empty());
-    }
-
-    #[test]
     fn serving_shape_binds_base_level_and_row_counters() {
         let mut ann = valid_offline_ann_ref();
         ann.base.as_mut().unwrap().level = 1;
@@ -2290,91 +1679,5 @@ mod tests {
             error.contains("probes") && error.contains("candidates"),
             "{error}"
         );
-    }
-
-    #[test]
-    fn deletion_only_drain_publishes_coverage_without_arrow_put() {
-        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let storage = Storage::from_object_store(
-            "memory:///deletion-only-v11-run".to_owned(),
-            Arc::clone(&inner),
-        )
-        .unwrap();
-        let (codebook, codebook_ref) = resident_codebook();
-        let coverage = SourceRangeSet::new(vec![range(3, 7, 9, 9)]).unwrap();
-        let unpublished = build_unpublished_leaf_run_from_records(
-            &storage,
-            &codebook,
-            &codebook_ref,
-            &[],
-            coverage.clone(),
-            0,
-            LeafRunBuildConfig {
-                dimensions: 2,
-                element_type: VectorElementType::Float32,
-                normalize: false,
-            },
-        )
-        .unwrap();
-        let run = persist_unpublished_leaf_run_directory(&storage, unpublished).unwrap();
-
-        assert_eq!(run.rows, 0);
-        assert_eq!(run.pages, 0);
-        assert_eq!(run.bundles, 0);
-        assert_eq!(run.source_ranges, coverage);
-        assert!(run.min_stamp.is_none());
-        assert!(run.max_stamp.is_none());
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let paths = runtime
-            .block_on(inner.list(None).try_collect::<Vec<_>>())
-            .unwrap()
-            .into_iter()
-            .map(|object| object.location.to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(paths.len(), 1);
-        assert!(paths[0].ends_with(".parquet"));
-        assert!(!paths.iter().any(|path| path.ends_with(".arrow")));
-    }
-
-    #[test]
-    fn direct_builder_encodes_resident_records_into_one_partial_bundle() {
-        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let storage = Storage::from_object_store(
-            "memory:///one-record-v11-run".to_owned(),
-            Arc::clone(&inner),
-        )
-        .unwrap();
-        let (codebook, codebook_ref) = resident_codebook();
-        let record = CanonicalMutation::put(
-            MutationVersion::from_parts(5, [7; 16]),
-            VectorRecord::new("resident", vec![2.0, 6.0]),
-        )
-        .unwrap()
-        .into_record()
-        .unwrap();
-        let unpublished = build_unpublished_leaf_run_from_records(
-            &storage,
-            &codebook,
-            &codebook_ref,
-            &[record],
-            SourceRangeSet::new(vec![range(4, 8, 11, 11)]).unwrap(),
-            0,
-            LeafRunBuildConfig {
-                dimensions: 2,
-                element_type: VectorElementType::Float32,
-                normalize: false,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(unpublished.rows, 1);
-        assert_eq!(unpublished.page_refs.len(), 1);
-        assert_eq!(unpublished.bundles.len(), 1);
-        assert_eq!(unpublished.sealed_pages, 0);
-        assert_eq!(unpublished.partial_pages, 1);
-        assert_eq!(unpublished.reconstruction_errors_micros.len(), 1);
     }
 }

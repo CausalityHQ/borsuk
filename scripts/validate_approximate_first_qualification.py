@@ -73,8 +73,7 @@ def arm(row, name, expected_mode, truth, k):
         "disk_cache_reads", "disk_cache_bytes_read", "bytes_read",
         "global_identity_rows_resolved", "global_exact_vectors_fetched",
         "global_base_approximate_us", "global_base_exact_rerank_us",
-        "global_delta_approximate_us", "global_delta_exact_rerank_us",
-        "global_delta_wait_us", "collection_resident_bytes", "retained_bytes",
+        "collection_resident_bytes", "retained_bytes",
         "retained_capacity_bytes", "retained_peak_bytes", "transient_bytes",
         "transient_capacity_bytes", "transient_peak_bytes",
     )
@@ -140,7 +139,7 @@ def evaluate_point(rows, manifest, nprobe, candidates):
         failures.append("treatment p05 recall")
     if max(value["global_exact_vectors_fetched"] for value in treatment_values) > manifest["maximum_treatment_exact_vectors"]:
         failures.append("treatment exact vectors")
-    if max(value["global_base_exact_rerank_us"] + value["global_delta_exact_rerank_us"] for value in treatment_values) > manifest["maximum_treatment_exact_rerank_us"]:
+    if max(value["global_base_exact_rerank_us"] for value in treatment_values) > manifest["maximum_treatment_exact_rerank_us"]:
         failures.append("treatment exact rerank time")
     if max(value["disk_cache_reads"] for value in control_values + treatment_values) > manifest["maximum_disk_cache_reads"]:
         failures.append("disk cache reads")

@@ -83,15 +83,12 @@ class GlobalCellStripeValidatorTest(unittest.TestCase):
                             "segments_searched",
                             "global_base_approximate_us",
                             "global_base_exact_rerank_us",
-                            "global_delta_approximate_us",
-                            "global_delta_exact_rerank_us",
-                            "global_delta_wait_us",
                         ]
                     )
                     for query in range(100):
                         latency = baseline + query / 100.0
                         writer.writerow(
-                            [query, f"id-{query}", f"id-{query}", "true", latency, 2, 2, 0, 0, 0, 0, 1024, 4, 1, 1, 1, 1, 1]
+                            [query, f"id-{query}", f"id-{query}", "true", latency, 2, 2, 0, 0, 0, 0, 1024, 4, 1, 1]
                         )
                 with (arm / "summary.csv").open("w", newline="") as handle:
                     writer = csv.DictWriter(

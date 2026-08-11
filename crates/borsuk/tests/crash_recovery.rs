@@ -1,8 +1,8 @@
 #![allow(missing_docs)]
 
-//! Crash-recovery harness. BORSUK commits foreground mutations through
-//! cell-local lane heads and one transaction marker; catalog/flush changes use
-//! `CURRENT`. Every immutable payload is content-addressed and checksum-verified.
+//! Crash-recovery harness. BORSUK commits foreground mutations through bounded
+//! positioned heads and immutable envelopes; catalog/flush changes use
+//! `CURRENT`. Every referenced payload is content-addressed and checksum-verified.
 //! This harness simulates the
 //! ways a process can die (or a store can rot) around those boundaries and pins
 //! the durability contract on reopen:
@@ -22,15 +22,17 @@ use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
+use arrow_array::BinaryArray;
 use borsuk::{
-    BorsukError, BorsukIndex, CellWalConfig, CellWalRunInput, CellWalRunKind, CellWalStore,
-    IndexConfig, LogicalCellId, SearchOptions, VectorMetric, VectorRecord, WalConfig,
+    BorsukError, BorsukIndex, IndexConfig, PositionedLogWriter, PositionedMutationModality,
+    SearchOptions, VectorMetric, VectorRecord, WalConfig,
 };
 use bytes::Bytes;
 use futures_util::TryStreamExt;
 use object_store::{
     GetOptions, ObjectStore, PutOptions, PutPayload, memory::InMemory, path::Path as ObjectPath,
 };
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
@@ -107,21 +109,73 @@ fn rebuild(
     store
 }
 
-/// The relative immutable record-run paths in the cell WAL, sorted by path.
-fn wal_paths(objects: &[(ObjectPath, Vec<u8>)]) -> Vec<ObjectPath> {
+/// The immutable positioned mutation payload paths, sorted by path.
+fn mutation_payload_paths(objects: &[(ObjectPath, Vec<u8>)]) -> Vec<ObjectPath> {
     let mut paths: Vec<ObjectPath> = objects
         .iter()
         .map(|(path, _)| path.clone())
         .filter(|path| {
             let s = path.as_ref();
-            s.starts_with("cells/")
-                && s.contains("/wal/")
-                && s.contains("/runs/")
-                && s.ends_with(".parquet")
+            s.starts_with("positioned-log/payloads/") && s.ends_with(".parquet")
         })
         .collect();
     paths.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
     paths
+}
+
+/// Resolve the unique authoritative primary payload containing `record_id`.
+fn live_primary_payload_path(
+    store: &Arc<dyn ObjectStore>,
+    uri: &str,
+    objects: &[(ObjectPath, Vec<u8>)],
+    record_id: &str,
+) -> ObjectPath {
+    let snapshot = PositionedLogWriter::open(uri, Arc::clone(store), 1)
+        .unwrap()
+        .reader()
+        .snapshot()
+        .unwrap();
+    let mut matches = Vec::new();
+    for payload in snapshot
+        .transactions
+        .iter()
+        .flat_map(|envelope| &envelope.payloads)
+        .filter(|payload| payload.modality == PositionedMutationModality::PrimaryDense)
+    {
+        let path = ObjectPath::from(payload.path.as_str());
+        let bytes = objects
+            .iter()
+            .find_map(|(candidate, bytes)| (candidate == &path).then_some(bytes))
+            .unwrap_or_else(|| panic!("authoritative payload `{path}` must exist in the snapshot"));
+        assert_eq!(
+            blake3::hash(bytes).to_hex().as_str(),
+            payload.checksum,
+            "authoritative payload `{path}` must match its envelope checksum"
+        );
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
+            .unwrap()
+            .build()
+            .unwrap();
+        for batch in reader {
+            let batch = batch.unwrap();
+            let column = batch.schema().index_of("record_id").unwrap();
+            let ids = batch
+                .column(column)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .unwrap();
+            if ids.iter().flatten().any(|id| id == record_id.as_bytes()) {
+                matches.push(path.clone());
+                break;
+            }
+        }
+    }
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected exactly one authoritative primary payload containing live row `{record_id}`"
+    );
+    matches.pop().unwrap()
 }
 
 /// Build an index that leaves `count` records in the un-flushed WAL tail (plus a
@@ -207,7 +261,7 @@ fn torn_trailing_wal_object_does_not_lose_earlier_committed_records() {
     let uri = "memory:///crash-torn-tail";
     let (store, _live) = build_tail_index(uri, 12);
     let objects = snapshot(&store);
-    let wal = wal_paths(&objects);
+    let wal = mutation_payload_paths(&objects);
     assert!(
         wal.len() >= 3,
         "expected several WAL objects, got {}",
@@ -268,8 +322,7 @@ fn byte_mutated_wal_object_is_caught_by_checksum_not_a_wrong_answer() {
     let uri = "memory:///crash-mutated-wal";
     let (store, _live) = build_tail_index(uri, 8);
     let objects = snapshot(&store);
-    let wal = wal_paths(&objects);
-    let target = wal[wal.len() / 2].clone();
+    let target = live_primary_payload_path(&store, uri, &objects, "r0000");
 
     let mutated = rebuild(&objects, |path, bytes| {
         if *path == target {
@@ -299,32 +352,6 @@ fn byte_mutated_wal_object_is_caught_by_checksum_not_a_wrong_answer() {
             assert!(result.is_ok(), "search over a mutated WAL object panicked");
         }
     }
-}
-
-#[test]
-fn prepared_cell_run_without_commit_marker_is_invisible() {
-    let uri = "memory:///crash-uncommitted-cell-run";
-    let (store, live_before) = build_tail_index(uri, 6);
-    let wal = CellWalStore::new(
-        Arc::clone(&store),
-        uri,
-        CellWalConfig::default(),
-        b"crashed-writer".to_vec(),
-    )
-    .unwrap();
-    wal.prepare_transaction(
-        "never-committed",
-        &[CellWalRunInput {
-            cell: LogicalCellId::new(1, 0),
-            kind: CellWalRunKind::Records,
-            metadata: Vec::new(),
-            bytes: b"uncommitted garbage must never be decoded".to_vec(),
-            record_count: 1,
-            extension: "parquet".to_string(),
-        }],
-    )
-    .unwrap();
-    assert_recovers(&store, uri, &live_before);
 }
 
 #[test]

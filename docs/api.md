@@ -874,9 +874,7 @@ data.
 | `records_considered` | Rows loaded from fetched segments. | Measures local work before candidate selection. |
 | `records_scored` | Rows exact-scored with the index metric. | Controlled by `max_candidates_per_segment`. |
 | `graph_candidates_added` / `graphCandidatesAdded` | Extra exact-scored candidates reached through segment-local graph edges. | Nonzero only for graph-backed modes; shows how much graph expansion contributed. |
-| `global_base_approximate_us` / `globalBaseApproximateUs` and `global_base_exact_rerank_us` / `globalBaseExactRerankUs` | Microseconds spent producing base PQ candidates and fetching/MVCC-filtering/exact-scoring the base shortlist. | Compare approximate and rerank work to distinguish code-scan from lossless-row cost. |
-| `global_delta_approximate_us` / `globalDeltaApproximateUs` and `global_delta_exact_rerank_us` / `globalDeltaExactRerankUs` | The same two phases for the immutable global delta. | Base and delta can overlap, so compare their intervals with wall time rather than adding them. |
-| `global_delta_wait_us` / `globalDeltaWaitUs` | Time the completed base path waited for an overlapped delta search to finish. | Nonzero tail values identify the delta as remaining critical-path work. |
+| `global_base_approximate_us` / `globalBaseApproximateUs` and `global_base_exact_rerank_us` / `globalBaseExactRerankUs` | Aggregate microseconds spent producing global PQ candidates and fetching/MVCC-filtering/exact-scoring global shortlists across every merged immutable run. | Compare approximate and rerank work to distinguish code-scan from lossless-row cost; compare with wall time because internal executions may overlap. |
 | `resident_bytes_estimate` / `collection_resident_bytes` | Current loaded collection-wide manifest/control bytes, including every dense or late-interaction named modality and routing metadata actually resident in this handle. Admission uses conservative persisted estimates, so the reported live value can be slightly lower than the reserved value. The two fields are aliases; the explicit name is preferred for new telemetry. | Compare the complete collection footprint with `ram_budget_bytes`, not one modality in isolation. |
 | `retained_bytes` / `retained_capacity_bytes` / `retained_peak_bytes` | Current, configured, and peak bytes held by the collection-wide decoded-object cache pool. | Prove primary, named, lexical, sidecar, graph, and WAL caches share one ceiling. |
 | `transient_bytes` / `transient_capacity_bytes` / `transient_peak_bytes` | Current, configured, and peak collection-wide decode-working-set admission. | Reconcile concurrent query measurements with the configured envelope; one irreducible oversized object occupies the gate alone. |
@@ -1024,9 +1022,9 @@ I/O stay flat as you scale readers and data.
 
 ## Deletion
 
-`BorsukIndex::delete(ids)` / `delete_with_report`, Python `Index.delete(ids)`,
-TypeScript `index.delete(ids)`, and CLI `borsuk delete --id <id>` logically
-delete records. Deletes are **soft**: the ids are recorded in a single
+`BorsukIndex::delete(ids)`, Python `Index.delete(ids)`, TypeScript
+`index.delete(ids)`, and CLI `borsuk delete --id <id>` logically delete
+records and return a request-local receipt. Deletes are **soft**: the ids are recorded in a single
 immutable tombstone delta and later consolidated into hash-routed stable pages,
 so `search` and `get_vector` skip deleted records immediately. Live-run blooms
 avoid unrelated delta reads; a stable point lookup addresses at most one bucket,
@@ -1047,9 +1045,15 @@ Physical storage is reclaimed two ways:
 
 Re-adding a currently-deleted id is rejected until it is purged, so the tombstone
 stays authoritative and search never returns a freshly re-added record by
-mistake. `DeleteReport` exposes `deleted`, `total_tombstoned`, `published`, and
-`requests`; `PurgeReport` exposes `segments_rewritten`, `records_purged`,
-`tombstones_cleared`, `published`, and `requests`.
+mistake. `DeleteReport` exposes `ids_submitted`, `published`, and `requests`.
+`ids_submitted` is the number of unique ids in this request after canonical
+deduplication; it does not claim that those ids were globally newly deleted.
+`published` means this handle emitted a positioned mutation. Repeating a delete
+on an already-current handle can therefore return `published == false`, while
+two stale writers may both publish the same redundant delete. Their LWW state
+still converges and the record remains invisible; no globally linearized
+delete count is implied. `PurgeReport` exposes `segments_rewritten`,
+`records_purged`, `tombstones_cleared`, `published`, and `requests`.
 
 ## Maintenance
 

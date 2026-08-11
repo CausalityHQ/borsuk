@@ -59,6 +59,7 @@ pub struct OperationLogEntry {
     pub operation: StoreOperation,
     pub path: String,
     pub put_mode: Option<LoggedPutMode>,
+    pub payload_bytes: Option<u64>,
 }
 
 impl OperationLog {
@@ -97,10 +98,11 @@ impl OperationLog {
                 operation,
                 path: location.to_string(),
                 put_mode: None,
+                payload_bytes: None,
             });
     }
 
-    fn record_put(&self, location: &ObjectPath, mode: &PutMode) {
+    fn record_put(&self, location: &ObjectPath, mode: &PutMode, payload_bytes: usize) {
         let put_mode = match mode {
             PutMode::Overwrite => LoggedPutMode::Overwrite,
             PutMode::Create => LoggedPutMode::Create,
@@ -113,6 +115,7 @@ impl OperationLog {
                 operation: StoreOperation::Put,
                 path: location.to_string(),
                 put_mode: Some(put_mode),
+                payload_bytes: Some(payload_bytes as u64),
             });
     }
 }
@@ -136,6 +139,7 @@ pub struct FaultInjectingObjectStore {
     get_payload_latency: Option<(Duration, Arc<PathPredicate>)>,
     operation_log: Option<Arc<OperationLog>>,
     put_barrier: Option<Arc<PutBarrier>>,
+    put_overlap_barrier: Option<Arc<PutOverlapBarrier>>,
     put_concurrency: Option<Arc<PutConcurrencyProbe>>,
     get_group_concurrency: Option<Arc<GetGroupConcurrencyProbe>>,
     fail_after_put: bool,
@@ -145,6 +149,13 @@ struct PutBarrier {
     barrier: Arc<Barrier>,
     predicate: Arc<PathPredicate>,
     released: AtomicBool,
+}
+
+struct PutOverlapBarrier {
+    barrier: Arc<Barrier>,
+    predicate: Arc<PathPredicate>,
+    arrivals: AtomicUsize,
+    parties: usize,
 }
 
 #[derive(Debug, Default)]
@@ -276,6 +287,7 @@ impl FaultInjectingObjectStore {
             get_payload_latency: None,
             operation_log: None,
             put_barrier: None,
+            put_overlap_barrier: None,
             put_concurrency: None,
             get_group_concurrency: None,
             fail_after_put: false,
@@ -325,6 +337,7 @@ impl FaultInjectingObjectStore {
             get_payload_latency: None,
             operation_log: None,
             put_barrier: None,
+            put_overlap_barrier: None,
             put_concurrency: None,
             get_group_concurrency: None,
             fail_after_put: false,
@@ -379,6 +392,28 @@ impl FaultInjectingObjectStore {
         self
     }
 
+    /// Block the first `parties` matching PUTs together. When each operation can
+    /// issue only one matching PUT before the barrier, this proves distinct
+    /// public operations were simultaneously inside the real store boundary.
+    pub fn with_first_matching_puts_barrier<F>(
+        mut self,
+        barrier: Arc<Barrier>,
+        parties: usize,
+        predicate: F,
+    ) -> Self
+    where
+        F: Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync + 'static,
+    {
+        assert!(parties > 1, "overlap barrier needs at least two parties");
+        self.put_overlap_barrier = Some(Arc::new(PutOverlapBarrier {
+            barrier,
+            predicate: Arc::new(predicate),
+            arrivals: AtomicUsize::new(0),
+            parties,
+        }));
+        self
+    }
+
     fn maybe_wait_at_put_barrier(&self, operation: StoreOperation, location: &ObjectPath) {
         let Some(put_barrier) = &self.put_barrier else {
             return;
@@ -390,6 +425,18 @@ impl FaultInjectingObjectStore {
             return;
         }
         put_barrier.barrier.wait();
+    }
+
+    fn maybe_wait_at_put_overlap_barrier(&self, operation: StoreOperation, location: &ObjectPath) {
+        let Some(put_barrier) = &self.put_overlap_barrier else {
+            return;
+        };
+        if !(put_barrier.predicate)(operation, location) {
+            return;
+        }
+        if put_barrier.arrivals.fetch_add(1, Ordering::SeqCst) < put_barrier.parties {
+            put_barrier.barrier.wait();
+        }
     }
 
     pub fn with_operation_log(mut self) -> (Self, Arc<OperationLog>) {
@@ -492,18 +539,20 @@ impl ObjectStore for FaultInjectingObjectStore {
         Self: Sync + 'async_trait,
     {
         Box::pin(async move {
+            let payload_bytes = payload.content_length();
             let _active_put = self
                 .put_concurrency
                 .as_deref()
                 .map(PutConcurrencyProbe::enter);
             self.maybe_sleep().await;
             if let Some(operation_log) = &self.operation_log {
-                operation_log.record_put(location, &opts.mode);
+                operation_log.record_put(location, &opts.mode, payload_bytes);
             }
             if !self.fail_after_put {
                 self.maybe_fail(StoreOperation::Put, location)?;
             }
             self.maybe_wait_at_put_barrier(StoreOperation::Put, location);
+            self.maybe_wait_at_put_overlap_barrier(StoreOperation::Put, location);
             let result = self.inner.put_opts(location, payload, opts).await?;
             if self.fail_after_put {
                 self.maybe_fail(StoreOperation::Put, location)?;
@@ -531,6 +580,7 @@ impl ObjectStore for FaultInjectingObjectStore {
             self.maybe_fail(StoreOperation::MultipartPut, location)?;
             self.record_operation(StoreOperation::MultipartPut, location);
             self.maybe_wait_at_put_barrier(StoreOperation::MultipartPut, location);
+            self.maybe_wait_at_put_overlap_barrier(StoreOperation::MultipartPut, location);
             self.inner.put_multipart_opts(location, opts).await
         })
     }

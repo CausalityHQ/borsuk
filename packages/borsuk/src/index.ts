@@ -222,16 +222,10 @@ export interface SearchReport {
   graphCandidatesAdded: number;
   globalGraphChunksSearched: number;
   globalScanChunksSearched: number;
-  /** Global base routing/PQ candidate work. */
+  /** Aggregate global routing/PQ candidate work across merged immutable runs. */
   globalBaseApproximateUs: number;
-  /** Global base exact-fetch/rerank work. */
+  /** Aggregate global exact-fetch/rerank work across merged immutable runs. */
   globalBaseExactRerankUs: number;
-  /** Immutable global delta routing/PQ candidate work. */
-  globalDeltaApproximateUs: number;
-  /** Immutable global delta exact-fetch/rerank work. */
-  globalDeltaExactRerankUs: number;
-  /** Time the completed base path waited for its overlapped delta. */
-  globalDeltaWaitUs: number;
   residentBytesEstimate: number;
   collectionResidentBytes: number;
   retainedBytes: number;
@@ -330,8 +324,9 @@ export interface RebuildReport {
 }
 
 export interface DeleteReport {
-  deleted: number;
-  totalTombstoned: number;
+  /** Unique ids in this request after canonical deduplication. */
+  idsSubmitted: number;
+  /** Whether this handle emitted a positioned mutation. */
   published: boolean;
   requests: RequestCounts;
 }

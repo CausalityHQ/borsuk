@@ -48,6 +48,12 @@ pub enum PhysicalObjectRole {
     Tombstone,
     /// Record-ID to logical-cell ownership mapping.
     IdDirectory,
+    /// Immutable typed payload in the positioned mutation log.
+    PositionedPayload,
+    /// Immutable commit envelope in the positioned mutation log.
+    PositionedEnvelope,
+    /// Conditional shard head in the positioned mutation log.
+    PositionedHead,
     /// Unclassified object that must not be silently attributed.
     Unknown,
 }
@@ -118,6 +124,12 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         PhysicalObjectRole::Tombstone
     } else if path.starts_with("id-directory/") {
         PhysicalObjectRole::IdDirectory
+    } else if path.starts_with("positioned-log/heads/") {
+        PhysicalObjectRole::PositionedHead
+    } else if path.starts_with("positioned-log/payloads/") {
+        PhysicalObjectRole::PositionedPayload
+    } else if path.starts_with("positioned-log/envelopes/") {
+        PhysicalObjectRole::PositionedEnvelope
     } else {
         PhysicalObjectRole::Unknown
     }
@@ -164,6 +176,9 @@ impl PhysicalObjectRole {
             Self::LateInteraction => "late_interaction",
             Self::Tombstone => "tombstone",
             Self::IdDirectory => "id_directory",
+            Self::PositionedPayload => "positioned_payload",
+            Self::PositionedEnvelope => "positioned_envelope",
+            Self::PositionedHead => "positioned_head",
             Self::Unknown => "unknown",
         }
     }

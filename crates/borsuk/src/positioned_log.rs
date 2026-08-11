@@ -18,6 +18,7 @@ use crate::{
 
 /// Number of independent commit-source shards represented in V12 coverage.
 pub const SOURCE_SHARD_COUNT: u8 = 64;
+pub(crate) const INITIAL_POSITIONED_SOURCE_EPOCH: u64 = 1;
 const MAX_COMMIT_SOURCE_RANGES: usize = SOURCE_SHARD_COUNT as usize * u64::BITS as usize;
 const POSITIONED_LOG_LAYOUT: u16 = 12;
 /// Maximum authoritative bytes in one serialized JSON shard head.
@@ -564,6 +565,9 @@ pub struct CommittedPositionedMutation {
     pub rows: u64,
     /// Aggregate encoded payload bytes.
     pub encoded_bytes: u64,
+    /// Payload bytes submitted to backing PUT attempts, including the envelope,
+    /// shard-head CAS, and any retry amplification.
+    pub put_payload_bytes: u64,
     /// Backing object-store requests issued by this append call.
     pub requests: RequestCounts,
 }
@@ -586,6 +590,9 @@ impl Eq for CommittedPositionedMutation {}
 pub struct PositionedLogSnapshot {
     /// Pending transactions ordered by durable source position.
     pub transactions: Vec<PositionedMutationEnvelope>,
+    /// Authoritative envelope checksum aligned one-for-one with `transactions`.
+    /// The canonical immutable envelope path is derived from this checksum.
+    pub envelope_checksums: Vec<String>,
     /// BLAKE3 checksum of each authoritative JSON head.
     pub head_checksums: [String; SOURCE_SHARD_COUNT as usize],
     /// Durable sequence observed for every shard.
@@ -791,6 +798,14 @@ pub struct PositionedLogWriter {
 }
 
 impl PositionedLogWriter {
+    pub(crate) fn with_storage_scope(&self, storage: Storage) -> Self {
+        Self {
+            storage,
+            source_epoch: self.source_epoch,
+            heads: Arc::clone(&self.heads),
+        }
+    }
+
     /// Initialize all 64 authoritative heads for one new source epoch.
     pub fn create(
         uri: impl Into<String>,
@@ -801,6 +816,13 @@ impl PositionedLogWriter {
             return invalid("positioned source epoch must be positive");
         }
         let storage = Storage::from_object_store(uri.into(), store)?;
+        Self::create_from_storage(storage, source_epoch)
+    }
+
+    pub(crate) fn create_from_storage(storage: Storage, source_epoch: u64) -> Result<Self> {
+        if source_epoch == 0 {
+            return invalid("positioned source epoch must be positive");
+        }
         let mut pinned = Vec::with_capacity(SOURCE_SHARD_COUNT as usize);
         for shard in 0..SOURCE_SHARD_COUNT {
             let head = PositionedShardHead::empty(source_epoch, shard)?;
@@ -855,6 +877,20 @@ impl PositionedLogWriter {
             return invalid("positioned source epoch must be positive");
         }
         let storage = Storage::from_object_store(uri.into(), store)?;
+        Self::open_from_storage_with_report(storage, source_epoch)
+    }
+
+    pub(crate) fn open_from_storage(storage: Storage, source_epoch: u64) -> Result<Self> {
+        Self::open_from_storage_with_report(storage, source_epoch).map(|(writer, _)| writer)
+    }
+
+    fn open_from_storage_with_report(
+        storage: Storage,
+        source_epoch: u64,
+    ) -> Result<(Self, RequestCounts)> {
+        if source_epoch == 0 {
+            return invalid("positioned source epoch must be positive");
+        }
         let pinned = load_all_heads(&storage, source_epoch)?
             .into_iter()
             .map(|head| {
@@ -890,8 +926,7 @@ impl PositionedLogWriter {
         schema_fingerprint: &str,
         payloads: Vec<PositionedMutationPayloadInput>,
     ) -> Result<CommittedPositionedMutation> {
-        let storage = self.storage.clone_with_independent_request_counters();
-        let requests_before = storage.request_counts();
+        let storage = self.storage.clone_with_independent_mutation_counters();
         let prepared = prepare_append(transaction_id, schema_fingerprint, payloads)?;
         let shard = prepared.transaction_digest[0] % SOURCE_SHARD_COUNT;
         let mut pinned = self.heads[usize::from(shard)]
@@ -918,7 +953,8 @@ impl PositionedLogWriter {
                     self.source_epoch,
                     shard,
                     reference,
-                    storage.request_counts().delta(&requests_before),
+                    storage.request_counts(),
+                    storage.put_payload_bytes(),
                 );
             }
             let sequence = match pinned.head.durable_sequence.checked_add(1) {
@@ -968,7 +1004,7 @@ impl PositionedLogWriter {
                 }
                 Err(error) => return Err(error),
             };
-            let envelope_path = envelope_path(&envelope_checksum);
+            let envelope_path = canonical_envelope_path(&envelope_checksum);
             if !payloads_written {
                 let mut unique_payloads = BTreeMap::new();
                 for payload in &prepared.payloads {
@@ -1014,7 +1050,8 @@ impl PositionedLogWriter {
                         self.source_epoch,
                         shard,
                         &reference,
-                        storage.request_counts().delta(&requests_before),
+                        storage.request_counts(),
+                        storage.put_payload_bytes(),
                     );
                 }
                 Err(
@@ -1047,7 +1084,8 @@ impl PositionedLogWriter {
                             self.source_epoch,
                             shard,
                             &existing,
-                            storage.request_counts().delta(&requests_before),
+                            storage.request_counts(),
+                            storage.put_payload_bytes(),
                         );
                     }
                     reject_digest_conflict(
@@ -1263,11 +1301,14 @@ impl PositionedLogReader {
             .par_iter()
             .map(|(shard, reference)| {
                 load_envelope(&self.storage, self.source_epoch, *shard, reference)
+                    .map(|envelope| (envelope, reference.envelope_checksum.clone()))
             })
             .collect::<Result<Vec<_>>>()?;
-        transactions.sort_unstable_by_key(|envelope| envelope.position);
+        transactions.sort_unstable_by_key(|(envelope, _)| envelope.position);
+        let (transactions, envelope_checksums) = transactions.into_iter().unzip();
         Ok(Some(PositionedLogSnapshot {
             transactions,
+            envelope_checksums,
             head_checksums,
             durable_sequences,
             materialized_sequences,
@@ -1349,7 +1390,7 @@ fn prepare_append(
             }
         }
         let payload_checksum = checksum(&payload.bytes);
-        let path = payload_path(payload.format, &payload_checksum);
+        let path = canonical_payload_path(payload.format, &payload_checksum);
         let reference = PositionedMutationPayloadRef {
             modality: payload.modality,
             role: payload.role,
@@ -1530,7 +1571,7 @@ fn load_envelope(
     shard: u8,
     reference: &PositionedCommitReference,
 ) -> Result<PositionedMutationEnvelope> {
-    let path = envelope_path(&reference.envelope_checksum);
+    let path = canonical_envelope_path(&reference.envelope_checksum);
     let bytes = storage.read_object_fresh(&path)?.ok_or_else(|| {
         BorsukError::InvalidStorage(format!("positioned envelope `{path}` is missing"))
     })?;
@@ -1543,6 +1584,94 @@ fn load_envelope(
         shard,
         reference,
     )
+}
+
+pub(crate) fn validate_claim_authorization_envelope(
+    storage: &Storage,
+    source_epoch: u64,
+    shard: u8,
+    sequence: u64,
+    transaction_id: &str,
+    envelope_checksum: &str,
+) -> Result<()> {
+    validate_hex("positioned claim envelope checksum", envelope_checksum)?;
+    let path = canonical_envelope_path(envelope_checksum);
+    let bytes = storage.read_object_fresh(&path)?.ok_or_else(|| {
+        BorsukError::InvalidStorage(format!(
+            "positioned claim authorization envelope `{path}` is missing"
+        ))
+    })?;
+    if checksum(&bytes) != envelope_checksum {
+        return invalid("positioned claim authorization envelope checksum is inconsistent");
+    }
+    let decoded = positioned_envelope_from_parquet(&bytes)?;
+    let rows = decoded
+        .envelope
+        .payloads
+        .iter()
+        .try_fold(0_u64, |total, payload| {
+            total.checked_add(payload.rows).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned claim authorization envelope row total overflow".to_string(),
+                )
+            })
+        })?;
+    let encoded_bytes = decoded
+        .envelope
+        .payloads
+        .iter()
+        .try_fold(0_u64, |total, payload| {
+            total.checked_add(payload.encoded_bytes).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned claim authorization envelope byte total overflow".to_string(),
+                )
+            })
+        })?;
+    let reference = PositionedCommitReference {
+        transaction_digest: blake3::hash(transaction_id.as_bytes()).to_hex().to_string(),
+        request_digest: decoded.request_digest.clone(),
+        envelope_checksum: envelope_checksum.to_string(),
+        sequence,
+        rows,
+        encoded_bytes,
+        materialized_collection_generation: 0,
+    };
+    let envelope = validate_authorized_envelope(decoded, source_epoch, shard, &reference)?;
+    if envelope.transaction_id != transaction_id {
+        return invalid("positioned claim authorization envelope transaction id is inconsistent");
+    }
+    Ok(())
+}
+
+pub(crate) fn authorized_transaction_receipt(
+    storage: &Storage,
+    source_epoch: u64,
+    transaction_id: &str,
+) -> Result<Option<(CommitSourcePosition, String)>> {
+    let transaction_hash = blake3::hash(transaction_id.as_bytes());
+    let transaction_digest = transaction_hash.to_hex().to_string();
+    let shard = transaction_hash.as_bytes()[0] % SOURCE_SHARD_COUNT;
+    let path = shard_head_path(shard);
+    let Some(stored) = storage.read_coordination_object(&path)? else {
+        return Ok(None);
+    };
+    let head = shard_head_from_bytes(&stored.bytes, source_epoch, shard)?;
+    let Some(reference) = head
+        .pending
+        .iter()
+        .chain(head.recent.iter())
+        .find(|reference| reference.transaction_digest == transaction_digest)
+    else {
+        return Ok(None);
+    };
+    let envelope = load_envelope(storage, source_epoch, shard, reference)?;
+    if envelope.transaction_id != transaction_id {
+        return invalid("positioned transaction digest resolved to a different transaction id");
+    }
+    Ok(Some((
+        envelope.position,
+        reference.envelope_checksum.clone(),
+    )))
 }
 
 fn validate_authorized_envelope(
@@ -1636,6 +1765,7 @@ fn committed_from_reference(
     shard: u8,
     reference: &PositionedCommitReference,
     requests: RequestCounts,
+    put_payload_bytes: u64,
 ) -> Result<CommittedPositionedMutation> {
     Ok(CommittedPositionedMutation {
         position: CommitSourcePosition::new(source_epoch, shard, reference.sequence)?,
@@ -1644,6 +1774,7 @@ fn committed_from_reference(
         envelope_checksum: reference.envelope_checksum.clone(),
         rows: reference.rows,
         encoded_bytes: reference.encoded_bytes,
+        put_payload_bytes,
         requests,
     })
 }
@@ -1686,7 +1817,7 @@ fn validate_payload_ref(reference: &PositionedMutationPayloadRef) -> Result<()> 
     if reference.rows == 0 || reference.encoded_bytes == 0 {
         return invalid("positioned payload reference contains a zero row or byte total");
     }
-    if reference.path != payload_path(reference.format, &reference.checksum) {
+    if reference.path != canonical_payload_path(reference.format, &reference.checksum) {
         return invalid(
             "positioned payload path is not deterministically derived from its checksum",
         );
@@ -1740,7 +1871,7 @@ fn shard_head_path(shard: u8) -> String {
     format!("positioned-log/heads/{shard:02}.json")
 }
 
-fn payload_path(format: PositionedPayloadFormat, checksum: &str) -> String {
+pub(crate) fn canonical_payload_path(format: PositionedPayloadFormat, checksum: &str) -> String {
     format!(
         "positioned-log/payloads/{}/{}/{}.{}",
         format.as_str(),
@@ -1750,7 +1881,7 @@ fn payload_path(format: PositionedPayloadFormat, checksum: &str) -> String {
     )
 }
 
-fn envelope_path(checksum: &str) -> String {
+pub(crate) fn canonical_envelope_path(checksum: &str) -> String {
     format!(
         "positioned-log/envelopes/{}/{}.parquet",
         &checksum[..2],
@@ -1943,7 +2074,7 @@ mod tests {
                 modality: PositionedMutationModality::PrimaryDense,
                 role: "primary".to_owned(),
                 format: PositionedPayloadFormat::ArrowIpc,
-                path: payload_path(PositionedPayloadFormat::ArrowIpc, &payload_checksum),
+                path: canonical_payload_path(PositionedPayloadFormat::ArrowIpc, &payload_checksum),
                 checksum: payload_checksum,
                 rows: 1,
                 encoded_bytes: 128,

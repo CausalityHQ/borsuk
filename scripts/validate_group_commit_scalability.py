@@ -1051,9 +1051,6 @@ def validate(
         global_phase_fields = (
             "global_base_approximate_us",
             "global_base_exact_rerank_us",
-            "global_delta_approximate_us",
-            "global_delta_exact_rerank_us",
-            "global_delta_wait_us",
         )
         emits_global_phases = any(
             field in read_samples[0] for field in global_phase_fields

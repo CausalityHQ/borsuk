@@ -1431,14 +1431,6 @@ fn validate_v11_codebook(descriptor: &GlobalCodebookDescriptor) -> Result<()> {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code, reason = "Task 4 direct lane-run record encoding")]
-pub(crate) struct EncodedGlobalRecord {
-    pub(crate) cell: u16,
-    pub(crate) scan_code: Vec<u8>,
-    pub(crate) reconstruction_error_micros: u64,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct ResidentGlobalCodebook {
     metric: VectorMetric,
     dimensions: usize,
@@ -1478,26 +1470,6 @@ impl ResidentGlobalCodebook {
         })
     }
 
-    #[allow(dead_code, reason = "Task 4 direct lane-run record encoding")]
-    pub(crate) fn encode_record(&self, vector: &[f32]) -> Result<EncodedGlobalRecord> {
-        let scan_code = self.quantizer.encode(vector)?;
-        let prepared = self.quantizer.prepare_query(vector)?;
-        let distance = self.quantizer.distance(&prepared, &scan_code)?;
-        if !distance.is_finite() || distance < 0.0 {
-            return invalid("V11 codebook reconstruction error is non-finite or negative");
-        }
-        let reconstruction_error_micros = checked_reconstruction_error_micros(f64::from(distance))?;
-        Ok(EncodedGlobalRecord {
-            cell: self.coarse_quantizer.encode_cell_with_scratch(
-                vector,
-                &mut Vec::new(),
-                &mut Vec::new(),
-            )?,
-            scan_code,
-            reconstruction_error_micros,
-        })
-    }
-
     pub(crate) fn nearest_cells(&self, query: &[f32], probes: usize) -> Result<Vec<u16>> {
         let ranked =
             self.coarse_quantizer
@@ -1517,9 +1489,19 @@ impl ResidentGlobalCodebook {
     ) -> Result<Vec<RoutedGlobalLeafPage>> {
         let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
         let prepared = self.quantizer.prepare_query(query)?;
+        let mut seen = BTreeSet::new();
         let mut ranked = pages
             .into_iter()
             .filter(|page| selected.contains(&page.page.cell_index))
+            .filter(|page| {
+                seen.insert((
+                    page.run_ordinal,
+                    page.page.cell_index,
+                    page.page.leaf_ordinal,
+                    page.bundle_path.clone(),
+                    page.page.batch_offset,
+                ))
+            })
             .map(|mut routed| {
                 if u64::from(routed.page.batch_bytes)
                     > crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
@@ -1762,14 +1744,14 @@ mod tests {
                         run_ordinal: 0,
                         level: None,
                         distance: f32::NAN,
-                        bundle_path: "base.arrow".to_owned(),
+                        bundle_path: "shared.arrow".to_owned(),
                         page: page.clone(),
                     },
                     RoutedGlobalLeafPage {
                         run_ordinal: 1,
                         level: Some(0),
                         distance: f32::NAN,
-                        bundle_path: "incremental.arrow".to_owned(),
+                        bundle_path: "shared.arrow".to_owned(),
                         page,
                     },
                 ],
@@ -1778,6 +1760,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(ranked.len(), 2);
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|page| page.run_ordinal)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([0, 1]),
+            "equal run-local page coordinates from distinct runs must both survive"
+        );
     }
 
     #[test]
@@ -1857,17 +1847,13 @@ mod tests {
     }
 
     #[test]
-    fn v11_resident_codebook_encodes_records_and_routes_cells() {
+    fn v11_resident_codebook_routes_cells() {
         let descriptor = test_v11_codebook_descriptor();
         let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
         let vector = vectors(1, 64).pop().unwrap();
-        let encoded = resident.encode_record(&vector).unwrap();
-        assert!(!encoded.scan_code.is_empty());
-        assert!(resident.cells.contains(&encoded.cell));
-        assert!(encoded.reconstruction_error_micros < u64::MAX);
         let cells = resident.nearest_cells(&vector, 4).unwrap();
         assert_eq!(cells.len(), 4);
-        assert!(cells.contains(&encoded.cell));
+        assert!(cells.iter().all(|cell| resident.cells.contains(cell)));
     }
 
     fn leaf_page(
