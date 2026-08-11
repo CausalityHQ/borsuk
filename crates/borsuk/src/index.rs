@@ -1081,7 +1081,6 @@ struct ActiveCollectionTransaction {
     schema_fingerprint: String,
     snapshot_checksum: String,
     snapshot_generation: u64,
-    validated_snapshot_generation: Arc<Mutex<Option<u64>>>,
     positioned: Arc<Mutex<Vec<StagedPositionedRun>>>,
     positioned_metadata: Arc<Mutex<BTreeMap<String, StagedPositionedMetadata>>>,
 }
@@ -4612,7 +4611,6 @@ impl BorsukIndex {
             schema_fingerprint,
             snapshot_checksum: collection.checksum.clone(),
             snapshot_generation: collection.snapshot.generation,
-            validated_snapshot_generation: Arc::new(Mutex::new(None)),
             positioned: Arc::new(Mutex::new(Vec::new())),
             positioned_metadata: Arc::new(Mutex::new(BTreeMap::new())),
         };
@@ -10000,17 +9998,6 @@ impl BorsukIndex {
             .active_collection_transaction
             .as_ref()
             .expect("positioned mutation staging checked the active transaction above");
-        let validated_generation = self
-            .collection_storage
-            .collection_snapshot_generation_if_schema_compatible(
-                &active.snapshot_checksum,
-                active.snapshot_generation,
-                &active.schema_fingerprint,
-            )?;
-        *active
-            .validated_snapshot_generation
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(validated_generation);
         active
             .positioned
             .lock()

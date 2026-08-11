@@ -2098,6 +2098,13 @@ fn add_with_report_describes_positioned_append_telemetry() {
         }),
         0
     );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Get && path == "collection/CURRENT"
+        }),
+        1,
+        "one logical mutation validates its pinned collection schema exactly once at commit"
+    );
     assert_eq!(report.segments_written, 0);
     assert_eq!(report.graph_payloads_written, 0);
     assert_eq!(report.manifest_tables_written, 0);
