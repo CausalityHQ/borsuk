@@ -36,7 +36,7 @@ def validate_manifest(manifest: dict[str, object]) -> None:
             "purchase_option": "local",
             "dimensions": 768,
             "metric": "cosine",
-            "cell_counts": [2_000],
+            "cell_counts": [2_000, 16_000],
             "routing_modes": ["flat", "quantizer"],
             "writers": [1],
             "repetitions": 1,

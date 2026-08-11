@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 INSTANCE_ID = re.compile(r"^i-[0-9a-f]{17}$")
 MODES = {"flat", "quantizer"}
 
@@ -119,9 +119,11 @@ def validate_manifest(manifest: dict[str, object]) -> None:
     if protocol_kind != "local-smoke" and manifest.get("writers") != [1, 8, 32]:
         raise ValidationError("production manifest must freeze writers to [1, 8, 32]")
     if protocol_kind == "local-smoke" and (
-        manifest.get("cell_counts") != [2_000] or manifest.get("writers") != [1]
+        manifest.get("cell_counts") != [2_000, 16_000] or manifest.get("writers") != [1]
     ):
-        raise ValidationError("local smoke must use one realistic 2000-cell writer arm")
+        raise ValidationError(
+            "local smoke must cover both realistic catalog sizes with one writer"
+        )
     if set(manifest.get("routing_modes", [])) != MODES:
         raise ValidationError("manifest must freeze flat and quantizer modes")
     for field in (
@@ -237,7 +239,7 @@ def validate_results(manifest_path: Path, root: Path) -> None:
     for field, expected_value in expected_environment.items():
         if env.get(field) != expected_value:
             raise ValidationError(f"environment {field} mismatch")
-    if not HEX_SHA256.fullmatch(env.get("source_sha256", "")):
+    if not HEX_DIGEST.fullmatch(env.get("source_sha256", "")):
         raise ValidationError("environment source SHA-256 is invalid")
     if manifest["protocol_kind"] != "local-smoke" and not INSTANCE_ID.fullmatch(
         env.get("instance_id", "")
@@ -247,6 +249,94 @@ def validate_results(manifest_path: Path, root: Path) -> None:
         raise ValidationError("local smoke instance identity is invalid")
     if not env.get("availability_zone", ""):
         raise ValidationError("environment availability zone is absent")
+
+    template_shapes: dict[int, tuple[int, int]] = {}
+    for cells in manifest["cell_counts"]:
+        template_path = root / "templates" / f"c{cells}.json"
+        if not template_path.is_file():
+            raise ValidationError(f"missing template evidence: {template_path}")
+        template = json.loads(template_path.read_text(encoding="utf-8"))
+        if not HEX_DIGEST.fullmatch(str(template.get("catalog_checksum", ""))):
+            raise ValidationError(f"invalid template catalog checksum: {template_path}")
+        if (
+            integer(template.get("catalog_rows"), "catalog_rows", template_path)
+            != cells
+        ):
+            raise ValidationError(f"template catalog row mismatch: {template_path}")
+        if (
+            integer(
+                template.get("catalog_dimensions"),
+                "catalog_dimensions",
+                template_path,
+            )
+            != 768
+        ):
+            raise ValidationError(
+                f"template catalog dimension mismatch: {template_path}"
+            )
+        encoded_bytes = integer(
+            template.get("encoded_bytes"), "encoded_bytes", template_path
+        )
+        if not 0 < encoded_bytes < 64 * 1024 * 1024:
+            raise ValidationError(
+                f"template catalog exceeds the bounded object shape: {template_path}"
+            )
+        if integer(template.get("seed_records"), "seed_records", template_path) != 0:
+            raise ValidationError(
+                f"template contains synthetic seed records: {template_path}"
+            )
+        if (
+            integer(
+                template.get("physical_segments"),
+                "physical_segments",
+                template_path,
+            )
+            != 0
+        ):
+            raise ValidationError(
+                f"template contains synthetic physical segments: {template_path}"
+            )
+        if (
+            integer(
+                template.get("flat_distinct_cells"),
+                "flat_distinct_cells",
+                template_path,
+            )
+            <= 1
+        ):
+            raise ValidationError(f"template flat routing collapsed: {template_path}")
+        if (
+            integer(
+                template.get("quantizer_distinct_cells"),
+                "quantizer_distinct_cells",
+                template_path,
+            )
+            <= 1
+        ):
+            raise ValidationError(
+                f"template quantizer routing collapsed: {template_path}"
+            )
+        routing_probe_count = integer(
+            template.get("routing_probe_count"), "routing_probe_count", template_path
+        )
+        routing_agreements = integer(
+            template.get("routing_agreements"), "routing_agreements", template_path
+        )
+        if routing_probe_count <= 1 or routing_agreements != routing_probe_count:
+            raise ValidationError(f"template routing probes disagree: {template_path}")
+        object_count = integer(
+            template.get("object_count"), "object_count", template_path
+        )
+        object_bytes = integer(
+            template.get("object_bytes"), "object_bytes", template_path
+        )
+        if not 0 < object_count <= 256 or object_bytes < encoded_bytes:
+            raise ValidationError(
+                f"template object shape is not bounded: {template_path}"
+            )
+        template_shapes[cells] = (object_count, object_bytes)
+    if len({shape[0] for shape in template_shapes.values()}) != 1:
+        raise ValidationError("template object count depends on logical-cell count")
 
     summary_path = root / "summary.csv"
     summary_fields, summaries = read_csv(summary_path)
@@ -307,7 +397,7 @@ def validate_results(manifest_path: Path, root: Path) -> None:
         ):
             if row[field] != env[field]:
                 raise ValidationError(f"summary {field} differs from environment")
-        if not HEX_SHA256.fullmatch(row["cohort_blake3"]):
+        if not HEX_DIGEST.fullmatch(row["cohort_blake3"]):
             raise ValidationError("invalid cohort BLAKE3")
         if row["routing_path"] != row["routing_mode"]:
             raise ValidationError(f"{key}: routing path differs from the labeled arm")
@@ -346,6 +436,24 @@ def validate_results(manifest_path: Path, root: Path) -> None:
             raise ValidationError(f"nonterminal cell: {cell}")
         if (cell / "process_exit.txt").read_text(encoding="utf-8").strip() != "0":
             raise ValidationError(f"cell process did not exit successfully: {cell}")
+        clone_path = cell / "clone.json"
+        if not clone_path.is_file():
+            raise ValidationError(f"missing clone telemetry: {clone_path}")
+        clone = json.loads(clone_path.read_text(encoding="utf-8"))
+        template_object_count, template_object_bytes = template_shapes[cells]
+        if (
+            integer(clone.get("copy_count"), "copy_count", clone_path)
+            != template_object_count
+        ):
+            raise ValidationError(f"clone object count mismatch: {clone_path}")
+        if (
+            integer(clone.get("copied_bytes"), "copied_bytes", clone_path)
+            != template_object_bytes
+        ):
+            raise ValidationError(f"clone byte count mismatch: {clone_path}")
+        duration_ms = finite(clone.get("duration_ms"), "duration_ms", clone_path)
+        if not 0 <= duration_ms <= int(manifest["clone_timeout_seconds"]) * 1_000:
+            raise ValidationError(f"clone duration exceeds its timeout: {clone_path}")
         validate_resource_csv(cell / "resources.csv")
         for name in ("storage-access.csv",):
             path = cell / name
@@ -411,7 +519,7 @@ def validate_results(manifest_path: Path, root: Path) -> None:
             raise ValidationError("sample selected cell is outside the catalog")
         if integer(row["storage_requests"], "storage_requests", sample_path) < 0:
             raise ValidationError("sample storage requests must be non-negative")
-        if not HEX_SHA256.fullmatch(row["vector_blake3"]):
+        if not HEX_DIGEST.fullmatch(row["vector_blake3"]):
             raise ValidationError("invalid sample vector BLAKE3")
         sample_id = (writer, operation, row["record_id"], row["vector_blake3"])
         if sample_id in identities[key]:

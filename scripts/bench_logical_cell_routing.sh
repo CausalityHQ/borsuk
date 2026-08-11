@@ -68,6 +68,7 @@ METRIC="$(json_value metric)"
 MUTATION_PROTOCOL="$(json_value mutation_protocol)"
 CELL_TIMEOUT_SECONDS="$(json_value cell_timeout_seconds)"
 CLONE_TIMEOUT_SECONDS="$(json_value clone_timeout_seconds)"
+SETUP_TIMEOUT_SECONDS="$(json_value setup_timeout_seconds)"
 RESOURCE_INTERVAL_MS="$(json_value resource_sample_interval_ms)"
 MAX_WRITE_P95_MS="$(json_value max_write_p95_ms)"
 MASTER_SEED="$(json_value master_seed)"
@@ -153,19 +154,102 @@ fi
 TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 BINARY="$TARGET_DIR/release/examples/logical_cell_routing_bench"
 
+capture_epoch_ns() {
+  local output_name="$1"
+  local LC_ALL=C
+  local now seconds micros
+  now="$EPOCHREALTIME"
+  seconds="${now%%.*}"
+  micros="${now#*.}"
+  printf -v "$output_name" '%s%s000' "$seconds" "$micros"
+}
+
 clone_index() {
   local source="$1"
   local destination="$2"
+  local evidence="$3"
+  local started_ns
   if [[ "$source" == s3://* && "$destination" == s3://* ]]; then
     python3 "$ROOT_DIR/scripts/benchmark_s3.py" assert-empty \
       --uri "$destination" --timeout-seconds "$CLONE_TIMEOUT_SECONDS"
+    capture_epoch_ns started_ns
     timeout --signal=TERM --kill-after=30s "$CLONE_TIMEOUT_SECONDS" \
       aws s3 sync --only-show-errors "$source/" "$destination/"
   else
+    capture_epoch_ns started_ns
     mkdir -p "$(dirname "$destination")"
     [[ ! -e "$destination" ]] || { echo "refusing to reuse index $destination" >&2; return 1; }
     cp -a "$source" "$destination"
   fi
+  local completed_ns shape
+  capture_epoch_ns completed_ns
+  shape="$(template_object_shape "$destination")"
+  python3 - "$shape" "$started_ns" "$completed_ns" "$evidence" <<'PY'
+import json
+import pathlib
+import sys
+
+shape = json.loads(sys.argv[1])
+duration_ms = (int(sys.argv[3]) - int(sys.argv[2])) / 1_000_000
+pathlib.Path(sys.argv[4]).write_text(
+    json.dumps(
+        {
+            "copy_count": shape["object_count"],
+            "copied_bytes": shape["object_bytes"],
+            "duration_ms": duration_ms,
+        },
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+template_object_shape() {
+  local uri="$1"
+  python3 - "$uri" "$CLONE_TIMEOUT_SECONDS" <<'PY'
+import json
+import os
+import pathlib
+import subprocess
+import sys
+from urllib.parse import urlparse
+
+uri = sys.argv[1]
+timeout_seconds = int(sys.argv[2])
+if uri.startswith("s3://"):
+    parsed = urlparse(uri)
+    prefix = parsed.path.strip("/")
+    if not prefix:
+        raise SystemExit("template S3 URI must include a non-empty key prefix")
+    command = [
+        "aws", "s3api", "list-objects-v2", "--bucket", parsed.netloc,
+        "--prefix", prefix + "/", "--output", "json",
+    ]
+    profile = os.environ.get("AWS_PROFILE")
+    if profile:
+        command.extend(["--profile", profile])
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+    )
+    contents = json.loads(result.stdout).get("Contents", [])
+    print(json.dumps({
+        "object_count": len(contents),
+        "object_bytes": sum(int(item["Size"]) for item in contents),
+    }, sort_keys=True))
+else:
+    root = pathlib.Path(uri.removeprefix("file://"))
+    files = [path for path in root.rglob("*") if path.is_file()]
+    print(json.dumps({
+        "object_count": len(files),
+        "object_bytes": sum(path.stat().st_size for path in files),
+    }, sort_keys=True))
+PY
 }
 
 run_exact_test() {
@@ -236,22 +320,48 @@ run_exact_test materializer_race positioned_log concurrent_checkpoint_generation
 
 cargo build --locked --release -p borsuk --example logical_cell_routing_bench
 
+mkdir -p "$OUTPUT/templates"
+setup_started_seconds=$SECONDS
 for cells in "${CELL_COUNTS[@]}"; do
   template_uri="$INDEX_ROOT/templates/c${cells}"
-  env \
+  build_evidence="$OUTPUT/templates/c${cells}.build.json"
+  shape_evidence="$OUTPUT/templates/c${cells}.shape.json"
+  setup_remaining_seconds=$((SETUP_TIMEOUT_SECONDS - (SECONDS - setup_started_seconds)))
+  (( setup_remaining_seconds > 0 )) || {
+    echo "logical-cell template setup exceeded its frozen timeout" >&2
+    exit 124
+  }
+  timeout --signal=TERM --kill-after=30s "$setup_remaining_seconds" env \
     BORSUK_ROUTING_SMOKE="$SMOKE" \
     BORSUK_ROUTING_INDEX_URI="$template_uri" \
     BORSUK_ROUTING_CELL_COUNT="$cells" \
     BORSUK_ROUTING_DIMENSIONS="$DIMENSIONS" \
-    "$BINARY" build
+    "$BINARY" build > "$build_evidence"
+  template_object_shape "$template_uri" > "$shape_evidence"
+  python3 - "$build_evidence" "$shape_evidence" "$OUTPUT/templates/c${cells}.json" <<'PY'
+import json
+import pathlib
+import sys
+
+build = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+shape = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+build.update(shape)
+pathlib.Path(sys.argv[3]).write_text(json.dumps(build, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  rm "$build_evidence" "$shape_evidence"
 done
+(( SECONDS - setup_started_seconds <= SETUP_TIMEOUT_SECONDS )) || {
+  echo "logical-cell template setup exceeded its frozen timeout" >&2
+  exit 124
+}
 
 while IFS=$'\t' read -r cells writers repetition mode; do
         template_uri="$INDEX_ROOT/templates/c${cells}"
         cell_output="$OUTPUT/cells/c${cells}/r$(printf '%02d' "$repetition")/w${writers}/$mode"
         uri="$INDEX_ROOT/cells/c${cells}/r$(printf '%02d' "$repetition")/w${writers}/$mode"
-        clone_index "$template_uri" "$uri"
         mkdir -p "$(dirname "$cell_output")"
+        clone_evidence="${cell_output}.clone.json"
+        clone_index "$template_uri" "$uri" "$clone_evidence"
         CURRENT_CELL="$cell_output"
         resource_output="${cell_output}.resources.csv"
         storage_trace_output="${cell_output}.storage-access.csv"
@@ -288,6 +398,7 @@ while IFS=$'\t' read -r cells writers repetition mode; do
         status=$?
         set -e
         mkdir -p "$cell_output"
+        mv "$clone_evidence" "$cell_output/clone.json"
         mv "$resource_output" "$cell_output/resources.csv" 2>/dev/null || true
         mv "$storage_trace_output" "$cell_output/storage-access.csv" 2>/dev/null || true
         mv "$stdout_output" "$cell_output/benchmark.stdout.log" 2>/dev/null || true
@@ -296,7 +407,7 @@ while IFS=$'\t' read -r cells writers repetition mode; do
         if (( status != 0 )); then
           exit "$status"
         fi
-        for artifact in resources.csv storage-access.csv summary.csv samples.csv; do
+        for artifact in clone.json resources.csv storage-access.csv summary.csv samples.csv; do
           [[ -s "$cell_output/$artifact" ]] || {
             echo "missing terminal arm artifact: $cell_output/$artifact" >&2
             exit 1

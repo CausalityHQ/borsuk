@@ -150,6 +150,17 @@ class ValidateLogicalCellRoutingResultsTest(unittest.TestCase):
                             encoding="utf-8",
                         )
                         (cell / "process_exit.txt").write_text("0\n", encoding="utf-8")
+                        (cell / "clone.json").write_text(
+                            json.dumps(
+                                {
+                                    "copy_count": 132,
+                                    "copied_bytes": cells * 768 * 4 + 4096,
+                                    "duration_ms": 10.0,
+                                }
+                            )
+                            + "\n",
+                            encoding="utf-8",
+                        )
                         (cell / "CELL_COMPLETE").write_text(
                             "complete\n", encoding="utf-8"
                         )
@@ -180,6 +191,30 @@ class ValidateLogicalCellRoutingResultsTest(unittest.TestCase):
             "metric=cosine\n",
             encoding="utf-8",
         )
+        for cells in self.manifest["cell_counts"]:
+            template = self.root / "templates" / f"c{cells}.json"
+            template.parent.mkdir(parents=True, exist_ok=True)
+            template.write_text(
+                json.dumps(
+                    {
+                        "catalog_checksum": "b" * 64,
+                        "catalog_rows": cells,
+                        "catalog_dimensions": 768,
+                        "encoded_bytes": cells * 768 * 4,
+                        "seed_records": 0,
+                        "physical_segments": 0,
+                        "flat_distinct_cells": 16,
+                        "quantizer_distinct_cells": 16,
+                        "routing_probe_count": 32,
+                        "routing_agreements": 32,
+                        "object_count": 132,
+                        "object_bytes": cells * 768 * 4 + 4096,
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         (self.root / "LOGICAL_CELL_ROUTING_COMPLETE").write_text(
             "complete\n", encoding="utf-8"
         )
@@ -192,6 +227,32 @@ class ValidateLogicalCellRoutingResultsTest(unittest.TestCase):
 
     def test_accepts_complete_exact_paired_matrix(self) -> None:
         self.validate()
+
+    def test_rejects_missing_template_evidence(self) -> None:
+        (self.root / "templates" / "c2000.json").unlink()
+        with self.assertRaisesRegex(ValidationError, "missing template evidence"):
+            self.validate()
+
+    def test_rejects_seed_record_template_shape(self) -> None:
+        path = self.root / "templates" / "c2000.json"
+        template = json.loads(path.read_text(encoding="utf-8"))
+        template["seed_records"] = 1
+        path.write_text(json.dumps(template), encoding="utf-8")
+        with self.assertRaisesRegex(ValidationError, "synthetic seed records"):
+            self.validate()
+
+    def test_rejects_template_object_count_that_depends_on_cell_count(self) -> None:
+        path = self.root / "templates" / "c16000.json"
+        template = json.loads(path.read_text(encoding="utf-8"))
+        template["object_count"] = 133
+        path.write_text(json.dumps(template), encoding="utf-8")
+        with self.assertRaisesRegex(ValidationError, "depends on logical-cell count"):
+            self.validate()
+
+    def test_rejects_missing_clone_telemetry(self) -> None:
+        next(self.root.glob("cells/**/clone.json")).unlink()
+        with self.assertRaisesRegex(ValidationError, "missing clone telemetry"):
+            self.validate()
 
     def test_rejects_missing_cell_timeout(self) -> None:
         del self.manifest["cell_timeout_seconds"]

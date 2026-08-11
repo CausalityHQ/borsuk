@@ -6269,13 +6269,13 @@ impl BorsukIndex {
         Ok((ids, report))
     }
 
-    /// Add vectors with generated collision-free numeric ids.
+    /// Add vectors with collision-resistant transaction-derived ids.
     pub fn add_vectors(&mut self, vectors: Vec<Vec<f32>>) -> Result<Vec<String>> {
         let (ids, _) = self.add_vectors_with_report(vectors)?;
         Ok(ids)
     }
 
-    /// Add vectors with generated collision-free numeric ids and return write counters.
+    /// Add vectors with collision-resistant transaction-derived ids and return write counters.
     pub fn add_vectors_with_report(
         &mut self,
         vectors: Vec<Vec<f32>>,
@@ -9389,6 +9389,42 @@ impl BorsukIndex {
     ) -> Result<(LogicalCellId, &'static str)> {
         self.validate_vector(vector)?;
         self.route_vector_to_logical_cell_with_path(vector)
+    }
+
+    /// Return the authenticated immutable routing-catalog identity for
+    /// preregistered structural qualification.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn logical_cell_catalog_evidence(&self) -> Option<(String, u32, u32, u64, u64, usize)> {
+        let logical_records = self
+            .manifest
+            .segments
+            .iter()
+            .fold(0_u64, |total, segment| {
+                total.saturating_add(segment.object_count as u64)
+            })
+            .saturating_add(
+                self.cell_wal_snapshot
+                    .iter()
+                    .flat_map(|transaction| &transaction.runs)
+                    .filter(|run| run.kind == CellWalRunKind::Records)
+                    .fold(0_u64, |total, run| {
+                        total.saturating_add(run.record_count as u64)
+                    }),
+            );
+        self.manifest
+            .logical_cell_catalog_ref
+            .as_ref()
+            .map(|reference| {
+                (
+                    reference.checksum.clone(),
+                    reference.cell_count,
+                    reference.dimensions,
+                    reference.encoded_bytes,
+                    logical_records,
+                    self.manifest.segments.len(),
+                )
+            })
     }
 
     fn id_directory_partition(&self, id: &[u8]) -> LogicalCellId {
@@ -24967,6 +25003,37 @@ mod tests {
             "a catalog that cannot fit the handle RAM budget must not create an orphan object"
         );
         assert!(index.manifest.logical_cell_catalog_ref.is_none());
+    }
+
+    #[test]
+    fn logical_cell_catalog_evidence_measures_seed_records_and_segments() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .initialize_logical_cell_catalog(vec![vec![0.0, 0.0], vec![10.0, 0.0]])
+            .unwrap();
+        let pristine = index.logical_cell_catalog_evidence().unwrap();
+        assert_eq!((pristine.4, pristine.5), (0, 0));
+
+        index
+            .put(vec![VectorRecord::new("seed", vec![9.0, 0.0])])
+            .unwrap();
+        let positioned = index.logical_cell_catalog_evidence().unwrap();
+        assert_eq!((positioned.4, positioned.5), (1, 0));
+
+        index.flush().unwrap();
+        let materialized = index.logical_cell_catalog_evidence().unwrap();
+        assert_eq!((materialized.4, materialized.5), (1, 1));
     }
 
     #[test]

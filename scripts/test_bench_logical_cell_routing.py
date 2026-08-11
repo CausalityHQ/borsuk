@@ -128,7 +128,9 @@ class BenchLogicalCellRoutingTest(unittest.TestCase):
         self.assertEqual(plan["arm_count"], 60)
         self.assertEqual(len(plan["arms"]), 60)
 
-    def test_shell_runner_smoke_plan_has_the_two_arms_it_executes(self) -> None:
+    def test_shell_runner_smoke_plan_covers_both_catalog_sizes_and_both_modes(
+        self,
+    ) -> None:
         result = subprocess.run(
             ["bash", str(ROOT / "scripts/bench_logical_cell_routing.sh")],
             cwd=ROOT,
@@ -142,11 +144,44 @@ class BenchLogicalCellRoutingTest(unittest.TestCase):
             text=True,
         )
         plan = json.loads(result.stdout)
-        self.assertEqual(plan["arm_count"], 2)
+        self.assertEqual(plan["cell_counts"], [2_000, 16_000])
+        self.assertEqual(plan["arm_count"], 4)
         self.assertEqual(plan["claim_eligibility"], "ineligible-structural-smoke")
         self.assertEqual(
-            [arm["routing_mode"] for arm in plan["arms"]], ["flat", "quantizer"]
+            [(arm["cell_count"], arm["routing_mode"]) for arm in plan["arms"]],
+            [
+                (2_000, "flat"),
+                (2_000, "quantizer"),
+                (16_000, "flat"),
+                (16_000, "quantizer"),
+            ],
         )
+
+    def test_rust_builder_uses_catalog_initialization_without_seed_records(
+        self,
+    ) -> None:
+        source = (
+            ROOT / "crates/borsuk/examples/logical_cell_routing_bench.rs"
+        ).read_text(encoding="utf-8")
+        build_body = source.split("fn build() -> BenchResult<()> {", 1)[1].split(
+            "\nfn run_config()", 1
+        )[0]
+        self.assertIn("initialize_logical_cell_catalog", build_body)
+        self.assertNotIn("index.add(", build_body)
+        self.assertNotIn("finish_bulk_load", build_body)
+        for field in (
+            "catalog_checksum",
+            "catalog_rows",
+            "catalog_dimensions",
+            "encoded_bytes",
+            "seed_records",
+            "physical_segments",
+            "flat_distinct_cells",
+            "quantizer_distinct_cells",
+            "routing_probe_count",
+            "routing_agreements",
+        ):
+            self.assertIn(field, build_body)
 
     def test_correctness_gates_name_current_positioned_behaviors(self) -> None:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -163,6 +198,39 @@ class BenchLogicalCellRoutingTest(unittest.TestCase):
                 "materializer_race",
             ],
         )
+
+    def test_shell_runner_times_and_bounds_every_setup_and_clone_phase(self) -> None:
+        source = (ROOT / "scripts/bench_logical_cell_routing.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('now="$EPOCHREALTIME"', source)
+        self.assertIn("local LC_ALL=C", source)
+        self.assertIn("'%s%s000'", source)
+        self.assertNotIn("'%s%06d000'", source)
+        self.assertNotIn("time.monotonic_ns()", source)
+        self.assertIn(
+            'SETUP_TIMEOUT_SECONDS="$(json_value setup_timeout_seconds)"', source
+        )
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=30s "$setup_remaining_seconds" env',
+            source,
+        )
+        self.assertIn('mv "$clone_evidence" "$cell_output/clone.json"', source)
+        self.assertNotIn(
+            'mv "$clone_evidence" "$cell_output/clone.json" 2>/dev/null || true',
+            source,
+        )
+        self.assertIn(
+            "for artifact in clone.json resources.csv storage-access.csv summary.csv samples.csv",
+            source,
+        )
+        s3_precondition = source.index(
+            'python3 "$ROOT_DIR/scripts/benchmark_s3.py" assert-empty'
+        )
+        s3_timer = source.index("capture_epoch_ns started_ns", s3_precondition)
+        s3_copy = source.index("aws s3 sync", s3_timer)
+        self.assertLess(s3_precondition, s3_timer)
+        self.assertLess(s3_timer, s3_copy)
 
     def test_startup_failure_is_published_as_terminal_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

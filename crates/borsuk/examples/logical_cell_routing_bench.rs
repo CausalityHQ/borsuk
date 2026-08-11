@@ -244,7 +244,7 @@ fn protocol_shape_is_valid(
     dimensions: usize,
 ) -> bool {
     if smoke {
-        cell_count == 2_000
+        matches!(cell_count, 2_000 | 16_000)
             && writers == 1
             && repetition == 1
             && operations == 2
@@ -269,34 +269,127 @@ fn build() -> BenchResult<()> {
     let cell_count: usize = number("BORSUK_ROUTING_CELL_COUNT")?;
     let dimensions: usize = number("BORSUK_ROUTING_DIMENSIONS")?;
     let smoke = smoke_mode();
-    if (!smoke && (!matches!(cell_count, 2_000 | 16_000) || dimensions != 768))
-        || (smoke && (cell_count != 2_000 || dimensions != 768))
-    {
+    if !matches!(cell_count, 2_000 | 16_000) || dimensions != 768 {
         return Err("build differs from its frozen logical-cell protocol".into());
     }
+    let centroids = (0..cell_count)
+        .map(|ordinal| vector(0x626f_7273_756b, ordinal as u64, dimensions))
+        .collect::<Vec<_>>();
     let mut index = BorsukIndex::create(IndexConfig {
-        uri,
+        uri: uri.clone(),
         metric: VectorMetric::Cosine,
         dimensions,
-        segment_max_vectors: 1,
+        segment_max_vectors: recommended_segment_max_vectors(dimensions),
         ram_budget_bytes: None,
         text: false,
         named_vectors: Default::default(),
     })?;
-    let records = (0..cell_count)
-        .map(|ordinal| {
-            VectorRecord::new(
-                format!("base-{ordinal:05}"),
-                vector(0x626f_7273_756b, ordinal as u64, dimensions),
-            )
-        })
-        .collect();
-    index.add(records)?;
-    index.finish_bulk_load()?;
-    if index.manifest().logical_cells().len() != cell_count {
+    index.initialize_logical_cell_catalog(centroids)?;
+    if index.manifest().logical_cells().len() != cell_count
+        || !index.manifest().segments.is_empty()
+        || index.manifest().next_generated_id != 0
+    {
         return Err("built logical-cell count differs from frozen protocol".into());
     }
-    index.set_segment_max_vectors(recommended_segment_max_vectors(dimensions))?;
+    let (
+        catalog_checksum,
+        catalog_rows,
+        catalog_dimensions,
+        encoded_bytes,
+        seed_records,
+        physical_segments,
+    ) = index
+        .logical_cell_catalog_evidence()
+        .ok_or("built index has no authenticated logical-cell catalog")?;
+    if seed_records != 0 || physical_segments != 0 {
+        return Err("built logical-cell template contains synthetic records or segments".into());
+    }
+    drop(index);
+
+    let route_vectors = (0..32_u64)
+        .map(|ordinal| {
+            let mut probe = vector(0x626f_7273_756b, ordinal, dimensions);
+            let noise = vector(0x626f_7273_756a, ordinal, dimensions);
+            probe
+                .iter_mut()
+                .zip(noise)
+                .for_each(|(value, noise)| *value += noise * 1.0e-3);
+            probe
+        })
+        .collect::<Vec<_>>();
+    let flat = BorsukIndex::open_with_options(
+        &uri,
+        OpenOptions {
+            flat_logical_cell_routing: true,
+            ..OpenOptions::default()
+        },
+    )?;
+    let flat_cells = route_vectors
+        .iter()
+        .map(|query| flat.logical_cell_for_research(query))
+        .collect::<Result<Vec<_>, _>>()?;
+    if flat_cells.iter().any(|(_, path)| *path != "flat") {
+        return Err("flat template qualification used a different routing path".into());
+    }
+    let flat_distinct_cells = flat_cells
+        .iter()
+        .map(|(cell, _)| cell.cell_ordinal)
+        .collect::<BTreeSet<_>>()
+        .len();
+    drop(flat);
+
+    let quantizer = BorsukIndex::open(&uri)?;
+    let quantizer_cells = route_vectors
+        .iter()
+        .map(|query| quantizer.logical_cell_for_research(query))
+        .collect::<Result<Vec<_>, _>>()?;
+    if quantizer_cells.iter().any(|(_, path)| *path != "quantizer") {
+        return Err("quantizer template qualification used a different routing path".into());
+    }
+    let quantizer_distinct_cells = quantizer_cells
+        .iter()
+        .map(|(cell, _)| cell.cell_ordinal)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let routing_agreements = flat_cells
+        .iter()
+        .zip(&quantizer_cells)
+        .filter(|((flat, _), (quantizer, _))| flat == quantizer)
+        .count();
+    if flat_distinct_cells <= 1 || quantizer_distinct_cells <= 1 {
+        return Err("built logical-cell catalog collapsed to one routed cell".into());
+    }
+    if routing_agreements != route_vectors.len() {
+        return Err("flat and quantizer template probes disagree on routed cells".into());
+    }
+    if quantizer.logical_cell_catalog_evidence()
+        != Some((
+            catalog_checksum.clone(),
+            catalog_rows,
+            catalog_dimensions,
+            encoded_bytes,
+            seed_records,
+            physical_segments,
+        ))
+    {
+        return Err("reopened logical-cell catalog identity changed".into());
+    }
+    println!(
+        "{}",
+        serde_json::json!({
+            "catalog_checksum": catalog_checksum,
+            "catalog_rows": catalog_rows,
+            "catalog_dimensions": catalog_dimensions,
+            "encoded_bytes": encoded_bytes,
+            "seed_records": seed_records,
+            "physical_segments": physical_segments,
+            "flat_distinct_cells": flat_distinct_cells,
+            "quantizer_distinct_cells": quantizer_distinct_cells,
+            "routing_probe_count": route_vectors.len(),
+            "routing_agreements": routing_agreements,
+            "smoke": smoke,
+        })
+    );
     Ok(())
 }
 
@@ -681,6 +774,7 @@ mod tests {
     #[test]
     fn functional_smoke_is_realistic_but_claim_ineligible() {
         assert!(protocol_shape_is_valid(true, 2_000, 1, 1, 2, 1, 768));
+        assert!(protocol_shape_is_valid(true, 16_000, 1, 1, 2, 1, 768));
         assert!(!protocol_shape_is_valid(true, 64, 1, 1, 2, 1, 8));
     }
 
