@@ -32,9 +32,12 @@ class PythonApiTests(unittest.TestCase):
                 metric="euclidean",
                 dimensions=16,
             )
+            # Keep the GIL exercise below the atomic positioned-transaction
+            # bound: each explicit dense row also contributes one ID-directory
+            # row to the same all-or-nothing append.
             vectors = [
                 [(row + column) / 10_000.0 for column in range(16)]
-                for row in range(50_000)
+                for row in range(16_384)
             ]
             ids = [f"gil-{row}" for row in range(len(vectors))]
             ready = threading.Event()
@@ -803,9 +806,12 @@ class PythonApiTests(unittest.TestCase):
             generated_ids = index.add([[0.0, 0.0], [1.0, 0.0]])
             explicit_ids = index.add([[9.0, 0.0]], ids=["far"])
 
-            self.assertEqual(generated_ids, ["0", "1"])
+            self.assertEqual(len(generated_ids), 2)
+            self.assertEqual(len(set(generated_ids)), 2)
+            for generated_id in generated_ids:
+                self.assertRegex(generated_id, r"^g[0-9a-f]{64}$")
             self.assertEqual(explicit_ids, ["far"])
-            self.assertEqual(index.search_ids([0.1, 0.0], k=2), ["0", "1"])
+            self.assertEqual(index.search_ids([0.1, 0.0], k=2), generated_ids)
 
     def test_flush_materializes_wal_records_for_segment_admin_workflows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -899,10 +905,14 @@ class PythonApiTests(unittest.TestCase):
                 index.add([[0.0, 0.0], [1.0, 0.0]], ids=["dup", "dup"])
 
             index.add([[0.0, 0.0]], ids=["1"])
-            self.assertEqual(index.add([[2.0, 0.0], [3.0, 0.0]]), ["2", "3"])
+            generated_ids = index.add([[2.0, 0.0], [3.0, 0.0]])
+            self.assertEqual(len(set(generated_ids)), 2)
+            self.assertNotIn("1", generated_ids)
+            for generated_id in generated_ids:
+                self.assertRegex(generated_id, r"^g[0-9a-f]{64}$")
 
             with self.assertRaisesRegex(borsuk.BorsukError, "duplicate record id"):
-                index.add([[4.0, 0.0]], ids=["2"])
+                index.add([[4.0, 0.0]], ids=[generated_ids[0]])
 
     def test_search_vectors_and_get_vector_return_stored_vectors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1182,11 +1192,13 @@ class PythonApiTests(unittest.TestCase):
                 segment_size=2,
                 ram_budget="1MB",
             )
+            created_version = index.stats().manifest_version
 
             index.add(
                 [[0.0, 0.0], [1.0, 0.0], [10.0, 0.0]],
                 ids=["a", "b", "c"],
             )
+            self.assertEqual(index.stats().manifest_version, created_version)
             index.flush()
             stats = index.stats()
 
@@ -1194,7 +1206,7 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(stats.dimensions, 2)
             self.assertEqual(stats.segment_max_vectors, 2)
             self.assertEqual(stats.ram_budget_bytes, 1_000_000)
-            self.assertEqual(stats.manifest_version, 3)
+            self.assertEqual(stats.manifest_version, created_version + 1)
             self.assertEqual(stats.routing_max_level, 0)
             self.assertEqual(stats.routing_page_fanout, 128)
             self.assertEqual(stats.routing_leaf_pages, 1)
@@ -2209,13 +2221,19 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(report.bytes_read, 0)
             self.assertGreater(report.bytes_written, 0)
             self.assertEqual(report.routing_page_indexes_read, 1)
-            self.assertEqual(report.routing_pages_read, 1)
+            self.assertEqual(report.routing_pages_read, 0)
             self.assertGreaterEqual(report.routing_page_indexes_written, 1)
             self.assertGreaterEqual(report.routing_pages_written, 1)
             self.assertEqual(report.graph_payloads_read, 0)
             self.assertEqual(report.graph_bytes_read, 0)
             self.assertEqual(report.object_cache_hits, 0)
-            self.assertEqual(report.object_cache_misses, 6)
+            self.assertEqual(
+                report.object_cache_misses,
+                report.segments_read
+                + report.routing_page_indexes_read
+                + report.routing_pages_read
+                + report.graph_payloads_read,
+            )
 
             after = index.search_with_report([8.5, 0.0], k=2)
             self.assertEqual(after.segments_total, 2)
@@ -2326,12 +2344,15 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.compaction.segments_read, 4)
             self.assertEqual(report.compaction.segments_written, 2)
             self.assertFalse(report.garbage_collection.dry_run)
-            # Rebuild also reclaims the seven fenced cell-WAL objects made obsolete
-            # by flush: two payloads, two frontier nodes, descriptor, STATE, COMMIT.
-            self.assertEqual(report.garbage_collection.objects_deleted, 36)
-            self.assertEqual(report.garbage_collection.routing_objects_deleted, 5)
-            self.assertEqual(report.garbage_collection.tables_deleted, 15)
-            self.assertEqual(len(report.garbage_collection.candidates), 36)
+            gc = report.garbage_collection
+            self.assertEqual(gc.objects_scanned, 43)
+            self.assertEqual(gc.objects_deleted, 25)
+            self.assertEqual(gc.routing_objects_deleted, 4)
+            self.assertEqual(gc.tables_deleted, 9)
+            self.assertEqual(len(gc.candidates), 25)
+            self.assertGreater(gc.bytes_reclaimed, 0)
+            for candidate in gc.candidates:
+                self.assertFalse((Path(tmp) / candidate).exists())
             self.assertEqual(index.search_ids([8.5, 0.0], k=2), ["c", "d"])
 
     def test_rebuild_rejects_non_integer_options(self) -> None:
@@ -2391,31 +2412,36 @@ class PythonApiTests(unittest.TestCase):
 
             dry_run = index.gc_obsolete_segments(min_age_seconds=0)
             self.assertTrue(dry_run.dry_run)
-            # The object inventory includes the seven fenced cell-WAL objects
-            # written by add.
-            self.assertEqual(dry_run.objects_scanned, 40)
+            self.assertEqual(dry_run.objects_scanned, 30)
             self.assertEqual(dry_run.objects_deleted, 0)
             self.assertEqual(dry_run.routing_objects_deleted, 0)
             self.assertEqual(dry_run.tables_deleted, 0)
             self.assertEqual(dry_run.routing_page_indexes_read, 1)
-            self.assertEqual(dry_run.routing_pages_read, 1)
+            self.assertEqual(dry_run.routing_pages_read, 0)
             self.assertGreater(dry_run.bytes_read, 0)
             self.assertEqual(dry_run.object_cache_hits, 0)
-            self.assertEqual(dry_run.object_cache_misses, 2)
-            self.assertEqual(len(dry_run.candidates), 26)
+            self.assertEqual(
+                dry_run.object_cache_misses,
+                dry_run.routing_page_indexes_read + dry_run.routing_pages_read,
+            )
+            self.assertEqual(len(dry_run.candidates), 15)
             self.assertGreater(dry_run.bytes_reclaimable, 0)
 
             # Repo-policy anchor for the delete path: gc_obsolete_segments(dry_run=False).
             deleted = index.gc_obsolete_segments(dry_run=False, min_age_seconds=0)
             self.assertFalse(deleted.dry_run)
-            self.assertEqual(deleted.objects_deleted, 26)
-            self.assertEqual(deleted.routing_objects_deleted, 4)
-            self.assertEqual(deleted.tables_deleted, 12)
+            self.assertEqual(deleted.objects_scanned, 30)
+            self.assertEqual(deleted.objects_deleted, 15)
+            self.assertEqual(deleted.routing_objects_deleted, 3)
+            self.assertEqual(deleted.tables_deleted, 6)
             self.assertEqual(deleted.routing_page_indexes_read, 1)
-            self.assertEqual(deleted.routing_pages_read, 1)
+            self.assertEqual(deleted.routing_pages_read, 0)
             self.assertGreater(deleted.bytes_read, 0)
             self.assertEqual(deleted.object_cache_hits, 0)
-            self.assertEqual(deleted.object_cache_misses, 2)
+            self.assertEqual(
+                deleted.object_cache_misses,
+                deleted.routing_page_indexes_read + deleted.routing_pages_read,
+            )
             self.assertEqual(deleted.candidates, dry_run.candidates)
             self.assertEqual(deleted.bytes_reclaimed, dry_run.bytes_reclaimable)
 
@@ -2473,9 +2499,11 @@ class PythonApiTests(unittest.TestCase):
 
             deleted = index.gc_obsolete_segments(dry_run=False, min_age_seconds=0)
 
-            self.assertEqual(deleted.objects_deleted, 32)
-            self.assertEqual(deleted.routing_objects_deleted, 4)
-            self.assertEqual(deleted.tables_deleted, 12)
+            self.assertEqual(deleted.objects_scanned, 33)
+            self.assertEqual(deleted.objects_deleted, 21)
+            self.assertEqual(deleted.routing_objects_deleted, 3)
+            self.assertEqual(deleted.tables_deleted, 6)
+            self.assertEqual(len(deleted.candidates), 21)
             self.assertFalse(list((Path(cache) / "segments" / "L0").rglob("*.parquet")))
             self.assertFalse(list((Path(cache) / "graphs" / "L0").rglob("*.parquet")))
             self.assertEqual(

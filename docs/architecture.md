@@ -888,7 +888,8 @@ as the primitive id type. The production model is:
 
 - dense internal numeric row ids for graph edges and row references;
 - compact arbitrary external ids stored as binary bytes, not UTF-8-only strings;
-- generated ids should be numeric and small by default;
+- generated ids are retry-stable transaction-derived `g<64-hex>` values, avoiding
+  a collection-wide coordination counter;
 - id lookup should use a binary id index plus segment-level negative filters,
   not a full scan of every leaf.
 

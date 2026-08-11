@@ -409,7 +409,7 @@ def assert_routing_implementation_tests(
         "compact_from_empty_routing_table_publishes_without_l0_page_index",
         "compact_overflow_from_empty_routing_table_publishes_without_l0_page_index",
         "compact_reuses_unaffected_routing_layer_page_objects",
-        "generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent",
+        "generated_id_flush_reuses_pages_during_right_edge_growth",
     ]
     required_index_unit_tests = [
         "l0_page_routing_overfetch_reads_sibling_pages_when_first_page_is_dense",
@@ -1522,7 +1522,6 @@ def main() -> None:
             "k must be greater than zero",
             "eps must be finite and non-negative when set",
             "next_generated_id_after_explicit_records",
-            "fn advance_generated_id",
             "might_contain_record_id",
             "validate_record_ids_against_existing_segments",
             "record ids must not be empty",
@@ -1670,7 +1669,7 @@ def main() -> None:
             "read_through_cache_refetches_corrupt_segment_and_graph_payloads",
             "add_after_empty_routing_table_preserves_existing_routing_pages",
             "generated_id_add_after_empty_routing_table_does_not_read_unrelated_parent_pages",
-            "generated_id_add_after_empty_routing_table_reuses_rightmost_append_parent",
+            "generated_id_flush_reuses_pages_during_right_edge_growth",
             "add_after_empty_routing_table_rejects_duplicate_ids_through_routing_pages",
             "compact_reuses_unaffected_routing_layer_page_objects",
             "approximate_search_reads_persisted_routing_layer_pages",
