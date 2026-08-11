@@ -60,6 +60,10 @@ use crate::{
         routing_layer_page_index_from_parquet, routing_layer_page_index_to_parquet,
         routing_layer_page_to_parquet, routing_parent_page_to_parquet, routing_to_parquet,
     },
+    logical_cell_catalog::{
+        LogicalCellCatalog, LogicalCellCatalogRef, logical_cell_catalog_from_parquet,
+        logical_cell_catalog_to_parquet,
+    },
     manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
     observability,
     record::RequestCounts,
@@ -2020,8 +2024,17 @@ impl Storage {
             routing: blake3::hash(&routing_bytes),
             pivots: blake3::hash(&pivots_bytes),
         };
-        let paged_resident_bytes =
+        let mut paged_resident_bytes =
             manifest_metadata_from_parquet(&manifest_bytes)?.resident_bytes_estimate();
+        if let Some(reference) = &manifest.logical_cell_catalog_ref {
+            paged_resident_bytes = paged_resident_bytes
+                .checked_add(reference.decoded_resident_bytes()?)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "paged manifest resident byte estimate overflow".to_string(),
+                    )
+                })?;
+        }
 
         self.write_bytes_if_absent(&manifest.file_name(), &manifest_bytes)?;
         report.record_metadata_table(manifest_bytes.len());
@@ -2330,6 +2343,15 @@ impl Storage {
         reference: &CollectionManifestRef,
         resident_routing: bool,
     ) -> Result<Manifest> {
+        self.load_manifest_ref_reusing_catalog(reference, resident_routing, None)
+    }
+
+    pub(crate) fn load_manifest_ref_reusing_catalog(
+        &self,
+        reference: &CollectionManifestRef,
+        resident_routing: bool,
+        reusable_manifest: Option<&Manifest>,
+    ) -> Result<Manifest> {
         validate_collection_manifest_ref(reference)?;
         let expected_paths = [
             (
@@ -2418,6 +2440,33 @@ impl Storage {
         }
         manifest.cell_wal_visible_runs = 0;
         manifest.cell_wal_visible_tombstone_runs = 0;
+        if let Some(reference) = manifest.logical_cell_catalog_ref.as_ref() {
+            let reusable = reusable_manifest.filter(|existing| {
+                existing.logical_cell_catalog_ref.as_ref() == Some(reference)
+                    && existing.config.dimensions == manifest.config.dimensions
+                    && existing.config.metric == manifest.config.metric
+            });
+            let catalog = match reusable.and_then(|existing| existing.logical_cell_catalog.as_ref())
+            {
+                Some(catalog) => Arc::clone(catalog),
+                None => {
+                    self.load_logical_cell_catalog(reference, manifest.config.metric.clone())?
+                }
+            };
+            if reference.routing_epoch != manifest.routing_epoch {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "logical-cell catalog epoch {} does not match manifest epoch {}",
+                    reference.routing_epoch, manifest.routing_epoch
+                )));
+            }
+            if usize::try_from(reference.dimensions).ok() != Some(manifest.config.dimensions) {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "logical-cell catalog dimensions {} do not match manifest dimensions {}",
+                    reference.dimensions, manifest.config.dimensions
+                )));
+            }
+            manifest.logical_cell_catalog = Some(catalog);
+        }
         Ok(manifest)
     }
 
@@ -2447,6 +2496,16 @@ impl Storage {
                 manifest.version
             )));
         }
+        if let Some(reference) = &manifest.logical_cell_catalog_ref {
+            reference.validate()?;
+            if reference.routing_epoch != manifest.routing_epoch
+                || usize::try_from(reference.dimensions).ok() != Some(manifest.config.dimensions)
+            {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "logical-cell catalog reference does not match retained manifest version {version}"
+                )));
+            }
+        }
         Ok(Some(manifest))
     }
 
@@ -2474,6 +2533,67 @@ impl Storage {
             Ok(_) | Err(BorsukError::ConcurrentModification { .. }) => Ok(()),
             Err(err) => Err(err),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn write_logical_cell_catalog(
+        &self,
+        catalog: &LogicalCellCatalog,
+    ) -> Result<LogicalCellCatalogRef> {
+        let (reference, bytes) = Self::prepare_logical_cell_catalog(catalog)?;
+        self.write_prepared_logical_cell_catalog(&reference, &bytes)?;
+        Ok(reference)
+    }
+
+    pub(crate) fn prepare_logical_cell_catalog(
+        catalog: &LogicalCellCatalog,
+    ) -> Result<(LogicalCellCatalogRef, Vec<u8>)> {
+        let bytes = logical_cell_catalog_to_parquet(catalog)?;
+        let reference = LogicalCellCatalogRef::new(
+            blake3::hash(&bytes).to_hex().to_string(),
+            catalog.routing_epoch(),
+            u32::try_from(catalog.cells.len()).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "logical-cell count exceeds the u32 catalog limit".to_string(),
+                )
+            })?,
+            u32::try_from(catalog.dimensions()).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "logical-cell catalog dimensions exceed u32".to_string(),
+                )
+            })?,
+            bytes.len(),
+        )?;
+        Ok((reference, bytes))
+    }
+
+    pub(crate) fn write_prepared_logical_cell_catalog(
+        &self,
+        reference: &LogicalCellCatalogRef,
+        bytes: &[u8],
+    ) -> Result<()> {
+        reference.validate()?;
+        if u64::try_from(bytes.len()).ok() != Some(reference.encoded_bytes)
+            || blake3::hash(bytes).to_hex().as_str() != reference.checksum
+        {
+            return Err(BorsukError::InvalidStorage(
+                "prepared logical-cell catalog bytes do not match their reference".to_string(),
+            ));
+        }
+        self.write_bytes_content_addressed(&reference.path, bytes)?;
+        Ok(())
+    }
+
+    pub(crate) fn load_logical_cell_catalog(
+        &self,
+        reference: &LogicalCellCatalogRef,
+        metric: crate::metric::VectorMetric,
+    ) -> Result<Arc<LogicalCellCatalog>> {
+        reference.validate()?;
+        let bytes = self
+            .read_bytes_with_cache_status_and_checksum(&reference.path, &reference.checksum)?
+            .bytes;
+        logical_cell_catalog_from_parquet(&bytes, reference, metric).map(Arc::new)
     }
 
     pub(crate) fn create_bytes_verified(
@@ -5042,6 +5162,54 @@ mod tests {
             staged.reference.resident_routing_bytes_estimate >= loaded.resident_bytes_estimate()
         );
         assert!(staged.reference.resident_bytes_estimate >= paged.resident_bytes_estimate());
+    }
+
+    #[test]
+    fn manifest_load_authenticates_the_referenced_logical_cell_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let catalog = crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+            1,
+            2,
+            VectorMetric::Cosine,
+            vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+        )
+        .unwrap();
+        let reference = storage.write_logical_cell_catalog(&catalog).unwrap();
+        let mut manifest = exact_manifest(&uri);
+        manifest.logical_cell_catalog_ref = Some(reference.clone());
+        manifest.logical_cell_catalog = Some(Arc::new(catalog.clone()));
+        let staged = storage
+            .stage_manifest(PRIMARY_MODALITY, &manifest, None)
+            .unwrap();
+
+        let loaded = storage.load_manifest_ref(&staged.reference, true).unwrap();
+
+        assert_eq!(loaded.logical_cell_catalog_ref, Some(reference.clone()));
+        assert_eq!(loaded.logical_cell_catalog.as_deref(), Some(&catalog),);
+
+        let before_reuse = storage.request_counts();
+        let reused = storage
+            .load_manifest_ref_reusing_catalog(&staged.reference, true, Some(&loaded))
+            .unwrap();
+        let reuse_gets = storage.request_counts().delta(&before_reuse).gets;
+        assert!(Arc::ptr_eq(
+            reused.logical_cell_catalog.as_ref().unwrap(),
+            loaded.logical_cell_catalog.as_ref().unwrap(),
+        ));
+
+        let before_cold = storage.request_counts();
+        storage.load_manifest_ref(&staged.reference, true).unwrap();
+        let cold_gets = storage.request_counts().delta(&before_cold).gets;
+        assert_eq!(
+            cold_gets,
+            reuse_gets + 1,
+            "reloading an unchanged manifest must not GET and decode its 16K catalog again"
+        );
+
+        storage.write_bytes(&reference.path, b"corrupt").unwrap();
+        assert!(storage.load_manifest_ref(&staged.reference, true).is_err());
     }
 
     #[test]

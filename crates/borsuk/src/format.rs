@@ -135,7 +135,10 @@ use crate::{
 // Bumped 31 -> 32 when durable table roles became fixed to Parquet and the
 // rejected alternate-backend fields/readers were removed. Pre-release v31
 // artifacts are rejected instead of retaining a compatibility path.
-const CURRENT_VERSION: u16 = 32;
+// Bumped 32 -> 33 when logical-cell centroids moved from repeated inline
+// manifest JSON into one checksum-pinned, content-addressed Parquet catalog.
+// Experimental v32 manifests are rebuilt rather than keeping a dual reader.
+const CURRENT_VERSION: u16 = 33;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -460,10 +463,7 @@ struct WalManifestJson {
     routing_epoch: u64,
     #[serde(default)]
     cell_wal_config: crate::CellWalConfig,
-    #[serde(default = "default_logical_cells")]
-    logical_cells: Vec<crate::LogicalCellId>,
-    #[serde(default)]
-    logical_cell_centroids: Vec<Vec<f32>>,
+    logical_cell_catalog_ref: Option<crate::logical_cell_catalog::LogicalCellCatalogRef>,
     #[serde(default)]
     cell_wal_consumed_runs: BTreeSet<String>,
     #[serde(default)]
@@ -480,8 +480,7 @@ type ManifestWalState = (
     crate::manifest::WalConfig,
     u64,
     crate::CellWalConfig,
-    Vec<crate::LogicalCellId>,
-    Vec<Vec<f32>>,
+    Option<crate::logical_cell_catalog::LogicalCellCatalogRef>,
     BTreeSet<String>,
     Vec<crate::manifest::TombstoneSummary>,
     Vec<crate::manifest::Bm25StatsDeltaRef>,
@@ -493,10 +492,6 @@ const fn default_routing_epoch() -> u64 {
     1
 }
 
-fn default_logical_cells() -> Vec<crate::LogicalCellId> {
-    vec![crate::LogicalCellId::new(default_routing_epoch(), 0)]
-}
-
 fn wal_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
     // The production catalog always persists its routing epoch and cell-lane
     // policy, even when every value equals the current default. BORSUK is
@@ -505,8 +500,7 @@ fn wal_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
         config: manifest.wal_config.clone(),
         routing_epoch: manifest.routing_epoch,
         cell_wal_config: manifest.cell_wal_config,
-        logical_cells: manifest.logical_cells.clone(),
-        logical_cell_centroids: manifest.logical_cell_centroids.clone(),
+        logical_cell_catalog_ref: manifest.logical_cell_catalog_ref.clone(),
         cell_wal_consumed_runs: manifest.cell_wal_consumed_runs.clone(),
         tombstone_frontier: manifest.tombstone_frontier.clone(),
         bm25_stats_delta_frontier: manifest.bm25_stats_delta_frontier.clone(),
@@ -525,8 +519,7 @@ fn manifest_wal(batch: &RecordBatch) -> Result<ManifestWalState> {
             crate::manifest::WalConfig::default(),
             default_routing_epoch(),
             crate::CellWalConfig::default(),
-            default_logical_cells(),
-            Vec::new(),
+            None,
             BTreeSet::new(),
             Vec::new(),
             Vec::new(),
@@ -539,8 +532,7 @@ fn manifest_wal(batch: &RecordBatch) -> Result<ManifestWalState> {
             crate::manifest::WalConfig::default(),
             default_routing_epoch(),
             crate::CellWalConfig::default(),
-            default_logical_cells(),
-            Vec::new(),
+            None,
             BTreeSet::new(),
             Vec::new(),
             Vec::new(),
@@ -556,8 +548,7 @@ fn manifest_wal(batch: &RecordBatch) -> Result<ManifestWalState> {
         payload.config,
         payload.routing_epoch,
         payload.cell_wal_config,
-        payload.logical_cells,
-        payload.logical_cell_centroids,
+        payload.logical_cell_catalog_ref,
         payload.cell_wal_consumed_runs,
         payload.tombstone_frontier,
         payload.bm25_stats_delta_frontier,
@@ -695,8 +686,7 @@ pub(crate) fn manifest_from_parquet(
         wal_config,
         routing_epoch,
         cell_wal_config,
-        logical_cells,
-        logical_cell_centroids,
+        logical_cell_catalog_ref,
         cell_wal_consumed_runs,
         tombstone_frontier,
         bm25_stats_delta_frontier,
@@ -734,8 +724,9 @@ pub(crate) fn manifest_from_parquet(
         wal_config,
         routing_epoch,
         cell_wal_config,
-        logical_cells,
-        logical_cell_centroids,
+        logical_cell_catalog_ref,
+        logical_cell_catalog: None,
+        bootstrap_logical_cells: [crate::LogicalCellId::new(routing_epoch, 0)],
         cell_wal_consumed_runs,
         cell_wal_visible_runs: 0,
         cell_wal_visible_tombstone_runs: 0,
@@ -799,8 +790,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         wal_config,
         routing_epoch,
         cell_wal_config,
-        logical_cells,
-        logical_cell_centroids,
+        logical_cell_catalog_ref,
         cell_wal_consumed_runs,
         tombstone_frontier,
         bm25_stats_delta_frontier,
@@ -843,8 +833,9 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         wal_config,
         routing_epoch,
         cell_wal_config,
-        logical_cells,
-        logical_cell_centroids,
+        logical_cell_catalog_ref,
+        logical_cell_catalog: None,
+        bootstrap_logical_cells: [crate::LogicalCellId::new(routing_epoch, 0)],
         cell_wal_consumed_runs,
         cell_wal_visible_runs: 0,
         cell_wal_visible_tombstone_runs: 0,
@@ -9153,8 +9144,9 @@ mod tests {
             wal_config: crate::manifest::WalConfig::default(),
             routing_epoch: 1,
             cell_wal_config: crate::CellWalConfig::default(),
-            logical_cells: vec![crate::LogicalCellId::new(1, 0)],
-            logical_cell_centroids: Vec::new(),
+            logical_cell_catalog_ref: None,
+            logical_cell_catalog: None,
+            bootstrap_logical_cells: [crate::LogicalCellId::new(1, 0)],
             cell_wal_consumed_runs: BTreeSet::new(),
             cell_wal_visible_runs: 0,
             cell_wal_visible_tombstone_runs: 0,
@@ -9165,6 +9157,55 @@ mod tests {
             bm25_stats_delta_frontier: Vec::new(),
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn manifest_table_uses_the_logical_cell_catalog_format_version() {
+        let bytes = manifest_to_parquet(&valid_manifest()).unwrap();
+        let batch = first_batch(&bytes, "manifest").unwrap();
+
+        assert_eq!(
+            primitive_value_by_name::<UInt16Type>(&batch, 0, "format_version").unwrap(),
+            crate::logical_cell_catalog::LOGICAL_CELL_CATALOG_FORMAT_VERSION
+        );
+    }
+
+    #[test]
+    fn manifest_persists_only_the_bounded_logical_cell_catalog_reference() {
+        let mut manifest = valid_manifest();
+        let catalog = Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                1,
+                2,
+                VectorMetric::Euclidean,
+                vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            )
+            .unwrap(),
+        );
+        let catalog_bytes =
+            crate::logical_cell_catalog::logical_cell_catalog_to_parquet(&catalog).unwrap();
+        let reference = crate::logical_cell_catalog::LogicalCellCatalogRef::new(
+            blake3::hash(&catalog_bytes).to_hex().to_string(),
+            1,
+            2,
+            2,
+            catalog_bytes.len(),
+        )
+        .unwrap();
+        manifest.logical_cell_catalog_ref = Some(reference.clone());
+        manifest.logical_cell_catalog = Some(catalog);
+
+        let manifest_bytes = manifest_to_parquet(&manifest).unwrap();
+        let routing_bytes = routing_to_parquet(&manifest).unwrap();
+        let decoded = manifest_from_parquet(&manifest_bytes, &routing_bytes).unwrap();
+        let batch = first_batch(&manifest_bytes, "manifest").unwrap();
+        let wal_json = string_value_by_name(&batch, 0, "wal_json").unwrap();
+
+        assert_eq!(decoded.logical_cell_catalog_ref, Some(reference));
+        assert!(decoded.logical_cell_catalog.is_none());
+        assert!(!wal_json.contains("logical_cells"), "{wal_json}");
+        assert!(!wal_json.contains("logical_cell_centroids"), "{wal_json}");
+        assert!(wal_json.contains("logical_cell_catalog_ref"), "{wal_json}");
     }
 
     fn manifest_with_segment(segment: SegmentSummary) -> Manifest {

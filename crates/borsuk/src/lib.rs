@@ -25,6 +25,7 @@ mod late_interaction_sidecar;
 mod lexical_build;
 mod lexical_root;
 mod lexical_simd;
+mod logical_cell_catalog;
 mod maintenance;
 mod manifest;
 mod metadata;

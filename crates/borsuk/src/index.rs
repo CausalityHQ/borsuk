@@ -2609,34 +2609,123 @@ impl BorsukIndex {
         self.finalize_logical_cell_topology(&summaries)
     }
 
+    /// Initialize a frozen logical-cell routing catalog without creating seed
+    /// records or empty physical segments.
+    ///
+    /// This pre-release qualification seam is intentionally pristine-only. A
+    /// concurrent initializer must win the collection CAS explicitly; this
+    /// method never rebases a different catalog onto a newer collection view.
+    #[doc(hidden)]
+    pub fn initialize_logical_cell_catalog(&mut self, centroids: Vec<Vec<f32>>) -> Result<()> {
+        if self.manifest_reference.modality != PRIMARY_MODALITY
+            || !self.named.is_empty()
+            || !self.manifest.config.named_vectors.is_empty()
+            || !self.manifest.segments.is_empty()
+            || !self.manifest.pivots.is_empty()
+            || self.manifest.next_generated_id != 0
+            || self.manifest.tombstone.is_some()
+            || !self.manifest.tombstone_frontier.is_empty()
+            || !self.manifest.tombstone_pages.is_empty()
+            || self.manifest.tombstone_id_count != 0
+            || !self.manifest.cell_wal_consumed_runs.is_empty()
+            || self.manifest.quantizer_ref.is_some()
+            || self.manifest.global_ann_ref.is_some()
+            || !self.manifest.lexical_roots.is_empty()
+            || self.manifest.bm25_stats_delta.is_some()
+            || !self.manifest.bm25_stats_delta_frontier.is_empty()
+            || self.manifest.logical_cell_catalog_ref.is_some()
+            || self.manifest.logical_cell_catalog.is_some()
+            || !self.cell_wal_snapshot.is_empty()
+            || !self.positioned_run_identities.is_empty()
+            || !self.positioned_bm25_deltas.is_empty()
+            || !self.lane_log_snapshot.is_empty()
+            || self.active_collection_transaction.is_some()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "logical-cell catalog initialization requires a pristine primary collection"
+                    .to_string(),
+            ));
+        }
+        let catalog = Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                self.manifest.routing_epoch,
+                self.manifest.config.dimensions,
+                self.manifest.config.metric.clone(),
+                centroids,
+            )?,
+        );
+        let (reference, bytes) = Storage::prepare_logical_cell_catalog(&catalog)?;
+        let previous = self.manifest.clone();
+        let mut next = self.manifest.next_version();
+        next.logical_cell_catalog_ref = Some(reference.clone());
+        next.logical_cell_catalog = Some(catalog);
+        enforce_ram_budget(&next, self.runtime_ram_budget_bytes)?;
+        self.storage
+            .write_prepared_logical_cell_catalog(&reference, &bytes)?;
+        let (staged, mut report) = self
+            .storage
+            .stage_manifest_with_report_and_routing_summaries(
+                PRIMARY_MODALITY,
+                &next,
+                Some(&previous),
+                Some(&[]),
+            )?;
+        let published = self.publish_staged_collection_manifest(staged, &mut report)?;
+        self.manifest = published;
+        *self
+            .logical_cell_quantizer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+        Ok(())
+    }
+
     /// Freeze epoch-one logical write cells from the freshly built routing
     /// centroids. Physical segment replacement later does not rewrite this
     /// catalog; only an explicit routing-epoch rebuild may do so.
     fn finalize_logical_cell_topology(&mut self, summaries: &[SegmentSummary]) -> Result<()> {
-        if summaries.is_empty() || !self.manifest.logical_cell_centroids.is_empty() {
+        if summaries.is_empty() || self.manifest.logical_cell_catalog_ref.is_some() {
             return Ok(());
         }
-        let logical_cells = summaries
-            .iter()
-            .enumerate()
-            .map(|(ordinal, _)| {
-                let ordinal = u32::try_from(ordinal).map_err(|_| {
-                    BorsukError::InvalidStorage(
-                        "logical cell count exceeds the u32 catalog limit".to_string(),
-                    )
-                })?;
-                Ok(LogicalCellId::new(self.manifest.routing_epoch, ordinal))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let normalized_geometry = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
         let centroids = summaries
             .iter()
             .map(|summary| summary.centroid.clone())
+            .filter(|centroid| {
+                !normalized_geometry
+                    || centroid
+                        .iter()
+                        .map(|value| {
+                            let value = f64::from(*value);
+                            value * value
+                        })
+                        .sum::<f64>()
+                        .sqrt()
+                        > f64::from(f32::EPSILON)
+            })
             .collect::<Vec<_>>();
+        if centroids.is_empty() {
+            return Ok(());
+        }
+        let catalog = Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                self.manifest.routing_epoch,
+                self.manifest.config.dimensions,
+                self.manifest.config.metric.clone(),
+                centroids,
+            )?,
+        );
+        let (catalog_ref, bytes) = Storage::prepare_logical_cell_catalog(&catalog)?;
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
-        manifest.logical_cells = logical_cells;
-        manifest.logical_cell_centroids = centroids;
+        manifest.logical_cell_catalog_ref = Some(catalog_ref.clone());
+        manifest.logical_cell_catalog = Some(catalog);
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        self.storage
+            .write_prepared_logical_cell_catalog(&catalog_ref, &bytes)?;
         self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
             manifest, &previous,
         )?;
@@ -4016,9 +4105,11 @@ impl BorsukIndex {
                 ))
             })?
             .clone();
-        let mut latest = self
-            .collection_storage
-            .load_manifest_ref(&own_reference, self.resident_routing_summaries().is_some())?;
+        let mut latest = self.collection_storage.load_manifest_ref_reusing_catalog(
+            &own_reference,
+            self.resident_routing_summaries().is_some(),
+            Some(&self.manifest),
+        )?;
         validate_reference_resident_bytes(&own_reference, &latest, resident_routing)?;
         if own_modality == PRIMARY_MODALITY
             && collection_schema_fingerprint(&latest)
@@ -4063,9 +4154,11 @@ impl BorsukIndex {
                     ))
                 })?
                 .clone();
-            let mut manifest = self
-                .collection_storage
-                .load_manifest_ref(&reference, child.resident_routing_summaries().is_some())?;
+            let mut manifest = self.collection_storage.load_manifest_ref_reusing_catalog(
+                &reference,
+                child.resident_routing_summaries().is_some(),
+                Some(&child.manifest),
+            )?;
             validate_reference_resident_bytes(
                 &reference,
                 &manifest,
@@ -5557,8 +5650,10 @@ impl BorsukIndex {
                 .collection_wal_authorized_transaction_ids_snapshot()?;
             let mut before = before;
             before.extend(cell_wal.live_staging_transaction_ids()?);
-            let unrooted = cell_wal
-                .run_identities_without_root_authorization(&self.manifest.logical_cells, &before)?;
+            let unrooted = cell_wal.run_identities_without_root_authorization(
+                self.manifest.logical_cells(),
+                &before,
+            )?;
             let mut after = self
                 .collection_storage
                 .collection_wal_authorized_transaction_ids_snapshot()?;
@@ -5585,7 +5680,7 @@ impl BorsukIndex {
         let unrooted =
             self.cell_wal_run_identities_without_root_authorization(retained_run_identities)?;
         self.cell_wal_store()?
-            .prune_consumed_runs(&self.manifest.logical_cells, &unrooted)
+            .prune_consumed_runs(self.manifest.logical_cells(), &unrooted)
     }
 
     fn cell_wal_object_paths_detached_without_root_authorization(
@@ -5595,7 +5690,7 @@ impl BorsukIndex {
         let unrooted =
             self.cell_wal_run_identities_without_root_authorization(retained_run_identities)?;
         self.cell_wal_store()?
-            .object_paths_detached_by_pruning(&self.manifest.logical_cells, &unrooted)
+            .object_paths_detached_by_pruning(self.manifest.logical_cells(), &unrooted)
     }
 
     fn collection_wal_transactions_by_modality(
@@ -5665,9 +5760,16 @@ impl BorsukIndex {
                                 "consumed transaction `{transaction_id}` references missing modality `{modality}`"
                             ))
                         })?;
-                    let manifest = self
-                        .collection_storage
-                        .load_manifest_ref(reference, false)?;
+                    let reusable_manifest = if modality == PRIMARY_MODALITY {
+                        Some(&self.manifest)
+                    } else {
+                        self.named.get(modality).map(|child| &child.manifest)
+                    };
+                    let manifest = self.collection_storage.load_manifest_ref_reusing_catalog(
+                        reference,
+                        false,
+                        reusable_manifest,
+                    )?;
                     if !run_ids.is_subset(&manifest.cell_wal_consumed_runs) {
                         return Err(BorsukError::InvalidStorage(format!(
                             "pending transaction `{transaction_id}` is not fenced by the published `{modality}` manifest"
@@ -9189,14 +9291,22 @@ impl BorsukIndex {
         &self,
         vector: &[f32],
     ) -> Result<(LogicalCellId, &'static str)> {
+        if self.manifest.logical_cell_catalog_ref.is_some()
+            && self.manifest.logical_cell_catalog.is_none()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "manifest references a logical-cell catalog without a resident logical-cell catalog"
+                    .to_string(),
+            ));
+        }
         let bootstrap = self
             .manifest
-            .logical_cells
+            .logical_cells()
             .first()
             .copied()
             .unwrap_or_else(|| LogicalCellId::new(self.manifest.routing_epoch, 0));
-        if self.manifest.logical_cell_centroids.len() != self.manifest.logical_cells.len()
-            || self.manifest.logical_cell_centroids.is_empty()
+        if self.manifest.logical_cell_centroids().len() != self.manifest.logical_cells().len()
+            || self.manifest.logical_cell_centroids().is_empty()
         {
             return Ok((bootstrap, "bootstrap"));
         }
@@ -9211,7 +9321,7 @@ impl BorsukIndex {
             vector.to_vec()
         };
         if !self.flat_logical_cell_routing
-            && self.manifest.logical_cells.len() >= COARSE_QUANTIZER_MIN_CELLS
+            && self.manifest.logical_cells().len() >= COARSE_QUANTIZER_MIN_CELLS
         {
             let quantizer = {
                 let cached = self
@@ -9225,7 +9335,7 @@ impl BorsukIndex {
             let quantizer = match quantizer {
                 Some(quantizer) => Some(quantizer),
                 None => {
-                    let Some(built) = CentroidHnsw::build(&self.manifest.logical_cell_centroids)
+                    let Some(built) = CentroidHnsw::build(self.manifest.logical_cell_centroids())
                     else {
                         return Ok((bootstrap, "bootstrap"));
                     };
@@ -9241,13 +9351,13 @@ impl BorsukIndex {
             if let Some(ordinal) = quantizer
                 .and_then(|quantizer| quantizer.nearest(&routed, 1).into_iter().next())
                 .and_then(|ordinal| usize::try_from(ordinal).ok())
-                && let Some(cell) = self.manifest.logical_cells.get(ordinal)
+                && let Some(cell) = self.manifest.logical_cells().get(ordinal)
             {
                 return Ok((*cell, "quantizer"));
             }
         }
         self.manifest
-            .logical_cell_centroids
+            .logical_cell_centroids()
             .iter()
             .enumerate()
             .map(|(ordinal, centroid)| {
@@ -9260,7 +9370,7 @@ impl BorsukIndex {
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .min_by(|left, right| left.1.total_cmp(&right.1))
-            .and_then(|(ordinal, _)| self.manifest.logical_cells.get(ordinal).copied())
+            .and_then(|(ordinal, _)| self.manifest.logical_cells().get(ordinal).copied())
             .map(|cell| (cell, "flat"))
             .ok_or_else(|| {
                 BorsukError::InvalidStorage(
@@ -9282,7 +9392,7 @@ impl BorsukIndex {
     }
 
     fn id_directory_partition(&self, id: &[u8]) -> LogicalCellId {
-        let cells = &self.manifest.logical_cells;
+        let cells = self.manifest.logical_cells();
         if cells.is_empty() {
             return LogicalCellId::new(self.manifest.routing_epoch, 0);
         }
@@ -9378,7 +9488,7 @@ impl BorsukIndex {
             return Ok(());
         }
         self.cell_wal_store()?
-            .prune_consumed_runs(&self.manifest.logical_cells, &consumed)?;
+            .prune_consumed_runs(self.manifest.logical_cells(), &consumed)?;
         Ok(())
     }
 
@@ -9673,7 +9783,7 @@ impl BorsukIndex {
         let mut inputs = Vec::new();
         let bundle_cell = self
             .manifest
-            .logical_cells
+            .logical_cells()
             .first()
             .copied()
             .unwrap_or_else(|| LogicalCellId::new(self.manifest.routing_epoch, 0));
@@ -10941,9 +11051,11 @@ impl BorsukIndex {
                 ))
             })?
             .clone();
-        let manifest = self
-            .collection_storage
-            .load_manifest_ref(&reference, self.resident_routing_summaries().is_some())?;
+        let manifest = self.collection_storage.load_manifest_ref_reusing_catalog(
+            &reference,
+            self.resident_routing_summaries().is_some(),
+            Some(&self.manifest),
+        )?;
         Ok((collection, reference, manifest))
     }
 
@@ -13188,6 +13300,10 @@ impl BorsukIndex {
         for tombstone in &self.manifest.tombstone_pages {
             paths.insert(tombstone.path.clone());
         }
+        if let Some(catalog_ref) = &self.manifest.logical_cell_catalog_ref {
+            catalog_ref.validate()?;
+            paths.insert(catalog_ref.path.clone());
+        }
         // The persisted coarse-quantizer object this manifest references is live
         // and must be retained; a superseded one is reclaimed once no active or
         // retained manifest references it.
@@ -13295,7 +13411,7 @@ impl BorsukIndex {
         }
         Self::extend_cell_wal_metadata_object_paths(&mut paths, &self.cell_wal_snapshot)?;
         let cell_wal = self.cell_wal_store()?;
-        paths.extend(cell_wal.active_object_paths(&self.manifest.logical_cells)?);
+        paths.extend(cell_wal.active_object_paths(self.manifest.logical_cells())?);
         let legacy_consumed_runs = self
             .manifest
             .cell_wal_consumed_runs
@@ -24655,6 +24771,241 @@ mod tests {
     }
 
     #[test]
+    fn pristine_logical_cell_catalog_initializes_without_seed_records_or_segments() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let cell_count = COARSE_QUANTIZER_MIN_CELLS.max(128);
+        let centroids = (0..cell_count)
+            .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+            .collect::<Vec<_>>();
+
+        index.initialize_logical_cell_catalog(centroids).unwrap();
+
+        assert!(index.manifest.segments.is_empty());
+        assert_eq!(index.manifest.logical_cells().len(), cell_count);
+        assert!(index.cell_wal_snapshot.is_empty());
+        let reference = index.manifest.logical_cell_catalog_ref.clone().unwrap();
+        assert!(
+            index
+                .active_segment_object_paths()
+                .unwrap()
+                .paths
+                .contains(&reference.path),
+            "GC must retain the catalog referenced by the live manifest"
+        );
+        let routed = index.logical_cell_for_research(&[730.0, 0.0]).unwrap();
+        assert_eq!(routed.1, "quantizer");
+        assert_eq!(routed.0, LogicalCellId::new(1, 73));
+        drop(index);
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert!(reopened.manifest.segments.is_empty());
+        assert_eq!(reopened.manifest.logical_cell_catalog_ref, Some(reference));
+        assert_eq!(
+            reopened.logical_cell_for_research(&[730.0, 0.0]).unwrap(),
+            routed
+        );
+    }
+
+    #[test]
+    fn empty_catalog_cells_accept_positioned_writes_and_flush_only_nonempty_segments() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .initialize_logical_cell_catalog(vec![
+                vec![0.0, 0.0],
+                vec![10.0, 0.0],
+                vec![20.0, 0.0],
+                vec![30.0, 0.0],
+            ])
+            .unwrap();
+        let reference = index.manifest.logical_cell_catalog_ref.clone().unwrap();
+
+        index
+            .put(vec![
+                VectorRecord::new("near-zero", vec![0.5, 0.0]),
+                VectorRecord::new("near-thirty", vec![29.5, 0.0]),
+            ])
+            .unwrap();
+
+        assert!(index.manifest.segments.is_empty());
+        assert_eq!(index.get_vector("near-zero").unwrap(), Some(vec![0.5, 0.0]));
+        drop(index);
+
+        let mut reopened = BorsukIndex::open(&uri).unwrap();
+        assert!(reopened.manifest.segments.is_empty());
+        assert_eq!(
+            reopened.get_vector("near-thirty").unwrap(),
+            Some(vec![29.5, 0.0])
+        );
+        reopened.flush().unwrap();
+
+        assert!(!reopened.manifest.segments.is_empty());
+        assert!(
+            reopened
+                .manifest
+                .segments
+                .iter()
+                .all(|segment| segment.object_count > 0)
+        );
+        assert!(reopened.cell_wal_snapshot.is_empty());
+        assert_eq!(reopened.manifest.logical_cell_catalog_ref, Some(reference));
+        assert_eq!(
+            reopened.logical_cell_for_research(&[29.5, 0.0]).unwrap().0,
+            LogicalCellId::new(1, 3)
+        );
+    }
+
+    #[test]
+    fn logical_cell_catalog_reseed_is_rejected_without_changing_the_live_catalog() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .initialize_logical_cell_catalog(vec![vec![0.0, 0.0], vec![10.0, 0.0]])
+            .unwrap();
+        let before = index.manifest.logical_cell_catalog_ref.clone();
+
+        assert!(
+            index
+                .initialize_logical_cell_catalog(vec![vec![5.0, 0.0], vec![15.0, 0.0]])
+                .is_err()
+        );
+
+        assert_eq!(index.manifest.logical_cell_catalog_ref, before);
+        drop(index);
+        assert_eq!(
+            BorsukIndex::open(&uri)
+                .unwrap()
+                .manifest
+                .logical_cell_catalog_ref,
+            before
+        );
+    }
+
+    #[test]
+    fn referenced_logical_cell_catalog_never_falls_back_to_bootstrap_routing() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .initialize_logical_cell_catalog(vec![vec![0.0, 0.0], vec![10.0, 0.0]])
+            .unwrap();
+        index.manifest.logical_cell_catalog = None;
+
+        let error = index.route_vector_to_logical_cell(&[9.0, 0.0]).unwrap_err();
+
+        assert!(
+            matches!(error, BorsukError::InvalidStorage(message) if message.contains("resident logical-cell catalog")),
+            "a referenced but absent catalog must fail closed instead of routing to cell zero"
+        );
+    }
+
+    #[test]
+    fn logical_cell_catalog_ram_rejection_happens_before_catalog_put() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index.runtime_ram_budget_bytes = Some(index.manifest.resident_bytes_estimate());
+        let requests_before = index.request_counts();
+
+        let error = index
+            .initialize_logical_cell_catalog(vec![vec![0.0, 0.0], vec![10.0, 0.0]])
+            .unwrap_err();
+
+        assert!(matches!(error, BorsukError::RamBudgetExceeded { .. }));
+        assert_eq!(
+            index.request_counts().delta(&requests_before).puts,
+            0,
+            "a catalog that cannot fit the handle RAM budget must not create an orphan object"
+        );
+        assert!(index.manifest.logical_cell_catalog_ref.is_none());
+    }
+
+    #[test]
+    fn finish_bulk_load_skips_degenerate_cosine_routing_centroids() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Cosine,
+            dimensions: 2,
+            segment_max_vectors: 2,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .put(vec![
+                VectorRecord::new("positive", vec![1.0, 0.0]),
+                VectorRecord::new("negative", vec![-1.0, 0.0]),
+            ])
+            .unwrap();
+
+        index.finish_bulk_load().unwrap();
+
+        assert!(!index.manifest.segments.is_empty());
+        assert!(index.manifest.logical_cell_catalog_ref.is_none());
+        assert_eq!(index.get_vector("positive").unwrap(), Some(vec![1.0, 0.0]));
+        drop(index);
+        assert_eq!(
+            BorsukIndex::open(&uri)
+                .unwrap()
+                .get_vector("negative")
+                .unwrap(),
+            Some(vec![-1.0, 0.0])
+        );
+    }
+
+    #[test]
     fn logical_cell_write_quantizer_routes_and_survives_manifest_versions() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
@@ -24669,19 +25020,19 @@ mod tests {
         })
         .unwrap();
         let cell_count = COARSE_QUANTIZER_MIN_CELLS.max(128);
-        index.manifest.logical_cells = (0..cell_count)
-            .map(|ordinal| {
-                LogicalCellId::new(
-                    index.manifest.routing_epoch,
-                    u32::try_from(ordinal).unwrap(),
-                )
-            })
-            .collect();
-        index.manifest.logical_cell_centroids = (0..cell_count)
-            .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
-            .collect();
+        index.manifest.logical_cell_catalog = Some(Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                index.manifest.routing_epoch,
+                2,
+                VectorMetric::Euclidean,
+                (0..cell_count)
+                    .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+                    .collect(),
+            )
+            .unwrap(),
+        ));
 
-        let expected = index.manifest.logical_cells[73];
+        let expected = index.manifest.logical_cells()[73];
         assert_eq!(
             index.route_vector_to_logical_cell(&[730.0, 0.0]).unwrap(),
             expected
@@ -24718,22 +25069,22 @@ mod tests {
         })
         .unwrap();
         let cell_count = COARSE_QUANTIZER_MIN_CELLS.max(128);
-        index.manifest.logical_cells = (0..cell_count)
-            .map(|ordinal| {
-                LogicalCellId::new(
-                    index.manifest.routing_epoch,
-                    u32::try_from(ordinal).unwrap(),
-                )
-            })
-            .collect();
-        index.manifest.logical_cell_centroids = (0..cell_count)
-            .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
-            .collect();
+        index.manifest.logical_cell_catalog = Some(Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                index.manifest.routing_epoch,
+                2,
+                VectorMetric::Euclidean,
+                (0..cell_count)
+                    .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+                    .collect(),
+            )
+            .unwrap(),
+        ));
         index.flat_logical_cell_routing = true;
 
         assert_eq!(
             index.route_vector_to_logical_cell(&[730.0, 0.0]).unwrap(),
-            index.manifest.logical_cells[73]
+            index.manifest.logical_cells()[73]
         );
         assert!(index.logical_cell_quantizer.lock().unwrap().is_none());
     }
@@ -24753,23 +25104,23 @@ mod tests {
         })
         .unwrap();
         let cell_count = COARSE_QUANTIZER_MIN_CELLS.max(128);
-        index.manifest.logical_cells = (0..cell_count)
-            .map(|ordinal| {
-                LogicalCellId::new(
-                    index.manifest.routing_epoch,
-                    u32::try_from(ordinal).unwrap(),
-                )
-            })
-            .collect();
-        index.manifest.logical_cell_centroids = (0..cell_count)
-            .map(|ordinal| {
-                let angle = std::f32::consts::TAU * ordinal as f32 / cell_count as f32;
-                vec![angle.cos(), angle.sin()]
-            })
-            .collect();
+        index.manifest.logical_cell_catalog = Some(Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                index.manifest.routing_epoch,
+                2,
+                VectorMetric::Angular,
+                (0..cell_count)
+                    .map(|ordinal| {
+                        let angle = std::f32::consts::TAU * ordinal as f32 / cell_count as f32;
+                        vec![angle.cos(), angle.sin()]
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+        ));
 
-        let expected = index.manifest.logical_cells[19];
-        let centroid = &index.manifest.logical_cell_centroids[19];
+        let expected = index.manifest.logical_cells()[19];
+        let centroid = &index.manifest.logical_cell_centroids()[19];
         let scaled = [centroid[0] * 37.0, centroid[1] * 37.0];
         assert_eq!(
             index.route_vector_to_logical_cell(&scaled).unwrap(),
@@ -24988,12 +25339,17 @@ mod tests {
             named_vectors: BTreeMap::new(),
         })
         .unwrap();
-        index.manifest.logical_cells = (0..8)
-            .map(|ordinal| LogicalCellId::new(index.manifest.routing_epoch, ordinal))
-            .collect();
-        index.manifest.logical_cell_centroids = (0..8)
-            .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
-            .collect();
+        index.manifest.logical_cell_catalog = Some(Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                index.manifest.routing_epoch,
+                2,
+                VectorMetric::Euclidean,
+                (0..8)
+                    .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+                    .collect(),
+            )
+            .unwrap(),
+        ));
         index.wal_tail_runtime = Arc::new(WalTailRuntime::new(0, 1024 * 1024));
         index
             .add(
@@ -25084,14 +25440,17 @@ mod tests {
 
         let mut gets = Vec::new();
         for cell_count in [1_usize, 10_000] {
-            index.manifest.logical_cells = (0..cell_count)
-                .map(|ordinal| {
-                    LogicalCellId::new(
-                        index.manifest.routing_epoch,
-                        u32::try_from(ordinal).unwrap(),
-                    )
-                })
-                .collect();
+            index.manifest.logical_cell_catalog = Some(Arc::new(
+                crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                    index.manifest.routing_epoch,
+                    2,
+                    VectorMetric::Euclidean,
+                    (0..cell_count)
+                        .map(|ordinal| vec![ordinal as f32, 0.0])
+                        .collect(),
+                )
+                .unwrap(),
+            ));
             let before = index.storage.request_counts();
             assert!(
                 index

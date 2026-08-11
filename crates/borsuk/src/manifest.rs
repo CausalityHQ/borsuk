@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, mem::size_of};
+use std::{collections::BTreeSet, mem::size_of, sync::Arc};
 
 use crate::simd_control::f32x8;
 use chrono::{DateTime, Utc};
@@ -8,6 +8,7 @@ use crate::{
     error::{BorsukError, Result},
     global_leaf_run::GlobalAnnRef,
     index::IndexConfig,
+    logical_cell_catalog::{LogicalCellCatalog, LogicalCellCatalogRef},
     metric::{VectorMetric, unit_l2_normalized},
     record::{BuildConfig, LeafCapability, LeafMode},
     segment::vector_signature,
@@ -167,13 +168,15 @@ pub struct Manifest {
     /// Independent lane count owned by every logical cell in this epoch.
     #[serde(default)]
     pub(crate) cell_wal_config: CellWalConfig,
-    /// Active logical write cells, independent of replaceable segment IDs.
-    #[serde(default = "default_logical_cells")]
-    pub(crate) logical_cells: Vec<LogicalCellId>,
-    /// Immutable routing centroids corresponding one-for-one with
-    /// `logical_cells`. Empty denotes the bootstrap topology.
+    /// Bounded reference to the immutable format-33 logical-cell catalog.
     #[serde(default)]
-    pub(crate) logical_cell_centroids: Vec<Vec<f32>>,
+    pub(crate) logical_cell_catalog_ref: Option<LogicalCellCatalogRef>,
+    /// Authenticated resident catalog loaded before an index handle is exposed.
+    #[serde(skip)]
+    pub(crate) logical_cell_catalog: Option<Arc<LogicalCellCatalog>>,
+    /// Handle-local one-cell fallback used only before a catalog is initialized.
+    #[serde(skip, default = "default_logical_cells")]
+    pub(crate) bootstrap_logical_cells: [LogicalCellId; 1],
     /// Cell-WAL run checksums already materialized into immutable base segments.
     #[serde(default)]
     pub(crate) cell_wal_consumed_runs: BTreeSet<String>,
@@ -222,8 +225,8 @@ const fn default_routing_epoch() -> u64 {
     1
 }
 
-fn default_logical_cells() -> Vec<LogicalCellId> {
-    vec![LogicalCellId::new(default_routing_epoch(), 0)]
+fn default_logical_cells() -> [LogicalCellId; 1] {
+    [LogicalCellId::new(default_routing_epoch(), 0)]
 }
 
 /// Reference from a manifest to its persisted coarse-quantizer object. The
@@ -516,8 +519,9 @@ impl Manifest {
             wal_config: WalConfig::default(),
             routing_epoch: default_routing_epoch(),
             cell_wal_config: CellWalConfig::default(),
-            logical_cells: default_logical_cells(),
-            logical_cell_centroids: Vec::new(),
+            logical_cell_catalog_ref: None,
+            logical_cell_catalog: None,
+            bootstrap_logical_cells: default_logical_cells(),
             cell_wal_consumed_runs: BTreeSet::new(),
             cell_wal_visible_runs: 0,
             cell_wal_visible_tombstone_runs: 0,
@@ -550,8 +554,9 @@ impl Manifest {
             wal_config: self.wal_config.clone(),
             routing_epoch: self.routing_epoch,
             cell_wal_config: self.cell_wal_config,
-            logical_cells: self.logical_cells.clone(),
-            logical_cell_centroids: self.logical_cell_centroids.clone(),
+            logical_cell_catalog_ref: self.logical_cell_catalog_ref.clone(),
+            logical_cell_catalog: self.logical_cell_catalog.clone(),
+            bootstrap_logical_cells: self.bootstrap_logical_cells,
             cell_wal_consumed_runs: self.cell_wal_consumed_runs.clone(),
             cell_wal_visible_runs: self.cell_wal_visible_runs,
             cell_wal_visible_tombstone_runs: self.cell_wal_visible_tombstone_runs,
@@ -619,7 +624,15 @@ impl Manifest {
     /// Active logical write cells for the routing epoch.
     #[must_use]
     pub fn logical_cells(&self) -> &[LogicalCellId] {
-        &self.logical_cells
+        self.logical_cell_catalog
+            .as_ref()
+            .map_or(&self.bootstrap_logical_cells, |catalog| &catalog.cells)
+    }
+
+    pub(crate) fn logical_cell_centroids(&self) -> &[Vec<f32>] {
+        self.logical_cell_catalog
+            .as_ref()
+            .map_or(&[], |catalog| catalog.centroids.as_slice())
     }
 
     /// Maximum records written into each future immutable physical segment.
@@ -756,6 +769,16 @@ impl Manifest {
             }
             for page in &self.tombstone_pages {
                 add(page.resident_bytes_estimate())?;
+            }
+            if let Some(reference) = &self.logical_cell_catalog_ref {
+                add(reference.path.len())?;
+                add(reference.checksum.len())?;
+            }
+            if let Some(catalog) = &self.logical_cell_catalog {
+                add(catalog.cells.len() * size_of::<LogicalCellId>())?;
+                for centroid in &catalog.centroids {
+                    add(centroid.len() * size_of::<f32>())?;
+                }
             }
             if let Some(quantizer) = &self.quantizer_ref {
                 add(quantizer.resident_bytes_estimate())?;
@@ -1231,7 +1254,60 @@ fn vector_signature_bloom_positions(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+
+    #[test]
+    fn metadata_version_reuses_the_resident_logical_cell_catalog() {
+        let mut manifest = Manifest::new_with_routing_page_fanout(
+            crate::IndexConfig {
+                uri: "memory://catalog-arc".to_string(),
+                metric: VectorMetric::Cosine,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            DEFAULT_ROUTING_PAGE_FANOUT,
+            DEFAULT_GRAPH_NEIGHBORS,
+            LeafCapability::PqScanOnly,
+            BuildConfig::default(),
+        );
+        let catalog = Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                1,
+                2,
+                VectorMetric::Cosine,
+                vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+            )
+            .unwrap(),
+        );
+        let bytes = crate::logical_cell_catalog::logical_cell_catalog_to_parquet(&catalog).unwrap();
+        manifest.logical_cell_catalog_ref = Some(
+            crate::logical_cell_catalog::LogicalCellCatalogRef::new(
+                blake3::hash(&bytes).to_hex().to_string(),
+                1,
+                2,
+                2,
+                bytes.len(),
+            )
+            .unwrap(),
+        );
+        manifest.logical_cell_catalog = Some(Arc::clone(&catalog));
+
+        let next = manifest.next_version();
+
+        assert_eq!(
+            next.logical_cell_catalog_ref,
+            manifest.logical_cell_catalog_ref
+        );
+        assert!(Arc::ptr_eq(
+            next.logical_cell_catalog.as_ref().unwrap(),
+            manifest.logical_cell_catalog.as_ref().unwrap(),
+        ));
+    }
 
     #[test]
     fn production_segment_id_bloom_keeps_absent_lookup_amplification_bounded() {
