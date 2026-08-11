@@ -2,7 +2,12 @@
 
 mod common;
 
-use std::{collections::BTreeMap, sync::Arc, thread, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    thread,
+    time::Duration,
+};
 
 use borsuk::{
     BorsukError, BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, ObjectStore,
@@ -633,8 +638,16 @@ fn accepted_release_loss_still_allows_exactly_one_concurrent_add() {
         })
     });
     let results = handles.map(|handle| handle.join().unwrap());
-    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-    assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+    assert_eq!(
+        results.iter().filter(|result| result.is_ok()).count(),
+        1,
+        "concurrent strict-add results: {results:?}"
+    );
+    assert_eq!(
+        results.iter().filter(|result| result.is_err()).count(),
+        1,
+        "concurrent strict-add results: {results:?}"
+    );
     assert!(
         results
             .iter()
@@ -643,12 +656,19 @@ fn accepted_release_loss_still_allows_exactly_one_concurrent_add() {
             .to_string()
             .contains("already exists")
     );
+    let authorization_paths = operations.matching_paths(|operation, path| {
+        operation == common::StoreOperation::Put
+            && path.starts_with("positioned-log/claim-authorizations/")
+    });
+    assert!(
+        (1..=2).contains(&authorization_paths.len()),
+        "the committer and a concurrent reclaimer may each idempotently persist the same receipt; \
+         observed {authorization_paths:?} for {results:?}"
+    );
     assert_eq!(
-        operations.count_matching(|operation, path| {
-            operation == common::StoreOperation::Put
-                && path.starts_with("positioned-log/claim-authorizations/")
-        }),
-        1
+        authorization_paths.iter().collect::<BTreeSet<_>>().len(),
+        1,
+        "every authorization attempt must target the winner's one receipt: {authorization_paths:?}"
     );
     let reopened = BorsukIndex::open_with_object_store(inner, uri).unwrap();
     assert_eq!(reopened.list_records(0, 10).unwrap().len(), 1);

@@ -517,13 +517,22 @@ fn delete_batches_append_bounded_wal_runs_until_flush() {
 
     assert_eq!(
         index.manifest().wal_frontier_len(),
-        5,
-        "the initial add plus each delete remains one immutable positioned transaction"
+        4,
+        "the first delete preflushes the initial eight-record tail at its configured cap, then \
+         each delete remains one immutable positioned transaction"
+    );
+    assert!(
+        segment_count(dir.path()) > 0,
+        "the capped initial add must be materialized before the first delete commits"
     );
     assert_eq!(index.manifest().tombstone_delta_run_count(), 4);
     assert!(
-        puts.iter().max().unwrap() - puts.iter().min().unwrap() <= 1,
-        "foreground delete request count grew with accumulated tombstones: {puts:?}"
+        puts[0] > puts[1],
+        "the first delete must report the preceding capped-tail materialization: {puts:?}"
+    );
+    assert!(
+        puts[1..].iter().max().unwrap() - puts[1..].iter().min().unwrap() <= 1,
+        "steady-state foreground delete requests grew with accumulated tombstones: {puts:?}"
     );
     let fresh = BorsukIndex::open(&uri).unwrap();
     for value in 0..4 {

@@ -14,6 +14,10 @@ fn persisted_paths_have_stable_physical_object_roles() {
         ("collection/CURRENT", PhysicalObjectRole::Catalog),
         ("collection/snapshots/abc.bin", PhysicalObjectRole::Catalog),
         ("manifests/0001.parquet", PhysicalObjectRole::Catalog),
+        (
+            "logical-cell-catalogs/aa/catalog.parquet",
+            PhysicalObjectRole::Catalog,
+        ),
         ("wal/0001.parquet", PhysicalObjectRole::WalRun),
         ("cells/1/42/wal/3/HEAD", PhysicalObjectRole::LaneHead),
         ("lane-log/lanes/0003/HEAD", PhysicalObjectRole::LaneHead),

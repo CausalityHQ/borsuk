@@ -2255,6 +2255,7 @@ mod tests {
                 vec![crate::positioned_log::PositionedMutationPayloadInput {
                     modality: crate::positioned_log::PositionedMutationModality::Tombstone,
                     role: "owner".to_string(),
+                    id_bloom: Vec::new(),
                     format: crate::positioned_log::PositionedPayloadFormat::Parquet,
                     rows: 1,
                     bytes: payload(b"owner"),
@@ -2268,6 +2269,7 @@ mod tests {
                 vec![crate::positioned_log::PositionedMutationPayloadInput {
                     modality: crate::positioned_log::PositionedMutationModality::Tombstone,
                     role: "other".to_string(),
+                    id_bloom: Vec::new(),
                     format: crate::positioned_log::PositionedPayloadFormat::Parquet,
                     rows: 1,
                     bytes: payload(b"other"),
@@ -2385,6 +2387,7 @@ mod tests {
                     vec![crate::positioned_log::PositionedMutationPayloadInput {
                         modality: crate::positioned_log::PositionedMutationModality::Tombstone,
                         role: "wide-owner".to_string(),
+                        id_bloom: Vec::new(),
                         format: crate::positioned_log::PositionedPayloadFormat::Parquet,
                         rows: 1,
                         bytes,
@@ -2464,6 +2467,7 @@ mod tests {
                 vec![crate::positioned_log::PositionedMutationPayloadInput {
                     modality: crate::positioned_log::PositionedMutationModality::Tombstone,
                     role: "claim-crash-gap".to_string(),
+                    id_bloom: Vec::new(),
                     format: crate::positioned_log::PositionedPayloadFormat::Parquet,
                     rows: 1,
                     bytes,

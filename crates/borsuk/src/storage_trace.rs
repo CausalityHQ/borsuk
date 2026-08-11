@@ -67,6 +67,7 @@ pub fn physical_object_role_for_path(path: &str) -> PhysicalObjectRole {
         || path.starts_with("manifests/")
         || path.starts_with("metadata/")
         || path.starts_with("pivots/")
+        || path.starts_with("logical-cell-catalogs/")
     {
         PhysicalObjectRole::Catalog
     } else if path == "lane-log/ACTIVE" {

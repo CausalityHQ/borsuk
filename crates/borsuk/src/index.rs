@@ -1546,6 +1546,22 @@ fn cell_wal_id_directory_from_slice(
     })
 }
 
+fn validate_positioned_id_directory_bloom<'a>(
+    bytes: &'a [u8],
+    record_count: usize,
+    path: &str,
+) -> Result<&'a [u8]> {
+    let expected = crate::manifest::id_directory_bloom_bytes(record_count);
+    if bytes.len() != expected {
+        return Err(BorsukError::InvalidStorage(format!(
+            "positioned ID-directory bloom in `{path}` has {} bytes instead of {}",
+            bytes.len(),
+            expected
+        )));
+    }
+    Ok(bytes)
+}
+
 fn cell_wal_mutation_metadata_bytes(metadata: &CellWalMutationMetadata) -> Result<Vec<u8>> {
     let mut bytes = Vec::with_capacity(128);
     bytes.extend_from_slice(CELL_WAL_MUTATION_METADATA_MAGIC);
@@ -4580,6 +4596,11 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return Ok(());
         }
+        // Enforce an already-reached memory-safety cap before starting the next
+        // logical mutation. Maintenance can still fail here without creating
+        // the ambiguous result of reporting failure after the new positioned
+        // transaction has durably committed.
+        self.maybe_flush_wal()?;
         let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
         let collection = self.collection_snapshot.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage(
@@ -5169,6 +5190,9 @@ impl BorsukIndex {
                         "positioned payload role has an unsupported version".to_string(),
                     ));
                 }
+                let payload_record_count = usize::try_from(payload.rows).map_err(|_| {
+                    BorsukError::InvalidStorage("positioned payload rows exceed usize".to_string())
+                })?;
                 let metadata = if role.kind == CellWalRunKind::Tombstones {
                     let bytes = self
                         .collection_storage
@@ -5202,7 +5226,20 @@ impl BorsukIndex {
                         ),
                         created_at,
                     })?
+                } else if role.kind == CellWalRunKind::IdDirectory {
+                    validate_positioned_id_directory_bloom(
+                        &payload.id_bloom,
+                        payload_record_count,
+                        "positioned ID-directory envelope row",
+                    )?
+                    .to_vec()
                 } else {
+                    if !payload.id_bloom.is_empty() {
+                        return Err(BorsukError::InvalidStorage(
+                            "positioned record envelope row carries unexpected ID bloom metadata"
+                                .to_string(),
+                        ));
+                    }
                     Vec::new()
                 };
                 by_modality
@@ -5216,11 +5253,7 @@ impl BorsukIndex {
                         metadata,
                         path: payload.path.clone(),
                         checksum: payload.checksum.clone(),
-                        record_count: usize::try_from(payload.rows).map_err(|_| {
-                            BorsukError::InvalidStorage(
-                                "positioned payload rows exceed usize".to_string(),
-                            )
-                        })?,
+                        record_count: payload_record_count,
                         byte_len: payload.encoded_bytes,
                     });
             }
@@ -5482,6 +5515,16 @@ impl BorsukIndex {
                 Ok(PositionedMutationPayloadInput {
                     modality: self.positioned_modality_for_run(run),
                     role: Self::positioned_role(run)?,
+                    id_bloom: if run.input.kind == CellWalRunKind::IdDirectory {
+                        validate_positioned_id_directory_bloom(
+                            &run.input.metadata,
+                            run.input.record_count,
+                            "staged positioned ID-directory run",
+                        )?
+                        .to_vec()
+                    } else {
+                        Vec::new()
+                    },
                     format: PositionedPayloadFormat::Parquet,
                     bytes: run.input.bytes.clone(),
                     rows: u64::try_from(run.input.record_count).map_err(|_| {
@@ -5549,6 +5592,7 @@ impl BorsukIndex {
             payloads.push(PositionedMutationPayloadInput {
                 modality: PositionedMutationModality::Tombstone,
                 role: "tombstones_by_modality_v1".to_string(),
+                id_bloom: Vec::new(),
                 format: PositionedPayloadFormat::Parquet,
                 bytes,
                 rows,
@@ -5606,6 +5650,7 @@ impl BorsukIndex {
             payloads.push(PositionedMutationPayloadInput {
                 modality: PositionedMutationModality::IdDirectory,
                 role: "transaction_metadata_v2".to_string(),
+                id_bloom: Vec::new(),
                 format: PositionedPayloadFormat::Parquet,
                 rows: metadata_rows.len() as u64,
                 bytes,
@@ -5887,8 +5932,8 @@ impl BorsukIndex {
         };
         match self.append_positioned_mutation(batch) {
             Ok(report) => {
-                // Foreground durability ends at the positioned head CAS; leaf
-                // materialization remains outside the ingest critical path.
+                // Foreground durability ends at the positioned head CAS; tail
+                // caps are enforced before the next collection transaction.
                 let committed = report.positioned_position.ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "non-empty positioned append returned no source position".to_string(),
@@ -9745,7 +9790,20 @@ impl BorsukIndex {
             .iter()
             .flat_map(|transaction| &transaction.runs)
             .filter(|run| run.kind == CellWalRunKind::IdDirectory)
-            .cloned()
+            .map(|run| {
+                let bloom = validate_positioned_id_directory_bloom(
+                    &run.metadata,
+                    run.record_count,
+                    &format!("ID-directory run `{}`", run.path),
+                )?;
+                Ok(target_ids
+                    .iter()
+                    .any(|id| crate::manifest::id_directory_bloom_might_contain(bloom, id))
+                    .then(|| run.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
             .collect::<Vec<_>>();
         let decoded = crate::parallel::install_io(|| {
             runs.par_iter()
@@ -9909,10 +9967,14 @@ impl BorsukIndex {
             // routing partition.
             bundled_directory.sort_by(|left, right| left.id.cmp(&right.id));
             let bytes = cell_wal_id_directory_bytes(&bundled_directory)?;
+            let metadata = crate::manifest::id_directory_bloom(
+                bundled_directory.iter().map(|entry| entry.id.as_slice()),
+                bundled_directory.len(),
+            );
             inputs.push(CellWalRunInput {
                 cell: bundle_cell,
                 kind: CellWalRunKind::IdDirectory,
-                metadata: Vec::new(),
+                metadata,
                 record_count: bundled_directory.len(),
                 bytes,
                 extension: "parquet".to_string(),
@@ -26361,6 +26423,205 @@ mod tests {
             .add(vec![VectorRecord::new("first", vec![3.0, 0.0])])
             .unwrap_err();
         assert!(error.to_string().contains("duplicate record id `first`"));
+    }
+
+    #[test]
+    fn insert_only_duplicate_validation_prunes_unrelated_id_directory_payloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let config = IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        };
+        let wal = WalConfig {
+            enabled: true,
+            flush_threshold_runs: usize::MAX,
+            flush_threshold_records: usize::MAX,
+            flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
+        };
+        let mut index = BorsukIndex::create_with_wal(config, wal).unwrap();
+        index
+            .add(vec![VectorRecord::new("first", vec![1.0, 0.0])])
+            .unwrap();
+
+        let before = index.storage.request_counts();
+        assert!(
+            index
+                .cell_wal_id_directory_entries(std::iter::once(b"unrelated".as_slice()))
+                .unwrap()
+                .is_empty()
+        );
+        let requests = index.storage.request_counts().delta(&before);
+        assert_eq!(
+            requests.gets + requests.heads,
+            0,
+            "an unrelated strict-add probe must not fetch an immutable directory payload"
+        );
+
+        drop(index);
+        let mut reopened = BorsukIndex::open(&uri).unwrap();
+        let before = reopened.storage.request_counts();
+        assert!(
+            reopened
+                .cell_wal_id_directory_entries(std::iter::once(b"unrelated".as_slice()))
+                .unwrap()
+                .is_empty()
+        );
+        let requests = reopened.storage.request_counts().delta(&before);
+        assert_eq!(
+            requests.gets + requests.heads,
+            0,
+            "cold-open metadata must preserve directory pruning"
+        );
+        let error = reopened
+            .add(vec![VectorRecord::new("first", vec![2.0, 0.0])])
+            .unwrap_err();
+        assert!(error.to_string().contains("duplicate record id `first`"));
+    }
+
+    #[test]
+    fn public_positioned_add_enforces_the_configured_tail_run_cap() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 8,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: 2,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+
+        index
+            .add(vec![VectorRecord::new("first", vec![1.0, 0.0])])
+            .unwrap();
+        assert_eq!(index.cell_wal_snapshot.len(), 1);
+        assert!(index.manifest.segments.is_empty());
+
+        index
+            .add(vec![VectorRecord::new("second", vec![2.0, 0.0])])
+            .unwrap();
+        assert_eq!(index.cell_wal_snapshot.len(), 2);
+        assert!(index.manifest.segments.is_empty());
+
+        index
+            .add(vec![VectorRecord::new("third", vec![3.0, 0.0])])
+            .unwrap();
+        assert_eq!(index.cell_wal_snapshot.len(), 1);
+        assert_eq!(index.manifest.segments.len(), 1);
+    }
+
+    #[test]
+    fn id_directory_bloom_positive_is_confirmed_from_the_typed_payload() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 8,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+        index
+            .add(vec![VectorRecord::new("first", vec![1.0, 0.0])])
+            .unwrap();
+        let directory_run = index
+            .cell_wal_snapshot
+            .iter_mut()
+            .flat_map(|transaction| &mut transaction.runs)
+            .find(|run| run.kind == CellWalRunKind::IdDirectory)
+            .unwrap();
+        directory_run.metadata.fill(0xff);
+
+        let before = index.storage.request_counts();
+        assert!(
+            index
+                .cell_wal_id_directory_entries(std::iter::once(b"unrelated".as_slice()))
+                .unwrap()
+                .is_empty()
+        );
+        let requests = index.storage.request_counts().delta(&before);
+        assert_eq!(requests.gets + requests.heads, 1);
+        index
+            .add(vec![VectorRecord::new("unrelated", vec![2.0, 0.0])])
+            .unwrap();
+    }
+
+    #[test]
+    fn id_directory_bloom_scales_with_batch_cardinality() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 2_000,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+        index
+            .add(
+                (0..1_000)
+                    .map(|ordinal| {
+                        VectorRecord::new(format!("batch-{ordinal}"), vec![ordinal as f32, 0.0])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        let run = index
+            .cell_wal_snapshot
+            .iter()
+            .flat_map(|transaction| &transaction.runs)
+            .find(|run| run.kind == CellWalRunKind::IdDirectory)
+            .unwrap();
+        assert_eq!(run.record_count, 1_000);
+        assert_eq!(run.metadata.len(), 2_000);
+        assert!((0..1_000).all(|ordinal| {
+            crate::manifest::id_directory_bloom_might_contain(
+                &run.metadata,
+                format!("batch-{ordinal}"),
+            )
+        }));
     }
 
     #[test]

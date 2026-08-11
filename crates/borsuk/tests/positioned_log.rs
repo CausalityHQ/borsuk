@@ -119,6 +119,7 @@ fn payload(role: impl Into<String>, hlc: u64) -> PositionedMutationPayloadInput 
     PositionedMutationPayloadInput {
         modality: PositionedMutationModality::PrimaryDense,
         role: role.into(),
+        id_bloom: Vec::new(),
         format: PositionedPayloadFormat::ArrowIpc,
         bytes: arrow_payload(hlc),
         rows: 1,
@@ -153,6 +154,7 @@ fn arrow_and_parquet_payloads_reopen_from_one_typed_envelope() {
                 PositionedMutationPayloadInput {
                     modality: PositionedMutationModality::Sparse,
                     role: "parquet".to_owned(),
+                    id_bloom: Vec::new(),
                     format: PositionedPayloadFormat::Parquet,
                     bytes: parquet_payload(11),
                     rows: 1,
@@ -394,6 +396,7 @@ fn shared_payload_checksum_is_created_once_without_an_append_path_get() {
                 PositionedMutationPayloadInput {
                     modality: PositionedMutationModality::PrimaryDense,
                     role: "primary".to_owned(),
+                    id_bloom: Vec::new(),
                     format: PositionedPayloadFormat::ArrowIpc,
                     bytes: bytes.clone(),
                     rows: 1,
@@ -401,6 +404,7 @@ fn shared_payload_checksum_is_created_once_without_an_append_path_get() {
                 PositionedMutationPayloadInput {
                     modality: PositionedMutationModality::NamedDense,
                     role: "named".to_owned(),
+                    id_bloom: Vec::new(),
                     format: PositionedPayloadFormat::ArrowIpc,
                     bytes,
                     rows: 1,
@@ -432,6 +436,7 @@ fn existing_content_addressed_payload_is_verified_and_reported_separately() {
             vec![PositionedMutationPayloadInput {
                 modality: PositionedMutationModality::PrimaryDense,
                 role: "primary".to_owned(),
+                id_bloom: Vec::new(),
                 format: PositionedPayloadFormat::ArrowIpc,
                 bytes: bytes.clone(),
                 rows: 1,
@@ -447,6 +452,7 @@ fn existing_content_addressed_payload_is_verified_and_reported_separately() {
             vec![PositionedMutationPayloadInput {
                 modality: PositionedMutationModality::PrimaryDense,
                 role: "primary".to_owned(),
+                id_bloom: Vec::new(),
                 format: PositionedPayloadFormat::ArrowIpc,
                 bytes,
                 rows: 1,
@@ -991,6 +997,7 @@ fn payload_must_be_a_typed_container_with_truthful_rows() {
     let malformed = PositionedMutationPayloadInput {
         modality: PositionedMutationModality::PrimaryDense,
         role: "primary".to_owned(),
+        id_bloom: Vec::new(),
         format: PositionedPayloadFormat::ArrowIpc,
         bytes: Cursor::new(b"not-arrow".to_vec()).into_inner(),
         rows: 1,
@@ -1023,6 +1030,7 @@ fn compressed_arrow_payload_is_rejected_before_decompression_or_publication() {
             vec![PositionedMutationPayloadInput {
                 modality: PositionedMutationModality::PrimaryDense,
                 role: "primary".to_owned(),
+                id_bloom: Vec::new(),
                 format: PositionedPayloadFormat::ArrowIpc,
                 bytes: compressed_arrow_payload(1),
                 rows: 1,
@@ -1070,6 +1078,7 @@ fn exact_payload_and_row_bounds_admit_then_bound_plus_one_rejects_before_put() {
     let exact_rows = PositionedMutationPayloadInput {
         modality: PositionedMutationModality::PrimaryDense,
         role: "rows".to_owned(),
+        id_bloom: Vec::new(),
         format: PositionedPayloadFormat::ArrowIpc,
         bytes: arrow_payload_rows(1, MAX_APPEND_ROWS as usize),
         rows: MAX_APPEND_ROWS,
@@ -1085,6 +1094,7 @@ fn exact_payload_and_row_bounds_admit_then_bound_plus_one_rejects_before_put() {
     let excessive_rows = PositionedMutationPayloadInput {
         modality: PositionedMutationModality::PrimaryDense,
         role: "rows".to_owned(),
+        id_bloom: Vec::new(),
         format: PositionedPayloadFormat::ArrowIpc,
         bytes: arrow_payload_rows(1, MAX_APPEND_ROWS as usize + 1),
         rows: MAX_APPEND_ROWS + 1,
@@ -1114,6 +1124,7 @@ fn declared_row_and_aggregate_encoded_bounds_reject_before_container_decode() {
             vec![PositionedMutationPayloadInput {
                 modality: PositionedMutationModality::PrimaryDense,
                 role: "rows".to_owned(),
+                id_bloom: Vec::new(),
                 format: PositionedPayloadFormat::ArrowIpc,
                 bytes: vec![0],
                 rows: MAX_APPEND_ROWS + 1,
@@ -1132,6 +1143,7 @@ fn declared_row_and_aggregate_encoded_bounds_reject_before_container_decode() {
                 PositionedMutationPayloadInput {
                     modality: PositionedMutationModality::PrimaryDense,
                     role: "a".to_owned(),
+                    id_bloom: Vec::new(),
                     format: PositionedPayloadFormat::ArrowIpc,
                     bytes: vec![0; first_len],
                     rows: 1,
@@ -1139,6 +1151,7 @@ fn declared_row_and_aggregate_encoded_bounds_reject_before_container_decode() {
                 PositionedMutationPayloadInput {
                     modality: PositionedMutationModality::Sparse,
                     role: "b".to_owned(),
+                    id_bloom: Vec::new(),
                     format: PositionedPayloadFormat::ArrowIpc,
                     bytes: vec![0; second_len],
                     rows: 1,

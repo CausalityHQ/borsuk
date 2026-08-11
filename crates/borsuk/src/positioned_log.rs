@@ -469,6 +469,8 @@ pub struct PositionedMutationPayloadInput {
     pub modality: PositionedMutationModality,
     /// Nonempty bounded semantic object role.
     pub role: String,
+    /// Optional authenticated ID-membership bloom stored in the Parquet envelope.
+    pub id_bloom: Vec<u8>,
     /// Typed physical container format.
     pub format: PositionedPayloadFormat,
     /// Complete encoded container bytes.
@@ -485,6 +487,8 @@ pub struct PositionedMutationPayloadRef {
     pub modality: PositionedMutationModality,
     /// Bounded semantic object role.
     pub role: String,
+    /// Optional authenticated ID-membership bloom stored in the Parquet envelope.
+    pub id_bloom: Vec<u8>,
     /// Typed physical container format.
     pub format: PositionedPayloadFormat,
     /// Deterministic checksum-derived object path.
@@ -1394,6 +1398,7 @@ fn prepare_append(
         let reference = PositionedMutationPayloadRef {
             modality: payload.modality,
             role: payload.role,
+            id_bloom: payload.id_bloom,
             format: payload.format,
             path,
             checksum: payload_checksum,
@@ -1469,6 +1474,7 @@ fn request_digest(
     for payload in payloads {
         hash_field(&mut hasher, payload.modality.as_str().as_bytes());
         hash_field(&mut hasher, payload.role.as_bytes());
+        hash_field(&mut hasher, &payload.id_bloom);
         hash_field(&mut hasher, payload.format.as_str().as_bytes());
         hash_field(&mut hasher, payload.checksum.as_bytes());
         hash_field(&mut hasher, &payload.rows.to_be_bytes());
@@ -1813,6 +1819,9 @@ fn validate_commit_reference(reference: &PositionedCommitReference) -> Result<()
 
 fn validate_payload_ref(reference: &PositionedMutationPayloadRef) -> Result<()> {
     validate_bounded_utf8("payload role", &reference.role)?;
+    if reference.id_bloom.len() > 64 * 1024 {
+        return invalid("positioned payload ID bloom exceeds 65536 bytes");
+    }
     validate_hex("payload checksum", &reference.checksum)?;
     if reference.rows == 0 || reference.encoded_bytes == 0 {
         return invalid("positioned payload reference contains a zero row or byte total");
@@ -2073,6 +2082,7 @@ mod tests {
             payloads: vec![PositionedMutationPayloadRef {
                 modality: PositionedMutationModality::PrimaryDense,
                 role: "primary".to_owned(),
+                id_bloom: Vec::new(),
                 format: PositionedPayloadFormat::ArrowIpc,
                 path: canonical_payload_path(PositionedPayloadFormat::ArrowIpc, &payload_checksum),
                 checksum: payload_checksum,

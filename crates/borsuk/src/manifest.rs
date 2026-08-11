@@ -17,6 +17,9 @@ use crate::{
 pub(crate) const TABLE_EXTENSION: &str = "parquet";
 pub(crate) const SEGMENT_ID_BLOOM_BYTES: usize = 8 * 1024;
 pub(crate) const TOMBSTONE_ID_BLOOM_BYTES: usize = 128;
+pub(crate) const ID_DIRECTORY_BLOOM_MAX_BYTES: usize = 64 * 1024;
+const ID_DIRECTORY_BLOOM_MIN_BYTES: usize = 128;
+const ID_DIRECTORY_BLOOM_BYTES_PER_ENTRY: usize = 2;
 pub(crate) const SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES: usize = 256;
 /// Default number of routing page refs grouped into each routing parent page.
 pub const DEFAULT_ROUTING_PAGE_FANOUT: usize = 128;
@@ -1040,6 +1043,33 @@ pub(crate) fn tombstone_id_bloom(ids: impl IntoIterator<Item = impl AsRef<[u8]>>
         }
     }
     bloom
+}
+
+pub(crate) fn id_directory_bloom_bytes(entry_count: usize) -> usize {
+    entry_count
+        .saturating_mul(ID_DIRECTORY_BLOOM_BYTES_PER_ENTRY)
+        .clamp(ID_DIRECTORY_BLOOM_MIN_BYTES, ID_DIRECTORY_BLOOM_MAX_BYTES)
+}
+
+pub(crate) fn id_directory_bloom<'a>(
+    ids: impl IntoIterator<Item = &'a [u8]>,
+    entry_count: usize,
+) -> Vec<u8> {
+    let mut bloom = vec![0_u8; id_directory_bloom_bytes(entry_count)];
+    let bits = bloom.len() * 8;
+    for id in ids {
+        for position in bloom_positions_with_bits(id, bits) {
+            bloom[position / 8] |= 1_u8 << (position % 8);
+        }
+    }
+    bloom
+}
+
+pub(crate) fn id_directory_bloom_might_contain(bloom: &[u8], id: impl AsRef<[u8]>) -> bool {
+    if !(ID_DIRECTORY_BLOOM_MIN_BYTES..=ID_DIRECTORY_BLOOM_MAX_BYTES).contains(&bloom.len()) {
+        return true;
+    }
+    bloom_contains_with_bits(bloom, id, bloom.len() * 8)
 }
 
 pub(crate) fn segment_vector_signature_bloom<'a>(

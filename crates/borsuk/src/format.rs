@@ -6087,6 +6087,7 @@ fn positioned_envelope_schema() -> Arc<Schema> {
         Field::new("payload_ordinal", DataType::UInt32, false),
         Field::new("payload_modality", DataType::Utf8, false),
         Field::new("payload_role", DataType::Utf8, false),
+        Field::new("payload_id_bloom", DataType::Binary, false),
         Field::new("payload_format", DataType::Utf8, false),
         Field::new("payload_path", DataType::Utf8, false),
         Field::new("payload_checksum", DataType::Utf8, false),
@@ -6105,7 +6106,7 @@ fn validate_positioned_envelope_schema_and_columns(
 ) -> Result<()> {
     if schema != positioned_envelope_schema().as_ref() {
         return Err(BorsukError::InvalidStorage(
-            "positioned envelope schema is not the exact V12 schema".to_owned(),
+            "positioned envelope schema is not the exact V13 schema".to_owned(),
         ));
     }
     if columns.iter().any(|column| column.null_count() != 0) {
@@ -6127,7 +6128,7 @@ pub(crate) fn positioned_envelope_to_parquet(
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            array(UInt16Array::from_iter_values(payloads.iter().map(|_| 12))),
+            array(UInt16Array::from_iter_values(payloads.iter().map(|_| 13))),
             array(StringArray::from_iter_values(
                 payloads.iter().map(|_| envelope.transaction_id.as_str()),
             )),
@@ -6178,6 +6179,9 @@ pub(crate) fn positioned_envelope_to_parquet(
             array(StringArray::from_iter_values(
                 payloads.iter().map(|payload| payload.role.as_str()),
             )),
+            array(BinaryArray::from_iter_values(
+                payloads.iter().map(|payload| payload.id_bloom.as_slice()),
+            )),
             array(StringArray::from_iter_values(
                 payloads.iter().map(|payload| payload.format.as_str()),
             )),
@@ -6221,7 +6225,7 @@ fn positioned_envelope_from_parquet_inner(bytes: &[u8]) -> Result<DecodedPositio
     }
     if builder.schema().as_ref() != positioned_envelope_schema().as_ref() {
         return Err(BorsukError::InvalidStorage(
-            "positioned envelope schema is not the exact V12 schema".to_owned(),
+            "positioned envelope schema is not the exact V13 schema".to_owned(),
         ));
     }
     let mut batches = builder
@@ -6236,7 +6240,7 @@ fn positioned_envelope_from_parquet_inner(bytes: &[u8]) -> Result<DecodedPositio
         for row in 0..batch.num_rows() {
             let decoded = decode_positioned_envelope_row(&batch, row)?;
             if let Some(first) = first.as_ref() {
-                if decoded.layout != 12
+                if decoded.layout != 13
                     || decoded.transaction_id != first.transaction_id
                     || decoded.transaction_digest != first.transaction_digest
                     || decoded.request_digest != first.request_digest
@@ -6249,7 +6253,7 @@ fn positioned_envelope_from_parquet_inner(bytes: &[u8]) -> Result<DecodedPositio
                         "positioned envelope repeated transaction columns disagree".to_owned(),
                     ));
                 }
-            } else if decoded.layout != 12 {
+            } else if decoded.layout != 13 {
                 return Err(BorsukError::InvalidStorage(
                     "positioned envelope layout marker is unsupported".to_owned(),
                 ));
@@ -6357,6 +6361,7 @@ fn decode_positioned_envelope_row(
                 string_value_by_name(batch, row, "payload_modality")?,
             )?,
             role: value("payload_role")?,
+            id_bloom: binary_value_by_name(batch, row, "payload_id_bloom")?.to_vec(),
             format: PositionedPayloadFormat::parse(string_value_by_name(
                 batch,
                 row,
@@ -7240,6 +7245,7 @@ mod tests {
             payloads: vec![PositionedMutationPayloadRef {
                 modality: crate::positioned_log::PositionedMutationModality::PrimaryDense,
                 role: "primary".to_owned(),
+                id_bloom: Vec::new(),
                 format: PositionedPayloadFormat::ArrowIpc,
                 path: format!("positioned-log/payloads/arrow-ipc/bb/{checksum}.arrow"),
                 checksum,
@@ -7257,6 +7263,16 @@ mod tests {
         )
         .unwrap();
         read_batches(&bytes).unwrap().into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn positioned_envelope_v13_round_trips_authenticated_id_bloom() {
+        let mut expected = positioned_envelope_fixture();
+        expected.payloads[0].id_bloom = vec![0x5a; 128];
+        let bytes =
+            positioned_envelope_to_parquet(&expected, &"c".repeat(64), &"d".repeat(64)).unwrap();
+        let decoded = positioned_envelope_from_parquet(&bytes).unwrap();
+        assert_eq!(decoded.envelope, expected);
     }
 
     #[test]
@@ -7381,6 +7397,12 @@ mod tests {
                 DataType::Utf8 => {
                     let values = column.as_any().downcast_ref::<StringArray>().unwrap();
                     array(StringArray::from_iter_values(
+                        (0..rows).map(|_| values.value(0)),
+                    ))
+                }
+                DataType::Binary => {
+                    let values = column.as_any().downcast_ref::<BinaryArray>().unwrap();
+                    array(BinaryArray::from_iter_values(
                         (0..rows).map(|_| values.value(0)),
                     ))
                 }
