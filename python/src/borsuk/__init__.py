@@ -911,6 +911,7 @@ _index_add_id_bytes = Index.add_id_bytes
 _index_add_buffer = Index.add_buffer
 _index_add_buffer_id_bytes = Index.add_buffer_id_bytes
 _index_stats = Index.stats
+_index_refresh = Index.refresh
 _index_warm = Index.warm
 _index_search_ids = Index.search_ids
 _index_search_id_bytes = Index.search_id_bytes
@@ -964,6 +965,16 @@ def _annotated_index_upsert(
     return _index_upsert(
         self, rows, list(ids), meta_list, sparse_list, text_list, named_vector_list
     )
+
+
+def _annotated_index_refresh(self: Index) -> bool:
+    """Advance this handle to the latest atomically published snapshot.
+
+    Returns ``True`` when the snapshot advanced and ``False`` when the handle
+    was already current. Until refresh succeeds, reads keep using the handle's
+    previously pinned snapshot.
+    """
+    return _index_refresh(self)
 
 
 def _annotated_index_add(
@@ -1727,6 +1738,7 @@ Index.upsert = _annotated_index_upsert
 Index.add_with_report = _annotated_index_add_with_report
 Index.add_buffer = _annotated_index_add_buffer
 Index.stats = _annotated_index_stats
+Index.refresh = _annotated_index_refresh
 Index.warm = _annotated_index_warm
 Index.search_ids = _annotated_index_search_ids
 Index.search_id_bytes = _annotated_index_search_id_bytes

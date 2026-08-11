@@ -689,6 +689,17 @@ impl JsIndex {
         index_stats_to_js(stats)
     }
 
+    /// Advance this handle to the latest atomically published snapshot.
+    /// Returns true when the snapshot advanced and false when already current.
+    #[napi]
+    pub async fn refresh(&self) -> Result<bool> {
+        self.inner
+            .lock()
+            .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
+            .refresh()
+            .map_err(to_js_error)
+    }
+
     /// Materialize the current write-ahead-log tail into immutable cells.
     /// Reads already include the tail; this is for segment administration and
     /// workflows that require all records to be represented by cell objects.

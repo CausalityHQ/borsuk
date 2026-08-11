@@ -565,6 +565,7 @@ interface NativeIndex {
   addBuffer(vectors: Float32Array, ids?: string[] | null): Promise<string[]>;
   addBufferIdBytes(vectors: Float32Array, ids: Uint8Array[]): Promise<Uint8Array[]>;
   stats(): Promise<IndexStats>;
+  refresh(): Promise<boolean>;
   flush(): Promise<void>;
   warm(): Promise<WarmReport>;
   searchIds(query: number[], options?: NativeSearchOptions): Promise<string[]>;
@@ -950,6 +951,15 @@ export class Index {
 
   async stats(): Promise<IndexStats> {
     return wrapNativeError(() => this.#inner.stats());
+  }
+
+  /**
+   * Advance this handle to the latest atomically published snapshot.
+   * Returns `true` when the snapshot advanced and `false` when already current.
+   * Until refresh succeeds, reads keep using the previously pinned snapshot.
+   */
+  async refresh(): Promise<boolean> {
+    return wrapNativeError(() => this.#inner.refresh());
   }
 
   /**

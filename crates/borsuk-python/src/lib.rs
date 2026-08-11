@@ -1078,6 +1078,14 @@ impl PyIndex {
         })
     }
 
+    /// Advance this handle to the latest atomically published snapshot.
+    ///
+    /// Returns true when the snapshot advanced and false when this handle was
+    /// already current.
+    fn refresh(&self, py: Python<'_>) -> PyResult<bool> {
+        self.detached(py, |index| index.refresh().map_err(to_py_error))
+    }
+
     fn warm(&self, py: Python<'_>) -> PyResult<PyWarmReport> {
         self.detached(py, |index| {
             index.warm().map(Into::into).map_err(to_py_error)

@@ -279,8 +279,13 @@ const index = await create({
 | Group-commit concurrent record batches | `GroupCommitWriter::append(records)` | — | — |
 | Add flat float32 buffer | Rust lower-level record API | `index.add_buffer(buffer, ids=ids)` | `const bufferIds = await index.addBuffer(new Float32Array(flatVectors), ids)` |
 | Materialize WAL tail into cells | `BorsukIndex::flush()` | `index.flush()` | `await index.flush()` |
+| Advance a pinned handle to the latest atomic snapshot | `BorsukIndex::refresh()` | `index.refresh()` | `await index.refresh()` |
 | Load one vector | `BorsukIndex::get_vector(id)` | `index.get_vector(id)` | `await index.getVector(id)` |
 | Load a vector with metadata | `BorsukIndex::get_record(id)` | `index.get_record(id)` | `await index.getRecord(id)` |
+
+`refresh()` returns `true` only when the handle advances; an already-current
+handle returns `false`. Reads remain on the previously pinned coherent snapshot
+until refresh completes successfully.
 
 To attach per-vector metadata on add and constrain searches by it, see
 [Metadata And Filtered Search](#metadata-and-filtered-search).

@@ -42,6 +42,7 @@ def typed_config_values() -> None:
 
 
 def typed_index_methods(index: borsuk.Index) -> None:
+    advanced: bool = index.refresh()
     ids: list[RecordId] = index.add([[0.0, 0.0]], ids=["a"])
     byte_ids: list[RecordId] = index.add([[2.0, 0.0]], ids=[b"\x00\x9f\xff\x07"])
     int_ids: list[RecordId] = index.add([[3.0, 0.0]], ids=[300])
@@ -86,6 +87,7 @@ def typed_index_methods(index: borsuk.Index) -> None:
     byte_vector: list[float] | None = index.get_vector(b"\x00\x9f\xff\x07")
     int_vector: list[float] | None = index.get_vector(300)
 
+    assert isinstance(advanced, bool)
     assert ids
     assert byte_ids
     assert int_ids
