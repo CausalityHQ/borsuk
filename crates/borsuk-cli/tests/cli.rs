@@ -776,9 +776,11 @@ fn cli_search_can_report_query_counters() {
     assert!(report["bytes_read"].as_u64().unwrap() > 0);
     assert!(report["records_scored"].as_u64().unwrap() > 0);
     assert!(report["resident_bytes_estimate"].as_u64().unwrap() > 0);
+    assert!(report["prepared_positioned_bytes"].as_u64().unwrap() > 0);
     assert_eq!(
-        report["collection_resident_bytes"],
-        report["resident_bytes_estimate"]
+        report["collection_resident_bytes"].as_u64().unwrap(),
+        report["resident_bytes_estimate"].as_u64().unwrap()
+            + report["prepared_positioned_bytes"].as_u64().unwrap()
     );
     assert!(
         report["transient_peak_bytes"].as_u64().unwrap()
@@ -1230,9 +1232,11 @@ fn cli_reports_manifest_stats() {
     assert!(stats["segment_bytes"].as_u64().unwrap() > 0);
     assert_eq!(stats["graph_bytes"], 0);
     assert!(stats["resident_bytes_estimate"].as_u64().unwrap() > 0);
+    assert!(stats["prepared_positioned_bytes"].as_u64().unwrap() > 0);
     assert_eq!(
-        stats["collection_resident_bytes"],
-        stats["resident_bytes_estimate"]
+        stats["collection_resident_bytes"].as_u64().unwrap(),
+        stats["resident_bytes_estimate"].as_u64().unwrap()
+            + stats["prepared_positioned_bytes"].as_u64().unwrap()
     );
     assert!(
         stats["retained_peak_bytes"].as_u64().unwrap()

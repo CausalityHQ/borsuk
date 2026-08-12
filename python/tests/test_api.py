@@ -1145,9 +1145,11 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(reports[1].bytes_read, 0)
             self.assertGreater(reports[0].resident_bytes_estimate, 0)
             self.assertGreater(reports[1].resident_bytes_estimate, 0)
+            self.assertGreater(reports[0].prepared_positioned_bytes, 0)
             self.assertEqual(
                 reports[0].collection_resident_bytes,
-                reports[0].resident_bytes_estimate,
+                reports[0].resident_bytes_estimate
+                + reports[0].prepared_positioned_bytes,
             )
             self.assertLessEqual(
                 reports[0].transient_peak_bytes,
@@ -1216,9 +1218,10 @@ class PythonApiTests(unittest.TestCase):
             self.assertGreater(stats.segment_bytes, 0)
             self.assertEqual(stats.graph_bytes, 0)
             self.assertGreater(stats.resident_bytes_estimate, 0)
+            self.assertGreater(stats.prepared_positioned_bytes, 0)
             self.assertEqual(
                 stats.collection_resident_bytes,
-                stats.resident_bytes_estimate,
+                stats.resident_bytes_estimate + stats.prepared_positioned_bytes,
             )
             self.assertLessEqual(
                 stats.retained_peak_bytes,

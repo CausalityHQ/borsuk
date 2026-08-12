@@ -1552,6 +1552,11 @@ impl Storage {
         self.storage_trace.record(event)
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_access_trace_for_test(&mut self, trace: StorageAccessTrace) {
+        self.storage_trace = trace;
+    }
+
     pub(crate) fn create_layout(&self) -> Result<()> {
         Ok(())
     }

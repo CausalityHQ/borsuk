@@ -2146,6 +2146,47 @@ mod tests {
     }
 
     #[test]
+    fn commit_source_ranges_round_trip_losslessly_through_leaf_ranges() {
+        use crate::global_leaf_run::{LaneSourceRange, SourceRangeSet};
+
+        let positioned = CommitSourceRangeSet::new(vec![
+            range(11, 3, 8, 13),
+            range(11, 3, 1, 7),
+            range(12, 63, 21, 34),
+        ])
+        .unwrap();
+        let leaf = SourceRangeSet::try_from(&positioned).unwrap();
+        assert_eq!(
+            leaf.ranges(),
+            &[
+                LaneSourceRange {
+                    lane: 3,
+                    lease_epoch: 11,
+                    first_sequence: 1,
+                    last_sequence: 13,
+                },
+                LaneSourceRange {
+                    lane: 63,
+                    lease_epoch: 12,
+                    first_sequence: 21,
+                    last_sequence: 34,
+                },
+            ]
+        );
+        assert_eq!(CommitSourceRangeSet::try_from(&leaf).unwrap(), positioned);
+
+        assert!(
+            SourceRangeSet::new(vec![LaneSourceRange {
+                lane: u16::from(SOURCE_SHARD_COUNT),
+                lease_epoch: 11,
+                first_sequence: 1,
+                last_sequence: 1,
+            }])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn sixty_four_shards_and_levels_have_a_fixed_metadata_bound() {
         let coverage = fixture_coverage_for_all_shards_and_levels();
         assert!(coverage.ranges().len() <= 64 * 64);

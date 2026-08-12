@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::{
@@ -101,6 +102,61 @@ impl SourceRangeSet {
             return invalid("V12 source ranges must be sorted canonically");
         }
         Ok(())
+    }
+
+    // The incremental candidate is deliberately not consumed until Task 4's
+    // atomic publication switch, so its typed range accessor is not wired yet.
+    #[allow(dead_code)]
+    pub(crate) fn ranges(&self) -> &[LaneSourceRange] {
+        &self.ranges
+    }
+}
+
+impl TryFrom<&crate::positioned_log::CommitSourceRangeSet> for SourceRangeSet {
+    type Error = BorsukError;
+
+    fn try_from(source: &crate::positioned_log::CommitSourceRangeSet) -> Result<Self> {
+        source.validate_canonical()?;
+        Self::new(
+            source
+                .ranges()
+                .iter()
+                .map(|range| LaneSourceRange {
+                    lane: u16::from(range.shard),
+                    lease_epoch: range.source_epoch,
+                    first_sequence: range.first_sequence,
+                    last_sequence: range.last_sequence,
+                })
+                .collect(),
+        )
+    }
+}
+
+impl TryFrom<&SourceRangeSet> for crate::positioned_log::CommitSourceRangeSet {
+    type Error = BorsukError;
+
+    fn try_from(source: &SourceRangeSet) -> Result<Self> {
+        source.validate_canonical()?;
+        crate::positioned_log::CommitSourceRangeSet::new(
+            source
+                .ranges
+                .iter()
+                .map(|range| {
+                    let shard = u8::try_from(range.lane).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "V12 leaf source lane cannot be represented as a positioned shard"
+                                .to_owned(),
+                        )
+                    })?;
+                    crate::positioned_log::CommitSourceRange::new(
+                        range.lease_epoch,
+                        shard,
+                        range.first_sequence,
+                        range.last_sequence,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )
     }
 }
 
@@ -559,6 +615,43 @@ impl GlobalLeafRunRef {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
+    pub(crate) fn new_incremental(
+        codebook: &GlobalCodebookRef,
+        level: u8,
+        directory: GlobalLeafDirectoryRef,
+        rows: u64,
+        pages: u64,
+        bundles: u64,
+        sealed_pages: u64,
+        partial_pages: u64,
+        encoded_bytes: u64,
+        resident_bytes: u64,
+        min_stamp: Option<MutationStamp>,
+        max_stamp: Option<MutationStamp>,
+        source_ranges: SourceRangeSet,
+    ) -> Result<Self> {
+        let run = Self {
+            layout_version: GLOBAL_PQ_REF_LAYOUT_VERSION,
+            level,
+            codebook_checksum: codebook.descriptor_checksum.clone(),
+            directory,
+            rows,
+            pages,
+            bundles,
+            sealed_pages,
+            partial_pages,
+            encoded_bytes,
+            resident_bytes,
+            min_stamp: min_stamp.map(MutationStampRef::from_stamp),
+            max_stamp: max_stamp.map(MutationStampRef::from_stamp),
+            source_ranges,
+        };
+        validate_run(&run, codebook, false)?;
+        Ok(run)
+    }
+
     pub(crate) fn directory(&self) -> &GlobalLeafDirectoryRef {
         &self.directory
     }
@@ -608,6 +701,11 @@ impl GlobalLeafRunRef {
 
     pub(crate) fn partial_pages(&self) -> u64 {
         self.partial_pages
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn source_ranges(&self) -> &SourceRangeSet {
+        &self.source_ranges
     }
 }
 
@@ -976,6 +1074,344 @@ pub(crate) struct PersistedGlobalLeafArtifacts {
     pub(crate) rows: usize,
     pub(crate) storage_bytes: u64,
     pub(crate) resident_bytes: u64,
+    #[allow(dead_code)]
+    pub(crate) run_artifacts: PrimaryDenseRunArtifacts,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum GlobalLeafArtifactRole {
+    #[allow(dead_code)]
+    CodebookDescriptor,
+    LeafDirectoryRoot,
+    LeafDirectoryShard,
+    LeafBundle,
+    LeafCodePlane,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GlobalLeafArtifactRef {
+    pub(crate) role: GlobalLeafArtifactRole,
+    pub(crate) path: String,
+    pub(crate) checksum: String,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) range: Option<Range<u64>>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct PrimaryDenseRunArtifacts {
+    roster: Vec<GlobalLeafArtifactRef>,
+    directory_shards: Vec<crate::global_leaf::GlobalLeafDirectoryShardRef>,
+    page_cells: Vec<u32>,
+}
+
+// These candidate-only values remain intentionally unwired until Task 4 owns
+// the manifest CAS/publication boundary.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PrimaryDenseSourceWatermarks {
+    source_epoch: u64,
+    sequences: [u64; crate::positioned_log::SOURCE_SHARD_COUNT as usize],
+}
+
+#[allow(dead_code)]
+impl PrimaryDenseSourceWatermarks {
+    fn from_ranges(ranges: &crate::positioned_log::CommitSourceRangeSet) -> Result<Self> {
+        ranges.validate_canonical()?;
+        let source_epoch = ranges
+            .ranges()
+            .first()
+            .map(|range| range.source_epoch)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "primary-dense candidate source coverage must not be empty".to_owned(),
+                )
+            })?;
+        let mut sequences = [0_u64; crate::positioned_log::SOURCE_SHARD_COUNT as usize];
+        for range in ranges.ranges() {
+            if range.source_epoch != source_epoch {
+                return Err(BorsukError::InvalidStorage(
+                    "primary-dense candidate source coverage mixes source epochs".to_owned(),
+                ));
+            }
+            let sequence = &mut sequences[usize::from(range.shard)];
+            if *sequence != 0 {
+                return Err(BorsukError::InvalidStorage(
+                    "primary-dense candidate source coverage has a gap within one shard".to_owned(),
+                ));
+            }
+            *sequence = range.last_sequence;
+        }
+        Ok(Self {
+            source_epoch,
+            sequences,
+        })
+    }
+
+    pub(crate) fn sequence(&self, source_epoch: u64, shard: u8) -> Option<u64> {
+        (source_epoch == self.source_epoch)
+            .then(|| self.sequences.get(usize::from(shard)).copied())
+            .flatten()
+            .filter(|sequence| *sequence > 0)
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct CarriedPrimaryDenseRun {
+    run: GlobalLeafRunRef,
+    artifacts: PrimaryDenseRunArtifacts,
+}
+
+#[allow(dead_code)]
+impl CarriedPrimaryDenseRun {
+    pub(crate) fn run(&self) -> &GlobalLeafRunRef {
+        &self.run
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct PrimaryDenseArtifactCandidate {
+    codebook: GlobalCodebookRef,
+    new_run: Option<GlobalLeafRunRef>,
+    new_run_artifacts: Option<PrimaryDenseRunArtifacts>,
+    carried_runs: Vec<GlobalLeafRunRef>,
+    roster: Vec<GlobalLeafArtifactRef>,
+    source_ranges: crate::positioned_log::CommitSourceRangeSet,
+    watermarks: PrimaryDenseSourceWatermarks,
+}
+
+#[allow(dead_code)]
+impl PrimaryDenseArtifactCandidate {
+    pub(crate) fn assemble(
+        codebook: GlobalCodebookRef,
+        new_run: Option<(GlobalLeafRunRef, PrimaryDenseRunArtifacts)>,
+        carried: &[CarriedPrimaryDenseRun],
+        source_ranges: crate::positioned_log::CommitSourceRangeSet,
+    ) -> Result<Self> {
+        validate_codebook(&codebook)?;
+        source_ranges.validate_canonical()?;
+        let watermarks = PrimaryDenseSourceWatermarks::from_ranges(&source_ranges)?;
+        let descriptor = GlobalLeafArtifactRef {
+            role: GlobalLeafArtifactRole::CodebookDescriptor,
+            path: codebook.descriptor_path.clone(),
+            checksum: codebook.descriptor_checksum.clone(),
+            encoded_bytes: codebook.storage_bytes,
+            range: None,
+        };
+        let mut union = SourceRangeSet::default();
+        let mut levels = std::collections::BTreeSet::new();
+        let mut carried_runs = Vec::with_capacity(carried.len());
+        let mut roster = vec![descriptor];
+        for carried in carried {
+            validate_run(&carried.run, &codebook, false)?;
+            if !levels.insert(carried.run.level) {
+                return Err(BorsukError::InvalidStorage(
+                    "primary-dense candidate repeats a carried run level".to_owned(),
+                ));
+            }
+            validate_run_artifacts(&carried.run, &carried.artifacts, &codebook)?;
+            union = union.union_disjoint(&carried.run.source_ranges)?;
+            carried_runs.push(carried.run.clone());
+            roster.extend(carried.artifacts.roster.iter().cloned());
+        }
+        let (new_run, new_run_artifacts) = new_run
+            .map(|(run, artifacts)| {
+                validate_run(&run, &codebook, false)?;
+                if !levels.insert(run.level) {
+                    return Err(BorsukError::InvalidStorage(
+                        "primary-dense candidate new run repeats a carried level".to_owned(),
+                    ));
+                }
+                validate_run_artifacts(&run, &artifacts, &codebook)?;
+                union = union.union_disjoint(&run.source_ranges)?;
+                roster.extend(artifacts.roster.iter().cloned());
+                Ok((run, artifacts))
+            })
+            .transpose()?
+            .map_or((None, None), |(run, artifacts)| {
+                (Some(run), Some(artifacts))
+            });
+        if crate::positioned_log::CommitSourceRangeSet::try_from(&union)? != source_ranges {
+            return Err(BorsukError::InvalidStorage(
+                "primary-dense candidate run coverage does not equal its exact source prefix"
+                    .to_owned(),
+            ));
+        }
+        roster.sort_by(|left, right| {
+            left.role
+                .cmp(&right.role)
+                .then_with(|| left.path.cmp(&right.path))
+                .then_with(|| {
+                    left.range
+                        .as_ref()
+                        .map(|range| (range.start, range.end))
+                        .cmp(&right.range.as_ref().map(|range| (range.start, range.end)))
+                })
+        });
+        if roster.windows(2).any(|pair| {
+            pair[0].role == pair[1].role
+                && pair[0].path == pair[1].path
+                && pair[0].range == pair[1].range
+        }) {
+            return Err(BorsukError::InvalidStorage(
+                "primary-dense candidate roster repeats an artifact".to_owned(),
+            ));
+        }
+        Ok(Self {
+            codebook,
+            new_run,
+            new_run_artifacts,
+            carried_runs,
+            roster,
+            source_ranges,
+            watermarks,
+        })
+    }
+
+    pub(crate) fn new_run(&self) -> Option<&GlobalLeafRunRef> {
+        self.new_run.as_ref()
+    }
+
+    pub(crate) fn codebook(&self) -> &GlobalCodebookRef {
+        &self.codebook
+    }
+
+    pub(crate) fn carried_runs(&self) -> &[GlobalLeafRunRef] {
+        &self.carried_runs
+    }
+
+    pub(crate) fn roster(&self) -> &[GlobalLeafArtifactRef] {
+        &self.roster
+    }
+
+    pub(crate) fn source_ranges(&self) -> &crate::positioned_log::CommitSourceRangeSet {
+        &self.source_ranges
+    }
+
+    pub(crate) fn watermarks(&self) -> &PrimaryDenseSourceWatermarks {
+        &self.watermarks
+    }
+
+    pub(crate) fn carry_new_run(&self) -> Option<CarriedPrimaryDenseRun> {
+        self.new_run
+            .clone()
+            .zip(self.new_run_artifacts.clone())
+            .map(|(run, artifacts)| CarriedPrimaryDenseRun { run, artifacts })
+    }
+}
+
+#[allow(dead_code)]
+fn validate_run_artifacts(
+    run: &GlobalLeafRunRef,
+    artifacts: &PrimaryDenseRunArtifacts,
+    codebook: &GlobalCodebookRef,
+) -> Result<()> {
+    let roster = &artifacts.roster;
+    if roster
+        .iter()
+        .any(|artifact| artifact.role == GlobalLeafArtifactRole::CodebookDescriptor)
+    {
+        return invalid("primary-dense run artifacts contain a codebook descriptor");
+    }
+    let mut identities = roster
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.role,
+                artifact.path.as_str(),
+                artifact
+                    .range
+                    .as_ref()
+                    .map(|range| (range.start, range.end)),
+            )
+        })
+        .collect::<Vec<_>>();
+    identities.sort_unstable();
+    if identities.windows(2).any(|pair| pair[0] == pair[1]) {
+        return invalid("primary-dense run roster repeats an artifact identity");
+    }
+    let directory_entries = roster
+        .iter()
+        .filter(|artifact| artifact.role == GlobalLeafArtifactRole::LeafDirectoryRoot)
+        .collect::<Vec<_>>();
+    if directory_entries.len() != 1
+        || directory_entries[0].path != run.directory.path
+        || directory_entries[0].checksum != run.directory.checksum
+        || directory_entries[0].encoded_bytes != run.directory.encoded_bytes
+        || directory_entries[0].range.is_some()
+    {
+        return invalid("primary-dense run roster does not authenticate its directory root");
+    }
+    let expected_shards =
+        usize::try_from(run.directory.shard_count.saturating_sub(1)).unwrap_or(usize::MAX);
+    let shard_entries = roster
+        .iter()
+        .filter(|artifact| artifact.role == GlobalLeafArtifactRole::LeafDirectoryShard)
+        .collect::<Vec<_>>();
+    let mut expected_shard_identities = artifacts
+        .directory_shards
+        .iter()
+        .map(|reference| {
+            (
+                reference.path.as_str(),
+                reference.checksum.as_str(),
+                reference.encoded_bytes,
+            )
+        })
+        .collect::<Vec<_>>();
+    expected_shard_identities.sort_unstable();
+    let mut actual_shard_identities = shard_entries
+        .iter()
+        .filter(|artifact| artifact.range.is_none())
+        .map(|artifact| {
+            (
+                artifact.path.as_str(),
+                artifact.checksum.as_str(),
+                artifact.encoded_bytes,
+            )
+        })
+        .collect::<Vec<_>>();
+    actual_shard_identities.sort_unstable();
+    if run.directory.shard_count == 0
+        || artifacts.directory_shards.len() != expected_shards
+        || shard_entries.len() != expected_shards
+        || actual_shard_identities != expected_shard_identities
+    {
+        return invalid("primary-dense run roster does not authenticate its directory shards");
+    }
+    if artifacts.page_cells.len() != usize::try_from(run.pages).unwrap_or(usize::MAX)
+        || artifacts
+            .page_cells
+            .iter()
+            .any(|cell| *cell >= codebook.cell_count)
+    {
+        return invalid("primary-dense run page cell is outside its codebook catalog");
+    }
+    if run.rows == 0 {
+        if roster.iter().any(|artifact| {
+            matches!(
+                artifact.role,
+                GlobalLeafArtifactRole::LeafBundle | GlobalLeafArtifactRole::LeafCodePlane
+            )
+        }) {
+            return invalid("coverage-only primary-dense run roster contains leaf data");
+        }
+    } else {
+        let bundles = roster
+            .iter()
+            .filter(|artifact| artifact.role == GlobalLeafArtifactRole::LeafBundle)
+            .count();
+        let code_planes = roster
+            .iter()
+            .filter(|artifact| artifact.role == GlobalLeafArtifactRole::LeafCodePlane)
+            .count();
+        if bundles != run.bundles as usize || code_planes != bundles {
+            return invalid("primary-dense run roster does not cover every leaf bundle code plane");
+        }
+    }
+    Ok(())
 }
 
 pub(crate) struct GlobalLeafPersistenceWriter<'a> {
@@ -1287,6 +1723,36 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
                 "global leaf writer has an unfinalized cell continuation".to_owned(),
             ));
         }
+        let mut roster = self
+            .bundles
+            .iter()
+            .flat_map(|bundle| {
+                let code_end = bundle
+                    .code_plane_offset
+                    .checked_add(bundle.code_plane_bytes)
+                    .expect("validated V12 code-plane range");
+                [
+                    GlobalLeafArtifactRef {
+                        role: GlobalLeafArtifactRole::LeafBundle,
+                        path: bundle.path.clone(),
+                        checksum: blake3::Hash::from_bytes(bundle.checksum)
+                            .to_hex()
+                            .to_string(),
+                        encoded_bytes: bundle.encoded_bytes,
+                        range: None,
+                    },
+                    GlobalLeafArtifactRef {
+                        role: GlobalLeafArtifactRole::LeafCodePlane,
+                        path: bundle.path.clone(),
+                        checksum: blake3::Hash::from_bytes(bundle.code_plane_checksum)
+                            .to_hex()
+                            .to_string(),
+                        encoded_bytes: bundle.code_plane_bytes,
+                        range: Some(bundle.code_plane_offset..code_end),
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
         let persistence = persist_directory_artifacts(
             self.storage,
             &self.codebook_checksum,
@@ -1294,6 +1760,8 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
             &self.bundles,
             self.storage_bytes,
         )?;
+        roster.extend(persistence.roster.iter().cloned());
+        let page_cells = self.page_refs.iter().map(|page| page.cell_index).collect();
         Ok(PersistedGlobalLeafArtifacts {
             directory: persistence.directory,
             page_count: self.page_count,
@@ -1301,6 +1769,11 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
             rows: self.rows,
             storage_bytes: persistence.storage_bytes,
             resident_bytes: persistence.resident_bytes,
+            run_artifacts: PrimaryDenseRunArtifacts {
+                roster,
+                directory_shards: persistence.directory_shards,
+                page_cells,
+            },
         })
     }
 }
@@ -1309,6 +1782,8 @@ struct PersistedDirectoryArtifacts {
     directory: GlobalLeafDirectoryRef,
     storage_bytes: u64,
     resident_bytes: u64,
+    roster: Vec<GlobalLeafArtifactRef>,
+    directory_shards: Vec<crate::global_leaf::GlobalLeafDirectoryShardRef>,
 }
 
 fn persist_directory_artifacts(
@@ -1324,6 +1799,7 @@ fn persist_directory_artifacts(
         bundles,
     )?;
     let mut storage_bytes = bundle_bytes;
+    let mut roster = Vec::with_capacity(encoded.shards.len().saturating_add(1));
     for shard in &encoded.shards {
         storage.write_bytes_content_addressed(&shard.reference.path, &shard.bytes)?;
         storage_bytes = storage_bytes
@@ -1331,6 +1807,13 @@ fn persist_directory_artifacts(
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("global leaf storage byte count overflows".to_owned())
             })?;
+        roster.push(GlobalLeafArtifactRef {
+            role: GlobalLeafArtifactRole::LeafDirectoryShard,
+            path: shard.reference.path.clone(),
+            checksum: shard.reference.checksum.clone(),
+            encoded_bytes: shard.reference.encoded_bytes,
+            range: None,
+        });
     }
     let root_checksum = blake3::hash(&encoded.root).to_hex().to_string();
     let root_path = format!(
@@ -1363,6 +1846,18 @@ fn persist_directory_artifacts(
     let resident_bytes = u64::try_from(directory.resident_bytes()).map_err(|_| {
         BorsukError::InvalidStorage("global leaf directory resident bytes exceed u64".to_owned())
     })?;
+    roster.push(GlobalLeafArtifactRef {
+        role: GlobalLeafArtifactRole::LeafDirectoryRoot,
+        path: root_path.clone(),
+        checksum: root_checksum.clone(),
+        encoded_bytes: root_bytes,
+        range: None,
+    });
+    let directory_shards = encoded
+        .shards
+        .iter()
+        .map(|shard| shard.reference.clone())
+        .collect();
     Ok(PersistedDirectoryArtifacts {
         directory: GlobalLeafDirectoryRef::new(
             root_path,
@@ -1372,6 +1867,8 @@ fn persist_directory_artifacts(
         ),
         storage_bytes,
         resident_bytes,
+        roster,
+        directory_shards,
     })
 }
 
@@ -1594,6 +2091,120 @@ mod tests {
             artifacts.storage_bytes,
             complete_bundle_bytes + artifacts.directory.encoded_bytes(),
             "persisted storage bytes must charge the complete Arrow bundle and directory"
+        );
+    }
+
+    #[test]
+    fn primary_dense_candidate_authenticates_exact_run_roster_and_page_cell_bounds() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(directory.path().to_string_lossy().as_ref()).unwrap();
+        let codebook = valid_ann_ref().codebook;
+        let pages = (0..=crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES)
+            .map(|ordinal| crate::global_leaf::GlobalLeafPageInput {
+                cell_index: 0,
+                leaf_ordinal: u32::try_from(ordinal).unwrap(),
+                centroid_code: vec![1, 2, 3, 4],
+                rows: vec![crate::global_leaf::GlobalLeafRowInput {
+                    id: crate::RecordId::from(format!("row-{ordinal}")),
+                    stamp: crate::mutation::MutationStamp::new(
+                        crate::mutation::MutationVersion::from_parts(
+                            u64::try_from(ordinal + 1).unwrap(),
+                            [1; 16],
+                        ),
+                        [2; 32],
+                    ),
+                    code: vec![3, 4, 5, 6].into(),
+                    exact: [1.0_f32, 2.0, 3.0, 4.0]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                }],
+            })
+            .collect();
+        let mut writer = GlobalLeafPersistenceWriter::new(
+            &storage,
+            4,
+            VectorElementType::Float32,
+            codebook.descriptor_checksum().to_owned(),
+        )
+        .unwrap();
+        writer.push_cell_chunk(pages).unwrap();
+        writer.finalize_cell(0).unwrap();
+        let artifacts = writer.finish().unwrap();
+        let source_ranges = SourceRangeSet::new(vec![range(0, 7, 1, 1)]).unwrap();
+        let run = GlobalLeafRunRef::new_incremental(
+            &codebook,
+            1,
+            artifacts.directory.clone(),
+            artifacts.rows as u64,
+            artifacts.page_count as u64,
+            artifacts.bundle_count as u64,
+            artifacts.page_count as u64,
+            0,
+            artifacts.storage_bytes,
+            artifacts.resident_bytes,
+            Some(crate::mutation::MutationStamp::new(
+                crate::mutation::MutationVersion::from_parts(1, [1; 16]),
+                [2; 32],
+            )),
+            Some(crate::mutation::MutationStamp::new(
+                crate::mutation::MutationVersion::from_parts(1, [1; 16]),
+                [2; 32],
+            )),
+            source_ranges,
+        )
+        .unwrap();
+        let exact = artifacts.run_artifacts.clone();
+        PrimaryDenseArtifactCandidate::assemble(
+            codebook.clone(),
+            Some((run.clone(), exact.clone())),
+            &[],
+            crate::positioned_log::CommitSourceRangeSet::try_from(run.source_ranges()).unwrap(),
+        )
+        .unwrap();
+
+        let mut wrong_shard = exact.clone();
+        let shard = wrong_shard
+            .roster
+            .iter_mut()
+            .find(|artifact| artifact.role == GlobalLeafArtifactRole::LeafDirectoryShard)
+            .unwrap();
+        shard.path.push_str("-substituted");
+        assert!(
+            PrimaryDenseArtifactCandidate::assemble(
+                codebook.clone(),
+                Some((run.clone(), wrong_shard)),
+                &[],
+                crate::positioned_log::CommitSourceRangeSet::try_from(run.source_ranges()).unwrap(),
+            )
+            .is_err()
+        );
+
+        let mut duplicate_identity = exact.clone();
+        let mut duplicate = duplicate_identity.roster[0].clone();
+        duplicate.checksum = "ff".repeat(32);
+        duplicate.encoded_bytes += 1;
+        duplicate_identity.roster.push(duplicate);
+        assert!(
+            PrimaryDenseArtifactCandidate::assemble(
+                codebook.clone(),
+                Some((run.clone(), duplicate_identity)),
+                &[],
+                crate::positioned_log::CommitSourceRangeSet::try_from(run.source_ranges()).unwrap(),
+            )
+            .is_err()
+        );
+
+        let mut out_of_bounds = exact;
+        out_of_bounds.page_cells[0] = codebook.cell_count();
+        assert!(
+            PrimaryDenseArtifactCandidate::assemble(
+                codebook,
+                Some((run.clone(), out_of_bounds)),
+                &[],
+                crate::positioned_log::CommitSourceRangeSet::try_from(run.source_ranges()).unwrap(),
+            )
+            .is_err()
         );
     }
 

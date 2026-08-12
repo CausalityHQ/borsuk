@@ -308,6 +308,8 @@ struct PyIndexStats {
     #[pyo3(get)]
     resident_bytes_estimate: u64,
     #[pyo3(get)]
+    prepared_positioned_bytes: u64,
+    #[pyo3(get)]
     collection_resident_bytes: u64,
     #[pyo3(get)]
     retained_bytes: u64,
@@ -327,7 +329,7 @@ struct PyIndexStats {
 impl PyIndexStats {
     fn __repr__(&self) -> String {
         format!(
-            "IndexStats(metric={:?}, dimensions={}, segment_max_vectors={}, ram_budget_bytes={:?}, text={}, named_vectors={:?}, sparse_encoded_vectors={}, dense_encoded_vectors={}, manifest_version={}, routing_max_level={}, routing_page_fanout={}, routing_leaf_pages={}, routing_pages={}, segments={}, records={}, segment_bytes={}, graph_bytes={}, resident_bytes_estimate={}, collection_resident_bytes={}, retained_bytes={}, retained_capacity_bytes={}, retained_peak_bytes={}, transient_bytes={}, transient_capacity_bytes={}, transient_peak_bytes={})",
+            "IndexStats(metric={:?}, dimensions={}, segment_max_vectors={}, ram_budget_bytes={:?}, text={}, named_vectors={:?}, sparse_encoded_vectors={}, dense_encoded_vectors={}, manifest_version={}, routing_max_level={}, routing_page_fanout={}, routing_leaf_pages={}, routing_pages={}, segments={}, records={}, segment_bytes={}, graph_bytes={}, resident_bytes_estimate={}, prepared_positioned_bytes={}, collection_resident_bytes={}, retained_bytes={}, retained_capacity_bytes={}, retained_peak_bytes={}, transient_bytes={}, transient_capacity_bytes={}, transient_peak_bytes={})",
             self.metric,
             self.dimensions,
             self.segment_max_vectors,
@@ -346,6 +348,7 @@ impl PyIndexStats {
             self.segment_bytes,
             self.graph_bytes,
             self.resident_bytes_estimate,
+            self.prepared_positioned_bytes,
             self.collection_resident_bytes,
             self.retained_bytes,
             self.retained_capacity_bytes,
@@ -649,6 +652,8 @@ struct PySearchReport {
     #[pyo3(get)]
     resident_bytes_estimate: u64,
     #[pyo3(get)]
+    prepared_positioned_bytes: u64,
+    #[pyo3(get)]
     collection_resident_bytes: u64,
     #[pyo3(get)]
     retained_bytes: u64,
@@ -678,7 +683,7 @@ struct PySearchReport {
 impl PySearchReport {
     fn __repr__(&self) -> String {
         format!(
-            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, decoded_cache_hits={}, decoded_cache_bytes_read={}, object_cache_hits={}, object_cache_misses={}, disk_cache_bytes_read={}, backing_bytes_read={}, disk_cache_reads={}, backing_reads={}, cache_repairs={}, records_considered={}, records_scored={}, graph_candidates_added={}, global_graph_chunks_searched={}, global_scan_chunks_searched={}, global_base_approximate_us={}, global_base_exact_rerank_us={}, resident_bytes_estimate={}, collection_resident_bytes={}, retained_bytes={}, retained_capacity_bytes={}, retained_peak_bytes={}, transient_bytes={}, transient_capacity_bytes={}, transient_peak_bytes={}, elapsed_ms={}, requests={})",
+            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, decoded_cache_hits={}, decoded_cache_bytes_read={}, object_cache_hits={}, object_cache_misses={}, disk_cache_bytes_read={}, backing_bytes_read={}, disk_cache_reads={}, backing_reads={}, cache_repairs={}, records_considered={}, records_scored={}, graph_candidates_added={}, global_graph_chunks_searched={}, global_scan_chunks_searched={}, global_base_approximate_us={}, global_base_exact_rerank_us={}, resident_bytes_estimate={}, prepared_positioned_bytes={}, collection_resident_bytes={}, retained_bytes={}, retained_capacity_bytes={}, retained_peak_bytes={}, transient_bytes={}, transient_capacity_bytes={}, transient_peak_bytes={}, elapsed_ms={}, requests={})",
             self.hits.len(),
             self.leaf_mode,
             self.termination_reason,
@@ -708,6 +713,7 @@ impl PySearchReport {
             self.global_base_approximate_us,
             self.global_base_exact_rerank_us,
             self.resident_bytes_estimate,
+            self.prepared_positioned_bytes,
             self.collection_resident_bytes,
             self.retained_bytes,
             self.retained_capacity_bytes,
@@ -3009,6 +3015,7 @@ impl From<IndexStats> for PyIndexStats {
             segment_bytes: stats.segment_bytes,
             graph_bytes: stats.graph_bytes,
             resident_bytes_estimate: stats.resident_bytes_estimate,
+            prepared_positioned_bytes: stats.prepared_positioned_bytes,
             collection_resident_bytes: stats.collection_resident_bytes,
             retained_bytes: stats.retained_bytes,
             retained_capacity_bytes: stats.retained_capacity_bytes,
@@ -3104,6 +3111,7 @@ impl TryFrom<SearchReport> for PySearchReport {
             global_base_approximate_us: report.global_base_approximate_us,
             global_base_exact_rerank_us: report.global_base_exact_rerank_us,
             resident_bytes_estimate: report.resident_bytes_estimate,
+            prepared_positioned_bytes: report.prepared_positioned_bytes,
             collection_resident_bytes: report.collection_resident_bytes,
             retained_bytes: report.retained_bytes,
             retained_capacity_bytes: report.retained_capacity_bytes,

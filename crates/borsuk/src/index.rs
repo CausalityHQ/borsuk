@@ -49,12 +49,12 @@ use crate::{
         tombstone_ids_to_parquet, wal_records_from_table,
     },
     global_leaf_run::{
-        GlobalAnnRef, GlobalCodebookRef, GlobalLeafPersistenceWriter, GlobalLeafRunRef,
-        ResidentGlobalLeafRun,
+        CarriedPrimaryDenseRun, GlobalAnnRef, GlobalCodebookRef, GlobalLeafPersistenceWriter,
+        GlobalLeafRunRef, PrimaryDenseArtifactCandidate, ResidentGlobalLeafRun, SourceRangeSet,
     },
     global_pq_sidecar::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCoarseQuantizer, GlobalCodebookDescriptor,
-        GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalScanQuantizer,
+        GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalPqChunkBytes, GlobalScanQuantizer,
         HierarchicalCoarseQuantizer, ResidentGlobalCodebook, RoutedGlobalLeafPage,
         ValidatedGlobalCodebookMetadata,
     },
@@ -1497,19 +1497,229 @@ struct PreparedPositionedModalitySnapshot {
     run_identities: BTreeSet<String>,
 }
 
+// Rust does not expose BTree node allocation sizes. Charge a conservative
+// per-entry pointer/length allowance in addition to the inline key/value and
+// every owned buffer capacity, so admission never treats tree bookkeeping as
+// free memory.
+const PREPARED_BTREE_ENTRY_OVERHEAD: usize = 4 * std::mem::size_of::<usize>();
+
+fn prepared_run_dynamic_bytes(run: &PreparedCellWalRun) -> usize {
+    run.transaction_id
+        .capacity()
+        .saturating_add(run.metadata.capacity())
+        .saturating_add(run.path.capacity())
+        .saturating_add(run.checksum.capacity())
+}
+
+fn prepared_transaction_resident_bytes(transaction: &CommittedCellWalTransaction) -> usize {
+    std::mem::size_of::<CommittedCellWalTransaction>()
+        .saturating_add(transaction.transaction_id.capacity())
+        .saturating_add(transaction.descriptor_path.capacity())
+        .saturating_add(transaction.descriptor_checksum.capacity())
+        .saturating_add(transaction.metadata.capacity())
+        .saturating_add(
+            transaction
+                .runs
+                .capacity()
+                .saturating_mul(std::mem::size_of::<PreparedCellWalRun>()),
+        )
+        .saturating_add(
+            transaction
+                .runs
+                .iter()
+                .map(prepared_run_dynamic_bytes)
+                .fold(0_usize, usize::saturating_add),
+        )
+}
+
+impl PreparedPositionedModalitySnapshot {
+    fn resident_bytes(&self) -> usize {
+        prepared_modality_resident_bytes(
+            &self.transactions,
+            self.transactions.capacity(),
+            &self.run_identities,
+        )
+    }
+}
+
+fn prepared_modality_resident_bytes(
+    transactions: &[CommittedCellWalTransaction],
+    transaction_capacity: usize,
+    run_identities: &BTreeSet<String>,
+) -> usize {
+    std::mem::size_of::<PreparedPositionedModalitySnapshot>()
+        .saturating_add(
+            transaction_capacity.saturating_mul(std::mem::size_of::<CommittedCellWalTransaction>()),
+        )
+        .saturating_add(
+            transactions
+                .iter()
+                .map(prepared_transaction_resident_bytes)
+                .map(|bytes| {
+                    bytes.saturating_sub(std::mem::size_of::<CommittedCellWalTransaction>())
+                })
+                .fold(0_usize, usize::saturating_add),
+        )
+        .saturating_add(
+            run_identities
+                .iter()
+                .map(|identity| {
+                    std::mem::size_of::<String>()
+                        .saturating_add(identity.capacity())
+                        .saturating_add(PREPARED_BTREE_ENTRY_OVERHEAD)
+                })
+                .fold(0_usize, usize::saturating_add),
+        )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthenticatedPrimaryRouteAuthority {
+    catalog_checksum: String,
+    routing_epoch: u64,
+    strategy: CatalogRoutingStrategy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthenticatedPrimaryRoutePrefix {
+    position: crate::CommitSourcePosition,
+    cell_ordinals: Arc<[u32]>,
+}
+
+#[derive(Debug, Clone)]
+struct PrimaryDenseProjectedRow {
+    id: Vec<u8>,
+    vector: Vec<f32>,
+    state: MutationState,
+}
+
+impl PrimaryDenseProjectedRow {
+    fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(self.id.capacity())
+            .saturating_add(
+                self.vector
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<f32>()),
+            )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PrimaryDenseProjectedTombstone {
+    id: Vec<u8>,
+    state: MutationState,
+}
+
+impl PrimaryDenseProjectedTombstone {
+    fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>().saturating_add(self.id.capacity())
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct PreparedPrimaryDenseProjection {
+    position: crate::CommitSourcePosition,
+    rows: Arc<[PrimaryDenseProjectedRow]>,
+    tombstones: Arc<[PrimaryDenseProjectedTombstone]>,
+}
+
+impl PreparedPrimaryDenseProjection {
+    fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(4 * std::mem::size_of::<usize>())
+            .saturating_add(
+                self.rows
+                    .iter()
+                    .map(PrimaryDenseProjectedRow::resident_bytes)
+                    .chain(
+                        self.tombstones
+                            .iter()
+                            .map(PrimaryDenseProjectedTombstone::resident_bytes),
+                    )
+                    .fold(0_usize, usize::saturating_add),
+            )
+    }
+}
+
+#[derive(Debug)]
+struct ValidatedPositionedRoutePlanEnvelope {
+    loaded: BTreeMap<String, Vec<u8>>,
+    primary_route_prefix: AuthenticatedPrimaryRoutePrefix,
+    primary_rows: Arc<[PrimaryDenseProjectedRow]>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PositionedSnapshotAuthority {
     collection_checksum: String,
     schema_fingerprint: String,
     manifest_refs: Vec<CollectionManifestRef>,
+    primary_route: AuthenticatedPrimaryRouteAuthority,
 }
 
-#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
 struct PreparedPositionedEnvelope {
     primary: PreparedPositionedModalitySnapshot,
     named: BTreeMap<String, PreparedPositionedModalitySnapshot>,
     primary_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
     fully_materialized_positions: Vec<crate::CommitSourcePosition>,
+    primary_route_prefix: AuthenticatedPrimaryRoutePrefix,
+    primary_dense_projection: PreparedPrimaryDenseProjection,
+}
+
+impl PreparedPositionedEnvelope {
+    fn resident_bytes(&self) -> usize {
+        let named =
+            self.named
+                .iter()
+                .map(|(name, snapshot)| {
+                    std::mem::size_of::<(String, PreparedPositionedModalitySnapshot)>()
+                        .saturating_add(PREPARED_BTREE_ENTRY_OVERHEAD)
+                        .saturating_add(name.capacity())
+                        .saturating_add(snapshot.resident_bytes().saturating_sub(
+                            std::mem::size_of::<PreparedPositionedModalitySnapshot>(),
+                        ))
+                })
+                .fold(0_usize, usize::saturating_add);
+        let bm25 = self
+            .primary_bm25_deltas
+            .iter()
+            .map(|(transaction_id, delta)| {
+                std::mem::size_of::<(String, Bm25StatsDelta)>()
+                    .saturating_add(PREPARED_BTREE_ENTRY_OVERHEAD)
+                    .saturating_add(transaction_id.capacity())
+                    .saturating_add(
+                        delta.document_frequencies.len().saturating_mul(
+                            std::mem::size_of::<(u32, i64)>()
+                                .saturating_add(PREPARED_BTREE_ENTRY_OVERHEAD),
+                        ),
+                    )
+            })
+            .fold(0_usize, usize::saturating_add);
+        std::mem::size_of::<Self>()
+            .saturating_add(
+                self.primary
+                    .resident_bytes()
+                    .saturating_sub(std::mem::size_of::<PreparedPositionedModalitySnapshot>()),
+            )
+            .saturating_add(named)
+            .saturating_add(bm25)
+            .saturating_add(
+                self.fully_materialized_positions
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<crate::CommitSourcePosition>()),
+            )
+            .saturating_add(2 * std::mem::size_of::<usize>())
+            .saturating_add(std::mem::size_of_val(
+                self.primary_route_prefix.cell_ordinals.as_ref(),
+            ))
+            .saturating_add(
+                self.primary_dense_projection
+                    .resident_bytes()
+                    .saturating_sub(std::mem::size_of::<PreparedPrimaryDenseProjection>()),
+            )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1520,6 +1730,97 @@ struct PreparedPositionedSnapshot {
     fully_materialized_positions: Vec<crate::CommitSourcePosition>,
     authority: PositionedSnapshotAuthority,
     envelopes: BTreeMap<String, PreparedPositionedEnvelope>,
+}
+
+impl PreparedPositionedSnapshot {
+    fn primary_dense_resident_bytes(&self) -> u64 {
+        prepared_positioned_owned_bytes(
+            Some(&self.authority),
+            &self.envelopes,
+            self.primary.resident_bytes(),
+            self.named
+                .values()
+                .map(PreparedPositionedModalitySnapshot::resident_bytes)
+                .fold(0_usize, usize::saturating_add),
+            &self.primary_bm25_deltas,
+            &self.fully_materialized_positions,
+        )
+    }
+}
+
+fn prepared_positioned_owned_bytes(
+    authority: Option<&PositionedSnapshotAuthority>,
+    envelopes: &BTreeMap<String, PreparedPositionedEnvelope>,
+    primary_bytes: usize,
+    named_bytes: usize,
+    primary_bm25_deltas: &BTreeMap<String, Bm25StatsDelta>,
+    fully_materialized_positions: &[crate::CommitSourcePosition],
+) -> u64 {
+    let authority_bytes = authority.map_or(0, |authority| {
+        let manifest_refs = authority
+            .manifest_refs
+            .iter()
+            .map(|reference| {
+                reference.modality.capacity()
+                    + reference.prefix.capacity()
+                    + reference.manifest_path.capacity()
+                    + reference.manifest_checksum.capacity()
+                    + reference.routing_path.capacity()
+                    + reference.routing_checksum.capacity()
+                    + reference.pivots_path.capacity()
+                    + reference.pivots_checksum.capacity()
+                    + reference.consumed_wal_frontier_checksum.capacity()
+            })
+            .fold(0_usize, usize::saturating_add);
+        std::mem::size_of::<PositionedSnapshotAuthority>()
+            .saturating_add(authority.collection_checksum.capacity())
+            .saturating_add(authority.schema_fingerprint.capacity())
+            .saturating_add(authority.primary_route.catalog_checksum.capacity())
+            .saturating_add(
+                authority
+                    .manifest_refs
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<CollectionManifestRef>()),
+            )
+            .saturating_add(manifest_refs)
+    });
+    let envelope_bytes = envelopes
+        .iter()
+        .map(|(checksum, envelope)| {
+            std::mem::size_of::<(String, PreparedPositionedEnvelope)>()
+                .saturating_add(PREPARED_BTREE_ENTRY_OVERHEAD)
+                .saturating_add(checksum.capacity())
+                .saturating_add(
+                    envelope
+                        .resident_bytes()
+                        .saturating_sub(std::mem::size_of::<PreparedPositionedEnvelope>()),
+                )
+        })
+        .fold(0_usize, usize::saturating_add);
+    let bm25_bytes = primary_bm25_deltas
+        .iter()
+        .map(|(transaction_id, delta)| {
+            std::mem::size_of::<(String, Bm25StatsDelta)>()
+                .saturating_add(PREPARED_BTREE_ENTRY_OVERHEAD)
+                .saturating_add(transaction_id.capacity())
+                .saturating_add(delta.document_frequencies.len().saturating_mul(
+                    std::mem::size_of::<(u32, i64)>().saturating_add(PREPARED_BTREE_ENTRY_OVERHEAD),
+                ))
+        })
+        .fold(0_usize, usize::saturating_add);
+    u64::try_from(
+        authority_bytes
+            .saturating_add(envelope_bytes)
+            .saturating_add(primary_bytes)
+            .saturating_add(named_bytes)
+            .saturating_add(bm25_bytes)
+            .saturating_add(
+                fully_materialized_positions
+                    .len()
+                    .saturating_mul(std::mem::size_of::<crate::CommitSourcePosition>()),
+            ),
+    )
+    .unwrap_or(u64::MAX)
 }
 
 #[derive(Debug)]
@@ -4239,6 +4540,13 @@ impl BorsukIndex {
                     )
                 })
                 .transpose()?;
+            if derived.is_some() {
+                self.admit_prepared_positioned_snapshot(
+                    &latest,
+                    &named_manifests,
+                    &prepared_positioned,
+                )?;
+            }
             self.resident_global_ann_pins = latest_global_ann_pins;
             for (name, (_, _, _, global_pq_pins)) in prepared_named {
                 self.named
@@ -4262,6 +4570,7 @@ impl BorsukIndex {
             &prepared_positioned,
             &candidate_lane_log_head_checksums,
         )?;
+        self.admit_prepared_positioned_snapshot(&latest, &named_manifests, &prepared_positioned)?;
 
         self.manifest = latest;
         self.resident_global_ann_pins = latest_global_ann_pins;
@@ -4420,7 +4729,8 @@ impl BorsukIndex {
                         .fold(0_usize, usize::saturating_add)
                 },
             ),
-            resident_bytes_estimate: self.collection_resident_bytes_estimate(),
+            resident_bytes_estimate: self.persisted_collection_resident_bytes_estimate(),
+            prepared_positioned_bytes: self.prepared_positioned_resident_bytes(),
             collection_resident_bytes: self.collection_resident_bytes_estimate(),
             retained_bytes: self
                 .read_runtime
@@ -5414,16 +5724,32 @@ impl BorsukIndex {
             &prepared,
             &self.lane_log_head_checksums,
         )?;
+        self.admit_prepared_positioned_snapshot(&primary_manifest, &named_manifests, &prepared)?;
         self.install_prepared_positioned_snapshot(prepared, derived);
         Ok(())
     }
 
+    #[cfg(test)]
     fn validate_positioned_route_plan_envelope(
         &self,
         envelope: &crate::positioned_log::PositionedMutationEnvelope,
         primary_manifest: &Manifest,
         named_manifests: &BTreeMap<String, Manifest>,
     ) -> Result<BTreeMap<String, Vec<u8>>> {
+        self.validate_positioned_route_plan_envelope_with_prefix(
+            envelope,
+            primary_manifest,
+            named_manifests,
+        )
+        .map(|validated| validated.loaded)
+    }
+
+    fn validate_positioned_route_plan_envelope_with_prefix(
+        &self,
+        envelope: &crate::positioned_log::PositionedMutationEnvelope,
+        primary_manifest: &Manifest,
+        named_manifests: &BTreeMap<String, Manifest>,
+    ) -> Result<ValidatedPositionedRoutePlanEnvelope> {
         if envelope
             .payloads
             .iter()
@@ -5651,7 +5977,48 @@ impl BorsukIndex {
             source_min,
             &rows,
         )?;
-        Ok(loaded)
+        let cell_ordinals = rows
+            .iter()
+            .filter(|row| {
+                row.projection_kind == PositionedRouteProjectionKind::Primary
+                    && row.record_id.is_some()
+            })
+            .map(|row| {
+                row.cell_ordinal.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "authenticated primary route row lost its cell ordinal".to_owned(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if cell_ordinals.len() != primary_records.len() {
+            return Err(BorsukError::InvalidStorage(
+                "authenticated primary route prefix changed primary row cardinality".to_owned(),
+            ));
+        }
+        let primary_rows = primary_records
+            .into_iter()
+            .map(|(record, _, _)| {
+                let stamp = record.mutation_stamp().ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "authenticated primary row has no mutation stamp".to_owned(),
+                    )
+                })?;
+                Ok(PrimaryDenseProjectedRow {
+                    id: record.id.as_bytes().to_vec(),
+                    vector: record.vector,
+                    state: MutationState::new(stamp, MutationOperation::Put),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ValidatedPositionedRoutePlanEnvelope {
+            loaded,
+            primary_route_prefix: AuthenticatedPrimaryRoutePrefix {
+                position: envelope.position,
+                cell_ordinals: Arc::from(cell_ordinals),
+            },
+            primary_rows: Arc::from(primary_rows),
+        })
     }
 
     fn prepare_positioned_snapshot(
@@ -5669,10 +6036,24 @@ impl BorsukIndex {
         let snapshot = writer
             .reader()
             .snapshot_for_collection_generation(generation)?;
+        let primary_catalog = primary_manifest
+            .logical_cell_catalog_ref
+            .as_ref()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned snapshot requires primary logical-cell catalog authority"
+                        .to_owned(),
+                )
+            })?;
         let authority = PositionedSnapshotAuthority {
             collection_checksum: collection_snapshot.checksum.clone(),
             schema_fingerprint: collection_snapshot.snapshot.schema_fingerprint.clone(),
             manifest_refs: collection_snapshot.snapshot.modalities.clone(),
+            primary_route: AuthenticatedPrimaryRouteAuthority {
+                catalog_checksum: primary_catalog.checksum.clone(),
+                routing_epoch: primary_catalog.routing_epoch,
+                strategy: primary_manifest.logical_cell_routing_strategy,
+            },
         };
         let can_reuse = self.positioned_prepared_authority.as_ref() == Some(&authority);
         let mut prepared = PreparedPositionedSnapshot {
@@ -5707,19 +6088,34 @@ impl BorsukIndex {
                     .insert(descriptor_checksum, contribution.clone());
                 continue;
             }
-            let mut contribution = PreparedPositionedEnvelope {
-                named: named_manifests
-                    .keys()
-                    .map(|name| (name.clone(), PreparedPositionedModalitySnapshot::default()))
-                    .collect(),
-                ..PreparedPositionedEnvelope::default()
-            };
             let mut fully_materialized = true;
-            let loaded = self.validate_positioned_route_plan_envelope(
+            let mut primary_tombstones = Vec::<PrimaryDenseProjectedTombstone>::new();
+            let validated = self.validate_positioned_route_plan_envelope_with_prefix(
                 &envelope,
                 primary_manifest,
                 named_manifests,
             )?;
+            let ValidatedPositionedRoutePlanEnvelope {
+                loaded,
+                primary_route_prefix,
+                primary_rows,
+            } = validated;
+            let position = primary_route_prefix.position;
+            let mut contribution = PreparedPositionedEnvelope {
+                primary: PreparedPositionedModalitySnapshot::default(),
+                named: named_manifests
+                    .keys()
+                    .map(|name| (name.clone(), PreparedPositionedModalitySnapshot::default()))
+                    .collect(),
+                primary_bm25_deltas: BTreeMap::new(),
+                fully_materialized_positions: Vec::new(),
+                primary_route_prefix,
+                primary_dense_projection: PreparedPrimaryDenseProjection {
+                    position,
+                    rows: primary_rows,
+                    tombstones: Arc::from([]),
+                },
+            };
             let mut by_modality = BTreeMap::<String, Vec<PreparedCellWalRun>>::new();
             let mut transaction_metadata = BTreeMap::<String, StagedPositionedMetadata>::new();
             for payload in &envelope.payloads {
@@ -5817,6 +6213,14 @@ impl BorsukIndex {
                         checksum_hasher.update(payload.checksum.as_bytes());
                         checksum_hasher.update(modality.as_bytes());
                         let projection_checksum = checksum_hasher.finalize().to_hex().to_string();
+                        if modality == PRIMARY_MODALITY {
+                            primary_tombstones.extend(rows.iter().map(|row| {
+                                PrimaryDenseProjectedTombstone {
+                                    id: row.record_id.clone(),
+                                    state: row.state,
+                                }
+                            }));
+                        }
                         by_modality
                             .entry(modality.clone())
                             .or_default()
@@ -5864,6 +6268,14 @@ impl BorsukIndex {
                         .get(&payload.path)
                         .expect("validated positioned payload");
                     let entries = tombstone_ids_from_parquet(bytes)?;
+                    if role.modality == PRIMARY_MODALITY {
+                        primary_tombstones.extend(entries.iter().map(|(id, state)| {
+                            PrimaryDenseProjectedTombstone {
+                                id: id.clone(),
+                                state: *state,
+                            }
+                        }));
+                    }
                     let seconds = role.tombstone_created_at_seconds.ok_or_else(|| {
                         BorsukError::InvalidStorage(
                             "positioned tombstone role is missing created-at seconds".to_string(),
@@ -6066,6 +6478,8 @@ impl BorsukIndex {
                     .fully_materialized_positions
                     .push(envelope.position);
             }
+            primary_tombstones.sort_unstable_by(|left, right| left.id.cmp(&right.id));
+            contribution.primary_dense_projection.tombstones = Arc::from(primary_tombstones);
             Self::merge_prepared_positioned_envelope(&mut prepared, &contribution);
             prepared.envelopes.insert(descriptor_checksum, contribution);
         }
@@ -6153,6 +6567,36 @@ impl BorsukIndex {
             primary_resident_global_mutations,
             named_resident_global_mutations,
         })
+    }
+
+    fn admit_prepared_positioned_snapshot(
+        &self,
+        primary_manifest: &Manifest,
+        named_manifests: &BTreeMap<String, Manifest>,
+        prepared: &PreparedPositionedSnapshot,
+    ) -> Result<()> {
+        let persisted_bytes = named_manifests.values().fold(
+            primary_manifest.resident_bytes_estimate(),
+            |total, manifest| total.saturating_add(manifest.resident_bytes_estimate()),
+        );
+        let resident_bytes = persisted_bytes
+            .checked_add(prepared.primary_dense_resident_bytes())
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "prepared positioned resident bytes exceed u64".to_owned(),
+                )
+            })?;
+        if let Some(budget_bytes) = self.effective_ram_budget_bytes()
+            && resident_bytes > budget_bytes
+        {
+            return Err(BorsukError::RamBudgetExceeded {
+                resident_bytes,
+                budget_bytes,
+            });
+        }
+        self.read_runtime
+            .enforce_resident_capacity(resident_bytes)?;
+        Ok(())
     }
 
     fn install_prepared_positioned_snapshot(
@@ -9904,6 +10348,7 @@ impl BorsukIndex {
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
             resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+            prepared_positioned_bytes: 0,
             collection_resident_bytes: 0,
             retained_bytes: 0,
             retained_capacity_bytes: 0,
@@ -15783,6 +16228,7 @@ impl BorsukIndex {
                     global_base_approximate_us: 0,
                     global_base_exact_rerank_us: 0,
                     resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                    prepared_positioned_bytes: 0,
                     collection_resident_bytes: 0,
                     retained_bytes: 0,
                     retained_capacity_bytes: 0,
@@ -16095,6 +16541,7 @@ impl BorsukIndex {
                 global_base_exact_rerank_us: u64::try_from(exact_started.elapsed().as_micros())
                     .unwrap_or(u64::MAX),
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                prepared_positioned_bytes: 0,
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
                 retained_capacity_bytes: 0,
@@ -16389,6 +16836,7 @@ impl BorsukIndex {
         let coarse_quantizer_state = coarse_quantizer.state();
         let global_code_width = quantizer.code_bytes_per_vector();
         let quantizer_state = quantizer.state();
+        let leaf_quantizer = GlobalScanQuantizer::from_state(quantizer_state.clone())?;
         let reconstruction_error_p95_micros =
             quantizer.reconstruction_error_p95_micros(&training_sample)?;
         let coarse_cell_count = coarse_quantizer.all_cells()?.len();
@@ -16534,11 +16982,11 @@ impl BorsukIndex {
                     let pages = build_global_leaf_pages(
                         std::slice::from_mut(&mut source),
                         global_code_width,
-                        quantizer_state.uses_product_code_locality(),
+                        leaf_quantizer.uses_product_code_locality(),
                         dimensions,
                         self.manifest.build_config.vector_element_type,
                         normalize,
-                        quantizer_state.clone(),
+                        &leaf_quantizer,
                     )?;
                     leaf_writer.push_cell_chunk(pages)?;
                 }
@@ -16611,6 +17059,300 @@ impl BorsukIndex {
     fn refresh_resident_global_ann(&mut self) -> Result<()> {
         let summaries = self.active_segment_summaries()?;
         self.refresh_resident_global_ann_from_summaries(&summaries, 0)
+    }
+
+    // Task 3 builds this immutable candidate, while Task 4 exclusively owns
+    // its collection-manifest publication and CAS boundary.
+    #[allow(dead_code)]
+    fn build_unwired_primary_dense_candidate(
+        &self,
+        source_ranges: &crate::positioned_log::CommitSourceRangeSet,
+        codebook_ref: &GlobalCodebookRef,
+        carried: &[CarriedPrimaryDenseRun],
+    ) -> Result<PrimaryDenseArtifactCandidate> {
+        source_ranges.validate_canonical()?;
+        if source_ranges.ranges().is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "primary-dense candidate source coverage must not be empty".to_owned(),
+            ));
+        }
+        let carried_coverage = carried.iter().try_fold(
+            crate::positioned_log::CommitSourceRangeSet::default(),
+            |coverage, run| {
+                coverage.union_disjoint(&crate::positioned_log::CommitSourceRangeSet::try_from(
+                    run.run().source_ranges(),
+                )?)
+            },
+        )?;
+        if !source_ranges.covers(&carried_coverage) {
+            return Err(BorsukError::InvalidStorage(
+                "primary-dense carried run coverage is outside the requested prefix".to_owned(),
+            ));
+        }
+        let remaining = match source_ranges.subtract(&carried_coverage)? {
+            crate::positioned_log::CommitSourceCoverageDifference::FullyCovered => {
+                crate::positioned_log::CommitSourceRangeSet::default()
+            }
+            crate::positioned_log::CommitSourceCoverageDifference::Partial(remaining)
+            | crate::positioned_log::CommitSourceCoverageDifference::Disjoint(remaining) => {
+                remaining
+            }
+        };
+        let contains = |coverage: &crate::positioned_log::CommitSourceRangeSet,
+                        position: crate::CommitSourcePosition| {
+            coverage.ranges().iter().any(|range| {
+                range.source_epoch == position.source_epoch
+                    && range.shard == position.shard
+                    && (range.first_sequence..=range.last_sequence).contains(&position.sequence)
+            })
+        };
+        let mut selected = self
+            .positioned_prepared_envelopes
+            .values()
+            .filter(|envelope| contains(&remaining, envelope.primary_route_prefix.position))
+            .collect::<Vec<_>>();
+        selected.sort_unstable_by_key(|envelope| envelope.primary_route_prefix.position);
+        let selected_coverage = crate::positioned_log::CommitSourceRangeSet::new(
+            selected
+                .iter()
+                .map(|envelope| {
+                    let position = envelope.primary_route_prefix.position;
+                    crate::positioned_log::CommitSourceRange::new(
+                        position.source_epoch,
+                        position.shard,
+                        position.sequence,
+                        position.sequence,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )?;
+        if selected_coverage != remaining {
+            return Err(BorsukError::InvalidStorage(
+                "prepared primary route prefixes do not exactly cover the requested source prefix"
+                    .to_owned(),
+            ));
+        }
+        let snapshot_route = &self
+            .positioned_prepared_authority
+            .as_ref()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "primary-dense candidate has no authenticated positioned authority".to_owned(),
+                )
+            })?
+            .primary_route;
+        let catalog_ref = self
+            .manifest
+            .logical_cell_catalog_ref
+            .as_ref()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "primary-dense candidate has no manifest catalog authority".to_owned(),
+                )
+            })?;
+        if snapshot_route.catalog_checksum != catalog_ref.checksum
+            || snapshot_route.routing_epoch != catalog_ref.routing_epoch
+            || snapshot_route.strategy != self.manifest.logical_cell_routing_strategy
+            || catalog_ref.routing_epoch != self.manifest.routing_epoch
+        {
+            return Err(BorsukError::InvalidStorage(
+                "primary-dense candidate codebook does not match catalog authority".to_owned(),
+            ));
+        }
+        let codebook = self.load_resident_global_codebook(codebook_ref)?;
+        let codebook_router = codebook.catalog_router().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "primary-dense candidate requires a catalog-pinned V12 codebook".to_owned(),
+            )
+        })?;
+        if self
+            .manifest
+            .logical_cell_router
+            .as_ref()
+            .is_none_or(|router| !Arc::ptr_eq(router, codebook_router))
+            || codebook_router.strategy() != snapshot_route.strategy
+            || codebook_router.catalog().routing_epoch() != snapshot_route.routing_epoch
+            || codebook.cell_count()
+                != usize::try_from(catalog_ref.cell_count).unwrap_or(usize::MAX)
+            || catalog_ref.cell_count != codebook_ref.cell_count()
+            || usize::try_from(catalog_ref.dimensions).ok() != Some(codebook_ref.dimensions())
+            || codebook_ref.metric() != &self.manifest.config.metric
+            || codebook_ref.element_type() != self.manifest.build_config.vector_element_type
+        {
+            return Err(BorsukError::InvalidStorage(
+                "primary-dense candidate resident codebook does not match catalog authority"
+                    .to_owned(),
+            ));
+        }
+        if selected.is_empty() {
+            return PrimaryDenseArtifactCandidate::assemble(
+                codebook_ref.clone(),
+                None,
+                carried,
+                source_ranges.clone(),
+            );
+        }
+        if codebook.metric() != &self.manifest.config.metric
+            || codebook.dimensions() != self.manifest.config.dimensions
+            || codebook.vector_element_type() != self.manifest.build_config.vector_element_type
+        {
+            return Err(BorsukError::InvalidStorage(
+                "primary-dense candidate codebook disagrees with collection schema".to_owned(),
+            ));
+        }
+
+        let mut newest =
+            BTreeMap::<Vec<u8>, (MutationState, Option<(&PrimaryDenseProjectedRow, u32)>)>::new();
+        for envelope in selected {
+            let projection = &envelope.primary_dense_projection;
+            if projection.position != envelope.primary_route_prefix.position {
+                return Err(BorsukError::InvalidStorage(
+                    "primary-dense projection position disagrees with its route prefix".to_owned(),
+                ));
+            }
+            for tombstone in projection.tombstones.iter() {
+                merge_primary_dense_candidate_state(
+                    &mut newest,
+                    tombstone.id.clone(),
+                    tombstone.state,
+                    None,
+                )?;
+            }
+            if projection.rows.len() != envelope.primary_route_prefix.cell_ordinals.len() {
+                return Err(BorsukError::InvalidStorage(
+                    "primary-dense route prefix and record projection disagree".to_owned(),
+                ));
+            }
+            for (row, cell_ordinal) in projection
+                .rows
+                .iter()
+                .zip(envelope.primary_route_prefix.cell_ordinals.iter().copied())
+            {
+                merge_primary_dense_candidate_state(
+                    &mut newest,
+                    row.id.clone(),
+                    row.state,
+                    Some((row, cell_ordinal)),
+                )?;
+            }
+        }
+
+        let mut cells = BTreeMap::<u32, Vec<&PrimaryDenseProjectedRow>>::new();
+        for (_id, (state, row)) in newest {
+            if !state.is_deleted()
+                && let Some((record, cell)) = row
+            {
+                cells.entry(cell).or_default().push(record);
+            }
+        }
+        for rows in cells.values_mut() {
+            rows.sort_unstable_by(|left, right| left.id.cmp(&right.id));
+        }
+        let occupied_levels = carried
+            .iter()
+            .map(|run| run.run().level())
+            .collect::<BTreeSet<_>>();
+        let level = (1..u8::MAX)
+            .find(|level| !occupied_levels.contains(level))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "primary-dense candidate has no available incremental run level".to_owned(),
+                )
+            })?;
+        let mut writer = GlobalLeafPersistenceWriter::new(
+            &self.storage,
+            self.manifest.config.dimensions,
+            self.manifest.build_config.vector_element_type,
+            codebook_ref.descriptor_checksum().to_owned(),
+        )?;
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let element_type = self.manifest.build_config.vector_element_type;
+        let dimensions = self.manifest.config.dimensions;
+        let code_width = codebook.code_bytes_per_vector();
+        let mut minimum_stamp = None::<MutationStamp>;
+        let mut maximum_stamp = None::<MutationStamp>;
+        for (cell, records) in cells {
+            let mut code_bytes = Vec::with_capacity(records.len().saturating_mul(code_width));
+            let mut exact_bytes = Vec::new();
+            let mut identities = Vec::with_capacity(records.len());
+            for record in records {
+                let normalized;
+                let vector = if normalize {
+                    normalized = crate::metric::unit_l2_normalized(&record.vector);
+                    normalized.as_slice()
+                } else {
+                    record.vector.as_slice()
+                };
+                code_bytes.extend_from_slice(&codebook.encode_vector(vector)?);
+                let mut exact = Vec::new();
+                element_type.encode_canonical_fixed_width_into(&record.vector, &mut exact)?;
+                exact_bytes.extend_from_slice(&exact);
+                let stamp = record.state.stamp();
+                minimum_stamp = Some(minimum_stamp.map_or(stamp, |current| {
+                    if stamp.version() < current.version() {
+                        stamp
+                    } else {
+                        current
+                    }
+                }));
+                maximum_stamp = Some(maximum_stamp.map_or(stamp, |current| {
+                    if stamp.version() > current.version() {
+                        stamp
+                    } else {
+                        current
+                    }
+                }));
+                identities.push((RecordId::from_bytes(record.id.clone()), stamp));
+            }
+            let rows = identities.len();
+            let mut pending = [PendingGlobalPqChunk {
+                cell_index: cell,
+                chunk: GlobalPqChunkBytes {
+                    bytes: code_bytes,
+                    exact_bytes,
+                    identities,
+                    rows,
+                },
+            }];
+            let pages = build_global_leaf_pages(
+                &mut pending,
+                code_width,
+                codebook.scan_quantizer().uses_product_code_locality(),
+                dimensions,
+                element_type,
+                normalize,
+                codebook.scan_quantizer(),
+            )?;
+            writer.push_cell_chunk(pages)?;
+            writer.finalize_cell(cell)?;
+        }
+        let artifacts = writer.finish()?;
+        let source_leaf_ranges = SourceRangeSet::try_from(&selected_coverage)?;
+        let run = GlobalLeafRunRef::new_incremental(
+            codebook_ref,
+            level,
+            artifacts.directory,
+            artifacts.rows as u64,
+            artifacts.page_count as u64,
+            artifacts.bundle_count as u64,
+            artifacts.page_count as u64,
+            0,
+            artifacts.storage_bytes,
+            artifacts.resident_bytes,
+            minimum_stamp,
+            maximum_stamp,
+            source_leaf_ranges,
+        )?;
+        PrimaryDenseArtifactCandidate::assemble(
+            codebook_ref.clone(),
+            Some((run, artifacts.run_artifacts)),
+            carried,
+            source_ranges.clone(),
+        )
     }
 
     /// Rebuild and atomically publish one offline V12 codebook plus one base run.
@@ -17107,7 +17849,8 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_base_exact_rerank_us)
                 .sum(),
-            resident_bytes_estimate: self.collection_resident_bytes_estimate(),
+            resident_bytes_estimate: self.persisted_collection_resident_bytes_estimate(),
+            prepared_positioned_bytes: self.prepared_positioned_resident_bytes(),
             collection_resident_bytes: self.collection_resident_bytes_estimate(),
             retained_bytes: 0,
             retained_capacity_bytes: 0,
@@ -17259,6 +18002,7 @@ impl BorsukIndex {
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
                 resident_bytes_estimate,
+                prepared_positioned_bytes: 0,
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
                 retained_capacity_bytes: 0,
@@ -17474,6 +18218,7 @@ impl BorsukIndex {
             global_base_approximate_us: 0,
             global_base_exact_rerank_us: 0,
             resident_bytes_estimate,
+            prepared_positioned_bytes: 0,
             collection_resident_bytes: 0,
             retained_bytes: 0,
             retained_capacity_bytes: 0,
@@ -17816,6 +18561,7 @@ impl BorsukIndex {
                     global_base_approximate_us: 0,
                     global_base_exact_rerank_us: 0,
                     resident_bytes_estimate,
+                    prepared_positioned_bytes: 0,
                     collection_resident_bytes: 0,
                     retained_bytes: 0,
                     retained_capacity_bytes: 0,
@@ -18576,6 +19322,7 @@ impl BorsukIndex {
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
                 resident_bytes_estimate,
+                prepared_positioned_bytes: 0,
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
                 retained_capacity_bytes: 0,
@@ -18683,6 +19430,7 @@ impl BorsukIndex {
                 global_base_approximate_us: 0,
                 global_base_exact_rerank_us: 0,
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                prepared_positioned_bytes: 0,
                 collection_resident_bytes: 0,
                 retained_bytes: 0,
                 retained_capacity_bytes: 0,
@@ -21458,7 +22206,7 @@ impl BorsukIndex {
         )
     }
 
-    fn collection_resident_bytes_estimate(&self) -> u64 {
+    fn persisted_collection_resident_bytes_estimate(&self) -> u64 {
         // Report what this handle actually retains. Collection references are
         // deliberately conservative admission estimates (and include a decode
         // allowance), while a writer can still hold inline routing summaries
@@ -21472,10 +22220,44 @@ impl BorsukIndex {
             })
     }
 
+    fn prepared_positioned_resident_bytes(&self) -> u64 {
+        let primary_bytes = prepared_modality_resident_bytes(
+            &self.cell_wal_snapshot,
+            self.cell_wal_snapshot.capacity(),
+            &self.positioned_run_identities,
+        );
+        let named_bytes = self
+            .named
+            .values()
+            .map(|child| {
+                prepared_modality_resident_bytes(
+                    &child.cell_wal_snapshot,
+                    child.cell_wal_snapshot.capacity(),
+                    &child.positioned_run_identities,
+                )
+            })
+            .fold(0_usize, usize::saturating_add);
+        prepared_positioned_owned_bytes(
+            self.positioned_prepared_authority.as_ref(),
+            &self.positioned_prepared_envelopes,
+            primary_bytes,
+            named_bytes,
+            &self.positioned_bm25_deltas,
+            &self.positioned_materialized_candidates,
+        )
+    }
+
+    fn collection_resident_bytes_estimate(&self) -> u64 {
+        self.persisted_collection_resident_bytes_estimate()
+            .saturating_add(self.prepared_positioned_resident_bytes())
+    }
+
     fn apply_collection_memory_telemetry(&self, report: &mut SearchReport) {
-        let resident = self.collection_resident_bytes_estimate();
-        report.resident_bytes_estimate = resident;
-        report.collection_resident_bytes = resident;
+        let persisted = self.persisted_collection_resident_bytes_estimate();
+        let prepared = self.prepared_positioned_resident_bytes();
+        report.resident_bytes_estimate = persisted;
+        report.prepared_positioned_bytes = prepared;
+        report.collection_resident_bytes = persisted.saturating_add(prepared);
         if let Some(pool) = &self.read_runtime.retained_pool {
             report.retained_bytes = pool.used_bytes();
             report.retained_capacity_bytes = pool.capacity_bytes();
@@ -22121,7 +22903,7 @@ fn build_global_leaf_pages(
     dimensions: usize,
     element_type: crate::record::VectorElementType,
     normalize: bool,
-    quantizer_state: impl Into<crate::global_pq_sidecar::GlobalScanQuantizerState>,
+    quantizer: &GlobalScanQuantizer,
 ) -> Result<Vec<crate::global_leaf::GlobalLeafPageInput>> {
     let exact_row_bytes = element_type.fixed_width_bytes(dimensions)?;
     let scan_row_bytes = code_width;
@@ -22160,7 +22942,6 @@ fn build_global_leaf_pages(
     }
     let partitions =
         global_leaf_partition_order(&partition_rows, code_width, exact_row_bytes, use_code_space)?;
-    let quantizer = GlobalScanQuantizer::from_state(quantizer_state.into())?;
     let mut next_leaf = BTreeMap::<u32, u32>::new();
     let mut pages = Vec::new();
     for partition in partitions {
@@ -24421,6 +25202,30 @@ fn page_ref_routing_rank_distance(
     metric.distance_unchecked(query, &page_ref.centroid)
 }
 
+#[allow(dead_code, clippy::type_complexity)]
+fn merge_primary_dense_candidate_state<'a>(
+    newest: &mut BTreeMap<Vec<u8>, (MutationState, Option<(&'a PrimaryDenseProjectedRow, u32)>)>,
+    id: Vec<u8>,
+    state: MutationState,
+    row: Option<(&'a PrimaryDenseProjectedRow, u32)>,
+) -> Result<()> {
+    match newest.entry(id) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert((state, row));
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            let current = entry.get().0;
+            let greatest = current.greatest(state)?;
+            if greatest == state && state.stamp().version() > current.stamp().version() {
+                entry.insert((state, row));
+            } else if state == current && entry.get().1.is_none() && row.is_some() {
+                entry.get_mut().1 = row;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn leaf_page_ref_updates_by_ordinal(
     page_refs: &[RoutingLayerPageRef],
 ) -> Result<HashMap<usize, RoutingLayerPageRef>> {
@@ -25488,6 +26293,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use crate::global_leaf_run::GlobalLeafArtifactRole;
     use chrono::Utc;
 
     use super::*;
@@ -25602,6 +26408,179 @@ mod tests {
             )
             .unwrap(),
         ));
+    }
+
+    fn write_test_catalog_codebook(index: &BorsukIndex) -> GlobalCodebookRef {
+        let catalog_ref = index.manifest.logical_cell_catalog_ref.as_ref().unwrap();
+        let descriptor = GlobalCodebookDescriptor::new_catalog_pinned(
+            GlobalScanQuantizer::from(
+                crate::turboquant::FastTurboQuantProdScanQuantizer::new(
+                    crate::DEFAULT_TURBOQUANT_SEED,
+                    index.manifest.config.dimensions,
+                    4,
+                )
+                .unwrap(),
+            )
+            .state(),
+            index.manifest.config.metric.clone(),
+            index.manifest.build_config.vector_element_type,
+            catalog_ref,
+            index.manifest.logical_cell_routing_strategy,
+            catalog_ref.cell_count,
+            1,
+            0,
+        )
+        .unwrap();
+        let bytes = descriptor.encode().unwrap();
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = format!(
+            "global-leaf/v12/codebooks/{}/codebook-{checksum}.parquet",
+            &checksum[..2]
+        );
+        index
+            .storage
+            .write_bytes_content_addressed(&path, &bytes)
+            .unwrap();
+        let resident = index
+            .resident_global_codebook_from_descriptor(descriptor, &index.manifest)
+            .unwrap();
+        GlobalCodebookRef::new(
+            path,
+            checksum,
+            index.manifest.config.metric.clone(),
+            index.manifest.config.dimensions,
+            index.manifest.build_config.vector_element_type,
+            resident.code_bytes_per_vector(),
+            catalog_ref.cell_count,
+            catalog_ref.cell_count,
+            1,
+            0,
+            resident.resident_bytes() as u64,
+            bytes.len() as u64,
+        )
+    }
+
+    fn write_test_segment_derived_codebook(index: &BorsukIndex) -> GlobalCodebookRef {
+        let training = vec![
+            vec![0.0_f32, 0.0_f32],
+            vec![1.0_f32, 0.0_f32],
+            vec![10.0_f32, 0.0_f32],
+            vec![11.0_f32, 0.0_f32],
+        ];
+        let (quantizer, coarse) = index
+            .fit_resident_global_quantizers(&training, training.len())
+            .unwrap();
+        let cell_count = u32::try_from(coarse.all_cells().unwrap().len()).unwrap();
+        let descriptor = GlobalCodebookDescriptor::new(
+            quantizer.state(),
+            coarse.state(),
+            index.manifest.config.metric.clone(),
+            index.manifest.build_config.vector_element_type,
+            cell_count,
+            cell_count,
+            1,
+            0,
+        )
+        .unwrap();
+        let bytes = descriptor.encode().unwrap();
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = format!(
+            "global-leaf/v12/codebooks/{}/codebook-{checksum}.parquet",
+            &checksum[..2]
+        );
+        index
+            .storage
+            .write_bytes_content_addressed(&path, &bytes)
+            .unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        GlobalCodebookRef::new(
+            path,
+            checksum,
+            index.manifest.config.metric.clone(),
+            index.manifest.config.dimensions,
+            index.manifest.build_config.vector_element_type,
+            resident.code_bytes_per_vector(),
+            cell_count,
+            cell_count,
+            1,
+            0,
+            resident.resident_bytes() as u64,
+            bytes.len() as u64,
+        )
+    }
+
+    fn positioned_coverage(
+        positions: impl IntoIterator<Item = crate::CommitSourcePosition>,
+    ) -> crate::positioned_log::CommitSourceRangeSet {
+        crate::positioned_log::CommitSourceRangeSet::new(
+            positions
+                .into_iter()
+                .map(|position| {
+                    crate::positioned_log::CommitSourceRange::new(
+                        position.source_epoch,
+                        position.shard,
+                        position.sequence,
+                        position.sequence,
+                    )
+                    .unwrap()
+                })
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    fn decoded_candidate_rows(
+        index: &BorsukIndex,
+        candidate: &PrimaryDenseArtifactCandidate,
+    ) -> Vec<crate::global_leaf::DecodedGlobalLeafRow> {
+        let run = candidate.new_run().unwrap();
+        let root = index
+            .storage
+            .read_bytes_with_cache_status_and_checksum(
+                run.directory().path(),
+                run.directory().checksum(),
+            )
+            .unwrap()
+            .bytes;
+        let directory = crate::global_leaf::decode_global_leaf_run_directory(
+            run.codebook_checksum(),
+            &root,
+            |shard| {
+                Ok(index
+                    .storage
+                    .read_bytes_with_cache_status_and_checksum(&shard.path, &shard.checksum)?
+                    .bytes
+                    .to_vec())
+            },
+        )
+        .unwrap();
+        directory
+            .pages
+            .iter()
+            .flat_map(|page| {
+                let bundle = &directory.bundles[page.bundle_index as usize];
+                let block = index
+                    .storage
+                    .read_range(
+                        &bundle.path,
+                        page.batch_offset..page.batch_offset + u64::from(page.batch_bytes),
+                    )
+                    .unwrap();
+                let batch = crate::global_leaf::decode_global_leaf_page_ref(
+                    page,
+                    &block,
+                    index.manifest.config.dimensions,
+                    index.manifest.build_config.vector_element_type,
+                )
+                .unwrap();
+                crate::global_leaf::decode_global_leaf_rows(
+                    &batch,
+                    index.manifest.config.dimensions,
+                    index.manifest.build_config.vector_element_type,
+                )
+                .unwrap()
+            })
+            .collect()
     }
 
     fn positioned_metadata_rows_for_position(
@@ -26112,8 +27091,30 @@ mod tests {
             complete - without_router.try_resident_bytes_estimate().unwrap(),
             router.resident_bytes_excluding_catalog() as u64
         );
-        let exact_budget = created.manifest_reference.resident_bytes_estimate;
+        let persisted_exact_budget = complete;
         drop(created);
+
+        let probe = BorsukIndex::open(&uri).unwrap();
+        let probe_collection = probe.collection_snapshot.clone().unwrap();
+        let probe_named = probe
+            .named
+            .iter()
+            .map(|(name, child)| (name.clone(), child.manifest.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let probe_prepared = probe
+            .prepare_positioned_snapshot(&probe_collection, &probe.manifest, &probe_named)
+            .unwrap();
+        let prospective_prepared_bytes = probe_prepared.primary_dense_resident_bytes();
+        assert_eq!(
+            prospective_prepared_bytes,
+            probe.prepared_positioned_resident_bytes()
+        );
+        let exact_resident_bytes =
+            persisted_exact_budget.saturating_add(prospective_prepared_bytes);
+        let exact_budget =
+            exact_resident_bytes.saturating_mul(COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR);
+        assert!(exact_budget >= probe.collection_resident_bytes_estimate());
+        drop(probe);
 
         let reopened = BorsukIndex::open_with_options(
             &uri,
@@ -27883,6 +28884,854 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_primary_route_prefix_is_four_bytes_per_row_and_reused_without_route_get() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0], vec![10.0, 0.0], vec![20.0, 0.0]],
+        )
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("z-cell-0", vec![0.0, 0.0]),
+                VectorRecord::new("a-cell-2", vec![20.0, 0.0]),
+                VectorRecord::new("m-cell-1", vec![10.0, 0.0]),
+            ])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+
+        let (descriptor_checksum, prepared_envelope) =
+            index.positioned_prepared_envelopes.iter().next().unwrap();
+        let prefix = &prepared_envelope.primary_route_prefix;
+        assert_eq!(prefix.cell_ordinals.as_ref(), &[2_u32, 1, 0]);
+        assert_eq!(
+            std::mem::size_of_val(prefix.cell_ordinals.as_ref()),
+            3 * std::mem::size_of::<u32>()
+        );
+        assert!(std::mem::size_of::<AuthenticatedPrimaryRoutePrefix>() <= 48);
+        assert_eq!(
+            prefix.position,
+            index.cell_wal_snapshot[0].source_position.unwrap()
+        );
+        let authority = &index
+            .positioned_prepared_authority
+            .as_ref()
+            .unwrap()
+            .primary_route;
+        let catalog = index.manifest.logical_cell_catalog_ref.as_ref().unwrap();
+        assert_eq!(authority.catalog_checksum, catalog.checksum);
+        assert_eq!(authority.routing_epoch, catalog.routing_epoch);
+        assert_eq!(
+            authority.strategy,
+            index.manifest.logical_cell_routing_strategy
+        );
+
+        let collection = index.collection_snapshot.clone().unwrap();
+        let requests_before = index.collection_storage.request_counts();
+        let prepared = index
+            .prepare_positioned_snapshot(&collection, &index.manifest, &BTreeMap::new())
+            .unwrap();
+        assert_eq!(
+            index
+                .collection_storage
+                .request_counts()
+                .delta(&requests_before)
+                .gets,
+            u64::from(crate::positioned_log::SOURCE_SHARD_COUNT) + 1,
+            "refresh may reread fixed heads and the envelope, but no prepared payload or route plan"
+        );
+        let reused = &prepared
+            .envelopes
+            .get(descriptor_checksum)
+            .unwrap()
+            .primary_route_prefix;
+        assert!(Arc::ptr_eq(&prefix.cell_ordinals, &reused.cell_ordinals));
+    }
+
+    #[test]
+    fn prepared_primary_dense_projection_retains_only_compact_rows_and_is_exactly_accounted() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: true,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0]],
+        )
+        .unwrap();
+        let mut metadata = crate::Metadata::new();
+        metadata.insert(
+            "large".to_owned(),
+            crate::MetaValue::Str("not-retained".repeat(1_024)),
+        );
+        index
+            .add(vec![
+                VectorRecord::new("compact", vec![0.25, 0.75])
+                    .with_text("also not retained ".repeat(1_024))
+                    .with_metadata(metadata),
+            ])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+
+        let envelope = index.positioned_prepared_envelopes.values().next().unwrap();
+        let projection = &envelope.primary_dense_projection;
+        assert_eq!(projection.rows.len(), 1);
+        assert_eq!(projection.rows[0].id, b"compact");
+        assert_eq!(projection.rows[0].vector, [0.25, 0.75]);
+        assert!(projection.tombstones.is_empty());
+        let expected_row_bytes = std::mem::size_of::<PrimaryDenseProjectedRow>()
+            + projection.rows[0].id.capacity()
+            + projection.rows[0].vector.capacity() * std::mem::size_of::<f32>();
+        let expected_projection_bytes = std::mem::size_of::<PreparedPrimaryDenseProjection>()
+            + 4 * std::mem::size_of::<usize>()
+            + expected_row_bytes;
+        assert_eq!(projection.resident_bytes(), expected_projection_bytes);
+
+        let compact_envelope_floor = expected_projection_bytes
+            + std::mem::size_of_val(envelope.primary_route_prefix.cell_ordinals.as_ref());
+        assert!(envelope.resident_bytes() >= compact_envelope_floor);
+        let expected_tail_bytes = index.prepared_positioned_resident_bytes();
+        assert!(
+            expected_tail_bytes > envelope.resident_bytes() as u64,
+            "installed tail accounting must include aggregate transactions and authority"
+        );
+        let stats = index.stats();
+        assert_eq!(stats.prepared_positioned_bytes, expected_tail_bytes);
+        assert_eq!(
+            stats.collection_resident_bytes,
+            stats.resident_bytes_estimate + stats.prepared_positioned_bytes
+        );
+
+        let coverage = positioned_coverage([index.cell_wal_snapshot[0].source_position.unwrap()]);
+        let codebook = write_test_catalog_codebook(&index);
+        let (candidate, clones) = crate::record::count_vector_record_clones(|| {
+            index
+                .build_unwired_primary_dense_candidate(&coverage, &codebook, &[])
+                .unwrap()
+        });
+        assert_eq!(
+            clones, 0,
+            "candidate construction cloned full VectorRecord values"
+        );
+        assert_eq!(decoded_candidate_rows(&index, &candidate).len(), 1);
+    }
+
+    #[test]
+    fn prepared_positioned_ram_rejection_preserves_the_installed_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0]],
+        )
+        .unwrap();
+        index
+            .add(vec![VectorRecord::new("first", vec![0.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let installed_envelopes = index.positioned_prepared_envelopes.clone();
+        let installed_envelope_keys = installed_envelopes.keys().cloned().collect::<Vec<_>>();
+        let installed_transactions = index.cell_wal_snapshot.clone();
+
+        index
+            .add(vec![VectorRecord::new("second", vec![0.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let prospective = index.collection_resident_bytes_estimate();
+
+        index.positioned_prepared_envelopes = installed_envelopes.clone();
+        index.cell_wal_snapshot = installed_transactions.clone();
+        index.runtime_ram_budget_bytes = Some(prospective - 1);
+        let error = index.reload_positioned_snapshot().unwrap_err();
+        assert!(matches!(error, BorsukError::RamBudgetExceeded { .. }));
+        assert_eq!(
+            index
+                .positioned_prepared_envelopes
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            installed_envelope_keys
+        );
+        assert_eq!(index.cell_wal_snapshot, installed_transactions);
+    }
+
+    #[test]
+    fn refresh_ram_rejection_preserves_the_installed_collection_view() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut writer = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0]],
+        )
+        .unwrap();
+        writer
+            .add(vec![VectorRecord::new("first", vec![0.0, 0.0])])
+            .unwrap();
+        let mut reader = BorsukIndex::open(&uri).unwrap();
+
+        writer.flush().unwrap();
+        writer
+            .add(vec![VectorRecord::new("second", vec![0.0, 0.0])])
+            .unwrap();
+        let probe = BorsukIndex::open(&uri).unwrap();
+        let prospective = probe.collection_resident_bytes_estimate();
+
+        let installed_manifest_version = reader.manifest.version;
+        let installed_manifest_reference = reader.manifest_reference.clone();
+        let installed_collection_checksum = reader
+            .collection_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.checksum.clone());
+        let installed_transactions = reader.cell_wal_snapshot.clone();
+        let installed_run_identities = reader.positioned_run_identities.clone();
+        let installed_candidates = reader.positioned_materialized_candidates.clone();
+        let installed_bm25_deltas = reader.positioned_bm25_deltas.clone();
+        let installed_authority = reader.positioned_prepared_authority.clone();
+        let installed_envelope_keys = reader
+            .positioned_prepared_envelopes
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let installed_cache = Arc::as_ptr(&reader.live_wal_snapshot_cache);
+        let installed_resident_overlay = reader.resident_global_mutations.as_ref().map(Arc::as_ptr);
+
+        reader.runtime_ram_budget_bytes = Some(prospective - 1);
+        let error = reader.refresh().unwrap_err();
+        assert!(matches!(error, BorsukError::RamBudgetExceeded { .. }));
+        assert_eq!(reader.manifest.version, installed_manifest_version);
+        assert_eq!(reader.manifest_reference, installed_manifest_reference);
+        assert_eq!(
+            reader
+                .collection_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.checksum.clone()),
+            installed_collection_checksum
+        );
+        assert_eq!(reader.cell_wal_snapshot, installed_transactions);
+        assert_eq!(reader.positioned_run_identities, installed_run_identities);
+        assert_eq!(
+            reader.positioned_materialized_candidates,
+            installed_candidates
+        );
+        assert_eq!(reader.positioned_bm25_deltas, installed_bm25_deltas);
+        assert_eq!(reader.positioned_prepared_authority, installed_authority);
+        assert_eq!(
+            reader
+                .positioned_prepared_envelopes
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            installed_envelope_keys
+        );
+        assert_eq!(
+            Arc::as_ptr(&reader.live_wal_snapshot_cache),
+            installed_cache
+        );
+        assert_eq!(
+            reader.resident_global_mutations.as_ref().map(Arc::as_ptr),
+            installed_resident_overlay
+        );
+    }
+
+    #[test]
+    fn incremental_primary_dense_candidate_uses_authenticated_route_prefix_not_legacy_cell() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0], vec![10.0, 0.0], vec![20.0, 0.0]],
+        )
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("cell-2", vec![20.0, 0.0]),
+                VectorRecord::new("cell-1", vec![10.0, 0.0]),
+            ])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let position = index.cell_wal_snapshot[0].source_position.unwrap();
+        for run in index
+            .cell_wal_snapshot
+            .iter_mut()
+            .flat_map(|transaction| &mut transaction.runs)
+        {
+            run.cell = LogicalCellId::new(index.manifest.routing_epoch, u32::MAX);
+        }
+        let coverage = positioned_coverage([position]);
+        let codebook = write_test_catalog_codebook(&index);
+        let before_manifest = serde_json::to_value(&index.manifest.global_ann_ref).unwrap();
+        let candidate = index
+            .build_unwired_primary_dense_candidate(&coverage, &codebook, &[])
+            .unwrap();
+
+        assert_eq!(
+            candidate.codebook().descriptor_checksum(),
+            codebook.descriptor_checksum()
+        );
+        assert_eq!(
+            serde_json::to_value(&index.manifest.global_ann_ref).unwrap(),
+            before_manifest
+        );
+        assert_eq!(candidate.source_ranges(), &coverage);
+        assert_eq!(
+            candidate
+                .watermarks()
+                .sequence(position.source_epoch, position.shard),
+            Some(position.sequence)
+        );
+        assert!(candidate.carried_runs().is_empty());
+        let run = candidate.new_run().unwrap();
+        let root = index
+            .storage
+            .read_bytes_with_cache_status_and_checksum(
+                run.directory().path(),
+                run.directory().checksum(),
+            )
+            .unwrap()
+            .bytes;
+        let directory = crate::global_leaf::decode_global_leaf_run_directory(
+            run.codebook_checksum(),
+            &root,
+            |shard| {
+                Ok(index
+                    .storage
+                    .read_bytes_with_cache_status_and_checksum(&shard.path, &shard.checksum)?
+                    .bytes
+                    .to_vec())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            directory
+                .pages
+                .iter()
+                .map(|page| page.cell_index)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([1_u32, 2])
+        );
+
+        assert!(candidate.roster().iter().any(|artifact| {
+            artifact.role == GlobalLeafArtifactRole::CodebookDescriptor
+                && artifact.path == codebook.descriptor_path()
+        }));
+        assert!(
+            candidate
+                .roster()
+                .iter()
+                .any(|artifact| artifact.role == GlobalLeafArtifactRole::LeafDirectoryRoot)
+        );
+        assert!(
+            candidate
+                .roster()
+                .iter()
+                .any(|artifact| artifact.role == GlobalLeafArtifactRole::LeafBundle)
+        );
+        assert!(
+            candidate
+                .roster()
+                .iter()
+                .any(|artifact| artifact.role == GlobalLeafArtifactRole::LeafCodePlane)
+        );
+        for artifact in candidate.roster() {
+            let bytes = match artifact.range.clone() {
+                Some(range) => index.storage.read_range(&artifact.path, range).unwrap(),
+                None => {
+                    index
+                        .storage
+                        .read_bytes_with_cache_status_and_checksum(
+                            &artifact.path,
+                            &artifact.checksum,
+                        )
+                        .unwrap()
+                        .bytes
+                }
+            };
+            assert_eq!(bytes.len() as u64, artifact.encoded_bytes);
+            assert_eq!(blake3::hash(&bytes).to_hex().to_string(), artifact.checksum);
+        }
+    }
+
+    #[test]
+    fn incremental_primary_dense_candidate_rejects_segment_derived_and_mismatched_catalog_codebooks()
+     {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0], vec![10.0, 0.0]],
+        )
+        .unwrap();
+        index
+            .add(vec![VectorRecord::new("routed", vec![0.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let coverage = positioned_coverage([position]);
+
+        let segment_derived = write_test_segment_derived_codebook(&index);
+        let error = index
+            .build_unwired_primary_dense_candidate(&coverage, &segment_derived, &[])
+            .unwrap_err();
+        assert!(error.to_string().contains("catalog-pinned"), "{error}");
+
+        let catalog_codebook = write_test_catalog_codebook(&index);
+        index
+            .positioned_prepared_authority
+            .as_mut()
+            .unwrap()
+            .primary_route
+            .catalog_checksum = "ff".repeat(32);
+        let error = index
+            .build_unwired_primary_dense_candidate(&coverage, &catalog_codebook, &[])
+            .unwrap_err();
+        assert!(error.to_string().contains("catalog authority"), "{error}");
+    }
+
+    #[test]
+    fn incremental_primary_dense_candidate_rejects_gap_overlap_and_allows_later_suffix() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0], vec![10.0, 0.0]],
+        )
+        .unwrap();
+        index
+            .add(vec![VectorRecord::new("covered", vec![0.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let codebook = write_test_catalog_codebook(&index);
+        let gap = crate::positioned_log::CommitSourceRangeSet::new(vec![
+            crate::positioned_log::CommitSourceRange::new(
+                position.source_epoch,
+                position.shard,
+                position.sequence,
+                position.sequence + 1,
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let gap_error = index
+            .build_unwired_primary_dense_candidate(&gap, &codebook, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(gap_error.contains("exactly cover"), "{gap_error}");
+
+        let coverage = positioned_coverage([position]);
+        let first = index
+            .build_unwired_primary_dense_candidate(&coverage, &codebook, &[])
+            .unwrap();
+        let carried = first.carry_new_run().unwrap();
+        let overlap_error = index
+            .build_unwired_primary_dense_candidate(
+                &coverage,
+                &codebook,
+                &[carried.clone(), carried],
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(overlap_error.contains("overlap"), "{overlap_error}");
+
+        index
+            .add(vec![VectorRecord::new("stray", vec![10.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let bounded_prefix = index
+            .build_unwired_primary_dense_candidate(&coverage, &codebook, &[])
+            .unwrap();
+        assert_eq!(bounded_prefix.source_ranges(), &coverage);
+        assert_eq!(decoded_candidate_rows(&index, &bounded_prefix).len(), 1);
+    }
+
+    #[test]
+    fn incremental_primary_dense_candidate_advances_delete_only_and_zero_dense_coverage() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0]],
+        )
+        .unwrap();
+        index.delete(["never-present"]).unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let coverage = positioned_coverage([position]);
+        let codebook = write_test_catalog_codebook(&index);
+        let candidate = index
+            .build_unwired_primary_dense_candidate(&coverage, &codebook, &[])
+            .unwrap();
+
+        assert_eq!(candidate.new_run().unwrap().rows(), 0);
+        assert_eq!(candidate.source_ranges(), &coverage);
+        assert_eq!(
+            candidate
+                .watermarks()
+                .sequence(position.source_epoch, position.shard),
+            Some(position.sequence)
+        );
+        assert!(
+            candidate
+                .roster()
+                .iter()
+                .any(|artifact| artifact.role == GlobalLeafArtifactRole::LeafDirectoryRoot)
+        );
+        assert!(!candidate.roster().iter().any(|artifact| matches!(
+            artifact.role,
+            GlobalLeafArtifactRole::LeafBundle | GlobalLeafArtifactRole::LeafCodePlane
+        )));
+    }
+
+    #[test]
+    fn incremental_primary_dense_candidate_applies_upsert_delete_upsert_visibility() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0], vec![20.0, 0.0]],
+        )
+        .unwrap();
+        index
+            .add(vec![VectorRecord::new("newest", vec![0.0, 0.0])])
+            .unwrap();
+        index.delete(["newest"]).unwrap();
+        index
+            .upsert(vec![VectorRecord::new("newest", vec![20.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let positions = index
+            .cell_wal_snapshot
+            .iter()
+            .map(|transaction| transaction.source_position.unwrap())
+            .collect::<Vec<_>>();
+        let coverage = positioned_coverage(positions);
+        let codebook = write_test_catalog_codebook(&index);
+        let candidate = index
+            .build_unwired_primary_dense_candidate(&coverage, &codebook, &[])
+            .unwrap();
+        let rows = decoded_candidate_rows(&index, &candidate);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, RecordId::from("newest"));
+        assert_eq!(rows[0].vector, vec![20.0, 0.0]);
+        let run = candidate.new_run().unwrap();
+        let root = index
+            .storage
+            .read_bytes_with_cache_status_and_checksum(
+                run.directory().path(),
+                run.directory().checksum(),
+            )
+            .unwrap()
+            .bytes;
+        let directory = crate::global_leaf::decode_global_leaf_run_directory(
+            run.codebook_checksum(),
+            &root,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(directory.pages[0].cell_index, 1);
+    }
+
+    #[test]
+    fn incremental_primary_dense_candidate_reuses_disjoint_checksum_run_and_stays_unpublished() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0], vec![10.0, 0.0]],
+        )
+        .unwrap();
+        index
+            .add(vec![VectorRecord::new("carried", vec![0.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let first_position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let codebook = write_test_catalog_codebook(&index);
+        let first = index
+            .build_unwired_primary_dense_candidate(
+                &positioned_coverage([first_position]),
+                &codebook,
+                &[],
+            )
+            .unwrap();
+        let carried = first.carry_new_run().unwrap();
+
+        index
+            .add(vec![VectorRecord::new("fresh", vec![10.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let positions = index
+            .cell_wal_snapshot
+            .iter()
+            .map(|transaction| transaction.source_position.unwrap())
+            .collect::<Vec<_>>();
+        let coverage = positioned_coverage(positions);
+        let manifest_before = serde_json::to_value(&index.manifest.global_ann_ref).unwrap();
+        let trace_dir = tempfile::tempdir().unwrap();
+        let trace_path = trace_dir.path().join("candidate-storage-access.csv");
+        let trace = crate::storage_trace::StorageAccessTrace::create(&trace_path).unwrap();
+        index.storage.set_access_trace_for_test(trace.clone());
+        index
+            .collection_storage
+            .set_access_trace_for_test(trace.clone());
+        trace.reset().unwrap();
+        let requests_before = index.collection_storage.request_counts();
+        let second = index
+            .build_unwired_primary_dense_candidate(
+                &coverage,
+                &codebook,
+                std::slice::from_ref(&carried),
+            )
+            .unwrap();
+        let gets = index
+            .collection_storage
+            .request_counts()
+            .delta(&requests_before)
+            .gets;
+
+        assert_eq!(gets, 0, "prepared primary data must not be fetched again");
+        let traced = std::fs::read_to_string(&trace_path).unwrap();
+        let positioned_payload_reads = traced
+            .lines()
+            .skip(1)
+            .filter(|line| {
+                let columns = line.split(',').collect::<Vec<_>>();
+                columns.get(1) == Some(&"positioned_payload")
+                    || columns
+                        .get(2)
+                        .is_some_and(|path| path.starts_with("positioned-log/payloads/"))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            positioned_payload_reads.is_empty(),
+            "candidate construction refetched prepared route/data payloads: {positioned_payload_reads:?}"
+        );
+        assert_eq!(second.carried_runs().len(), 1);
+        assert_eq!(
+            second.carried_runs()[0].directory().path(),
+            carried.run().directory().path()
+        );
+        assert_eq!(
+            second.carried_runs()[0].directory().checksum(),
+            carried.run().directory().checksum()
+        );
+        assert_eq!(
+            second.carried_runs()[0].codebook_checksum(),
+            carried.run().codebook_checksum()
+        );
+        assert_eq!(
+            second.carried_runs()[0].source_ranges(),
+            carried.run().source_ranges()
+        );
+        assert_eq!(
+            serde_json::to_value(&index.manifest.global_ann_ref).unwrap(),
+            manifest_before
+        );
+        assert!(second.roster().iter().any(|artifact| {
+            artifact.role == GlobalLeafArtifactRole::LeafDirectoryRoot
+                && artifact.path == carried.run().directory().path()
+                && artifact.checksum == carried.run().directory().checksum()
+        }));
+    }
+
+    #[test]
+    fn incremental_primary_dense_candidate_carries_only_its_own_run_across_three_generations() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0], vec![10.0, 0.0]],
+        )
+        .unwrap();
+        let codebook = write_test_catalog_codebook(&index);
+
+        index
+            .add(vec![VectorRecord::new("a", vec![0.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let a = index.cell_wal_snapshot[0].source_position.unwrap();
+        let generation_a = index
+            .build_unwired_primary_dense_candidate(&positioned_coverage([a]), &codebook, &[])
+            .unwrap();
+        let carried_a = generation_a.carry_new_run().unwrap();
+
+        index
+            .add(vec![VectorRecord::new("b", vec![10.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let b = index
+            .cell_wal_snapshot
+            .iter()
+            .map(|transaction| transaction.source_position.unwrap())
+            .find(|position| *position != a)
+            .unwrap();
+        let generation_b = index
+            .build_unwired_primary_dense_candidate(
+                &positioned_coverage([a, b]),
+                &codebook,
+                &[carried_a],
+            )
+            .unwrap();
+        let b_run = generation_b.new_run().unwrap().clone();
+        let carried_b = generation_b.carry_new_run().unwrap();
+        assert_eq!(carried_b.run().directory().path(), b_run.directory().path());
+
+        index
+            .add(vec![VectorRecord::new("c", vec![0.0, 0.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let c = index
+            .cell_wal_snapshot
+            .iter()
+            .map(|transaction| transaction.source_position.unwrap())
+            .find(|position| *position != a && *position != b)
+            .unwrap();
+        let generation_c = index
+            .build_unwired_primary_dense_candidate(
+                &positioned_coverage([b, c]),
+                &codebook,
+                &[carried_b],
+            )
+            .unwrap();
+        assert_eq!(generation_c.carried_runs().len(), 1);
+        assert_eq!(
+            generation_c.carried_runs()[0].directory().path(),
+            b_run.directory().path()
+        );
+        assert_eq!(
+            generation_c.carried_runs()[0].directory().checksum(),
+            b_run.directory().checksum()
+        );
+        assert_eq!(
+            generation_c.carried_runs()[0].source_ranges(),
+            b_run.source_ranges()
+        );
+        assert_eq!(decoded_candidate_rows(&index, &generation_c).len(), 1);
+    }
+
+    #[test]
+    fn incremental_primary_dense_candidate_is_byte_deterministic_across_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            vec![vec![0.0, 0.0], vec![10.0, 0.0]],
+        )
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("b", vec![10.0, 0.0]),
+                VectorRecord::new("a", vec![0.0, 0.0]),
+            ])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let coverage = positioned_coverage(
+            index
+                .cell_wal_snapshot
+                .iter()
+                .map(|transaction| transaction.source_position.unwrap()),
+        );
+        let codebook = write_test_catalog_codebook(&index);
+        let first = index
+            .build_unwired_primary_dense_candidate(&coverage, &codebook, &[])
+            .unwrap();
+        let second = index
+            .build_unwired_primary_dense_candidate(&coverage, &codebook, &[])
+            .unwrap();
+
+        assert_eq!(first.roster(), second.roster());
+        assert_eq!(
+            serde_json::to_value(first.new_run().unwrap()).unwrap(),
+            serde_json::to_value(second.new_run().unwrap()).unwrap()
+        );
+    }
+
+    #[test]
     fn leased_maintenance_renews_ownership_during_long_work() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -29371,19 +31220,21 @@ mod tests {
             vec![2.0, 4.0],
             vec![3.0, 5.0],
         ];
-        let quantizer = RotatedProductQuantizer::fit(
-            ProductQuantizerConfig {
-                rotation: crate::rotated_product_quantizer::ProductRotation::Identity,
-                seed: 7,
-                dimensions: 2,
-                subspaces: 1,
-                centroids: 2,
-                sample_limit: training.len(),
-                iterations: 2,
-            },
-            &training,
-        )
-        .unwrap();
+        let quantizer = GlobalScanQuantizer::from(
+            RotatedProductQuantizer::fit(
+                ProductQuantizerConfig {
+                    rotation: crate::rotated_product_quantizer::ProductRotation::Identity,
+                    seed: 7,
+                    dimensions: 2,
+                    subspaces: 1,
+                    centroids: 2,
+                    sample_limit: training.len(),
+                    iterations: 2,
+                },
+                &training,
+            )
+            .unwrap(),
+        );
         let exact_rows = [[1.0_f32, 3.0_f32], [3.0_f32, 5.0_f32]];
         let mut bytes = Vec::new();
         for exact in &exact_rows {
@@ -29419,7 +31270,7 @@ mod tests {
             2,
             crate::VectorElementType::Float32,
             false,
-            quantizer.state(),
+            &quantizer,
         )
         .unwrap();
 

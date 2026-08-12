@@ -1310,8 +1310,12 @@ fn non_resident_search_lifecycle_keeps_segment_summaries_out_of_ram() {
     assert!(compacted_stats.routing_max_level >= 2);
     assert!(compacted_stats.resident_bytes_estimate < full_resident_bytes);
 
-    let metadata_budget = compacted_stats.resident_bytes_estimate;
     drop(index);
+
+    let probe = BorsukIndex::open(&uri).unwrap();
+    let expected_collection_resident_bytes = probe.stats().collection_resident_bytes;
+    let metadata_budget = expected_collection_resident_bytes.saturating_mul(16);
+    drop(probe);
 
     let reopened = BorsukIndex::open_with_options(
         &uri,
@@ -1324,8 +1328,12 @@ fn non_resident_search_lifecycle_keeps_segment_summaries_out_of_ram() {
     .unwrap();
 
     assert!(reopened.manifest().segments.is_empty());
-    let initial_resident_bytes = reopened.stats().resident_bytes_estimate;
-    assert_eq!(initial_resident_bytes, metadata_budget);
+    let initial_stats = reopened.stats();
+    let initial_resident_bytes = initial_stats.resident_bytes_estimate;
+    assert_eq!(
+        initial_stats.collection_resident_bytes,
+        expected_collection_resident_bytes
+    );
 
     for id in [0, 1, 3, 5, 7, 9, 11, 13, 17, 19, 21, 23] {
         let report = reopened

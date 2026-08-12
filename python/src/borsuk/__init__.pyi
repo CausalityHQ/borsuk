@@ -229,6 +229,7 @@ class IndexStats:
     segment_bytes: int
     graph_bytes: int
     resident_bytes_estimate: int
+    prepared_positioned_bytes: int
     collection_resident_bytes: int
     retained_bytes: int
     retained_capacity_bytes: int
@@ -287,6 +288,7 @@ class SearchReport:
     global_base_approximate_us: int
     global_base_exact_rerank_us: int
     resident_bytes_estimate: int
+    prepared_positioned_bytes: int
     collection_resident_bytes: int
     retained_bytes: int
     retained_capacity_bytes: int

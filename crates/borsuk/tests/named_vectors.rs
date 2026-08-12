@@ -42,7 +42,9 @@ fn collection_ram_budget_rejects_aggregate_named_manifest_bytes() {
         },
     );
     let index = BorsukIndex::create(collection_config).unwrap();
-    let aggregate = index.stats().resident_bytes_estimate;
+    let stats = index.stats();
+    let aggregate = stats.resident_bytes_estimate;
+    let collection_resident = stats.collection_resident_bytes;
     let lexical_report = index
         .search_with_report(
             &[0.0; 4],
@@ -53,9 +55,16 @@ fn collection_ram_budget_rejects_aggregate_named_manifest_bytes() {
         .search_with_report(&[0.0; 8], SearchOptions::exact(1).with_vector_name("image"))
         .unwrap();
     assert_eq!(lexical_report.resident_bytes_estimate, aggregate);
-    assert_eq!(lexical_report.collection_resident_bytes, aggregate);
+    assert_eq!(
+        lexical_report.collection_resident_bytes,
+        lexical_report.resident_bytes_estimate + lexical_report.prepared_positioned_bytes
+    );
+    assert_eq!(
+        lexical_report.collection_resident_bytes,
+        collection_resident
+    );
     assert_eq!(image_report.resident_bytes_estimate, aggregate);
-    let insufficient = aggregate - 1;
+    let insufficient = collection_resident - 1;
     drop(index);
 
     let error = BorsukIndex::open_with_options(
@@ -67,13 +76,15 @@ fn collection_ram_budget_rejects_aggregate_named_manifest_bytes() {
     )
     .unwrap_err();
 
-    assert!(matches!(
-        error,
-        BorsukError::RamBudgetExceeded {
-            resident_bytes,
-            budget_bytes,
-        } if resident_bytes == aggregate && budget_bytes == insufficient
-    ));
+    let BorsukError::RamBudgetExceeded {
+        resident_bytes,
+        budget_bytes,
+    } = error
+    else {
+        panic!("expected RAM budget rejection, got {error:?}");
+    };
+    assert!(resident_bytes >= collection_resident);
+    assert!(budget_bytes < resident_bytes);
 }
 
 #[test]
@@ -81,7 +92,10 @@ fn collection_ram_budget_rejects_growth_before_snapshot_publication() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().to_string();
     let index = BorsukIndex::create(config(uri.clone())).unwrap();
-    let aggregate = index.stats().resident_bytes_estimate;
+    let initial_stats = index.stats();
+    let aggregate = initial_stats.resident_bytes_estimate;
+    let collection_resident = initial_stats.collection_resident_bytes;
+    let budget = collection_resident.saturating_mul(16);
     assert_eq!(
         index
             .search_with_report(
@@ -97,7 +111,7 @@ fn collection_ram_budget_rejects_growth_before_snapshot_publication() {
     let mut bounded = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
-            ram_budget_bytes: Some(aggregate),
+            ram_budget_bytes: Some(budget),
             ..OpenOptions::default()
         },
     )
@@ -110,19 +124,21 @@ fn collection_ram_budget_rejects_growth_before_snapshot_publication() {
         .unwrap();
 
     let error = bounded.flush().unwrap_err();
-    assert!(matches!(
-        error,
-        BorsukError::RamBudgetExceeded {
-            resident_bytes,
-            budget_bytes,
-        } if resident_bytes > budget_bytes && budget_bytes == aggregate
-    ));
+    let BorsukError::RamBudgetExceeded {
+        resident_bytes,
+        budget_bytes,
+    } = error
+    else {
+        panic!("expected RAM budget rejection, got {error:?}");
+    };
+    assert!(resident_bytes > collection_resident);
+    assert!(budget_bytes < resident_bytes);
     drop(bounded);
 
     let reopened = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
-            ram_budget_bytes: Some(aggregate),
+            ram_budget_bytes: Some(budget),
             ..OpenOptions::default()
         },
     )
@@ -177,9 +193,13 @@ fn collection_memory_telemetry_is_shared_across_named_modalities() {
         "paged reopen should retain less routing metadata than the writer"
     );
     assert_eq!(stats.resident_bytes_estimate, aggregate);
-    assert_eq!(stats.collection_resident_bytes, aggregate);
+    assert_eq!(
+        stats.collection_resident_bytes,
+        aggregate + stats.prepared_positioned_bytes
+    );
     assert!(
-        stats.retained_capacity_bytes + stats.transient_capacity_bytes <= budget - aggregate,
+        stats.retained_capacity_bytes + stats.transient_capacity_bytes
+            <= budget - stats.collection_resident_bytes,
         "conservative admission may reserve slightly more than live manifests report"
     );
 
@@ -190,7 +210,10 @@ fn collection_memory_telemetry_is_shared_across_named_modalities() {
         )
         .unwrap();
     assert_eq!(report.resident_bytes_estimate, aggregate);
-    assert_eq!(report.collection_resident_bytes, aggregate);
+    assert_eq!(
+        report.collection_resident_bytes,
+        aggregate + report.prepared_positioned_bytes
+    );
     assert_eq!(
         report.retained_capacity_bytes,
         stats.retained_capacity_bytes

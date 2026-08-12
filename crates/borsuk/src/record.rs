@@ -853,7 +853,11 @@ pub struct IndexStats {
     pub global_leaf_partial_pages: usize,
     /// Collection-wide resident manifest/config/routing/pivot bytes.
     pub resident_bytes_estimate: u64,
-    /// Collection-wide resident manifest bytes (explicit telemetry alias).
+    /// Conservative bytes for all authenticated positioned-tail state retained
+    /// outside manifests, including transaction/run ownership and projections.
+    #[serde(default)]
+    pub prepared_positioned_bytes: u64,
+    /// Total collection resident bytes, including the prepared positioned tail.
     #[serde(default)]
     pub collection_resident_bytes: u64,
     /// Bytes currently retained in collection-wide decoded caches.
@@ -1134,7 +1138,11 @@ pub struct SearchReport {
     pub global_base_exact_rerank_us: u64,
     /// Collection-wide resident manifest/config/routing/pivot bytes.
     pub resident_bytes_estimate: u64,
-    /// Collection-wide resident manifest bytes (explicit telemetry alias).
+    /// Conservative bytes for all authenticated positioned-tail state retained
+    /// outside manifests, including transaction/run ownership and projections.
+    #[serde(default)]
+    pub prepared_positioned_bytes: u64,
+    /// Total collection resident bytes, including the prepared positioned tail.
     #[serde(default)]
     pub collection_resident_bytes: u64,
     /// Bytes currently retained in collection-wide decoded caches.

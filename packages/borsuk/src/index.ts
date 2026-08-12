@@ -167,6 +167,7 @@ export interface IndexStats {
   segmentBytes: number;
   graphBytes: number;
   residentBytesEstimate: number;
+  preparedPositionedBytes: number;
   collectionResidentBytes: number;
   retainedBytes: number;
   retainedCapacityBytes: number;
@@ -227,6 +228,7 @@ export interface SearchReport {
   /** Aggregate global exact-fetch/rerank work across merged immutable runs. */
   globalBaseExactRerankUs: number;
   residentBytesEstimate: number;
+  preparedPositionedBytes: number;
   collectionResidentBytes: number;
   retainedBytes: number;
   retainedCapacityBytes: number;

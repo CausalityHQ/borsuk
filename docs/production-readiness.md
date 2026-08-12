@@ -339,9 +339,10 @@ Memory failures are explicit:
   WAL, and late-interaction decode work;
 - `SearchReport` and `IndexStats` expose collection resident, retained
   current/capacity/peak, and transient current/capacity/peak byte counters;
-- `resident_bytes_estimate` and `collection_resident_bytes` report the same
-  current loaded collection-wide manifest/control total. Persisted admission
-  estimates are conservative and can be slightly higher. These fields do not include
+- `resident_bytes_estimate` reports the persisted collection-wide
+  manifest/control estimate, `prepared_positioned_bytes` reports the
+  conservative authenticated positioned-tail estimate, and
+  `collection_resident_bytes` reports their checked sum. These fields do not include
   object-store client state, allocator arenas, thread stacks, or unrelated
   application memory, so production evidence reports process RSS separately;
 - open with `cache_dir` reads fresh `CURRENT` and invalidates stale cached

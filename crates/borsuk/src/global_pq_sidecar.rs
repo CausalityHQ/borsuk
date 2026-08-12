@@ -92,10 +92,6 @@ pub(crate) enum GlobalScanQuantizerState {
 }
 
 impl GlobalScanQuantizerState {
-    pub(crate) fn uses_product_code_locality(&self) -> bool {
-        matches!(self, Self::Pq(_))
-    }
-
     fn heap_bytes(&self) -> usize {
         match self {
             Self::Pq(state) => product_quantizer_state_heap_bytes(state),
@@ -198,6 +194,10 @@ impl GlobalScanQuantizer {
             Self::FastTurboQuantMse(quantizer) => quantizer.encode(vector),
             Self::FastTurboQuantProd(quantizer) => quantizer.encode(vector),
         }
+    }
+
+    pub(crate) fn uses_product_code_locality(&self) -> bool {
+        matches!(self, Self::Pq(_))
     }
 
     pub(crate) fn reconstruction_error_p95_micros(&self, sample: &[Vec<f32>]) -> Result<u64> {
@@ -1788,7 +1788,6 @@ impl ResidentGlobalCodebook {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn catalog_router(&self) -> Option<&Arc<CatalogRouter>> {
         match &self.routing {
             ResidentGlobalRouting::Catalog(router) => Some(router),
@@ -1854,6 +1853,17 @@ impl ResidentGlobalCodebook {
 
     pub(crate) fn code_bytes_per_vector(&self) -> usize {
         self.code_width
+    }
+
+    // Candidate construction remains unwired until Task 4 publication.
+    #[allow(dead_code)]
+    pub(crate) fn encode_vector(&self, vector: &[f32]) -> Result<Vec<u8>> {
+        self.quantizer.encode(vector)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn scan_quantizer(&self) -> &GlobalScanQuantizer {
+        &self.quantizer
     }
 
     pub(crate) fn metric(&self) -> &VectorMetric {
@@ -2591,8 +2601,8 @@ mod tests {
     fn production_turboquant_state_drives_global_scan_without_dense_state() {
         let quantizer = crate::turboquant::FastTurboQuantProdScanQuantizer::new(23, 64, 4).unwrap();
         let state = GlobalScanQuantizerState::FastTurboQuantProd(quantizer.state());
-        assert!(!state.uses_product_code_locality());
         let restored = GlobalScanQuantizer::from_state(state).unwrap();
+        assert!(!restored.uses_product_code_locality());
         let mut query = vec![0.0_f32; 64];
         query[5] = 1.0;
         query[19] = -0.5;

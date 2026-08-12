@@ -880,7 +880,7 @@ data.
 | `records_scored` | Rows exact-scored with the index metric. | Controlled by `max_candidates_per_segment`. |
 | `graph_candidates_added` / `graphCandidatesAdded` | Extra exact-scored candidates reached through segment-local graph edges. | Nonzero only for graph-backed modes; shows how much graph expansion contributed. |
 | `global_base_approximate_us` / `globalBaseApproximateUs` and `global_base_exact_rerank_us` / `globalBaseExactRerankUs` | Aggregate microseconds spent producing global PQ candidates and fetching/MVCC-filtering/exact-scoring global shortlists across every merged immutable run. | Compare approximate and rerank work to distinguish code-scan from lossless-row cost; compare with wall time because internal executions may overlap. |
-| `resident_bytes_estimate` / `collection_resident_bytes` | Current loaded collection-wide manifest/control bytes, including every dense or late-interaction named modality and routing metadata actually resident in this handle. Admission uses conservative persisted estimates, so the reported live value can be slightly lower than the reserved value. The two fields are aliases; the explicit name is preferred for new telemetry. | Compare the complete collection footprint with `ram_budget_bytes`, not one modality in isolation. |
+| `resident_bytes_estimate` / `prepared_positioned_bytes` / `collection_resident_bytes` | `resident_bytes_estimate` is the persisted collection-wide manifest/control estimate. `prepared_positioned_bytes` is the conservative memory retained for the authenticated positioned tail. `collection_resident_bytes` is their checked sum. | Compare the complete collection footprint with `ram_budget_bytes`, not one modality in isolation. |
 | `retained_bytes` / `retained_capacity_bytes` / `retained_peak_bytes` | Current, configured, and peak bytes held by the collection-wide decoded-object cache pool. | Prove primary, named, lexical, sidecar, graph, and WAL caches share one ceiling. |
 | `transient_bytes` / `transient_capacity_bytes` / `transient_peak_bytes` | Current, configured, and peak collection-wide decode-working-set admission. | Reconcile concurrent query measurements with the configured envelope; one irreducible oversized object occupies the gate alone. |
 | `object_cache_hits` / `object_cache_misses` | Immutable object cache behavior. | Validate cache usefulness. |
@@ -895,7 +895,8 @@ has computed additional parent layers from leaf count and routing fanout.
 `routing_leaf_pages` is the number of L0 routing pages and `routing_pages` is
 the total routing content-page count across all layers.
 `IndexStats` also exposes the same collection memory envelope fields:
-`collection_resident_bytes`, `retained_bytes`, `retained_capacity_bytes`,
+`collection_resident_bytes`, `resident_bytes_estimate`,
+`prepared_positioned_bytes`, `retained_bytes`, `retained_capacity_bytes`,
 `retained_peak_bytes`, `transient_bytes`, `transient_capacity_bytes`, and
 `transient_peak_bytes` (camelCase in TypeScript).
 `LateInteractionSearchReport` exposes those seven fields as well, so token ANN

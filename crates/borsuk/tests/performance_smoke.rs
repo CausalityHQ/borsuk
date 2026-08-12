@@ -357,6 +357,7 @@ fn synthetic_report(
         global_base_approximate_us: 0,
         global_base_exact_rerank_us: 0,
         resident_bytes_estimate: 1,
+        prepared_positioned_bytes: 0,
         collection_resident_bytes: 1,
         retained_bytes: 0,
         retained_capacity_bytes: 0,
