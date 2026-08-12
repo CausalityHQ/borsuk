@@ -42,4 +42,5 @@ bench-data/
 **/.borsuk-scratch/
 docs/web/assets/benchmarks/raw/
 .superpowers/
+docs/superpowers/
 /.claude/
