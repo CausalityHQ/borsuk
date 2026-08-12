@@ -349,6 +349,8 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
                 "engine",
                 "logical_cells",
                 "minimum_rows_per_logical_cell",
+                "training_rows_per_cell",
+                "training_iterations",
                 "routing",
                 "hnsw_m",
                 "hnsw_ef_construction",
@@ -362,6 +364,9 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
         _exact_fields(profile, expected, "borsuk index profile")
         if engine != "borsuk-v12":
             raise ValueError("borsuk index engine must be borsuk-v12")
+        code_bytes = _positive_int(profile["code_bytes"], "borsuk code bytes")
+        if code_bytes & (code_bytes - 1):
+            raise ValueError("borsuk code bytes must be a power of two")
         return {
             "engine": "borsuk-v12",
             "logical_cells": _positive_int(profile["logical_cells"], "logical cells"),
@@ -369,13 +374,19 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
                 profile["minimum_rows_per_logical_cell"],
                 "minimum rows per logical cell",
             ),
+            "training_rows_per_cell": _positive_int(
+                profile["training_rows_per_cell"], "training rows per cell"
+            ),
+            "training_iterations": _positive_int(
+                profile["training_iterations"], "training iterations"
+            ),
             "routing": _identifier(profile["routing"], "borsuk routing"),
             "hnsw_m": _positive_int(profile["hnsw_m"], "borsuk hnsw_m"),
             "hnsw_ef_construction": _positive_int(
                 profile["hnsw_ef_construction"], "borsuk hnsw ef construction"
             ),
             "leaf_codec": _identifier(profile["leaf_codec"], "borsuk leaf codec"),
-            "code_bytes": _positive_int(profile["code_bytes"], "borsuk code bytes"),
+            "code_bytes": code_bytes,
             "bundle_target_mib": _positive_int(
                 profile["bundle_target_mib"], "borsuk bundle target MiB"
             ),

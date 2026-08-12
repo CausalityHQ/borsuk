@@ -21,6 +21,18 @@ except ModuleNotFoundError:
 SUPPORTED_LOCAL_KINDS = frozenset({"read-recall"})
 
 
+def dataset_training_seed(dataset: dict[str, object]) -> int:
+    source = dataset.get("source")
+    if isinstance(source, dict):
+        seed = source.get("seed")
+        if isinstance(seed, int) and not isinstance(seed, bool) and seed >= 0:
+            return seed
+    dataset_id = dataset.get("id")
+    if not isinstance(dataset_id, str) or not dataset_id:
+        raise ValueError("dataset has no stable training identity")
+    return int.from_bytes(hashlib.sha256(dataset_id.encode()).digest()[:8], "big")
+
+
 def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
     workload = cell.get("workload")
     if not isinstance(workload, dict) or workload.get("kind") != "read-recall":
@@ -81,12 +93,15 @@ def build_execution_plan(
         raise ValueError("cell dataset is invalid")
     if mode == "publication" and (not isinstance(source, dict) or source.get("state") != "frozen"):
         raise ValueError("publication execution requires a frozen source archive")
-    if mode == "publication":
-        raise ValueError("publication execution awaits exact index-profile binding")
 
     factors = workload.get("factors")
     scale = dataset.get("scale")
-    if not isinstance(factors, dict) or not isinstance(scale, dict):
+    index_profile = cell.get("index_profile")
+    if (
+        not isinstance(factors, dict)
+        or not isinstance(scale, dict)
+        or not isinstance(index_profile, dict)
+    ):
         raise ValueError("cell workload factors or dataset scale are invalid")
     scheduled_rows = scale.get("rows")
     dimensions = dataset.get("dimensions")
@@ -103,7 +118,22 @@ def build_execution_plan(
     if isinstance(queries_per_repetition, bool) or not isinstance(queries_per_repetition, int):
         raise ValueError("cell source query count is invalid")
 
-    effective_rows = scheduled_rows if mode == "publication" else min(scheduled_rows, 1_000)
+    profile_cells = index_profile.get("logical_cells")
+    minimum_rows_per_cell = index_profile.get("minimum_rows_per_logical_cell")
+    if (
+        isinstance(profile_cells, bool)
+        or not isinstance(profile_cells, int)
+        or profile_cells <= 0
+        or isinstance(minimum_rows_per_cell, bool)
+        or not isinstance(minimum_rows_per_cell, int)
+        or minimum_rows_per_cell <= 0
+    ):
+        raise ValueError("BORSUK logical-cell profile is not executable")
+    smoke_cells = min(profile_cells, 128)
+    smoke_rows = max(1_000, smoke_cells * minimum_rows_per_cell)
+    if mode == "smoke" and dataset["source"].get("generator") == "synthetic-clustered-v1":
+        smoke_rows = ((smoke_rows + 99) // 100) * 100
+    effective_rows = scheduled_rows if mode == "publication" else min(scheduled_rows, smoke_rows)
     effective_queries = queries_per_repetition if mode == "publication" else min(queries_per_repetition, 10)
     dataset_dir = workspace / "dataset"
     output_dir = workspace / "output"
@@ -152,6 +182,39 @@ def build_execution_plan(
             "uncached" if arm["cache_state"] == "cold" else "disk_cached"
         ),
     }
+    code_bytes = index_profile.get("code_bytes")
+    training_rows_per_cell = index_profile.get("training_rows_per_cell")
+    training_iterations = index_profile.get("training_iterations")
+    if (
+        isinstance(code_bytes, bool)
+        or not isinstance(code_bytes, int)
+        or code_bytes <= 0
+        or isinstance(training_rows_per_cell, bool)
+        or not isinstance(training_rows_per_cell, int)
+        or training_rows_per_cell <= 0
+        or isinstance(training_iterations, bool)
+        or not isinstance(training_iterations, int)
+        or training_iterations <= 0
+    ):
+        raise ValueError("BORSUK index profile is not executable")
+    effective_cells = (
+        profile_cells
+        if mode == "publication"
+        else min(profile_cells, max(1, effective_rows // minimum_rows_per_cell))
+    )
+    training_rows = min(effective_rows, effective_cells * training_rows_per_cell)
+    if training_rows < effective_cells:
+        raise ValueError("BORSUK index profile has fewer training rows than logical cells")
+    benchmark_env.update(
+        {
+            "BORSUK_BENCH_LOGICAL_CELLS": str(effective_cells),
+            "BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS": str(training_rows),
+            "BORSUK_BENCH_LOGICAL_CELL_SEED": str(dataset_training_seed(dataset)),
+            "BORSUK_BENCH_LOGICAL_CELL_ITERATIONS": str(training_iterations),
+            "BORSUK_BENCH_GLOBAL_SCAN_CODEC": str(index_profile.get("leaf_codec")),
+            "BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES": str(code_bytes),
+        }
+    )
     if mode == "smoke":
         benchmark_env["BORSUK_BENCH_LIMIT"] = str(effective_rows)
     steps.append(

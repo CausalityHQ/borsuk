@@ -117,6 +117,9 @@ struct ResolvedConfig {
     global_turboquant_shards: u32,
     logical_cell_catalog: Option<PathBuf>,
     logical_cells: Option<usize>,
+    logical_cell_training_rows: Option<usize>,
+    logical_cell_seed: u64,
+    logical_cell_iterations: usize,
     cache_execution: CacheExecutionPolicy,
     force_segment_path: bool,
     ram_budget_bytes: Option<u64>,
@@ -538,13 +541,44 @@ fn run() -> BenchResult<()> {
                     build_config,
                 )?
             }
+            (None, Some(expected_cells)) => {
+                let sample_rows = config
+                    .logical_cell_training_rows
+                    .unwrap_or_else(|| expected_cells.saturating_mul(32));
+                if sample_rows < expected_cells || sample_rows > dataset.train_count {
+                    return Err(invalid_input(&format!(
+                        "logical-cell training rows must be in {expected_cells}..={}, got {sample_rows}",
+                        dataset.train_count
+                    ))
+                    .into());
+                }
+                let sample = sample_logical_cell_training_vectors(
+                    &config,
+                    &dataset,
+                    sample_rows,
+                    config.logical_cell_seed,
+                )?;
+                let centroids = borsuk::train_logical_cell_centroids(
+                    &sample,
+                    dataset.metric.clone(),
+                    expected_cells,
+                    config.logical_cell_iterations,
+                )?;
+                BorsukIndex::create_with_logical_cell_catalog_and_build_config(
+                    index_config,
+                    centroids,
+                    wal,
+                    config.leaf_capability,
+                    build_config,
+                )?
+            }
             (None, None) => BorsukIndex::create_with_wal_capability_and_build_config(
                 index_config,
                 wal,
                 config.leaf_capability,
                 build_config,
             )?,
-            _ => unreachable!("logical-cell catalog configuration was validated"),
+            (Some(_), None) => unreachable!("logical-cell catalog configuration was validated"),
         };
         let catalog_evidence = index
             .logical_cell_catalog_evidence()
@@ -838,9 +872,25 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let logical_cell_catalog =
         non_empty_env("BORSUK_BENCH_LOGICAL_CELL_CATALOG").map(PathBuf::from);
     let logical_cells = env_optional_cap("BORSUK_BENCH_LOGICAL_CELLS", None)?;
-    if logical_cell_catalog.is_some() != logical_cells.is_some() {
+    let logical_cell_training_rows =
+        env_optional_cap("BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS", None)?;
+    let logical_cell_seed = env_u64("BORSUK_BENCH_LOGICAL_CELL_SEED", 0)?;
+    let logical_cell_iterations = env_usize("BORSUK_BENCH_LOGICAL_CELL_ITERATIONS", 8)?;
+    if logical_cell_iterations == 0 {
         return Err(invalid_input(
-            "BORSUK_BENCH_LOGICAL_CELL_CATALOG and BORSUK_BENCH_LOGICAL_CELLS must be set together",
+            "BORSUK_BENCH_LOGICAL_CELL_ITERATIONS must be greater than zero",
+        )
+        .into());
+    }
+    if logical_cell_catalog.is_some() && logical_cells.is_none() {
+        return Err(invalid_input(
+            "BORSUK_BENCH_LOGICAL_CELL_CATALOG requires BORSUK_BENCH_LOGICAL_CELLS",
+        )
+        .into());
+    }
+    if logical_cell_training_rows.is_some() && logical_cells.is_none() {
+        return Err(invalid_input(
+            "BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS requires BORSUK_BENCH_LOGICAL_CELLS",
         )
         .into());
     }
@@ -965,6 +1015,9 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         global_turboquant_shards,
         logical_cell_catalog,
         logical_cells,
+        logical_cell_training_rows,
+        logical_cell_seed,
+        logical_cell_iterations,
         cache_execution,
         force_segment_path,
         ram_budget_bytes,
@@ -1231,6 +1284,27 @@ fn read_logical_cell_catalog(
         return Err(invalid_input("logical-cell catalog contains a non-finite value").into());
     }
     Ok(centroids)
+}
+
+fn update_vector_reservoir(
+    reservoir: &mut Vec<Vec<f32>>,
+    vector: Vec<f32>,
+    row: usize,
+    capacity: usize,
+    seed: u64,
+) {
+    if reservoir.len() < capacity {
+        reservoir.push(vector);
+        return;
+    }
+    let mut mixed = seed ^ (row as u64).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    mixed ^= mixed >> 31;
+    let slot = (mixed % (row as u64 + 1)) as usize;
+    if slot < capacity {
+        reservoir[slot] = vector;
+    }
 }
 
 fn read_f32_vector(reader: &mut impl Read, dimensions: usize) -> io::Result<Vec<f32>> {
@@ -1620,6 +1694,35 @@ fn ingest_train(index: &mut BorsukIndex, dataset_dir: &Path, dataset: &Dataset) 
     Ok(())
 }
 
+fn sample_logical_cell_training_vectors(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    sample_rows: usize,
+    seed: u64,
+) -> BenchResult<Vec<Vec<f32>>> {
+    let mut sample = Vec::with_capacity(sample_rows);
+    stream_dataset_batches(config, dataset, dataset.train_count, |offset, vectors| {
+        for (within_batch, vector) in vectors.into_iter().enumerate() {
+            update_vector_reservoir(
+                &mut sample,
+                vector,
+                offset.saturating_add(within_batch),
+                sample_rows,
+                seed,
+            );
+        }
+        Ok(())
+    })?;
+    if sample.len() != sample_rows {
+        return Err(invalid_input(&format!(
+            "logical-cell sampling retained {} rows; expected {sample_rows}",
+            sample.len()
+        ))
+        .into());
+    }
+    Ok(sample)
+}
+
 fn ingest_generated_batch(
     index: &mut BorsukIndex,
     start: usize,
@@ -1718,7 +1821,8 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
     let mut writer = csv_writer(&path)?;
     writeln!(writer, "{BUILD_HEADER}")?;
     let total_active_index_bytes = build
-        .segment_bytes
+        .logical_cell_catalog_bytes
+        .saturating_add(build.segment_bytes)
         .saturating_add(build.vector_bytes)
         .saturating_add(build.graph_bytes)
         .saturating_add(build.global_scan_bytes);
@@ -3761,10 +3865,10 @@ mod tests {
         parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
         parse_serving_mode, permuted_positions, preload_query_count, read_logical_cell_catalog,
         recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
-        sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
-        validate_build_only, validate_disk_cached_network, validate_generated_id_range,
-        validate_insert_only, validate_leaf_capability_modes, validate_phase_selection, vector_row,
-        write_batch_len, write_operation_count,
+        sample_stddev, update_vector_reservoir, uses_bounded_decoded_cache_phases,
+        uses_memory_preloaded_phase, validate_build_only, validate_disk_cached_network,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
+        validate_phase_selection, vector_row, write_batch_len, write_operation_count,
     };
 
     #[test]
@@ -3805,6 +3909,20 @@ mod tests {
 
         std::fs::write(&path, f32::NAN.to_le_bytes()).unwrap();
         assert!(read_logical_cell_catalog(&path, 1, 1).is_err());
+    }
+
+    #[test]
+    fn vector_reservoir_is_bounded_seeded_and_deterministic() {
+        let sample = |seed| {
+            let mut reservoir = Vec::new();
+            for row in 0..100 {
+                update_vector_reservoir(&mut reservoir, vec![row as f32], row, 8, seed);
+            }
+            reservoir
+        };
+        assert_eq!(sample(41), sample(41));
+        assert_ne!(sample(41), sample(42));
+        assert_eq!(sample(41).len(), 8);
     }
 
     use arrow_array::{

@@ -14,11 +14,291 @@ use parquet::{
 
 use crate::{
     BorsukError, LogicalCellId, Result,
-    metric::{VectorMetric, unit_l2_normalized},
+    metric::{VectorMetric, squared_euclidean_simd, unit_l2_normalized},
 };
 
 pub(crate) const LOGICAL_CELL_CATALOG_FORMAT_VERSION: u16 = 34;
 const BLAKE3_HEX_LEN: usize = 64;
+const TRAINING_FANOUT: usize = 32;
+const TRAINING_PARALLEL_THRESHOLD: usize = 4_096;
+
+/// Train exactly `cell_count` deterministic logical-cell centroids from a
+/// bounded representative sample using hierarchical Lloyd partitions.
+///
+/// Assignment work is `O(sample * fanout * dimensions * levels)` rather than
+/// flat `O(sample * cell_count * dimensions)`. Cosine/angular inputs are
+/// normalized once and produce spherical centroids. Callers own streaming
+/// sampling so this routine's memory is bounded by the explicit sample.
+#[doc(hidden)]
+pub fn train_logical_cell_centroids(
+    sample: &[Vec<f32>],
+    metric: VectorMetric,
+    cell_count: usize,
+    max_iterations: usize,
+) -> Result<Vec<Vec<f32>>> {
+    if cell_count == 0 || max_iterations == 0 || sample.len() < cell_count {
+        return Err(BorsukError::InvalidMetricInput(
+            "logical-cell training requires nonzero cells/iterations and at least one sample per cell"
+                .to_string(),
+        ));
+    }
+    let dimensions = sample.first().map_or(0, Vec::len);
+    if dimensions == 0 {
+        return Err(BorsukError::InvalidMetricInput(
+            "logical-cell training dimensions must be nonzero".to_string(),
+        ));
+    }
+    let normalize = metric.uses_normalized_euclidean_geometry();
+    let geometry = sample
+        .iter()
+        .enumerate()
+        .map(|(row, vector)| {
+            if vector.len() != dimensions {
+                return Err(BorsukError::DimensionMismatch {
+                    expected: dimensions,
+                    actual: vector.len(),
+                });
+            }
+            if vector.iter().any(|value| !value.is_finite()) {
+                return Err(BorsukError::InvalidMetricInput(format!(
+                    "logical-cell training row {row} contains a non-finite value"
+                )));
+            }
+            let prepared = if normalize {
+                unit_l2_normalized(vector)
+            } else {
+                vector.clone()
+            };
+            if normalize && prepared.iter().all(|value| *value == 0.0) {
+                return Err(BorsukError::InvalidMetricInput(format!(
+                    "logical-cell training row {row} has zero norm"
+                )));
+            }
+            Ok(prepared)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut centroids = Vec::with_capacity(cell_count);
+    train_centroid_partition(
+        &geometry,
+        (0..geometry.len()).collect(),
+        cell_count,
+        max_iterations,
+        normalize,
+        &mut centroids,
+    )?;
+    if centroids.len() != cell_count {
+        return Err(BorsukError::InvalidMetricInput(format!(
+            "logical-cell trainer emitted {} centroids; expected {cell_count}",
+            centroids.len()
+        )));
+    }
+    let mut identities = std::collections::BTreeSet::new();
+    for centroid in &centroids {
+        let identity = centroid
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>();
+        if !identities.insert(identity) {
+            return Err(BorsukError::InvalidMetricInput(
+                "logical-cell training produced duplicate centroids".to_string(),
+            ));
+        }
+    }
+    Ok(centroids)
+}
+
+fn train_centroid_partition(
+    geometry: &[Vec<f32>],
+    indices: Vec<usize>,
+    leaves: usize,
+    max_iterations: usize,
+    normalize: bool,
+    output: &mut Vec<Vec<f32>>,
+) -> Result<()> {
+    if leaves == 1 {
+        output.push(mean_centroid(geometry, &indices, normalize)?);
+        return Ok(());
+    }
+    if indices.len() < leaves {
+        return Err(BorsukError::InvalidMetricInput(
+            "logical-cell partition has fewer samples than requested leaves".to_string(),
+        ));
+    }
+    let k = leaves.min(TRAINING_FANOUT).min(indices.len());
+    let dimensions = geometry[0].len();
+    let mut centroids = (0..k)
+        .map(|slot| geometry[indices[slot * indices.len() / k]].clone())
+        .collect::<Vec<_>>();
+    let mut assignments = vec![0_usize; indices.len()];
+    let mut nearest = vec![0.0_f32; indices.len()];
+    for _ in 0..max_iterations {
+        assign_training_rows(
+            geometry,
+            &indices,
+            &centroids,
+            &mut assignments,
+            &mut nearest,
+        );
+        let mut sums = vec![vec![0.0_f32; dimensions]; k];
+        let mut counts = vec![0_usize; k];
+        for (local, index) in indices.iter().copied().enumerate() {
+            let cluster = assignments[local];
+            counts[cluster] += 1;
+            for (sum, value) in sums[cluster].iter_mut().zip(&geometry[index]) {
+                *sum += *value;
+            }
+        }
+        let mut movement = 0.0_f32;
+        for cluster in 0..k {
+            let updated = if counts[cluster] == 0 {
+                let farthest = nearest
+                    .iter()
+                    .enumerate()
+                    .max_by(|left, right| left.1.total_cmp(right.1))
+                    .map_or(0, |(index, _)| index);
+                nearest[farthest] = -1.0;
+                geometry[indices[farthest]].clone()
+            } else {
+                let inverse = (counts[cluster] as f32).recip();
+                let mut mean = sums[cluster]
+                    .iter()
+                    .map(|sum| sum * inverse)
+                    .collect::<Vec<_>>();
+                if normalize {
+                    mean = unit_l2_normalized(&mean);
+                }
+                mean
+            };
+            movement += squared_euclidean_simd(&centroids[cluster], &updated);
+            centroids[cluster] = updated;
+        }
+        if movement <= 1.0e-5 {
+            break;
+        }
+    }
+    assign_training_rows(
+        geometry,
+        &indices,
+        &centroids,
+        &mut assignments,
+        &mut nearest,
+    );
+    let mut groups = vec![Vec::new(); k];
+    for (local, index) in indices.into_iter().enumerate() {
+        groups[assignments[local]].push(index);
+    }
+    for empty in 0..k {
+        if groups[empty].is_empty() {
+            let donor = groups
+                .iter()
+                .enumerate()
+                .filter(|(_, group)| group.len() > 1)
+                .max_by_key(|(_, group)| group.len())
+                .map(|(index, _)| index)
+                .ok_or_else(|| {
+                    BorsukError::InvalidMetricInput(
+                        "logical-cell training could not repair an empty partition".to_string(),
+                    )
+                })?;
+            let moved = groups[donor].pop().expect("donor is nonempty");
+            groups[empty].push(moved);
+        }
+    }
+    let quotas = proportional_leaf_quotas(&groups, leaves)?;
+    for (group, quota) in groups.into_iter().zip(quotas) {
+        train_centroid_partition(geometry, group, quota, max_iterations, normalize, output)?;
+    }
+    Ok(())
+}
+
+fn assign_training_rows(
+    geometry: &[Vec<f32>],
+    indices: &[usize],
+    centroids: &[Vec<f32>],
+    assignments: &mut [usize],
+    nearest: &mut [f32],
+) {
+    let thread_count = if indices.len() < TRAINING_PARALLEL_THRESHOLD {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map_or(1, std::num::NonZero::get)
+            .min(crate::configured_cpu_threads())
+            .min(indices.len())
+            .max(1)
+    };
+    let assign = |indices: &[usize], assignments: &mut [usize], nearest: &mut [f32]| {
+        for ((index, assignment), distance_slot) in
+            indices.iter().copied().zip(assignments).zip(nearest)
+        {
+            let mut best = 0_usize;
+            let mut best_distance = f32::INFINITY;
+            for (cluster, centroid) in centroids.iter().enumerate() {
+                let distance = squared_euclidean_simd(&geometry[index], centroid);
+                if distance < best_distance {
+                    best = cluster;
+                    best_distance = distance;
+                }
+            }
+            *assignment = best;
+            *distance_slot = best_distance;
+        }
+    };
+    if thread_count == 1 {
+        assign(indices, assignments, nearest);
+        return;
+    }
+    let chunk_len = indices.len().div_ceil(thread_count);
+    std::thread::scope(|scope| {
+        for ((index_chunk, assignment_chunk), nearest_chunk) in indices
+            .chunks(chunk_len)
+            .zip(assignments.chunks_mut(chunk_len))
+            .zip(nearest.chunks_mut(chunk_len))
+        {
+            scope.spawn(move || assign(index_chunk, assignment_chunk, nearest_chunk));
+        }
+    });
+}
+
+fn mean_centroid(geometry: &[Vec<f32>], indices: &[usize], normalize: bool) -> Result<Vec<f32>> {
+    let mut centroid = vec![0.0_f32; geometry[0].len()];
+    for index in indices {
+        for (sum, value) in centroid.iter_mut().zip(&geometry[*index]) {
+            *sum += *value;
+        }
+    }
+    let inverse = (indices.len() as f32).recip();
+    for value in &mut centroid {
+        *value *= inverse;
+    }
+    if normalize {
+        centroid = unit_l2_normalized(&centroid);
+        if centroid.iter().all(|value| *value == 0.0) {
+            return Err(BorsukError::InvalidMetricInput(
+                "logical-cell partition centroid has zero norm".to_string(),
+            ));
+        }
+    }
+    Ok(centroid)
+}
+
+fn proportional_leaf_quotas(groups: &[Vec<usize>], leaves: usize) -> Result<Vec<usize>> {
+    let mut quotas = vec![1_usize; groups.len()];
+    for _ in groups.len()..leaves {
+        let selected = (0..groups.len())
+            .filter(|index| quotas[*index] < groups[*index].len())
+            .max_by(|left, right| {
+                (groups[*left].len() * quotas[*right]).cmp(&(groups[*right].len() * quotas[*left]))
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidMetricInput(
+                    "logical-cell leaf allocation exceeds its sample capacity".to_string(),
+                )
+            })?;
+        quotas[selected] += 1;
+    }
+    Ok(quotas)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LogicalCellCatalogRef {
@@ -454,6 +734,39 @@ fn validate_stored_centroid(ordinal: u32, centroid: &[f32], metric: &VectorMetri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hierarchical_trainer_is_exact_deterministic_and_spherical() {
+        let mut sample = Vec::new();
+        for center in [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]] {
+            for offset in 0..8 {
+                sample.push(vec![
+                    center[0] + offset as f32 * 0.001,
+                    center[1] - offset as f32 * 0.001,
+                ]);
+            }
+        }
+
+        let first = train_logical_cell_centroids(&sample, VectorMetric::Cosine, 4, 8).unwrap();
+        let second = train_logical_cell_centroids(&sample, VectorMetric::Cosine, 4, 8).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 4);
+        for centroid in &first {
+            let norm = centroid.iter().map(|value| value * value).sum::<f32>();
+            assert!((norm - 1.0).abs() < 1.0e-5);
+        }
+        let distinct = first
+            .iter()
+            .map(|centroid| {
+                centroid
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(distinct.len(), 4);
+        assert!(train_logical_cell_centroids(&sample[..3], VectorMetric::Cosine, 4, 8).is_err());
+    }
 
     fn reference_for(
         bytes: &[u8],

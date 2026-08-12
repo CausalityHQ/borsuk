@@ -105,6 +105,8 @@ pub use index::{
     WarmReport, parse_byte_size, parse_ram_budget, recommended_segment_max_vectors,
 };
 pub use lane_log::GROUP_COMMIT_STRIPE_COUNT;
+#[doc(hidden)]
+pub use logical_cell_catalog::train_logical_cell_centroids;
 
 /// Maximum CPU worker threads used by default index-build phases. Query
 /// concurrency has separate admission controls; this cap prevents an offline

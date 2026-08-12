@@ -68,11 +68,13 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                 "engine": "borsuk-v12",
                 "logical_cells": 16384,
                 "minimum_rows_per_logical_cell": 256,
+                "training_rows_per_cell": 32,
+                "training_iterations": 8,
                 "routing": "hnsw",
                 "hnsw_m": 32,
                 "hnsw_ef_construction": 200,
                 "leaf_codec": "srht-pq-scan",
-                "code_bytes": 96,
+                "code_bytes": 128,
                 "bundle_target_mib": 64,
                 "row_group_target_mib": 8,
                 "max_active_levels": 16,
@@ -200,6 +202,12 @@ def paid_v3_manifest() -> dict[str, object]:
 
 
 class PublicationV3ProtocolTests(unittest.TestCase):
+    def test_borsuk_profile_rejects_non_power_of_two_code_width(self) -> None:
+        manifest = paid_v3_manifest()
+        manifest["index_profiles"]["borsuk"]["code_bytes"] = 96
+        with self.assertRaisesRegex(ValueError, "power of two"):
+            validate_manifest(manifest)
+
     def test_protocol_is_exact_scheduled_cell_without_reconstruction(self) -> None:
         cell = build_schedule_document(validate_manifest(valid_v3_manifest()))["cells"][0]
         with tempfile.TemporaryDirectory() as directory:

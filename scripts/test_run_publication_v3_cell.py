@@ -52,7 +52,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         generator_env = plan["steps"][0]["env"]
         benchmark_env = plan["steps"][1]["env"]
-        self.assertEqual(int(generator_env["BORSUK_SYNTHETIC_TRAIN"]), 1_000)
+        self.assertEqual(int(generator_env["BORSUK_SYNTHETIC_TRAIN"]), 32_800)
         self.assertEqual(int(generator_env["BORSUK_SYNTHETIC_DIMENSIONS"]), cell["dataset"]["dimensions"])
         self.assertEqual(
             generator_env["BORSUK_SYNTHETIC_SEED"],
@@ -63,6 +63,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(benchmark_env["BORSUK_BENCH_NPROBES"], str(arm["routing_cell_budget"]))
         self.assertEqual(benchmark_env["BORSUK_BENCH_CANDIDATES"], str(arm["candidate_budget"]))
         self.assertEqual(benchmark_env["BORSUK_BENCH_SKIP_EXACT_RECALL"], "1")
+        self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELLS"], "128")
+        self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS"], "4096")
+        self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_ITERATIONS"], "8")
+        self.assertEqual(benchmark_env["BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES"], "128")
 
     def test_smoke_plan_is_scaled_and_cannot_be_published(self) -> None:
         cell = next(
@@ -83,19 +87,25 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 mode="smoke",
             )
         self.assertFalse(plan["publishable"])
-        self.assertEqual(plan["effective_rows"], 1_000)
+        self.assertEqual(plan["effective_rows"], 32_800)
         self.assertEqual(plan["effective_queries"], 10)
-        self.assertEqual(plan["steps"][0]["env"]["BORSUK_SYNTHETIC_TRAIN"], "1000")
+        self.assertEqual(plan["steps"][0]["env"]["BORSUK_SYNTHETIC_TRAIN"], "32800")
         self.assertEqual(plan["steps"][1]["env"]["BORSUK_BENCH_QUERIES"], "10")
-        with self.assertRaisesRegex(ValueError, "index-profile binding"):
-            build_execution_plan(
-                cell,
-                arm=arm,
-                workspace=Path(root),
-                generator=Path("/bin/true"),
-                borsuk_bench=Path("/bin/true"),
-                mode="publication",
-            )
+        cell["source"] = {"state": "frozen"}
+        publication = build_execution_plan(
+            cell,
+            arm=arm,
+            workspace=Path(root),
+            generator=Path("/bin/true"),
+            borsuk_bench=Path("/bin/true"),
+            mode="publication",
+        )
+        self.assertTrue(publication["publishable"])
+        self.assertEqual(publication["effective_rows"], cell["dataset"]["scale"]["rows"])
+        self.assertEqual(
+            publication["steps"][-1]["env"]["BORSUK_BENCH_LOGICAL_CELLS"],
+            str(cell["index_profile"]["logical_cells"]),
+        )
 
     def test_unavailable_local_system_is_rejected_not_simulated(self) -> None:
         cell = scheduled_cell(system="amazon-s3-vectors")
