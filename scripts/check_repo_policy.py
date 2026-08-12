@@ -961,6 +961,34 @@ def assert_global_exact_rerank_hedge_manifest(manifest: dict[str, object]) -> No
     )
 
 
+PUBLICATION_V3_ACTIVE_FILES = (
+    "scripts/publication_v3_protocol.py",
+    "scripts/bench_publication_v3_aws.sh",
+    "scripts/validate_publication_v3_results.py",
+    "scripts/launch_aws_publication_v3.sh",
+    "docs/research/publication-v3-manifest.json",
+)
+
+
+def check_publication_v3_contract(root: Path) -> None:
+    forbidden = (
+        "publication_v2",
+        "PUBLICATION_V2",
+        "result_key",
+        "index_key",
+        "protocol.txt",
+    )
+    for relative in PUBLICATION_V3_ACTIVE_FILES:
+        path = root / relative
+        require(path.is_file(), f"{relative} must exist for Publication V3")
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            require(
+                token not in text,
+                f"{relative} must not contain historical V2 token {token!r}",
+            )
+
+
 def main() -> None:
     require((ROOT / "Cargo.lock").is_file(), "Cargo.lock must exist")
     require(
@@ -988,6 +1016,9 @@ def main() -> None:
     assert_tracked("python/examples/local_index.py")
     assert_tracked("python/examples/s3_index.py")
     assert_tracked("python/src/borsuk/__init__.pyi")
+    check_publication_v3_contract(ROOT)
+    for publication_path in PUBLICATION_V3_ACTIVE_FILES:
+        assert_tracked(publication_path)
     assert_tracked("python/src/borsuk/py.typed")
     assert_not_ignored("python/tests/typing_usage.py")
     assert_tracked("packages/borsuk/examples/local-index.ts")

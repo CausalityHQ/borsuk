@@ -1,6 +1,7 @@
 import contextlib
 import io
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,30 @@ import check_repo_policy
 
 
 class BenchmarkArtifactPolicyTests(unittest.TestCase):
+    def test_publication_v3_contract_requires_active_files_and_rejects_v2_aliases(
+        self,
+    ) -> None:
+        required = (
+            "scripts/publication_v3_protocol.py",
+            "scripts/bench_publication_v3_aws.sh",
+            "scripts/validate_publication_v3_results.py",
+            "scripts/launch_aws_publication_v3.sh",
+            "docs/research/publication-v3-manifest.json",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in required:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("publication-v3\n", encoding="utf-8")
+            check_repo_policy.check_publication_v3_contract(root)
+            (root / required[0]).write_text("result_key\n", encoding="utf-8")
+            with (
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                check_repo_policy.check_publication_v3_contract(root)
+
     def test_global_exact_rerank_hedge_policy_freezes_the_paired_v35_contract(
         self,
     ) -> None:

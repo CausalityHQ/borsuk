@@ -5,6 +5,20 @@ historical baselines, external comparisons, and publication analysis. The
 normal [API guide](../api.md) and [architecture guide](../architecture.md)
 describe only the supported production path and its defaults.
 
+## Current release qualification
+
+Publication V3 is the only active release campaign. Its checked
+[manifest](publication-v3-manifest.json) covers standard ANN datasets,
+realistic 1M/10M/100M dense datasets, synthetic stress families, hybrid and
+late-interaction retrieval, datatype kernels, and write/update/delete/compact
+lifecycle behavior. The campaign has not launched: its source is not frozen
+and 12 external datasets are not yet staged, so the protocol rejects paid
+execution.
+
+Publication V2 and all earlier campaign artifacts are immutable historical
+evidence for their recorded source revisions. They are not current-release
+results and are not combined with future V3 measurements.
+
 ## Production system under evaluation
 
 The default query path keeps the compact global product-PQ descriptor/codebook

@@ -1,10 +1,13 @@
 import json
+import hashlib
 import os
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +79,21 @@ class LaunchAwsPublicationV3Tests(unittest.TestCase):
             self.assertEqual(
                 reports[0]["structural_replay"], "blocked-until-paid-ready"
             )
+            materialized = json.loads(
+                (repository / "docs/research/publication-v3-manifest.json").read_text()
+            )
+            materialized["source"] = {
+                "state": "frozen",
+                "git_commit": reports[0]["source_commit"],
+                "archive_sha256": reports[0]["source_archive_sha256"],
+                "cargo_lock_sha256": reports[0]["cargo_lock_sha256"],
+                "python_lock_sha256": reports[0]["python_lock_sha256"],
+                "node_lock_sha256": reports[0]["node_lock_sha256"],
+            }
+            expected_manifest_sha256 = hashlib.sha256(
+                canonical_json_bytes(validate_manifest(materialized))
+            ).hexdigest()
+            self.assertEqual(reports[0]["manifest_sha256"], expected_manifest_sha256)
 
     def test_dry_run_rejects_any_untracked_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
