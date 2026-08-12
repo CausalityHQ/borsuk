@@ -67,8 +67,11 @@ ENVIRONMENT_FIELDS = frozenset(
         "region",
         "architecture",
         "spot_default",
-        "instance_types",
-        "client_storage",
+        "build_workers",
+        "runtime_clients",
+        "build_storage",
+        "runtime_storage",
+        "runtime_data_contract",
         "interruption_contract",
     }
 )
@@ -641,30 +644,85 @@ def _validate_environment(value: object) -> dict[str, object]:
         raise ValueError("environment architecture is unsupported")
     if not isinstance(environment["spot_default"], bool):
         raise ValueError("environment spot_default must be a boolean")
-    instance_types = _dict(environment["instance_types"], "instance_types")
-    _exact_fields(instance_types, frozenset(SYSTEMS), "instance_types")
-    normalized_instances = {
-        system: _identifier(instance_types[system], f"{system} instance type")
+    resource_fields = frozenset({"instance_type", "vcpus", "memory_mib"})
+    query_resource_fields = resource_fields | frozenset(
+        {"resident_limit_mib", "disk_cache_limit_mib"}
+    )
+
+    def normalize_resources(raw: object, role: str, *, query: bool) -> dict[str, object]:
+        resources = _dict(raw, role)
+        _exact_fields(resources, query_resource_fields if query else resource_fields, role)
+        result = {
+            "instance_type": _identifier(resources["instance_type"], f"{role} instance type"),
+            "vcpus": _positive_int(resources["vcpus"], f"{role} vCPUs"),
+            "memory_mib": _positive_int(resources["memory_mib"], f"{role} memory MiB"),
+        }
+        if query:
+            result["resident_limit_mib"] = _positive_int(
+                resources["resident_limit_mib"], f"{role} resident limit MiB"
+            )
+            result["disk_cache_limit_mib"] = _positive_int(
+                resources["disk_cache_limit_mib"], f"{role} disk cache limit MiB"
+            )
+        return result
+
+    workers = _dict(environment["build_workers"], "build_workers")
+    clients = _dict(environment["runtime_clients"], "runtime_clients")
+    _exact_fields(workers, frozenset(SYSTEMS), "build_workers")
+    _exact_fields(clients, frozenset(SYSTEMS), "runtime_clients")
+    normalized_workers = {
+        system: normalize_resources(workers[system], f"{system} build worker", query=False)
         for system in SYSTEMS
     }
-    storage = _dict(environment["client_storage"], "client_storage")
-    _exact_fields(
-        storage,
-        frozenset(
-            {"volume_type", "volume_size_gib", "iops", "throughput_mib_s"}
-        ),
-        "client_storage",
-    )
-    normalized_storage = {
-        "volume_type": _identifier(storage["volume_type"], "volume type"),
-        "volume_size_gib": _positive_int(
-            storage["volume_size_gib"], "volume size GiB"
-        ),
-        "iops": _positive_int(storage["iops"], "storage IOPS"),
-        "throughput_mib_s": _positive_int(
-            storage["throughput_mib_s"], "storage throughput MiB/s"
-        ),
+    normalized_clients = {
+        system: normalize_resources(clients[system], f"{system} query client", query=True)
+        for system in SYSTEMS
     }
+    query_caps = {
+        "borsuk": (8_192, 2_048),
+        "amazon-s3-vectors": (8_192, 2_048),
+        "faiss": (16_384, 12_288),
+    }
+    for system, (memory_cap, resident_cap) in query_caps.items():
+        client = normalized_clients[system]
+        if client["memory_mib"] > memory_cap:
+            raise ValueError(f"{system} runtime client memory exceeds its small-client cap")
+        if client["resident_limit_mib"] > resident_cap or client["resident_limit_mib"] >= client["memory_mib"]:
+            raise ValueError(f"{system} runtime resident limit exceeds its cap")
+        if client["disk_cache_limit_mib"] > 1_024:
+            raise ValueError(f"{system} runtime cache exceeds its 1 GiB cap")
+
+    def normalize_storage(raw: object, role: str) -> dict[str, object]:
+        storage = _dict(raw, role)
+        _exact_fields(
+            storage,
+            frozenset({"volume_type", "volume_size_gib", "iops", "throughput_mib_s"}),
+            role,
+        )
+        return {
+            "volume_type": _identifier(storage["volume_type"], f"{role} volume type"),
+            "volume_size_gib": _positive_int(storage["volume_size_gib"], f"{role} size GiB"),
+            "iops": _positive_int(storage["iops"], f"{role} IOPS"),
+            "throughput_mib_s": _positive_int(storage["throughput_mib_s"], f"{role} throughput MiB/s"),
+        }
+
+    normalized_build_storage = normalize_storage(environment["build_storage"], "build storage")
+    normalized_runtime_storage = normalize_storage(environment["runtime_storage"], "runtime storage")
+    if (
+        normalized_runtime_storage["volume_size_gib"] > 32
+        or normalized_runtime_storage["iops"] > 3_000
+        or normalized_runtime_storage["throughput_mib_s"] > 125
+    ):
+        raise ValueError("runtime storage exceeds the small-client cap")
+    runtime_data_contract = _dict(environment["runtime_data_contract"], "runtime_data_contract")
+    expected_runtime_data_contract = {
+        "index_location": "s3",
+        "dataset_location": "s3",
+        "allow_local_corpus": False,
+        "allow_local_index": False,
+    }
+    if runtime_data_contract != expected_runtime_data_contract:
+        raise ValueError("runtime data contract must be S3-only")
     interruption = _dict(
         environment["interruption_contract"], "interruption_contract"
     )
@@ -683,8 +741,11 @@ def _validate_environment(value: object) -> dict[str, object]:
         "region": region,
         "architecture": architecture,
         "spot_default": environment["spot_default"],
-        "instance_types": normalized_instances,
-        "client_storage": normalized_storage,
+        "build_workers": normalized_workers,
+        "runtime_clients": normalized_clients,
+        "build_storage": normalized_build_storage,
+        "runtime_storage": normalized_runtime_storage,
+        "runtime_data_contract": expected_runtime_data_contract,
         "interruption_contract": expected_interruption,
     }
 

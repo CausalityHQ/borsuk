@@ -124,6 +124,7 @@ struct ResolvedConfig {
     force_segment_path: bool,
     ram_budget_bytes: Option<u64>,
     segment_cache_max_bytes: Option<u64>,
+    disk_cache_max_bytes: Option<u64>,
     recall_nprobes: Vec<usize>,
     recall_candidates: Vec<usize>,
     recall_leaf_mode: LeafMode,
@@ -773,6 +774,7 @@ fn open_serving_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
         &config.uri,
         OpenOptions {
             cache_dir: Some(config.cache_dir.clone()),
+            cache_max_bytes: config.disk_cache_max_bytes,
             ram_budget_bytes: config.ram_budget_bytes,
             segment_cache_max_bytes: effective_segment_cache_budget(config),
             // Routing summaries and the centroid graph are serving metadata.
@@ -918,6 +920,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     )?;
     let segment_cache_max_bytes =
         env_optional_byte_cap("BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES", None)?;
+    let disk_cache_max_bytes = env_optional_byte_cap("BORSUK_BENCH_DISK_CACHE_MAX_BYTES", None)?;
     let recall_nprobes = env_positive_list("BORSUK_BENCH_NPROBES", DEFAULT_NPROBE_SWEEP)?;
     let recall_candidates =
         env_positive_list("BORSUK_BENCH_CANDIDATES", DEFAULT_RECALL_CANDIDATES)?;
@@ -1031,6 +1034,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         force_segment_path,
         ram_budget_bytes,
         segment_cache_max_bytes,
+        disk_cache_max_bytes,
         recall_nprobes,
         recall_candidates,
         recall_leaf_mode,
@@ -4519,6 +4523,10 @@ mod tests {
             None
         );
         assert!(parse_optional_byte_cap("BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES", "512MiB").is_err());
+        assert_eq!(
+            parse_optional_byte_cap("BORSUK_BENCH_DISK_CACHE_MAX_BYTES", "1073741824").unwrap(),
+            Some(1_073_741_824)
+        );
     }
 
     #[test]

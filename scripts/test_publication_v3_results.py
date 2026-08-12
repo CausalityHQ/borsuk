@@ -85,6 +85,18 @@ class PublicationV3ResultTests(unittest.TestCase):
             {**result, "protocol_sha256": "b" * 64},
             {**result, "source_archive_sha256": "b" * 64},
             {**result, "metrics": {**result["metrics"], "correctness_ppm": 949999}},
+            {
+                **result,
+                "metrics": {
+                    **result["metrics"],
+                    "peak_rss_bytes": (
+                        cell["environment_contract"]["runtime_clients"][cell["system"]]["memory_mib"]
+                        * 1024
+                        * 1024
+                        + 1
+                    ),
+                },
+            },
             {**result, "arm": {**result["arm"], "k": True}},
         ):
             with self.subTest(mutation=json.dumps(mutation, sort_keys=True)[:100]):

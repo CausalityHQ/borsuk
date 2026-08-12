@@ -96,6 +96,27 @@ def build_execution_plan(
         raise ValueError("cell dataset is invalid")
     if mode == "publication" and (not isinstance(source, dict) or source.get("state") != "frozen"):
         raise ValueError("publication execution requires a frozen source archive")
+    environment = cell.get("environment_contract")
+    if not isinstance(environment, dict):
+        raise ValueError("cell environment contract is invalid")
+    runtime_clients = environment.get("runtime_clients")
+    runtime_storage = environment.get("runtime_storage")
+    if not isinstance(runtime_clients, dict) or not isinstance(runtime_storage, dict):
+        raise ValueError("cell has no bounded runtime-client contract")
+    runtime_client = runtime_clients.get("borsuk")
+    if not isinstance(runtime_client, dict):
+        raise ValueError("cell has no BORSUK runtime-client contract")
+    resident_limit_mib = runtime_client.get("resident_limit_mib")
+    disk_cache_limit_mib = runtime_client.get("disk_cache_limit_mib")
+    if (
+        isinstance(resident_limit_mib, bool)
+        or not isinstance(resident_limit_mib, int)
+        or resident_limit_mib <= 0
+        or isinstance(disk_cache_limit_mib, bool)
+        or not isinstance(disk_cache_limit_mib, int)
+        or disk_cache_limit_mib <= 0
+    ):
+        raise ValueError("BORSUK runtime-client limits are invalid")
 
     factors = workload.get("factors")
     scale = dataset.get("scale")
@@ -184,6 +205,10 @@ def build_execution_plan(
         "BORSUK_BENCH_CACHE_PROFILE": (
             "uncached" if arm["cache_state"] == "cold" else "disk_cached"
         ),
+        "BORSUK_BENCH_RAM_BUDGET_BYTES": str(resident_limit_mib * 1024 * 1024),
+        "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": str(
+            disk_cache_limit_mib * 1024 * 1024
+        ),
     }
     code_bytes = index_profile.get("code_bytes")
     training_rows_per_cell = index_profile.get("training_rows_per_cell")
@@ -233,6 +258,8 @@ def build_execution_plan(
         "publishable": mode == "publication",
         "effective_rows": effective_rows,
         "effective_queries": effective_queries,
+        "runtime_client": runtime_client,
+        "runtime_storage": runtime_storage,
         "workspace": str(workspace),
         "output_dir": str(output_dir),
         "steps": steps,

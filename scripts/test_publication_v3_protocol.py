@@ -40,16 +40,33 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
             "region": "eu-central-1",
             "architecture": "aarch64",
             "spot_default": True,
-            "instance_types": {
-                "borsuk": "r7g.16xlarge",
-                "amazon-s3-vectors": "r7g.16xlarge",
-                "faiss": "r7g.16xlarge",
+            "build_workers": {
+                "borsuk": {"instance_type": "r7g.8xlarge", "vcpus": 32, "memory_mib": 262144},
+                "amazon-s3-vectors": {"instance_type": "r7g.8xlarge", "vcpus": 32, "memory_mib": 262144},
+                "faiss": {"instance_type": "r7g.16xlarge", "vcpus": 64, "memory_mib": 524288},
             },
-            "client_storage": {
+            "runtime_clients": {
+                "borsuk": {"instance_type": "c7g.xlarge", "vcpus": 4, "memory_mib": 8192, "resident_limit_mib": 2048, "disk_cache_limit_mib": 1024},
+                "amazon-s3-vectors": {"instance_type": "c7g.xlarge", "vcpus": 4, "memory_mib": 8192, "resident_limit_mib": 2048, "disk_cache_limit_mib": 1024},
+                "faiss": {"instance_type": "c7g.2xlarge", "vcpus": 8, "memory_mib": 16384, "resident_limit_mib": 12288, "disk_cache_limit_mib": 1024},
+            },
+            "build_storage": {
                 "volume_type": "gp3",
                 "volume_size_gib": 4096,
                 "iops": 16000,
                 "throughput_mib_s": 1000,
+            },
+            "runtime_storage": {
+                "volume_type": "gp3",
+                "volume_size_gib": 32,
+                "iops": 3000,
+                "throughput_mib_s": 125,
+            },
+            "runtime_data_contract": {
+                "index_location": "s3",
+                "dataset_location": "s3",
+                "allow_local_corpus": False,
+                "allow_local_index": False,
             },
             "interruption_contract": {
                 "measurement_unit": "factor-arm",
@@ -328,10 +345,14 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         different_hardware = valid_v3_manifest(
             environment_contract={
                 **valid_v3_manifest()["environment_contract"],
-                "instance_types": {
-                    "borsuk": "r7g.12xlarge",
-                    "amazon-s3-vectors": "r7g.12xlarge",
-                    "faiss": "r7g.12xlarge",
+                "runtime_clients": {
+                    **valid_v3_manifest()["environment_contract"]["runtime_clients"],
+                    "borsuk": {
+                        **valid_v3_manifest()["environment_contract"]["runtime_clients"]["borsuk"],
+                        "instance_type": "c7g.large",
+                        "vcpus": 2,
+                        "memory_mib": 4096,
+                    },
                 },
             }
         )
@@ -341,6 +362,30 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         self.assertNotEqual(
             first["cells"][0]["cell_id"], hardware_schedule["cells"][0]["cell_id"]
         )
+
+    def test_environment_separates_builders_from_bounded_s3_query_clients(self) -> None:
+        environment = validate_manifest(valid_v3_manifest())["environment_contract"]
+        self.assertEqual(environment["build_workers"]["borsuk"]["memory_mib"], 262144)
+        self.assertEqual(environment["runtime_clients"]["borsuk"]["memory_mib"], 8192)
+        self.assertLessEqual(environment["runtime_clients"]["borsuk"]["resident_limit_mib"], 2048)
+        self.assertEqual(environment["runtime_storage"]["volume_size_gib"], 32)
+        self.assertFalse(environment["runtime_data_contract"]["allow_local_corpus"])
+        self.assertFalse(environment["runtime_data_contract"]["allow_local_index"])
+
+        for mutation, error in (
+            (("runtime_clients", "borsuk", "resident_limit_mib", 8192), "resident"),
+            (("runtime_clients", "borsuk", "disk_cache_limit_mib", 4096), "cache"),
+            (("runtime_storage", "volume_size_gib", None, 256), "runtime storage"),
+            (("runtime_data_contract", "allow_local_index", None, True), "S3-only"),
+        ):
+            manifest = valid_v3_manifest()
+            section, key, nested, value = mutation
+            if nested is None:
+                manifest["environment_contract"][section][key] = value
+            else:
+                manifest["environment_contract"][section][key][nested] = value
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                validate_manifest(manifest)
 
     def test_v2_aliases_and_unknown_fields_are_rejected(self) -> None:
         row = build_schedule_document(validate_manifest(valid_v3_manifest()))[

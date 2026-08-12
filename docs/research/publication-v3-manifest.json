@@ -14,16 +14,33 @@
     "region": "eu-central-1",
     "architecture": "aarch64",
     "spot_default": true,
-    "instance_types": {
-      "borsuk": "r7g.16xlarge",
-      "amazon-s3-vectors": "r7g.16xlarge",
-      "faiss": "r7g.16xlarge"
+    "build_workers": {
+      "borsuk": {"instance_type": "r7g.8xlarge", "vcpus": 32, "memory_mib": 262144},
+      "amazon-s3-vectors": {"instance_type": "r7g.8xlarge", "vcpus": 32, "memory_mib": 262144},
+      "faiss": {"instance_type": "r7g.16xlarge", "vcpus": 64, "memory_mib": 524288}
     },
-    "client_storage": {
+    "runtime_clients": {
+      "borsuk": {"instance_type": "c7g.xlarge", "vcpus": 4, "memory_mib": 8192, "resident_limit_mib": 2048, "disk_cache_limit_mib": 1024},
+      "amazon-s3-vectors": {"instance_type": "c7g.xlarge", "vcpus": 4, "memory_mib": 8192, "resident_limit_mib": 2048, "disk_cache_limit_mib": 1024},
+      "faiss": {"instance_type": "c7g.2xlarge", "vcpus": 8, "memory_mib": 16384, "resident_limit_mib": 12288, "disk_cache_limit_mib": 1024}
+    },
+    "build_storage": {
       "volume_type": "gp3",
       "volume_size_gib": 4096,
       "iops": 16000,
       "throughput_mib_s": 1000
+    },
+    "runtime_storage": {
+      "volume_type": "gp3",
+      "volume_size_gib": 32,
+      "iops": 3000,
+      "throughput_mib_s": 125
+    },
+    "runtime_data_contract": {
+      "index_location": "s3",
+      "dataset_location": "s3",
+      "allow_local_corpus": false,
+      "allow_local_index": false
     },
     "interruption_contract": {
       "measurement_unit": "factor-arm",

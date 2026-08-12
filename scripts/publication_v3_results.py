@@ -249,7 +249,18 @@ def validate_cell_result(
         raise ValueError("cell result latency quantiles are not ordered")
     _positive_integer(metrics["throughput_milli_per_second"], "throughput")
     _positive_integer(metrics["cpu_ns"], "CPU time")
-    _positive_integer(metrics["peak_rss_bytes"], "peak RSS")
+    peak_rss_bytes = _positive_integer(metrics["peak_rss_bytes"], "peak RSS")
+    environment = cell.get("environment_contract")
+    system = cell.get("system")
+    if not isinstance(environment, dict) or not isinstance(system, str):
+        raise ValueError("cell runtime-client environment is invalid")
+    clients = environment.get("runtime_clients")
+    client = clients.get(system) if isinstance(clients, dict) else None
+    memory_mib = client.get("memory_mib") if isinstance(client, dict) else None
+    if isinstance(memory_mib, bool) or not isinstance(memory_mib, int) or memory_mib <= 0:
+        raise ValueError("cell runtime-client memory is invalid")
+    if peak_rss_bytes > memory_mib * 1024 * 1024:
+        raise ValueError("cell result peak RSS exceeds its runtime client")
     for field in (
         "disk_read_bytes",
         "disk_write_bytes",

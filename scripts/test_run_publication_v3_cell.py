@@ -206,6 +206,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS"], "4096")
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_ITERATIONS"], "8")
         self.assertEqual(benchmark_env["BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES"], "128")
+        self.assertEqual(benchmark_env["BORSUK_BENCH_RAM_BUDGET_BYTES"], str(2 * 1024**3))
+        self.assertEqual(benchmark_env["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"], str(1024**3))
+        self.assertEqual(plan["runtime_client"]["instance_type"], "c7g.xlarge")
+        self.assertEqual(plan["runtime_storage"]["volume_size_gib"], 32)
 
     def test_smoke_plan_is_scaled_and_cannot_be_published(self) -> None:
         cell = next(
