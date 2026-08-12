@@ -46,6 +46,7 @@ SCHEDULE_CELL_FIELDS = frozenset(
         "system",
         "index_profile",
         "query_seed",
+        "queries_per_repetition",
         "dataset",
         "workload",
         "source",
@@ -806,6 +807,7 @@ def _cell_base(
             manifest["index_profiles"][system], dataset, workload
         ),
         "query_seed": query_seed,
+        "queries_per_repetition": manifest["queries_per_repetition"],
         "dataset": dataset,
         "workload": workload,
         "source": manifest["source"],
@@ -924,6 +926,9 @@ def validate_schedule_cell(value: dict[str, object]) -> dict[str, object]:
         raise ValueError("cell system is unsupported")
     index_profile = _validate_index_profile(system, cell["index_profile"])
     query_seed = _positive_int(cell["query_seed"], "cell query_seed")
+    queries_per_repetition = _positive_int(
+        cell["queries_per_repetition"], "cell queries_per_repetition"
+    )
     dataset = _validate_dataset(cell["dataset"])
     workload = _validate_workload(cell["workload"])
     if index_profile != _effective_index_profile(index_profile, dataset, workload):
@@ -958,6 +963,7 @@ def validate_schedule_cell(value: dict[str, object]) -> dict[str, object]:
         "system": system,
         "index_profile": index_profile,
         "query_seed": query_seed,
+        "queries_per_repetition": queries_per_repetition,
         "dataset": dataset,
         "workload": workload,
         "source": source,

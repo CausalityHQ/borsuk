@@ -240,6 +240,7 @@ class PublicationV3ProtocolTests(unittest.TestCase):
                     "system",
                     "index_profile",
                     "query_seed",
+                    "queries_per_repetition",
                     "dataset",
                     "workload",
                     "source",

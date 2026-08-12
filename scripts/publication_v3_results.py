@@ -205,10 +205,8 @@ def validate_cell_result(
     if not isinstance(metrics, dict) or frozenset(metrics) != METRIC_FIELDS:
         raise ValueError("cell result metric fields differ")
     queries = _positive_integer(metrics["queries"], "query count")
-    source = cell.get("source")
-    if isinstance(source, dict) and "queries_per_repetition" in source:
-        if queries != source["queries_per_repetition"]:
-            raise ValueError("cell result query count differs from its protocol")
+    if queries != cell.get("queries_per_repetition"):
+        raise ValueError("cell result query count differs from its protocol")
     correctness = _nonnegative_integer(metrics["correctness_ppm"], "correctness ppm")
     if correctness > 1_000_000 or correctness < _correctness_floor(cell):
         raise ValueError("cell result correctness is below its protocol floor")

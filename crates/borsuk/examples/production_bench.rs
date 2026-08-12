@@ -1559,10 +1559,18 @@ fn ingest_generated_batch(
     vectors: Vec<Vec<f32>>,
 ) -> BenchResult<()> {
     let end = start.saturating_add(vectors.len());
-    // This API is collision-free and avoids scanning all existing segments for
-    // duplicates on later batches of a multi-million-row build.
-    let ids = index.add_vectors(vectors)?;
+    // Ground-truth files address corpus rows by their numeric ordinal. Generated
+    // library IDs are intentionally opaque, so the benchmark supplies the exact
+    // stable row IDs instead of depending on an implementation detail.
+    let requested_ids = benchmark_row_ids(start, vectors.len());
+    let ids = index.add_vectors_with_ids(vectors, requested_ids)?;
     validate_generated_id_range(start, end, &ids)
+}
+
+fn benchmark_row_ids(start: usize, count: usize) -> Vec<String> {
+    (start..start.saturating_add(count))
+        .map(|row| row.to_string())
+        .collect()
 }
 
 fn ingest_batch_size(dimensions: usize) -> usize {
@@ -3674,7 +3682,7 @@ mod tests {
         DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, LIFECYCLE_HEADER, LeafCapability, LeafMode,
         MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample,
         QuerySummary, RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER,
-        WRITE_SAMPLE_HEADER, approximate_options, cache_coverage_cohort_size,
+        WRITE_SAMPLE_HEADER, approximate_options, benchmark_row_ids, cache_coverage_cohort_size,
         cache_coverage_enabled, dataset_metric, default_build_leaf_capability,
         default_recall_leaf_mode, default_serving_leaf_mode, dollars_per_million_queries,
         ingest_batch_size, is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
@@ -3698,6 +3706,12 @@ mod tests {
         assert_eq!(sorted, (0..20).collect::<Vec<_>>());
         assert_eq!(permuted_positions(10, 17), [2, 6, 8, 9, 7, 1, 0, 5, 3, 4]);
     }
+
+    #[test]
+    fn benchmark_ingest_ids_are_explicit_deterministic_row_ids() {
+        assert_eq!(benchmark_row_ids(5, 3), ["5", "6", "7"]);
+    }
+
     use arrow_array::{
         LargeListArray,
         types::{Float32Type, Int64Type},
