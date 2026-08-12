@@ -17,7 +17,9 @@
 //! deterministic — node levels come from a splitmix hash of the node index, not
 //! an RNG — so the same centroids always yield the same graph.
 
-use std::collections::BinaryHeap;
+use std::{collections::BinaryHeap, mem::size_of, sync::Arc};
+
+use crate::{BorsukError, Result, logical_cell_catalog::LogicalCellCatalog, metric::VectorMetric};
 
 /// Neighbours kept per node on layers above 0.
 const DEFAULT_M: usize = 16;
@@ -27,6 +29,248 @@ const DEFAULT_M0: usize = 32;
 /// more work. This is the coarse quantizer, so a modest value suffices.
 const DEFAULT_EF_CONSTRUCTION: usize = 64;
 const DEFAULT_EF_SEARCH: usize = 64;
+
+/// Catalog-routing behavior authenticated by the global-codebook descriptor.
+/// The exact HNSW parameters are durable input: changing one produces a
+/// different codebook checksum instead of silently changing cell assignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "strategy", rename_all = "kebab-case")]
+pub(crate) enum CatalogRoutingStrategy {
+    Flat,
+    Hnsw {
+        m: u32,
+        m0: u32,
+        ef_construction: u32,
+        ef_search: u32,
+    },
+}
+
+impl CatalogRoutingStrategy {
+    pub(crate) fn hnsw(m: u32, m0: u32, ef_construction: u32, ef_search: u32) -> Result<Self> {
+        if !(2..=128).contains(&m)
+            || m0 < m
+            || m0 > 256
+            || ef_construction < m0
+            || ef_construction > 4_096
+            || ef_search == 0
+            || ef_search > 4_096
+        {
+            return Err(BorsukError::InvalidStorage(
+                "catalog HNSW parameters are inconsistent".to_string(),
+            ));
+        }
+        Ok(Self::Hnsw {
+            m,
+            m0,
+            ef_construction,
+            ef_search,
+        })
+    }
+
+    pub(crate) fn production(metric: &VectorMetric, cell_count: usize) -> Self {
+        if cell_count < 128 || !supports_hnsw_geometry(metric) {
+            Self::Flat
+        } else {
+            Self::Hnsw {
+                m: DEFAULT_M as u32,
+                m0: DEFAULT_M0 as u32,
+                ef_construction: DEFAULT_EF_CONSTRUCTION as u32,
+                ef_search: DEFAULT_EF_SEARCH as u32,
+            }
+        }
+    }
+
+    pub(crate) fn validated(self) -> Result<Self> {
+        match self {
+            Self::Flat => Ok(self),
+            Self::Hnsw {
+                m,
+                m0,
+                ef_construction,
+                ef_search,
+            } => Self::hnsw(m, m0, ef_construction, ef_search),
+        }
+    }
+
+    pub(crate) fn validated_for_metric(self, metric: &VectorMetric) -> Result<Self> {
+        let strategy = self.validated()?;
+        if matches!(strategy, Self::Hnsw { .. }) && !supports_hnsw_geometry(metric) {
+            return Err(BorsukError::InvalidStorage(
+                "catalog HNSW strategy requires Euclidean routing geometry".to_string(),
+            ));
+        }
+        Ok(strategy)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CentroidHnswAdjacency {
+    neighbours: Vec<Vec<Vec<u32>>>,
+    entry: u32,
+    ef_search: usize,
+}
+
+impl CentroidHnswAdjacency {
+    fn heap_bytes(&self) -> usize {
+        self.neighbours
+            .capacity()
+            .saturating_mul(size_of::<Vec<Vec<u32>>>())
+            .saturating_add(
+                self.neighbours
+                    .iter()
+                    .map(|tower| {
+                        tower
+                            .capacity()
+                            .saturating_mul(size_of::<Vec<u32>>())
+                            .saturating_add(
+                                tower
+                                    .iter()
+                                    .map(|layer| layer.capacity().saturating_mul(size_of::<u32>()))
+                                    .fold(0_usize, usize::saturating_add),
+                            )
+                    })
+                    .fold(0_usize, usize::saturating_add),
+            )
+    }
+}
+
+/// One immutable router shared by positioned writes and catalog-pinned global
+/// queries. The catalog owns the only centroid allocation; this object owns
+/// adjacency and an `Arc` to that catalog.
+#[derive(Debug)]
+pub(crate) struct CatalogRouter {
+    catalog: Arc<LogicalCellCatalog>,
+    metric: VectorMetric,
+    strategy: CatalogRoutingStrategy,
+    adjacency: Option<CentroidHnswAdjacency>,
+}
+
+impl CatalogRouter {
+    pub(crate) fn build(
+        catalog: Arc<LogicalCellCatalog>,
+        metric: VectorMetric,
+        strategy: CatalogRoutingStrategy,
+    ) -> Result<Self> {
+        let strategy = strategy.validated_for_metric(&metric)?;
+        if catalog.cells.is_empty()
+            || catalog.cells.len() != catalog.centroids.len()
+            || catalog
+                .centroids
+                .iter()
+                .any(|centroid| centroid.len() != catalog.dimensions())
+        {
+            return Err(BorsukError::InvalidStorage(
+                "catalog router requires aligned nonempty cells and centroids".to_string(),
+            ));
+        }
+        let adjacency = match strategy {
+            CatalogRoutingStrategy::Flat => None,
+            CatalogRoutingStrategy::Hnsw {
+                m,
+                m0,
+                ef_construction,
+                ef_search,
+            } => Some(
+                build_hnsw_adjacency(
+                    &catalog.centroids,
+                    m as usize,
+                    m0 as usize,
+                    ef_construction as usize,
+                    ef_search as usize,
+                )
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "catalog HNSW strategy requires at least two cells".to_string(),
+                    )
+                })?,
+            ),
+        };
+        Ok(Self {
+            catalog,
+            metric,
+            strategy,
+            adjacency,
+        })
+    }
+
+    pub(crate) fn catalog(&self) -> &Arc<LogicalCellCatalog> {
+        &self.catalog
+    }
+
+    pub(crate) fn strategy(&self) -> CatalogRoutingStrategy {
+        self.strategy
+    }
+
+    pub(crate) fn metric(&self) -> &VectorMetric {
+        &self.metric
+    }
+
+    pub(crate) fn nearest(&self, query: &[f32], probes: usize) -> Result<Vec<u32>> {
+        if query.len() != self.catalog.dimensions() {
+            return Err(BorsukError::DimensionMismatch {
+                expected: self.catalog.dimensions(),
+                actual: query.len(),
+            });
+        }
+        if query.iter().any(|value| !value.is_finite()) {
+            return Err(BorsukError::InvalidStorage(
+                "catalog routing query must contain only finite values".to_string(),
+            ));
+        }
+        if probes == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "catalog probe count must be positive".to_string(),
+            ));
+        }
+        if let Some(adjacency) = &self.adjacency {
+            return Ok(nearest_with_adjacency(
+                adjacency,
+                &self.catalog.centroids,
+                query,
+                probes,
+            ));
+        }
+        let mut ranked = self
+            .catalog
+            .centroids
+            .iter()
+            .enumerate()
+            .map(|(ordinal, centroid)| {
+                self.metric
+                    .centroid_geometry_distance_unchecked(query, centroid)
+                    .map(|distance| (distance, ordinal as u32))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ranked.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
+        ranked.truncate(probes.min(ranked.len()));
+        Ok(ranked.into_iter().map(|(_, ordinal)| ordinal).collect())
+    }
+
+    /// Exact resident allocation owned by the router, excluding the shared
+    /// catalog allocation counted by the manifest's catalog line.
+    pub(crate) fn resident_bytes_excluding_catalog(&self) -> usize {
+        size_of::<Self>().saturating_add(
+            self.adjacency
+                .as_ref()
+                .map_or(0, CentroidHnswAdjacency::heap_bytes),
+        )
+    }
+
+    #[cfg(test)]
+    fn adjacency(&self) -> Option<&CentroidHnswAdjacency> {
+        self.adjacency.as_ref()
+    }
+}
+
+fn supports_hnsw_geometry(metric: &VectorMetric) -> bool {
+    matches!(
+        metric,
+        VectorMetric::Euclidean
+            | VectorMetric::SquaredEuclidean
+            | VectorMetric::Cosine
+            | VectorMetric::Angular
+    )
+}
 
 /// A navigable small-world graph over centroid vectors.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -118,6 +362,128 @@ fn node_level(index: usize, m: usize) -> usize {
     level
 }
 
+fn build_hnsw_adjacency(
+    centroids: &[Vec<f32>],
+    m: usize,
+    m0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+) -> Option<CentroidHnswAdjacency> {
+    if centroids.len() < 2 {
+        return None;
+    }
+    let levels: Vec<usize> = (0..centroids.len()).map(|i| node_level(i, m)).collect();
+    let mut neighbours: Vec<Vec<Vec<u32>>> = levels
+        .iter()
+        .map(|&level| vec![Vec::new(); level + 1])
+        .collect();
+
+    // Sequential deterministic insertion is part of the catalog-routing
+    // contract. Parallelizing this loop would make adjacency and assignments
+    // scheduler-dependent across writers.
+    let order = shuffled_indices(centroids.len());
+    let mut entry = order[0];
+    let mut top_level = levels[entry as usize];
+    for &node in &order[1..] {
+        let node = node as usize;
+        let node_top = levels[node];
+        let query = &centroids[node];
+        let mut current = entry;
+        let mut current_distance = squared_distance(query, &centroids[current as usize]);
+        let mut layer = top_level;
+        while layer > node_top {
+            current = CentroidHnsw::greedy_descend(
+                query,
+                current,
+                &mut current_distance,
+                layer,
+                &neighbours,
+                centroids,
+            );
+            layer -= 1;
+        }
+        let mut layer = node_top.min(top_level);
+        loop {
+            let width = if layer == 0 { m0 } else { m };
+            let found = CentroidHnsw::search_layer(
+                query,
+                &[current],
+                layer,
+                ef_construction,
+                &neighbours,
+                centroids,
+            );
+            let selected = CentroidHnsw::select_neighbours(&found, width, centroids);
+            for &neighbour in &selected {
+                CentroidHnsw::connect(
+                    &mut neighbours,
+                    node as u32,
+                    neighbour,
+                    layer,
+                    width,
+                    centroids,
+                );
+                CentroidHnsw::connect(
+                    &mut neighbours,
+                    neighbour,
+                    node as u32,
+                    layer,
+                    width,
+                    centroids,
+                );
+            }
+            if let Some(nearest) = found.first() {
+                current = nearest.node;
+            }
+            if layer == 0 {
+                break;
+            }
+            layer -= 1;
+        }
+        if node_top > top_level {
+            top_level = node_top;
+            entry = node as u32;
+        }
+    }
+
+    Some(CentroidHnswAdjacency {
+        neighbours,
+        entry,
+        ef_search,
+    })
+}
+
+fn nearest_with_adjacency(
+    adjacency: &CentroidHnswAdjacency,
+    vectors: &[Vec<f32>],
+    query: &[f32],
+    nprobe: usize,
+) -> Vec<u32> {
+    if vectors.is_empty() || nprobe == 0 {
+        return Vec::new();
+    }
+    let mut current = adjacency.entry;
+    let mut current_distance = squared_distance(query, &vectors[current as usize]);
+    let top_level = adjacency.neighbours[current as usize]
+        .len()
+        .saturating_sub(1);
+    for layer in (1..=top_level).rev() {
+        current = CentroidHnsw::greedy_descend(
+            query,
+            current,
+            &mut current_distance,
+            layer,
+            &adjacency.neighbours,
+            vectors,
+        );
+    }
+    let ef = adjacency.ef_search.max(nprobe);
+    let mut found =
+        CentroidHnsw::search_layer(query, &[current], 0, ef, &adjacency.neighbours, vectors);
+    found.truncate(nprobe);
+    found.into_iter().map(|candidate| candidate.node).collect()
+}
+
 impl CentroidHnsw {
     /// Build the graph over `centroids` (node `i` is `centroids[i]`). Returns
     /// `None` when there are too few centroids to bother navigating.
@@ -133,96 +499,12 @@ impl CentroidHnsw {
         m0: usize,
         ef_construction: usize,
     ) -> Option<Self> {
-        if centroids.len() < 2 {
-            return None;
-        }
-        let levels: Vec<usize> = (0..centroids.len()).map(|i| node_level(i, m)).collect();
-        let mut neighbours: Vec<Vec<Vec<u32>>> = levels
-            .iter()
-            .map(|&level| vec![Vec::new(); level + 1])
-            .collect();
-
-        // Insert in a deterministic *shuffled* order, never the natural 0..n.
-        // Callers hand us centroids in cell-locality order (so routing pages stay
-        // tight), and inserting an HNSW in spatial order builds a poorly
-        // connected graph — early nodes wire only to their spatial neighbours and
-        // whole regions become unreachable from the entry point, capping how many
-        // cells a query can probe. A shuffle decouples graph quality from the
-        // caller's ordering. Node *ids* stay the centroid indices; only the
-        // insertion order changes.
-        let order = shuffled_indices(centroids.len());
-        let mut entry = order[0];
-        let mut top_level = levels[entry as usize];
-        for &node in &order[1..] {
-            let node = node as usize;
-            let node_top = levels[node];
-            let query = &centroids[node];
-            // Descend from the current entry down to just above the node's top
-            // level, greedily hopping to the nearest neighbour at each layer.
-            let mut current = entry;
-            let mut current_distance = squared_distance(query, &centroids[current as usize]);
-            let mut layer = top_level;
-            while layer > node_top {
-                current = Self::greedy_descend(
-                    query,
-                    current,
-                    &mut current_distance,
-                    layer,
-                    &neighbours,
-                    centroids,
-                );
-                layer -= 1;
-            }
-            // Connect the node on every layer it occupies.
-            let mut layer = node_top.min(top_level);
-            loop {
-                let width = if layer == 0 { m0 } else { m };
-                let found = Self::search_layer(
-                    query,
-                    &[current],
-                    layer,
-                    ef_construction,
-                    &neighbours,
-                    centroids,
-                );
-                let selected = Self::select_neighbours(&found, width, centroids);
-                for &neighbour in &selected {
-                    Self::connect(
-                        &mut neighbours,
-                        node as u32,
-                        neighbour,
-                        layer,
-                        width,
-                        centroids,
-                    );
-                    Self::connect(
-                        &mut neighbours,
-                        neighbour,
-                        node as u32,
-                        layer,
-                        width,
-                        centroids,
-                    );
-                }
-                if let Some(nearest) = found.first() {
-                    current = nearest.node;
-                }
-                if layer == 0 {
-                    break;
-                }
-                layer -= 1;
-            }
-            if node_top > top_level {
-                top_level = node_top;
-                entry = node as u32;
-            }
-        }
-
+        let adjacency = build_hnsw_adjacency(centroids, m, m0, ef_construction, DEFAULT_EF_SEARCH)?;
         Some(Self {
             vectors: centroids.to_vec(),
-            neighbours,
-            entry,
-            ef_search: DEFAULT_EF_SEARCH,
+            neighbours: adjacency.neighbours,
+            entry: adjacency.entry,
+            ef_search: adjacency.ef_search,
         })
     }
 
@@ -567,6 +849,7 @@ impl CentroidHnsw {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn grid(n: usize, dim: usize) -> Vec<Vec<f32>> {
         (0..n)
@@ -639,6 +922,90 @@ mod tests {
                 .flatten()
                 .all(|node| (*node as usize) < vectors.len())
         );
+    }
+
+    #[test]
+    fn catalog_router_reuses_catalog_and_has_deterministic_adjacency() {
+        let centroids = grid(200, 16);
+        let catalog = Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                9,
+                16,
+                crate::VectorMetric::Euclidean,
+                centroids,
+            )
+            .unwrap(),
+        );
+        let strategy = CatalogRoutingStrategy::hnsw(16, 32, 64, 64).unwrap();
+        let first = CatalogRouter::build(
+            Arc::clone(&catalog),
+            crate::VectorMetric::Euclidean,
+            strategy,
+        )
+        .unwrap();
+        let second = CatalogRouter::build(
+            Arc::clone(&catalog),
+            crate::VectorMetric::Euclidean,
+            strategy,
+        )
+        .unwrap();
+
+        assert!(Arc::ptr_eq(first.catalog(), &catalog));
+        assert!(Arc::ptr_eq(second.catalog(), &catalog));
+        assert_eq!(first.strategy(), strategy);
+        assert_eq!(first.adjacency(), second.adjacency());
+        let observed_edge_payload_bytes = first
+            .adjacency()
+            .unwrap()
+            .neighbours
+            .iter()
+            .flatten()
+            .map(|layer| layer.len() * size_of::<u32>())
+            .sum::<usize>();
+        assert!(
+            first.resident_bytes_excluding_catalog()
+                >= size_of::<CatalogRouter>() + observed_edge_payload_bytes
+        );
+        assert_eq!(
+            first.nearest(&catalog.centroids[137], 1).unwrap(),
+            vec![137_u32]
+        );
+    }
+
+    #[test]
+    fn catalog_router_rejects_nonfinite_queries_before_flat_or_hnsw_routing() {
+        let catalog = Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                9,
+                16,
+                crate::VectorMetric::Euclidean,
+                grid(200, 16),
+            )
+            .unwrap(),
+        );
+        let routers = [
+            CatalogRouter::build(
+                Arc::clone(&catalog),
+                crate::VectorMetric::Euclidean,
+                CatalogRoutingStrategy::Flat,
+            )
+            .unwrap(),
+            CatalogRouter::build(
+                Arc::clone(&catalog),
+                crate::VectorMetric::Euclidean,
+                CatalogRoutingStrategy::hnsw(16, 32, 64, 64).unwrap(),
+            )
+            .unwrap(),
+        ];
+
+        for router in routers {
+            for nonfinite in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut query = catalog.centroids[0].clone();
+                query[7] = nonfinite;
+                let error = router.nearest(&query, 1).unwrap_err();
+                assert!(error.to_string().contains("finite"), "{error}");
+            }
+        }
     }
 
     #[test]

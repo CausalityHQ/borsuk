@@ -6,10 +6,9 @@ use crate::{
 };
 
 pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 12;
-// The current segment-derived coarse quantizer still emits u16 cell IDs.
-// The durable V12 leaf schema is already u32; catalog pinning removes this
-// temporary producer bound atomically in the next reviewed slice.
-const SEGMENT_DERIVED_COARSE_QUANTIZER_MAX_CELLS: u32 = 65_536;
+// The durable V12 reference accepts the catalog's full u32 ordinal space. The
+// still-wired segment-derived descriptor enforces its own 65,536-cell producer
+// bound until Task 4 switches publication to catalog-pinned artifacts.
 pub(crate) const MAX_GLOBAL_LEAF_LEVELS: usize = u64::BITS as usize;
 pub(crate) const DRIFT_WINDOW_ROWS: usize = 4096;
 
@@ -872,11 +871,8 @@ fn validate_codebook(codebook: &GlobalCodebookRef) -> Result<()> {
     if codebook.code_width == 0 {
         return invalid("V12 global codebook code width must be positive");
     }
-    if codebook.cell_count == 0 || codebook.cell_count > SEGMENT_DERIVED_COARSE_QUANTIZER_MAX_CELLS
-    {
-        return invalid(
-            "V12 global codebook cell count exceeds the temporary segment-derived coarse quantizer bound",
-        );
+    if codebook.cell_count == 0 {
+        return invalid("V12 global codebook cell count must be positive");
     }
     if codebook.candidates == 0 || codebook.candidates > codebook.cell_count {
         return invalid("V12 global codebook candidates must be within the cell count");
@@ -1840,19 +1836,18 @@ mod tests {
     }
 
     #[test]
-    fn global_ann_temporarily_caps_segment_derived_coarse_quantizer_cells() {
+    fn global_ann_reference_preserves_u32_catalog_format_capacity() {
         let mut ann = valid_ann_ref();
-        ann.codebook.cell_count = 65_536;
+        ann.codebook.cell_count = 70_000;
+        ann.codebook.candidates = 70_000;
+        ann.codebook.probes = 70_000;
         ann.validate().unwrap();
 
-        ann.codebook.cell_count = 65_537;
+        ann.codebook.cell_count = 0;
+        ann.codebook.candidates = 1;
+        ann.codebook.probes = 1;
         let error = ann.validate().unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("temporary segment-derived coarse quantizer bound"),
-            "{error}"
-        );
+        assert!(error.to_string().contains("positive"), "{error}");
     }
 
     #[test]

@@ -20,6 +20,8 @@ use rayon::prelude::*;
 
 use crate::{
     BorsukError, Result,
+    centroid_hnsw::{CatalogRouter, CatalogRoutingStrategy},
+    logical_cell_catalog::LogicalCellCatalogRef,
     metric::VectorMetric,
     mutation::{MutationStamp, MutationVersion},
     record::VectorElementType,
@@ -513,6 +515,17 @@ fn top_parent_candidates(
 pub(crate) enum GlobalCoarseQuantizerState {
     Product(ProductQuantizerState),
     Hierarchical(HierarchicalCoarseQuantizerState),
+    Catalog(CatalogCoarsePin),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct CatalogCoarsePin {
+    checksum: String,
+    routing_epoch: u64,
+    cell_count: u32,
+    dimensions: u32,
+    ordinal_width_bits: u8,
+    strategy: CatalogRoutingStrategy,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -563,6 +576,9 @@ impl GlobalCoarseQuantizer {
             GlobalCoarseQuantizerState::Hierarchical(state) => Ok(Self::Hierarchical(
                 HierarchicalCoarseQuantizer::from_state(state)?,
             )),
+            GlobalCoarseQuantizerState::Catalog(_) => invalid(
+                "catalog-pinned coarse routing requires an authenticated logical-cell catalog",
+            ),
         }
     }
 
@@ -698,6 +714,7 @@ impl GlobalCoarseQuantizerState {
                     + state.child_offsets.capacity() * size_of::<u16>()
                     + state.child_centroids.capacity() * size_of::<f32>()
             }
+            Self::Catalog(pin) => pin.checksum.capacity(),
         }
     }
 }
@@ -1186,9 +1203,7 @@ impl GlobalCodebookDescriptor {
         let coarse_quantizer = coarse_quantizer.into();
         let scan_quantizer = GlobalScanQuantizer::from_state(quantizer.clone())?;
         let coarse = GlobalCoarseQuantizer::from_state(coarse_quantizer.clone())?;
-        if matches!(&metric, VectorMetric::Minkowski { p } if !p.is_finite() || *p < 1.0) {
-            return invalid("V12 codebook Minkowski power must be finite and at least one");
-        }
+        validate_codebook_metric(&metric)?;
         let dimensions = scan_dimensions(&quantizer);
         if dimensions == 0 || dimensions != coarse_dimensions(&coarse_quantizer) {
             return invalid("V12 scan and coarse quantizers disagree on dimensions");
@@ -1219,6 +1234,98 @@ impl GlobalCodebookDescriptor {
             quantizer,
             coarse_quantizer,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)] // Consumed by the held incremental-candidate slice before Task 4 publication.
+    pub(crate) fn new_catalog_pinned(
+        quantizer: impl Into<GlobalScanQuantizerState>,
+        metric: VectorMetric,
+        vector_element_type: VectorElementType,
+        catalog: &LogicalCellCatalogRef,
+        strategy: CatalogRoutingStrategy,
+        candidates: u32,
+        probes: u32,
+        reconstruction_error_p95_micros: u64,
+    ) -> Result<Self> {
+        catalog.validate()?;
+        let quantizer = quantizer.into();
+        let scan_quantizer = GlobalScanQuantizer::from_state(quantizer.clone())?;
+        let dimensions = scan_dimensions(&quantizer);
+        if usize::try_from(catalog.dimensions).ok() != Some(dimensions) {
+            return invalid("V12 scan quantizer and logical-cell catalog disagree on dimensions");
+        }
+        validate_codebook_metric(&metric)?;
+        vector_element_type.fixed_width_bytes(dimensions)?;
+        strategy.validated_for_metric(&metric)?;
+        if candidates == 0
+            || probes == 0
+            || candidates > catalog.cell_count
+            || probes > catalog.cell_count
+            || probes > candidates
+        {
+            return invalid(
+                "V12 catalog codebook cell count, candidates, and probes are inconsistent",
+            );
+        }
+        Ok(Self {
+            layout: V12_CODEBOOK_LAYOUT.to_string(),
+            metric,
+            dimensions,
+            vector_element_type,
+            centroid_code_bytes: scan_quantizer.code_bytes_per_vector(),
+            cell_count: catalog.cell_count,
+            candidates,
+            probes,
+            reconstruction_error_p95_micros,
+            quantizer,
+            coarse_quantizer: GlobalCoarseQuantizerState::Catalog(CatalogCoarsePin {
+                checksum: catalog.checksum.clone(),
+                routing_epoch: catalog.routing_epoch,
+                cell_count: catalog.cell_count,
+                dimensions: catalog.dimensions,
+                ordinal_width_bits: u32::BITS as u8,
+                strategy,
+            }),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn catalog_checksum(&self) -> &str {
+        match &self.coarse_quantizer {
+            GlobalCoarseQuantizerState::Catalog(pin) => &pin.checksum,
+            _ => "",
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn routing_epoch(&self) -> u64 {
+        match &self.coarse_quantizer {
+            GlobalCoarseQuantizerState::Catalog(pin) => pin.routing_epoch,
+            _ => 0,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn catalog_ordinal_width_bits(&self) -> u8 {
+        match &self.coarse_quantizer {
+            GlobalCoarseQuantizerState::Catalog(pin) => pin.ordinal_width_bits,
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn catalog_routing_strategy(&self) -> Option<CatalogRoutingStrategy> {
+        match &self.coarse_quantizer {
+            GlobalCoarseQuantizerState::Catalog(pin) => Some(pin.strategy),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_catalog_pinned(&self) -> bool {
+        matches!(
+            &self.coarse_quantizer,
+            GlobalCoarseQuantizerState::Catalog(_)
+        )
     }
 
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
@@ -1411,6 +1518,7 @@ fn coarse_dimensions(state: &GlobalCoarseQuantizerState) -> usize {
     match state {
         GlobalCoarseQuantizerState::Product(state) => state.dimensions,
         GlobalCoarseQuantizerState::Hierarchical(state) => state.dimensions,
+        GlobalCoarseQuantizerState::Catalog(pin) => pin.dimensions as usize,
     }
 }
 
@@ -1420,22 +1528,151 @@ fn validate_v12_codebook(descriptor: &GlobalCodebookDescriptor) -> Result<()> {
             "V12 codebook payload layout is incompatible; rebuild the unreleased index",
         );
     }
-    let rebuilt = GlobalCodebookDescriptor::new(
-        descriptor.quantizer.clone(),
-        descriptor.coarse_quantizer.clone(),
-        descriptor.metric.clone(),
-        descriptor.vector_element_type,
-        descriptor.cell_count,
-        descriptor.candidates,
-        descriptor.probes,
-        descriptor.reconstruction_error_p95_micros,
-    )?;
+    validate_codebook_metric(&descriptor.metric)?;
+    let rebuilt = match &descriptor.coarse_quantizer {
+        GlobalCoarseQuantizerState::Catalog(pin) => {
+            if pin.ordinal_width_bits != u32::BITS as u8
+                || pin.routing_epoch == 0
+                || pin.cell_count == 0
+                || pin.cell_count != descriptor.cell_count
+                || usize::try_from(pin.dimensions).ok() != Some(descriptor.dimensions)
+                || blake3::Hash::from_hex(&pin.checksum).is_err()
+            {
+                return invalid("V12 catalog codebook authority is invalid");
+            }
+            pin.strategy.validated_for_metric(&descriptor.metric)?;
+            let quantizer = descriptor.quantizer.clone();
+            let scan = GlobalScanQuantizer::from_state(quantizer.clone())?;
+            descriptor
+                .vector_element_type
+                .fixed_width_bytes(descriptor.dimensions)?;
+            if descriptor.candidates == 0
+                || descriptor.probes == 0
+                || descriptor.candidates > descriptor.cell_count
+                || descriptor.probes > descriptor.cell_count
+                || descriptor.probes > descriptor.candidates
+            {
+                return invalid("V12 catalog codebook probe configuration is invalid");
+            }
+            SelfValidatedCodebook {
+                dimensions: scan_dimensions(&quantizer),
+                centroid_code_bytes: scan.code_bytes_per_vector(),
+            }
+        }
+        _ => {
+            let rebuilt = GlobalCodebookDescriptor::new(
+                descriptor.quantizer.clone(),
+                descriptor.coarse_quantizer.clone(),
+                descriptor.metric.clone(),
+                descriptor.vector_element_type,
+                descriptor.cell_count,
+                descriptor.candidates,
+                descriptor.probes,
+                descriptor.reconstruction_error_p95_micros,
+            )?;
+            SelfValidatedCodebook {
+                dimensions: rebuilt.dimensions,
+                centroid_code_bytes: rebuilt.centroid_code_bytes,
+            }
+        }
+    };
     if rebuilt.dimensions != descriptor.dimensions
         || rebuilt.centroid_code_bytes != descriptor.centroid_code_bytes
     {
         return invalid("V12 codebook typed columns do not match quantizer state");
     }
     Ok(())
+}
+
+fn validate_codebook_metric(metric: &VectorMetric) -> Result<()> {
+    if matches!(metric, VectorMetric::Minkowski { p } if !p.is_finite() || *p < 1.0) {
+        return invalid("V12 codebook Minkowski power must be finite and at least one");
+    }
+    Ok(())
+}
+
+struct SelfValidatedCodebook {
+    dimensions: usize,
+    centroid_code_bytes: usize,
+}
+
+/// Descriptor metadata authenticated for a retained-manifest keep-set walk.
+/// This deliberately carries no query router: GC needs to retain and validate
+/// referenced objects, not allocate one HNSW graph for every historical
+/// manifest version.
+#[derive(Debug)]
+pub(crate) struct ValidatedGlobalCodebookMetadata {
+    pub(crate) metric: VectorMetric,
+    pub(crate) dimensions: usize,
+    pub(crate) vector_element_type: VectorElementType,
+    pub(crate) code_width: usize,
+    pub(crate) cell_count: usize,
+    pub(crate) candidates: u32,
+    pub(crate) probes: u32,
+    pub(crate) reconstruction_error_p95_micros: u64,
+    pub(crate) resident_bytes: usize,
+}
+
+impl ValidatedGlobalCodebookMetadata {
+    pub(crate) fn for_retained_manifest(
+        descriptor: GlobalCodebookDescriptor,
+        catalog_reference: Option<&LogicalCellCatalogRef>,
+        manifest_strategy: CatalogRoutingStrategy,
+    ) -> Result<Self> {
+        validate_v12_codebook(&descriptor)?;
+        if !descriptor.is_catalog_pinned() {
+            let resident = ResidentGlobalCodebook::load(descriptor)?;
+            return Ok(Self::from_resident(&resident));
+        }
+        let catalog_reference = catalog_reference.ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "catalog-pinned V12 codebook has no retained manifest catalog reference"
+                    .to_string(),
+            )
+        })?;
+        catalog_reference.validate()?;
+        let GlobalCoarseQuantizerState::Catalog(pin) = &descriptor.coarse_quantizer else {
+            unreachable!("catalog-pinned descriptor variant checked above")
+        };
+        if catalog_reference.checksum != pin.checksum
+            || catalog_reference.routing_epoch != pin.routing_epoch
+            || catalog_reference.cell_count != pin.cell_count
+            || catalog_reference.dimensions != pin.dimensions
+            || pin.strategy != manifest_strategy
+        {
+            return invalid(
+                "catalog-pinned V12 codebook does not match retained manifest authority",
+            );
+        }
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer)?;
+        let resident_bytes =
+            size_of::<ResidentGlobalCodebook>().saturating_add(quantizer.state().heap_bytes());
+        Ok(Self {
+            metric: descriptor.metric,
+            dimensions: descriptor.dimensions,
+            vector_element_type: descriptor.vector_element_type,
+            code_width: descriptor.centroid_code_bytes,
+            cell_count: descriptor.cell_count as usize,
+            candidates: descriptor.candidates,
+            probes: descriptor.probes,
+            reconstruction_error_p95_micros: descriptor.reconstruction_error_p95_micros,
+            resident_bytes,
+        })
+    }
+
+    fn from_resident(resident: &ResidentGlobalCodebook) -> Self {
+        Self {
+            metric: resident.metric().clone(),
+            dimensions: resident.dimensions(),
+            vector_element_type: resident.vector_element_type(),
+            code_width: resident.code_bytes_per_vector(),
+            cell_count: resident.cell_count(),
+            candidates: resident.candidates(),
+            probes: resident.probes(),
+            reconstruction_error_p95_micros: resident.reconstruction_error_p95_micros(),
+            resident_bytes: resident.resident_bytes(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1448,13 +1685,27 @@ pub(crate) struct ResidentGlobalCodebook {
     probes: u32,
     reconstruction_error_p95_micros: u64,
     quantizer: GlobalScanQuantizer,
-    coarse_quantizer: GlobalCoarseQuantizer,
-    cells: Vec<u16>,
+    routing: ResidentGlobalRouting,
+}
+
+#[derive(Debug, Clone)]
+enum ResidentGlobalRouting {
+    SegmentDerived {
+        coarse_quantizer: Box<GlobalCoarseQuantizer>,
+        cells: Vec<u16>,
+    },
+    Catalog(Arc<CatalogRouter>),
 }
 
 impl ResidentGlobalCodebook {
     pub(crate) fn load(descriptor: GlobalCodebookDescriptor) -> Result<Self> {
         validate_v12_codebook(&descriptor)?;
+        if matches!(
+            &descriptor.coarse_quantizer,
+            GlobalCoarseQuantizerState::Catalog(_)
+        ) {
+            return invalid("catalog-pinned V12 codebook requires catalog loading");
+        }
         let metric = descriptor.metric.clone();
         let dimensions = descriptor.dimensions;
         let vector_element_type = descriptor.vector_element_type;
@@ -1473,19 +1724,76 @@ impl ResidentGlobalCodebook {
             probes,
             reconstruction_error_p95_micros,
             quantizer: GlobalScanQuantizer::from_state(descriptor.quantizer)?,
-            coarse_quantizer,
-            cells,
+            routing: ResidentGlobalRouting::SegmentDerived {
+                coarse_quantizer: Box::new(coarse_quantizer),
+                cells,
+            },
         })
     }
 
-    pub(crate) fn nearest_cells(&self, query: &[f32], probes: usize) -> Result<Vec<u16>> {
-        let ranked =
-            self.coarse_quantizer
-                .nearest_cells_with_distances(query, probes, &self.cells)?;
-        if ranked.iter().any(|(distance, _)| !distance.is_finite()) {
-            return invalid("V12 routing produced a non-finite cell distance");
+    pub(crate) fn load_for_catalog(
+        descriptor: GlobalCodebookDescriptor,
+        catalog_reference: &LogicalCellCatalogRef,
+        router: Arc<CatalogRouter>,
+    ) -> Result<Self> {
+        validate_v12_codebook(&descriptor)?;
+        catalog_reference.validate()?;
+        let GlobalCoarseQuantizerState::Catalog(pin) = &descriptor.coarse_quantizer else {
+            return invalid("segment-derived V12 codebook cannot load as catalog-pinned");
+        };
+        let catalog = router.catalog();
+        if catalog_reference.checksum != pin.checksum
+            || catalog_reference.routing_epoch != pin.routing_epoch
+            || catalog_reference.cell_count != pin.cell_count
+            || catalog_reference.dimensions != pin.dimensions
+            || pin.cell_count != descriptor.cell_count
+            || usize::try_from(pin.dimensions).ok() != Some(descriptor.dimensions)
+            || catalog.routing_epoch() != pin.routing_epoch
+            || usize::try_from(pin.cell_count).ok() != Some(catalog.cells.len())
+            || usize::try_from(pin.dimensions).ok() != Some(catalog.dimensions())
+            || router.strategy() != pin.strategy
+            || router.metric() != &descriptor.metric
+        {
+            return invalid("catalog-pinned V12 codebook does not match catalog authority");
         }
-        Ok(ranked.into_iter().map(|(_, cell)| cell).collect())
+        Ok(Self {
+            metric: descriptor.metric,
+            dimensions: descriptor.dimensions,
+            vector_element_type: descriptor.vector_element_type,
+            code_width: descriptor.centroid_code_bytes,
+            candidates: descriptor.candidates,
+            probes: descriptor.probes,
+            reconstruction_error_p95_micros: descriptor.reconstruction_error_p95_micros,
+            quantizer: GlobalScanQuantizer::from_state(descriptor.quantizer)?,
+            routing: ResidentGlobalRouting::Catalog(router),
+        })
+    }
+
+    pub(crate) fn nearest_cells(&self, query: &[f32], probes: usize) -> Result<Vec<u32>> {
+        match &self.routing {
+            ResidentGlobalRouting::SegmentDerived {
+                coarse_quantizer,
+                cells,
+            } => {
+                let ranked = coarse_quantizer.nearest_cells_with_distances(query, probes, cells)?;
+                if ranked.iter().any(|(distance, _)| !distance.is_finite()) {
+                    return invalid("V12 routing produced a non-finite cell distance");
+                }
+                Ok(ranked
+                    .into_iter()
+                    .map(|(_, cell)| u32::from(cell))
+                    .collect())
+            }
+            ResidentGlobalRouting::Catalog(router) => router.nearest(query, probes),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn catalog_router(&self) -> Option<&Arc<CatalogRouter>> {
+        match &self.routing {
+            ResidentGlobalRouting::Catalog(router) => Some(router),
+            ResidentGlobalRouting::SegmentDerived { .. } => None,
+        }
     }
 
     pub(crate) fn rank_pages(
@@ -1573,18 +1881,24 @@ impl ResidentGlobalCodebook {
     }
 
     pub(crate) fn cell_count(&self) -> usize {
-        self.cells.len()
+        match &self.routing {
+            ResidentGlobalRouting::SegmentDerived { cells, .. } => cells.len(),
+            ResidentGlobalRouting::Catalog(router) => router.catalog().cells.len(),
+        }
     }
 
     pub(crate) fn resident_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             .saturating_add(self.quantizer.state().heap_bytes())
-            .saturating_add(self.coarse_quantizer.state().heap_bytes())
-            .saturating_add(
-                self.cells
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<u16>()),
-            )
+            .saturating_add(match &self.routing {
+                ResidentGlobalRouting::SegmentDerived {
+                    coarse_quantizer,
+                    cells,
+                } => std::mem::size_of::<GlobalCoarseQuantizer>()
+                    .saturating_add(coarse_quantizer.state().heap_bytes())
+                    .saturating_add(cells.capacity().saturating_mul(std::mem::size_of::<u16>())),
+                ResidentGlobalRouting::Catalog(_) => 0,
+            })
     }
 }
 
@@ -1712,6 +2026,118 @@ mod tests {
     }
 
     #[test]
+    fn v12_codebook_persists_exact_u32_logical_catalog_authority() {
+        let fit = vectors(256, 64);
+        let scan = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let catalog = Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                41,
+                64,
+                crate::VectorMetric::Euclidean,
+                fit[..130].to_vec(),
+            )
+            .unwrap(),
+        );
+        let catalog_bytes =
+            crate::logical_cell_catalog::logical_cell_catalog_to_parquet(&catalog).unwrap();
+        let catalog_checksum = blake3::hash(&catalog_bytes).to_hex().to_string();
+        let catalog_ref = crate::logical_cell_catalog::LogicalCellCatalogRef::new(
+            catalog_checksum.clone(),
+            41,
+            130,
+            64,
+            catalog_bytes.len(),
+        )
+        .unwrap();
+
+        let descriptor = GlobalCodebookDescriptor::new_catalog_pinned(
+            scan.state(),
+            crate::VectorMetric::Euclidean,
+            VectorElementType::Float32,
+            &catalog_ref,
+            crate::centroid_hnsw::CatalogRoutingStrategy::hnsw(16, 32, 64, 64).unwrap(),
+            16,
+            4,
+            17,
+        )
+        .unwrap();
+        let catalog_pin_json = serde_json::to_string(&descriptor.coarse_quantizer).unwrap();
+        assert!(
+            catalog_pin_json.len() < 1_024,
+            "catalog pin contains centroid data"
+        );
+        let descriptor_bytes = descriptor.encode().unwrap();
+        let decoded = GlobalCodebookDescriptor::decode(&descriptor_bytes).unwrap();
+
+        assert_eq!(decoded.catalog_checksum(), catalog_checksum);
+        assert_eq!(decoded.routing_epoch(), 41);
+        assert_eq!(decoded.catalog_ordinal_width_bits(), 32);
+        assert_eq!(
+            decoded.catalog_routing_strategy(),
+            Some(crate::centroid_hnsw::CatalogRoutingStrategy::hnsw(16, 32, 64, 64).unwrap())
+        );
+
+        let without_catalog = ResidentGlobalCodebook::load(decoded.clone()).unwrap_err();
+        assert!(
+            without_catalog.to_string().contains("requires catalog"),
+            "{without_catalog}"
+        );
+
+        let router = Arc::new(
+            crate::centroid_hnsw::CatalogRouter::build(
+                Arc::clone(&catalog),
+                crate::VectorMetric::Euclidean,
+                decoded.catalog_routing_strategy().unwrap(),
+            )
+            .unwrap(),
+        );
+        let resident = ResidentGlobalCodebook::load_for_catalog(
+            decoded.clone(),
+            &catalog_ref,
+            Arc::clone(&router),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(resident.catalog_router().unwrap(), &router));
+        assert_eq!(
+            resident.nearest_cells(&catalog.centroids[70], 1).unwrap(),
+            vec![70_u32]
+        );
+
+        let substituted_catalog = crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+            41,
+            64,
+            crate::VectorMetric::Euclidean,
+            fit[1..131].to_vec(),
+        )
+        .unwrap();
+        let substituted_bytes =
+            crate::logical_cell_catalog::logical_cell_catalog_to_parquet(&substituted_catalog)
+                .unwrap();
+        let substituted_ref = crate::logical_cell_catalog::LogicalCellCatalogRef::new(
+            blake3::hash(&substituted_bytes).to_hex().to_string(),
+            41,
+            130,
+            64,
+            substituted_bytes.len(),
+        )
+        .unwrap();
+        let error = ResidentGlobalCodebook::load_for_catalog(
+            decoded,
+            &substituted_ref,
+            Arc::new(
+                crate::centroid_hnsw::CatalogRouter::build(
+                    Arc::new(substituted_catalog),
+                    crate::VectorMetric::Euclidean,
+                    crate::centroid_hnsw::CatalogRoutingStrategy::hnsw(16, 32, 64, 64).unwrap(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("catalog"), "{error}");
+    }
+
+    #[test]
     fn v12_codebook_rejects_typed_state_and_payload_layout_substitution() {
         let descriptor = test_v12_codebook_descriptor();
         let encoded = descriptor.encode().unwrap();
@@ -1829,6 +2255,44 @@ mod tests {
     }
 
     #[test]
+    fn v12_catalog_codebook_rejects_corrupt_nonfinite_minkowski_metric() {
+        let fit = vectors(256, 64);
+        let scan = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let catalog = crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+            41,
+            64,
+            crate::VectorMetric::Euclidean,
+            fit[..130].to_vec(),
+        )
+        .unwrap();
+        let catalog_bytes =
+            crate::logical_cell_catalog::logical_cell_catalog_to_parquet(&catalog).unwrap();
+        let catalog_ref = crate::logical_cell_catalog::LogicalCellCatalogRef::new(
+            blake3::hash(&catalog_bytes).to_hex().to_string(),
+            41,
+            130,
+            64,
+            catalog_bytes.len(),
+        )
+        .unwrap();
+        let mut descriptor = GlobalCodebookDescriptor::new_catalog_pinned(
+            scan.state(),
+            crate::VectorMetric::Euclidean,
+            VectorElementType::Float32,
+            &catalog_ref,
+            CatalogRoutingStrategy::Flat,
+            16,
+            4,
+            17,
+        )
+        .unwrap();
+        descriptor.metric = VectorMetric::Minkowski { p: f32::NAN };
+
+        let error = descriptor.encode().unwrap_err();
+        assert!(error.to_string().contains("Minkowski"), "{error}");
+    }
+
+    #[test]
     fn reconstruction_micros_rejects_the_rounded_two_to_the_64_boundary() {
         let distance = 2_f64.powi(64) / 1_000_000.0;
         let error = checked_reconstruction_error_micros(distance).unwrap_err();
@@ -1875,7 +2339,11 @@ mod tests {
         let vector = vectors(1, 64).pop().unwrap();
         let cells = resident.nearest_cells(&vector, 4).unwrap();
         assert_eq!(cells.len(), 4);
-        assert!(cells.iter().all(|cell| resident.cells.contains(cell)));
+        assert!(
+            cells
+                .iter()
+                .all(|cell| (*cell as usize) < resident.cell_count())
+        );
     }
 
     fn leaf_page(

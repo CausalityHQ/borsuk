@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     cell_wal::{CellWalConfig, LogicalCellId},
+    centroid_hnsw::{CatalogRouter, CatalogRoutingStrategy},
     error::{BorsukError, Result},
     global_leaf_run::GlobalAnnRef,
     index::IndexConfig,
@@ -174,9 +175,17 @@ pub struct Manifest {
     /// Bounded reference to the immutable format-34 logical-cell catalog.
     #[serde(default)]
     pub(crate) logical_cell_catalog_ref: Option<LogicalCellCatalogRef>,
+    /// Durable routing policy for the immutable logical-cell catalog. Creation
+    /// chooses the production default once; every later open rebuilds exactly
+    /// this strategy rather than re-evaluating mutable implementation defaults.
+    pub(crate) logical_cell_routing_strategy: CatalogRoutingStrategy,
     /// Authenticated resident catalog loaded before an index handle is exposed.
     #[serde(skip)]
     pub(crate) logical_cell_catalog: Option<Arc<LogicalCellCatalog>>,
+    /// Deterministic adjacency over the resident catalog. The router borrows
+    /// the manifest's catalog allocation and is rebuilt before open returns.
+    #[serde(skip)]
+    pub(crate) logical_cell_router: Option<Arc<CatalogRouter>>,
     /// Cell-WAL run checksums already materialized into immutable base segments.
     #[serde(default)]
     pub(crate) cell_wal_consumed_runs: BTreeSet<String>,
@@ -516,7 +525,9 @@ impl Manifest {
             routing_epoch: default_routing_epoch(),
             cell_wal_config: CellWalConfig::default(),
             logical_cell_catalog_ref: None,
+            logical_cell_routing_strategy: CatalogRoutingStrategy::Flat,
             logical_cell_catalog: None,
+            logical_cell_router: None,
             cell_wal_consumed_runs: BTreeSet::new(),
             cell_wal_visible_runs: 0,
             cell_wal_visible_tombstone_runs: 0,
@@ -550,7 +561,9 @@ impl Manifest {
             routing_epoch: self.routing_epoch,
             cell_wal_config: self.cell_wal_config,
             logical_cell_catalog_ref: self.logical_cell_catalog_ref.clone(),
+            logical_cell_routing_strategy: self.logical_cell_routing_strategy,
             logical_cell_catalog: self.logical_cell_catalog.clone(),
+            logical_cell_router: self.logical_cell_router.clone(),
             cell_wal_consumed_runs: self.cell_wal_consumed_runs.clone(),
             cell_wal_visible_runs: self.cell_wal_visible_runs,
             cell_wal_visible_tombstone_runs: self.cell_wal_visible_tombstone_runs,
@@ -773,6 +786,9 @@ impl Manifest {
                 for centroid in &catalog.centroids {
                     add(centroid.len() * size_of::<f32>())?;
                 }
+            }
+            if let Some(router) = &self.logical_cell_router {
+                add(router.resident_bytes_excluding_catalog())?;
             }
             if let Some(quantizer) = &self.quantizer_ref {
                 add(quantizer.resident_bytes_estimate())?;

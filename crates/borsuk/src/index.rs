@@ -24,7 +24,7 @@ use crate::{
         CommittedCellWalTransaction, LogicalCellId, PreparedCellWalRun, cell_wal_run_identity,
         cell_wal_run_transaction_id,
     },
-    centroid_hnsw::CentroidHnsw,
+    centroid_hnsw::{CatalogRouter, CatalogRoutingStrategy, CentroidHnsw},
     collection_control::{
         COLLECTION_CURRENT, CollectionCommit, CollectionManifestRef, CollectionSnapshot,
         PRIMARY_MODALITY, collection_schema_fingerprint, pending_collection_commit_path,
@@ -56,6 +56,7 @@ use crate::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCoarseQuantizer, GlobalCodebookDescriptor,
         GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalScanQuantizer,
         HierarchicalCoarseQuantizer, ResidentGlobalCodebook, RoutedGlobalLeafPage,
+        ValidatedGlobalCodebookMetadata,
     },
     late_interaction::{LateInteractionSearchOptions, LateInteractionSearchReport},
     lexical_build::{
@@ -768,10 +769,6 @@ pub struct BorsukIndex {
     /// list. Navigates to the nprobe nearest cells in ~O(log cells) instead of
     /// a flat centroid scan; rebuilt whenever the manifest version changes.
     coarse_quantizer: CoarseQuantizerCache,
-    /// Lazy HNSW over the frozen logical write-cell centroids. Unlike the query
-    /// quantizer, this survives ordinary manifest changes because cell ownership
-    /// is immutable within one routing epoch.
-    logical_cell_quantizer: LogicalCellQuantizerCache,
     /// Lazily loaded PERSISTED coarse quantizer, keyed by the manifest version's
     /// `quantizer_ref` checksum. Loaded with one object read on a COLD/paged
     /// query (no resident summaries) when the active manifest references a
@@ -1924,9 +1921,6 @@ type ResolvedCoarseQuantizer = (Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>);
 
 /// [`ResolvedCoarseQuantizer`] keyed by the manifest version it describes.
 type CoarseQuantizerCache = Arc<Mutex<Option<(u64, Arc<CentroidHnsw>, Arc<Vec<SegmentSummary>>)>>>;
-
-/// HNSW over the immutable logical write-cell catalog, keyed by routing epoch.
-type LogicalCellQuantizerCache = Arc<Mutex<Option<(u64, Arc<CentroidHnsw>)>>>;
 
 /// A persisted quantizer loaded from storage, keyed by the object checksum it
 /// was loaded from (so a manifest that swaps in a new quantizer object reloads).
@@ -3157,7 +3151,6 @@ impl BorsukIndex {
         );
         manifest.text_tokenizer = Some(tokenizer.fingerprint());
         manifest.wal_config = wal;
-        let prebuild_logical_cell_quantizer = creation_catalog_centroids.is_some();
         let centroids = creation_catalog_centroids.unwrap_or_else(|| {
             let mut centroid = vec![0.0; manifest.config.dimensions];
             centroid[0] = 1.0;
@@ -3173,7 +3166,16 @@ impl BorsukIndex {
         );
         let (catalog_reference, catalog_bytes) = Storage::prepare_logical_cell_catalog(&catalog)?;
         manifest.logical_cell_catalog_ref = Some(catalog_reference.clone());
-        manifest.logical_cell_catalog = Some(catalog);
+        manifest.logical_cell_catalog = Some(Arc::clone(&catalog));
+        manifest.logical_cell_routing_strategy = CatalogRoutingStrategy::production(
+            &manifest.config.metric,
+            catalog_reference.cell_count as usize,
+        );
+        manifest.logical_cell_router = Some(Arc::new(CatalogRouter::build(
+            catalog,
+            manifest.config.metric.clone(),
+            manifest.logical_cell_routing_strategy,
+        )?));
         enforce_ram_budget(&manifest, None)?;
         storage.write_prepared_logical_cell_catalog(&catalog_reference, &catalog_bytes)?;
         if collection_root {
@@ -3194,21 +3196,6 @@ impl BorsukIndex {
             manifest.config.ram_budget_bytes,
             manifest.resident_bytes_estimate(),
         );
-        let logical_cell_quantizer = if prebuild_logical_cell_quantizer
-            && manifest.logical_cells().len() >= COARSE_QUANTIZER_MIN_CELLS
-        {
-            let quantizer =
-                CentroidHnsw::build(manifest.logical_cell_centroids()).ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "supplied logical-cell catalog could not build its routing HNSW"
-                            .to_string(),
-                    )
-                })?;
-            Some((manifest.routing_epoch, Arc::new(quantizer)))
-        } else {
-            None
-        };
-
         let writer = *Uuid::new_v4().as_bytes();
         let mut index = Self {
             collection_storage: storage.clone(),
@@ -3243,7 +3230,6 @@ impl BorsukIndex {
             segment_cache: Arc::clone(&read_runtime.segment_cache),
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
-            logical_cell_quantizer: Arc::new(Mutex::new(logical_cell_quantizer)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
             resident_global_codebooks: Arc::new(BoundedResidentCache::new(
                 RESIDENT_GLOBAL_PQ_CACHE_GENERATIONS,
@@ -3583,7 +3569,6 @@ impl BorsukIndex {
             segment_cache: Arc::clone(&read_runtime.segment_cache),
             resident_routing_summaries: Arc::new(Mutex::new(None)),
             coarse_quantizer: Arc::new(Mutex::new(None)),
-            logical_cell_quantizer: Arc::new(Mutex::new(None)),
             persisted_quantizer: Arc::new(Mutex::new(None)),
             resident_global_codebooks: Arc::new(BoundedResidentCache::new(
                 RESIDENT_GLOBAL_PQ_CACHE_GENERATIONS,
@@ -10193,36 +10178,24 @@ impl BorsukIndex {
         } else {
             vector.to_vec()
         };
-        if !self.flat_logical_cell_routing
-            && self.manifest.logical_cells().len() >= COARSE_QUANTIZER_MIN_CELLS
-        {
-            let quantizer = {
-                let cached = self
-                    .logical_cell_quantizer
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                cached.as_ref().and_then(|(routing_epoch, quantizer)| {
-                    (*routing_epoch == self.manifest.routing_epoch).then(|| Arc::clone(quantizer))
-                })
-            };
-            let quantizer = match quantizer {
-                Some(quantizer) => Some(quantizer),
-                None => CentroidHnsw::build(self.manifest.logical_cell_centroids()).map(|built| {
-                    let built = Arc::new(built);
-                    let mut cached = self
-                        .logical_cell_quantizer
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    *cached = Some((self.manifest.routing_epoch, Arc::clone(&built)));
-                    built
-                }),
-            };
-            if let Some(ordinal) = quantizer
-                .and_then(|quantizer| quantizer.nearest(&routed, 1).into_iter().next())
+        if !self.flat_logical_cell_routing {
+            let router = self.manifest.logical_cell_router.as_ref().ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "logical-cell catalog has no prebuilt resident router".to_string(),
+                )
+            })?;
+            if let Some(ordinal) = router
+                .nearest(&routed, 1)?
+                .into_iter()
+                .next()
                 .and_then(|ordinal| usize::try_from(ordinal).ok())
                 && let Some(cell) = self.manifest.logical_cells().get(ordinal)
             {
-                return Ok((*cell, "quantizer"));
+                let path = match router.strategy() {
+                    CatalogRoutingStrategy::Flat => "flat",
+                    CatalogRoutingStrategy::Hnsw { .. } => "quantizer",
+                };
+                return Ok((*cell, path));
             }
         }
         self.manifest
@@ -10259,9 +10232,7 @@ impl BorsukIndex {
                 "global codebook probe count must be positive".to_string(),
             ));
         }
-        codebook
-            .nearest_cells(query, probes)
-            .map(|cells| cells.into_iter().map(u32::from).collect())
+        codebook.nearest_cells(query, probes)
     }
 
     /// Resolve the logical write cell using this handle's configured routing
@@ -14438,14 +14409,26 @@ impl BorsukIndex {
                     codebook.storage_bytes(),
                     codebook.descriptor_checksum(),
                 )?;
-            let resident_codebook = ResidentGlobalCodebook::load(
+            let descriptor_metadata = ValidatedGlobalCodebookMetadata::for_retained_manifest(
                 GlobalCodebookDescriptor::decode(&descriptor_read.bytes)?,
+                self.manifest.logical_cell_catalog_ref.as_ref(),
+                self.manifest.logical_cell_routing_strategy,
             )?;
-            if resident_codebook.code_bytes_per_vector() != codebook.code_width()
-                || resident_codebook.cell_count()
+            if descriptor_metadata.code_width != codebook.code_width()
+                || descriptor_metadata.cell_count
                     != usize::try_from(codebook.cell_count()).unwrap_or(usize::MAX)
-                || u64::try_from(resident_codebook.resident_bytes()).ok()
+                || u64::try_from(descriptor_metadata.resident_bytes).ok()
                     != Some(codebook.resident_bytes())
+                || &descriptor_metadata.metric != codebook.metric()
+                || descriptor_metadata.dimensions != codebook.dimensions()
+                || descriptor_metadata.vector_element_type != codebook.element_type()
+                || descriptor_metadata.candidates != codebook.candidates()
+                || descriptor_metadata.probes != codebook.probes()
+                || descriptor_metadata.reconstruction_error_p95_micros
+                    != codebook.reconstruction_error_p95_micros()
+                || codebook.metric() != &self.manifest.config.metric
+                || codebook.dimensions() != self.manifest.config.dimensions
+                || codebook.element_type() != self.manifest.build_config.vector_element_type
             {
                 return Err(BorsukError::InvalidStorage(
                     "V12 GC codebook does not match its manifest reference".to_string(),
@@ -14958,19 +14941,53 @@ impl BorsukIndex {
                 reference.storage_bytes(),
                 reference.descriptor_checksum(),
             )?;
-        ResidentGlobalCodebook::load(GlobalCodebookDescriptor::decode(&read.bytes)?)
+        self.resident_global_codebook_from_descriptor(
+            GlobalCodebookDescriptor::decode(&read.bytes)?,
+            &self.manifest,
+        )
     }
 
     fn read_resident_global_codebook_from_backing(
         &self,
         reference: &GlobalCodebookRef,
+        manifest: &Manifest,
     ) -> Result<ResidentGlobalCodebook> {
         let read = self.storage.read_known_size_from_backing_with_checksum(
             reference.descriptor_path(),
             reference.storage_bytes(),
             reference.descriptor_checksum(),
         )?;
-        ResidentGlobalCodebook::load(GlobalCodebookDescriptor::decode(&read.bytes)?)
+        self.resident_global_codebook_from_descriptor(
+            GlobalCodebookDescriptor::decode(&read.bytes)?,
+            manifest,
+        )
+    }
+
+    fn resident_global_codebook_from_descriptor(
+        &self,
+        descriptor: GlobalCodebookDescriptor,
+        manifest: &Manifest,
+    ) -> Result<ResidentGlobalCodebook> {
+        if !descriptor.is_catalog_pinned() {
+            return ResidentGlobalCodebook::load(descriptor);
+        }
+        if descriptor.catalog_routing_strategy() != Some(manifest.logical_cell_routing_strategy) {
+            return Err(BorsukError::InvalidStorage(
+                "catalog-pinned V12 codebook strategy does not match manifest authority"
+                    .to_string(),
+            ));
+        }
+        let catalog_ref = manifest.logical_cell_catalog_ref.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "catalog-pinned V12 codebook has no manifest catalog reference".to_string(),
+            )
+        })?;
+        let router = manifest.logical_cell_router.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "catalog-pinned V12 codebook has no prebuilt catalog router".to_string(),
+            )
+        })?;
+        ResidentGlobalCodebook::load_for_catalog(descriptor, catalog_ref, Arc::clone(router))
     }
 
     fn validate_resident_global_codebook(
@@ -15176,7 +15193,7 @@ impl BorsukIndex {
             ))
         })?;
         let codebook_loaded =
-            self.read_resident_global_codebook_from_backing(codebook_reference)?;
+            self.read_resident_global_codebook_from_backing(codebook_reference, manifest)?;
         self.validate_resident_global_codebook(codebook_reference, &codebook_loaded, manifest)?;
         let codebook = self
             .resident_global_codebooks
@@ -23499,6 +23516,11 @@ fn validate_routed_manifest_catalog(manifest: &Manifest) -> Result<()> {
             "routed manifest has no authenticated resident logical-cell catalog".to_string(),
         )
     })?;
+    let router = manifest.logical_cell_router.as_ref().ok_or_else(|| {
+        BorsukError::InvalidStorage(
+            "routed manifest has no prebuilt resident logical-cell router".to_string(),
+        )
+    })?;
     let reference_dimensions = usize::try_from(reference.dimensions).map_err(|_| {
         BorsukError::InvalidStorage(
             "logical-cell catalog dimensions do not fit this platform".to_string(),
@@ -23514,6 +23536,12 @@ fn validate_routed_manifest_catalog(manifest: &Manifest) -> Result<()> {
         || reference_dimensions != manifest.config.dimensions
         || reference_dimensions != catalog.dimensions()
         || reference_cell_count != catalog.cells.len()
+        || !Arc::ptr_eq(router.catalog(), catalog)
+        || router.strategy() != manifest.logical_cell_routing_strategy
+        || manifest
+            .logical_cell_routing_strategy
+            .validated_for_metric(&manifest.config.metric)?
+            != manifest.logical_cell_routing_strategy
     {
         return Err(BorsukError::InvalidStorage(
             "routed manifest logical-cell catalog authority is inconsistent".to_string(),
@@ -25561,8 +25589,19 @@ mod tests {
             .write_prepared_logical_cell_catalog(&reference, &bytes)
             .unwrap();
         index.manifest.logical_cell_catalog_ref = Some(reference);
-        index.manifest.logical_cell_catalog = Some(catalog);
-        *index.logical_cell_quantizer.lock().unwrap() = None;
+        index.manifest.logical_cell_catalog = Some(Arc::clone(&catalog));
+        index.manifest.logical_cell_routing_strategy = CatalogRoutingStrategy::production(
+            &index.manifest.config.metric,
+            index.manifest.logical_cells().len(),
+        );
+        index.manifest.logical_cell_router = Some(Arc::new(
+            CatalogRouter::build(
+                catalog,
+                index.manifest.config.metric.clone(),
+                index.manifest.logical_cell_routing_strategy,
+            )
+            .unwrap(),
+        ));
     }
 
     fn positioned_metadata_rows_for_position(
@@ -26012,7 +26051,7 @@ mod tests {
         assert_eq!(index.manifest.logical_cells().len(), cell_count);
         assert!(index.cell_wal_snapshot.is_empty());
         assert!(
-            index.logical_cell_quantizer.lock().unwrap().is_some(),
+            index.manifest.logical_cell_router.is_some(),
             "the supplied benchmark catalog must build its route before create returns"
         );
         let reference = index.manifest.logical_cell_catalog_ref.clone().unwrap();
@@ -26032,10 +26071,203 @@ mod tests {
         let reopened = BorsukIndex::open(&uri).unwrap();
         assert!(reopened.manifest.segments.is_empty());
         assert_eq!(reopened.manifest.logical_cell_catalog_ref, Some(reference));
+        assert!(
+            reopened.manifest.logical_cell_router.is_some(),
+            "cold open must build the immutable catalog router before returning"
+        );
         assert_eq!(
             reopened.logical_cell_for_research(&[730.0, 0.0]).unwrap(),
             routed
         );
+    }
+
+    #[test]
+    fn logical_catalog_router_cold_open_is_prebuilt_and_exactly_ram_admitted() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let created = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            (0..128)
+                .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+                .collect(),
+        )
+        .unwrap();
+        let router = created.manifest.logical_cell_router.as_ref().unwrap();
+        assert!(Arc::ptr_eq(
+            router.catalog(),
+            created.manifest.logical_cell_catalog.as_ref().unwrap()
+        ));
+        let complete = created.manifest.try_resident_bytes_estimate().unwrap();
+        let mut without_router = created.manifest.clone();
+        without_router.logical_cell_router = None;
+        assert_eq!(
+            complete - without_router.try_resident_bytes_estimate().unwrap(),
+            router.resident_bytes_excluding_catalog() as u64
+        );
+        let exact_budget = created.manifest_reference.resident_bytes_estimate;
+        drop(created);
+
+        let reopened = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                ram_budget_bytes: Some(exact_budget),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(reopened.manifest.logical_cell_router.is_some());
+        drop(reopened);
+
+        let error = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                ram_budget_bytes: Some(exact_budget - 1),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, BorsukError::RamBudgetExceeded { .. }));
+    }
+
+    #[test]
+    fn catalog_pinned_codebook_and_positioned_writer_share_one_router_and_u32_ordinals() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let index = BorsukIndex::create_with_logical_cell_catalog(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            (0..130)
+                .map(|ordinal| {
+                    let mut centroid = vec![0.0; 8];
+                    centroid[0] = ordinal as f32 * 10.0;
+                    centroid
+                })
+                .collect(),
+        )
+        .unwrap();
+        let router = Arc::clone(index.manifest.logical_cell_router.as_ref().unwrap());
+        let descriptor = GlobalCodebookDescriptor::new_catalog_pinned(
+            GlobalScanQuantizer::from(
+                crate::turboquant::FastTurboQuantProdScanQuantizer::new(
+                    crate::DEFAULT_TURBOQUANT_SEED,
+                    8,
+                    4,
+                )
+                .unwrap(),
+            )
+            .state(),
+            VectorMetric::Euclidean,
+            crate::VectorElementType::Float32,
+            index.manifest.logical_cell_catalog_ref.as_ref().unwrap(),
+            router.strategy(),
+            16,
+            1,
+            0,
+        )
+        .unwrap();
+        let codebook = index
+            .resident_global_codebook_from_descriptor(descriptor.clone(), &index.manifest)
+            .unwrap();
+        assert!(Arc::ptr_eq(codebook.catalog_router().unwrap(), &router));
+
+        let mut substituted_authority = index.manifest.clone();
+        substituted_authority.logical_cell_routing_strategy = CatalogRoutingStrategy::Flat;
+        let error = index
+            .resident_global_codebook_from_descriptor(descriptor, &substituted_authority)
+            .unwrap_err();
+        assert!(error.to_string().contains("strategy"), "{error}");
+
+        let query = &index.manifest.logical_cell_centroids()[129];
+        assert_eq!(
+            index.route_vector_to_logical_cell(query).unwrap(),
+            LogicalCellId::new(index.manifest.routing_epoch, 129)
+        );
+        assert_eq!(codebook.nearest_cells(query, 1).unwrap(), vec![129_u32]);
+    }
+
+    #[test]
+    fn retained_manifest_gc_walk_validates_catalog_codebook_without_building_router() {
+        let (_directory, mut index) = build_finished_resident_global_v12_index();
+        let catalog_ref = index.manifest.logical_cell_catalog_ref.clone().unwrap();
+        let router = Arc::clone(index.manifest.logical_cell_router.as_ref().unwrap());
+        let descriptor = GlobalCodebookDescriptor::new_catalog_pinned(
+            GlobalScanQuantizer::from(
+                crate::turboquant::FastTurboQuantProdScanQuantizer::new(
+                    crate::DEFAULT_TURBOQUANT_SEED,
+                    8,
+                    4,
+                )
+                .unwrap(),
+            )
+            .state(),
+            VectorMetric::Euclidean,
+            crate::VectorElementType::Float32,
+            &catalog_ref,
+            index.manifest.logical_cell_routing_strategy,
+            1,
+            1,
+            0,
+        )
+        .unwrap();
+        let descriptor_bytes = descriptor.encode().unwrap();
+        let descriptor_checksum = blake3::hash(&descriptor_bytes).to_hex().to_string();
+        let descriptor_path = format!("global-pq/codebooks/{descriptor_checksum}.parquet");
+        index
+            .storage
+            .write_bytes(&descriptor_path, &descriptor_bytes)
+            .unwrap();
+        let resident =
+            ResidentGlobalCodebook::load_for_catalog(descriptor, &catalog_ref, router).unwrap();
+        let codebook_ref = GlobalCodebookRef::new(
+            descriptor_path.clone(),
+            descriptor_checksum.clone(),
+            VectorMetric::Euclidean,
+            8,
+            crate::VectorElementType::Float32,
+            resident.code_bytes_per_vector(),
+            catalog_ref.cell_count,
+            1,
+            1,
+            0,
+            resident.resident_bytes() as u64,
+            descriptor_bytes.len() as u64,
+        );
+        let current_ann = index.manifest.global_ann_ref.as_ref().unwrap();
+        let retained_ann = ann_from_mutated_json(current_ann, |value| {
+            value["codebook"] = serde_json::to_value(&codebook_ref).unwrap();
+            value["base"] = serde_json::Value::Null;
+            value["base_rows"] = serde_json::Value::from(0);
+            value["rows"] = serde_json::Value::from(0);
+            value["storage_bytes"] = serde_json::Value::from(codebook_ref.storage_bytes());
+            value["resident_bytes"] = serde_json::Value::from(codebook_ref.resident_bytes());
+        });
+        retained_ann.validate().unwrap();
+        let mut retained_manifest = index.manifest.clone();
+        retained_manifest.global_ann_ref = Some(retained_ann);
+        retained_manifest.logical_cell_catalog = None;
+        retained_manifest.logical_cell_router = None;
+
+        let walked = index
+            .object_paths_for_retained_manifest(retained_manifest)
+            .unwrap();
+
+        assert!(walked.paths.contains(&descriptor_path));
+        assert!(walked.paths.contains(&catalog_ref.path));
     }
 
     #[test]
@@ -26275,25 +26507,19 @@ mod tests {
             index.route_vector_to_logical_cell(&[730.0, 0.0]).unwrap(),
             expected
         );
-        let first = {
-            let cache = index.logical_cell_quantizer.lock().unwrap();
-            Arc::clone(&cache.as_ref().unwrap().1)
-        };
+        let first = { Arc::clone(index.manifest.logical_cell_router.as_ref().unwrap()) };
 
         index.manifest.version += 1;
         assert_eq!(
             index.route_vector_to_logical_cell(&[730.0, 0.0]).unwrap(),
             expected
         );
-        let second = {
-            let cache = index.logical_cell_quantizer.lock().unwrap();
-            Arc::clone(&cache.as_ref().unwrap().1)
-        };
+        let second = { Arc::clone(index.manifest.logical_cell_router.as_ref().unwrap()) };
         assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]
-    fn flat_logical_cell_routing_control_uses_the_same_catalog_without_building_hnsw() {
+    fn flat_logical_cell_routing_control_bypasses_the_prebuilt_catalog_hnsw() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -26319,7 +26545,15 @@ mod tests {
             index.route_vector_to_logical_cell(&[730.0, 0.0]).unwrap(),
             index.manifest.logical_cells()[73]
         );
-        assert!(index.logical_cell_quantizer.lock().unwrap().is_none());
+        assert!(matches!(
+            index
+                .manifest
+                .logical_cell_router
+                .as_ref()
+                .unwrap()
+                .strategy(),
+            CatalogRoutingStrategy::Hnsw { .. }
+        ));
     }
 
     #[test]

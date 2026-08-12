@@ -43,6 +43,7 @@ use tokio::{
 use url::Url;
 
 use crate::{
+    centroid_hnsw::CatalogRouter,
     collection_control::{
         COLLECTION_CURRENT, COLLECTION_WAL_FRONTIER_SHARDS, CollectionCommit, CollectionCurrent,
         CollectionManifestRef, CollectionSnapshot, collection_current_bytes,
@@ -2007,6 +2008,21 @@ impl Storage {
                     )
                 })?;
         }
+        if let Some(router) = &manifest.logical_cell_router {
+            paged_resident_bytes = paged_resident_bytes
+                .checked_add(
+                    u64::try_from(router.resident_bytes_excluding_catalog()).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "catalog-router resident byte estimate exceeds u64".to_string(),
+                        )
+                    })?,
+                )
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "paged manifest catalog-router estimate overflow".to_string(),
+                    )
+                })?;
+        }
 
         self.write_bytes_if_absent(&manifest.file_name(), &manifest_bytes)?;
         report.record_metadata_table(manifest_bytes.len());
@@ -2442,6 +2458,22 @@ impl Storage {
                 )));
             }
             manifest.logical_cell_catalog = Some(catalog);
+            let router = match reusable.and_then(|existing| {
+                existing.logical_cell_router.as_ref().filter(|router| {
+                    Arc::ptr_eq(
+                        router.catalog(),
+                        manifest.logical_cell_catalog.as_ref().unwrap(),
+                    ) && router.strategy() == manifest.logical_cell_routing_strategy
+                })
+            }) {
+                Some(router) => Arc::clone(router),
+                None => Arc::new(CatalogRouter::build(
+                    Arc::clone(manifest.logical_cell_catalog.as_ref().unwrap()),
+                    manifest.config.metric.clone(),
+                    manifest.logical_cell_routing_strategy,
+                )?),
+            };
+            manifest.logical_cell_router = Some(router);
         }
         Ok(manifest)
     }
@@ -4387,6 +4419,7 @@ mod tests {
         Storage, plan_bounded_ranges,
     };
     use crate::{
+        centroid_hnsw::{CatalogRouter, CatalogRoutingStrategy},
         collection_control::{
             CollectionWalFrontierHead, CollectionWalReservation, PRIMARY_MODALITY,
             collection_wal_frontier_head_bytes, collection_wal_frontier_head_path,
@@ -5174,6 +5207,44 @@ mod tests {
 
         storage.write_bytes(&reference.path, b"corrupt").unwrap();
         assert!(storage.load_manifest_ref(&staged.reference, true).is_err());
+    }
+
+    #[test]
+    fn manifest_load_rebuilds_exact_persisted_catalog_routing_strategy() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = file_uri(dir.path());
+        let storage = Storage::from_uri(&uri).unwrap();
+        let catalog = Arc::new(
+            crate::logical_cell_catalog::LogicalCellCatalog::from_centroids(
+                1,
+                2,
+                VectorMetric::Euclidean,
+                (0..130).map(|ordinal| vec![ordinal as f32, 0.0]).collect(),
+            )
+            .unwrap(),
+        );
+        let reference = storage.write_logical_cell_catalog(&catalog).unwrap();
+        let strategy = CatalogRoutingStrategy::hnsw(8, 24, 48, 31).unwrap();
+        let mut manifest = exact_manifest(&uri);
+        manifest.logical_cell_catalog_ref = Some(reference);
+        manifest.logical_cell_catalog = Some(Arc::clone(&catalog));
+        manifest.logical_cell_routing_strategy = strategy;
+        manifest.logical_cell_router = Some(Arc::new(
+            CatalogRouter::build(catalog, VectorMetric::Euclidean, strategy).unwrap(),
+        ));
+        let staged = storage
+            .stage_manifest(PRIMARY_MODALITY, &manifest, None)
+            .unwrap();
+
+        let loaded = storage.load_manifest_ref(&staged.reference, true).unwrap();
+
+        assert_eq!(loaded.logical_cell_routing_strategy, strategy);
+        assert_eq!(loaded.logical_cell_router.unwrap().strategy(), strategy);
+        assert_ne!(
+            strategy,
+            CatalogRoutingStrategy::production(&VectorMetric::Euclidean, 130),
+            "fixture must detect recomputation from implementation defaults"
+        );
     }
 
     #[test]

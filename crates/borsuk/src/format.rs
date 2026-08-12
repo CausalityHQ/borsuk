@@ -144,7 +144,11 @@ use crate::{
 // Bumped 34 -> 35 when positioned primary WAL rows gained required checked
 // routing epoch/cell columns and every positioned envelope gained one dedicated
 // route-plan payload. Experimental v34 artifacts cannot establish row owners.
-const CURRENT_VERSION: u16 = 35;
+// Bumped 35 -> 36 when the logical-cell routing strategy and exact HNSW
+// parameters became required manifest authority. Recomputing them from current
+// defaults on open could route an old collection differently after a constant
+// change, so format-35 experiments are rejected rather than inferred.
+const CURRENT_VERSION: u16 = 36;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -201,6 +205,16 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     } else {
         Some(manifest.leaf_capability.as_str().to_string())
     };
+    let logical_cell_routing_strategy_json = serde_json::to_string(
+        &manifest
+            .logical_cell_routing_strategy
+            .validated_for_metric(&manifest.config.metric)?,
+    )
+    .map_err(|err| {
+        BorsukError::InvalidStorage(format!(
+            "failed to serialize logical-cell routing strategy: {err}"
+        ))
+    })?;
     // The WAL column is written only when the WAL is active or has a pending
     // frontier. A disabled, never-used WAL leaves the column absent, so its
     // manifest bytes are byte-for-byte identical to a pre-WAL index.
@@ -260,6 +274,9 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
             manifest.graph_neighbors as u64
         ])),
         array(StringArray::from_iter([leaf_capability_json])),
+        array(StringArray::from_iter_values([
+            logical_cell_routing_strategy_json.as_str(),
+        ])),
         array(StringArray::from_iter([manifest
             .tombstone
             .as_ref()
@@ -596,6 +613,20 @@ fn manifest_leaf_capability(batch: &RecordBatch) -> Result<crate::LeafCapability
     crate::LeafCapability::from_str(value)
 }
 
+fn manifest_catalog_routing_strategy(
+    batch: &RecordBatch,
+    metric: &VectorMetric,
+) -> Result<crate::centroid_hnsw::CatalogRoutingStrategy> {
+    let json = string_value_by_name(batch, 0, "logical_cell_routing_strategy_json")?;
+    let strategy = serde_json::from_str::<crate::centroid_hnsw::CatalogRoutingStrategy>(json)
+        .map_err(|err| {
+            BorsukError::InvalidStorage(format!(
+                "failed to parse logical-cell routing strategy: {err}"
+            ))
+        })?;
+    strategy.validated_for_metric(metric)
+}
+
 fn manifest_text_enabled(batch: &RecordBatch) -> Result<bool> {
     let Ok(column) = batch.schema().index_of("text_enabled") else {
         return Ok(false);
@@ -654,6 +685,7 @@ pub(crate) fn manifest_from_parquet(
 
     let manifest_version = primitive_value_by_name::<UInt64Type>(&batch, 0, "version")?;
     let metric = VectorMetric::from_str(string_value_by_name(&batch, 0, "metric")?)?;
+    let logical_cell_routing_strategy = manifest_catalog_routing_strategy(&batch, &metric)?;
     let segments = routing_from_parquet(routing_bytes, manifest_version)?;
     let dimensions = usize_from_u64(primitive_value_by_name::<UInt64Type>(
         &batch,
@@ -731,7 +763,9 @@ pub(crate) fn manifest_from_parquet(
         routing_epoch,
         cell_wal_config,
         logical_cell_catalog_ref,
+        logical_cell_routing_strategy,
         logical_cell_catalog: None,
+        logical_cell_router: None,
         cell_wal_consumed_runs,
         cell_wal_visible_runs: 0,
         cell_wal_visible_tombstone_runs: 0,
@@ -803,11 +837,14 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         tombstone_pages,
     ) = manifest_wal(&batch)?;
 
+    let metric = VectorMetric::from_str(string_value_by_name(&batch, 0, "metric")?)?;
+    let logical_cell_routing_strategy = manifest_catalog_routing_strategy(&batch, &metric)?;
+
     Ok(Manifest {
         version: primitive_value_by_name::<UInt64Type>(&batch, 0, "version")?,
         config: IndexConfig {
             uri: string_value_by_name(&batch, 0, "uri")?.to_string(),
-            metric: VectorMetric::from_str(string_value_by_name(&batch, 0, "metric")?)?,
+            metric,
             dimensions,
             segment_max_vectors,
             ram_budget_bytes: if batch.schema().field_with_name("ram_budget_bytes").is_ok() {
@@ -839,7 +876,9 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         routing_epoch,
         cell_wal_config,
         logical_cell_catalog_ref,
+        logical_cell_routing_strategy,
         logical_cell_catalog: None,
+        logical_cell_router: None,
         cell_wal_consumed_runs,
         cell_wal_visible_runs: 0,
         cell_wal_visible_tombstone_runs: 0,
@@ -4808,6 +4847,7 @@ fn manifest_schema_with_named_vectors_and_wal(
         Field::new("routing_page_fanout", DataType::UInt64, false),
         Field::new("graph_neighbors", DataType::UInt64, false),
         Field::new("leaf_capability", DataType::Utf8, true),
+        Field::new("logical_cell_routing_strategy_json", DataType::Utf8, false),
         Field::new("tombstone_path", DataType::Utf8, true),
         Field::new("tombstone_checksum", DataType::Utf8, true),
         Field::new("tombstone_count", DataType::UInt64, true),
@@ -9431,12 +9471,20 @@ mod tests {
     }
 
     #[test]
-    fn manifest_decoder_rejects_format_34_marker() {
+    fn manifest_persists_exact_catalog_strategy_and_rejects_format_35_marker() {
+        let strategy = crate::centroid_hnsw::CatalogRoutingStrategy::hnsw(8, 24, 48, 31).unwrap();
+        let mut manifest = valid_manifest();
+        manifest.logical_cell_routing_strategy = strategy;
+        let bytes = manifest_to_parquet(&manifest).unwrap();
+        let routing = routing_to_parquet(&manifest).unwrap();
+        let decoded = manifest_from_parquet(&bytes, &routing).unwrap();
+        assert_eq!(decoded.logical_cell_routing_strategy, strategy);
+
         let bytes = manifest_to_parquet(&valid_manifest()).unwrap();
         let batch = first_batch(&bytes, "manifest").unwrap();
         let mut columns = batch.columns().to_vec();
         columns[batch.schema().index_of("format_version").unwrap()] =
-            array(UInt16Array::from_iter_values([34]));
+            array(UInt16Array::from_iter_values([35]));
         let old = write_batch(RecordBatch::try_new(batch.schema(), columns).unwrap()).unwrap();
         let routing = routing_to_parquet(&valid_manifest()).unwrap();
 
@@ -9444,7 +9492,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("unsupported manifest table version 34"),
+            error.contains("unsupported manifest table version 35"),
             "{error}"
         );
     }
@@ -10326,7 +10374,9 @@ mod tests {
             routing_epoch: 1,
             cell_wal_config: crate::CellWalConfig::default(),
             logical_cell_catalog_ref: None,
+            logical_cell_routing_strategy: crate::centroid_hnsw::CatalogRoutingStrategy::Flat,
             logical_cell_catalog: None,
+            logical_cell_router: None,
             cell_wal_consumed_runs: BTreeSet::new(),
             cell_wal_visible_runs: 0,
             cell_wal_visible_tombstone_runs: 0,
@@ -11010,6 +11060,10 @@ mod tests {
                     DEFAULT_GRAPH_NEIGHBORS as u64
                 ])),
                 array(StringArray::from_iter([None::<String>])),
+                array(StringArray::from_iter_values([serde_json::to_string(
+                    &crate::centroid_hnsw::CatalogRoutingStrategy::Flat,
+                )
+                .unwrap()])),
                 array(StringArray::from_iter([None::<String>])),
                 array(StringArray::from_iter([None::<String>])),
                 array(UInt64Array::from_iter([None::<u64>])),
@@ -11040,6 +11094,7 @@ mod tests {
             Field::new("ram_budget_bytes", DataType::UInt64, true),
             Field::new("next_generated_id", DataType::UInt64, false),
             Field::new("routing_max_level", DataType::UInt8, false),
+            Field::new("logical_cell_routing_strategy_json", DataType::Utf8, false),
         ]));
         let batch = RecordBatch::try_new(
             schema,
@@ -11054,6 +11109,10 @@ mod tests {
                 array(UInt64Array::from_iter([None::<u64>])),
                 array(UInt64Array::from_iter_values([0])),
                 array(UInt8Array::from_iter_values([0])),
+                array(StringArray::from_iter_values([serde_json::to_string(
+                    &crate::centroid_hnsw::CatalogRoutingStrategy::Flat,
+                )
+                .unwrap()])),
             ],
         )
         .unwrap();
