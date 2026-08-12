@@ -129,8 +129,10 @@ def validate_dataset_descriptor(
     }
     if value["schema_version"] != 1 or any(value[key] != item for key, item in expected.items()):
         raise ValueError("dataset descriptor differs from manifest")
-    digest = str(value["content_sha256"])
-    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+    content_digest = str(value["content_sha256"])
+    if len(content_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in content_digest
+    ):
         raise ValueError("dataset descriptor content checksum is invalid")
     objects = value["objects"]
     if not isinstance(objects, list):
@@ -140,7 +142,7 @@ def validate_dataset_descriptor(
         if not isinstance(item, dict) or frozenset(item) != OBJECT_FIELDS:
             raise ValueError("dataset object fields differ")
         path = str(item["path"])
-        digest = str(item["sha256"])
+        object_digest = str(item["sha256"])
         if not path or path.startswith("/") or ".." in path.split("/") or path in paths:
             raise ValueError("dataset object paths must be relative and unique")
         paths.add(path)
@@ -149,8 +151,10 @@ def validate_dataset_descriptor(
             or not isinstance(item["bytes"], int)
             or item["bytes"] <= 0
             or item["bytes"] > MAX_DATASET_OBJECT_BYTES
-            or len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)
+            or len(object_digest) != 64
+            or any(
+                character not in "0123456789abcdef" for character in object_digest
+            )
         ):
             raise ValueError("dataset object format or size is invalid")
     if value["materialization"] != "staged-parquet" or not objects:
@@ -163,6 +167,6 @@ def validate_dataset_descriptor(
         }
         for item in objects
     ]
-    if hashlib.sha256(canonical_json_bytes(identity)).hexdigest() != digest:
+    if hashlib.sha256(canonical_json_bytes(identity)).hexdigest() != content_digest:
         raise ValueError("staged dataset object set differs")
     return value
