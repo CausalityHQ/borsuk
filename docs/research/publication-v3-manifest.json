@@ -1,0 +1,315 @@
+{
+  "schema_version": 3,
+  "campaign_id": "publication-v3-20260812",
+  "campaign_kind": "publication",
+  "master_seed": 20260812,
+  "repetitions": 5,
+  "queries_per_repetition": 1000,
+  "publish_p99": true,
+  "source": {
+    "state": "unfrozen"
+  },
+  "environment_contract": {
+    "aws_account": "453182569524",
+    "region": "eu-central-1",
+    "architecture": "aarch64",
+    "spot_default": true,
+    "instance_types": {
+      "borsuk": "r7g.16xlarge",
+      "amazon-s3-vectors": "r7g.16xlarge",
+      "faiss": "r7g.16xlarge"
+    },
+    "client_storage": {
+      "volume_type": "gp3",
+      "volume_size_gib": 4096,
+      "iops": 16000,
+      "throughput_mib_s": 1000
+    },
+    "interruption_contract": {
+      "measurement_unit": "factor-arm",
+      "sync_terminal_repetitions": true,
+      "discard_interrupted_measurement_cell": true
+    }
+  },
+  "prefixes": {
+    "result": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results",
+    "index": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/indexes",
+    "dataset": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets",
+    "cache": "publication-v3-20260812-cache"
+  },
+  "index_profiles": {
+    "borsuk": {
+      "engine": "borsuk-v12",
+      "logical_cells": 16384,
+      "minimum_rows_per_logical_cell": 256,
+      "routing": "hnsw",
+      "hnsw_m": 32,
+      "hnsw_ef_construction": 200,
+      "leaf_codec": "srht-pq-scan",
+      "code_bytes": 96,
+      "bundle_target_mib": 64,
+      "row_group_target_mib": 8,
+      "max_active_levels": 16
+    },
+    "amazon-s3-vectors": {"engine": "amazon-s3-vectors-managed"},
+    "faiss": {"engine": "faiss-ivf-flat", "nlist": 16384, "training_rows": 1000000, "minimum_training_rows_per_centroid": 39}
+  },
+  "budget_contract": {
+    "max_campaign_usd_micros": 50000000000,
+    "max_cell_seconds": 7200,
+    "max_index_build_seconds": 28800,
+    "terminate_on_terminal_marker": true
+  },
+  "datasets": [
+    {
+      "id": "deep-image-96",
+      "kind": "standard-ann",
+      "scale": {"state": "exact", "rows": 9990000},
+      "dimensions": 96,
+      "metric": "cosine",
+      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/deep-image-96-angular.hdf5", "license": "upstream-dataset-license"}
+    },
+    {
+      "id": "fashion-mnist-784",
+      "kind": "standard-ann",
+      "scale": {"state": "exact", "rows": 60000},
+      "dimensions": 784,
+      "metric": "l2",
+      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/fashion-mnist-784-euclidean.hdf5", "license": "upstream-dataset-license"}
+    },
+    {
+      "id": "gist-960",
+      "kind": "standard-ann",
+      "scale": {"state": "exact", "rows": 1000000},
+      "dimensions": 960,
+      "metric": "l2",
+      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/gist-960-euclidean.hdf5", "license": "upstream-dataset-license"}
+    },
+    {
+      "id": "glove-100",
+      "kind": "standard-ann",
+      "scale": {"state": "exact", "rows": 1183514},
+      "dimensions": 100,
+      "metric": "cosine",
+      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/glove-100-angular.hdf5", "license": "upstream-dataset-license"}
+    },
+    {
+      "id": "nytimes-256",
+      "kind": "standard-ann",
+      "scale": {"state": "exact", "rows": 290000},
+      "dimensions": 256,
+      "metric": "cosine",
+      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/nytimes-256-angular.hdf5", "license": "upstream-dataset-license"}
+    },
+    {
+      "id": "sift-128",
+      "kind": "standard-ann",
+      "scale": {"state": "exact", "rows": 1000000},
+      "dimensions": 128,
+      "metric": "l2",
+      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/sift-128-euclidean.hdf5", "license": "upstream-dataset-license"}
+    },
+    {
+      "id": "cohere-medium-1m-768",
+      "kind": "realistic-dense",
+      "scale": {"state": "exact", "rows": 1000000},
+      "dimensions": 768,
+      "metric": "cosine",
+      "source": {"state": "unstaged", "expected_source": "s3://assets.zilliz.com/benchmark/cohere_medium_1m", "license": "cohere-wikipedia-benchmark-license"}
+    },
+    {
+      "id": "cohere-large-10m-768",
+      "kind": "realistic-dense",
+      "scale": {"state": "exact", "rows": 10000000},
+      "dimensions": 768,
+      "metric": "cosine",
+      "source": {"state": "unstaged", "expected_source": "s3://assets.zilliz.com/benchmark/cohere_large_10m", "license": "cohere-wikipedia-benchmark-license"}
+    },
+    {
+      "id": "laion-100m-768",
+      "kind": "realistic-dense",
+      "scale": {"state": "exact", "rows": 100000000},
+      "dimensions": 768,
+      "metric": "cosine",
+      "source": {"state": "unstaged", "expected_source": "s3://assets.zilliz.com/benchmark/laion2b-en-100m", "license": "laion-dataset-license"}
+    },
+    {
+      "id": "synthetic-clustered-1m-384",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 1000000},
+      "dimensions": 384,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-clustered-v1", "seed": 1101384}
+    },
+    {
+      "id": "synthetic-clustered-1m-768",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 1000000},
+      "dimensions": 768,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-clustered-v1", "seed": 1101768}
+    },
+    {
+      "id": "synthetic-clustered-1m-1536",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 1000000},
+      "dimensions": 1536,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-clustered-v1", "seed": 1102536}
+    },
+    {
+      "id": "synthetic-uniform-10m-384",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 10000000},
+      "dimensions": 384,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-uniform-v1", "seed": 1201384}
+    },
+    {
+      "id": "synthetic-uniform-10m-768",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 10000000},
+      "dimensions": 768,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-uniform-v1", "seed": 1201768}
+    },
+    {
+      "id": "synthetic-uniform-10m-1536",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 10000000},
+      "dimensions": 1536,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-uniform-v1", "seed": 1202536}
+    },
+    {
+      "id": "synthetic-duplicate-1m-768",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 1000000},
+      "dimensions": 768,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-duplicate-v1", "seed": 1301768}
+    },
+    {
+      "id": "synthetic-adversarial-1m-768",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 1000000},
+      "dimensions": 768,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-adversarial-v1", "seed": 1401768}
+    },
+    {
+      "id": "synthetic-clustered-100m-768",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 100000000},
+      "dimensions": 768,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-clustered-v1", "seed": 1501768}
+    },
+    {
+      "id": "synthetic-uniform-100m-768",
+      "kind": "synthetic-dense",
+      "scale": {"state": "exact", "rows": 100000000},
+      "dimensions": 768,
+      "metric": "cosine",
+      "source": {"state": "generated", "generator": "synthetic-uniform-v1", "seed": 1601768}
+    },
+    {
+      "id": "synthetic-binary-1m-768",
+      "kind": "synthetic-binary",
+      "scale": {"state": "exact", "rows": 1000000},
+      "dimensions": 768,
+      "metric": "hamming",
+      "source": {"state": "generated", "generator": "synthetic-binary-v1", "seed": 1701768}
+    },
+    {
+      "id": "scifact",
+      "kind": "beir-hybrid",
+      "scale": {"state": "exact", "rows": 5183},
+      "dimensions": 384,
+      "metric": "cosine",
+      "source": {"state": "unstaged", "expected_source": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip", "license": "beir-upstream-license"}
+    },
+    {
+      "id": "nfcorpus",
+      "kind": "beir-hybrid",
+      "scale": {"state": "exact", "rows": 3633},
+      "dimensions": 384,
+      "metric": "cosine",
+      "source": {"state": "unstaged", "expected_source": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip", "license": "beir-upstream-license"}
+    },
+    {
+      "id": "fiqa",
+      "kind": "beir-hybrid",
+      "scale": {"state": "exact", "rows": 57638},
+      "dimensions": 384,
+      "metric": "cosine",
+      "source": {"state": "unstaged", "expected_source": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip", "license": "beir-upstream-license"}
+    }
+  ],
+  "workloads": [
+    {
+      "id": "standard-ann-read",
+      "kind": "read-recall",
+      "dataset_ids": ["deep-image-96", "fashion-mnist-784", "gist-960", "glove-100", "nytimes-256", "sift-128"],
+      "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
+      "factors": {"k": [10, 100], "candidate_budgets": [64, 128, 256, 512], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
+    },
+    {
+      "id": "realistic-dense-read",
+      "kind": "read-recall",
+      "dataset_ids": ["cohere-medium-1m-768", "cohere-large-10m-768", "laion-100m-768"],
+      "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
+      "factors": {"k": [10, 100], "candidate_budgets": [64, 128, 256, 512, 1024], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
+    },
+    {
+      "id": "synthetic-dense-read",
+      "kind": "read-recall",
+      "dataset_ids": ["synthetic-clustered-1m-384", "synthetic-clustered-1m-768", "synthetic-clustered-1m-1536", "synthetic-uniform-10m-384", "synthetic-uniform-10m-768", "synthetic-uniform-10m-1536", "synthetic-duplicate-1m-768", "synthetic-adversarial-1m-768", "synthetic-clustered-100m-768", "synthetic-uniform-100m-768"],
+      "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
+      "factors": {"k": [10, 100], "candidate_budgets": [64, 128, 256, 512, 1024], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
+    },
+    {
+      "id": "durable-lifecycle",
+      "kind": "write-update-delete-compact",
+      "dataset_ids": ["cohere-medium-1m-768", "cohere-large-10m-768", "synthetic-clustered-1m-768", "synthetic-clustered-100m-768"],
+      "systems": ["borsuk", "amazon-s3-vectors"],
+      "factors": {"writers": [1, 8, 32], "batch_sizes": [1, 64, 1024], "update_percent": [10, 50], "delete_percent": [10, 50], "compaction_states": ["before", "after"], "duration_seconds": 300, "minimum_lifecycle_accuracy_ppm": 1000000}
+    },
+    {
+      "id": "hybrid-read",
+      "kind": "sparse-text-dense-hybrid",
+      "dataset_ids": ["scifact", "nfcorpus", "fiqa"],
+      "systems": ["borsuk"],
+      "factors": {"modes": ["dense", "sparse", "text", "dense-sparse", "dense-text", "sparse-text", "dense-sparse-text"], "candidate_depths": [64, 256], "fusion": "rrf", "rrf_k": 60, "minimum_ndcg_ppm": 900000}
+    },
+    {
+      "id": "filtered-namespaces",
+      "kind": "filtered-namespace-read",
+      "dataset_ids": ["cohere-medium-1m-768", "synthetic-clustered-1m-768"],
+      "systems": ["borsuk", "amazon-s3-vectors"],
+      "factors": {"selectivity_ppm": [1000, 10000, 100000, 1000000], "namespace_counts": [1, 100, 10000], "k": [10, 100], "minimum_recall_ppm": 950000}
+    },
+    {
+      "id": "late-interaction",
+      "kind": "late-interaction-read",
+      "dataset_ids": ["scifact", "nfcorpus", "fiqa"],
+      "systems": ["borsuk"],
+      "factors": {"query_token_counts": [8, 32], "document_token_counts": [64, 256], "candidate_depths": [64, 256], "k": [10], "minimum_ndcg_ppm": 900000}
+    },
+    {
+      "id": "datatype-simd",
+      "kind": "datatype-simd-matrix",
+      "dataset_ids": ["synthetic-clustered-1m-384", "synthetic-clustered-1m-768", "synthetic-clustered-1m-1536", "synthetic-binary-1m-768"],
+      "systems": ["borsuk", "faiss"],
+      "factors": {"datatypes": ["f32", "f16", "bf16", "float8-e4m3", "float8-e5m2", "int8", "binary"], "dimensions": [384, 768, 1536], "kernels": ["scalar", "simd"], "k": [10, 100], "minimum_recall_ppm": 950000}
+    },
+    {
+      "id": "object-layout",
+      "kind": "storage-layout-audit",
+      "dataset_ids": ["cohere-large-10m-768", "laion-100m-768", "synthetic-clustered-100m-768"],
+      "systems": ["borsuk"],
+      "factors": {"bundle_target_mib": 64, "row_group_target_mib": 8, "max_active_levels": 16, "require_multiple_data_bundles": true}
+    }
+  ],
+  "systems": ["borsuk", "amazon-s3-vectors", "faiss"]
+}
