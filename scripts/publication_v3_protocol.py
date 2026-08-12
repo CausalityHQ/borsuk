@@ -1030,6 +1030,27 @@ def _write_canonical(path: Path, value: object) -> None:
     path.write_bytes(canonical_json_bytes(value) + b"\n")
 
 
+def _read_canonical_json(path: Path, maximum_bytes: int) -> dict[str, object]:
+    payload = path.read_bytes()
+    if not payload or len(payload) > maximum_bytes:
+        raise ValueError(f"{path} is empty or exceeds its byte bound")
+    try:
+        value = _dict(json.loads(payload.decode("utf-8")), str(path))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{path} is not canonical UTF-8 JSON") from error
+    if payload != canonical_json_bytes(value) + b"\n":
+        raise ValueError(f"{path} is not canonical JSON")
+    return value
+
+
+def write_protocol(path: Path, cell: dict[str, object]) -> None:
+    _write_canonical(path, validate_schedule_cell(cell))
+
+
+def read_protocol(path: Path) -> dict[str, object]:
+    return validate_schedule_cell(_read_canonical_json(path, 256 * 1024))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1041,7 +1062,26 @@ def main() -> int:
     verify_parser = subparsers.add_parser("verify-schedule")
     verify_parser.add_argument("manifest", type=Path)
     verify_parser.add_argument("schedule", type=Path)
+    protocol_parser = subparsers.add_parser("protocol")
+    protocol_parser.add_argument("--schedule", required=True, type=Path)
+    protocol_parser.add_argument("--cell-id", required=True)
+    protocol_parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
+    if args.command == "protocol":
+        schedule = validate_schedule_document(_read_json(args.schedule))
+        cells = {
+            str(cell["cell_id"]): cell for cell in schedule["cells"]
+        }
+        if args.cell_id not in cells:
+            raise ValueError("requested cell_id is absent from schedule")
+        write_protocol(args.output, cells[args.cell_id])
+        print(
+            json.dumps(
+                {"cell_id": args.cell_id, "output": str(args.output)},
+                sort_keys=True,
+            )
+        )
+        return 0
     manifest = validate_manifest(_read_json(args.manifest))
     unstaged = sum(
         dataset["source"]["state"] == "unstaged" for dataset in manifest["datasets"]

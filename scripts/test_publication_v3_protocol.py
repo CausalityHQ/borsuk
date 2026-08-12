@@ -9,9 +9,11 @@ from pathlib import Path
 from scripts.publication_v3_protocol import (
     build_schedule_document,
     canonical_json_bytes,
+    read_protocol,
     validate_manifest,
     validate_schedule_cell,
     validate_schedule_for_manifest,
+    write_protocol,
 )
 
 
@@ -197,6 +199,18 @@ def paid_v3_manifest() -> dict[str, object]:
 
 
 class PublicationV3ProtocolTests(unittest.TestCase):
+    def test_protocol_is_exact_scheduled_cell_without_reconstruction(self) -> None:
+        cell = build_schedule_document(validate_manifest(valid_v3_manifest()))["cells"][0]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "protocol.json"
+            write_protocol(path, cell)
+            self.assertEqual(path.read_bytes(), canonical_json_bytes(cell) + b"\n")
+            self.assertEqual(read_protocol(path), cell)
+
+            path.write_text(json.dumps(cell, indent=2), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "canonical"):
+                read_protocol(path)
+
     def test_schedule_cells_are_canonical_typed_and_alias_free(self) -> None:
         manifest = validate_manifest(valid_v3_manifest())
         first = build_schedule_document(manifest)
