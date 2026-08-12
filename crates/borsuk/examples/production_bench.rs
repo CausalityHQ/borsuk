@@ -65,7 +65,7 @@ const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turb
 const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,cache_profile,target_cache_coverage_percent,execution_engine,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read";
 const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
 const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,network_gets";
-const BUILD_HEADER: &str = "vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
+const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
 const WRITE_COST_HEADER: &str = "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
 const WRITE_SAMPLE_HEADER: &str =
     "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
@@ -115,6 +115,8 @@ struct ResolvedConfig {
     global_turboquant_bits: u8,
     global_turboquant_qjl_bits: u32,
     global_turboquant_shards: u32,
+    logical_cell_catalog: Option<PathBuf>,
+    logical_cells: Option<usize>,
     cache_execution: CacheExecutionPolicy,
     force_segment_path: bool,
     ram_budget_bytes: Option<u64>,
@@ -463,6 +465,10 @@ struct InsertMeasurement {
 }
 
 struct BuildMeasurement {
+    logical_cell_catalog_checksum: String,
+    logical_cells: u32,
+    logical_cell_dimensions: u32,
+    logical_cell_catalog_bytes: u64,
     layout: &'static str,
     ingest_ms: f64,
     compaction_ms: f64,
@@ -497,33 +503,63 @@ fn run() -> BenchResult<()> {
     fs::create_dir_all(&config.output_dir)?;
 
     if config.build_index {
-        let mut index = BorsukIndex::create_with_wal_capability_and_build_config(
-            IndexConfig {
-                uri: config.uri.clone(),
-                metric: dataset.metric.clone(),
-                dimensions: dataset.meta.dim,
-                segment_max_vectors: config.segment_max,
-                ram_budget_bytes: config.ram_budget_bytes,
-                text: false,
-                named_vectors: Default::default(),
-            },
-            // The production lifecycle is WAL-first: each batch is durable and
-            // visible after one immutable WAL publish, while threshold-driven
-            // flushes materialize bounded indexed deltas. The final bulk-load
-            // boundary flushes any tail before building the immutable base.
-            WalConfig::default(),
-            config.leaf_capability,
-            BuildConfig {
-                vector_element_type: config.vector_element_type,
-                global_pq_layout: config.global_pq_layout.clone(),
-                global_pq_code_bytes: config.global_pq_code_bytes,
-                global_scan_codec: config.global_scan_codec,
-                global_turboquant_bits: config.global_turboquant_bits,
-                global_turboquant_qjl_bits: config.global_turboquant_qjl_bits,
-                global_turboquant_shards: config.global_turboquant_shards,
-                ..BuildConfig::default()
-            },
-        )?;
+        let index_config = IndexConfig {
+            uri: config.uri.clone(),
+            metric: dataset.metric.clone(),
+            dimensions: dataset.meta.dim,
+            segment_max_vectors: config.segment_max,
+            ram_budget_bytes: config.ram_budget_bytes,
+            text: false,
+            named_vectors: Default::default(),
+        };
+        let build_config = BuildConfig {
+            vector_element_type: config.vector_element_type,
+            global_pq_layout: config.global_pq_layout.clone(),
+            global_pq_code_bytes: config.global_pq_code_bytes,
+            global_scan_codec: config.global_scan_codec,
+            global_turboquant_bits: config.global_turboquant_bits,
+            global_turboquant_qjl_bits: config.global_turboquant_qjl_bits,
+            global_turboquant_shards: config.global_turboquant_shards,
+            ..BuildConfig::default()
+        };
+        // The production lifecycle is WAL-first: each batch is durable and
+        // visible after one immutable WAL publish, while threshold-driven
+        // flushes materialize bounded indexed deltas. The final bulk-load
+        // boundary flushes any tail before building the immutable base.
+        let wal = WalConfig::default();
+        let mut index = match (&config.logical_cell_catalog, config.logical_cells) {
+            (Some(path), Some(expected_cells)) => {
+                let centroids = read_logical_cell_catalog(path, expected_cells, dataset.meta.dim)?;
+                BorsukIndex::create_with_logical_cell_catalog_and_build_config(
+                    index_config,
+                    centroids,
+                    wal,
+                    config.leaf_capability,
+                    build_config,
+                )?
+            }
+            (None, None) => BorsukIndex::create_with_wal_capability_and_build_config(
+                index_config,
+                wal,
+                config.leaf_capability,
+                build_config,
+            )?,
+            _ => unreachable!("logical-cell catalog configuration was validated"),
+        };
+        let catalog_evidence = index
+            .logical_cell_catalog_evidence()
+            .ok_or_else(|| invalid_input("created index has no logical-cell catalog evidence"))?;
+        if config
+            .logical_cells
+            .is_some_and(|expected| catalog_evidence.1 as usize != expected)
+        {
+            return Err(invalid_input(&format!(
+                "created logical-cell catalog has {} cells; expected {}",
+                catalog_evidence.1,
+                config.logical_cells.unwrap_or_default()
+            ))
+            .into());
+        }
 
         let ingest_started = Instant::now();
         ingest_train(&mut index, &config.dataset_dir, &dataset)?;
@@ -552,6 +588,10 @@ fn run() -> BenchResult<()> {
         );
         let stats = index.stats();
         let build = BuildMeasurement {
+            logical_cell_catalog_checksum: catalog_evidence.0,
+            logical_cells: catalog_evidence.1,
+            logical_cell_dimensions: catalog_evidence.2,
+            logical_cell_catalog_bytes: catalog_evidence.3,
             layout,
             ingest_ms,
             compaction_ms,
@@ -795,6 +835,15 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let global_turboquant_shards =
         u32::try_from(env_usize("BORSUK_BENCH_TURBOQUANT_SHARDS", 1)?)
             .map_err(|_| invalid_input("BORSUK_BENCH_TURBOQUANT_SHARDS must fit u32"))?;
+    let logical_cell_catalog =
+        non_empty_env("BORSUK_BENCH_LOGICAL_CELL_CATALOG").map(PathBuf::from);
+    let logical_cells = env_optional_cap("BORSUK_BENCH_LOGICAL_CELLS", None)?;
+    if logical_cell_catalog.is_some() != logical_cells.is_some() {
+        return Err(invalid_input(
+            "BORSUK_BENCH_LOGICAL_CELL_CATALOG and BORSUK_BENCH_LOGICAL_CELLS must be set together",
+        )
+        .into());
+    }
     let cache_execution = non_empty_env("BORSUK_BENCH_CACHE_EXECUTION").map_or(
         Ok::<CacheExecutionPolicy, Box<dyn Error>>(CacheExecutionPolicy::Scan),
         |value| {
@@ -914,6 +963,8 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         global_turboquant_bits,
         global_turboquant_qjl_bits,
         global_turboquant_shards,
+        logical_cell_catalog,
+        logical_cells,
         cache_execution,
         force_segment_path,
         ram_budget_bytes,
@@ -1164,6 +1215,22 @@ fn read_f32_rows(path: &Path, rows: usize, dimensions: usize) -> BenchResult<Vec
         result.push(read_f32_vector(&mut reader, dimensions)?);
     }
     Ok(result)
+}
+
+fn read_logical_cell_catalog(
+    path: &Path,
+    expected_cells: usize,
+    dimensions: usize,
+) -> BenchResult<Vec<Vec<f32>>> {
+    if expected_cells == 0 || dimensions == 0 {
+        return Err(invalid_input("logical-cell catalog shape must be non-zero").into());
+    }
+    validate_file_size(path, expected_cells, dimensions, 4)?;
+    let centroids = read_f32_rows(path, expected_cells, dimensions)?;
+    if centroids.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(invalid_input("logical-cell catalog contains a non-finite value").into());
+    }
+    Ok(centroids)
 }
 
 fn read_f32_vector(reader: &mut impl Read, dimensions: usize) -> io::Result<Vec<f32>> {
@@ -1662,7 +1729,11 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
     };
     writeln!(
         writer,
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{}",
+        build.logical_cell_catalog_checksum,
+        build.logical_cells,
+        build.logical_cell_dimensions,
+        build.logical_cell_catalog_bytes,
         config.vector_element_type,
         config.global_scan_codec,
         config.global_turboquant_bits,
@@ -3688,7 +3759,7 @@ mod tests {
         ingest_batch_size, is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
         normalized_cache_access_fractions, parse_flag_value, parse_global_pq_layout,
         parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, permuted_positions, preload_query_count,
+        parse_serving_mode, permuted_positions, preload_query_count, read_logical_cell_catalog,
         recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
         sample_stddev, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_build_only, validate_disk_cached_network, validate_generated_id_range,
@@ -3710,6 +3781,30 @@ mod tests {
     #[test]
     fn benchmark_ingest_ids_are_explicit_deterministic_row_ids() {
         assert_eq!(benchmark_row_ids(5, 3), ["5", "6", "7"]);
+    }
+
+    #[test]
+    fn logical_cell_catalog_file_is_exactly_sized_and_finite() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("catalog.f32");
+        let values = [0.0_f32, 1.0, 2.0, 3.0, 4.0, 5.0];
+        std::fs::write(
+            &path,
+            values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_logical_cell_catalog(&path, 2, 3).unwrap(),
+            [vec![0.0, 1.0, 2.0], vec![3.0, 4.0, 5.0]]
+        );
+        assert!(read_logical_cell_catalog(&path, 3, 3).is_err());
+
+        std::fs::write(&path, f32::NAN.to_le_bytes()).unwrap();
+        assert!(read_logical_cell_catalog(&path, 1, 1).is_err());
     }
 
     use arrow_array::{
@@ -4181,6 +4276,10 @@ mod tests {
     #[test]
     fn build_artifact_records_fresh_build_costs_and_footprint_inputs() {
         for column in [
+            "logical_cell_catalog_checksum",
+            "logical_cells",
+            "logical_cell_dimensions",
+            "logical_cell_catalog_bytes",
             "vector_element_type",
             "build_layout",
             "leaf_capability",
