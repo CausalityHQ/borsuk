@@ -1123,7 +1123,7 @@ fn print_config(config: &ResolvedConfig) {
         config.cache_coverage_percent,
         config.build_index,
         config.build_only,
-        config.recall_only,
+        config.recall_only || !config.build_index,
         config.skip_recall,
         config.skip_exact_recall,
         config.recluster_build,
@@ -1366,12 +1366,13 @@ fn find_parquet_train_files(dataset_dir: &Path) -> BenchResult<Vec<PathBuf>> {
 fn parquet_train_files_for_phase(
     dataset_dir: &Path,
     expected_rows: usize,
-    recall_only: bool,
+    allow_missing_corpus: bool,
 ) -> BenchResult<Option<Vec<PathBuf>>> {
-    if recall_only {
-        return Ok(None);
-    }
-    let train_files = find_parquet_train_files(dataset_dir)?;
+    let train_files = match find_parquet_train_files(dataset_dir) {
+        Ok(files) => files,
+        Err(_) if allow_missing_corpus => return Ok(None),
+        Err(error) => return Err(error),
+    };
     validate_parquet_row_count(&train_files, expected_rows, "training")?;
     Ok(Some(train_files))
 }
@@ -3424,7 +3425,14 @@ fn stream_dataset_batches(
     let mut offset = 0_usize;
     match &dataset.source {
         DatasetVectorSource::Unavailable => {
-            return Err(invalid_input("mutation workload requires local source vectors").into());
+            while offset < count {
+                let batch_rows = write_batch_len(count, offset, config.write_batch_size);
+                let vectors = (offset..offset.saturating_add(batch_rows))
+                    .map(|row| deterministic_mutation_vector(row, dataset.meta.dim))
+                    .collect();
+                consume(offset, vectors)?;
+                offset = offset.saturating_add(batch_rows);
+            }
         }
         DatasetVectorSource::RawF32 => {
             let mut reader = BufReader::new(File::open(config.dataset_dir.join("train.f32"))?);
@@ -3469,6 +3477,20 @@ fn stream_dataset_batches(
         .into());
     }
     Ok(())
+}
+
+fn deterministic_mutation_vector(row: usize, dimensions: usize) -> Vec<f32> {
+    let mut state = (row as u64).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut vector = Vec::with_capacity(dimensions);
+    for _ in 0..dimensions {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut mixed = state;
+        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        mixed ^= mixed >> 31;
+        vector.push((mixed as u32 as f32 / u32::MAX as f32) * 2.0 - 1.0);
+    }
+    vector
 }
 
 fn measure_deletes(
@@ -3906,17 +3928,17 @@ mod tests {
         QuerySummary, RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER,
         WRITE_SAMPLE_HEADER, approximate_options, benchmark_row_ids, cache_coverage_cohort_size,
         cache_coverage_enabled, dataset_metric, default_build_leaf_capability,
-        default_recall_leaf_mode, default_serving_leaf_mode, dollars_per_million_queries,
-        ingest_batch_size, is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
-        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
-        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
-        parse_positive_list, parse_serving_mode, permuted_positions, preload_query_count,
-        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count,
-        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
-        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase, validate_build_only,
-        validate_disk_cached_network, validate_generated_id_range, validate_insert_only,
-        validate_leaf_capability_modes, validate_phase_selection, vector_row, write_batch_len,
-        write_operation_count,
+        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
+        dollars_per_million_queries, ingest_batch_size, is_hot_workload_position,
+        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
+        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
+        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
+        parse_serving_mode, permuted_positions, preload_query_count, read_logical_cell_catalog,
+        recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
+        sample_stddev, update_vector_reservoir, uses_bounded_decoded_cache_phases,
+        uses_memory_preloaded_phase, validate_build_only, validate_disk_cached_network,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
+        validate_phase_selection, vector_row, write_batch_len, write_operation_count,
     };
 
     #[test]
@@ -4565,6 +4587,19 @@ mod tests {
             None
         );
         assert!(parquet_train_files_for_phase(directory.path(), 100_000_000, false).is_err());
+    }
+
+    #[test]
+    fn runtime_mutation_vectors_are_deterministic_without_local_corpus() {
+        let first = deterministic_mutation_vector(42, 768);
+        assert_eq!(first, deterministic_mutation_vector(42, 768));
+        assert_ne!(first, deterministic_mutation_vector(43, 768));
+        assert_eq!(first.len(), 768);
+        assert!(
+            first
+                .iter()
+                .all(|value| value.is_finite() && (-1.0..=1.0).contains(value))
+        );
     }
 
     #[test]
