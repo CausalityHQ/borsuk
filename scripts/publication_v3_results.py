@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
+
+from scripts.publication_v3_protocol import canonical_json_bytes
+
 
 OBJECT_FIELDS = frozenset({"role", "path", "format", "bytes", "rows", "checksum"})
 OBJECT_ROLES = frozenset({"data-bundle", "query-page", "directory", "control"})
@@ -16,6 +21,38 @@ MAX_DATA_OBJECT_BYTES = 128 * 1024 * 1024
 MAX_CONTROL_OBJECT_BYTES = 256 * 1024
 MAX_CONTROL_OBJECTS = 256
 MAX_DATA_OBJECTS = 8192
+RESULT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "cell_id",
+        "manifest_sha256",
+        "protocol_sha256",
+        "source_archive_sha256",
+        "attempt_id",
+        "instance_identity",
+        "metrics",
+        "object_roster",
+    }
+)
+METRIC_FIELDS = frozenset(
+    {
+        "queries",
+        "correctness_ppm",
+        "latency_p50_us",
+        "latency_p95_us",
+        "latency_p99_us",
+        "throughput_milli_per_second",
+        "cpu_ns",
+        "peak_rss_bytes",
+        "disk_read_bytes",
+        "disk_write_bytes",
+        "storage_gets",
+        "storage_puts",
+        "storage_bytes_read",
+        "storage_bytes_written",
+    }
+)
 
 
 def _positive_integer(value: object, role: str) -> int:
@@ -29,6 +66,43 @@ def _checksum(value: object) -> str:
     if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
         raise ValueError("object checksum must be lowercase SHA-256")
     return digest
+
+
+def _nonnegative_integer(value: object, role: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{role} must be a nonnegative integer")
+    return value
+
+
+def _bounded_identity(value: object, role: str) -> str:
+    identity = str(value)
+    if not identity or len(identity.encode("utf-8")) > 256:
+        raise ValueError(f"{role} must be a nonempty bounded string")
+    return identity
+
+
+def _correctness_floor(cell: dict[str, object]) -> int:
+    workload = cell.get("workload")
+    if not isinstance(workload, dict) or not isinstance(workload.get("factors"), dict):
+        raise ValueError("cell workload factors are invalid")
+    factors = workload["factors"]
+    floors = [
+        factors[key]
+        for key in (
+            "minimum_recall_ppm",
+            "minimum_ndcg_ppm",
+            "minimum_lifecycle_accuracy_ppm",
+        )
+        if key in factors
+    ]
+    if len(floors) > 1:
+        raise ValueError("cell declares multiple correctness floors")
+    if not floors:
+        return 1_000_000
+    floor = _positive_integer(floors[0], "correctness floor")
+    if floor > 1_000_000:
+        raise ValueError("correctness floor exceeds one million ppm")
+    return floor
 
 
 def validate_object_roster(
@@ -98,3 +172,72 @@ def validate_object_roster(
         "total_object_bytes": total_bytes,
         "maximum_object_bytes": maximum_bytes,
     }
+
+
+def validate_cell_result(
+    value: dict[str, object],
+    *,
+    cell: dict[str, object],
+    protocol_bytes: bytes,
+    source_archive_sha256: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict) or frozenset(value) != RESULT_FIELDS:
+        raise ValueError("cell result fields differ")
+    if value["schema_version"] != 1 or value["status"] != "complete":
+        raise ValueError("cell result schema or status is invalid")
+    if value["cell_id"] != cell.get("cell_id"):
+        raise ValueError("cell result identity differs from its protocol")
+    if value["manifest_sha256"] != cell.get("manifest_sha256"):
+        raise ValueError("cell result manifest differs from its protocol")
+    expected_protocol = canonical_json_bytes(cell) + b"\n"
+    if protocol_bytes != expected_protocol:
+        raise ValueError("protocol bytes are not the canonical scheduled cell")
+    protocol_sha256 = hashlib.sha256(protocol_bytes).hexdigest()
+    if value["protocol_sha256"] != protocol_sha256:
+        raise ValueError("cell result protocol checksum differs")
+    source_archive_sha256 = _checksum(source_archive_sha256)
+    if value["source_archive_sha256"] != source_archive_sha256:
+        raise ValueError("cell result source archive checksum differs")
+    _bounded_identity(value["attempt_id"], "attempt identity")
+    _bounded_identity(value["instance_identity"], "instance identity")
+
+    metrics = value["metrics"]
+    if not isinstance(metrics, dict) or frozenset(metrics) != METRIC_FIELDS:
+        raise ValueError("cell result metric fields differ")
+    queries = _positive_integer(metrics["queries"], "query count")
+    source = cell.get("source")
+    if isinstance(source, dict) and "queries_per_repetition" in source:
+        if queries != source["queries_per_repetition"]:
+            raise ValueError("cell result query count differs from its protocol")
+    correctness = _nonnegative_integer(metrics["correctness_ppm"], "correctness ppm")
+    if correctness > 1_000_000 or correctness < _correctness_floor(cell):
+        raise ValueError("cell result correctness is below its protocol floor")
+    p50 = _nonnegative_integer(metrics["latency_p50_us"], "p50 latency")
+    p95 = _nonnegative_integer(metrics["latency_p95_us"], "p95 latency")
+    p99 = _nonnegative_integer(metrics["latency_p99_us"], "p99 latency")
+    if not p50 <= p95 <= p99:
+        raise ValueError("cell result latency quantiles are not ordered")
+    _positive_integer(metrics["throughput_milli_per_second"], "throughput")
+    _positive_integer(metrics["cpu_ns"], "CPU time")
+    _positive_integer(metrics["peak_rss_bytes"], "peak RSS")
+    for field in (
+        "disk_read_bytes",
+        "disk_write_bytes",
+        "storage_gets",
+        "storage_puts",
+        "storage_bytes_read",
+        "storage_bytes_written",
+    ):
+        _nonnegative_integer(metrics[field], field.replace("_", " "))
+
+    dataset = cell.get("dataset")
+    if not isinstance(dataset, dict) or not isinstance(dataset.get("scale"), dict):
+        raise ValueError("cell dataset scale is invalid")
+    rows = _positive_integer(dataset["scale"].get("rows"), "dataset rows")
+    profile = cell.get("index_profile")
+    logical_cells = profile.get("logical_cells") if isinstance(profile, dict) else None
+    roster = value["object_roster"]
+    if not isinstance(roster, list):
+        raise ValueError("cell result object roster is invalid")
+    validate_object_roster(roster, logical_rows=rows, logical_cells=logical_cells)
+    return copy.deepcopy(value)
