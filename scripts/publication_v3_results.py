@@ -6,8 +6,10 @@ from __future__ import annotations
 import copy
 import hashlib
 
-from scripts.publication_v3_protocol import canonical_json_bytes
-
+try:
+    from scripts.publication_v3_protocol import canonical_json_bytes
+except ModuleNotFoundError:
+    from publication_v3_protocol import canonical_json_bytes
 
 OBJECT_FIELDS = frozenset({"role", "path", "format", "bytes", "rows", "checksum"})
 OBJECT_ROLES = frozenset({"data-bundle", "query-page", "directory", "control"})
@@ -33,7 +35,7 @@ RESULT_FIELDS = frozenset(
         "instance_identity",
         "arm",
         "metrics",
-        "object_roster",
+        "index_receipt_sha256",
     }
 )
 METRIC_FIELDS = frozenset(
@@ -211,6 +213,8 @@ def validate_cell_result(
     cell: dict[str, object],
     protocol_bytes: bytes,
     source_archive_sha256: str,
+    dataset_materialization_sha256: str,
+    index_receipt: dict[str, object],
 ) -> dict[str, object]:
     if not isinstance(value, dict) or frozenset(value) != RESULT_FIELDS:
         raise ValueError("cell result fields differ")
@@ -232,6 +236,25 @@ def validate_cell_result(
     _bounded_identity(value["attempt_id"], "attempt identity")
     _bounded_identity(value["instance_identity"], "instance identity")
     _validate_result_arm(value["arm"], cell)
+    try:
+        from scripts.publication_v3_receipts import (
+            receipt_document_sha256,
+            validate_index_receipt,
+        )
+    except ModuleNotFoundError:
+        from publication_v3_receipts import (
+            receipt_document_sha256,
+            validate_index_receipt,
+        )
+
+    receipt = validate_index_receipt(
+        index_receipt,
+        cell=cell,
+        source_archive_sha256=source_archive_sha256,
+        dataset_materialization_sha256=dataset_materialization_sha256,
+    )
+    if value["index_receipt_sha256"] != receipt_document_sha256(receipt):
+        raise ValueError("cell result index receipt differs from its authorized build")
 
     metrics = value["metrics"]
     if not isinstance(metrics, dict) or frozenset(metrics) != METRIC_FIELDS:
@@ -270,15 +293,9 @@ def validate_cell_result(
         "storage_bytes_written",
     ):
         _nonnegative_integer(metrics[field], field.replace("_", " "))
-
-    dataset = cell.get("dataset")
-    if not isinstance(dataset, dict) or not isinstance(dataset.get("scale"), dict):
-        raise ValueError("cell dataset scale is invalid")
-    rows = _positive_integer(dataset["scale"].get("rows"), "dataset rows")
-    profile = cell.get("index_profile")
-    logical_cells = profile.get("logical_cells") if isinstance(profile, dict) else None
-    roster = value["object_roster"]
-    if not isinstance(roster, list):
-        raise ValueError("cell result object roster is invalid")
-    validate_object_roster(roster, logical_rows=rows, logical_cells=logical_cells)
+    workload = cell.get("workload")
+    if isinstance(workload, dict) and workload.get("kind") == "read-recall" and (
+        metrics["storage_puts"] != 0 or metrics["storage_bytes_written"] != 0
+    ):
+        raise ValueError("read-only publication results cannot write index objects")
     return copy.deepcopy(value)

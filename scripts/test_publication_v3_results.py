@@ -2,9 +2,19 @@ import hashlib
 import json
 import unittest
 
-from scripts.publication_v3_protocol import build_schedule_document, canonical_json_bytes, validate_manifest
+from scripts.publication_v3_protocol import (
+    build_schedule_document,
+    canonical_json_bytes,
+    validate_manifest,
+)
+from scripts.publication_v3_receipts import build_index_receipt, receipt_document_sha256
 from scripts.publication_v3_results import validate_cell_result, validate_object_roster
 from scripts.test_publication_v3_protocol import valid_v3_manifest
+from scripts.test_publication_v3_receipts import (
+    build_artifact,
+    build_metrics,
+    data_roster,
+)
 
 
 def data_object(index: int, rows: int, byte_count: int = 64 * 1024 * 1024) -> dict[str, object]:
@@ -39,12 +49,30 @@ def first_read_arm(cell: dict[str, object]) -> dict[str, object]:
     }
 
 
+def receipt_for(cell: dict[str, object]) -> dict[str, object]:
+    return build_index_receipt(
+        cell=cell,
+        source_archive_sha256="a" * 64,
+        dataset_materialization_sha256="d" * 64,
+        build_attempt_id="build-attempt-01",
+        builder_instance_identity="i-builder-01",
+        builder_instance_type=cell["environment_contract"]["build_workers"][cell["system"]]["instance_type"],
+        build_artifact=build_artifact(cell),
+        object_roster=data_roster(cell),
+        build_metrics=build_metrics(),
+    )
+
+
 class PublicationV3ResultTests(unittest.TestCase):
     def test_cell_result_binds_protocol_source_quality_latency_and_resources(self) -> None:
         manifest = validate_manifest(valid_v3_manifest())
-        cell = build_schedule_document(manifest)["cells"][0]
+        cell = next(
+            cell
+            for cell in build_schedule_document(manifest)["cells"]
+            if cell["system"] == "borsuk"
+        )
         protocol = canonical_json_bytes(cell) + b"\n"
-        roster = [data_object(0, cell["dataset"]["scale"]["rows"])]
+        receipt = receipt_for(cell)
         result = {
             "schema_version": 1,
             "status": "complete",
@@ -71,13 +99,15 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "storage_bytes_read": 4096,
                 "storage_bytes_written": 0,
             },
-            "object_roster": roster,
+            "index_receipt_sha256": receipt_document_sha256(receipt),
         }
         validated = validate_cell_result(
             result,
             cell=cell,
             protocol_bytes=protocol,
             source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+            index_receipt=receipt,
         )
         self.assertEqual(validated, result)
 
@@ -106,12 +136,19 @@ class PublicationV3ResultTests(unittest.TestCase):
                         cell=cell,
                         protocol_bytes=protocol,
                         source_archive_sha256="a" * 64,
+                        dataset_materialization_sha256="d" * 64,
+                        index_receipt=receipt,
                     )
 
     def test_cell_result_rejects_missing_resource_or_storage_telemetry(self) -> None:
         manifest = validate_manifest(valid_v3_manifest())
-        cell = build_schedule_document(manifest)["cells"][0]
+        cell = next(
+            cell
+            for cell in build_schedule_document(manifest)["cells"]
+            if cell["system"] == "borsuk"
+        )
         protocol = canonical_json_bytes(cell) + b"\n"
+        receipt = receipt_for(cell)
         base_metrics = {
             "queries": 1000,
             "correctness_ppm": 950000,
@@ -141,7 +178,7 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "instance_identity": "local-test",
                 "arm": first_read_arm(cell),
                 "metrics": metrics,
-                "object_roster": [data_object(0, cell["dataset"]["scale"]["rows"])],
+                "index_receipt_sha256": receipt_document_sha256(receipt),
             }
             with self.subTest(missing=missing), self.assertRaises(ValueError):
                 validate_cell_result(
@@ -149,6 +186,8 @@ class PublicationV3ResultTests(unittest.TestCase):
                     cell=cell,
                     protocol_bytes=protocol,
                     source_archive_sha256="a" * 64,
+                    dataset_materialization_sha256="d" * 64,
+                    index_receipt=receipt,
                 )
 
     def test_large_scale_roster_requires_multiple_bounded_data_bundles(self) -> None:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -14,14 +15,67 @@ import time
 from pathlib import Path
 
 try:
-    from scripts.publication_v3_protocol import canonical_json_bytes, read_protocol
+    from scripts.publication_v3_protocol import (
+        build_schedule_document,
+        canonical_json_bytes,
+        read_protocol,
+        validate_manifest,
+    )
+    from scripts.publication_v3_receipts import (
+        build_index_receipt,
+        receipt_document_sha256,
+        reconcile_index_inventory,
+        require_verified_index,
+        require_verified_object_roster,
+        validate_index_receipt,
+    )
     from scripts.publication_v3_results import validate_cell_result
 except ModuleNotFoundError:
-    from publication_v3_protocol import canonical_json_bytes, read_protocol
+    from publication_v3_protocol import (
+        build_schedule_document,
+        canonical_json_bytes,
+        read_protocol,
+        validate_manifest,
+    )
+    from publication_v3_receipts import (
+        build_index_receipt,
+        receipt_document_sha256,
+        reconcile_index_inventory,
+        require_verified_index,
+        require_verified_object_roster,
+        validate_index_receipt,
+    )
     from publication_v3_results import validate_cell_result
 
 
 SUPPORTED_LOCAL_KINDS = frozenset({"read-recall"})
+PRODUCTION_BUILD_FIELDS = tuple(
+    "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
+)
+
+
+def validate_publication_cell_authority(
+    cell: dict[str, object], manifest_path: Path
+) -> dict[str, object]:
+    payload = manifest_path.read_bytes()
+    try:
+        manifest_value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("frozen manifest is not valid JSON") from error
+    manifest = validate_manifest(manifest_value)
+    if payload != canonical_json_bytes(manifest) + b"\n":
+        raise ValueError("frozen manifest is not canonical")
+    expected = next(
+        (
+            candidate
+            for candidate in build_schedule_document(manifest)["cells"]
+            if candidate["cell_id"] == cell.get("cell_id")
+        ),
+        None,
+    )
+    if expected is None or canonical_json_bytes(expected) != canonical_json_bytes(cell):
+        raise ValueError("publication cell differs from its frozen manifest authority")
+    return copy.deepcopy(cell)
 
 
 def dataset_training_seed(dataset: dict[str, object]) -> int:
@@ -276,6 +330,8 @@ def build_execution_plan(
             "BORSUK_BENCH_OUTPUT_DIR": str(runtime_output_dir),
             "BORSUK_BENCH_RECALL_ONLY": "1",
             "BORSUK_BENCH_READ_ONLY": "1",
+            "BORSUK_BENCH_BUILD_INDEX": "0",
+            "BORSUK_STORAGE_TRACE": str(runtime_output_dir / "storage-access.csv"),
         }
         return {
             "schema_version": 1,
@@ -316,14 +372,67 @@ def build_execution_plan(
     }
 
 
+def authorize_publication_runtime(
+    plan: dict[str, object],
+    *,
+    receipt: dict[str, object],
+    cell: dict[str, object],
+    source_archive_sha256: str,
+    dataset_materialization_sha256: str,
+) -> dict[str, object]:
+    if plan.get("mode") != "publication" or plan.get("publishable") is not True:
+        raise ValueError("only a publication plan has an authorized runtime phase")
+    if plan.get("cell_id") != cell.get("cell_id"):
+        raise ValueError("runtime plan cell differs from its protocol")
+    validated_receipt = validate_index_receipt(
+        receipt,
+        cell=cell,
+        source_archive_sha256=source_archive_sha256,
+        dataset_materialization_sha256=dataset_materialization_sha256,
+    )
+    runtime = plan.get("runtime")
+    if not isinstance(runtime, dict) or not isinstance(runtime.get("steps"), list):
+        raise ValueError("publication plan has no runtime phase")
+    authorized = copy.deepcopy(runtime)
+    for step in authorized["steps"]:
+        if not isinstance(step, dict) or not isinstance(step.get("env"), dict):
+            raise ValueError("publication runtime step is invalid")
+        environment = step["env"]
+        if environment.get("BORSUK_BENCH_URI") != validated_receipt["index_uri"]:
+            raise ValueError("runtime index URI differs from the immutable build receipt")
+        if environment.get("BORSUK_BENCH_BUILD_INDEX") != "0":
+            raise ValueError("publication runtime must disable index construction")
+        for forbidden in (
+            "BORSUK_BENCH_BUILD_ONLY",
+            "BORSUK_BENCH_INSERT_ONLY",
+            "BORSUK_BENCH_RECLUSTER_BUILD",
+            "BORSUK_BENCH_PRELOAD_SERVING",
+        ):
+            if forbidden in environment:
+                raise ValueError("publication runtime step contains a build-only flag")
+    authorized["index_receipt_sha256"] = receipt_document_sha256(validated_receipt)
+    return authorized
+
+
 def execute_plan_with_resources(
     plan: dict[str, object],
 ) -> tuple[Path, dict[str, int], int]:
-    steps = plan.get("steps")
+    output_dir, resources, elapsed_ns = _execute_steps_with_resources(
+        workspace=Path(str(plan.get("workspace"))),
+        output_dir=Path(str(plan.get("output_dir"))),
+        steps=plan.get("steps"),
+    )
+    samples = output_dir / "bench_query_samples.csv"
+    if not samples.is_file() or samples.stat().st_size == 0:
+        raise ValueError("execution completed without a real query sample artifact")
+    return samples, resources, elapsed_ns
+
+
+def _execute_steps_with_resources(
+    *, workspace: Path, output_dir: Path, steps: object
+) -> tuple[Path, dict[str, int], int]:
     if not isinstance(steps, list) or not steps:
         raise ValueError("execution plan has no steps")
-    workspace = Path(str(plan.get("workspace")))
-    output_dir = Path(str(plan.get("output_dir")))
     workspace.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     cpu_ns = 0
@@ -364,11 +473,8 @@ def execute_plan_with_resources(
         disk_read_bytes += int(usage.ru_inblock) * 512
         disk_write_bytes += int(usage.ru_oublock) * 512
     elapsed_ns = time.monotonic_ns() - started_ns
-    samples = output_dir / "bench_query_samples.csv"
-    if not samples.is_file() or samples.stat().st_size == 0:
-        raise ValueError("execution completed without a real query sample artifact")
     return (
-        samples,
+        output_dir,
         {
             "cpu_ns": cpu_ns,
             "peak_rss_bytes": peak_rss_bytes,
@@ -376,6 +482,21 @@ def execute_plan_with_resources(
             "disk_write_bytes": disk_write_bytes,
         },
         elapsed_ns,
+    )
+
+
+def execute_publication_phase(
+    plan: dict[str, object], phase: str
+) -> tuple[Path, dict[str, int], int]:
+    if plan.get("mode") != "publication" or phase not in {"build", "runtime"}:
+        raise ValueError("publication execution phase is invalid")
+    selected = plan.get(phase)
+    if not isinstance(selected, dict):
+        raise ValueError("publication execution phase is missing")
+    return _execute_steps_with_resources(
+        workspace=Path(str(plan.get("workspace"))) / phase,
+        output_dir=Path(str(selected.get("output_dir"))),
+        steps=selected.get("steps"),
     )
 
 
@@ -447,17 +568,51 @@ def summarize_query_samples(
     }
 
 
-def read_build_storage_metrics(output_dir: Path) -> dict[str, int]:
+def summarize_runtime_write_trace(path: Path) -> dict[str, int]:
+    if not path.is_file():
+        raise ValueError("publication runtime storage trace is missing")
+    if (path.parent / "bench_build.csv").exists():
+        raise ValueError("publication runtime unexpectedly emitted a build artifact")
+    with path.open(newline="") as source:
+        rows = list(csv.DictReader(source))
+    storage_puts = 0
+    storage_bytes_written = 0
+    for row in rows:
+        if row.get("operation") != "write":
+            continue
+        try:
+            requests = int(row["request_count"])
+            byte_count = int(row["object_bytes"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("publication runtime write trace is invalid") from error
+        if requests < 0 or byte_count < 0:
+            raise ValueError("publication runtime write trace is negative")
+        storage_puts += requests
+        storage_bytes_written += byte_count
+    return {
+        "storage_puts": storage_puts,
+        "storage_bytes_written": storage_bytes_written,
+    }
+
+
+def read_build_artifact(
+    output_dir: Path, *, cell: dict[str, object]
+) -> dict[str, dict[str, int | str]]:
     path = output_dir / "bench_build.csv"
     if not path.is_file():
         raise ValueError("publication build storage artifact is missing")
     with path.open(newline="") as source:
-        rows = list(csv.DictReader(source))
+        reader = csv.DictReader(source)
+        if tuple(reader.fieldnames or ()) != PRODUCTION_BUILD_FIELDS:
+            raise ValueError("publication build artifact header differs from production")
+        rows = list(reader)
     if len(rows) != 1:
         raise ValueError("publication build storage artifact must contain one row")
     row = rows[0]
-    result: dict[str, int] = {}
-    for field in (
+    integer_fields = (
+        "logical_cells",
+        "records",
+        "total_active_index_bytes",
         "storage_gets",
         "storage_puts",
         "storage_deletes",
@@ -465,19 +620,47 @@ def read_build_storage_metrics(output_dir: Path) -> dict[str, int]:
         "storage_lists",
         "storage_bytes_read",
         "storage_bytes_written",
-    ):
+    )
+    parsed: dict[str, int] = {}
+    for field in integer_fields:
         try:
             value = int(row[field])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"publication build storage field {field} is invalid") from error
         if value < 0:
             raise ValueError(f"publication build storage field {field} is negative")
-        result[field] = value
-    return result
+        parsed[field] = value
+    dataset = cell.get("dataset")
+    profile = cell.get("index_profile")
+    expected_rows = dataset.get("scale", {}).get("rows") if isinstance(dataset, dict) else None
+    expected_cells = profile.get("logical_cells") if isinstance(profile, dict) else None
+    if parsed["records"] != expected_rows or parsed["logical_cells"] != expected_cells:
+        raise ValueError("publication build identity differs from its scheduled index")
+    checksum = row.get("logical_cell_catalog_checksum", "")
+    if len(checksum) != 64 or any(character not in "0123456789abcdef" for character in checksum):
+        raise ValueError("publication build catalog checksum is invalid")
+    if parsed["total_active_index_bytes"] <= 0:
+        raise ValueError("publication build active index bytes must be positive")
+    return {
+        "index_stats": {
+            "logical_cells": parsed["logical_cells"],
+            "records": parsed["records"],
+            "total_active_index_bytes": parsed["total_active_index_bytes"],
+            "logical_cell_catalog_checksum": checksum,
+        },
+        "storage_metrics": {
+            field: parsed[field]
+            for field in integer_fields
+            if field.startswith("storage_")
+        },
+    }
 
 
-def build_resource_metrics(
-    process_resources: dict[str, int], storage_metrics: dict[str, int]
+def build_receipt_metrics(
+    process_resources: dict[str, int],
+    storage_metrics: dict[str, int],
+    *,
+    elapsed_ns: int,
 ) -> dict[str, int]:
     process_fields = frozenset(
         {"cpu_ns", "peak_rss_bytes", "disk_read_bytes", "disk_write_bytes"}
@@ -486,6 +669,9 @@ def build_resource_metrics(
         {
             "storage_gets",
             "storage_puts",
+            "storage_deletes",
+            "storage_heads",
+            "storage_lists",
             "storage_bytes_read",
             "storage_bytes_written",
         }
@@ -494,9 +680,12 @@ def build_resource_metrics(
         storage_metrics
     ):
         raise ValueError("publication resource inputs differ")
+    if isinstance(elapsed_ns, bool) or not isinstance(elapsed_ns, int) or elapsed_ns <= 0:
+        raise ValueError("publication build elapsed time is invalid")
     return {
         **process_resources,
         **{field: storage_metrics[field] for field in sorted(required_storage)},
+        "build_elapsed_ns": elapsed_ns,
     }
 
 
@@ -532,12 +721,14 @@ def build_publication_report(
     arm: dict[str, object],
     protocol_bytes: bytes,
     source_archive_sha256: str,
+    dataset_materialization_sha256: str,
     attempt_id: str,
     instance_identity: str,
     elapsed_ns: int,
     query_metrics: dict[str, int],
     resource_metrics: dict[str, int],
-    object_roster: list[dict[str, object]],
+    runtime_write_metrics: dict[str, int],
+    index_receipt: dict[str, object],
 ) -> dict[str, object]:
     if isinstance(elapsed_ns, bool) or not isinstance(elapsed_ns, int) or elapsed_ns <= 0:
         raise ValueError("publication elapsed time must be a positive integer")
@@ -562,16 +753,16 @@ def build_publication_report(
             "peak_rss_bytes",
             "disk_read_bytes",
             "disk_write_bytes",
-            "storage_gets",
-            "storage_puts",
-            "storage_bytes_read",
-            "storage_bytes_written",
         }
     )
     if frozenset(query_metrics) != expected_query_fields:
         raise ValueError("publication query metric fields differ")
     if frozenset(resource_metrics) != expected_resource_fields:
         raise ValueError("publication resource metric fields differ")
+    if frozenset(runtime_write_metrics) != frozenset(
+        {"storage_puts", "storage_bytes_written"}
+    ):
+        raise ValueError("publication runtime write metric fields differ")
     result = {
         "schema_version": 1,
         "status": "complete",
@@ -589,10 +780,10 @@ def build_publication_report(
                 if key != "query_elapsed_ns"
             },
             **resource_metrics,
-            "storage_gets": query_metrics["storage_gets"]
-            + resource_metrics["storage_gets"],
-            "storage_bytes_read": query_metrics["storage_bytes_read"]
-            + resource_metrics["storage_bytes_read"],
+            "storage_gets": query_metrics["storage_gets"],
+            "storage_puts": runtime_write_metrics["storage_puts"],
+            "storage_bytes_read": query_metrics["storage_bytes_read"],
+            "storage_bytes_written": runtime_write_metrics["storage_bytes_written"],
             "throughput_milli_per_second": max(
                 1,
                 round(
@@ -602,24 +793,51 @@ def build_publication_report(
                 ),
             ),
         },
-        "object_roster": object_roster,
+        "index_receipt_sha256": receipt_document_sha256(index_receipt),
     }
     validated = validate_cell_result(
         result,
         cell=cell,
         protocol_bytes=protocol_bytes,
         source_archive_sha256=source_archive_sha256,
+        dataset_materialization_sha256=dataset_materialization_sha256,
+        index_receipt=index_receipt,
     )
     return {"publishable": True, "result": validated}
+
+
+def _read_canonical_value(path: Path, maximum_bytes: int) -> object:
+    payload = path.read_bytes()
+    if not payload or len(payload) > maximum_bytes or not payload.endswith(b"\n"):
+        raise ValueError(f"{path} is missing or exceeds its canonical bound")
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{path} is not valid UTF-8 JSON") from error
+    if canonical_json_bytes(value) + b"\n" != payload:
+        raise ValueError(f"{path} is not canonical JSON")
+    return value
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("protocol", type=Path)
     parser.add_argument("workspace", type=Path)
-    parser.add_argument("--generator", type=Path, required=True)
-    parser.add_argument("--borsuk-bench", type=Path, required=True)
+    parser.add_argument("--generator", type=Path)
+    parser.add_argument("--borsuk-bench", type=Path)
     parser.add_argument("--arm-index", type=int, default=0)
+    parser.add_argument(
+        "--mode", choices=("smoke", "build", "seal", "runtime"), default="smoke"
+    )
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--source-archive-sha256")
+    parser.add_argument("--dataset-materialization-sha256")
+    parser.add_argument("--attempt-id")
+    parser.add_argument("--instance-identity")
+    parser.add_argument("--object-roster", type=Path)
+    parser.add_argument("--index-receipt", type=Path)
+    parser.add_argument("--index-inventory", type=Path)
+    parser.add_argument("--build-complete", type=Path)
     args = parser.parse_args()
 
     cell = read_protocol(args.protocol)
@@ -628,14 +846,166 @@ def main() -> int:
     if args.arm_index < 0 or args.arm_index >= len(arms):
         raise ValueError("arm index is outside the scheduled factor matrix")
     arm = arms[args.arm_index]
+    publication = args.mode in {"build", "seal", "runtime"}
+    if publication:
+        if args.manifest is None:
+            raise ValueError("publication execution requires its frozen manifest")
+        validate_publication_cell_authority(cell, args.manifest)
+        for role, value in (
+            ("source archive checksum", args.source_archive_sha256),
+            ("dataset materialization checksum", args.dataset_materialization_sha256),
+            ("attempt identity", args.attempt_id),
+            ("instance identity", args.instance_identity),
+        ):
+            if not value:
+                raise ValueError(f"publication execution requires {role}")
+    if args.mode == "seal":
+        if args.build_complete is None or args.object_roster is None:
+            raise ValueError("publication seal requires build completion and object roster")
+        completion = _read_canonical_value(args.build_complete, 256 * 1024)
+        if not isinstance(completion, dict) or frozenset(completion) != frozenset(
+            {
+                "schema_version",
+                "document_kind",
+                "status",
+                "cell_id",
+                "builder_instance_identity",
+                "builder_instance_type",
+                "build_artifact",
+                "process_resources",
+                "elapsed_ns",
+            }
+        ):
+            raise ValueError("publication build completion fields differ")
+        if (
+            completion["schema_version"] != 1
+            or completion["document_kind"] != "publication-v3-build-complete"
+            or completion["status"] != "complete"
+            or completion["cell_id"] != cell.get("cell_id")
+            or completion["builder_instance_identity"] != args.instance_identity
+        ):
+            raise ValueError("publication build completion authority differs")
+        roster = _read_canonical_value(args.object_roster, 32 * 1024 * 1024)
+        if not isinstance(roster, list):
+            raise ValueError("publication object roster must be a JSON list")
+        receipt = build_index_receipt(
+            cell=cell,
+            source_archive_sha256=str(args.source_archive_sha256),
+            dataset_materialization_sha256=str(args.dataset_materialization_sha256),
+            build_attempt_id=str(args.attempt_id),
+            builder_instance_identity=str(completion["builder_instance_identity"]),
+            builder_instance_type=str(completion["builder_instance_type"]),
+            build_artifact=completion["build_artifact"],
+            object_roster=roster,
+            build_metrics=build_receipt_metrics(
+                completion["process_resources"],
+                completion["build_artifact"]["storage_metrics"],
+                elapsed_ns=completion["elapsed_ns"],
+            ),
+        )
+        destination = args.workspace / "INDEX_COMPLETE.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        (args.workspace / "INDEX_OBJECTS.json").write_bytes(
+            canonical_json_bytes(roster) + b"\n"
+        )
+        destination.write_bytes(canonical_json_bytes(receipt) + b"\n")
+        print(json.dumps(receipt, sort_keys=True))
+        return 0
+    if args.borsuk_bench is None or (
+        args.mode in {"smoke", "build"} and args.generator is None
+    ):
+        raise ValueError("selected execution mode requires its benchmark binaries")
     plan = build_execution_plan(
         cell,
         arm=arm,
         workspace=args.workspace,
-        generator=args.generator,
+        generator=args.generator or Path("/bin/false"),
         borsuk_bench=args.borsuk_bench,
-        mode="smoke",
+        mode="publication" if publication else "smoke",
     )
+    if args.mode == "build":
+        output, resources, elapsed_ns = execute_publication_phase(plan, "build")
+        artifact = read_build_artifact(output, cell=cell)
+        completion = {
+            "schema_version": 1,
+            "document_kind": "publication-v3-build-complete",
+            "status": "complete",
+            "cell_id": cell["cell_id"],
+            "builder_instance_identity": str(args.instance_identity),
+            "builder_instance_type": str(plan["build"]["worker"]["instance_type"]),
+            "build_artifact": artifact,
+            "process_resources": resources,
+            "elapsed_ns": elapsed_ns,
+        }
+        destination = args.workspace / "BUILD_COMPLETE.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(canonical_json_bytes(completion) + b"\n")
+        print(json.dumps(completion, sort_keys=True))
+        return 0
+    if args.mode == "runtime":
+        if (
+            args.index_receipt is None
+            or args.object_roster is None
+            or args.index_inventory is None
+        ):
+            raise ValueError(
+                "publication runtime requires receipt, roster, and inventory authority"
+            )
+        receipt_payload = args.index_receipt.read_bytes()
+        receipt, _ = require_verified_index(
+            receipt_payload,
+            cell=cell,
+            source_archive_sha256=str(args.source_archive_sha256),
+            dataset_materialization_sha256=str(args.dataset_materialization_sha256),
+        )
+        inventory = _read_canonical_value(args.index_inventory, 32 * 1024 * 1024)
+        if not isinstance(inventory, list):
+            raise ValueError("publication index inventory must be a JSON list")
+        roster = require_verified_object_roster(
+            receipt, args.object_roster.read_bytes(), cell=cell
+        )
+        reconcile_index_inventory(roster, inventory)
+        authorized_runtime = authorize_publication_runtime(
+            plan,
+            receipt=receipt,
+            cell=cell,
+            source_archive_sha256=str(args.source_archive_sha256),
+            dataset_materialization_sha256=str(args.dataset_materialization_sha256),
+        )
+        authorized_plan = {**plan, "runtime": authorized_runtime}
+        output, resources, elapsed_ns = execute_publication_phase(
+            authorized_plan, "runtime"
+        )
+        samples = output / "bench_query_samples.csv"
+        if not samples.is_file() or samples.stat().st_size == 0:
+            raise ValueError("publication runtime emitted no query samples")
+        with samples.open(newline="") as source:
+            rows = list(csv.DictReader(source))
+        metrics = summarize_query_samples(
+            rows,
+            cell=cell,
+            arm=arm,
+            expected_queries=int(plan["effective_queries"]),
+        )
+        runtime_writes = summarize_runtime_write_trace(output / "storage-access.csv")
+        report = build_publication_report(
+            cell=cell,
+            arm=arm,
+            protocol_bytes=protocol_bytes,
+            source_archive_sha256=str(args.source_archive_sha256),
+            dataset_materialization_sha256=str(args.dataset_materialization_sha256),
+            attempt_id=str(args.attempt_id),
+            instance_identity=str(args.instance_identity),
+            elapsed_ns=elapsed_ns,
+            query_metrics=metrics,
+            resource_metrics=resources,
+            runtime_write_metrics=runtime_writes,
+            index_receipt=receipt,
+        )
+        destination = args.workspace / "RESULT_COMPLETE.json"
+        destination.write_bytes(canonical_json_bytes(report) + b"\n")
+        print(json.dumps(report, sort_keys=True))
+        return 0
     samples = execute_plan(plan)
     with samples.open(newline="") as source:
         rows = list(csv.DictReader(source))

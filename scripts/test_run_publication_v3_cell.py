@@ -8,19 +8,30 @@ from scripts.publication_v3_protocol import (
     canonical_json_bytes,
     validate_manifest,
 )
+from scripts.publication_v3_receipts import build_index_receipt, receipt_document_sha256
+from scripts.publication_v3_results import validate_cell_result
 from scripts.run_publication_v3_cell import (
-    build_publication_report,
-    build_resource_metrics,
-    build_smoke_report,
+    PRODUCTION_BUILD_FIELDS,
+    authorize_publication_runtime,
     build_execution_plan,
+    build_publication_report,
+    build_receipt_metrics,
+    build_smoke_report,
     execute_plan,
     execute_plan_with_resources,
+    execute_publication_phase,
     plan_arms,
-    read_build_storage_metrics,
+    read_build_artifact,
     summarize_query_samples,
+    summarize_runtime_write_trace,
+    validate_publication_cell_authority,
 )
-from scripts.publication_v3_results import validate_cell_result
 from scripts.test_publication_v3_protocol import paid_v3_manifest
+from scripts.test_publication_v3_receipts import (
+    build_artifact,
+    build_metrics,
+    data_roster,
+)
 
 
 def scheduled_cell(*, system: str = "borsuk", kind: str = "read-recall") -> dict[str, object]:
@@ -33,7 +44,65 @@ def scheduled_cell(*, system: str = "borsuk", kind: str = "read-recall") -> dict
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
-    def test_build_storage_metrics_are_read_from_real_benchmark_artifact(self) -> None:
+    def test_publication_cell_must_match_the_frozen_manifest_prefix_authority(self) -> None:
+        cell = scheduled_cell()
+        with tempfile.TemporaryDirectory() as root:
+            manifest_path = Path(root) / "manifest.json"
+            manifest_path.write_bytes(
+                canonical_json_bytes(validate_manifest(paid_v3_manifest())) + b"\n"
+            )
+            self.assertEqual(validate_publication_cell_authority(cell, manifest_path), cell)
+            substituted = {
+                **cell,
+                "index_prefix": "s3://attacker-bucket/substituted/"
+                + cell["index_prefix"].rsplit("/", 1)[1],
+            }
+            with self.assertRaisesRegex(ValueError, "frozen manifest"):
+                validate_publication_cell_authority(substituted, manifest_path)
+
+    def test_publication_runtime_requires_matching_immutable_build_receipt(self) -> None:
+        cell = scheduled_cell()
+        with tempfile.TemporaryDirectory() as root:
+            plan = build_execution_plan(
+                cell,
+                arm=plan_arms(cell)[0],
+                workspace=Path(root),
+                generator=Path("/bin/true"),
+                borsuk_bench=Path("/bin/true"),
+                mode="publication",
+            )
+        receipt = build_index_receipt(
+            cell=cell,
+            source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+            build_attempt_id="build-attempt-01",
+            builder_instance_identity="i-builder-01",
+            builder_instance_type=cell["environment_contract"]["build_workers"]["borsuk"]["instance_type"],
+            build_artifact=build_artifact(cell),
+            object_roster=data_roster(cell),
+            build_metrics=build_metrics(),
+        )
+        runtime = authorize_publication_runtime(
+            plan,
+            receipt=receipt,
+            cell=cell,
+            source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+        )
+        self.assertEqual(runtime["index_receipt_sha256"], receipt_document_sha256(receipt))
+        self.assertEqual(runtime["steps"], plan["runtime"]["steps"])
+        self.assertNotIn("build", runtime)
+        with self.assertRaises(ValueError):
+            authorize_publication_runtime(
+                plan,
+                receipt={**receipt, "index_uri": "s3://attacker/substitute"},
+                cell=cell,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+            )
+
+    def test_build_identity_and_storage_are_read_from_the_real_benchmark_artifact(self) -> None:
+        cell = scheduled_cell()
         with tempfile.TemporaryDirectory() as root:
             output = Path(root)
             (output / "bench_build.csv").write_text(
@@ -41,11 +110,36 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "7,11,0,3,2,654321,123456\n",
                 encoding="utf-8",
             )
-            metrics = read_build_storage_metrics(output)
+            with self.assertRaisesRegex(ValueError, "header differs"):
+                read_build_artifact(output, cell=cell)
+            row = {field: "0" for field in PRODUCTION_BUILD_FIELDS}
+            row.update(
+                {
+                    "logical_cell_catalog_checksum": "3" * 64,
+                    "logical_cells": str(cell["index_profile"]["logical_cells"]),
+                    "records": str(cell["dataset"]["scale"]["rows"]),
+                    "total_active_index_bytes": str(123 * 1024 * 1024),
+                    "storage_gets": "7",
+                    "storage_puts": "11",
+                    "storage_deletes": "0",
+                    "storage_heads": "3",
+                    "storage_lists": "2",
+                    "storage_bytes_read": "654321",
+                    "storage_bytes_written": "123456",
+                }
+            )
+            (output / "bench_build.csv").write_text(
+                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                encoding="utf-8",
+            )
+            artifact = read_build_artifact(output, cell=cell)
+        metrics = artifact["storage_metrics"]
+        self.assertEqual(artifact["index_stats"]["records"], cell["dataset"]["scale"]["rows"])
         self.assertEqual(metrics["storage_puts"], 11)
         self.assertEqual(metrics["storage_bytes_read"], 654321)
         self.assertEqual(metrics["storage_bytes_written"], 123456)
-        resource = build_resource_metrics(
+        resource = build_receipt_metrics(
             {
                 "cpu_ns": 10,
                 "peak_rss_bytes": 20,
@@ -53,6 +147,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "disk_write_bytes": 40,
             },
             metrics,
+            elapsed_ns=90,
         )
         self.assertEqual(
             frozenset(resource),
@@ -66,6 +161,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "storage_puts",
                     "storage_bytes_read",
                     "storage_bytes_written",
+                    "storage_deletes",
+                    "storage_heads",
+                    "storage_lists",
+                    "build_elapsed_ns",
                 }
             ),
         )
@@ -92,30 +191,41 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertGreaterEqual(resources["disk_read_bytes"], 0)
         self.assertGreaterEqual(resources["disk_write_bytes"], 0)
 
+    def test_publication_build_and_runtime_execute_as_separate_phases(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            workspace = Path(root)
+            plan = {
+                "mode": "publication",
+                "workspace": str(workspace),
+                "build": {
+                    "output_dir": str(workspace / "build-output"),
+                    "steps": [{"argv": ["/bin/true"], "env": {}}],
+                },
+                "runtime": {
+                    "output_dir": str(workspace / "runtime-output"),
+                    "steps": [{"argv": ["/bin/true"], "env": {}}],
+                },
+            }
+            build_output, build_resources, _ = execute_publication_phase(plan, "build")
+            runtime_output, runtime_resources, _ = execute_publication_phase(plan, "runtime")
+        self.assertNotEqual(build_output, runtime_output)
+        self.assertGreater(build_resources["cpu_ns"], 0)
+        self.assertGreater(runtime_resources["cpu_ns"], 0)
+
     def test_publication_report_is_a_complete_admissible_result(self) -> None:
         cell = scheduled_cell()
         protocol = canonical_json_bytes(cell) + b"\n"
-        rows = cell["dataset"]["scale"]["rows"]
-        object_roster = [
-            {
-                "role": "data-bundle",
-                "path": "segments/0000.parquet",
-                "format": "parquet",
-                "bytes": 64 * 1024 * 1024,
-                "rows": rows,
-                "checksum": "1" * 64,
-            }
-        ]
-        if rows >= 10_000_000:
-            object_roster[0]["rows"] = rows // 2
-            object_roster.append(
-                {
-                    **object_roster[0],
-                    "path": "segments/0001.parquet",
-                    "rows": rows - rows // 2,
-                    "checksum": "2" * 64,
-                }
-            )
+        receipt = build_index_receipt(
+            cell=cell,
+            source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+            build_attempt_id="build-attempt-01",
+            builder_instance_identity="i-builder-01",
+            builder_instance_type=cell["environment_contract"]["build_workers"]["borsuk"]["instance_type"],
+            build_artifact=build_artifact(cell),
+            object_roster=data_roster(cell),
+            build_metrics=build_metrics(),
+        )
         report = build_publication_report(
             cell=cell,
             arm={
@@ -126,6 +236,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             },
             protocol_bytes=protocol,
             source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
             attempt_id="attempt-01",
             instance_identity="i-0123456789abcdef0",
             elapsed_ns=2_000_000_000,
@@ -144,24 +255,42 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "peak_rss_bytes": 256 * 1024 * 1024,
                 "disk_read_bytes": 8192,
                 "disk_write_bytes": 16384,
-                "storage_gets": 7,
-                "storage_puts": 12,
-                "storage_bytes_read": 2048,
-                "storage_bytes_written": 32768,
             },
-            object_roster=object_roster,
+            runtime_write_metrics={"storage_puts": 0, "storage_bytes_written": 0},
+            index_receipt=receipt,
         )
         self.assertTrue(report["publishable"])
         self.assertEqual(report["result"]["arm"]["candidate_budget"], 128)
-        self.assertEqual(report["result"]["metrics"]["storage_gets"], 17)
-        self.assertEqual(report["result"]["metrics"]["storage_bytes_read"], 6144)
+        self.assertEqual(report["result"]["metrics"]["storage_gets"], 10)
+        self.assertEqual(report["result"]["metrics"]["storage_bytes_read"], 4096)
         admitted = validate_cell_result(
             report["result"],
             cell=cell,
             protocol_bytes=protocol,
             source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+            index_receipt=receipt,
         )
         self.assertEqual(admitted, report["result"])
+
+        with tempfile.TemporaryDirectory() as root:
+            trace = Path(root) / "storage-access.csv"
+            trace.write_text(
+                "operation,object_role,path,physical_format,object_bytes,request_count,bytes_fetched,logical_projection,row_selection,logical_rows_requested,logical_rows_decoded,decode_cpu_ns,cache_state,status\n"
+                "write,catalog,collection/CURRENT,json,4096,1,4096,,,,,,,write,ok\n",
+                encoding="utf-8",
+            )
+            observed = summarize_runtime_write_trace(trace)
+        self.assertEqual(observed, {"storage_puts": 1, "storage_bytes_written": 4096})
+        with self.assertRaisesRegex(ValueError, "cannot write"):
+            validate_cell_result(
+                {**report["result"], "metrics": {**report["result"]["metrics"], **observed}},
+                cell=cell,
+                protocol_bytes=protocol,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+                index_receipt=receipt,
+            )
 
     def test_borsuk_read_smoke_plan_invokes_real_generator_and_production_bench(self) -> None:
         cell = next(
@@ -255,6 +384,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertNotIn("BORSUK_BENCH_READ_ONLY", build_env)
         self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
+        self.assertEqual(runtime_env["BORSUK_BENCH_BUILD_INDEX"], "0")
         self.assertEqual(runtime_env["BORSUK_BENCH_URI"], cell["index_prefix"])
         self.assertNotEqual(runtime_env["BORSUK_BENCH_DATASET"], build_env["BORSUK_BENCH_DATASET"])
         self.assertEqual(

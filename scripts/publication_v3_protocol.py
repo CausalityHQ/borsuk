@@ -13,7 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 MANIFEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -76,6 +75,7 @@ ENVIRONMENT_FIELDS = frozenset(
     }
 )
 PREFIX_FIELDS = frozenset({"result", "index", "dataset", "cache"})
+S3_PREFIX = re.compile(r"s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/[^\s/](?:[^\s]*[^\s/])?")
 SYSTEMS = ("borsuk", "amazon-s3-vectors", "faiss")
 METRICS = frozenset({"cosine", "l2", "dot", "hamming", "jaccard"})
 IDENTIFIER = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?")
@@ -759,6 +759,9 @@ def _validate_prefixes(value: object) -> dict[str, str]:
     }
     if len(set(result.values())) != len(result):
         raise ValueError("publication prefixes must be distinct")
+    for field in ("result", "index", "dataset"):
+        if S3_PREFIX.fullmatch(result[field]) is None:
+            raise ValueError(f"{field} prefix must be an S3 URI without a trailing slash")
     for left_name, left in result.items():
         for right_name, right in result.items():
             if left_name != right_name and (
@@ -918,7 +921,7 @@ def _project_workload_for_dataset(
     return projected
 
 
-def _index_id(base: dict[str, object]) -> str:
+def index_id(base: dict[str, object]) -> str:
     workload = _dict(base["workload"], "index workload")
     index_base = {
         "schema_version": base["schema_version"],
@@ -948,7 +951,7 @@ def _finish_cell(base: dict[str, object], prefixes: dict[str, str]) -> dict[str,
         **base,
         "cell_id": cell_id,
         "result_prefix": f"{prefixes['result'].rstrip('/')}/{cell_id}",
-        "index_prefix": f"{prefixes['index'].rstrip('/')}/{_index_id(base)}",
+        "index_prefix": f"{prefixes['index'].rstrip('/')}/{index_id(base)}",
         "dataset_prefix": (
             f"{prefixes['dataset'].rstrip('/')}/{dataset['id']}"
         ),
@@ -1028,6 +1031,9 @@ def validate_schedule_cell(value: dict[str, object]) -> dict[str, object]:
     environment = _validate_environment(cell["environment_contract"])
     for field in ("result_prefix", "index_prefix", "dataset_prefix", "cache_key"):
         _nonempty_string(cell[field], f"cell {field}")
+    for field in ("result_prefix", "index_prefix", "dataset_prefix"):
+        if S3_PREFIX.fullmatch(str(cell[field])) is None:
+            raise ValueError(f"cell {field} must be an S3 URI without a trailing slash")
     if len(
         {
             str(cell["result_prefix"]),
@@ -1055,7 +1061,7 @@ def validate_schedule_cell(value: dict[str, object]) -> dict[str, object]:
         raise ValueError("schedule cell identity or derived locations differ")
     expected_suffixes = {
         "result_prefix": f"/{expected_cell_id}",
-        "index_prefix": f"/{_index_id(base)}",
+        "index_prefix": f"/{index_id(base)}",
         "dataset_prefix": f"/{dataset['id']}",
         "cache_key": f"-{expected_cell_id}",
     }

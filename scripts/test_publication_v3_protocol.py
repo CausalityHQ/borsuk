@@ -9,6 +9,7 @@ from pathlib import Path
 from scripts.publication_v3_protocol import (
     build_schedule_document,
     canonical_json_bytes,
+    index_id,
     read_protocol,
     validate_manifest,
     validate_schedule_cell,
@@ -75,9 +76,9 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
             },
         },
         "prefixes": {
-            "result": "publication/v3/20260812/results",
-            "index": "publication/v3/20260812/indexes",
-            "dataset": "publication/v3/20260812/datasets",
+            "result": "s3://borsuk-publication-test/publication/v3/20260812/results",
+            "index": "s3://borsuk-publication-test/publication/v3/20260812/indexes",
+            "dataset": "s3://borsuk-publication-test/publication/v3/20260812/datasets",
             "cache": "publication-v3-20260812-cache",
         },
         "index_profiles": {
@@ -219,6 +220,26 @@ def paid_v3_manifest() -> dict[str, object]:
 
 
 class PublicationV3ProtocolTests(unittest.TestCase):
+    def test_index_identity_is_reusable_but_s3_authority_is_mandatory(self) -> None:
+        manifest = validate_manifest(valid_v3_manifest())
+        cells = build_schedule_document(manifest)["cells"]
+        first = cells[0]
+        reusable = next(
+            cell
+            for cell in cells
+            if cell["system"] == first["system"]
+            and cell["dataset"] == first["dataset"]
+            and cell["index_profile"] == first["index_profile"]
+            and cell["workload"]["kind"] == first["workload"]["kind"]
+            and cell["repetition_id"] != first["repetition_id"]
+        )
+        self.assertEqual(index_id(first), index_id(reusable))
+
+        invalid = valid_v3_manifest()
+        invalid["prefixes"]["index"] = "/tmp/local-index"
+        with self.assertRaisesRegex(ValueError, "index prefix must be an S3 URI"):
+            validate_manifest(invalid)
+
     def test_borsuk_profile_rejects_non_power_of_two_code_width(self) -> None:
         manifest = paid_v3_manifest()
         manifest["index_profiles"]["borsuk"]["code_bytes"] = 96
@@ -306,7 +327,7 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         moved = valid_v3_manifest(
             prefixes={
                 **valid_v3_manifest()["prefixes"],
-                "result": "publication/v3/20260812-moved/results",
+                "result": "s3://borsuk-publication-test/publication/v3/20260812-moved/results",
             }
         )
         moved_schedule = build_schedule_document(validate_manifest(moved))
