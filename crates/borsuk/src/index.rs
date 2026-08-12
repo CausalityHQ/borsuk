@@ -4352,17 +4352,25 @@ impl BorsukIndex {
     /// use [`RequestCounts::delta`] to attribute its physical requests.
     #[must_use]
     pub fn request_counts(&self) -> RequestCounts {
-        self.named
-            .values()
-            .fold(self.storage.request_counts(), |mut total, child| {
-                let child = child.request_counts();
-                total.gets = total.gets.saturating_add(child.gets);
-                total.puts = total.puts.saturating_add(child.puts);
-                total.deletes = total.deletes.saturating_add(child.deletes);
-                total.heads = total.heads.saturating_add(child.heads);
-                total.lists = total.lists.saturating_add(child.lists);
-                total
-            })
+        self.storage.request_counts()
+    }
+
+    /// Cumulative payload bytes submitted to backing PUT attempts by this
+    /// index handle, including dense named-vector child indexes.
+    ///
+    /// This counts retry amplification and multipart payload bytes, so callers
+    /// can snapshot the value around a build or mutation phase and report the
+    /// physical write traffic independently of active logical index bytes.
+    #[must_use]
+    pub fn put_payload_bytes(&self) -> u64 {
+        self.storage.put_payload_bytes()
+    }
+
+    /// Cumulative response bytes fetched from the backing object store by this
+    /// index handle, including dense named-vector child indexes.
+    #[must_use]
+    pub fn backing_bytes_read(&self) -> u64 {
+        self.storage.cache_read_counts().backing_bytes
     }
 
     /// Eagerly decode every active segment into the shared in-memory cache.
@@ -36553,5 +36561,64 @@ mod tests {
         for path in paths {
             assert!(!remaining.contains(path), "GC did not reclaim {path}");
         }
+    }
+
+    #[test]
+    fn public_write_payload_counter_covers_create_and_add_attempt_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let after_create = index.put_payload_bytes();
+        assert!(after_create > 0);
+
+        index
+            .add(vec![VectorRecord::new("payload", vec![1.0, 2.0])])
+            .unwrap();
+        assert!(index.put_payload_bytes() > after_create);
+        assert!(index.backing_bytes_read() > 0);
+    }
+
+    #[test]
+    fn public_lifetime_counters_do_not_multiply_shared_named_storage_counts() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "image".to_string(),
+                VectorSpec {
+                    dimensions: 2,
+                    metric: VectorMetric::Euclidean,
+                    kind: VectorKind::Dense,
+                    element_type: crate::VectorElementType::Float32,
+                },
+            )]),
+        })
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("named", vec![1.0, 2.0])
+                    .with_named_vector("image", vec![3.0, 4.0]),
+            ])
+            .unwrap();
+
+        assert_eq!(index.request_counts(), index.storage.request_counts());
+        assert_eq!(index.put_payload_bytes(), index.storage.put_payload_bytes());
+        assert_eq!(
+            index.backing_bytes_read(),
+            index.storage.cache_read_counts().backing_bytes
+        );
     }
 }

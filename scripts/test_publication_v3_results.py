@@ -29,6 +29,16 @@ def control_object(index: int) -> dict[str, object]:
     }
 
 
+def first_read_arm(cell: dict[str, object]) -> dict[str, object]:
+    factors = cell["workload"]["factors"]
+    return {
+        "k": factors["k"][0],
+        "candidate_budget": factors["candidate_budgets"][0],
+        "routing_cell_budget": factors["routing_cell_budget"],
+        "cache_state": factors["cache_states"][0],
+    }
+
+
 class PublicationV3ResultTests(unittest.TestCase):
     def test_cell_result_binds_protocol_source_quality_latency_and_resources(self) -> None:
         manifest = validate_manifest(valid_v3_manifest())
@@ -44,6 +54,7 @@ class PublicationV3ResultTests(unittest.TestCase):
             "source_archive_sha256": "a" * 64,
             "attempt_id": "attempt-01",
             "instance_identity": "local-test",
+            "arm": first_read_arm(cell),
             "metrics": {
                 "queries": 1000,
                 "correctness_ppm": 950000,
@@ -74,6 +85,7 @@ class PublicationV3ResultTests(unittest.TestCase):
             {**result, "protocol_sha256": "b" * 64},
             {**result, "source_archive_sha256": "b" * 64},
             {**result, "metrics": {**result["metrics"], "correctness_ppm": 949999}},
+            {**result, "arm": {**result["arm"], "k": True}},
         ):
             with self.subTest(mutation=json.dumps(mutation, sort_keys=True)[:100]):
                 with self.assertRaises(ValueError):
@@ -115,6 +127,7 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "source_archive_sha256": "a" * 64,
                 "attempt_id": "attempt-01",
                 "instance_identity": "local-test",
+                "arm": first_read_arm(cell),
                 "metrics": metrics,
                 "object_roster": [data_object(0, cell["dataset"]["scale"]["rows"])],
             }

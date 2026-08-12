@@ -3,14 +3,23 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.publication_v3_protocol import build_schedule_document, validate_manifest
+from scripts.publication_v3_protocol import (
+    build_schedule_document,
+    canonical_json_bytes,
+    validate_manifest,
+)
 from scripts.run_publication_v3_cell import (
+    build_publication_report,
+    build_resource_metrics,
     build_smoke_report,
     build_execution_plan,
     execute_plan,
+    execute_plan_with_resources,
     plan_arms,
+    read_build_storage_metrics,
     summarize_query_samples,
 )
+from scripts.publication_v3_results import validate_cell_result
 from scripts.test_publication_v3_protocol import paid_v3_manifest
 
 
@@ -24,6 +33,136 @@ def scheduled_cell(*, system: str = "borsuk", kind: str = "read-recall") -> dict
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_build_storage_metrics_are_read_from_real_benchmark_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root)
+            (output / "bench_build.csv").write_text(
+                "storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written\n"
+                "7,11,0,3,2,654321,123456\n",
+                encoding="utf-8",
+            )
+            metrics = read_build_storage_metrics(output)
+        self.assertEqual(metrics["storage_puts"], 11)
+        self.assertEqual(metrics["storage_bytes_read"], 654321)
+        self.assertEqual(metrics["storage_bytes_written"], 123456)
+        resource = build_resource_metrics(
+            {
+                "cpu_ns": 10,
+                "peak_rss_bytes": 20,
+                "disk_read_bytes": 30,
+                "disk_write_bytes": 40,
+            },
+            metrics,
+        )
+        self.assertEqual(
+            frozenset(resource),
+            frozenset(
+                {
+                    "cpu_ns",
+                    "peak_rss_bytes",
+                    "disk_read_bytes",
+                    "disk_write_bytes",
+                    "storage_gets",
+                    "storage_puts",
+                    "storage_bytes_read",
+                    "storage_bytes_written",
+                }
+            ),
+        )
+
+    def test_execution_records_child_cpu_rss_disk_and_elapsed_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            workspace = Path(root)
+            output = workspace / "output"
+            command = (
+                "mkdir -p output; "
+                "printf 'schema_version\\nreal\\n' > output/bench_query_samples.csv"
+            )
+            samples, resources, elapsed_ns = execute_plan_with_resources(
+                {
+                    "workspace": str(workspace),
+                    "output_dir": str(output),
+                    "steps": [{"argv": ["/bin/sh", "-c", command], "env": {}}],
+                }
+            )
+        self.assertEqual(samples.name, "bench_query_samples.csv")
+        self.assertGreater(elapsed_ns, 0)
+        self.assertGreater(resources["cpu_ns"], 0)
+        self.assertGreater(resources["peak_rss_bytes"], 0)
+        self.assertGreaterEqual(resources["disk_read_bytes"], 0)
+        self.assertGreaterEqual(resources["disk_write_bytes"], 0)
+
+    def test_publication_report_is_a_complete_admissible_result(self) -> None:
+        cell = scheduled_cell()
+        protocol = canonical_json_bytes(cell) + b"\n"
+        rows = cell["dataset"]["scale"]["rows"]
+        object_roster = [
+            {
+                "role": "data-bundle",
+                "path": "segments/0000.parquet",
+                "format": "parquet",
+                "bytes": 64 * 1024 * 1024,
+                "rows": rows,
+                "checksum": "1" * 64,
+            }
+        ]
+        if rows >= 10_000_000:
+            object_roster[0]["rows"] = rows // 2
+            object_roster.append(
+                {
+                    **object_roster[0],
+                    "path": "segments/0001.parquet",
+                    "rows": rows - rows // 2,
+                    "checksum": "2" * 64,
+                }
+            )
+        report = build_publication_report(
+            cell=cell,
+            arm={
+                "k": 10,
+                "candidate_budget": 128,
+                "routing_cell_budget": 32,
+                "cache_state": "cold",
+            },
+            protocol_bytes=protocol,
+            source_archive_sha256="a" * 64,
+            attempt_id="attempt-01",
+            instance_identity="i-0123456789abcdef0",
+            elapsed_ns=2_000_000_000,
+            query_metrics={
+                "queries": 1_000,
+                "correctness_ppm": 960_000,
+                "latency_p50_us": 1_000,
+                "latency_p95_us": 2_000,
+                "latency_p99_us": 3_000,
+                "storage_gets": 10,
+                "storage_bytes_read": 4096,
+                "query_elapsed_ns": 1_000_000_000,
+            },
+            resource_metrics={
+                "cpu_ns": 1_500_000_000,
+                "peak_rss_bytes": 256 * 1024 * 1024,
+                "disk_read_bytes": 8192,
+                "disk_write_bytes": 16384,
+                "storage_gets": 7,
+                "storage_puts": 12,
+                "storage_bytes_read": 2048,
+                "storage_bytes_written": 32768,
+            },
+            object_roster=object_roster,
+        )
+        self.assertTrue(report["publishable"])
+        self.assertEqual(report["result"]["arm"]["candidate_budget"], 128)
+        self.assertEqual(report["result"]["metrics"]["storage_gets"], 17)
+        self.assertEqual(report["result"]["metrics"]["storage_bytes_read"], 6144)
+        admitted = validate_cell_result(
+            report["result"],
+            cell=cell,
+            protocol_bytes=protocol,
+            source_archive_sha256="a" * 64,
+        )
+        self.assertEqual(admitted, report["result"])
+
     def test_borsuk_read_smoke_plan_invokes_real_generator_and_production_bench(self) -> None:
         cell = next(
             cell
@@ -179,6 +318,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(summary["latency_p99_us"], 4000)
         self.assertEqual(summary["storage_gets"], 6)
         self.assertEqual(summary["storage_bytes_read"], 600)
+        self.assertEqual(summary["query_elapsed_ns"], 7_000_000)
 
         bad = json.loads(json.dumps(rows))
         for row in bad:

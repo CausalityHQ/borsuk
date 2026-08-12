@@ -342,6 +342,10 @@ impl CacheReadCounters {
 }
 
 impl RequestCounters {
+    fn lifetime() -> Self {
+        Self::default()
+    }
+
     fn request_only() -> Self {
         Self {
             account_put_payload_bytes: false,
@@ -1507,7 +1511,7 @@ impl Storage {
     ) -> Result<Self> {
         let runtime = process_storage_runtime()?;
 
-        let request_counters = Arc::new(RequestCounters::request_only());
+        let request_counters = Arc::new(RequestCounters::lifetime());
         let cache_read_counters = Arc::new(CacheReadCounters::default());
         let store: Arc<dyn ObjectStore> = Arc::new(CountingObjectStore::with_get_admission(
             store,

@@ -31,6 +31,7 @@ RESULT_FIELDS = frozenset(
         "source_archive_sha256",
         "attempt_id",
         "instance_identity",
+        "arm",
         "metrics",
         "object_roster",
     }
@@ -103,6 +104,32 @@ def _correctness_floor(cell: dict[str, object]) -> int:
     if floor > 1_000_000:
         raise ValueError("correctness floor exceeds one million ppm")
     return floor
+
+
+def _validate_result_arm(value: object, cell: dict[str, object]) -> dict[str, object]:
+    arm = value if isinstance(value, dict) else None
+    workload = cell.get("workload")
+    if not isinstance(arm, dict) or not isinstance(workload, dict):
+        raise ValueError("cell result arm is invalid")
+    factors = workload.get("factors")
+    if workload.get("kind") != "read-recall" or not isinstance(factors, dict):
+        raise ValueError("cell result arm kind is not implemented")
+    expected = frozenset(
+        {"k", "candidate_budget", "routing_cell_budget", "cache_state"}
+    )
+    if frozenset(arm) != expected:
+        raise ValueError("cell result arm fields differ")
+    for field in ("k", "candidate_budget", "routing_cell_budget"):
+        _positive_integer(arm[field], f"cell result arm {field}")
+    _bounded_identity(arm["cache_state"], "cell result arm cache state")
+    if (
+        arm["k"] not in factors.get("k", [])
+        or arm["candidate_budget"] not in factors.get("candidate_budgets", [])
+        or arm["routing_cell_budget"] != factors.get("routing_cell_budget")
+        or arm["cache_state"] not in factors.get("cache_states", [])
+    ):
+        raise ValueError("cell result arm is not scheduled")
+    return copy.deepcopy(arm)
 
 
 def validate_object_roster(
@@ -204,6 +231,7 @@ def validate_cell_result(
         raise ValueError("cell result source archive checksum differs")
     _bounded_identity(value["attempt_id"], "attempt identity")
     _bounded_identity(value["instance_identity"], "instance identity")
+    _validate_result_arm(value["arm"], cell)
 
     metrics = value["metrics"]
     if not isinstance(metrics, dict) or frozenset(metrics) != METRIC_FIELDS:

@@ -10,12 +10,15 @@ import json
 import math
 import os
 import subprocess
+import time
 from pathlib import Path
 
 try:
     from scripts.publication_v3_protocol import canonical_json_bytes, read_protocol
+    from scripts.publication_v3_results import validate_cell_result
 except ModuleNotFoundError:
     from publication_v3_protocol import canonical_json_bytes, read_protocol
+    from publication_v3_results import validate_cell_result
 
 
 SUPPORTED_LOCAL_KINDS = frozenset({"read-recall"})
@@ -236,7 +239,9 @@ def build_execution_plan(
     }
 
 
-def execute_plan(plan: dict[str, object]) -> Path:
+def execute_plan_with_resources(
+    plan: dict[str, object],
+) -> tuple[Path, dict[str, int], int]:
     steps = plan.get("steps")
     if not isinstance(steps, list) or not steps:
         raise ValueError("execution plan has no steps")
@@ -244,6 +249,11 @@ def execute_plan(plan: dict[str, object]) -> Path:
     output_dir = Path(str(plan.get("output_dir")))
     workspace.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
+    cpu_ns = 0
+    peak_rss_bytes = 0
+    disk_read_bytes = 0
+    disk_write_bytes = 0
+    started_ns = time.monotonic_ns()
     for index, step in enumerate(steps):
         if not isinstance(step, dict) or not isinstance(step.get("argv"), list):
             raise ValueError("execution step is invalid")
@@ -261,17 +271,39 @@ def execute_plan(plan: dict[str, object]) -> Path:
         child_environment.update({str(key): str(value) for key, value in environment.items()})
         log_path = workspace / f"step-{index:02d}.log"
         with log_path.open("wb") as log:
-            subprocess.run(
+            process = subprocess.Popen(
                 argv,
-                check=True,
                 cwd=workspace,
                 env=child_environment,
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
+            _, status, usage = os.wait4(process.pid, 0)
+            process.returncode = os.waitstatus_to_exitcode(status)
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, argv)
+        cpu_ns += round((usage.ru_utime + usage.ru_stime) * 1_000_000_000)
+        peak_rss_bytes = max(peak_rss_bytes, int(usage.ru_maxrss) * 1024)
+        disk_read_bytes += int(usage.ru_inblock) * 512
+        disk_write_bytes += int(usage.ru_oublock) * 512
+    elapsed_ns = time.monotonic_ns() - started_ns
     samples = output_dir / "bench_query_samples.csv"
     if not samples.is_file() or samples.stat().st_size == 0:
         raise ValueError("execution completed without a real query sample artifact")
+    return (
+        samples,
+        {
+            "cpu_ns": cpu_ns,
+            "peak_rss_bytes": peak_rss_bytes,
+            "disk_read_bytes": disk_read_bytes,
+            "disk_write_bytes": disk_write_bytes,
+        },
+        elapsed_ns,
+    )
+
+
+def execute_plan(plan: dict[str, object]) -> Path:
+    samples, _, _ = execute_plan_with_resources(plan)
     return samples
 
 
@@ -334,6 +366,60 @@ def summarize_query_samples(
         "latency_p99_us": _nearest_rank(latencies_us, 0.99),
         "storage_gets": storage_gets,
         "storage_bytes_read": storage_bytes_read,
+        "query_elapsed_ns": sum(latencies_us) * 1_000,
+    }
+
+
+def read_build_storage_metrics(output_dir: Path) -> dict[str, int]:
+    path = output_dir / "bench_build.csv"
+    if not path.is_file():
+        raise ValueError("publication build storage artifact is missing")
+    with path.open(newline="") as source:
+        rows = list(csv.DictReader(source))
+    if len(rows) != 1:
+        raise ValueError("publication build storage artifact must contain one row")
+    row = rows[0]
+    result: dict[str, int] = {}
+    for field in (
+        "storage_gets",
+        "storage_puts",
+        "storage_deletes",
+        "storage_heads",
+        "storage_lists",
+        "storage_bytes_read",
+        "storage_bytes_written",
+    ):
+        try:
+            value = int(row[field])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"publication build storage field {field} is invalid") from error
+        if value < 0:
+            raise ValueError(f"publication build storage field {field} is negative")
+        result[field] = value
+    return result
+
+
+def build_resource_metrics(
+    process_resources: dict[str, int], storage_metrics: dict[str, int]
+) -> dict[str, int]:
+    process_fields = frozenset(
+        {"cpu_ns", "peak_rss_bytes", "disk_read_bytes", "disk_write_bytes"}
+    )
+    required_storage = frozenset(
+        {
+            "storage_gets",
+            "storage_puts",
+            "storage_bytes_read",
+            "storage_bytes_written",
+        }
+    )
+    if frozenset(process_resources) != process_fields or not required_storage.issubset(
+        storage_metrics
+    ):
+        raise ValueError("publication resource inputs differ")
+    return {
+        **process_resources,
+        **{field: storage_metrics[field] for field in sorted(required_storage)},
     }
 
 
@@ -361,6 +447,93 @@ def build_smoke_report(
         "effective_queries": effective_queries,
         "metrics": metrics,
     }
+
+
+def build_publication_report(
+    *,
+    cell: dict[str, object],
+    arm: dict[str, object],
+    protocol_bytes: bytes,
+    source_archive_sha256: str,
+    attempt_id: str,
+    instance_identity: str,
+    elapsed_ns: int,
+    query_metrics: dict[str, int],
+    resource_metrics: dict[str, int],
+    object_roster: list[dict[str, object]],
+) -> dict[str, object]:
+    if isinstance(elapsed_ns, bool) or not isinstance(elapsed_ns, int) or elapsed_ns <= 0:
+        raise ValueError("publication elapsed time must be a positive integer")
+    queries = query_metrics.get("queries")
+    if isinstance(queries, bool) or not isinstance(queries, int) or queries <= 0:
+        raise ValueError("publication query count must be a positive integer")
+    expected_query_fields = frozenset(
+        {
+            "queries",
+            "correctness_ppm",
+            "latency_p50_us",
+            "latency_p95_us",
+            "latency_p99_us",
+            "storage_gets",
+            "storage_bytes_read",
+            "query_elapsed_ns",
+        }
+    )
+    expected_resource_fields = frozenset(
+        {
+            "cpu_ns",
+            "peak_rss_bytes",
+            "disk_read_bytes",
+            "disk_write_bytes",
+            "storage_gets",
+            "storage_puts",
+            "storage_bytes_read",
+            "storage_bytes_written",
+        }
+    )
+    if frozenset(query_metrics) != expected_query_fields:
+        raise ValueError("publication query metric fields differ")
+    if frozenset(resource_metrics) != expected_resource_fields:
+        raise ValueError("publication resource metric fields differ")
+    result = {
+        "schema_version": 1,
+        "status": "complete",
+        "cell_id": cell.get("cell_id"),
+        "manifest_sha256": cell.get("manifest_sha256"),
+        "protocol_sha256": hashlib.sha256(protocol_bytes).hexdigest(),
+        "source_archive_sha256": source_archive_sha256,
+        "attempt_id": attempt_id,
+        "instance_identity": instance_identity,
+        "arm": arm,
+        "metrics": {
+            **{
+                key: value
+                for key, value in query_metrics.items()
+                if key != "query_elapsed_ns"
+            },
+            **resource_metrics,
+            "storage_gets": query_metrics["storage_gets"]
+            + resource_metrics["storage_gets"],
+            "storage_bytes_read": query_metrics["storage_bytes_read"]
+            + resource_metrics["storage_bytes_read"],
+            "throughput_milli_per_second": max(
+                1,
+                round(
+                    queries
+                    * 1_000_000_000_000
+                    / query_metrics["query_elapsed_ns"]
+                ),
+            ),
+        },
+        "object_roster": object_roster,
+    }
+    validated = validate_cell_result(
+        result,
+        cell=cell,
+        protocol_bytes=protocol_bytes,
+        source_archive_sha256=source_archive_sha256,
+    )
+    return {"publishable": True, "result": validated}
 
 
 def main() -> int:

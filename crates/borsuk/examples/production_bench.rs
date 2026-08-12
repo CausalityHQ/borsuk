@@ -65,7 +65,7 @@ const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turb
 const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,cache_profile,target_cache_coverage_percent,execution_engine,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read";
 const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
 const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,network_gets";
-const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written";
+const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written";
 const WRITE_COST_HEADER: &str = "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
 const WRITE_SAMPLE_HEADER: &str =
     "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
@@ -477,6 +477,9 @@ struct BuildMeasurement {
     compaction_ms: f64,
     compaction_bytes_read: u64,
     compaction_bytes_written: u64,
+    storage_requests: RequestCounts,
+    storage_bytes_read: u64,
+    storage_bytes_written: u64,
     records: usize,
     segment_bytes: u64,
     vector_bytes: u64,
@@ -621,6 +624,9 @@ fn run() -> BenchResult<()> {
             dataset.meta.name, dataset.train_count, compaction_bytes_read, compaction_bytes_written
         );
         let stats = index.stats();
+        let storage_requests = index.request_counts();
+        let storage_bytes_read = index.backing_bytes_read();
+        let storage_bytes_written = index.put_payload_bytes();
         let build = BuildMeasurement {
             logical_cell_catalog_checksum: catalog_evidence.0,
             logical_cells: catalog_evidence.1,
@@ -631,6 +637,9 @@ fn run() -> BenchResult<()> {
             compaction_ms,
             compaction_bytes_read,
             compaction_bytes_written,
+            storage_requests,
+            storage_bytes_read,
+            storage_bytes_written,
             records: stats.records,
             segment_bytes: stats.segment_bytes,
             vector_bytes: stats.vector_bytes,
@@ -1833,7 +1842,7 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
     };
     writeln!(
         writer,
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{},{},{},{},{},{},{},{}",
         build.logical_cell_catalog_checksum,
         build.logical_cells,
         build.logical_cell_dimensions,
@@ -1865,6 +1874,13 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
         build.compaction_ms,
         build.compaction_bytes_read,
         build.compaction_bytes_written,
+        build.storage_requests.gets,
+        build.storage_requests.puts,
+        build.storage_requests.deletes,
+        build.storage_requests.heads,
+        build.storage_requests.lists,
+        build.storage_bytes_read,
+        build.storage_bytes_written,
     )?;
     writer.flush()?;
     eprintln!("wrote {} rows=1", path.display());
@@ -4419,6 +4435,13 @@ mod tests {
             "compaction_ms",
             "compaction_bytes_read",
             "compaction_bytes_written",
+            "storage_gets",
+            "storage_puts",
+            "storage_deletes",
+            "storage_heads",
+            "storage_lists",
+            "storage_bytes_read",
+            "storage_bytes_written",
         ] {
             assert!(BUILD_HEADER.contains(column), "missing {column}");
         }
