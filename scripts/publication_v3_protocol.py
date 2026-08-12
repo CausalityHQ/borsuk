@@ -8,6 +8,9 @@ import copy
 import hashlib
 import json
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -1051,6 +1054,54 @@ def read_protocol(path: Path) -> dict[str, object]:
     return validate_schedule_cell(_read_canonical_json(path, 256 * 1024))
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_structural_replay(
+    manifest: dict[str, object], source_archive: Path, output: Path
+) -> None:
+    if output.exists():
+        raise ValueError("replay output must not already exist")
+    source_sha256 = _sha256_file(source_archive)
+    if source_sha256 != manifest["source"].get("archive_sha256"):
+        raise ValueError("source archive checksum differs from manifest")
+    schedule = build_schedule_document(manifest)
+    output.mkdir(parents=True)
+    _write_canonical(output / "manifest.json", manifest)
+    _write_canonical(output / "schedule.json", schedule)
+    _write_canonical(output / "environment.json", manifest["environment_contract"])
+    shutil.copyfile(source_archive, output / "source-archive.tar.gz")
+    for cell in schedule["cells"]:
+        cell_root = output / "cells" / str(cell["cell_id"])
+        protocol_path = cell_root / "protocol.json"
+        write_protocol(protocol_path, cell)
+        _write_canonical(
+            cell_root / "CELL_COMPLETE",
+            {
+                "schema_version": 1,
+                "status": "complete",
+                "cell_id": cell["cell_id"],
+                "manifest_sha256": schedule["manifest_sha256"],
+                "protocol_sha256": _sha256_file(protocol_path),
+            },
+        )
+    _write_canonical(
+        output / "PUBLICATION_V3_COMPLETE",
+        {
+            "schema_version": 1,
+            "status": "complete",
+            "manifest_sha256": schedule["manifest_sha256"],
+            "schedule_sha256": _sha256_file(output / "schedule.json"),
+            "complete_cells": len(schedule["cells"]),
+        },
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1066,6 +1117,10 @@ def main() -> int:
     protocol_parser.add_argument("--schedule", required=True, type=Path)
     protocol_parser.add_argument("--cell-id", required=True)
     protocol_parser.add_argument("--output", required=True, type=Path)
+    replay_parser = subparsers.add_parser("replay")
+    replay_parser.add_argument("manifest", type=Path)
+    replay_parser.add_argument("--source-archive", required=True, type=Path)
+    replay_parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     if args.command == "protocol":
         schedule = validate_schedule_document(_read_json(args.schedule))
@@ -1087,6 +1142,26 @@ def main() -> int:
         dataset["source"]["state"] == "unstaged" for dataset in manifest["datasets"]
     )
     paid_ready = manifest["source"]["state"] == "frozen" and unstaged == 0
+    if args.command == "replay":
+        if not paid_ready:
+            raise ValueError("replay requires paid-ready source and datasets")
+        _write_structural_replay(manifest, args.source_archive, args.output)
+        validator = Path(__file__).with_name("validate_publication_v3_results.py")
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(validator),
+                str(args.output),
+                "--structural-only",
+                "--expected-source-sha256",
+                _sha256_file(args.source_archive),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(completed.stdout.strip())
+        return 0
     if args.command == "validate":
         print(
             json.dumps(
