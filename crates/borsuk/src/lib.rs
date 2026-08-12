@@ -49,6 +49,7 @@ mod mutation_extent;
 mod observability;
 mod parallel;
 mod physical_layout;
+mod positioned_candidate;
 mod positioned_log;
 mod quantizer_sidecar;
 mod record;

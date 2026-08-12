@@ -49,8 +49,9 @@ use crate::{
         tombstone_ids_to_parquet, wal_records_from_table,
     },
     global_leaf_run::{
-        CarriedPrimaryDenseRun, GlobalAnnRef, GlobalCodebookRef, GlobalLeafPersistenceWriter,
-        GlobalLeafRunRef, PrimaryDenseArtifactCandidate, ResidentGlobalLeafRun, SourceRangeSet,
+        CarriedPrimaryDenseRun, GlobalAnnRef, GlobalCodebookRef, GlobalLeafArtifactRole,
+        GlobalLeafPersistenceWriter, GlobalLeafRunRef, PrimaryDenseArtifactCandidate,
+        ResidentGlobalLeafRun, SourceRangeSet,
     },
     global_pq_sidecar::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCoarseQuantizer, GlobalCodebookDescriptor,
@@ -82,10 +83,17 @@ use crate::{
         MutationVersion,
     },
     observability,
+    positioned_candidate::{
+        LexicalDeltaAuthority, MaterializationArtifactRef, MaterializationArtifactRole,
+        MaterializationBm25Delta, MaterializationChainAnchor, MaterializationDeltaCandidate,
+        MaterializationSourceTransfer, MaterializedDirectoryState, MaterializedProjectionDelta,
+        MaterializedRow, MaterializedRowValue, ModalityConstructionMetrics, build_row_bundle_delta,
+    },
     positioned_log::{
         CommittedPositionedMutation, INITIAL_POSITIONED_SOURCE_EPOCH, PositionedLogReader,
         PositionedLogWriter, PositionedMutationModality, PositionedMutationPayloadInput,
-        PositionedPayloadFormat, canonical_envelope_path, canonical_payload_path,
+        PositionedMutationPayloadRef, PositionedPayloadFormat, canonical_envelope_path,
+        canonical_payload_path,
     },
     quantizer_sidecar::{PersistedQuantizer, is_quantizer_path, quantizer_relative_path},
     record::{
@@ -1477,10 +1485,34 @@ fn tombstone_bucket(id: &[u8]) -> u16 {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct Bm25StatsDelta {
+pub(crate) struct Bm25StatsDelta {
     document_count: i64,
     total_document_length: i64,
     document_frequencies: BTreeMap<u32, i64>,
+}
+
+#[allow(
+    dead_code,
+    reason = "Task 3 BM25 ledgers remain unwired until the Task 4 collection CAS fold"
+)]
+impl Bm25StatsDelta {
+    pub(crate) fn checked_add_assign(&mut self, other: &Self) -> Result<()> {
+        self.document_count = self
+            .document_count
+            .checked_add(other.document_count)
+            .ok_or_else(|| BorsukError::InvalidStorage("BM25 document delta overflows".into()))?;
+        self.total_document_length = self
+            .total_document_length
+            .checked_add(other.total_document_length)
+            .ok_or_else(|| BorsukError::InvalidStorage("BM25 length delta overflows".into()))?;
+        for (term, delta) in &other.document_frequencies {
+            let value = self.document_frequencies.entry(*term).or_default();
+            *value = value.checked_add(*delta).ok_or_else(|| {
+                BorsukError::InvalidStorage("BM25 term-frequency delta overflows".into())
+            })?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1585,6 +1617,91 @@ struct AuthenticatedPrimaryRoutePrefix {
     cell_ordinals: Arc<[u32]>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthenticatedRouteProjection {
+    projection_kind: PositionedRouteProjectionKind,
+    assignment: PositionedRouteAssignment,
+    logical_row_count: u64,
+    cell_ordinals: Arc<[u32]>,
+    entity_token_offsets: Arc<[u32]>,
+}
+
+impl AuthenticatedRouteProjection {
+    fn resident_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(4 * std::mem::size_of::<usize>())
+            .saturating_add(std::mem::size_of_val(self.cell_ordinals.as_ref()))
+            .saturating_add(std::mem::size_of_val(self.entity_token_offsets.as_ref()))
+    }
+}
+
+fn authenticated_route_projections(
+    rows: &[PositionedRoutePlanRow],
+) -> Result<BTreeMap<String, AuthenticatedRouteProjection>> {
+    let mut projections = BTreeMap::new();
+    for summary in rows.iter().filter(|row| row.record_id.is_none()) {
+        let data = rows
+            .iter()
+            .filter(|row| row.modality == summary.modality && row.record_id.is_some())
+            .collect::<Vec<_>>();
+        let cell_ordinals = data
+            .iter()
+            .filter_map(|row| row.cell_ordinal)
+            .collect::<Vec<_>>();
+        if matches!(
+            summary.projection_kind,
+            PositionedRouteProjectionKind::Primary
+                | PositionedRouteProjectionKind::Dense
+                | PositionedRouteProjectionKind::LateInteraction
+        ) && cell_ordinals.len() != data.len()
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "authenticated route projection `{}` lost a catalog cell",
+                summary.modality
+            )));
+        }
+        let mut entity_token_offsets = Vec::new();
+        if summary.projection_kind == PositionedRouteProjectionKind::LateInteraction {
+            entity_token_offsets.push(0_u32);
+            let mut previous = None::<&[u8]>;
+            for (row_index, row) in data.iter().enumerate() {
+                let id = row.record_id.as_deref().expect("filtered route data row");
+                if previous.is_some_and(|current| current != id) {
+                    entity_token_offsets.push(u32::try_from(row_index).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "late route projection row count exceeds u32".to_owned(),
+                        )
+                    })?);
+                }
+                previous = Some(id);
+            }
+            if !data.is_empty() {
+                entity_token_offsets.push(u32::try_from(data.len()).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "late route projection row count exceeds u32".to_owned(),
+                    )
+                })?);
+            }
+        }
+        let projection = AuthenticatedRouteProjection {
+            projection_kind: summary.projection_kind,
+            assignment: summary.assignment.clone(),
+            logical_row_count: summary.logical_row_count,
+            cell_ordinals: Arc::from(cell_ordinals),
+            entity_token_offsets: Arc::from(entity_token_offsets),
+        };
+        if projections
+            .insert(summary.modality.clone(), projection)
+            .is_some()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "authenticated route projections repeat a modality".to_owned(),
+            ));
+        }
+    }
+    Ok(projections)
+}
+
 #[derive(Debug, Clone)]
 struct PrimaryDenseProjectedRow {
     id: Vec<u8>,
@@ -1609,6 +1726,47 @@ struct PrimaryDenseProjectedTombstone {
     id: Vec<u8>,
     state: MutationState,
 }
+
+#[derive(Debug)]
+#[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+struct CandidateDenseLeafRow {
+    leaf_id: Vec<u8>,
+    vector: Vec<f32>,
+    state: MutationState,
+    cell_ordinal: u32,
+}
+
+#[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+struct CandidateDenseProjectionRun<'a> {
+    modality: &'a str,
+    run_source_ranges: &'a crate::positioned_log::CommitSourceRangeSet,
+    candidate_source_ranges: &'a crate::positioned_log::CommitSourceRangeSet,
+    codebook_ref: &'a GlobalCodebookRef,
+    assignment: &'a PositionedRouteAssignment,
+    carried: &'a [CarriedPrimaryDenseRun],
+    target_level: u8,
+    rows: Vec<CandidateDenseLeafRow>,
+}
+
+#[derive(Debug)]
+#[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+struct CandidateProjectedRecord {
+    record: VectorRecord,
+    state: MutationState,
+    primary_cell: u32,
+    dense_cells: BTreeMap<String, u32>,
+    late_cells: BTreeMap<String, Vec<u32>>,
+}
+
+#[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+struct CandidateEntityMergeState {
+    state: MutationState,
+    row: Option<CandidateProjectedRecord>,
+    primary_cell: Option<u32>,
+}
+
+#[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+const POSITIONED_PRIMARY_PROJECTION: &str = "primary";
 
 impl PrimaryDenseProjectedTombstone {
     fn resident_bytes(&self) -> usize {
@@ -1647,6 +1805,8 @@ struct ValidatedPositionedRoutePlanEnvelope {
     loaded: BTreeMap<String, Vec<u8>>,
     primary_route_prefix: AuthenticatedPrimaryRoutePrefix,
     primary_rows: Arc<[PrimaryDenseProjectedRow]>,
+    route_projections: BTreeMap<String, AuthenticatedRouteProjection>,
+    primary_payload: Option<PositionedMutationPayloadRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1666,6 +1826,8 @@ struct PreparedPositionedEnvelope {
     fully_materialized_positions: Vec<crate::CommitSourcePosition>,
     primary_route_prefix: AuthenticatedPrimaryRoutePrefix,
     primary_dense_projection: PreparedPrimaryDenseProjection,
+    route_projections: BTreeMap<String, AuthenticatedRouteProjection>,
+    primary_payload: Option<PositionedMutationPayloadRef>,
 }
 
 impl PreparedPositionedEnvelope {
@@ -1719,6 +1881,31 @@ impl PreparedPositionedEnvelope {
                     .resident_bytes()
                     .saturating_sub(std::mem::size_of::<PreparedPrimaryDenseProjection>()),
             )
+            .saturating_add(
+                self.route_projections
+                    .iter()
+                    .map(|(name, projection)| {
+                        std::mem::size_of::<(String, AuthenticatedRouteProjection)>()
+                            .saturating_add(PREPARED_BTREE_ENTRY_OVERHEAD)
+                            .saturating_add(name.capacity())
+                            .saturating_add(
+                                projection
+                                    .resident_bytes()
+                                    .saturating_sub(std::mem::size_of::<
+                                        AuthenticatedRouteProjection,
+                                    >()),
+                            )
+                    })
+                    .fold(0_usize, usize::saturating_add),
+            )
+            .saturating_add(self.primary_payload.as_ref().map_or(0, |payload| {
+                payload
+                    .role
+                    .capacity()
+                    .saturating_add(payload.id_bloom.capacity())
+                    .saturating_add(payload.path.capacity())
+                    .saturating_add(payload.checksum.capacity())
+            }))
     }
 }
 
@@ -5977,6 +6164,7 @@ impl BorsukIndex {
             source_min,
             &rows,
         )?;
+        let route_projections = authenticated_route_projections(&rows)?;
         let cell_ordinals = rows
             .iter()
             .filter(|row| {
@@ -6018,6 +6206,8 @@ impl BorsukIndex {
                 cell_ordinals: Arc::from(cell_ordinals),
             },
             primary_rows: Arc::from(primary_rows),
+            route_projections,
+            primary_payload: primary_payload.cloned(),
         })
     }
 
@@ -6099,6 +6289,8 @@ impl BorsukIndex {
                 loaded,
                 primary_route_prefix,
                 primary_rows,
+                route_projections,
+                primary_payload,
             } = validated;
             let position = primary_route_prefix.position;
             let mut contribution = PreparedPositionedEnvelope {
@@ -6115,6 +6307,8 @@ impl BorsukIndex {
                     rows: primary_rows,
                     tombstones: Arc::from([]),
                 },
+                route_projections,
+                primary_payload,
             };
             let mut by_modality = BTreeMap::<String, Vec<PreparedCellWalRun>>::new();
             let mut transaction_metadata = BTreeMap::<String, StagedPositionedMetadata>::new();
@@ -17061,6 +17255,1019 @@ impl BorsukIndex {
         self.refresh_resident_global_ann_from_summaries(&summaries, 0)
     }
 
+    #[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+    fn candidate_catalog_codebook(
+        &self,
+        modality: &str,
+        codebook_ref: &GlobalCodebookRef,
+        assignment: &PositionedRouteAssignment,
+    ) -> Result<Arc<ResidentGlobalCodebook>> {
+        let catalog_ref = self
+            .manifest
+            .logical_cell_catalog_ref
+            .as_ref()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "materialization modality `{modality}` has no catalog authority"
+                ))
+            })?;
+        let catalog_checksum = blake3::Hash::from_hex(&catalog_ref.checksum).map_err(|_| {
+            BorsukError::InvalidStorage("manifest catalog checksum is not BLAKE3".to_owned())
+        })?;
+        if assignment.kind != crate::format::PositionedRouteAssignmentKind::Catalog
+            || assignment.checksum != *catalog_checksum.as_bytes()
+            || assignment.routing_epoch != Some(catalog_ref.routing_epoch)
+            || codebook_ref.cell_count() != catalog_ref.cell_count
+            || codebook_ref.dimensions() != self.manifest.config.dimensions
+            || codebook_ref.metric() != &self.manifest.config.metric
+            || codebook_ref.element_type() != self.manifest.build_config.vector_element_type
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "materialization modality `{modality}` codebook disagrees with its catalog authority"
+            )));
+        }
+        let codebook = self.load_resident_global_codebook(codebook_ref)?;
+        let router = codebook.catalog_router().ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "materialization modality `{modality}` requires a catalog-pinned codebook"
+            ))
+        })?;
+        if self
+            .manifest
+            .logical_cell_router
+            .as_ref()
+            .is_none_or(|manifest_router| !Arc::ptr_eq(manifest_router, router))
+            || router.catalog().routing_epoch() != catalog_ref.routing_epoch
+            || router.strategy() != self.manifest.logical_cell_routing_strategy
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "materialization modality `{modality}` codebook disagrees with its catalog authority"
+            )));
+        }
+        Ok(codebook)
+    }
+
+    #[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+    fn build_unwired_dense_projection_run(
+        &self,
+        input: CandidateDenseProjectionRun<'_>,
+    ) -> Result<(
+        PrimaryDenseArtifactCandidate,
+        Vec<MaterializationArtifactRef>,
+    )> {
+        let CandidateDenseProjectionRun {
+            modality,
+            run_source_ranges,
+            candidate_source_ranges,
+            codebook_ref,
+            assignment,
+            carried,
+            target_level,
+            mut rows,
+        } = input;
+        if rows.is_empty() {
+            return Err(BorsukError::InvalidStorage(format!(
+                "dense materialization modality `{modality}` has no rows"
+            )));
+        }
+        let codebook = self.candidate_catalog_codebook(modality, codebook_ref, assignment)?;
+        rows.sort_by(|left, right| {
+            left.cell_ordinal
+                .cmp(&right.cell_ordinal)
+                .then_with(|| left.leaf_id.cmp(&right.leaf_id))
+        });
+        let mut writer = GlobalLeafPersistenceWriter::new(
+            &self.storage,
+            self.manifest.config.dimensions,
+            self.manifest.build_config.vector_element_type,
+            codebook_ref.descriptor_checksum().to_owned(),
+        )?;
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let dimensions = self.manifest.config.dimensions;
+        let element_type = self.manifest.build_config.vector_element_type;
+        let code_width = codebook.code_bytes_per_vector();
+        let mut minimum_stamp = None::<MutationStamp>;
+        let mut maximum_stamp = None::<MutationStamp>;
+        let mut start = 0;
+        while start < rows.len() {
+            let cell = rows[start].cell_ordinal;
+            let end = rows[start..].partition_point(|row| row.cell_ordinal == cell) + start;
+            let mut code_bytes = Vec::with_capacity((end - start).saturating_mul(code_width));
+            let mut exact_bytes = Vec::new();
+            let mut exact_row = Vec::new();
+            let mut identities = Vec::with_capacity(end - start);
+            for row in &rows[start..end] {
+                let normalized;
+                let vector = if normalize {
+                    normalized = crate::metric::unit_l2_normalized(&row.vector);
+                    normalized.as_slice()
+                } else {
+                    row.vector.as_slice()
+                };
+                code_bytes.extend_from_slice(&codebook.encode_vector(vector)?);
+                element_type.encode_canonical_fixed_width_into(&row.vector, &mut exact_row)?;
+                exact_bytes.extend_from_slice(&exact_row);
+                let stamp = row.state.stamp();
+                minimum_stamp = Some(minimum_stamp.map_or(stamp, |current| {
+                    if stamp.version() < current.version() {
+                        stamp
+                    } else {
+                        current
+                    }
+                }));
+                maximum_stamp = Some(maximum_stamp.map_or(stamp, |current| {
+                    if stamp.version() > current.version() {
+                        stamp
+                    } else {
+                        current
+                    }
+                }));
+                identities.push((RecordId::from_bytes(row.leaf_id.clone()), stamp));
+            }
+            let chunk_rows = identities.len();
+            let mut pending = [PendingGlobalPqChunk {
+                cell_index: cell,
+                chunk: GlobalPqChunkBytes {
+                    bytes: code_bytes,
+                    exact_bytes,
+                    identities,
+                    rows: chunk_rows,
+                },
+            }];
+            let pages = build_global_leaf_pages(
+                &mut pending,
+                code_width,
+                codebook.scan_quantizer().uses_product_code_locality(),
+                dimensions,
+                element_type,
+                normalize,
+                codebook.scan_quantizer(),
+            )
+            .map_err(|error| {
+                BorsukError::InvalidStorage(format!(
+                    "dense materialization modality `{modality}` could not build leaf pages (rows {chunk_rows}, code bytes {}, exact bytes {}, code width {code_width}, dimensions {dimensions}, element {element_type:?}): {error}",
+                    pending[0].chunk.bytes.len(),
+                    pending[0].chunk.exact_bytes.len(),
+                ))
+            })?;
+            writer.push_cell_chunk(pages)?;
+            writer.finalize_cell(cell)?;
+            start = end;
+        }
+        let artifacts = writer.finish()?;
+        let run = GlobalLeafRunRef::new_incremental(
+            codebook_ref,
+            if carried.iter().any(|run| run.run().level() == target_level) {
+                return Err(BorsukError::InvalidStorage(
+                    "dense projection target level repeats a carried run".to_owned(),
+                ));
+            } else {
+                target_level
+            },
+            artifacts.directory,
+            artifacts.rows as u64,
+            artifacts.page_count as u64,
+            artifacts.bundle_count as u64,
+            artifacts.page_count as u64,
+            0,
+            artifacts.storage_bytes,
+            artifacts.resident_bytes,
+            minimum_stamp,
+            maximum_stamp,
+            SourceRangeSet::try_from(run_source_ranges)?,
+        )?;
+        let validated = PrimaryDenseArtifactCandidate::assemble(
+            codebook_ref.clone(),
+            Some((run, artifacts.run_artifacts)),
+            carried,
+            candidate_source_ranges.clone(),
+        )?;
+        let roster = validated
+            .roster()
+            .iter()
+            .filter(|artifact| artifact.role != GlobalLeafArtifactRole::CodebookDescriptor)
+            .map(|artifact| MaterializationArtifactRef::from_global(modality, artifact))
+            .collect();
+        Ok((validated, roster))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+    fn build_unwired_lexical_delta(
+        &self,
+        modality: &str,
+        kind: LexicalKind,
+        value_type: crate::VectorElementType,
+        dimensions: u32,
+        segment_key: &str,
+        rows: &[LexicalInputRow],
+    ) -> Result<LexicalDeltaAuthority> {
+        if rows.is_empty() {
+            return LexicalDeltaAuthority::new(Vec::new(), Vec::new());
+        }
+        let build = build_lexical_segment(
+            kind,
+            value_type,
+            dimensions,
+            modality,
+            segment_key,
+            rows,
+            DEFAULT_LEXICAL_BLOCK_BYTES,
+        )?;
+        let mut roster = Vec::new();
+        for object in &build.objects {
+            roster.push(MaterializationArtifactRef::content(
+                "primary",
+                modality,
+                if object.path.contains("/postings/") {
+                    MaterializationArtifactRole::LexicalPostings
+                } else {
+                    MaterializationArtifactRole::LexicalRows
+                },
+                object.path.clone(),
+                blake3::hash(&object.bytes).to_hex().to_string(),
+                object.bytes.len() as u64,
+            ));
+        }
+        let shard = self
+            .persist_lexical_segment_build(modality, segment_key, &build)?
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("nonempty lexical build emitted no shard".to_owned())
+            })?;
+        roster.push(MaterializationArtifactRef::content(
+            "primary",
+            modality,
+            MaterializationArtifactRole::LexicalShard,
+            shard.path.clone(),
+            shard.checksum.clone(),
+            shard.encoded_bytes,
+        ));
+        LexicalDeltaAuthority::new(vec![shard], roster)
+    }
+
+    #[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+    fn selected_positioned_envelopes(
+        &self,
+        source_ranges: &crate::positioned_log::CommitSourceRangeSet,
+    ) -> Result<Vec<&PreparedPositionedEnvelope>> {
+        source_ranges.validate_canonical()?;
+        if source_ranges.ranges().is_empty() {
+            return Ok(Vec::new());
+        }
+        let contains = |position: crate::CommitSourcePosition| {
+            source_ranges.ranges().iter().any(|range| {
+                range.source_epoch == position.source_epoch
+                    && range.shard == position.shard
+                    && (range.first_sequence..=range.last_sequence).contains(&position.sequence)
+            })
+        };
+        let mut selected = self
+            .positioned_prepared_envelopes
+            .values()
+            .filter(|envelope| contains(envelope.primary_route_prefix.position))
+            .collect::<Vec<_>>();
+        selected.sort_unstable_by_key(|envelope| envelope.primary_route_prefix.position);
+        let selected_coverage = crate::positioned_log::CommitSourceRangeSet::new(
+            selected
+                .iter()
+                .map(|envelope| {
+                    let position = envelope.primary_route_prefix.position;
+                    crate::positioned_log::CommitSourceRange::new(
+                        position.source_epoch,
+                        position.shard,
+                        position.sequence,
+                        position.sequence,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
+        )?;
+        if &selected_coverage != source_ranges {
+            return Err(BorsukError::InvalidStorage(
+                "prepared route projections do not exactly cover the requested source prefix"
+                    .to_owned(),
+            ));
+        }
+        Ok(selected)
+    }
+
+    #[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+    fn project_selected_record(
+        &self,
+        mut positioned: Vec<PositionedWalRecord>,
+        projections: &BTreeMap<String, AuthenticatedRouteProjection>,
+    ) -> Result<Vec<CandidateProjectedRecord>> {
+        positioned.sort_by(|left, right| left.0.id.cmp(&right.0.id));
+        let records = positioned.len();
+        let primary = projections
+            .get(POSITIONED_PRIMARY_PROJECTION)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("prepared route authority lost primary".to_owned())
+            })?;
+        if primary.logical_row_count != records as u64
+            || primary.cell_ordinals.len() != records
+            || positioned
+                .iter()
+                .zip(primary.cell_ordinals.iter())
+                .any(|((_, _, payload_cell), route_cell)| payload_cell != route_cell)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "prepared primary route authority changed during projection".to_owned(),
+            ));
+        }
+        let mut projected = positioned
+            .into_iter()
+            .zip(primary.cell_ordinals.iter().copied())
+            .map(|((record, _, _), primary_cell)| {
+                let stamp = record.mutation_stamp().ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "selected positioned record lost its mutation stamp".to_owned(),
+                    )
+                })?;
+                Ok(CandidateProjectedRecord {
+                    record,
+                    state: MutationState::new(stamp, MutationOperation::Put),
+                    primary_cell,
+                    dense_cells: BTreeMap::new(),
+                    late_cells: BTreeMap::new(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (name, spec) in &self.manifest.config.named_vectors {
+            let authority = projections.get(name).ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "prepared route authority lost modality `{name}`"
+                ))
+            })?;
+            match spec.kind {
+                VectorKind::Dense => {
+                    let indexes = projected
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, row)| {
+                            row.record.extra_vectors.contains_key(name).then_some(index)
+                        })
+                        .collect::<Vec<_>>();
+                    if authority.logical_row_count != indexes.len() as u64
+                        || authority.cell_ordinals.len() != indexes.len()
+                    {
+                        return Err(BorsukError::InvalidStorage(format!(
+                            "prepared dense route authority `{name}` changed cardinality"
+                        )));
+                    }
+                    for (index, cell) in indexes
+                        .into_iter()
+                        .zip(authority.cell_ordinals.iter().copied())
+                    {
+                        projected[index].dense_cells.insert(name.clone(), cell);
+                    }
+                }
+                VectorKind::Sparse => {
+                    let count = projected
+                        .iter()
+                        .filter(|row| row.record.extra_sparse.contains_key(name))
+                        .count();
+                    if authority.logical_row_count != count as u64
+                        || !authority.cell_ordinals.is_empty()
+                    {
+                        return Err(BorsukError::InvalidStorage(format!(
+                            "prepared sparse route authority `{name}` changed cardinality"
+                        )));
+                    }
+                }
+                VectorKind::LateInteraction => {
+                    let mut flat_cells = authority.cell_ordinals.iter().copied();
+                    let mut offsets = vec![0_u32];
+                    let mut total = 0_u32;
+                    for row in &mut projected {
+                        if let Some(matrix) = row.record.extra_multi_vectors.get(name) {
+                            let cells = (0..matrix.token_count())
+                                .map(|_| {
+                                    flat_cells.next().ok_or_else(|| {
+                                        BorsukError::InvalidStorage(format!(
+                                            "prepared late route authority `{name}` is truncated"
+                                        ))
+                                    })
+                                })
+                                .collect::<Result<Vec<_>>>()?;
+                            total = total.checked_add(cells.len() as u32).ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "late route projection offset overflows".to_owned(),
+                                )
+                            })?;
+                            offsets.push(total);
+                            row.late_cells.insert(name.clone(), cells);
+                        }
+                    }
+                    if flat_cells.next().is_some()
+                        || authority.logical_row_count != u64::from(total)
+                        || authority.entity_token_offsets.as_ref() != offsets
+                    {
+                        return Err(BorsukError::InvalidStorage(format!(
+                            "prepared late route authority `{name}` changed offsets"
+                        )));
+                    }
+                }
+            }
+        }
+        if self.manifest.config.text {
+            let authority = projections.get(HYBRID_TEXT_MODALITY).ok_or_else(|| {
+                BorsukError::InvalidStorage("prepared route authority lost text".to_owned())
+            })?;
+            let count = projected
+                .iter()
+                .filter(|row| !row.record.text_term_ids.is_empty())
+                .count();
+            if authority.logical_row_count != count as u64 || !authority.cell_ordinals.is_empty() {
+                return Err(BorsukError::InvalidStorage(
+                    "prepared text route authority changed cardinality".to_owned(),
+                ));
+            }
+        }
+        Ok(projected)
+    }
+
+    #[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+    fn persist_materialization_fence(
+        &self,
+        modality: &str,
+        entries: &[(Vec<u8>, MutationState)],
+    ) -> Result<MaterializationArtifactRef> {
+        let bytes = tombstone_ids_to_parquet(entries)?;
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let field_key = blake3::hash(modality.as_bytes()).to_hex().to_string();
+        let path = format!(
+            "materialization/fences/{}/{}/fence-{}.parquet",
+            &field_key[..12],
+            &checksum[..2],
+            checksum
+        );
+        self.collection_storage
+            .write_bytes_content_addressed(&path, &bytes)?;
+        Ok(MaterializationArtifactRef::content(
+            "collection",
+            modality,
+            MaterializationArtifactRole::MutationFence,
+            path,
+            checksum,
+            bytes.len() as u64,
+        ))
+    }
+
+    #[allow(
+        dead_code,
+        clippy::too_many_lines,
+        reason = "Task 3 candidate is consumed by Task 4"
+    )]
+    fn build_unwired_all_modality_delta(
+        &self,
+        extension: &crate::positioned_log::CommitSourceRangeSet,
+        primary_codebook: &GlobalCodebookRef,
+        named_codebooks: &BTreeMap<String, GlobalCodebookRef>,
+        anchor: Option<&MaterializationChainAnchor>,
+    ) -> Result<MaterializationDeltaCandidate> {
+        extension.validate_canonical()?;
+        if extension.ranges().is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "all-modality materialization delta is empty".to_owned(),
+            ));
+        }
+        let selected = self.selected_positioned_envelopes(extension)?;
+        let expected_dense_names = self
+            .manifest
+            .config
+            .named_vectors
+            .iter()
+            .filter(|(_, spec)| {
+                matches!(spec.kind, VectorKind::Dense | VectorKind::LateInteraction)
+            })
+            .map(|(name, _)| name)
+            .collect::<BTreeSet<_>>();
+        if named_codebooks.keys().collect::<BTreeSet<_>>() != expected_dense_names {
+            return Err(BorsukError::InvalidStorage(
+                "all-modality delta codebooks differ from routed dense modalities".to_owned(),
+            ));
+        }
+
+        let mut authorities = BTreeMap::<String, AuthenticatedRouteProjection>::new();
+        for envelope in &selected {
+            for (modality, authority) in &envelope.route_projections {
+                match authorities.get(modality) {
+                    Some(expected)
+                        if expected.projection_kind != authority.projection_kind
+                            || expected.assignment != authority.assignment =>
+                    {
+                        return Err(BorsukError::InvalidStorage(format!(
+                            "materialization delta mixes route authority for `{modality}`"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        authorities.insert(modality.clone(), authority.clone());
+                    }
+                }
+            }
+        }
+        let configured = std::iter::once(POSITIONED_PRIMARY_PROJECTION.to_owned())
+            .chain(self.manifest.config.named_vectors.keys().cloned())
+            .chain(
+                self.manifest
+                    .config
+                    .text
+                    .then(|| HYBRID_TEXT_MODALITY.to_owned()),
+            )
+            .collect::<BTreeSet<_>>();
+        if authorities.keys().cloned().collect::<BTreeSet<_>>() != configured {
+            return Err(BorsukError::InvalidStorage(
+                "materialization delta lacks configured route authority".to_owned(),
+            ));
+        }
+        self.candidate_catalog_codebook(
+            POSITIONED_PRIMARY_PROJECTION,
+            primary_codebook,
+            &authorities[POSITIONED_PRIMARY_PROJECTION].assignment,
+        )?;
+        for (name, codebook) in named_codebooks {
+            self.named[name].candidate_catalog_codebook(
+                name,
+                codebook,
+                &authorities[name].assignment,
+            )?;
+        }
+
+        let mut source_transfer = MaterializationSourceTransfer::default();
+        let mut newest = BTreeMap::<Vec<u8>, CandidateEntityMergeState>::new();
+        let merge = |newest: &mut BTreeMap<Vec<u8>, CandidateEntityMergeState>,
+                     id: Vec<u8>,
+                     state: MutationState,
+                     row: Option<CandidateProjectedRecord>,
+                     primary_cell: Option<u32>|
+         -> Result<()> {
+            match newest.entry(id) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(CandidateEntityMergeState {
+                        state,
+                        row,
+                        primary_cell,
+                    });
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    let current = entry.get().state;
+                    let greatest = current.greatest(state)?;
+                    if greatest == state && state.stamp().version() > current.stamp().version() {
+                        entry.insert(CandidateEntityMergeState {
+                            state,
+                            row,
+                            primary_cell,
+                        });
+                    } else if state == current && entry.get().row.is_none() && row.is_some() {
+                        let current = entry.get_mut();
+                        current.row = row;
+                        current.primary_cell = primary_cell;
+                    }
+                }
+            }
+            Ok(())
+        };
+        for envelope in &selected {
+            for tombstone in envelope.primary_dense_projection.tombstones.iter() {
+                merge(
+                    &mut newest,
+                    tombstone.id.clone(),
+                    tombstone.state,
+                    None,
+                    None,
+                )?;
+            }
+            let Some(payload) = envelope.primary_payload.as_ref() else {
+                continue;
+            };
+            let read = self
+                .collection_storage
+                .read_bytes_with_cache_status_and_checksum(&payload.path, &payload.checksum)?;
+            if read.bytes.len() as u64 != payload.encoded_bytes {
+                return Err(BorsukError::InvalidStorage(
+                    "selected materialization payload length changed".to_owned(),
+                ));
+            }
+            source_transfer.gets = source_transfer.gets.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("materialization payload GET count overflows".into())
+            })?;
+            source_transfer.bytes = source_transfer
+                .bytes
+                .checked_add(payload.encoded_bytes)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "materialization payload transferred bytes overflow".into(),
+                    )
+                })?;
+            for row in self.project_selected_record(
+                positioned_wal_records_from_table(read.bytes, &payload.path)?,
+                &envelope.route_projections,
+            )? {
+                let id = row.record.id.as_bytes().to_vec();
+                let cell = row.primary_cell;
+                merge(&mut newest, id, row.state, Some(row), Some(cell))?;
+            }
+        }
+
+        let visible = newest
+            .values()
+            .filter_map(|entry| {
+                (!entry.state.is_deleted())
+                    .then_some(entry.row.as_ref())
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        let pending_artifact_levels = if visible.is_empty() {
+            None
+        } else {
+            Some(match anchor {
+                Some(anchor) => anchor.pending_artifact_levels()?,
+                None => (0, 1),
+            })
+        };
+        let fence_entries = newest
+            .iter()
+            .map(|(id, entry)| (id.clone(), entry.state))
+            .collect::<Vec<_>>();
+        let mut fences = BTreeMap::new();
+        let mut roster = Vec::new();
+        for modality in &configured {
+            let fence = self.persist_materialization_fence(modality, &fence_entries)?;
+            if !roster.iter().any(|artifact: &MaterializationArtifactRef| {
+                artifact.storage_owner() == fence.storage_owner()
+                    && artifact.role() == fence.role()
+                    && artifact.path() == fence.path()
+                    && artifact.range() == fence.range()
+            }) {
+                roster.push(fence.clone());
+            }
+            fences.insert(modality.clone(), fence);
+        }
+
+        let mut materialized_rows = Vec::<MaterializedRow>::new();
+        let primary_authority = &authorities[POSITIONED_PRIMARY_PROJECTION];
+        let mut primary_dense_rows = Vec::new();
+        let mut directory = Vec::new();
+        for projected in &visible {
+            let id = projected.record.id.as_bytes().to_vec();
+            primary_dense_rows.push(CandidateDenseLeafRow {
+                leaf_id: id.clone(),
+                vector: projected.record.vector.clone(),
+                state: projected.state,
+                cell_ordinal: projected.primary_cell,
+            });
+            materialized_rows.push(MaterializedRow {
+                modality: POSITIONED_PRIMARY_PROJECTION.to_owned(),
+                projection_kind: PositionedRouteProjectionKind::Primary,
+                assignment: primary_authority.assignment.clone(),
+                cell_ordinal: Some(projected.primary_cell),
+                record_id: id.clone(),
+                projected_ordinal: 0,
+                state: projected.state,
+                value: MaterializedRowValue::Dense(projected.record.vector.clone()),
+            });
+            directory.push(MaterializedDirectoryState {
+                record_id: id,
+                routing_epoch: primary_authority.assignment.routing_epoch.ok_or_else(|| {
+                    BorsukError::InvalidStorage("primary route lacks routing epoch".into())
+                })?,
+                cell_ordinal: projected.primary_cell,
+                state: projected.state,
+            });
+        }
+        let mut projections = BTreeMap::new();
+        let started = Instant::now();
+        let primary_dense = if primary_dense_rows.is_empty() {
+            None
+        } else {
+            let (candidate, emitted) =
+                self.build_unwired_dense_projection_run(CandidateDenseProjectionRun {
+                    modality: POSITIONED_PRIMARY_PROJECTION,
+                    run_source_ranges: extension,
+                    candidate_source_ranges: extension,
+                    codebook_ref: primary_codebook,
+                    assignment: &primary_authority.assignment,
+                    carried: &[],
+                    target_level: pending_artifact_levels
+                        .expect("visible primary rows reserve one pending artifact level")
+                        .1,
+                    rows: primary_dense_rows,
+                })?;
+            roster.extend(emitted);
+            Some(candidate)
+        };
+        projections.insert(
+            POSITIONED_PRIMARY_PROJECTION.to_owned(),
+            MaterializedProjectionDelta {
+                assignment_checksum: primary_authority.assignment.checksum,
+                rows: visible.len() as u64,
+                dense: primary_dense,
+                lexical: None,
+                metrics: modality_metrics(
+                    POSITIONED_PRIMARY_PROJECTION,
+                    visible.len() as u64,
+                    started.elapsed(),
+                    &roster,
+                ),
+            },
+        );
+
+        for (name, spec) in &self.manifest.config.named_vectors {
+            let started = Instant::now();
+            let authority = &authorities[name];
+            match spec.kind {
+                VectorKind::Dense => {
+                    let mut dense_rows = Vec::new();
+                    for projected in &visible {
+                        let Some(vector) = projected.record.extra_vectors.get(name) else {
+                            continue;
+                        };
+                        let cell = *projected.dense_cells.get(name).ok_or_else(|| {
+                            BorsukError::InvalidStorage(format!(
+                                "dense route authority `{name}` lost a visible row"
+                            ))
+                        })?;
+                        let id = projected.record.id.as_bytes().to_vec();
+                        dense_rows.push(CandidateDenseLeafRow {
+                            leaf_id: id.clone(),
+                            vector: vector.clone(),
+                            state: projected.state,
+                            cell_ordinal: cell,
+                        });
+                        materialized_rows.push(MaterializedRow {
+                            modality: name.clone(),
+                            projection_kind: PositionedRouteProjectionKind::Dense,
+                            assignment: authority.assignment.clone(),
+                            cell_ordinal: Some(cell),
+                            record_id: id,
+                            projected_ordinal: 0,
+                            state: projected.state,
+                            value: MaterializedRowValue::Dense(vector.clone()),
+                        });
+                    }
+                    let rows = dense_rows.len() as u64;
+                    let dense = if dense_rows.is_empty() {
+                        None
+                    } else {
+                        let (candidate, emitted) = self.named[name]
+                            .build_unwired_dense_projection_run(CandidateDenseProjectionRun {
+                                modality: name,
+                                run_source_ranges: extension,
+                                candidate_source_ranges: extension,
+                                codebook_ref: &named_codebooks[name],
+                                assignment: &authority.assignment,
+                                carried: &[],
+                                target_level: pending_artifact_levels
+                                    .expect("visible named rows share one pending artifact level")
+                                    .1,
+                                rows: dense_rows,
+                            })?;
+                        roster.extend(emitted);
+                        Some(candidate)
+                    };
+                    projections.insert(
+                        name.clone(),
+                        MaterializedProjectionDelta {
+                            assignment_checksum: authority.assignment.checksum,
+                            rows,
+                            dense,
+                            lexical: None,
+                            metrics: modality_metrics(name, rows, started.elapsed(), &roster),
+                        },
+                    );
+                }
+                VectorKind::Sparse => {
+                    let mut lexical_rows = Vec::new();
+                    for projected in &visible {
+                        let Some(vector) = projected.record.extra_sparse.get(name) else {
+                            continue;
+                        };
+                        let id = projected.record.id.as_bytes().to_vec();
+                        let terms = vector
+                            .indices()
+                            .iter()
+                            .copied()
+                            .zip(vector.values().iter().copied())
+                            .collect::<Vec<_>>();
+                        lexical_rows.push(LexicalInputRow {
+                            record_id: id.clone(),
+                            generation: projected.record.generation,
+                            mutation_stamp: Some(projected.state.stamp()),
+                            terms: terms.clone(),
+                            // Sparse weights are not BM25 token frequencies;
+                            // this generation-local sparse shard therefore has
+                            // no document-length statistic by definition.
+                            document_length: 0,
+                        });
+                        materialized_rows.push(MaterializedRow {
+                            modality: name.clone(),
+                            projection_kind: PositionedRouteProjectionKind::Sparse,
+                            assignment: authority.assignment.clone(),
+                            cell_ordinal: None,
+                            record_id: id,
+                            projected_ordinal: 0,
+                            state: projected.state,
+                            value: MaterializedRowValue::Sparse(terms),
+                        });
+                    }
+                    let rows = lexical_rows.len() as u64;
+                    let lexical = self.build_unwired_lexical_delta(
+                        name,
+                        LexicalKind::Sparse,
+                        spec.element_type,
+                        u32::try_from(spec.dimensions).map_err(|_| {
+                            BorsukError::InvalidStorage(
+                                "sparse materialization dimensions exceed u32".into(),
+                            )
+                        })?,
+                        &candidate_segment_key(name, extension),
+                        &lexical_rows,
+                    )?;
+                    roster.extend(lexical.new_roster().iter().cloned());
+                    projections.insert(
+                        name.clone(),
+                        MaterializedProjectionDelta {
+                            assignment_checksum: authority.assignment.checksum,
+                            rows,
+                            dense: None,
+                            lexical: Some(lexical),
+                            metrics: modality_metrics(name, rows, started.elapsed(), &roster),
+                        },
+                    );
+                }
+                VectorKind::LateInteraction => {
+                    let mut dense_rows = Vec::new();
+                    for projected in &visible {
+                        let Some(matrix) = projected.record.extra_multi_vectors.get(name) else {
+                            continue;
+                        };
+                        let cells = projected.late_cells.get(name).ok_or_else(|| {
+                            BorsukError::InvalidStorage(format!(
+                                "late route authority `{name}` lost token offsets"
+                            ))
+                        })?;
+                        let id = projected.record.id.as_bytes().to_vec();
+                        for (token, cell) in cells.iter().copied().enumerate() {
+                            let ordinal = u32::try_from(token).map_err(|_| {
+                                BorsukError::InvalidStorage("late token ordinal exceeds u32".into())
+                            })?;
+                            let vector = matrix.token(token).ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "late route token count changed during projection".into(),
+                                )
+                            })?;
+                            dense_rows.push(CandidateDenseLeafRow {
+                                leaf_id: encode_late_interaction_token_id(
+                                    &id,
+                                    projected.record.generation,
+                                    token,
+                                )?,
+                                vector: vector.to_vec(),
+                                state: projected.state,
+                                cell_ordinal: cell,
+                            });
+                            materialized_rows.push(MaterializedRow {
+                                modality: name.clone(),
+                                projection_kind: PositionedRouteProjectionKind::LateInteraction,
+                                assignment: authority.assignment.clone(),
+                                cell_ordinal: Some(cell),
+                                record_id: id.clone(),
+                                projected_ordinal: ordinal,
+                                state: projected.state,
+                                value: MaterializedRowValue::Dense(vector.to_vec()),
+                            });
+                        }
+                    }
+                    let rows = dense_rows.len() as u64;
+                    let dense = if dense_rows.is_empty() {
+                        None
+                    } else {
+                        let (candidate, emitted) = self.named[name]
+                            .build_unwired_dense_projection_run(CandidateDenseProjectionRun {
+                                modality: name,
+                                run_source_ranges: extension,
+                                candidate_source_ranges: extension,
+                                codebook_ref: &named_codebooks[name],
+                                assignment: &authority.assignment,
+                                carried: &[],
+                                target_level: pending_artifact_levels
+                                    .expect("visible late rows share one pending artifact level")
+                                    .1,
+                                rows: dense_rows,
+                            })?;
+                        roster.extend(emitted);
+                        Some(candidate)
+                    };
+                    projections.insert(
+                        name.clone(),
+                        MaterializedProjectionDelta {
+                            assignment_checksum: authority.assignment.checksum,
+                            rows,
+                            dense,
+                            lexical: None,
+                            metrics: modality_metrics(name, rows, started.elapsed(), &roster),
+                        },
+                    );
+                }
+            }
+        }
+
+        if self.manifest.config.text {
+            let started = Instant::now();
+            let authority = &authorities[HYBRID_TEXT_MODALITY];
+            let mut lexical_rows = Vec::new();
+            for projected in &visible {
+                if projected.record.text_term_ids.is_empty() {
+                    continue;
+                }
+                let id = projected.record.id.as_bytes().to_vec();
+                let terms = projected
+                    .record
+                    .text_term_ids
+                    .iter()
+                    .copied()
+                    .zip(projected.record.text_term_freqs.iter().copied())
+                    .collect::<Vec<_>>();
+                lexical_rows.push(LexicalInputRow {
+                    record_id: id.clone(),
+                    generation: projected.record.generation,
+                    mutation_stamp: Some(projected.state.stamp()),
+                    terms: terms
+                        .iter()
+                        .map(|(term, frequency)| (*term, *frequency as f32))
+                        .collect(),
+                    document_length: terms.iter().map(|(_, frequency)| *frequency).sum(),
+                });
+                materialized_rows.push(MaterializedRow {
+                    modality: HYBRID_TEXT_MODALITY.to_owned(),
+                    projection_kind: PositionedRouteProjectionKind::Text,
+                    assignment: authority.assignment.clone(),
+                    cell_ordinal: None,
+                    record_id: id,
+                    projected_ordinal: 0,
+                    state: projected.state,
+                    value: MaterializedRowValue::Text(terms),
+                });
+            }
+            let rows = lexical_rows.len() as u64;
+            let lexical = self.build_unwired_lexical_delta(
+                HYBRID_TEXT_MODALITY,
+                LexicalKind::Bm25,
+                crate::VectorElementType::Float32,
+                0,
+                &candidate_segment_key(HYBRID_TEXT_MODALITY, extension),
+                &lexical_rows,
+            )?;
+            roster.extend(lexical.new_roster().iter().cloned());
+            projections.insert(
+                HYBRID_TEXT_MODALITY.to_owned(),
+                MaterializedProjectionDelta {
+                    assignment_checksum: authority.assignment.checksum,
+                    rows,
+                    dense: None,
+                    lexical: Some(lexical),
+                    metrics: modality_metrics(
+                        HYBRID_TEXT_MODALITY,
+                        rows,
+                        started.elapsed(),
+                        &roster,
+                    ),
+                },
+            );
+        }
+
+        let row_bundle = build_row_bundle_delta(
+            &self.storage,
+            materialized_rows,
+            directory.clone(),
+            pending_artifact_levels.map_or(0, |levels| levels.0),
+        )?;
+        roster.extend(row_bundle.roster);
+        let mut bm25_delta = Bm25StatsDelta::default();
+        for envelope in selected {
+            for delta in envelope.primary_bm25_deltas.values() {
+                bm25_delta.checked_add_assign(delta)?;
+            }
+        }
+        let bm25 = MaterializationBm25Delta::new(extension.clone(), bm25_delta)?;
+        MaterializationDeltaCandidate::new(
+            anchor,
+            extension.clone(),
+            source_transfer,
+            projections,
+            row_bundle.delta_root,
+            directory,
+            fences,
+            roster,
+            bm25,
+        )
+    }
+
     // Task 3 builds this immutable candidate, while Task 4 exclusively owns
     // its collection-manifest publication and CAS boundary.
     #[allow(dead_code)]
@@ -25226,6 +26433,43 @@ fn merge_primary_dense_candidate_state<'a>(
     Ok(())
 }
 
+#[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+fn candidate_segment_key(
+    modality: &str,
+    source_ranges: &crate::positioned_log::CommitSourceRangeSet,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"borsuk.positioned-candidate.segment.v1\0");
+    hasher.update(modality.as_bytes());
+    for range in source_ranges.ranges() {
+        hasher.update(&range.source_epoch.to_le_bytes());
+        hasher.update(&[range.shard]);
+        hasher.update(&range.first_sequence.to_le_bytes());
+        hasher.update(&range.last_sequence.to_le_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+#[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
+fn modality_metrics(
+    modality: &str,
+    rows: u64,
+    cpu: Duration,
+    roster: &[MaterializationArtifactRef],
+) -> ModalityConstructionMetrics {
+    let objects = roster
+        .iter()
+        .filter(|artifact| artifact.modality() == modality && artifact.range().is_none())
+        .map(|artifact| (artifact.path(), artifact.encoded_bytes()))
+        .collect::<BTreeMap<_, _>>();
+    ModalityConstructionMetrics {
+        cpu: cpu.max(Duration::from_nanos(1)),
+        encoded_bytes: objects.values().copied().sum(),
+        rows,
+        objects: objects.len() as u64,
+    }
+}
+
 fn leaf_page_ref_updates_by_ordinal(
     page_refs: &[RoutingLayerPageRef],
 ) -> Result<HashMap<usize, RoutingLayerPageRef>> {
@@ -26581,6 +27825,80 @@ mod tests {
                 .unwrap()
             })
             .collect()
+    }
+
+    fn all_modality_test_index() -> (tempfile::TempDir, BorsukIndex) {
+        let directory = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: true,
+            named_vectors: BTreeMap::from([
+                (
+                    "image".to_owned(),
+                    VectorSpec {
+                        dimensions: 3,
+                        metric: VectorMetric::Euclidean,
+                        kind: VectorKind::Dense,
+                        element_type: crate::VectorElementType::Float32,
+                    },
+                ),
+                (
+                    "sparse".to_owned(),
+                    VectorSpec {
+                        dimensions: 16,
+                        metric: VectorMetric::InnerProduct,
+                        kind: VectorKind::Sparse,
+                        element_type: crate::VectorElementType::Float32,
+                    },
+                ),
+                (
+                    "tokens".to_owned(),
+                    VectorSpec {
+                        dimensions: 2,
+                        metric: VectorMetric::InnerProduct,
+                        kind: VectorKind::LateInteraction,
+                        element_type: crate::VectorElementType::Float32,
+                    },
+                ),
+            ]),
+        })
+        .unwrap();
+        (directory, index)
+    }
+
+    fn all_modality_test_codebooks(
+        index: &BorsukIndex,
+    ) -> (GlobalCodebookRef, BTreeMap<String, GlobalCodebookRef>) {
+        let primary = write_test_catalog_codebook(index);
+        let named = index
+            .named
+            .iter()
+            .filter(|(name, _)| {
+                matches!(
+                    index.manifest.config.named_vectors[*name].kind,
+                    VectorKind::Dense | VectorKind::LateInteraction
+                )
+            })
+            .map(|(name, child)| (name.clone(), write_test_catalog_codebook(child)))
+            .collect();
+        (primary, named)
+    }
+
+    fn all_modality_record(id: &str, base: f32) -> VectorRecord {
+        VectorRecord::new(id, vec![base, base + 0.5])
+            .with_named_vector("image", vec![base + 1.0, base + 2.0, base + 3.0])
+            .with_named_sparse_vector("sparse", vec![1, 7], vec![base + 1.0, base + 2.0])
+            .unwrap()
+            .with_late_interaction(
+                "tokens",
+                vec![vec![base + 3.0, base + 4.0], vec![base + 5.0, base + 6.0]],
+            )
+            .unwrap()
+            .with_text(format!("term{id} shared"))
     }
 
     fn positioned_metadata_rows_for_position(
@@ -29159,6 +30477,519 @@ mod tests {
         assert_eq!(
             reader.resident_global_mutations.as_ref().map(Arc::as_ptr),
             installed_resident_overlay
+        );
+    }
+
+    #[test]
+    fn incremental_delta_unknown_delete_emits_physical_fences_without_owner() {
+        let (_directory, mut index) = all_modality_test_index();
+        index.delete(["never-owned"]).unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let extension = positioned_coverage([position]);
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+
+        let delta = index
+            .build_unwired_all_modality_delta(&extension, &primary_codebook, &named_codebooks, None)
+            .unwrap();
+
+        assert_eq!(delta.extension_source_ranges(), &extension);
+        assert!(delta.directory_owner_update(b"never-owned").is_none());
+        for modality in ["primary", "image", "sparse", HYBRID_TEXT_MODALITY, "tokens"] {
+            let fence = delta
+                .fence_artifact(modality)
+                .unwrap_or_else(|| panic!("{modality} lost the physical delete fence"));
+            let bytes = index
+                .collection_storage
+                .read_bytes_with_cache_status_and_checksum(fence.path(), fence.checksum())
+                .unwrap()
+                .bytes;
+            let decoded = tombstone_ids_from_parquet(&bytes).unwrap();
+            assert_eq!(decoded.len(), 1, "{modality}");
+            assert_eq!(decoded[0].0, b"never-owned", "{modality}");
+            assert!(decoded[0].1.is_deleted(), "{modality}");
+            let metrics = delta.modality_metrics(modality).unwrap();
+            assert_eq!(metrics.rows, 0, "{modality}");
+            assert_eq!(metrics.objects, 1, "{modality}");
+            assert_eq!(metrics.encoded_bytes, fence.encoded_bytes(), "{modality}");
+        }
+    }
+
+    #[test]
+    fn incremental_delta_omitted_dense_and_late_rows_emit_physical_put_fences() {
+        let (_directory, mut index) = all_modality_test_index();
+        index
+            .add(vec![all_modality_record("omitted", 1.0)])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let first_position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+        let first = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([first_position]),
+                &primary_codebook,
+                &named_codebooks,
+                None,
+            )
+            .unwrap();
+        let anchor = first.chain_anchor();
+
+        index
+            .upsert(vec![VectorRecord::new("omitted", vec![8.0, 9.0])])
+            .unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let second_position = index
+            .cell_wal_snapshot
+            .iter()
+            .map(|transaction| transaction.source_position.unwrap())
+            .find(|position| *position != first_position)
+            .unwrap();
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+        let second = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([second_position]),
+                &primary_codebook,
+                &named_codebooks,
+                Some(anchor),
+            )
+            .unwrap();
+
+        for modality in ["image", "tokens"] {
+            assert!(
+                second.dense_query_artifact(modality).is_none(),
+                "{modality}"
+            );
+            let fence = second
+                .fence_artifact(modality)
+                .unwrap_or_else(|| panic!("{modality} lost the omission fence"));
+            let bytes = index
+                .collection_storage
+                .read_bytes_with_cache_status_and_checksum(fence.path(), fence.checksum())
+                .unwrap()
+                .bytes;
+            let decoded = tombstone_ids_from_parquet(&bytes).unwrap();
+            assert_eq!(decoded.len(), 1, "{modality}");
+            assert_eq!(decoded[0].0, b"omitted", "{modality}");
+            assert!(!decoded[0].1.is_deleted(), "{modality}");
+        }
+    }
+
+    #[test]
+    fn incremental_delta_first_generation_delete_only_has_fence_coverage_without_row_generation() {
+        let (_directory, mut index) = all_modality_test_index();
+        index.delete(["absent-delete-only"]).unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let extension = positioned_coverage([position]);
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+
+        let delta = index
+            .build_unwired_all_modality_delta(&extension, &primary_codebook, &named_codebooks, None)
+            .unwrap();
+
+        assert_eq!(delta.extension_source_ranges(), &extension);
+        assert!(delta.row_bundle_delta_root().is_none());
+        assert!(delta.directory_updates().is_empty());
+        assert!(delta.new_roster().iter().all(|artifact| {
+            !matches!(
+                artifact.role(),
+                MaterializationArtifactRole::RowBundle
+                    | MaterializationArtifactRole::RowBundleGenerationRoot
+            )
+        }));
+        assert!(delta.fence_artifact("primary").is_some());
+    }
+
+    #[test]
+    fn incremental_delta_delete_only_extends_coverage_without_minting_published_authority() {
+        let (_directory, mut index) = all_modality_test_index();
+        let transaction_ids = (0_u64..)
+            .map(|ordinal| format!("materialization-heads-{ordinal}"))
+            .filter(|transaction_id| {
+                blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                    .is_multiple_of(crate::positioned_log::SOURCE_SHARD_COUNT)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+        index.begin_collection_transaction().unwrap();
+        index.active_collection_transaction.as_mut().unwrap().id = transaction_ids[0].clone();
+        let result = index.add_collection_records(vec![all_modality_record("retained-head", 1.0)]);
+        index.finish_collection_transaction(result).unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let first_position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+        let first = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([first_position]),
+                &primary_codebook,
+                &named_codebooks,
+                None,
+            )
+            .unwrap();
+        let first_anchor = first.chain_anchor().clone();
+
+        index.begin_collection_transaction().unwrap();
+        index.active_collection_transaction.as_mut().unwrap().id = transaction_ids[1].clone();
+        let result = index.delete_collection_records(vec![RecordId::from("retained-head")]);
+        index.finish_collection_transaction_value(result).unwrap();
+        index.reload_positioned_snapshot().unwrap();
+        let second_position = index
+            .cell_wal_snapshot
+            .iter()
+            .map(|transaction| transaction.source_position.unwrap())
+            .find(|position| *position != first_position)
+            .unwrap();
+        assert_eq!(second_position.shard, first_position.shard);
+        assert_eq!(second_position.sequence, first_position.sequence + 1);
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+        let second = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([second_position]),
+                &primary_codebook,
+                &named_codebooks,
+                Some(&first_anchor),
+            )
+            .unwrap();
+        assert!(second.row_bundle_delta_root().is_none());
+        assert_eq!(
+            second.full_source_coverage(),
+            &positioned_coverage([first_position, second_position])
+        );
+        assert_eq!(
+            second.chain_anchor().coverage(),
+            second.full_source_coverage()
+        );
+        for modality in ["primary", "image", "sparse", HYBRID_TEXT_MODALITY, "tokens"] {
+            assert!(second.fence_artifact(modality).is_some(), "{modality}");
+        }
+    }
+
+    #[test]
+    fn incremental_delta_two_row_prefixes_keep_disjoint_lexical_and_row_artifacts() {
+        let (_directory, mut index) = all_modality_test_index();
+        let transaction_ids = (0_u64..)
+            .map(|ordinal| format!("materialization-two-rows-{ordinal}"))
+            .filter(|transaction_id| {
+                blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                    .is_multiple_of(crate::positioned_log::SOURCE_SHARD_COUNT)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+        let append = |index: &mut BorsukIndex, transaction_id: &str, record: VectorRecord| {
+            index.begin_collection_transaction().unwrap();
+            index.active_collection_transaction.as_mut().unwrap().id = transaction_id.to_owned();
+            let result = index.add_collection_records(vec![record]);
+            index.finish_collection_transaction(result).unwrap();
+        };
+        append(
+            &mut index,
+            &transaction_ids[0],
+            all_modality_record("first-row", 1.0),
+        );
+        index.reload_positioned_snapshot().unwrap();
+        let first_position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+        let first = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([first_position]),
+                &primary_codebook,
+                &named_codebooks,
+                None,
+            )
+            .unwrap();
+
+        append(
+            &mut index,
+            &transaction_ids[1],
+            all_modality_record("second-row", 2.0),
+        );
+        index.reload_positioned_snapshot().unwrap();
+        let second_position = index
+            .cell_wal_snapshot
+            .iter()
+            .map(|transaction| transaction.source_position.unwrap())
+            .find(|position| *position != first_position)
+            .unwrap();
+        assert_eq!(second_position.shard, first_position.shard);
+        assert_eq!(second_position.sequence, first_position.sequence + 1);
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+        let second = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([second_position]),
+                &primary_codebook,
+                &named_codebooks,
+                Some(first.chain_anchor()),
+            )
+            .unwrap();
+
+        assert!(first.new_roster().iter().all(|left| {
+            second.new_roster().iter().all(|right| {
+                (left.storage_owner(), left.role(), left.path(), left.range())
+                    != (
+                        right.storage_owner(),
+                        right.role(),
+                        right.path(),
+                        right.range(),
+                    )
+            })
+        }));
+        let union = first
+            .new_roster()
+            .iter()
+            .chain(second.new_roster())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            union
+                .iter()
+                .filter(|artifact| artifact.role() == &MaterializationArtifactRole::LexicalShard)
+                .count(),
+            4
+        );
+        assert_eq!(
+            union
+                .iter()
+                .filter(|artifact| {
+                    artifact.role() == &MaterializationArtifactRole::RowBundleGenerationRoot
+                })
+                .count(),
+            2
+        );
+        assert_ne!(
+            first.row_bundle_delta_root().unwrap().path,
+            second.row_bundle_delta_root().unwrap().path
+        );
+        let delta_levels = |candidate: &MaterializationDeltaCandidate| {
+            let root = candidate.row_bundle_delta_root().unwrap();
+            let generation_bytes = index
+                .storage
+                .read_bytes_with_cache_status_and_checksum(&root.path, &root.checksum)
+                .unwrap()
+                .bytes;
+            let generation =
+                crate::row_bundle::decode_generation_root(root, generation_bytes.into()).unwrap();
+            let directory_bytes = index
+                .storage
+                .read_bytes_with_cache_status_and_checksum(
+                    &generation.directory_root.path,
+                    &generation.directory_root.checksum,
+                )
+                .unwrap()
+                .bytes;
+            let directory = crate::row_bundle::decode_directory_root(
+                &generation.directory_root,
+                directory_bytes.into(),
+            )
+            .unwrap();
+            (
+                generation.active_runs[0].level,
+                directory
+                    .iter()
+                    .map(|run| run.level)
+                    .collect::<BTreeSet<_>>(),
+                candidate
+                    .dense_query_artifact(POSITIONED_PRIMARY_PROJECTION)
+                    .unwrap()
+                    .level(),
+            )
+        };
+        assert_eq!(delta_levels(&first), (0, BTreeSet::from([0]), 1));
+        assert_eq!(delta_levels(&second), (1, BTreeSet::from([1]), 2));
+    }
+
+    #[test]
+    fn incremental_delta_bm25_ledger_folds_two_prefixes_losslessly() {
+        let first = crate::positioned_candidate::MaterializationBm25Delta::new(
+            positioned_coverage([crate::CommitSourcePosition::new(7, 3, 1).unwrap()]),
+            Bm25StatsDelta {
+                document_count: -1,
+                total_document_length: -3,
+                document_frequencies: BTreeMap::from([(7, -1), (9, -1)]),
+            },
+        )
+        .unwrap();
+        let second = crate::positioned_candidate::MaterializationBm25Delta::new(
+            positioned_coverage([crate::CommitSourcePosition::new(7, 3, 2).unwrap()]),
+            Bm25StatsDelta {
+                document_count: -1,
+                total_document_length: -4,
+                document_frequencies: BTreeMap::from([(7, -1), (11, -1)]),
+            },
+        )
+        .unwrap();
+
+        let folded =
+            crate::positioned_candidate::MaterializationBm25Delta::fold([&first, &second]).unwrap();
+
+        assert_eq!(
+            folded.source_ranges(),
+            &positioned_coverage([
+                crate::CommitSourcePosition::new(7, 3, 1).unwrap(),
+                crate::CommitSourcePosition::new(7, 3, 2).unwrap(),
+            ])
+        );
+        assert_eq!(folded.delta().document_count, -2);
+        assert_eq!(folded.delta().total_document_length, -7);
+        assert_eq!(
+            folded.delta().document_frequencies,
+            BTreeMap::from([(7, -2), (9, -1), (11, -1)])
+        );
+    }
+
+    #[test]
+    fn incremental_lexical_delta_emits_only_new_shard_and_leaves_global_merge_unresolved() {
+        let directory = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let first = index
+            .build_unwired_lexical_delta(
+                "sparse",
+                LexicalKind::Sparse,
+                crate::VectorElementType::Float32,
+                16,
+                &"11".repeat(32),
+                &[LexicalInputRow {
+                    record_id: b"same-id".to_vec(),
+                    generation: 1,
+                    mutation_stamp: None,
+                    terms: vec![(7, 1.0)],
+                    document_length: 0,
+                }],
+            )
+            .unwrap();
+        let second = index
+            .build_unwired_lexical_delta(
+                "sparse",
+                LexicalKind::Sparse,
+                crate::VectorElementType::Float32,
+                16,
+                &"22".repeat(32),
+                &[LexicalInputRow {
+                    record_id: b"same-id".to_vec(),
+                    generation: 2,
+                    mutation_stamp: None,
+                    terms: vec![(7, 1.0)],
+                    document_length: 0,
+                }],
+            )
+            .unwrap();
+
+        assert_eq!(first.new_shards().len(), 1);
+        assert_eq!(second.new_shards().len(), 1);
+        assert!(second.global_root_ref().is_none());
+        assert!(second.new_roster().iter().all(|artifact| {
+            first
+                .new_roster()
+                .iter()
+                .all(|old| old.path() != artifact.path())
+        }));
+    }
+
+    #[test]
+    fn incremental_delta_is_deterministic_and_rejects_gapped_base_extension() {
+        let (_directory, mut index) = all_modality_test_index();
+        let transaction_ids = (0_u64..)
+            .map(|ordinal| format!("materialization-gap-{ordinal}"))
+            .filter(|transaction_id| {
+                blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                    .is_multiple_of(crate::positioned_log::SOURCE_SHARD_COUNT)
+            })
+            .take(3)
+            .collect::<Vec<_>>();
+        let append = |index: &mut BorsukIndex, transaction_id: &str, record: VectorRecord| {
+            index.begin_collection_transaction().unwrap();
+            index
+                .active_collection_transaction
+                .as_mut()
+                .unwrap()
+                .id
+                .clone_from(&transaction_id.to_owned());
+            let result = index.add_collection_records(vec![record]);
+            index.finish_collection_transaction(result).unwrap();
+        };
+        append(
+            &mut index,
+            &transaction_ids[0],
+            all_modality_record("first", 1.0),
+        );
+        index.reload_positioned_snapshot().unwrap();
+        let first_position = index.cell_wal_snapshot[0].source_position.unwrap();
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+        let first = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([first_position]),
+                &primary_codebook,
+                &named_codebooks,
+                None,
+            )
+            .unwrap();
+        let anchor = first.chain_anchor().clone();
+
+        append(
+            &mut index,
+            &transaction_ids[1],
+            all_modality_record("second", 2.0),
+        );
+        append(
+            &mut index,
+            &transaction_ids[2],
+            all_modality_record("third", 3.0),
+        );
+        index.reload_positioned_snapshot().unwrap();
+        let mut later = index
+            .cell_wal_snapshot
+            .iter()
+            .map(|transaction| transaction.source_position.unwrap())
+            .filter(|position| *position != first_position)
+            .collect::<Vec<_>>();
+        later.sort_unstable();
+        assert_eq!(first_position.shard, later[0].shard);
+        assert_eq!(later[0].shard, later[1].shard);
+        assert_eq!(later[0].sequence, first_position.sequence + 1);
+        assert_eq!(later[1].sequence, later[0].sequence + 1);
+        let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
+        let second_a = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([later[0]]),
+                &primary_codebook,
+                &named_codebooks,
+                Some(&anchor),
+            )
+            .unwrap();
+        let second_b = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([later[0]]),
+                &primary_codebook,
+                &named_codebooks,
+                Some(&anchor),
+            )
+            .unwrap();
+        assert_eq!(second_a.new_roster(), second_b.new_roster());
+        assert_eq!(
+            second_a.row_bundle_delta_root(),
+            second_b.row_bundle_delta_root()
+        );
+        assert_eq!(second_a.chain_anchor(), second_b.chain_anchor());
+
+        let error = index
+            .build_unwired_all_modality_delta(
+                &positioned_coverage([later[1]]),
+                &primary_codebook,
+                &named_codebooks,
+                Some(&anchor),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("gap") || error.contains("contiguous"),
+            "{error}"
         );
     }
 

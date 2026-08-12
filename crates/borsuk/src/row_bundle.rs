@@ -521,6 +521,12 @@ pub(crate) struct DirectoryRunRef {
     batches: Vec<DirectoryBatchRef>,
 }
 
+impl DirectoryRunRef {
+    pub(crate) fn artifact(&self) -> &ArtifactRef {
+        &self.artifact
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PackedDirectoryPartitionRun {
     pub(crate) bytes: Bytes,
@@ -2982,6 +2988,39 @@ pub(crate) fn stage_row_bundle_generation_to_sink(
     })
 }
 
+pub(crate) fn stage_existing_row_bundle_generation_to_sink(
+    active: &[RowBundleRunRef],
+    directory_root: &ArtifactRef,
+    sink: &mut dyn RowBundleObjectSink,
+) -> Result<StagedRowBundleGeneration> {
+    if active.is_empty() || active.len() > MAX_ACTIVE_ROW_BUNDLE_LEVELS {
+        return invalid("row-bundle generation needs bounded active runs");
+    }
+    let mut runs = active.to_vec();
+    runs.sort_by_key(|run| run.level);
+    if runs.windows(2).any(|pair| pair[0].level == pair[1].level) {
+        return invalid("row-bundle generation repeats one active level");
+    }
+    for run in &runs {
+        validate_row_bundle_run_ref(run)?;
+    }
+    validate_authority_artifact(directory_root, "ID-directory root")?;
+    let root = emit_packed_artifact(
+        "row-bundle-generation-roots",
+        encode_generation_root(&runs, directory_root)?,
+        sink,
+    )?;
+    Ok(StagedRowBundleGeneration {
+        active_runs: runs,
+        directory_root: directory_root.clone(),
+        metrics: ConstructionMetrics {
+            peak_staged_bytes: root.reference.encoded_bytes,
+            directory_writes: 0,
+        },
+        root,
+    })
+}
+
 #[cfg(test)]
 fn stage_row_bundle_generation(
     active: &[RowBundleRunRef],
@@ -3791,10 +3830,18 @@ pub(crate) fn lookup_directory_owner<F>(
 where
     F: FnMut(&str, Range<u64>) -> Result<Vec<u8>>,
 {
-    if record_id.is_empty() || active_levels.len() > MAX_ACTIVE_DIRECTORY_LEVELS {
-        return invalid("ID-directory lookup is empty or exceeds its active level cap");
+    if record_id.is_empty() {
+        return invalid("ID-directory lookup record ID is empty");
     }
     let partition = DirectoryPartition::for_record_id(record_id);
+    if active_levels
+        .iter()
+        .filter(|run| run.partition == partition)
+        .count()
+        > MAX_ACTIVE_DIRECTORY_LEVELS
+    {
+        return invalid("ID-directory lookup exceeds its per-partition active level cap");
+    }
     let mut seen_levels = BTreeSet::new();
     let mut winner = None::<DirectoryOwnerState>;
     for run in active_levels {
@@ -5364,6 +5411,68 @@ mod tests {
         assert_eq!((owner.routing_epoch, owner.cell_ordinal), (11, 12_345));
         assert_eq!(calls.values().copied().sum::<usize>(), 1);
         assert!(calls.values().all(|calls| *calls <= 1));
+    }
+
+    #[test]
+    fn directory_lookup_applies_active_level_cap_per_partition_not_global_root() {
+        let target = b"directory-target-across-partitions".to_vec();
+        let target_partition = DirectoryPartition::for_record_id(&target);
+        let target_run = pack_directory_partition_run(
+            target_partition,
+            0,
+            &[DirectoryRow {
+                record_id: target.clone(),
+                routing_epoch: 19,
+                cell_ordinal: 7,
+                state: MutationState::new(stamp(100), MutationOperation::Put),
+            }],
+            directory_options(),
+        )
+        .unwrap();
+        let mut runs = vec![target_run.reference.clone()];
+        let mut objects = directory_object_map(&target_run);
+        let mut seen = BTreeSet::from([target_partition]);
+        let mut ordinal = 0_u32;
+        while runs.len() <= super::MAX_ACTIVE_DIRECTORY_LEVELS {
+            let id = format!("unrelated-partition-{ordinal:05}").into_bytes();
+            ordinal += 1;
+            let partition = DirectoryPartition::for_record_id(&id);
+            if !seen.insert(partition) {
+                continue;
+            }
+            let packed = pack_directory_partition_run(
+                partition,
+                0,
+                &[DirectoryRow {
+                    record_id: id,
+                    routing_epoch: 19,
+                    cell_ordinal: ordinal,
+                    state: MutationState::new(
+                        stamp(ordinal as usize + 100),
+                        MutationOperation::Put,
+                    ),
+                }],
+                directory_options(),
+            )
+            .unwrap();
+            objects.extend(directory_object_map(&packed));
+            runs.push(packed.reference);
+        }
+        assert_eq!(runs.len(), super::MAX_ACTIVE_DIRECTORY_LEVELS + 1);
+
+        let lookup = lookup_directory_owner(&runs, &target, |path, range: Range<u64>| {
+            let object = &objects[path];
+            Ok(
+                object[usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()]
+                    .to_vec(),
+            )
+        })
+        .unwrap();
+
+        let DirectoryLookup::Found(owner) = lookup else {
+            panic!("target partition owner disappeared behind unrelated directory partitions")
+        };
+        assert_eq!((owner.routing_epoch, owner.cell_ordinal), (19, 7));
     }
 
     #[test]
