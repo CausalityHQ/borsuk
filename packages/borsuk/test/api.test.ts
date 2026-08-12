@@ -1068,8 +1068,7 @@ test("searchBatchWithReport preserves query order and counters", async () => {
   assert.ok((reports[0]?.preparedPositionedBytes ?? 0) > 0);
   assert.equal(
     reports[0]?.collectionResidentBytes,
-    (reports[0]?.residentBytesEstimate ?? 0) +
-      (reports[0]?.preparedPositionedBytes ?? 0),
+    (reports[0]?.residentBytesEstimate ?? 0) + (reports[0]?.preparedPositionedBytes ?? 0),
   );
   assert.ok((reports[0]?.transientPeakBytes ?? 0) <= (reports[0]?.transientCapacityBytes ?? 0));
 });
