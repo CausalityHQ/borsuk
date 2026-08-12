@@ -24,7 +24,8 @@ DESCRIPTOR_FIELDS = frozenset(
         "objects",
     }
 )
-OBJECT_FIELDS = frozenset({"role", "format", "url", "sha256", "bytes"})
+OBJECT_FIELDS = frozenset({"role", "format", "path", "sha256", "bytes"})
+MAX_DATASET_OBJECT_BYTES = 128 * 1024 * 1024
 
 
 def _file_sha256(path: Path) -> str:
@@ -35,18 +36,44 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _generated_identity(dataset: dict[str, object]) -> str:
-    source = dataset["source"]
-    identity = {
-        "schema_version": 1,
-        "dataset_id": dataset["id"],
-        "rows": dataset["scale"]["rows"],
-        "dimensions": dataset["dimensions"],
-        "metric": dataset["metric"],
-        "generator": source["generator"],
-        "seed": source["seed"],
-        "encoding": "parquet-f32-v1",
-    }
+def _parquet_objects(root: Path) -> list[dict[str, object]]:
+    paths = [root] if root.is_file() else sorted(root.rglob("*.parquet"))
+    if not paths:
+        raise ValueError("staged dataset has no Parquet objects")
+    objects = []
+    for path in paths:
+        size = path.stat().st_size
+        if size <= 8 or size > MAX_DATASET_OBJECT_BYTES:
+            raise ValueError("staged dataset object exceeds its bounded Parquet size")
+        with path.open("rb") as source:
+            prefix = source.read(4)
+            source.seek(-4, 2)
+            suffix = source.read(4)
+        if prefix != b"PAR1" or suffix != b"PAR1":
+            raise ValueError("staged dataset object is not stock Parquet")
+        relative = path.name if root.is_file() else path.relative_to(root).as_posix()
+        objects.append(
+            {
+                "role": "dataset",
+                "format": "parquet",
+                "path": relative,
+                "sha256": _file_sha256(path),
+                "bytes": size,
+            }
+        )
+    return objects
+
+
+def dataset_materialization_sha256(root: Path) -> str:
+    objects = _parquet_objects(root)
+    identity = [
+        {
+            "path": item["path"],
+            "sha256": item["sha256"],
+            "bytes": item["bytes"],
+        }
+        for item in objects
+    ]
     return hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
 
 
@@ -57,32 +84,17 @@ def build_dataset_descriptor(dataset: dict[str, object]) -> dict[str, object]:
         raise ValueError("standard dataset cannot be replaced by generated data")
     objects: list[dict[str, object]] = []
     if state == "generated":
-        content_sha256 = _generated_identity(dataset)
-        materialization = "deterministic-generator"
+        raise ValueError("generated dataset has no checksummed materialized bytes")
     elif state == "staged":
         parsed = urlparse(str(source["url"]))
         if parsed.scheme != "file":
             raise ValueError("local descriptor inspection requires a staged file URL")
-        path = Path(unquote(parsed.path))
-        if path.suffix != ".parquet" or not path.is_file():
-            raise ValueError("staged dataset must be one existing Parquet file")
-        checksum = _file_sha256(path)
-        if checksum != source["sha256"]:
+        root = Path(unquote(parsed.path))
+        objects = _parquet_objects(root)
+        content_sha256 = dataset_materialization_sha256(root)
+        if content_sha256 != source["sha256"]:
             raise ValueError("staged dataset checksum differs from manifest")
-        payload = path.read_bytes()
-        if len(payload) < 8 or payload[:4] != b"PAR1" or payload[-4:] != b"PAR1":
-            raise ValueError("staged dataset is not a stock Parquet object")
-        content_sha256 = checksum
         materialization = "staged-parquet"
-        objects = [
-            {
-                "role": "dataset",
-                "format": "parquet",
-                "url": source["url"],
-                "sha256": checksum,
-                "bytes": len(payload),
-            }
-        ]
     elif state == "unstaged":
         raise ValueError("external dataset is not staged")
     else:
@@ -123,17 +135,34 @@ def validate_dataset_descriptor(
     objects = value["objects"]
     if not isinstance(objects, list):
         raise ValueError("dataset descriptor objects must be a list")
+    paths: set[str] = set()
     for item in objects:
         if not isinstance(item, dict) or frozenset(item) != OBJECT_FIELDS:
             raise ValueError("dataset object fields differ")
-        if item["format"] != "parquet" or not isinstance(item["bytes"], int) or item["bytes"] <= 0:
+        path = str(item["path"])
+        digest = str(item["sha256"])
+        if not path or path.startswith("/") or ".." in path.split("/") or path in paths:
+            raise ValueError("dataset object paths must be relative and unique")
+        paths.add(path)
+        if (
+            item["format"] != "parquet"
+            or not isinstance(item["bytes"], int)
+            or item["bytes"] <= 0
+            or item["bytes"] > MAX_DATASET_OBJECT_BYTES
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
             raise ValueError("dataset object format or size is invalid")
-    if value["materialization"] == "deterministic-generator":
-        if objects or digest != _generated_identity(dataset):
-            raise ValueError("generated dataset identity differs")
-    elif value["materialization"] == "staged-parquet":
-        if len(objects) != 1 or objects[0]["sha256"] != digest:
-            raise ValueError("staged dataset object differs")
-    else:
+    if value["materialization"] != "staged-parquet" or not objects:
         raise ValueError("dataset descriptor materialization is invalid")
+    identity = [
+        {
+            "path": item["path"],
+            "sha256": item["sha256"],
+            "bytes": item["bytes"],
+        }
+        for item in objects
+    ]
+    if hashlib.sha256(canonical_json_bytes(identity)).hexdigest() != digest:
+        raise ValueError("staged dataset object set differs")
     return value

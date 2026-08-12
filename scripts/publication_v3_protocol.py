@@ -81,7 +81,13 @@ HEX_64 = re.compile(r"[0-9a-f]{64}")
 AWS_ACCOUNT = re.compile(r"[0-9]{12}")
 WORKLOAD_FACTOR_FIELDS = {
     "read-recall": frozenset(
-        {"k", "candidate_budgets", "cache_states", "minimum_recall_ppm"}
+        {
+            "k",
+            "candidate_budgets",
+            "routing_cell_budget",
+            "cache_states",
+            "minimum_recall_ppm",
+        }
     ),
     "write-update-delete-compact": frozenset(
         {
@@ -226,6 +232,9 @@ def _validate_workload_factors(kind: str, value: object) -> dict[str, object]:
             "k": _positive_int_list(factors["k"], "read k"),
             "candidate_budgets": _positive_int_list(
                 factors["candidate_budgets"], "candidate budgets"
+            ),
+            "routing_cell_budget": _positive_int(
+                factors["routing_cell_budget"], "routing cell budget"
             ),
             "cache_states": _unique_strings(
                 factors["cache_states"], "cache states"

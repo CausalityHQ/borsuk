@@ -5,6 +5,7 @@ from pathlib import Path
 
 from scripts.publication_v3_datasets import (
     build_dataset_descriptor,
+    dataset_materialization_sha256,
     validate_dataset_descriptor,
 )
 from scripts.publication_v3_protocol import validate_manifest
@@ -21,21 +22,14 @@ class PublicationV3DatasetTests(unittest.TestCase):
             )
         )
 
-    def test_generated_descriptor_is_deterministic_and_binds_shape(self) -> None:
+    def test_generated_descriptor_requires_real_materialized_bytes(self) -> None:
         dataset = next(
             item
             for item in self.manifest["datasets"]
             if item["source"]["state"] == "generated"
         )
-        first = build_dataset_descriptor(dataset)
-        second = build_dataset_descriptor(dataset)
-        self.assertEqual(first, second)
-        self.assertEqual(first["dataset_id"], dataset["id"])
-        self.assertEqual(first["rows"], dataset["scale"]["rows"])
-        self.assertEqual(first["dimensions"], dataset["dimensions"])
-        self.assertEqual(first["metric"], dataset["metric"])
-        self.assertEqual(first["materialization"], "deterministic-generator")
-        self.assertEqual(validate_dataset_descriptor(first, dataset), first)
+        with self.assertRaisesRegex(ValueError, "materialized bytes"):
+            build_dataset_descriptor(dataset)
 
     def test_external_descriptor_requires_exact_staged_parquet_bytes(self) -> None:
         dataset = next(
@@ -44,23 +38,29 @@ class PublicationV3DatasetTests(unittest.TestCase):
             if item["source"]["state"] == "unstaged"
         )
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "dataset.parquet"
-            path.write_bytes(b"PAR1fixturePAR1")
+            root = Path(directory) / "dataset"
+            root.mkdir()
+            first = root / "part-000.parquet"
+            second = root / "part-001.parquet"
+            first.write_bytes(b"PAR1fixture-onePAR1")
+            second.write_bytes(b"PAR1fixture-twoPAR1")
             staged = json.loads(json.dumps(dataset))
             staged["source"] = {
                 "state": "staged",
-                "url": path.resolve().as_uri(),
+                "url": root.resolve().as_uri(),
                 "sha256": "0" * 64,
                 "license": dataset["source"]["license"],
             }
             with self.assertRaisesRegex(ValueError, "checksum"):
                 build_dataset_descriptor(staged)
-            import hashlib
-
-            staged["source"]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            staged["source"]["sha256"] = dataset_materialization_sha256(root)
             descriptor = build_dataset_descriptor(staged)
             self.assertEqual(descriptor["materialization"], "staged-parquet")
-            self.assertEqual(descriptor["objects"][0]["bytes"], len(path.read_bytes()))
+            self.assertEqual(len(descriptor["objects"]), 2)
+            self.assertEqual(
+                sum(item["bytes"] for item in descriptor["objects"]),
+                len(first.read_bytes()) + len(second.read_bytes()),
+            )
 
     def test_standard_dataset_cannot_be_replaced_by_generated_source(self) -> None:
         dataset = next(

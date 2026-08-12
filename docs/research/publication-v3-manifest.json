@@ -252,21 +252,21 @@
       "kind": "read-recall",
       "dataset_ids": ["deep-image-96", "fashion-mnist-784", "gist-960", "glove-100", "nytimes-256", "sift-128"],
       "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
-      "factors": {"k": [10, 100], "candidate_budgets": [64, 128, 256, 512], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
+      "factors": {"k": [10], "candidate_budgets": [64, 128, 256, 512], "routing_cell_budget": 128, "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
     },
     {
       "id": "realistic-dense-read",
       "kind": "read-recall",
       "dataset_ids": ["cohere-medium-1m-768", "cohere-large-10m-768", "laion-100m-768"],
       "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
-      "factors": {"k": [10, 100], "candidate_budgets": [64, 128, 256, 512, 1024], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
+      "factors": {"k": [10], "candidate_budgets": [64, 128, 256, 512, 1024], "routing_cell_budget": 128, "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
     },
     {
       "id": "synthetic-dense-read",
       "kind": "read-recall",
       "dataset_ids": ["synthetic-clustered-1m-384", "synthetic-clustered-1m-768", "synthetic-clustered-1m-1536", "synthetic-uniform-10m-384", "synthetic-uniform-10m-768", "synthetic-uniform-10m-1536", "synthetic-duplicate-1m-768", "synthetic-adversarial-1m-768", "synthetic-clustered-100m-768", "synthetic-uniform-100m-768"],
       "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
-      "factors": {"k": [10, 100], "candidate_budgets": [64, 128, 256, 512, 1024], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
+      "factors": {"k": [10], "candidate_budgets": [64, 128, 256, 512, 1024], "routing_cell_budget": 128, "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
     },
     {
       "id": "durable-lifecycle",
@@ -287,7 +287,7 @@
       "kind": "filtered-namespace-read",
       "dataset_ids": ["cohere-medium-1m-768", "synthetic-clustered-1m-768"],
       "systems": ["borsuk", "amazon-s3-vectors"],
-      "factors": {"selectivity_ppm": [1000, 10000, 100000, 1000000], "namespace_counts": [1, 100, 10000], "k": [10, 100], "minimum_recall_ppm": 950000}
+      "factors": {"selectivity_ppm": [1000, 10000, 100000, 1000000], "namespace_counts": [1, 100, 10000], "k": [10], "minimum_recall_ppm": 950000}
     },
     {
       "id": "late-interaction",
@@ -301,7 +301,7 @@
       "kind": "datatype-simd-matrix",
       "dataset_ids": ["synthetic-clustered-1m-384", "synthetic-clustered-1m-768", "synthetic-clustered-1m-1536", "synthetic-binary-1m-768"],
       "systems": ["borsuk", "faiss"],
-      "factors": {"datatypes": ["f32", "f16", "bf16", "float8-e4m3", "float8-e5m2", "int8", "binary"], "dimensions": [384, 768, 1536], "kernels": ["scalar", "simd"], "k": [10, 100], "minimum_recall_ppm": 950000}
+      "factors": {"datatypes": ["f32", "f16", "bf16", "float8-e4m3", "float8-e5m2", "int8", "binary"], "dimensions": [384, 768, 1536], "kernels": ["scalar", "simd"], "k": [10], "minimum_recall_ppm": 950000}
     },
     {
       "id": "object-layout",

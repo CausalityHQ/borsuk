@@ -110,7 +110,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                 "metric": "cosine",
                 "source": {
                     "state": "generated",
-                    "generator": "synthetic-dense-v1",
+                    "generator": "synthetic-clustered-v1",
                     "seed": 4441,
                 },
             },
@@ -137,6 +137,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                 "factors": {
                     "k": [10],
                     "candidate_budgets": [128, 320],
+                    "routing_cell_budget": 32,
                     "cache_states": ["cold", "warm"],
                     "minimum_recall_ppm": 950000,
                 },

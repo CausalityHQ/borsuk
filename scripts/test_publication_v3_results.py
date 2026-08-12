@@ -170,6 +170,22 @@ class PublicationV3ResultTests(unittest.TestCase):
                 logical_rows=2_000_000,
             )
 
+    def test_small_dataset_allows_fixed_query_and_directory_objects(self) -> None:
+        roster = [data_object(0, 3_633)]
+        for index in range(8):
+            roster.append(
+                {
+                    "role": "query-page" if index < 4 else "directory",
+                    "path": f"metadata/{index}.parquet",
+                    "format": "parquet",
+                    "bytes": 4096,
+                    "rows": 0,
+                    "checksum": f"{index + 2000:064x}",
+                }
+            )
+        summary = validate_object_roster(roster, logical_rows=3_633)
+        self.assertEqual(summary["data_objects"], 9)
+
 
 if __name__ == "__main__":
     unittest.main()

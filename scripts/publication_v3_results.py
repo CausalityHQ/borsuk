@@ -155,10 +155,14 @@ def validate_object_roster(
         raise ValueError("object roster logical row total differs from dataset")
     if logical_rows >= 10_000_000 and data_bundles < 2:
         raise ValueError("large-scale results require multiple data bundles")
-    if (data_objects > 1 and data_objects * 1024 > logical_rows) or data_objects > MAX_DATA_OBJECTS or (
-        logical_cells is not None
-        and logical_cells > MAX_DATA_OBJECTS
-        and data_objects >= logical_cells
+    if (
+        (data_bundles > 1 and data_bundles * 1024 > logical_rows)
+        or data_objects > MAX_DATA_OBJECTS
+        or (
+            logical_cells is not None
+            and logical_cells > MAX_DATA_OBJECTS
+            and data_objects >= logical_cells
+        )
     ):
         raise ValueError("object-count amplification is proportional to rows or cells")
     if control_objects > MAX_CONTROL_OBJECTS:
