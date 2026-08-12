@@ -17,6 +17,17 @@ from scripts.publication_v3_protocol import validate_manifest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def fixed_list_table(name: str, rows: list[list[object]], value_type, width: int):
+    flat = pa.array([value for row in rows for value in row], type=value_type)
+    array = pa.FixedSizeListArray.from_arrays(
+        flat,
+        type=pa.list_(pa.field("item", value_type, nullable=False), width),
+    )
+    return pa.Table.from_arrays(
+        [array], schema=pa.schema([pa.field(name, array.type, nullable=False)])
+    )
+
+
 class PublicationV3DatasetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = validate_manifest(
@@ -48,29 +59,31 @@ class PublicationV3DatasetTests(unittest.TestCase):
             root.mkdir()
             dimensions = dataset["dimensions"]
             rows = dataset["scale"]["rows"]
-            row_type = pa.list_(pa.float32(), dimensions)
-            first = root / "train-00000.parquet"
-            second = root / "train-00001.parquet"
+            first = root / "train-00000000.parquet"
+            second = root / "train-00000001.parquet"
             split = rows // 2
             for path, count in ((first, split), (second, rows - split)):
                 pq.write_table(
-                    pa.table(
-                        {
-                            "emb": pa.array(
-                                [[float(row % 7)] * dimensions for row in range(count)],
-                                type=row_type,
-                            )
-                        }
+                    fixed_list_table(
+                        "emb",
+                        [[float(row % 7)] * dimensions for row in range(count)],
+                        pa.float32(),
+                        dimensions,
                     ),
                     path,
                 )
             pq.write_table(
-                pa.table({"emb": pa.array([[0.0] * dimensions], type=row_type)}),
+                fixed_list_table(
+                    "emb", [[0.0] * dimensions], pa.float32(), dimensions
+                ),
                 root / "test.parquet",
             )
             pq.write_table(
-                pa.table(
-                    {"neighbors_id": pa.array([list(range(10))], type=pa.list_(pa.int32()))}
+                fixed_list_table(
+                    "neighbors_id",
+                    [[identifier % 4 for identifier in range(10)]],
+                    pa.int32(),
+                    10,
                 ),
                 root / "neighbors.parquet",
             )
@@ -126,18 +139,21 @@ class PublicationV3DatasetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             dimensions = dataset["dimensions"]
-            row_type = pa.list_(pa.float32(), dimensions)
             pq.write_table(
-                pa.table({"emb": pa.array([[0.0] * dimensions], type=row_type)}),
-                root / "train-00000.parquet",
+                fixed_list_table(
+                    "emb", [[0.0] * dimensions], pa.float32(), dimensions
+                ),
+                root / "train-00000000.parquet",
             )
             pq.write_table(
-                pa.table({"emb": pa.array([[0.0] * dimensions], type=row_type)}),
+                fixed_list_table(
+                    "emb", [[0.0] * dimensions], pa.float32(), dimensions
+                ),
                 root / "test.parquet",
             )
             pq.write_table(
-                pa.table(
-                    {"neighbors_id": pa.array([list(range(10))], type=pa.list_(pa.int32()))}
+                fixed_list_table(
+                    "neighbors_id", [[0 for _ in range(10)]], pa.int32(), 10
                 ),
                 root / "neighbors.parquet",
             )

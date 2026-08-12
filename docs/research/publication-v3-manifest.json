@@ -132,8 +132,8 @@
       "kind": "realistic-dense",
       "scale": {"state": "exact", "rows": 100000000},
       "dimensions": 768,
-      "metric": "cosine",
-      "source": {"state": "unstaged", "expected_source": "s3://assets.zilliz.com/benchmark/laion2b-en-100m", "license": "laion-dataset-license"}
+      "metric": "l2",
+      "source": {"state": "unstaged", "expected_source": "s3://assets.zilliz.com/benchmark/laion_large_100m", "license": "laion-dataset-license"}
     },
     {
       "id": "synthetic-clustered-1m-384",

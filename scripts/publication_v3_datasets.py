@@ -74,10 +74,9 @@ def _dataset_objects(root: Path) -> list[dict[str, object]]:
     if not root.is_dir():
         raise ValueError("staged dataset must be a directory")
     train_paths = sorted(root.glob("train-*.parquet"))
-    if (root / "train.parquet").is_file():
-        if train_paths:
-            raise ValueError("staged dataset has ambiguous train Parquet objects")
-        train_paths = [root / "train.parquet"]
+    expected_train_names = [f"train-{index:08}.parquet" for index in range(len(train_paths))]
+    if [path.name for path in train_paths] != expected_train_names:
+        raise ValueError("staged dataset train shard names are not contiguous and canonical")
     required = [root / "test.parquet", root / "neighbors.parquet", root / "meta.json"]
     if not train_paths or any(not path.is_file() for path in required):
         raise ValueError("staged dataset protocol objects are incomplete")
@@ -111,24 +110,34 @@ def _validate_embedding_schema(path: Path, dimensions: int, role: str) -> None:
     schema = pq.read_schema(path)
     if schema.names != ["emb"]:
         raise ValueError(f"{role} Parquet schema must contain only emb")
-    data_type = schema.field("emb").type
+    field = schema.field("emb")
+    data_type = field.type
     if not (
+        not field.nullable
+        and
         pa.types.is_fixed_size_list(data_type)
         and data_type.list_size == dimensions
         and pa.types.is_float32(data_type.value_type)
+        and not data_type.value_field.nullable
     ):
         raise ValueError(f"{role} embedding schema differs from the manifest")
 
 
-def _validate_truth_schema(path: Path, expected_rows: int, k: int) -> None:
+def _validate_truth_schema(
+    path: Path, expected_rows: int, k: int, train_rows: int
+) -> None:
     pa, pq = _require_pyarrow()
     table = pq.read_table(path, columns=["neighbors_id"])
     if table.schema.names != ["neighbors_id"] or table.num_rows != expected_rows:
         raise ValueError("ground-truth rows differ from query rows")
-    data_type = table.schema.field("neighbors_id").type
+    field = table.schema.field("neighbors_id")
+    data_type = field.type
     if not (
+        not field.nullable
+        and
         (pa.types.is_list(data_type) or pa.types.is_fixed_size_list(data_type))
         and (pa.types.is_int32(data_type.value_type) or pa.types.is_int64(data_type.value_type))
+        and not data_type.value_field.nullable
     ):
         raise ValueError("ground-truth neighbor schema is invalid")
     if pa.types.is_fixed_size_list(data_type):
@@ -137,6 +146,13 @@ def _validate_truth_schema(path: Path, expected_rows: int, k: int) -> None:
         widths_are_valid = all(len(value) >= k for value in table.column(0).to_pylist())
     if not widths_are_valid:
         raise ValueError("ground-truth width is below the publication k")
+    neighbors = table.column(0).to_pylist()
+    if any(
+        not isinstance(identifier, int) or identifier < 0 or identifier >= train_rows
+        for row in neighbors
+        for identifier in row
+    ):
+        raise ValueError("ground-truth contains an out-of-range train id")
 
 
 def _validate_physical_dataset(
@@ -185,7 +201,9 @@ def _validate_physical_dataset(
         raise ValueError("dataset metadata k is invalid")
     if int(truth_object["rows"]) != query_rows:
         raise ValueError("ground-truth rows differ from query rows")
-    _validate_truth_schema(root / str(truth_object["path"]), query_rows, k)
+    _validate_truth_schema(
+        root / str(truth_object["path"]), query_rows, k, expected_train_rows
+    )
 
 
 def _object_identity(objects: list[dict[str, object]]) -> list[dict[str, object]]:

@@ -56,6 +56,20 @@ class FetchVectorDbBenchDatasetTest(unittest.TestCase):
                 expected_train_files=2,
             )
 
+    def test_train_shards_sort_by_parsed_index_and_reject_gaps(self) -> None:
+        self.assertEqual(
+            fetch.ordered_train_files(
+                ["train-2-of-3.parquet", "train-0-of-3.parquet", "train-1-of-3.parquet"],
+                3,
+            ),
+            ["train-0-of-3.parquet", "train-1-of-3.parquet", "train-2-of-3.parquet"],
+        )
+        with self.assertRaisesRegex(ValueError, "numbering"):
+            fetch.ordered_train_files(
+                ["train-0-of-3.parquet", "train-1-of-3.parquet", "train-3-of-3.parquet"],
+                3,
+            )
+
     def test_parses_aws_s3_ls_without_using_dates_as_filenames(self) -> None:
         listing = (
             "2023-05-12 10:52:44    3704127 neighbors.parquet\n"
@@ -111,6 +125,195 @@ class FetchVectorDbBenchDatasetTest(unittest.TestCase):
 
             after = {path.name: path.read_bytes() for path in dataset_dir.iterdir()}
             self.assertEqual(after, before)
+
+    def test_publication_materialization_reshards_without_mutating_source(self) -> None:
+        import numpy as np
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            output = root / "publication"
+            source.mkdir()
+            original = fetch.DATASETS["cohere-medium-1M"]
+            fetch.DATASETS["cohere-medium-1M"] = fetch.DatasetContract(
+                remote_prefix=original.remote_prefix,
+                rows=100,
+                dimensions=4,
+                train_files=1,
+                metric=original.metric,
+                workload=original.workload,
+                adapter=original.adapter,
+                license=original.license,
+                license_source=original.license_source,
+            )
+            try:
+                contract = fetch.DATASETS["cohere-medium-1M"]
+                vector_type = pa.list_(pa.float32())
+                train = np.arange(400, dtype=np.float32).reshape(100, 4)
+                pq.write_table(
+                    pa.table(
+                        {
+                            "id": pa.array(range(100), type=pa.int64()),
+                            "emb": pa.array(train.tolist(), type=vector_type),
+                        }
+                    ),
+                    source / "train.parquet",
+                )
+                pq.write_table(
+                    pa.table(
+                        {
+                            "id": pa.array(range(2), type=pa.int64()),
+                            "emb": pa.array(train[:2].tolist(), type=vector_type),
+                        }
+                    ),
+                    source / "test.parquet",
+                )
+                pq.write_table(
+                    pa.table(
+                        {
+                            "neighbors_id": pa.array(
+                                [list(range(10)), list(range(10, 20))],
+                                type=pa.list_(pa.int64()),
+                            )
+                        }
+                    ),
+                    source / "neighbors.parquet",
+                )
+                fetch.write_json(
+                    source / "meta.json",
+                    fetch.metadata_document(
+                        "cohere-medium-1M", contract, n_test=2, k=10
+                    ),
+                )
+                remote_files = ["neighbors.parquet", "test.parquet", "train.parquet"]
+                fetch.write_json(
+                    source / "dataset.json",
+                    fetch.descriptor_document(
+                        "cohere-medium-1M", source, remote_files, contract
+                    ),
+                )
+                before = {
+                    path.name: fetch.sha256_file(path) for path in source.iterdir()
+                }
+                fetch.materialize_publication_dataset(
+                    "cohere-medium-1M", source, output, shard_target_bytes=400
+                )
+                self.assertEqual(len(list(output.glob("train-*.parquet"))), 4)
+                self.assertEqual(
+                    sum(
+                        pq.ParquetFile(path).metadata.num_rows
+                        for path in output.glob("train-*.parquet")
+                    ),
+                    100,
+                )
+                self.assertTrue(
+                    all(
+                        path.stat().st_size < 128 * 1024 * 1024
+                        for path in output.glob("*.parquet")
+                    )
+                )
+                self.assertEqual(
+                    before,
+                    {path.name: fetch.sha256_file(path) for path in source.iterdir()},
+                )
+                from publication_v3_datasets import (
+                    build_dataset_descriptor,
+                    dataset_materialization_sha256,
+                )
+
+                dataset = {
+                    "id": "cohere-medium-1m-768",
+                    "kind": "realistic-dense",
+                    "scale": {"state": "exact", "rows": 100},
+                    "dimensions": 4,
+                    "metric": "cosine",
+                    "source": {
+                        "state": "staged",
+                        "url": output.resolve().as_uri(),
+                        "sha256": dataset_materialization_sha256(output),
+                        "license": "fixture",
+                    },
+                }
+                descriptor = build_dataset_descriptor(dataset)
+                self.assertEqual(
+                    sum(
+                        item["rows"]
+                        for item in descriptor["objects"]
+                        if item["role"] == "train"
+                    ),
+                    100,
+                )
+            finally:
+                fetch.DATASETS["cohere-medium-1M"] = original
+
+    def test_publication_materialization_rejects_shuffled_train_ids(self) -> None:
+        import numpy as np
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.mkdir()
+            original = fetch.DATASETS["cohere-medium-1M"]
+            contract = fetch.DatasetContract(
+                remote_prefix=original.remote_prefix,
+                rows=10,
+                dimensions=4,
+                train_files=1,
+                metric=original.metric,
+                workload=original.workload,
+                adapter=original.adapter,
+                license=original.license,
+                license_source=original.license_source,
+            )
+            fetch.DATASETS["cohere-medium-1M"] = contract
+            try:
+                vectors = np.arange(40, dtype=np.float32).reshape(10, 4)
+                vector_type = pa.list_(pa.float32())
+                pq.write_table(
+                    pa.table(
+                        {
+                            "id": pa.array([1, 0, *range(2, 10)], type=pa.int64()),
+                            "emb": pa.array(vectors.tolist(), type=vector_type),
+                        }
+                    ),
+                    source / "train.parquet",
+                )
+                pq.write_table(
+                    pa.table(
+                        {
+                            "id": pa.array([0], type=pa.int64()),
+                            "emb": pa.array(vectors[:1].tolist(), type=vector_type),
+                        }
+                    ),
+                    source / "test.parquet",
+                )
+                pq.write_table(
+                    pa.table(
+                        {"neighbors_id": pa.array([list(range(10))], type=pa.list_(pa.int64()))}
+                    ),
+                    source / "neighbors.parquet",
+                )
+                fetch.write_json(
+                    source / "meta.json",
+                    fetch.metadata_document("cohere-medium-1M", contract, n_test=1, k=10),
+                )
+                remote_files = ["neighbors.parquet", "test.parquet", "train.parquet"]
+                fetch.write_json(
+                    source / "dataset.json",
+                    fetch.descriptor_document(
+                        "cohere-medium-1M", source, remote_files, contract
+                    ),
+                )
+                with self.assertRaisesRegex(ValueError, "canonical row positions"):
+                    fetch.materialize_publication_dataset(
+                        "cohere-medium-1M", source, root / "publication"
+                    )
+            finally:
+                fetch.DATASETS["cohere-medium-1M"] = original
 
 
 if __name__ == "__main__":
