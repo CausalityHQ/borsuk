@@ -66,7 +66,7 @@ const MAX_RUN_SUMMARIES: usize = MAX_RUN_ROWS;
 const MAX_SUMMARY_ROOT_SHARDS: usize = MAX_RUN_SUMMARIES;
 const MAX_ROSTER_ROWS: usize = MAX_RUN_BUNDLES + MAX_SUMMARY_ROOT_SHARDS + 1;
 pub(crate) const MAX_ACTIVE_ROW_BUNDLE_LEVELS: usize = 16;
-const MAX_ACTIVE_DIRECTORY_LEVELS: usize = 16;
+pub(crate) const MAX_ACTIVE_DIRECTORY_LEVELS: usize = 16;
 const MAX_DIRECTORY_ROOT_RUNS: usize = DIRECTORY_PARTITIONS * MAX_ACTIVE_DIRECTORY_LEVELS;
 
 #[derive(Clone, Copy, Debug)]
@@ -678,9 +678,19 @@ pub(crate) struct OpenedRowBundleRun {
 
 #[derive(Clone, Debug)]
 pub(crate) struct OpenedRowBundleGeneration {
-    pub(crate) generation: RowBundleGenerationRef,
-    pub(crate) active_runs: Vec<OpenedRowBundleRun>,
-    pub(crate) directory_runs: Vec<DirectoryRunRef>,
+    generation: RowBundleGenerationRef,
+    active_runs: Vec<OpenedRowBundleRun>,
+    directory_runs: Vec<DirectoryRunRef>,
+}
+
+impl OpenedRowBundleGeneration {
+    pub(crate) fn generation(&self) -> &RowBundleGenerationRef {
+        &self.generation
+    }
+
+    pub(crate) fn directory_runs(&self) -> &[DirectoryRunRef] {
+        &self.directory_runs
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

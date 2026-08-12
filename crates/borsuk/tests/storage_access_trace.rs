@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 fn persisted_paths_have_stable_physical_object_roles() {
     let cases = [
         ("collection/CURRENT", PhysicalObjectRole::Catalog),
-        ("collection/snapshots/abc.bin", PhysicalObjectRole::Catalog),
+        ("collection/snapshots/abc.json", PhysicalObjectRole::Catalog),
         ("manifests/0001.parquet", PhysicalObjectRole::Catalog),
         (
             "logical-cell-catalogs/aa/catalog.parquet",

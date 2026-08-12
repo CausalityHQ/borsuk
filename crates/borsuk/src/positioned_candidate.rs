@@ -11,7 +11,12 @@
     reason = "Task 3 constructs authenticated candidates; Task 4 will wire their CAS consumer"
 )]
 
-use std::{collections::BTreeMap, ops::Range, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+    sync::Arc,
+    time::Duration,
+};
 
 use arrow_array::{
     ArrayRef, BinaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, ListArray,
@@ -35,8 +40,8 @@ use crate::{
     positioned_log::CommitSourceRangeSet,
     row_bundle::{
         ArtifactRef, CanonicalRowBatch, DirectoryPackOptions, DirectoryPartition, DirectoryRow,
-        RowBundleObjectSink, RowBundlePackOptions, pack_canonical_row_bundles_to_sink,
-        pack_directory_partition_run, pack_directory_root,
+        OpenedRowBundleGeneration, RowBundleObjectSink, RowBundlePackOptions,
+        pack_canonical_row_bundles_to_sink, pack_directory_partition_run, pack_directory_root,
         stage_existing_row_bundle_generation_to_sink,
     },
     storage::Storage,
@@ -312,7 +317,7 @@ pub(crate) fn build_row_bundle_delta(
     storage: &Storage,
     mut rows: Vec<MaterializedRow>,
     directory: Vec<MaterializedDirectoryState>,
-    target_level: u8,
+    levels: &MaterializationLevelReservation,
 ) -> Result<BuiltRowBundleCandidate> {
     if rows.is_empty() != directory.is_empty() {
         return Err(BorsukError::InvalidStorage(
@@ -325,6 +330,11 @@ pub(crate) fn build_row_bundle_delta(
             roster: Vec::new(),
         });
     }
+    let row_level = levels.row_level.ok_or_else(|| {
+        BorsukError::InvalidStorage(
+            "row-bundle delta has rows without a reserved row level".to_owned(),
+        )
+    })?;
     rows.sort_by(|left, right| {
         left.modality
             .cmp(&right.modality)
@@ -418,7 +428,7 @@ pub(crate) fn build_row_bundle_delta(
     let packed = pack_canonical_row_bundles_to_sink(
         &batches,
         &route_plan,
-        target_level,
+        row_level,
         RowBundlePackOptions::production(),
         &mut sink,
     )?;
@@ -437,9 +447,14 @@ pub(crate) fn build_row_bundle_delta(
     let mut directory_runs = Vec::new();
     for (partition, mut rows) in partitions {
         rows.sort_by(|left, right| left.record_id.cmp(&right.record_id));
+        let directory_level = levels.directory_level(partition).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "row-bundle delta has directory rows without a reserved partition level".to_owned(),
+            )
+        })?;
         let run = pack_directory_partition_run(
             partition,
-            target_level,
+            directory_level,
             &rows,
             DirectoryPackOptions::production(),
         )?;
@@ -655,11 +670,8 @@ impl MaterializationBaseAuthority {
     }
 
     pub(crate) fn chain_anchor(&self) -> MaterializationChainAnchor {
-        // A published Task 4 CAS closes the prior pending chain. Its next
-        // immutable delta starts a fresh ref-free pending-level namespace.
         MaterializationChainAnchor {
             coverage: self.coverage.clone(),
-            pending_row_deltas: 0,
         }
     }
 }
@@ -667,9 +679,6 @@ impl MaterializationBaseAuthority {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MaterializationChainAnchor {
     coverage: CommitSourceRangeSet,
-    // Counts only unpublished row-bearing deltas since the last Task 4 CAS.
-    // Coverage-only delete deltas do not occupy immutable run levels.
-    pending_row_deltas: u8,
 }
 
 impl MaterializationChainAnchor {
@@ -680,51 +689,194 @@ impl MaterializationChainAnchor {
                 "materialization chain anchor coverage is empty".to_owned(),
             ));
         }
-        Ok(Self {
-            coverage,
-            pending_row_deltas: 0,
-        })
+        Ok(Self { coverage })
     }
 
     pub(crate) fn coverage(&self) -> &CommitSourceRangeSet {
         &self.coverage
     }
 
-    pub(crate) fn pending_artifact_levels(&self) -> Result<(u8, u8)> {
-        if usize::from(self.pending_row_deltas) >= crate::row_bundle::MAX_ACTIVE_ROW_BUNDLE_LEVELS {
-            return Err(BorsukError::InvalidStorage(
-                "materialization chain exhausted its pending row-run levels".to_owned(),
-            ));
-        }
-        let dense_level = self.pending_row_deltas.checked_add(1).ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "materialization chain dense run level overflows u8".to_owned(),
-            )
-        })?;
-        Ok((self.pending_row_deltas, dense_level))
-    }
-
-    fn advanced(&self, coverage: CommitSourceRangeSet, row_bearing: bool) -> Result<Self> {
+    fn advanced(&self, coverage: CommitSourceRangeSet) -> Result<Self> {
         coverage.validate_canonical()?;
         if coverage.ranges().is_empty() || !coverage.covers(&self.coverage) {
             return Err(BorsukError::InvalidStorage(
                 "materialization chain anchor does not extend its prior coverage".to_owned(),
             ));
         }
-        let pending_row_deltas = if row_bearing {
-            self.pending_artifact_levels()?;
-            self.pending_row_deltas.checked_add(1).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "materialization chain pending row count overflows u8".to_owned(),
-                )
-            })?
-        } else {
-            self.pending_row_deltas
-        };
+        Ok(Self { coverage })
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MaterializationLevelAuthority {
+    row_levels: BTreeSet<u8>,
+    directory_levels: BTreeMap<DirectoryPartition, BTreeSet<u8>>,
+    dense_levels: BTreeMap<String, BTreeSet<u8>>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MaterializationLevelReservation {
+    row_level: Option<u8>,
+    directory_levels: BTreeMap<DirectoryPartition, u8>,
+    dense_levels: BTreeMap<String, u8>,
+}
+
+impl MaterializationLevelReservation {
+    pub(crate) fn row_level(&self) -> Option<u8> {
+        self.row_level
+    }
+
+    pub(crate) fn directory_level(&self, partition: DirectoryPartition) -> Option<u8> {
+        self.directory_levels.get(&partition).copied()
+    }
+
+    pub(crate) fn dense_level(&self, modality: &str) -> Option<u8> {
+        self.dense_levels.get(modality).copied()
+    }
+}
+
+impl MaterializationLevelAuthority {
+    pub(crate) fn new(
+        row_levels: BTreeSet<u8>,
+        directory_levels: BTreeMap<DirectoryPartition, BTreeSet<u8>>,
+        dense_levels: BTreeMap<String, BTreeSet<u8>>,
+    ) -> Result<Self> {
+        if row_levels
+            .iter()
+            .any(|level| usize::from(*level) >= crate::row_bundle::MAX_ACTIVE_ROW_BUNDLE_LEVELS)
+            || directory_levels
+                .values()
+                .flatten()
+                .any(|level| usize::from(*level) >= crate::row_bundle::MAX_ACTIVE_DIRECTORY_LEVELS)
+            || dense_levels
+                .values()
+                .flatten()
+                .any(|level| usize::from(*level) >= crate::global_leaf_run::MAX_GLOBAL_LEAF_LEVELS)
+            || dense_levels.keys().any(|modality| modality.is_empty())
+        {
+            return Err(BorsukError::InvalidStorage(
+                "materialization level authority is outside an artifact level bound".to_owned(),
+            ));
+        }
         Ok(Self {
-            coverage,
-            pending_row_deltas,
+            row_levels,
+            directory_levels,
+            dense_levels,
         })
+    }
+
+    pub(crate) fn from_opened_published_refs(
+        opened_row_generation: Option<&OpenedRowBundleGeneration>,
+        dense_roots_by_projection: &BTreeMap<String, &crate::global_leaf_run::GlobalAnnRef>,
+    ) -> Result<Self> {
+        let row_levels = opened_row_generation
+            .into_iter()
+            .flat_map(|opened| opened.generation().active_runs.iter().map(|run| run.level))
+            .collect();
+        let mut directory_levels = BTreeMap::<DirectoryPartition, BTreeSet<u8>>::new();
+        for run in opened_row_generation
+            .into_iter()
+            .flat_map(OpenedRowBundleGeneration::directory_runs)
+        {
+            directory_levels
+                .entry(run.partition)
+                .or_default()
+                .insert(run.level);
+        }
+        let mut dense_levels = BTreeMap::new();
+        for (projection, root) in dense_roots_by_projection {
+            root.validate()?;
+            let levels = root
+                .base()
+                .into_iter()
+                .chain(root.incremental_runs())
+                .map(crate::global_leaf_run::GlobalLeafRunRef::level)
+                .collect();
+            dense_levels.insert(projection.clone(), levels);
+        }
+        Self::new(row_levels, directory_levels, dense_levels)
+    }
+
+    pub(crate) fn reserve(
+        &self,
+        touched_partitions: &[DirectoryPartition],
+        touched_dense_modalities: &[&str],
+    ) -> Result<(MaterializationLevelReservation, Self)> {
+        let mut next = self.clone();
+        let row_level = if touched_partitions.is_empty() {
+            None
+        } else {
+            let level = (0..crate::row_bundle::MAX_ACTIVE_ROW_BUNDLE_LEVELS)
+                .map(|level| u8::try_from(level).expect("row level bound fits u8"))
+                .find(|level| !self.row_levels.contains(level))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "materialization row level authority is full".to_owned(),
+                    )
+                })?;
+            next.row_levels.insert(level);
+            Some(level)
+        };
+        let mut reserved_directory = BTreeMap::new();
+        for partition in touched_partitions.iter().copied().collect::<BTreeSet<_>>() {
+            let occupied = self.directory_levels.get(&partition);
+            let level = (0..crate::row_bundle::MAX_ACTIVE_DIRECTORY_LEVELS)
+                .map(|level| u8::try_from(level).expect("directory level bound fits u8"))
+                .find(|level| occupied.is_none_or(|levels| !levels.contains(level)))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "materialization directory level authority is full".to_owned(),
+                    )
+                })?;
+            next.directory_levels
+                .entry(partition)
+                .or_default()
+                .insert(level);
+            reserved_directory.insert(partition, level);
+        }
+        let mut reserved_dense = BTreeMap::new();
+        for modality in touched_dense_modalities
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+        {
+            let occupied = self.dense_levels.get(modality);
+            // Level zero is reserved for the immutable offline base. Even a
+            // collection without a base root must leave that namespace free.
+            let level = (1..crate::global_leaf_run::MAX_GLOBAL_LEAF_LEVELS)
+                .map(|level| u8::try_from(level).expect("dense level bound fits u8"))
+                .find(|level| occupied.is_none_or(|levels| !levels.contains(level)))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "materialization dense level authority for `{modality}` is full"
+                    ))
+                })?;
+            next.dense_levels
+                .entry(modality.to_owned())
+                .or_default()
+                .insert(level);
+            reserved_dense.insert(modality.to_owned(), level);
+        }
+        Ok((
+            MaterializationLevelReservation {
+                row_level,
+                directory_levels: reserved_directory,
+                dense_levels: reserved_dense,
+            },
+            next,
+        ))
+    }
+
+    pub(crate) fn row_levels(&self) -> &BTreeSet<u8> {
+        &self.row_levels
+    }
+
+    pub(crate) fn directory_levels(&self, partition: DirectoryPartition) -> Option<&BTreeSet<u8>> {
+        self.directory_levels.get(&partition)
+    }
+
+    pub(crate) fn dense_levels(&self, modality: &str) -> Option<&BTreeSet<u8>> {
+        self.dense_levels.get(modality)
     }
 }
 
@@ -815,6 +967,8 @@ pub(crate) struct MaterializedProjectionDelta {
 pub(crate) struct MaterializationDeltaCandidate {
     extension: CommitSourceRangeSet,
     chain_anchor: MaterializationChainAnchor,
+    level_reservation: MaterializationLevelReservation,
+    level_authority: MaterializationLevelAuthority,
     source_transfer: MaterializationSourceTransfer,
     projections: BTreeMap<String, MaterializedProjectionDelta>,
     // This root covers only this extension. Task 4 must merge it with the
@@ -831,6 +985,8 @@ impl MaterializationDeltaCandidate {
     pub(crate) fn new(
         prior: Option<&MaterializationChainAnchor>,
         extension: CommitSourceRangeSet,
+        level_reservation: MaterializationLevelReservation,
+        level_authority: MaterializationLevelAuthority,
         source_transfer: MaterializationSourceTransfer,
         projections: BTreeMap<String, MaterializedProjectionDelta>,
         row_bundle_delta_root: Option<ArtifactRef>,
@@ -849,21 +1005,21 @@ impl MaterializationDeltaCandidate {
             Some(prior) => contiguous_extension(prior.coverage(), &extension)?,
             None => extension.clone(),
         };
-        let row_bearing = row_bundle_delta_root.is_some();
-        if row_bearing != !directory_updates.is_empty() {
+        if row_bundle_delta_root.is_some() != !directory_updates.is_empty() {
             return Err(BorsukError::InvalidStorage(
                 "materialization row delta and directory authority disagree".to_owned(),
             ));
         }
         let chain_anchor = match prior {
-            Some(prior) => prior.advanced(full_coverage, row_bearing)?,
-            None => MaterializationChainAnchor::new(full_coverage.clone())?
-                .advanced(full_coverage, row_bearing)?,
+            Some(prior) => prior.advanced(full_coverage)?,
+            None => MaterializationChainAnchor::new(full_coverage.clone())?,
         };
         sort_and_validate_roster(&mut new_roster)?;
         Ok(Self {
             extension,
             chain_anchor,
+            level_reservation,
+            level_authority,
             source_transfer,
             projections,
             row_bundle_delta_root,
@@ -920,6 +1076,14 @@ impl MaterializationDeltaCandidate {
 
     pub(crate) fn chain_anchor(&self) -> &MaterializationChainAnchor {
         &self.chain_anchor
+    }
+
+    pub(crate) fn level_reservation(&self) -> &MaterializationLevelReservation {
+        &self.level_reservation
+    }
+
+    pub(crate) fn level_authority(&self) -> &MaterializationLevelAuthority {
+        &self.level_authority
     }
 
     pub(crate) fn full_source_coverage(&self) -> &CommitSourceRangeSet {
@@ -1086,9 +1250,14 @@ mod tests {
             value: MaterializedRowValue::Dense(vec![1.0, 0.0]),
         }];
 
-        let error = build_row_bundle_delta(&storage, rows, Vec::new(), 0)
-            .unwrap_err()
-            .to_string();
+        let error = build_row_bundle_delta(
+            &storage,
+            rows,
+            Vec::new(),
+            &MaterializationLevelReservation::default(),
+        )
+        .unwrap_err()
+        .to_string();
 
         assert!(
             error.contains("rows and directory authority must both be empty or nonempty"),
@@ -1104,6 +1273,8 @@ mod tests {
         let candidate = MaterializationDeltaCandidate::new(
             None,
             coverage.clone(),
+            MaterializationLevelReservation::default(),
+            MaterializationLevelAuthority::default(),
             MaterializationSourceTransfer::default(),
             BTreeMap::new(),
             None,
@@ -1119,37 +1290,455 @@ mod tests {
         .unwrap();
 
         assert_eq!(candidate.chain_anchor(), &published.chain_anchor());
-        let MaterializationChainAnchor {
-            coverage: anchored,
-            pending_row_deltas: _,
-        } = candidate.chain_anchor().clone();
+        let MaterializationChainAnchor { coverage: anchored } = candidate.chain_anchor().clone();
         assert_eq!(anchored, coverage);
     }
 
     #[test]
-    fn materialization_chain_anchor_bounds_pending_row_levels_and_ignores_delete_only_deltas() {
+    fn materialization_chain_anchor_tracks_only_exact_source_coverage() {
         let coverage = source_coverage(1, 1);
         let anchor = MaterializationChainAnchor::new(coverage.clone()).unwrap();
-        assert_eq!(anchor.pending_artifact_levels().unwrap(), (0, 1));
+        let advanced = anchor.advanced(source_coverage(1, 2)).unwrap();
 
-        let row_bearing = anchor.advanced(source_coverage(1, 2), true).unwrap();
-        assert_eq!(row_bearing.pending_artifact_levels().unwrap(), (1, 2));
-        let delete_only = row_bearing.advanced(source_coverage(1, 3), false).unwrap();
-        assert_eq!(delete_only.pending_artifact_levels().unwrap(), (1, 2));
+        assert_eq!(anchor.coverage(), &coverage);
+        assert_eq!(advanced.coverage(), &source_coverage(1, 2));
+    }
 
-        let exhausted = MaterializationChainAnchor {
-            coverage,
-            pending_row_deltas: u8::try_from(crate::row_bundle::MAX_ACTIVE_ROW_BUNDLE_LEVELS)
-                .unwrap(),
-        };
-        assert!(exhausted.pending_artifact_levels().is_err());
-        assert!(exhausted.advanced(source_coverage(1, 2), true).is_err());
-        assert_eq!(
-            exhausted
-                .advanced(source_coverage(1, 2), false)
+    #[test]
+    fn published_level_authority_uses_sparse_sets_not_source_range_counts() {
+        let partition = DirectoryPartition::for_record_id(b"sparse-level-id");
+        let authority = MaterializationLevelAuthority::new(
+            std::collections::BTreeSet::from([0, 2]),
+            BTreeMap::from([(partition, std::collections::BTreeSet::from([0, 2]))]),
+            BTreeMap::from([(
+                "primary".to_owned(),
+                std::collections::BTreeSet::from([0, 2]),
+            )]),
+        )
+        .unwrap();
+        let source_anchor = MaterializationChainAnchor::new(source_coverage(1, 12)).unwrap();
+
+        let (plan, next) = authority.reserve(&[partition], &["primary"]).unwrap();
+
+        assert_eq!(source_anchor.coverage().ranges()[0].last_sequence, 12);
+        assert_eq!(plan.row_level(), Some(1));
+        assert_eq!(plan.directory_level(partition), Some(1));
+        assert_eq!(plan.dense_level("primary"), Some(1));
+        assert!(next.row_levels().contains(&1));
+        assert!(next.directory_levels(partition).unwrap().contains(&1));
+        assert!(next.dense_levels("primary").unwrap().contains(&1));
+    }
+
+    #[test]
+    fn repeated_row_bearing_reservations_choose_distinct_row_directory_and_dense_levels() {
+        let partition = DirectoryPartition::for_record_id(b"repeat-level-id");
+        let authority = MaterializationLevelAuthority::new(
+            std::collections::BTreeSet::new(),
+            BTreeMap::new(),
+            BTreeMap::from([("primary".to_owned(), std::collections::BTreeSet::from([0]))]),
+        )
+        .unwrap();
+
+        let (first, authority) = authority.reserve(&[partition], &["primary"]).unwrap();
+        let (second, _) = authority.reserve(&[partition], &["primary"]).unwrap();
+
+        assert_eq!(first.row_level(), Some(0));
+        assert_eq!(first.directory_level(partition), Some(0));
+        assert_eq!(second.row_level(), Some(1));
+        assert_eq!(second.directory_level(partition), Some(1));
+        assert_eq!(first.dense_level("primary"), Some(1));
+        assert_eq!(second.dense_level("primary"), Some(2));
+    }
+
+    #[test]
+    fn row_and_directory_reservations_reuse_disjoint_free_levels_independently() {
+        let partition = DirectoryPartition::for_record_id(b"disjoint-free-levels");
+        let authority = MaterializationLevelAuthority::new(
+            std::collections::BTreeSet::from([0]),
+            BTreeMap::from([(partition, std::collections::BTreeSet::from([1]))]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+
+        let (plan, _) = authority.reserve(&[partition], &[]).unwrap();
+
+        assert_eq!(plan.row_level(), Some(1));
+        assert_eq!(plan.directory_level(partition), Some(0));
+    }
+
+    #[test]
+    fn duplicate_touched_partitions_have_one_canonical_reservation() {
+        let partition = DirectoryPartition::for_record_id(b"duplicate-partition");
+        let authority = MaterializationLevelAuthority::default();
+
+        let (duplicate_plan, duplicate_next) = authority
+            .reserve(&[partition, partition, partition], &[])
+            .unwrap();
+        let (canonical_plan, canonical_next) = authority.reserve(&[partition], &[]).unwrap();
+
+        assert_eq!(duplicate_plan, canonical_plan);
+        assert_eq!(duplicate_next, canonical_next);
+        assert_eq!(duplicate_plan.directory_levels.len(), 1);
+    }
+
+    #[test]
+    fn opened_published_refs_derive_sparse_projection_level_authority() {
+        fn open_generation(
+            storage: &Storage,
+            root: &ArtifactRef,
+        ) -> crate::row_bundle::OpenedRowBundleGeneration {
+            let root_bytes = storage
+                .read_bytes_with_cache_status_and_checksum(&root.path, &root.checksum)
                 .unwrap()
-                .pending_row_deltas,
-            exhausted.pending_row_deltas
+                .bytes;
+            crate::row_bundle::open_row_bundle_generation(root, root_bytes.into(), |references| {
+                references
+                    .iter()
+                    .map(|reference| {
+                        storage
+                            .read_bytes_with_cache_status_and_checksum(
+                                &reference.path,
+                                &reference.checksum,
+                            )
+                            .map(|read| read.bytes.into())
+                    })
+                    .collect()
+            })
+            .unwrap()
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(directory.path().to_str().unwrap()).unwrap();
+        let assignment = PositionedRouteAssignment::catalog([9; 32], 1).unwrap();
+        let build_delta = |record_id: &[u8], version: u64, level: u8| {
+            let partition = DirectoryPartition::for_record_id(record_id);
+            let levels = MaterializationLevelReservation {
+                row_level: Some(level),
+                directory_levels: BTreeMap::from([(partition, level)]),
+                dense_levels: BTreeMap::new(),
+            };
+            build_row_bundle_delta(
+                &storage,
+                vec![MaterializedRow {
+                    modality: "primary".to_owned(),
+                    projection_kind: PositionedRouteProjectionKind::Primary,
+                    assignment: assignment.clone(),
+                    cell_ordinal: Some(0),
+                    record_id: record_id.to_vec(),
+                    projected_ordinal: 0,
+                    state: stamp(version),
+                    value: MaterializedRowValue::Dense(vec![version as f32, 1.0]),
+                }],
+                vec![MaterializedDirectoryState {
+                    record_id: record_id.to_vec(),
+                    routing_epoch: 1,
+                    cell_ordinal: 0,
+                    state: stamp(version),
+                }],
+                &levels,
+            )
+            .unwrap()
+            .delta_root
+            .unwrap()
+        };
+        let low_id = b"opened-low";
+        let partition = DirectoryPartition::for_record_id(low_id);
+        let high_id = (0_u64..)
+            .map(|ordinal| format!("opened-high-{ordinal}"))
+            .find(|id| DirectoryPartition::for_record_id(id.as_bytes()) == partition)
+            .unwrap();
+        let low = build_delta(low_id, 1, 0);
+        let high = build_delta(high_id.as_bytes(), 2, 2);
+        let folded = crate::positioned_materializer::fold_row_bundle_deltas_to_storage(
+            &storage,
+            None,
+            &[low, high],
+        )
+        .unwrap();
+        let opened = open_generation(&storage, &folded.root.reference);
+
+        let codebook_checksum = "ab".repeat(32);
+        let codebook = crate::global_leaf_run::GlobalCodebookRef::new(
+            "global-leaf/v12/codebooks/ab/codebook.parquet".to_owned(),
+            codebook_checksum.clone(),
+            crate::VectorMetric::Euclidean,
+            2,
+            crate::VectorElementType::Float32,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+        );
+        let base = crate::global_leaf_run::GlobalLeafRunRef::new_base(
+            codebook_checksum,
+            crate::global_leaf_run::GlobalLeafDirectoryRef::new(
+                "global-leaf/v12/directories/ab/directory.parquet".to_owned(),
+                "cd".repeat(32),
+                1,
+                1,
+            ),
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            stamp(1).stamp(),
+            stamp(1).stamp(),
+        );
+        let primary_root =
+            crate::global_leaf_run::GlobalAnnRef::new_offline_base(codebook, base, 1, 0).unwrap();
+        let dense_roots_by_projection = BTreeMap::from([("primary".to_owned(), &primary_root)]);
+
+        let authority = MaterializationLevelAuthority::from_opened_published_refs(
+            Some(&opened),
+            &dense_roots_by_projection,
+        )
+        .unwrap();
+
+        assert_eq!(authority.row_levels(), &BTreeSet::from([0, 2]));
+        assert_eq!(
+            authority.directory_levels(partition),
+            Some(&BTreeSet::from([0, 2]))
+        );
+        assert_eq!(
+            authority.dense_levels("primary"),
+            Some(&BTreeSet::from([0]))
+        );
+        let (reservation, _) = authority.reserve(&[partition], &["primary"]).unwrap();
+        assert_eq!(reservation.row_level(), Some(1));
+        assert_eq!(reservation.directory_level(partition), Some(1));
+        assert_eq!(reservation.dense_level("primary"), Some(1));
+
+        let foreign = build_delta(b"foreign-directory", 3, 3);
+        let foreign_opened = open_generation(&storage, &foreign);
+        let foreign_authority = MaterializationLevelAuthority::from_opened_published_refs(
+            Some(&foreign_opened),
+            &dense_roots_by_projection,
+        )
+        .unwrap();
+        assert_eq!(foreign_authority.row_levels(), &BTreeSet::from([3]));
+        assert_eq!(
+            foreign_authority
+                .directory_levels(DirectoryPartition::for_record_id(b"foreign-directory")),
+            Some(&BTreeSet::from([3]))
+        );
+    }
+
+    #[test]
+    fn opened_published_refs_reject_a_corrupt_dense_root_before_using_its_levels() {
+        let mut value = serde_json::to_value(
+            crate::global_leaf_run::GlobalAnnRef::new_offline_base(
+                crate::global_leaf_run::GlobalCodebookRef::new(
+                    "global-leaf/v12/codebooks/ab/codebook.parquet".to_owned(),
+                    "ab".repeat(32),
+                    crate::VectorMetric::Euclidean,
+                    2,
+                    crate::VectorElementType::Float32,
+                    1,
+                    1,
+                    1,
+                    1,
+                    0,
+                    1,
+                    1,
+                ),
+                crate::global_leaf_run::GlobalLeafRunRef::new_base(
+                    "ab".repeat(32),
+                    crate::global_leaf_run::GlobalLeafDirectoryRef::new(
+                        "global-leaf/v12/directories/ab/directory.parquet".to_owned(),
+                        "cd".repeat(32),
+                        1,
+                        1,
+                    ),
+                    1,
+                    1,
+                    1,
+                    1,
+                    0,
+                    1,
+                    1,
+                    stamp(1).stamp(),
+                    stamp(1).stamp(),
+                ),
+                1,
+                0,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        value["layout_version"] = serde_json::json!(11);
+        let corrupt: crate::global_leaf_run::GlobalAnnRef = serde_json::from_value(value).unwrap();
+
+        let error = MaterializationLevelAuthority::from_opened_published_refs(
+            None,
+            &BTreeMap::from([("primary".to_owned(), &corrupt)]),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("V12 global ANN layout version"), "{error}");
+    }
+
+    #[test]
+    fn row_free_but_touched_directory_full_fails_before_level_reservation() {
+        let partition = DirectoryPartition::for_record_id(b"full-directory");
+        let authority = MaterializationLevelAuthority::new(
+            std::collections::BTreeSet::from([0]),
+            BTreeMap::from([(
+                partition,
+                (0..u8::try_from(crate::row_bundle::MAX_ACTIVE_DIRECTORY_LEVELS).unwrap())
+                    .collect(),
+            )]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+
+        let error = authority
+            .reserve(&[partition], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("directory") && error.contains("level"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn dense_modalities_allocate_independently_and_one_full_modality_fails_atomically() {
+        let partition = DirectoryPartition::for_record_id(b"independent-dense");
+        let authority = MaterializationLevelAuthority::new(
+            std::collections::BTreeSet::new(),
+            BTreeMap::new(),
+            BTreeMap::from([
+                (
+                    "primary".to_owned(),
+                    std::collections::BTreeSet::from([0, 1]),
+                ),
+                ("image".to_owned(), std::collections::BTreeSet::from([0])),
+            ]),
+        )
+        .unwrap();
+        let (plan, _) = authority
+            .reserve(&[partition], &["primary", "image"])
+            .unwrap();
+        assert_eq!(plan.dense_level("primary"), Some(2));
+        assert_eq!(plan.dense_level("image"), Some(1));
+
+        let full = MaterializationLevelAuthority::new(
+            std::collections::BTreeSet::new(),
+            BTreeMap::new(),
+            BTreeMap::from([
+                ("primary".to_owned(), std::collections::BTreeSet::from([0])),
+                (
+                    "image".to_owned(),
+                    (0..u8::try_from(crate::global_leaf_run::MAX_GLOBAL_LEAF_LEVELS).unwrap())
+                        .collect(),
+                ),
+            ]),
+        )
+        .unwrap();
+        let before = full.clone();
+        assert!(full.reserve(&[partition], &["primary", "image"]).is_err());
+        assert_eq!(full, before);
+    }
+
+    #[test]
+    fn delete_only_level_reservation_succeeds_when_every_data_plane_is_full() {
+        let partition = DirectoryPartition::for_record_id(b"full-but-delete-only");
+        let authority = MaterializationLevelAuthority::new(
+            (0..u8::try_from(crate::row_bundle::MAX_ACTIVE_ROW_BUNDLE_LEVELS).unwrap()).collect(),
+            BTreeMap::from([(
+                partition,
+                (0..u8::try_from(crate::row_bundle::MAX_ACTIVE_DIRECTORY_LEVELS).unwrap())
+                    .collect(),
+            )]),
+            BTreeMap::from([(
+                "primary".to_owned(),
+                (0..u8::try_from(crate::global_leaf_run::MAX_GLOBAL_LEAF_LEVELS).unwrap())
+                    .collect(),
+            )]),
+        )
+        .unwrap();
+
+        let (plan, next) = authority.reserve(&[], &[]).unwrap();
+
+        assert_eq!(plan.row_level(), None);
+        assert_eq!(plan.dense_level("primary"), None);
+        assert_eq!(next, authority);
+    }
+
+    #[test]
+    fn pure_fold_never_substitutes_a_delta_root_for_the_published_generation_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(directory.path().to_str().unwrap()).unwrap();
+        let assignment = PositionedRouteAssignment::catalog([9; 32], 1).unwrap();
+        let build_delta = |record_id: &[u8], version: u64, cell_ordinal: u32, level: u8| {
+            let partition = DirectoryPartition::for_record_id(record_id);
+            let levels = MaterializationLevelReservation {
+                row_level: Some(level),
+                directory_levels: BTreeMap::from([(partition, level)]),
+                dense_levels: BTreeMap::new(),
+            };
+            build_row_bundle_delta(
+                &storage,
+                vec![MaterializedRow {
+                    modality: "primary".to_owned(),
+                    projection_kind: PositionedRouteProjectionKind::Primary,
+                    assignment: assignment.clone(),
+                    cell_ordinal: Some(cell_ordinal),
+                    record_id: record_id.to_vec(),
+                    projected_ordinal: 0,
+                    state: stamp(version),
+                    value: MaterializedRowValue::Dense(vec![version as f32, 1.0]),
+                }],
+                vec![MaterializedDirectoryState {
+                    record_id: record_id.to_vec(),
+                    routing_epoch: 1,
+                    cell_ordinal,
+                    state: stamp(version),
+                }],
+                &levels,
+            )
+            .unwrap()
+            .delta_root
+            .unwrap()
+        };
+        let published = build_delta(b"published", 1, 0, 0);
+        let delta = build_delta(b"delta", 2, 1, 1);
+
+        let folded = crate::positioned_materializer::fold_row_bundle_deltas_to_storage(
+            &storage,
+            Some(&published),
+            std::slice::from_ref(&delta),
+        )
+        .unwrap();
+
+        assert_ne!(folded.root.reference, delta);
+        assert_ne!(folded.root.reference, published);
+        let bytes = storage
+            .read_bytes_with_cache_status_and_checksum(
+                &folded.root.reference.path,
+                &folded.root.reference.checksum,
+            )
+            .unwrap()
+            .bytes;
+        let decoded = crate::row_bundle::decode_generation_root(
+            &folded.root.reference,
+            bytes::Bytes::from(bytes),
+        )
+        .unwrap();
+        assert_eq!(
+            decoded
+                .active_runs
+                .iter()
+                .map(|run| run.level)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
         );
     }
 
@@ -1229,7 +1818,15 @@ mod tests {
             },
         ];
 
-        let candidate = build_row_bundle_delta(&storage, rows, directory, 0).unwrap();
+        let levels = MaterializationLevelReservation {
+            row_level: Some(0),
+            directory_levels: directory
+                .iter()
+                .map(|row| (DirectoryPartition::for_record_id(&row.record_id), 0))
+                .collect(),
+            dense_levels: BTreeMap::new(),
+        };
+        let candidate = build_row_bundle_delta(&storage, rows, directory, &levels).unwrap();
 
         assert!(candidate.delta_root.is_some());
         let bundle = candidate

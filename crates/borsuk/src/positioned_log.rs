@@ -20,7 +20,10 @@ use crate::{
 pub const SOURCE_SHARD_COUNT: u8 = 64;
 pub(crate) const INITIAL_POSITIONED_SOURCE_EPOCH: u64 = 1;
 const MAX_COMMIT_SOURCE_RANGES: usize = SOURCE_SHARD_COUNT as usize * u64::BITS as usize;
-const POSITIONED_LOG_LAYOUT: u16 = 15;
+const POSITIONED_LOG_LAYOUT: u16 = 16;
+const MATERIALIZED_PREFIX_EMPTY_DOMAIN: &[u8] = b"borsuk.positioned.materialized-prefix.empty.v1\0";
+const MATERIALIZED_PREFIX_EXTEND_DOMAIN: &[u8] =
+    b"borsuk.positioned.materialized-prefix.extend.v1\0";
 /// Maximum authoritative bytes in one serialized JSON shard head.
 pub const MAX_SHARD_HEAD_BYTES: usize = 64 * 1024;
 /// Maximum unmaterialized envelope references retained by one shard.
@@ -39,6 +42,98 @@ pub const MAX_APPEND_ENCODED_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_APPEND_ROWS: u64 = 65_536;
 /// Maximum conditional-head publication attempts before reporting contention.
 pub const MAX_HEAD_CAS_ATTEMPTS: usize = 16;
+
+/// Exact authenticated progress through one positioned-source shard.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PositionedMaterializationWatermark {
+    sequence: u64,
+    prefix_digest: String,
+}
+
+impl PositionedMaterializationWatermark {
+    /// Return the fixed domain-separated identity of an empty source prefix.
+    pub fn empty() -> Self {
+        Self {
+            sequence: 0,
+            prefix_digest: blake3::hash(MATERIALIZED_PREFIX_EMPTY_DOMAIN)
+                .to_hex()
+                .to_string(),
+        }
+    }
+
+    /// Reconstitute and validate persisted positioned progress.
+    pub fn from_parts(sequence: u64, prefix_digest: String) -> Result<Self> {
+        let watermark = Self {
+            sequence,
+            prefix_digest,
+        };
+        watermark.validate()?;
+        Ok(watermark)
+    }
+
+    /// Highest source sequence included in this authenticated prefix.
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Rolling BLAKE3 digest of every included positioned envelope identity.
+    pub fn prefix_digest(&self) -> &str {
+        &self.prefix_digest
+    }
+
+    /// Extend this watermark with the next exact positioned envelope checksum.
+    pub fn advanced(
+        &self,
+        source_epoch: u64,
+        shard: u8,
+        sequence: u64,
+        envelope_checksum: &str,
+    ) -> Result<Self> {
+        self.validate()?;
+        validate_source_epoch_and_shard(source_epoch, shard)?;
+        validate_hex("positioned envelope checksum", envelope_checksum)?;
+        if self.sequence.checked_add(1) != Some(sequence) {
+            return invalid("positioned prefix watermark extension is not contiguous");
+        }
+        let prior = blake3::Hash::from_hex(&self.prefix_digest).map_err(|_| {
+            BorsukError::InvalidStorage(
+                "positioned prefix watermark contains an invalid digest".to_owned(),
+            )
+        })?;
+        let envelope = blake3::Hash::from_hex(envelope_checksum).map_err(|_| {
+            BorsukError::InvalidStorage(
+                "positioned envelope checksum is not a BLAKE3 digest".to_owned(),
+            )
+        })?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(MATERIALIZED_PREFIX_EXTEND_DOMAIN);
+        hasher.update(prior.as_bytes());
+        hasher.update(&source_epoch.to_le_bytes());
+        hasher.update(&[shard]);
+        hasher.update(&sequence.to_le_bytes());
+        hasher.update(envelope.as_bytes());
+        Ok(Self {
+            sequence,
+            prefix_digest: hasher.finalize().to_hex().to_string(),
+        })
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_hex("positioned materialized prefix digest", &self.prefix_digest)?;
+        let is_empty_digest = self.prefix_digest
+            == blake3::hash(MATERIALIZED_PREFIX_EMPTY_DOMAIN)
+                .to_hex()
+                .as_str();
+        if self.sequence == 0 && !is_empty_digest {
+            return invalid("positioned sequence-zero watermark has a nonempty prefix digest");
+        }
+        if self.sequence > 0 && is_empty_digest {
+            return invalid("positioned nonzero watermark has the fixed empty prefix digest");
+        }
+        Ok(())
+    }
+}
 
 /// A single durable commit source position.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -605,8 +700,8 @@ pub struct PositionedLogSnapshot {
     pub head_checksums: [String; SOURCE_SHARD_COUNT as usize],
     /// Durable sequence observed for every shard.
     pub durable_sequences: [u64; SOURCE_SHARD_COUNT as usize],
-    /// Materialized sequence observed for every shard.
-    pub materialized_sequences: [u64; SOURCE_SHARD_COUNT as usize],
+    /// Authenticated materialized prefix observed for every shard.
+    pub materialized_watermarks: [PositionedMaterializationWatermark; SOURCE_SHARD_COUNT as usize],
     /// Collection generation authorizing each materialized sequence.
     pub materialized_collection_generations: [u64; SOURCE_SHARD_COUNT as usize],
 }
@@ -632,6 +727,7 @@ struct PositionedShardHead {
     schema_fingerprint: String,
     durable_sequence: u64,
     materialized_sequence: u64,
+    materialized_prefix_digest: String,
     materialized_collection_generation: u64,
     evicted_recent_through_collection_generation: u64,
     pending_rows: u64,
@@ -651,6 +747,7 @@ impl PositionedShardHead {
             schema_fingerprint: schema_fingerprint.to_owned(),
             durable_sequence: 0,
             materialized_sequence: 0,
+            materialized_prefix_digest: PositionedMaterializationWatermark::empty().prefix_digest,
             materialized_collection_generation: 0,
             evicted_recent_through_collection_generation: 0,
             pending_rows: 0,
@@ -672,6 +769,10 @@ impl PositionedShardHead {
         if self.materialized_sequence > self.durable_sequence {
             return invalid("positioned shard materialized sequence exceeds durable sequence");
         }
+        PositionedMaterializationWatermark::from_parts(
+            self.materialized_sequence,
+            self.materialized_prefix_digest.clone(),
+        )?;
         if (self.materialized_sequence == 0) != (self.materialized_collection_generation == 0) {
             return invalid(
                 "positioned materialized collection generation must be zero exactly at sequence zero",
@@ -793,6 +894,91 @@ impl PositionedShardHead {
         }
         Ok(())
     }
+}
+
+fn checkpointed_head(
+    head: &PositionedShardHead,
+    target: &PositionedMaterializationWatermark,
+    collection_generation: u64,
+) -> Result<PositionedShardHead> {
+    head.validate(head.source_epoch, head.shard)?;
+    target.validate()?;
+    if target.sequence == 0 || collection_generation == 0 {
+        return invalid(
+            "positioned checkpoint sequence and collection generation must be positive",
+        );
+    }
+    if target.sequence <= head.materialized_sequence {
+        return invalid("positioned checkpoint does not advance the materialized prefix");
+    }
+    if target.sequence > head.durable_sequence {
+        return invalid("positioned checkpoint exceeds durable sequence");
+    }
+    if collection_generation <= head.materialized_collection_generation {
+        return invalid("positioned checkpoint collection generation must advance");
+    }
+
+    let split = head
+        .pending
+        .partition_point(|reference| reference.sequence <= target.sequence);
+    let completed = &head.pending[..split];
+    if completed.last().map(|reference| reference.sequence) != Some(target.sequence) {
+        return invalid("positioned checkpoint must end on a contiguous pending sequence");
+    }
+    let mut observed = PositionedMaterializationWatermark::from_parts(
+        head.materialized_sequence,
+        head.materialized_prefix_digest.clone(),
+    )?;
+    for reference in completed {
+        observed = observed.advanced(
+            head.source_epoch,
+            head.shard,
+            reference.sequence,
+            &reference.envelope_checksum,
+        )?;
+    }
+    if &observed != target {
+        return invalid(
+            "positioned checkpoint target prefix digest does not match pending authority",
+        );
+    }
+
+    let mut next = head.clone();
+    let completed = next.pending.drain(..split).collect::<Vec<_>>();
+    for mut reference in completed {
+        next.pending_rows = next
+            .pending_rows
+            .checked_sub(reference.rows)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("positioned checkpoint row total underflow".to_owned())
+            })?;
+        next.pending_bytes = next
+            .pending_bytes
+            .checked_sub(reference.encoded_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("positioned checkpoint byte total underflow".to_owned())
+            })?;
+        reference.materialized_collection_generation = collection_generation;
+        next.recent.push(reference);
+    }
+    if next.recent.len() > MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD {
+        let evict = next.recent.len() - MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD;
+        let evicted_through = next
+            .recent
+            .drain(..evict)
+            .map(|reference| reference.materialized_collection_generation)
+            .max()
+            .unwrap_or(next.evicted_recent_through_collection_generation);
+        next.evicted_recent_through_collection_generation = next
+            .evicted_recent_through_collection_generation
+            .max(evicted_through);
+    }
+    next.materialized_sequence = target.sequence;
+    next.materialized_prefix_digest
+        .clone_from(&target.prefix_digest);
+    next.materialized_collection_generation = collection_generation;
+    next.validate(next.source_epoch, next.shard)?;
+    Ok(next)
 }
 
 #[derive(Clone)]
@@ -1201,10 +1387,10 @@ impl PositionedLogWriter {
     pub fn checkpoint_materialized_through(
         &self,
         shard: u8,
-        sequence: u64,
+        target: &PositionedMaterializationWatermark,
         collection_generation: u64,
     ) -> Result<()> {
-        self.checkpoint_materialized_through_inner(shard, sequence, collection_generation, false)
+        self.checkpoint_materialized_through_inner(shard, target, collection_generation, false)
     }
 
     /// Repair a head only when its pinned materialized sequence is behind the
@@ -1214,30 +1400,42 @@ impl PositionedLogWriter {
     pub(crate) fn checkpoint_materialized_through_if_behind(
         &self,
         shard: u8,
-        sequence: u64,
+        target: &PositionedMaterializationWatermark,
         collection_generation: u64,
     ) -> Result<()> {
         validate_source_epoch_and_shard(self.source_epoch, shard)?;
+        target.validate()?;
         {
             let pinned = self.heads[usize::from(shard)]
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if pinned.head.materialized_sequence >= sequence {
+            if pinned.head.materialized_sequence > target.sequence {
+                // A later source repair is monotonic and already subsumes the
+                // caller's older published target.
+                return Ok(());
+            }
+            if pinned.head.materialized_sequence == target.sequence {
+                if pinned.head.materialized_prefix_digest != target.prefix_digest {
+                    return invalid(
+                        "positioned checkpoint target prefix digest conflicts with durable progress",
+                    );
+                }
                 return Ok(());
             }
         }
-        self.checkpoint_materialized_through_inner(shard, sequence, collection_generation, true)
+        self.checkpoint_materialized_through_inner(shard, target, collection_generation, true)
     }
 
     fn checkpoint_materialized_through_inner(
         &self,
         shard: u8,
-        sequence: u64,
+        target: &PositionedMaterializationWatermark,
         collection_generation: u64,
         tolerate_already_materialized: bool,
     ) -> Result<()> {
         validate_source_epoch_and_shard(self.source_epoch, shard)?;
-        if sequence == 0 || collection_generation == 0 {
+        target.validate()?;
+        if target.sequence == 0 || collection_generation == 0 {
             return invalid(
                 "positioned checkpoint sequence and collection generation must be positive",
             );
@@ -1257,8 +1455,20 @@ impl PositionedLogWriter {
             if pinned.head.schema_fingerprint != self.schema_fingerprint {
                 return invalid("positioned shard head schema fingerprint differs from its writer");
             }
-            if pinned.head.materialized_sequence >= sequence {
+            if pinned.head.materialized_sequence >= target.sequence {
+                if pinned.head.materialized_sequence == target.sequence
+                    && pinned.head.materialized_prefix_digest != target.prefix_digest
+                {
+                    return invalid(
+                        "positioned checkpoint target prefix digest conflicts with durable progress",
+                    );
+                }
                 if tolerate_already_materialized
+                    // A prior recovery may already have advanced this source
+                    // head beyond an older published generation. That is a
+                    // safe no-op: source authority is monotonic and must never
+                    // be rewound to the caller's older watermark.
+                    || pinned.head.materialized_sequence > target.sequence
                     || pinned.head.materialized_collection_generation >= collection_generation
                 {
                     return Ok(());
@@ -1267,54 +1477,7 @@ impl PositionedLogWriter {
                     "positioned checkpoint collection generation conflicts with durable progress",
                 );
             }
-            if sequence > pinned.head.durable_sequence {
-                return invalid("positioned checkpoint exceeds durable sequence");
-            }
-            if collection_generation <= pinned.head.materialized_collection_generation {
-                return invalid("positioned checkpoint collection generation must advance");
-            }
-            let mut next = pinned.head.clone();
-            let split = next
-                .pending
-                .partition_point(|reference| reference.sequence <= sequence);
-            let completed = next.pending.drain(..split).collect::<Vec<_>>();
-            if completed.last().map(|reference| reference.sequence) != Some(sequence) {
-                return invalid("positioned checkpoint must end on a contiguous pending sequence");
-            }
-            for mut reference in completed {
-                next.pending_rows =
-                    next.pending_rows
-                        .checked_sub(reference.rows)
-                        .ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "positioned checkpoint row total underflow".to_owned(),
-                            )
-                        })?;
-                next.pending_bytes = next
-                    .pending_bytes
-                    .checked_sub(reference.encoded_bytes)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "positioned checkpoint byte total underflow".to_owned(),
-                        )
-                    })?;
-                reference.materialized_collection_generation = collection_generation;
-                next.recent.push(reference);
-            }
-            if next.recent.len() > MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD {
-                let evict = next.recent.len() - MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD;
-                let evicted_through = next
-                    .recent
-                    .drain(..evict)
-                    .map(|reference| reference.materialized_collection_generation)
-                    .max()
-                    .unwrap_or(next.evicted_recent_through_collection_generation);
-                next.evicted_recent_through_collection_generation = next
-                    .evicted_recent_through_collection_generation
-                    .max(evicted_through);
-            }
-            next.materialized_sequence = sequence;
-            next.materialized_collection_generation = collection_generation;
+            let next = checkpointed_head(&pinned.head, target, collection_generation)?;
             let bytes = shard_head_bytes(&next)?;
             match self.storage.write_coordination_object(
                 &shard_head_path(shard),
@@ -1438,8 +1601,8 @@ impl PositionedLogReader {
             return Ok(None);
         }
         let durable_sequences = std::array::from_fn(|index| loaded[index].0.durable_sequence);
-        let materialized_sequences =
-            std::array::from_fn(|index| loaded[index].0.materialized_sequence);
+        let materialized_watermarks =
+            materialized_watermarks_from_heads(loaded.iter().map(|(head, _, _)| head))?;
         let materialized_collection_generations =
             std::array::from_fn(|index| loaded[index].0.materialized_collection_generation);
         if let Some(pinned_generation) = pinned_collection_generation {
@@ -1486,10 +1649,30 @@ impl PositionedLogReader {
             envelope_checksums,
             head_checksums,
             durable_sequences,
-            materialized_sequences,
+            materialized_watermarks,
             materialized_collection_generations,
         }))
     }
+}
+
+fn materialized_watermarks_from_heads<'a>(
+    heads: impl IntoIterator<Item = &'a PositionedShardHead>,
+) -> Result<[PositionedMaterializationWatermark; SOURCE_SHARD_COUNT as usize]> {
+    let watermarks = heads
+        .into_iter()
+        .map(|head| {
+            PositionedMaterializationWatermark::from_parts(
+                head.materialized_sequence,
+                head.materialized_prefix_digest.clone(),
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    watermarks.try_into().map_err(|watermarks: Vec<_>| {
+        BorsukError::InvalidStorage(format!(
+            "positioned snapshot requires exactly {SOURCE_SHARD_COUNT} materialized watermarks, got {}",
+            watermarks.len()
+        ))
+    })
 }
 
 struct PreparedPayload {
@@ -2078,6 +2261,16 @@ fn shard_head_from_bytes(
     if bytes.len() > MAX_SHARD_HEAD_BYTES {
         return invalid("positioned shard head exceeds its serialized hard bound");
     }
+    #[derive(Deserialize)]
+    struct PositionedHeadLayout {
+        layout: u16,
+    }
+    let layout = serde_json::from_slice::<PositionedHeadLayout>(bytes).map_err(|error| {
+        BorsukError::InvalidStorage(format!("failed to decode positioned shard head: {error}"))
+    })?;
+    if layout.layout != POSITIONED_LOG_LAYOUT {
+        return invalid("positioned shard head has an unsupported layout marker");
+    }
     let head = serde_json::from_slice::<PositionedShardHead>(bytes).map_err(|error| {
         BorsukError::InvalidStorage(format!("failed to decode positioned shard head: {error}"))
     })?;
@@ -2306,7 +2499,7 @@ mod tests {
         let head = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
         let mut bytes = shard_head_bytes(&head).unwrap();
         let json = std::str::from_utf8(&bytes).unwrap();
-        assert!(json.contains("\"layout\":15"), "{json}");
+        assert!(json.contains("\"layout\":16"), "{json}");
         assert!(
             json.contains(&format!("\"schema_fingerprint\":\"{}\"", "a".repeat(64))),
             "{json}"
@@ -2324,10 +2517,121 @@ mod tests {
         let bytes = shard_head_bytes(&head).unwrap();
         let old = std::str::from_utf8(&bytes)
             .unwrap()
-            .replace("\"layout\":15", "\"layout\":14")
+            .replace("\"layout\":16", "\"layout\":14")
             .into_bytes();
         let error = shard_head_from_bytes(&old, 7, 3).unwrap_err().to_string();
         assert!(error.contains("unsupported layout marker"), "{error}");
+    }
+
+    #[test]
+    fn positioned_head_rejects_v15_without_materialized_prefix_digest() {
+        let head = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&shard_head_bytes(&head).unwrap()).unwrap();
+        document["layout"] = serde_json::Value::from(15);
+        document
+            .as_object_mut()
+            .unwrap()
+            .remove("materialized_prefix_digest");
+        let old = serde_json::to_vec(&document).unwrap();
+
+        let error = shard_head_from_bytes(&old, 7, 3).unwrap_err().to_string();
+        assert!(error.contains("unsupported layout marker"), "{error}");
+    }
+
+    #[test]
+    fn materialized_prefix_digest_binds_ordered_envelope_identity() {
+        let empty = PositionedMaterializationWatermark::empty();
+        let expected_empty = blake3::hash(b"borsuk.positioned.materialized-prefix.empty.v1\0")
+            .to_hex()
+            .to_string();
+        assert_eq!(empty.sequence(), 0);
+        assert_eq!(empty.prefix_digest(), expected_empty);
+
+        let checksum = "c".repeat(64);
+        let first = empty.advanced(7, 3, 1, &checksum).unwrap();
+        let ordered = first.advanced(7, 3, 2, &"d".repeat(64)).unwrap();
+        let reordered = empty
+            .advanced(7, 3, 1, &"d".repeat(64))
+            .unwrap()
+            .advanced(7, 3, 2, &checksum)
+            .unwrap();
+        let other_shard = empty.advanced(7, 4, 1, &checksum).unwrap();
+        let other_envelope = empty.advanced(7, 3, 1, &"d".repeat(64)).unwrap();
+        assert_eq!(first.sequence(), 1);
+        assert_ne!(ordered.prefix_digest(), reordered.prefix_digest());
+        assert_ne!(first.prefix_digest(), other_shard.prefix_digest());
+        assert_ne!(first.prefix_digest(), other_envelope.prefix_digest());
+
+        let error = PositionedMaterializationWatermark::from_parts(
+            1,
+            PositionedMaterializationWatermark::empty()
+                .prefix_digest()
+                .to_owned(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("nonzero") && error.contains("empty"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn checkpoint_head_verifies_target_prefix_digest_before_draining() {
+        let mut head = PositionedShardHead::empty(7, 3, &"a".repeat(64)).unwrap();
+        for (sequence, digit) in [(1, 'c'), (2, 'd')] {
+            admit_pending(
+                &mut head,
+                PositionedCommitReference {
+                    transaction_digest: digit.to_string().repeat(64),
+                    request_digest: "e".repeat(64),
+                    envelope_checksum: digit.to_string().repeat(64),
+                    sequence,
+                    rows: 1,
+                    encoded_bytes: 1,
+                    materialized_collection_generation: 0,
+                },
+            )
+            .unwrap();
+        }
+        let target = PositionedMaterializationWatermark::empty()
+            .advanced(7, 3, 1, &"c".repeat(64))
+            .unwrap()
+            .advanced(7, 3, 2, &"d".repeat(64))
+            .unwrap();
+        let wrong = PositionedMaterializationWatermark::from_parts(2, "f".repeat(64)).unwrap();
+
+        let error = checkpointed_head(&head, &wrong, 9).unwrap_err().to_string();
+        assert!(error.contains("prefix digest"), "{error}");
+        assert_eq!(head.materialized_sequence, 0);
+        assert_eq!(head.pending.len(), 2);
+
+        let checkpointed = checkpointed_head(&head, &target, 9).unwrap();
+        assert_eq!(checkpointed.materialized_sequence, 2);
+        assert_eq!(
+            checkpointed.materialized_prefix_digest,
+            target.prefix_digest()
+        );
+        assert!(checkpointed.pending.is_empty());
+    }
+
+    #[test]
+    fn snapshot_watermark_reconstruction_returns_corruption_without_panicking() {
+        let mut heads = (0..SOURCE_SHARD_COUNT)
+            .map(|shard| PositionedShardHead::empty(7, shard, &"a".repeat(64)).unwrap())
+            .collect::<Vec<_>>();
+        heads[3].materialized_sequence = 1;
+        heads[3].durable_sequence = 1;
+
+        let error = materialized_watermarks_from_heads(heads.iter())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("nonzero") && error.contains("empty"),
+            "{error}"
+        );
     }
 
     #[test]

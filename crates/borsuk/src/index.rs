@@ -740,7 +740,7 @@ pub struct BorsukIndex {
     positioned_run_identities: BTreeSet<String>,
     /// Source positions already consumed by every modality in the pinned
     /// collection generation but not necessarily reclaimed from shard heads.
-    positioned_materialized_candidates: Vec<crate::CommitSourcePosition>,
+    positioned_materialized_candidates: Vec<FullyMaterializedPositionedCandidate>,
     positioned_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
     positioned_prepared_authority: Option<PositionedSnapshotAuthority>,
     positioned_prepared_envelopes: BTreeMap<String, PreparedPositionedEnvelope>,
@@ -1817,13 +1817,69 @@ struct PositionedSnapshotAuthority {
     primary_route: AuthenticatedPrimaryRouteAuthority,
 }
 
+/// One fully materialized source position and the exact immutable envelope
+/// identity authenticated while preparing it. Keeping these together makes
+/// collection-watermark rebases independent of the prepared-envelope cache.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct FullyMaterializedPositionedCandidate {
+    position: crate::CommitSourcePosition,
+    envelope_checksum: String,
+}
+
+impl FullyMaterializedPositionedCandidate {
+    fn new(position: crate::CommitSourcePosition, envelope_checksum: String) -> Result<Self> {
+        crate::CommitSourcePosition::new(position.source_epoch, position.shard, position.sequence)?;
+        if envelope_checksum.len() != 64 || blake3::Hash::from_hex(&envelope_checksum).is_err() {
+            return Err(BorsukError::InvalidStorage(
+                "fully materialized positioned candidate has an invalid envelope checksum"
+                    .to_owned(),
+            ));
+        }
+        Ok(Self {
+            position,
+            envelope_checksum,
+        })
+    }
+
+    fn validate(&self) -> Result<()> {
+        crate::CommitSourcePosition::new(
+            self.position.source_epoch,
+            self.position.shard,
+            self.position.sequence,
+        )?;
+        if self.envelope_checksum.len() != 64
+            || blake3::Hash::from_hex(&self.envelope_checksum).is_err()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "fully materialized positioned candidate has an invalid envelope checksum"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn fully_materialized_candidate_bytes(
+    candidates: &[FullyMaterializedPositionedCandidate],
+    capacity: usize,
+) -> usize {
+    capacity
+        .saturating_mul(std::mem::size_of::<FullyMaterializedPositionedCandidate>())
+        .saturating_add(
+            candidates
+                .iter()
+                .map(|candidate| candidate.envelope_checksum.capacity())
+                .fold(0_usize, usize::saturating_add),
+        )
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct PreparedPositionedEnvelope {
     primary: PreparedPositionedModalitySnapshot,
     named: BTreeMap<String, PreparedPositionedModalitySnapshot>,
     primary_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
-    fully_materialized_positions: Vec<crate::CommitSourcePosition>,
+    fully_materialized_candidates: Vec<FullyMaterializedPositionedCandidate>,
     primary_route_prefix: AuthenticatedPrimaryRoutePrefix,
     primary_dense_projection: PreparedPrimaryDenseProjection,
     route_projections: BTreeMap<String, AuthenticatedRouteProjection>,
@@ -1867,11 +1923,10 @@ impl PreparedPositionedEnvelope {
             )
             .saturating_add(named)
             .saturating_add(bm25)
-            .saturating_add(
-                self.fully_materialized_positions
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<crate::CommitSourcePosition>()),
-            )
+            .saturating_add(fully_materialized_candidate_bytes(
+                &self.fully_materialized_candidates,
+                self.fully_materialized_candidates.capacity(),
+            ))
             .saturating_add(2 * std::mem::size_of::<usize>())
             .saturating_add(std::mem::size_of_val(
                 self.primary_route_prefix.cell_ordinals.as_ref(),
@@ -1914,7 +1969,7 @@ struct PreparedPositionedSnapshot {
     primary: PreparedPositionedModalitySnapshot,
     named: BTreeMap<String, PreparedPositionedModalitySnapshot>,
     primary_bm25_deltas: BTreeMap<String, Bm25StatsDelta>,
-    fully_materialized_positions: Vec<crate::CommitSourcePosition>,
+    fully_materialized_candidates: Vec<FullyMaterializedPositionedCandidate>,
     authority: PositionedSnapshotAuthority,
     envelopes: BTreeMap<String, PreparedPositionedEnvelope>,
 }
@@ -1930,7 +1985,8 @@ impl PreparedPositionedSnapshot {
                 .map(PreparedPositionedModalitySnapshot::resident_bytes)
                 .fold(0_usize, usize::saturating_add),
             &self.primary_bm25_deltas,
-            &self.fully_materialized_positions,
+            &self.fully_materialized_candidates,
+            self.fully_materialized_candidates.capacity(),
         )
     }
 }
@@ -1941,7 +1997,8 @@ fn prepared_positioned_owned_bytes(
     primary_bytes: usize,
     named_bytes: usize,
     primary_bm25_deltas: &BTreeMap<String, Bm25StatsDelta>,
-    fully_materialized_positions: &[crate::CommitSourcePosition],
+    fully_materialized_candidates: &[FullyMaterializedPositionedCandidate],
+    fully_materialized_candidate_capacity: usize,
 ) -> u64 {
     let authority_bytes = authority.map_or(0, |authority| {
         let manifest_refs = authority
@@ -2001,11 +2058,10 @@ fn prepared_positioned_owned_bytes(
             .saturating_add(primary_bytes)
             .saturating_add(named_bytes)
             .saturating_add(bm25_bytes)
-            .saturating_add(
-                fully_materialized_positions
-                    .len()
-                    .saturating_mul(std::mem::size_of::<crate::CommitSourcePosition>()),
-            ),
+            .saturating_add(fully_materialized_candidate_bytes(
+                fully_materialized_candidates,
+                fully_materialized_candidate_capacity,
+            )),
     )
     .unwrap_or(u64::MAX)
 }
@@ -3796,8 +3852,9 @@ impl BorsukIndex {
                 schema_fingerprint: collection_schema_fingerprint(&index.manifest),
                 previous_snapshot_checksum: None,
                 positioned_source_epoch: POSITIONED_SOURCE_EPOCH,
-                positioned_materialized_sequences: [0; crate::positioned_log::SOURCE_SHARD_COUNT
-                    as usize],
+                positioned_materialized_watermarks: std::array::from_fn(|_| {
+                    crate::positioned_log::PositionedMaterializationWatermark::empty()
+                }),
                 modalities,
             };
             let positioned_log = PositionedLogWriter::create_from_storage(
@@ -6253,7 +6310,7 @@ impl BorsukIndex {
                 .map(|name| (name.clone(), PreparedPositionedModalitySnapshot::default()))
                 .collect(),
             primary_bm25_deltas: BTreeMap::new(),
-            fully_materialized_positions: Vec::new(),
+            fully_materialized_candidates: Vec::new(),
             authority,
             envelopes: BTreeMap::new(),
         };
@@ -6300,7 +6357,7 @@ impl BorsukIndex {
                     .map(|name| (name.clone(), PreparedPositionedModalitySnapshot::default()))
                     .collect(),
                 primary_bm25_deltas: BTreeMap::new(),
-                fully_materialized_positions: Vec::new(),
+                fully_materialized_candidates: Vec::new(),
                 primary_route_prefix,
                 primary_dense_projection: PreparedPrimaryDenseProjection {
                     position,
@@ -6668,9 +6725,12 @@ impl BorsukIndex {
                 }
             }
             if fully_materialized {
-                contribution
-                    .fully_materialized_positions
-                    .push(envelope.position);
+                contribution.fully_materialized_candidates.push(
+                    FullyMaterializedPositionedCandidate::new(
+                        envelope.position,
+                        descriptor_checksum.clone(),
+                    )?,
+                );
             }
             primary_tombstones.sort_unstable_by(|left, right| left.id.cmp(&right.id));
             contribution.primary_dense_projection.tombstones = Arc::from(primary_tombstones);
@@ -6717,8 +6777,8 @@ impl BorsukIndex {
             .primary_bm25_deltas
             .extend(contribution.primary_bm25_deltas.clone());
         prepared
-            .fully_materialized_positions
-            .extend(contribution.fully_materialized_positions.iter().copied());
+            .fully_materialized_candidates
+            .extend(contribution.fully_materialized_candidates.iter().cloned());
     }
 
     fn prepare_positioned_derived_state(
@@ -6802,7 +6862,7 @@ impl BorsukIndex {
             primary,
             named,
             primary_bm25_deltas,
-            fully_materialized_positions,
+            fully_materialized_candidates,
             authority,
             envelopes,
         } = prepared;
@@ -6810,7 +6870,7 @@ impl BorsukIndex {
         self.positioned_prepared_envelopes = envelopes;
         self.cell_wal_snapshot = primary.transactions;
         self.positioned_run_identities = primary.run_identities;
-        self.positioned_materialized_candidates = fully_materialized_positions;
+        self.positioned_materialized_candidates = fully_materialized_candidates;
         self.positioned_bm25_deltas = primary_bm25_deltas;
         self.manifest.cell_wal_visible_runs = cell_wal_run_count(&self.cell_wal_snapshot);
         self.manifest.cell_wal_visible_tombstone_runs =
@@ -7064,7 +7124,7 @@ impl BorsukIndex {
                 let candidates = self
                     .positioned_materialized_candidates
                     .iter()
-                    .copied()
+                    .cloned()
                     .collect::<BTreeSet<_>>();
                 if !candidates.is_empty() {
                     self.publish_positioned_materialization_watermarks(&candidates)?;
@@ -11669,7 +11729,7 @@ impl BorsukIndex {
             let positioned_candidates = self
                 .positioned_materialized_candidates
                 .iter()
-                .copied()
+                .cloned()
                 .collect::<BTreeSet<_>>();
             self.publish_positioned_materialization_watermarks(&positioned_candidates)?;
         }
@@ -11678,9 +11738,22 @@ impl BorsukIndex {
 
     fn publish_positioned_materialization_watermarks(
         &mut self,
-        candidates: &BTreeSet<crate::CommitSourcePosition>,
+        candidates: &BTreeSet<FullyMaterializedPositionedCandidate>,
     ) -> Result<()> {
         const MAX_WATERMARK_CAS_ATTEMPTS: usize = 128;
+        let mut checksum_by_position = BTreeMap::new();
+        for candidate in candidates {
+            candidate.validate()?;
+            if let Some(checksum) = checksum_by_position
+                .insert(candidate.position, candidate.envelope_checksum.as_str())
+                && checksum != candidate.envelope_checksum.as_str()
+            {
+                return Err(BorsukError::InvalidStorage(format!(
+                    "fully materialized positioned candidates contain conflicting envelope checksums for source position {:?}",
+                    candidate.position
+                )));
+            }
+        }
         let mut candidates = candidates.clone();
         for _ in 0..MAX_WATERMARK_CAS_ATTEMPTS {
             let current = self.collection_storage.load_collection_snapshot()?;
@@ -11700,11 +11773,12 @@ impl BorsukIndex {
                     )
                 })?;
             if current.checksum != pinned_checksum {
-                let candidates_already_authorized = candidates.iter().all(|position| {
-                    position.source_epoch == current.snapshot.positioned_source_epoch
-                        && current.snapshot.positioned_materialized_sequences
-                            [usize::from(position.shard)]
-                            >= position.sequence
+                let candidates_already_authorized = candidates.iter().all(|candidate| {
+                    candidate.position.source_epoch == current.snapshot.positioned_source_epoch
+                        && current.snapshot.positioned_materialized_watermarks
+                            [usize::from(candidate.position.shard)]
+                        .sequence()
+                            >= candidate.position.sequence
                 });
                 if candidates_already_authorized {
                     self.repair_positioned_heads_from_collection_snapshot(&current)?;
@@ -11716,10 +11790,11 @@ impl BorsukIndex {
                     } else {
                         self.refresh()?;
                     }
-                    self.positioned_materialized_candidates.retain(|position| {
-                        current.snapshot.positioned_materialized_sequences
-                            [usize::from(position.shard)]
-                            < position.sequence
+                    self.positioned_materialized_candidates.retain(|candidate| {
+                        current.snapshot.positioned_materialized_watermarks
+                            [usize::from(candidate.position.shard)]
+                        .sequence()
+                            < candidate.position.sequence
                     });
                     return Ok(());
                 }
@@ -11731,13 +11806,15 @@ impl BorsukIndex {
                     continue;
                 }
                 self.refresh()?;
-                candidates.retain(|position| {
+                candidates.retain(|candidate| {
                     self.collection_snapshot.as_ref().is_some_and(|collection| {
-                        collection.snapshot.positioned_source_epoch == position.source_epoch
-                            && collection.snapshot.positioned_materialized_sequences
-                                [usize::from(position.shard)]
-                                >= position.sequence
-                    }) || self.positioned_materialized_candidates.contains(position)
+                        collection.snapshot.positioned_source_epoch
+                            == candidate.position.source_epoch
+                            && collection.snapshot.positioned_materialized_watermarks
+                                [usize::from(candidate.position.shard)]
+                            .sequence()
+                                >= candidate.position.sequence
+                    }) || self.positioned_materialized_candidates.contains(candidate)
                 });
                 if candidates.is_empty() {
                     return Ok(());
@@ -11745,24 +11822,31 @@ impl BorsukIndex {
                 continue;
             }
 
-            let mut sequences = current.snapshot.positioned_materialized_sequences;
+            let mut watermarks = current.snapshot.positioned_materialized_watermarks.clone();
             for shard in 0..crate::positioned_log::SOURCE_SHARD_COUNT {
-                let slot = &mut sequences[usize::from(shard)];
-                let mut expected = slot.checked_add(1).ok_or_else(|| {
+                let slot = &mut watermarks[usize::from(shard)];
+                let mut expected = slot.sequence().checked_add(1).ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "collection positioned materialized sequence exceeds u64".to_string(),
                     )
                 })?;
-                for position in candidates.iter().filter(|position| {
-                    position.source_epoch == POSITIONED_SOURCE_EPOCH && position.shard == shard
+                for candidate in candidates.iter().filter(|candidate| {
+                    candidate.position.source_epoch == POSITIONED_SOURCE_EPOCH
+                        && candidate.position.shard == shard
                 }) {
+                    let position = candidate.position;
                     if position.sequence < expected {
                         continue;
                     }
                     if position.sequence != expected {
                         break;
                     }
-                    *slot = position.sequence;
+                    *slot = slot.advanced(
+                        POSITIONED_SOURCE_EPOCH,
+                        shard,
+                        position.sequence,
+                        &candidate.envelope_checksum,
+                    )?;
                     expected = expected.checked_add(1).ok_or_else(|| {
                         BorsukError::InvalidStorage(
                             "collection positioned materialized sequence exceeds u64".to_string(),
@@ -11770,7 +11854,7 @@ impl BorsukIndex {
                     })?;
                 }
             }
-            let loaded = if sequences == current.snapshot.positioned_materialized_sequences {
+            let loaded = if watermarks == current.snapshot.positioned_materialized_watermarks {
                 current
             } else {
                 let mut next = current.snapshot.clone();
@@ -11780,7 +11864,7 @@ impl BorsukIndex {
                     )
                 })?;
                 next.previous_snapshot_checksum = Some(current.checksum.clone());
-                next.positioned_materialized_sequences = sequences;
+                next.positioned_materialized_watermarks = watermarks;
                 match self
                     .collection_storage
                     .compare_and_swap_collection_snapshot_with_report(
@@ -11798,9 +11882,11 @@ impl BorsukIndex {
                 child.collection_snapshot = Some(loaded.clone());
             }
             self.repair_positioned_heads_from_collection_snapshot(&loaded)?;
-            self.positioned_materialized_candidates.retain(|position| {
-                loaded.snapshot.positioned_materialized_sequences[usize::from(position.shard)]
-                    < position.sequence
+            self.positioned_materialized_candidates.retain(|candidate| {
+                loaded.snapshot.positioned_materialized_watermarks
+                    [usize::from(candidate.position.shard)]
+                .sequence()
+                    < candidate.position.sequence
             });
             return Ok(());
         }
@@ -11823,15 +11909,14 @@ impl BorsukIndex {
         }
         collection
             .snapshot
-            .positioned_materialized_sequences
+            .positioned_materialized_watermarks
             .par_iter()
-            .copied()
             .enumerate()
-            .filter(|(_, sequence)| *sequence > 0)
-            .map(|(shard, sequence)| {
+            .filter(|(_, watermark)| watermark.sequence() > 0)
+            .map(|(shard, watermark)| {
                 writer.checkpoint_materialized_through_if_behind(
                     u8::try_from(shard).expect("fixed positioned shard index fits u8"),
-                    sequence,
+                    watermark,
                     collection.snapshot.generation,
                 )
             })
@@ -17728,6 +17813,7 @@ impl BorsukIndex {
         primary_codebook: &GlobalCodebookRef,
         named_codebooks: &BTreeMap<String, GlobalCodebookRef>,
         anchor: Option<&MaterializationChainAnchor>,
+        level_authority: &crate::positioned_candidate::MaterializationLevelAuthority,
     ) -> Result<MaterializationDeltaCandidate> {
         extension.validate_canonical()?;
         if extension.ranges().is_empty() {
@@ -17882,14 +17968,37 @@ impl BorsukIndex {
                     .flatten()
             })
             .collect::<Vec<_>>();
-        let pending_artifact_levels = if visible.is_empty() {
-            None
-        } else {
-            Some(match anchor {
-                Some(anchor) => anchor.pending_artifact_levels()?,
-                None => (0, 1),
+        let touched_partitions = visible
+            .iter()
+            .map(|projected| {
+                crate::row_bundle::DirectoryPartition::for_record_id(projected.record.id.as_bytes())
             })
-        };
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut touched_dense_modalities = Vec::new();
+        if !visible.is_empty() {
+            touched_dense_modalities.push(POSITIONED_PRIMARY_PROJECTION);
+        }
+        for (name, spec) in &self.manifest.config.named_vectors {
+            let touched = match spec.kind {
+                VectorKind::Dense => visible
+                    .iter()
+                    .any(|row| row.record.extra_vectors.contains_key(name)),
+                VectorKind::LateInteraction => visible.iter().any(|row| {
+                    row.record
+                        .extra_multi_vectors
+                        .get(name)
+                        .is_some_and(|matrix| matrix.token_count() > 0)
+                }),
+                VectorKind::Sparse => false,
+            };
+            if touched {
+                touched_dense_modalities.push(name.as_str());
+            }
+        }
+        let (level_reservation, next_level_authority) =
+            level_authority.reserve(&touched_partitions, &touched_dense_modalities)?;
         let fence_entries = newest
             .iter()
             .map(|(id, entry)| (id.clone(), entry.state))
@@ -17953,9 +18062,9 @@ impl BorsukIndex {
                     codebook_ref: primary_codebook,
                     assignment: &primary_authority.assignment,
                     carried: &[],
-                    target_level: pending_artifact_levels
-                        .expect("visible primary rows reserve one pending artifact level")
-                        .1,
+                    target_level: level_reservation
+                        .dense_level(POSITIONED_PRIMARY_PROJECTION)
+                        .expect("visible primary rows reserve one dense artifact level"),
                     rows: primary_dense_rows,
                 })?;
             roster.extend(emitted);
@@ -18022,9 +18131,9 @@ impl BorsukIndex {
                                 codebook_ref: &named_codebooks[name],
                                 assignment: &authority.assignment,
                                 carried: &[],
-                                target_level: pending_artifact_levels
-                                    .expect("visible named rows share one pending artifact level")
-                                    .1,
+                                target_level: level_reservation
+                                    .dense_level(name)
+                                    .expect("visible named rows reserve one dense artifact level"),
                                 rows: dense_rows,
                             })?;
                         roster.extend(emitted);
@@ -18155,9 +18264,9 @@ impl BorsukIndex {
                                 codebook_ref: &named_codebooks[name],
                                 assignment: &authority.assignment,
                                 carried: &[],
-                                target_level: pending_artifact_levels
-                                    .expect("visible late rows share one pending artifact level")
-                                    .1,
+                                target_level: level_reservation
+                                    .dense_level(name)
+                                    .expect("visible late rows reserve one dense artifact level"),
                                 rows: dense_rows,
                             })?;
                         roster.extend(emitted);
@@ -18245,7 +18354,7 @@ impl BorsukIndex {
             &self.storage,
             materialized_rows,
             directory.clone(),
-            pending_artifact_levels.map_or(0, |levels| levels.0),
+            &level_reservation,
         )?;
         roster.extend(row_bundle.roster);
         let mut bm25_delta = Bm25StatsDelta::default();
@@ -18258,6 +18367,8 @@ impl BorsukIndex {
         MaterializationDeltaCandidate::new(
             anchor,
             extension.clone(),
+            level_reservation,
+            next_level_authority,
             source_transfer,
             projections,
             row_bundle.delta_root,
@@ -23451,6 +23562,7 @@ impl BorsukIndex {
             named_bytes,
             &self.positioned_bm25_deltas,
             &self.positioned_materialized_candidates,
+            self.positioned_materialized_candidates.capacity(),
         )
     }
 
@@ -27538,10 +27650,46 @@ mod tests {
     use std::time::Duration;
 
     use crate::global_leaf_run::GlobalLeafArtifactRole;
+    use crate::positioned_candidate::MaterializationLevelAuthority;
     use chrono::Utc;
 
     use super::*;
     use std::sync::{Barrier, Mutex};
+
+    fn positioned_watermark_through(
+        index: &BorsukIndex,
+        shard: u8,
+        sequence: u64,
+    ) -> crate::positioned_log::PositionedMaterializationWatermark {
+        let snapshot = index
+            .positioned_log
+            .as_ref()
+            .unwrap()
+            .reader()
+            .snapshot()
+            .unwrap();
+        let mut watermark = crate::positioned_log::PositionedMaterializationWatermark::empty();
+        for (envelope, checksum) in snapshot
+            .transactions
+            .iter()
+            .zip(&snapshot.envelope_checksums)
+            .filter(|(envelope, _)| {
+                envelope.position.shard == shard && envelope.position.sequence <= sequence
+            })
+        {
+            watermark = watermark
+                .advanced(
+                    envelope.position.source_epoch,
+                    shard,
+                    envelope.position.sequence,
+                    checksum,
+                )
+                .unwrap();
+        }
+        assert_eq!(watermark.sequence(), sequence);
+        watermark
+    }
+
     fn build_finished_resident_global_v12_index() -> (tempfile::TempDir, BorsukIndex) {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -30138,7 +30286,7 @@ mod tests {
             .snapshot()
             .unwrap();
         assert_eq!(
-            current_source.materialized_sequences[usize::from(source_position.shard)],
+            current_source.materialized_watermarks[usize::from(source_position.shard)].sequence(),
             source_position.sequence,
             "a successful materialization must reclaim its bounded pending-head slot"
         );
@@ -30490,7 +30638,13 @@ mod tests {
         let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
 
         let delta = index
-            .build_unwired_all_modality_delta(&extension, &primary_codebook, &named_codebooks, None)
+            .build_unwired_all_modality_delta(
+                &extension,
+                &primary_codebook,
+                &named_codebooks,
+                None,
+                &MaterializationLevelAuthority::default(),
+            )
             .unwrap();
 
         assert_eq!(delta.extension_source_ranges(), &extension);
@@ -30530,6 +30684,7 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 None,
+                &MaterializationLevelAuthority::default(),
             )
             .unwrap();
         let anchor = first.chain_anchor();
@@ -30551,6 +30706,7 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 Some(anchor),
+                &MaterializationLevelAuthority::default(),
             )
             .unwrap();
 
@@ -30584,7 +30740,13 @@ mod tests {
         let (primary_codebook, named_codebooks) = all_modality_test_codebooks(&index);
 
         let delta = index
-            .build_unwired_all_modality_delta(&extension, &primary_codebook, &named_codebooks, None)
+            .build_unwired_all_modality_delta(
+                &extension,
+                &primary_codebook,
+                &named_codebooks,
+                None,
+                &MaterializationLevelAuthority::default(),
+            )
             .unwrap();
 
         assert_eq!(delta.extension_source_ranges(), &extension);
@@ -30624,6 +30786,7 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 None,
+                &MaterializationLevelAuthority::default(),
             )
             .unwrap();
         let first_anchor = first.chain_anchor().clone();
@@ -30648,6 +30811,7 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 Some(&first_anchor),
+                &MaterializationLevelAuthority::default(),
             )
             .unwrap();
         assert!(second.row_bundle_delta_root().is_none());
@@ -30695,13 +30859,24 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 None,
+                &MaterializationLevelAuthority::default(),
             )
             .unwrap();
 
+        let first_partition = crate::row_bundle::DirectoryPartition::for_record_id(b"first-row");
+        let second_id = (0_u64..)
+            .map(|ordinal| format!("second-row-{ordinal}"))
+            .find(|id| {
+                crate::row_bundle::DirectoryPartition::for_record_id(id.as_bytes())
+                    == first_partition
+            })
+            .unwrap();
         append(
             &mut index,
             &transaction_ids[1],
-            all_modality_record("second-row", 2.0),
+            // Both distinct entities touch the same directory partition, so
+            // this proves the pending partition-level authority advances too.
+            all_modality_record(&second_id, 2.0),
         );
         index.reload_positioned_snapshot().unwrap();
         let second_position = index
@@ -30719,6 +30894,7 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 Some(first.chain_anchor()),
+                first.level_authority(),
             )
             .unwrap();
 
@@ -30928,6 +31104,7 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 None,
+                &MaterializationLevelAuthority::default(),
             )
             .unwrap();
         let anchor = first.chain_anchor().clone();
@@ -30961,6 +31138,7 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 Some(&anchor),
+                &MaterializationLevelAuthority::default(),
             )
             .unwrap();
         let second_b = index
@@ -30969,6 +31147,7 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 Some(&anchor),
+                &MaterializationLevelAuthority::default(),
             )
             .unwrap();
         assert_eq!(second_a.new_roster(), second_b.new_roster());
@@ -30984,6 +31163,7 @@ mod tests {
                 &primary_codebook,
                 &named_codebooks,
                 Some(&anchor),
+                &MaterializationLevelAuthority::default(),
             )
             .unwrap_err()
             .to_string();
@@ -31808,12 +31988,13 @@ mod tests {
             .unwrap();
         let position = report.positioned_position.unwrap();
         index.flush_wal().unwrap();
+        let watermark = positioned_watermark_through(&index, position.shard, position.sequence);
 
         let current = index.collection_storage.load_collection_snapshot().unwrap();
         let mut next = current.snapshot.clone();
         next.generation += 1;
         next.previous_snapshot_checksum = Some(current.checksum.clone());
-        next.positioned_materialized_sequences[usize::from(position.shard)] = position.sequence;
+        next.positioned_materialized_watermarks[usize::from(position.shard)] = watermark;
         index
             .collection_storage
             .compare_and_swap_collection_snapshot_with_report(
@@ -31837,7 +32018,7 @@ mod tests {
             .snapshot()
             .unwrap();
         assert_eq!(
-            before_repair.materialized_sequences[usize::from(position.shard)],
+            before_repair.materialized_watermarks[usize::from(position.shard)].sequence(),
             0,
             "open must remain read-only even when checkpoint cleanup is pending"
         );
@@ -31851,7 +32032,7 @@ mod tests {
             .snapshot()
             .unwrap();
         assert_eq!(
-            source.materialized_sequences[usize::from(position.shard)],
+            source.materialized_watermarks[usize::from(position.shard)].sequence(),
             position.sequence
         );
         assert!(source.transactions.is_empty());
@@ -31910,6 +32091,7 @@ mod tests {
             .max()
             .unwrap();
         index.flush_wal().unwrap();
+        let watermark = positioned_watermark_through(&index, 0, materialized_through);
 
         // Simulate a crash after the collection authority published the
         // materialized prefix but before this process checkpointed shard 0.
@@ -31917,7 +32099,7 @@ mod tests {
         let mut next = current.snapshot.clone();
         next.generation += 1;
         next.previous_snapshot_checksum = Some(current.checksum.clone());
-        next.positioned_materialized_sequences[0] = materialized_through;
+        next.positioned_materialized_watermarks[0] = watermark;
         index
             .collection_storage
             .compare_and_swap_collection_snapshot_with_report(
@@ -31968,7 +32150,8 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .snapshot
-                .positioned_materialized_sequences[usize::from(position.shard)],
+                .positioned_materialized_watermarks[usize::from(position.shard)]
+            .sequence(),
             0
         );
         drop(index);
@@ -31980,7 +32163,8 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .snapshot
-                .positioned_materialized_sequences[usize::from(position.shard)],
+                .positioned_materialized_watermarks[usize::from(position.shard)]
+            .sequence(),
             0,
             "open must not mutate collection authority"
         );
@@ -31995,7 +32179,8 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .snapshot
-                .positioned_materialized_sequences[usize::from(position.shard)],
+                .positioned_materialized_watermarks[usize::from(position.shard)]
+            .sequence(),
             position.sequence
         );
     }
@@ -32048,13 +32233,83 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .snapshot
-                .positioned_materialized_sequences[usize::from(position.shard)],
+                .positioned_materialized_watermarks[usize::from(position.shard)]
+            .sequence(),
             position.sequence
         );
     }
 
     #[test]
-    fn disjoint_stale_watermark_publishers_converge() {
+    fn checkpoint_recovery_tolerates_a_source_head_already_ahead_of_the_published_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let transaction_ids = (0_u64..)
+            .map(|ordinal| format!("ahead-checkpoint-{ordinal}"))
+            .filter(|transaction_id| {
+                blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                    .is_multiple_of(crate::positioned_log::SOURCE_SHARD_COUNT)
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+        let mut positions = Vec::new();
+        for (ordinal, transaction_id) in transaction_ids.iter().enumerate() {
+            index.begin_collection_transaction().unwrap();
+            index.active_collection_transaction.as_mut().unwrap().id = transaction_id.clone();
+            let result = index.add_collection_records(vec![VectorRecord::new(
+                format!("ahead-row-{ordinal}"),
+                vec![ordinal as f32, 0.0],
+            )]);
+            index.finish_collection_transaction(result).unwrap();
+            positions.push(
+                index
+                    .cell_wal_snapshot
+                    .iter()
+                    .find(|transaction| transaction.transaction_id == *transaction_id)
+                    .unwrap()
+                    .source_position
+                    .unwrap(),
+            );
+        }
+        let first_target = positioned_watermark_through(&index, 0, positions[0].sequence);
+        let second_target = positioned_watermark_through(&index, 0, positions[1].sequence);
+        let writer = index.positioned_log.as_ref().unwrap();
+        writer
+            .checkpoint_materialized_through(0, &second_target, 9)
+            .unwrap();
+
+        writer
+            .checkpoint_materialized_through_if_behind(0, &first_target, 8)
+            .unwrap();
+
+        let wrong_same_sequence =
+            crate::positioned_log::PositionedMaterializationWatermark::from_parts(
+                second_target.sequence(),
+                "f".repeat(64),
+            )
+            .unwrap();
+        let error = writer
+            .checkpoint_materialized_through_if_behind(0, &wrong_same_sequence, 9)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("prefix digest"), "{error}");
+
+        assert_eq!(
+            writer.reader().snapshot().unwrap().materialized_watermarks[0],
+            second_target
+        );
+    }
+
+    #[test]
+    fn disjoint_stale_watermark_publishers_rebase_from_candidate_checksums_without_side_lookup() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut seed = BorsukIndex::create(IndexConfig {
@@ -32101,34 +32356,84 @@ mod tests {
 
         let mut first = BorsukIndex::open(&uri).unwrap();
         let mut second = BorsukIndex::open(&uri).unwrap();
-        assert!(
-            positions
+        let candidate_for = |index: &BorsukIndex, position: crate::CommitSourcePosition| {
+            index
+                .positioned_materialized_candidates
                 .iter()
-                .all(|position| first.positioned_materialized_candidates.contains(position))
-        );
-        assert!(
-            positions
-                .iter()
-                .all(|position| second.positioned_materialized_candidates.contains(position))
-        );
+                .find(|candidate| candidate.position == position)
+                .cloned()
+                .unwrap()
+        };
+        let first_candidate = candidate_for(&first, positions[0]);
+        let second_candidate = candidate_for(&second, positions[1]);
+        assert_eq!(first_candidate.envelope_checksum.len(), 64);
+        assert_eq!(second_candidate.envelope_checksum.len(), 64);
+
+        // Candidate identity is self-contained. A same-schema collection-CAS
+        // rebase must not rescan the retained prepared-envelope side cache.
+        first.positioned_prepared_envelopes.clear();
+        second.positioned_prepared_envelopes.clear();
 
         first
-            .publish_positioned_materialization_watermarks(&BTreeSet::from([positions[0]]))
+            .publish_positioned_materialization_watermarks(&BTreeSet::from([first_candidate]))
             .unwrap();
         second
-            .publish_positioned_materialization_watermarks(&BTreeSet::from([positions[1]]))
+            .publish_positioned_materialization_watermarks(&BTreeSet::from([second_candidate]))
             .unwrap();
 
         let reopened = BorsukIndex::open(&uri).unwrap();
-        let materialized = reopened
+        let materialized = &reopened
             .collection_snapshot
             .as_ref()
             .unwrap()
             .snapshot
-            .positioned_materialized_sequences;
+            .positioned_materialized_watermarks;
         for position in positions {
-            assert_eq!(materialized[usize::from(position.shard)], position.sequence);
+            assert_eq!(
+                materialized[usize::from(position.shard)].sequence(),
+                position.sequence
+            );
         }
+    }
+
+    #[test]
+    fn conflicting_candidate_checksums_for_one_position_fail_before_collection_mutation() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let before = index.collection_snapshot.as_ref().unwrap().checksum.clone();
+        let position = crate::CommitSourcePosition::new(POSITIONED_SOURCE_EPOCH, 0, 1).unwrap();
+        let candidates = BTreeSet::from([
+            FullyMaterializedPositionedCandidate::new(position, "a".repeat(64)).unwrap(),
+            FullyMaterializedPositionedCandidate::new(position, "b".repeat(64)).unwrap(),
+        ]);
+
+        let error = index
+            .publish_positioned_materialization_watermarks(&candidates)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("conflicting") && error.contains("checksum"),
+            "{error}"
+        );
+        assert_eq!(
+            index
+                .collection_storage
+                .load_collection_snapshot()
+                .unwrap()
+                .checksum,
+            before
+        );
+        assert_eq!(index.collection_snapshot.as_ref().unwrap().checksum, before);
     }
 
     #[test]
@@ -32170,7 +32475,7 @@ mod tests {
             .snapshot()
             .unwrap();
         assert_eq!(
-            source.materialized_sequences[usize::from(position.shard)],
+            source.materialized_watermarks[usize::from(position.shard)].sequence(),
             position.sequence
         );
         drop(index);
@@ -32244,7 +32549,8 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .snapshot
-                .positioned_materialized_sequences[usize::from(position.shard)],
+                .positioned_materialized_watermarks[usize::from(position.shard)]
+            .sequence(),
             position.sequence
         );
     }
@@ -32302,14 +32608,25 @@ mod tests {
         index
             .flush_wal_transactions(&BTreeSet::from([later.transaction_id.clone()]))
             .unwrap();
+        // This private selective-flush seam intentionally does not rebuild the
+        // installed positioned snapshot. Carry the authenticated envelope
+        // identity captured before the flush, just as the materializer does,
+        // so this test isolates the same-shard gap rule rather than snapshot
+        // refresh behavior.
+        let later_candidate = FullyMaterializedPositionedCandidate::new(
+            later.source_position.unwrap(),
+            later.descriptor_checksum.clone(),
+        )
+        .unwrap();
         index
-            .publish_positioned_materialization_watermarks(&BTreeSet::from([later
-                .source_position
-                .unwrap()]))
+            .publish_positioned_materialization_watermarks(&BTreeSet::from([later_candidate]))
             .unwrap();
 
         let collection = index.collection_snapshot.as_ref().unwrap();
-        assert_eq!(collection.snapshot.positioned_materialized_sequences[0], 0);
+        assert_eq!(
+            collection.snapshot.positioned_materialized_watermarks[0].sequence(),
+            0
+        );
         let source = index
             .positioned_log
             .as_ref()
@@ -32317,7 +32634,7 @@ mod tests {
             .reader()
             .snapshot()
             .unwrap();
-        assert_eq!(source.materialized_sequences[0], 0);
+        assert_eq!(source.materialized_watermarks[0].sequence(), 0);
         assert_eq!(source.transactions.len(), 2);
     }
 

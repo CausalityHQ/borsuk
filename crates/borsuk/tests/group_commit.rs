@@ -490,11 +490,11 @@ fn sixty_five_id_partitions_stay_in_one_bounded_positioned_transaction() {
 }
 
 #[test]
-fn sixty_five_named_modalities_and_tombstones_stay_bounded_and_reopen() {
+fn sixty_three_named_modalities_and_tombstones_stay_bounded_and_reopen() {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let uri = "memory:///positioned-sixty-five-modalities";
+    let uri = "memory:///positioned-sixty-three-named-modalities";
     let mut collection = config(uri);
-    for ordinal in 0..65 {
+    for ordinal in 0..63 {
         collection.named_vectors.insert(
             format!("named-{ordinal:02}"),
             VectorSpec {
@@ -507,7 +507,7 @@ fn sixty_five_named_modalities_and_tombstones_stay_bounded_and_reopen() {
     }
     let record = |value: f32| {
         let mut record = VectorRecord::new("entity", vec![value, 0.0]);
-        for ordinal in 0..65 {
+        for ordinal in 0..63 {
             record = record
                 .with_named_vector(format!("named-{ordinal:02}"), vec![value, ordinal as f32]);
         }

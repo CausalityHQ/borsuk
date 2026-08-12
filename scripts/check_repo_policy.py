@@ -1900,7 +1900,7 @@ def main() -> None:
         ],
         "crates/borsuk/tests/s3_compatible.rs": [
             "assert_s3_compatible_standard_layout",
-            "collection/CURRENT must be a checked binary pointer",
+            "collection/CURRENT must be a checked JSON pointer",
             "segment-summary routing tables must be Parquet objects",
             "only checked coordination JSON may accompany standard binary tables",
             "positioned visibility must have one checked head per source shard",

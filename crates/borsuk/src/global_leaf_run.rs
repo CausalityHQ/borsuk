@@ -873,7 +873,7 @@ impl GlobalAnnRef {
         validate_codebook(&self.codebook)?;
         self.coverage.validate_canonical()?;
 
-        let mut previous_level = None;
+        let mut previous_level = self.base.as_ref().map(|run| run.level);
         let mut union = SourceRangeSet::default();
         let mut saw_coverage_only_deletion = false;
         let mut storage_bytes = self.codebook.storage_bytes;
@@ -2444,6 +2444,22 @@ mod tests {
                 .to_string()
                 .contains("row total")
         );
+    }
+
+    #[test]
+    fn global_ann_rejects_an_incremental_run_at_the_base_level() {
+        let mut ann = valid_offline_ann_ref();
+        let mut incremental = valid_ann_ref().incremental_runs.remove(0);
+        incremental.codebook_checksum = ann.codebook.descriptor_checksum.clone();
+        ann.coverage = incremental.source_ranges.clone();
+        ann.appended_live_rows = incremental.rows;
+        ann.rows += incremental.rows;
+        ann.storage_bytes += incremental.encoded_bytes;
+        ann.resident_bytes += incremental.resident_bytes;
+        ann.incremental_runs.push(incremental);
+
+        let error = ann.validate().unwrap_err().to_string();
+        assert!(error.contains("duplicate V12 leaf-run level"), "{error}");
     }
 
     #[test]

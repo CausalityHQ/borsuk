@@ -328,11 +328,12 @@ fn assert_s3_compatible_standard_layout(uri: &str) {
         &runtime,
     );
     assert_eq!(current.len() as u64, current_size);
-    assert_eq!(&current[0..4], b"BCCP");
-    assert!(
-        !String::from_utf8_lossy(&current).contains("manifest-"),
-        "collection/CURRENT must be a checked binary pointer, not a text manifest path"
-    );
+    let document =
+        serde_json::from_slice::<LaneCoordinationDocument<CollectionCurrentDocument>>(&current)
+            .expect("collection/CURRENT must be a checked JSON pointer");
+    assert_eq!(document.schema_version, 1);
+    assert_eq!(document.object_role, "collection_current");
+    assert_lane_coordination_checksum("collection/CURRENT", &document);
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -342,6 +343,48 @@ struct LaneCoordinationDocument<T> {
     object_role: String,
     payload_checksum_blake3: String,
     payload: T,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CollectionCurrentDocument {
+    snapshot_path: String,
+    snapshot_checksum: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CollectionMaterializationWatermarkDocument {
+    sequence: u64,
+    prefix_digest: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CollectionManifestReferenceDocument {
+    modality: String,
+    prefix: String,
+    version: u64,
+    manifest_path: String,
+    manifest_checksum: String,
+    routing_path: String,
+    routing_checksum: String,
+    pivots_path: String,
+    pivots_checksum: String,
+    consumed_wal_frontier_checksum: String,
+    resident_bytes_estimate: u64,
+    resident_routing_bytes_estimate: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CollectionSnapshotDocument {
+    generation: u64,
+    schema_fingerprint: String,
+    previous_snapshot_checksum: Option<String>,
+    positioned_source_epoch: u64,
+    positioned_materialized_watermarks: Vec<CollectionMaterializationWatermarkDocument>,
+    modalities: Vec<CollectionManifestReferenceDocument>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -398,6 +441,7 @@ struct PositionedShardHeadDocument {
     schema_fingerprint: String,
     durable_sequence: u64,
     materialized_sequence: u64,
+    materialized_prefix_digest: String,
     materialized_collection_generation: u64,
     evicted_recent_through_collection_generation: u64,
     pending_rows: u64,
@@ -407,7 +451,9 @@ struct PositionedShardHeadDocument {
 }
 
 fn is_checked_json_coordination_path(path: &str) -> bool {
-    path == "lane-log/ACTIVE"
+    path == "collection/CURRENT"
+        || (path.starts_with("collection/snapshots/") && path.ends_with(".json"))
+        || path == "lane-log/ACTIVE"
         || (path.starts_with("lane-log/lanes/") && path.ends_with("/HEAD"))
         || (path.starts_with("positioned-log/heads/") && path.ends_with(".json"))
 }
@@ -419,9 +465,67 @@ fn assert_checked_json_coordination(
     size: u64,
     runtime: &tokio::runtime::Runtime,
 ) {
-    assert!(size <= 64 * 1024, "{path} exceeds its coordination bound");
+    let max_bytes = if path.starts_with("collection/snapshots/") {
+        256 * 1024
+    } else {
+        64 * 1024
+    };
+    assert!(size <= max_bytes, "{path} exceeds its coordination bound");
     let bytes = read_object_range(store, prefix, path, 0..size, runtime);
-    if path == "lane-log/ACTIVE" {
+    if path == "collection/CURRENT" {
+        let document =
+            serde_json::from_slice::<LaneCoordinationDocument<CollectionCurrentDocument>>(&bytes)
+                .unwrap_or_else(|error| panic!("{path} is not checked collection JSON: {error}"));
+        assert_eq!(document.schema_version, 1, "{path} schema marker");
+        assert_eq!(document.object_role, "collection_current", "{path} role");
+        assert_hex_checksum(
+            path,
+            "snapshot checksum",
+            &document.payload.snapshot_checksum,
+        );
+        assert_eq!(
+            document.payload.snapshot_path,
+            format!(
+                "collection/snapshots/{}.json",
+                document.payload.snapshot_checksum
+            ),
+            "{path} content-addressed snapshot authority"
+        );
+        assert_lane_coordination_checksum(path, &document);
+    } else if path.starts_with("collection/snapshots/") {
+        let path_checksum = path
+            .strip_prefix("collection/snapshots/")
+            .and_then(|suffix| suffix.strip_suffix(".json"))
+            .unwrap_or_else(|| panic!("invalid collection snapshot path: {path}"));
+        assert_hex_checksum(path, "path checksum", path_checksum);
+        assert_eq!(
+            path_checksum,
+            blake3::hash(&bytes).to_hex().as_str(),
+            "{path} content-addressed object checksum"
+        );
+        let document =
+            serde_json::from_slice::<LaneCoordinationDocument<CollectionSnapshotDocument>>(&bytes)
+                .unwrap_or_else(|error| panic!("{path} is not checked collection JSON: {error}"));
+        assert_eq!(document.schema_version, 1, "{path} schema marker");
+        assert_eq!(document.object_role, "collection_snapshot", "{path} role");
+        assert_eq!(
+            document.payload.positioned_materialized_watermarks.len(),
+            64,
+            "{path} positioned watermark count"
+        );
+        for watermark in &document.payload.positioned_materialized_watermarks {
+            assert_hex_checksum(path, "positioned prefix digest", &watermark.prefix_digest);
+            assert!(
+                watermark.sequence > 0
+                    || watermark.prefix_digest
+                        == blake3::hash(b"borsuk.positioned.materialized-prefix.empty.v1\0")
+                            .to_hex()
+                            .to_string(),
+                "{path} empty watermark digest"
+            );
+        }
+        assert_lane_coordination_checksum(path, &document);
+    } else if path == "lane-log/ACTIVE" {
         let document = serde_json::from_slice::<
             LaneCoordinationDocument<ActiveStripeDirectoryDocument>,
         >(&bytes)
@@ -453,10 +557,15 @@ fn assert_checked_json_coordination(
             .and_then(|suffix| suffix.strip_suffix(".json"))
             .and_then(|value| value.parse::<u8>().ok())
             .unwrap_or_else(|| panic!("invalid positioned shard-head path: {path}"));
-        assert_eq!(document.layout, 15, "{path} layout marker");
+        assert_eq!(document.layout, 16, "{path} layout marker");
         assert!(document.source_epoch > 0, "{path} source epoch");
         assert_eq!(document.shard, shard, "{path} shard authority");
         assert_hex_checksum(path, "schema fingerprint", &document.schema_fingerprint);
+        assert_hex_checksum(
+            path,
+            "materialized prefix digest",
+            &document.materialized_prefix_digest,
+        );
         assert!(
             document.materialized_sequence <= document.durable_sequence,
             "{path} materialized frontier"
@@ -552,11 +661,7 @@ fn assert_filter_index_envelope(
 }
 
 fn expected_magic(path: &str, role: PhysicalObjectRole) -> &'static [u8] {
-    if path == "collection/CURRENT" {
-        b"BCCP"
-    } else if path.starts_with("collection/snapshots/") {
-        b"BCSN"
-    } else if path.starts_with("collection/wal-frontier/") && path.ends_with("/HEAD") {
+    if path.starts_with("collection/wal-frontier/") && path.ends_with("/HEAD") {
         b"BCWH"
     } else if path.ends_with(".parquet") {
         b"PAR1"

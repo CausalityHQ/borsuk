@@ -1587,7 +1587,7 @@ impl Storage {
         let snapshot_bytes = collection_snapshot_bytes(snapshot)?;
         let checksum = blake3::hash(&snapshot_bytes).to_hex().to_string();
         let current_bytes = collection_current_bytes(&CollectionCurrent {
-            snapshot_path: format!("collection/snapshots/{checksum}.bin"),
+            snapshot_path: format!("collection/snapshots/{checksum}.json"),
             snapshot_checksum: checksum,
         })?;
         let loaded = self.publish_collection_snapshot(snapshot, Some(expected))?;
@@ -1602,7 +1602,7 @@ impl Storage {
     ) -> Result<LoadedCollectionSnapshot> {
         let snapshot_bytes = collection_snapshot_bytes(snapshot)?;
         let checksum = blake3::hash(&snapshot_bytes).to_hex().to_string();
-        let snapshot_path = format!("collection/snapshots/{checksum}.bin");
+        let snapshot_path = format!("collection/snapshots/{checksum}.json");
         self.write_bytes_content_addressed(&snapshot_path, &snapshot_bytes)?;
         let current = CollectionCurrent {
             snapshot_path,

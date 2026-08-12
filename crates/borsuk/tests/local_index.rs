@@ -26,6 +26,23 @@ use futures_util::TryStreamExt;
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path as ObjectPath};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CollectionCurrentPayload {
+    snapshot_path: String,
+    snapshot_checksum: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CheckedCollectionCurrent {
+    schema_version: u8,
+    object_role: String,
+    payload_checksum_blake3: String,
+    payload: CollectionCurrentPayload,
+}
 
 /// Open with routing summaries held resident in RAM. The library default is paged
 /// (minimal RAM); these helpers pin the resident path for tests that assert
@@ -2024,7 +2041,7 @@ fn open_options_reject_too_small_runtime_ram_budget() {
 }
 
 #[test]
-fn local_index_uses_binary_collection_current_and_parquet_tables() {
+fn local_index_uses_checked_json_collection_current_and_parquet_tables() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
@@ -2049,8 +2066,22 @@ fn local_index_uses_binary_collection_current_and_parquet_tables() {
     index.flush().unwrap();
 
     let current = fs::read(dir.path().join("collection/CURRENT")).unwrap();
-    assert_eq!(&current[0..4], b"BCCP");
-    assert!(!String::from_utf8_lossy(&current).contains("manifest-"));
+    let current: CheckedCollectionCurrent = serde_json::from_slice(&current).unwrap();
+    assert_eq!(current.schema_version, 1);
+    assert_eq!(current.object_role, "collection_current");
+    assert_eq!(
+        current.payload_checksum_blake3,
+        blake3::hash(&serde_json::to_vec(&current.payload).unwrap())
+            .to_hex()
+            .to_string()
+    );
+    assert_eq!(
+        current.payload.snapshot_path,
+        format!(
+            "collection/snapshots/{}.json",
+            current.payload.snapshot_checksum
+        )
+    );
     assert!(
         !dir.path().join("CURRENT").exists(),
         "the collection root is the only mutable publication pointer"

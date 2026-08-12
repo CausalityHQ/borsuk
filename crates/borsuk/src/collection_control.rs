@@ -1,14 +1,24 @@
 use std::collections::BTreeSet;
 
-use crate::{BorsukError, Result, manifest::Manifest, record::VectorKind};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+use crate::{
+    BorsukError, Result, manifest::Manifest, positioned_log::PositionedMaterializationWatermark,
+    record::VectorKind,
+};
 
 const COLLECTION_CODEC_VERSION: u8 = 4;
 const COLLECTION_CHECKSUM_LEN: usize = 32;
 const COLLECTION_HEADER_LEN: usize = 4 + 1 + 4;
-const COLLECTION_CURRENT_MAGIC: &[u8; 4] = b"BCCP";
-const COLLECTION_SNAPSHOT_MAGIC: &[u8; 4] = b"BCSN";
 const COLLECTION_WAL_FRONTIER_HEAD_MAGIC: &[u8; 4] = b"BCWH";
 const PENDING_COLLECTION_COMMIT_MAGIC: &[u8; 4] = b"BCPC";
+const COLLECTION_CONTROL_SCHEMA_VERSION: u8 = 1;
+const COLLECTION_CONTROL_MAX_BYTES: usize = 256 * 1024;
+const COLLECTION_MAX_MODALITIES: usize = 64;
+const COLLECTION_MAX_MODALITY_NAME_BYTES: usize = 128;
+const COLLECTION_MAX_RELATIVE_PATH_BYTES: usize = 512;
+const COLLECTION_CURRENT_ROLE: &str = "collection_current";
+const COLLECTION_SNAPSHOT_ROLE: &str = "collection_snapshot";
 
 pub(crate) const PRIMARY_MODALITY: &str = "@primary";
 pub(crate) const COLLECTION_CURRENT: &str = "collection/CURRENT";
@@ -16,13 +26,15 @@ pub(crate) const COLLECTION_WAL_FRONTIER_SHARDS: u8 = 64;
 /// Hard admission bound for one root shard. A stalled maintenance subsystem
 /// cannot make reader traversal grow without limit.
 pub(crate) const COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD: u32 = 64;
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CollectionCurrent {
     pub snapshot_path: String,
     pub snapshot_checksum: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CollectionManifestRef {
     pub modality: String,
     pub prefix: String,
@@ -40,13 +52,16 @@ pub(crate) struct CollectionManifestRef {
     pub resident_routing_bytes_estimate: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CollectionSnapshot {
     pub generation: u64,
     pub schema_fingerprint: String,
     pub previous_snapshot_checksum: Option<String>,
     pub positioned_source_epoch: u64,
-    pub positioned_materialized_sequences: [u64; COLLECTION_WAL_FRONTIER_SHARDS as usize],
+    #[serde(with = "positioned_materialization_watermarks_json")]
+    pub positioned_materialized_watermarks:
+        [PositionedMaterializationWatermark; COLLECTION_WAL_FRONTIER_SHARDS as usize],
     pub modalities: Vec<CollectionManifestRef>,
 }
 
@@ -89,72 +104,150 @@ pub(crate) struct CollectionWalFrontierHead {
 
 pub(crate) fn collection_current_bytes(current: &CollectionCurrent) -> Result<Vec<u8>> {
     validate_collection_current(current)?;
-    let mut writer = PackedCollectionWriter::new(COLLECTION_CURRENT_MAGIC);
-    writer.write_string(&current.snapshot_path, "snapshot path")?;
-    writer.write_string(&current.snapshot_checksum, "snapshot checksum")?;
-    writer.finish()
+    collection_control_json_bytes(COLLECTION_CURRENT_ROLE, current)
 }
 
 pub(crate) fn collection_current_from_slice(bytes: &[u8], path: &str) -> Result<CollectionCurrent> {
-    let mut reader = PackedCollectionReader::new(bytes, COLLECTION_CURRENT_MAGIC, path)?;
-    let current = CollectionCurrent {
-        snapshot_path: reader.read_string("snapshot path")?,
-        snapshot_checksum: reader.read_string("snapshot checksum")?,
-    };
-    reader.finish()?;
+    let current = collection_control_json_from_bytes(bytes, COLLECTION_CURRENT_ROLE, path)?;
     validate_collection_current(&current)?;
     Ok(current)
 }
 
 pub(crate) fn collection_snapshot_bytes(snapshot: &CollectionSnapshot) -> Result<Vec<u8>> {
     validate_collection_snapshot(snapshot)?;
-    let mut writer = PackedCollectionWriter::new(COLLECTION_SNAPSHOT_MAGIC);
-    writer.write_u64(snapshot.generation);
-    writer.write_string(&snapshot.schema_fingerprint, "schema fingerprint")?;
-    writer.write_optional_string(
-        snapshot.previous_snapshot_checksum.as_deref(),
-        "previous snapshot checksum",
-    )?;
-    writer.write_u64(snapshot.positioned_source_epoch);
-    for sequence in snapshot.positioned_materialized_sequences {
-        writer.write_u64(sequence);
+    let bytes = collection_control_json_bytes(COLLECTION_SNAPSHOT_ROLE, snapshot)?;
+    if snapshot.previous_snapshot_checksum.is_none() {
+        // Admission of a newly created collection must also prove that its
+        // first generation advance can add the fixed-width predecessor pin.
+        let mut advanced = snapshot.clone();
+        advanced.previous_snapshot_checksum = Some("0".repeat(64));
+        collection_control_json_bytes(COLLECTION_SNAPSHOT_ROLE, &advanced)?;
     }
-    writer.write_len(snapshot.modalities.len(), "snapshot modalities")?;
-    for reference in &snapshot.modalities {
-        write_manifest_ref(&mut writer, reference)?;
-    }
-    writer.finish()
+    Ok(bytes)
 }
 
 pub(crate) fn collection_snapshot_from_slice(
     bytes: &[u8],
     path: &str,
 ) -> Result<CollectionSnapshot> {
-    let mut reader = PackedCollectionReader::new(bytes, COLLECTION_SNAPSHOT_MAGIC, path)?;
-    let generation = reader.read_u64()?;
-    let schema_fingerprint = reader.read_string("schema fingerprint")?;
-    let previous_snapshot_checksum = reader.read_optional_string("previous snapshot checksum")?;
-    let positioned_source_epoch = reader.read_u64()?;
-    let mut positioned_materialized_sequences = [0_u64; COLLECTION_WAL_FRONTIER_SHARDS as usize];
-    for sequence in &mut positioned_materialized_sequences {
-        *sequence = reader.read_u64()?;
-    }
-    let modality_count = reader.read_len("snapshot modalities")?;
-    let mut modalities = Vec::with_capacity(modality_count.min(64));
-    for _ in 0..modality_count {
-        modalities.push(read_manifest_ref(&mut reader)?);
-    }
-    reader.finish()?;
-    let snapshot = CollectionSnapshot {
-        generation,
-        schema_fingerprint,
-        previous_snapshot_checksum,
-        positioned_source_epoch,
-        positioned_materialized_sequences,
-        modalities,
-    };
+    let snapshot = collection_control_json_from_bytes(bytes, COLLECTION_SNAPSHOT_ROLE, path)?;
     validate_collection_snapshot(&snapshot)?;
     Ok(snapshot)
+}
+
+#[derive(Serialize)]
+struct CollectionControlDocumentRef<'a, T> {
+    schema_version: u8,
+    object_role: &'static str,
+    payload_checksum_blake3: String,
+    payload: &'a T,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CollectionControlDocument<T> {
+    schema_version: u8,
+    object_role: String,
+    payload_checksum_blake3: String,
+    payload: T,
+}
+
+mod positioned_materialization_watermarks_json {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+
+    use crate::positioned_log::{PositionedMaterializationWatermark, SOURCE_SHARD_COUNT};
+
+    pub(super) fn serialize<S>(
+        watermarks: &[PositionedMaterializationWatermark; SOURCE_SHARD_COUNT as usize],
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        watermarks.as_slice().serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<
+        [PositionedMaterializationWatermark; SOURCE_SHARD_COUNT as usize],
+        D::Error,
+    >
+    where
+        D: Deserializer<'de>,
+    {
+        let values = Vec::<PositionedMaterializationWatermark>::deserialize(deserializer)?;
+        values.try_into().map_err(|values: Vec<_>| {
+            D::Error::custom(format!(
+                "expected exactly {SOURCE_SHARD_COUNT} positioned watermarks, got {}",
+                values.len()
+            ))
+        })
+    }
+}
+
+fn collection_control_json_bytes<T: Serialize>(role: &'static str, payload: &T) -> Result<Vec<u8>> {
+    let payload_bytes = serde_json::to_vec(payload).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "collection {role} payload cannot be encoded: {error}"
+        ))
+    })?;
+    let bytes = serde_json::to_vec(&CollectionControlDocumentRef {
+        schema_version: COLLECTION_CONTROL_SCHEMA_VERSION,
+        object_role: role,
+        payload_checksum_blake3: blake3::hash(&payload_bytes).to_hex().to_string(),
+        payload,
+    })
+    .map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "collection {role} document is not JSON-serializable: {error}"
+        ))
+    })?;
+    if bytes.len() > COLLECTION_CONTROL_MAX_BYTES {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection {role} JSON document exceeds {} bytes",
+            COLLECTION_CONTROL_MAX_BYTES
+        )));
+    }
+    Ok(bytes)
+}
+
+fn collection_control_json_from_bytes<T: DeserializeOwned + Serialize>(
+    bytes: &[u8],
+    expected_role: &'static str,
+    path: &str,
+) -> Result<T> {
+    if bytes.len() > COLLECTION_CONTROL_MAX_BYTES {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection {expected_role} JSON document `{path}` exceeds {} bytes",
+            COLLECTION_CONTROL_MAX_BYTES
+        )));
+    }
+    let document: CollectionControlDocument<T> =
+        serde_json::from_slice(bytes).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "invalid collection {expected_role} JSON document `{path}`: {error}"
+            ))
+        })?;
+    if document.schema_version != COLLECTION_CONTROL_SCHEMA_VERSION
+        || document.object_role != expected_role
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "unsupported collection {expected_role} JSON schema or object role"
+        )));
+    }
+    let payload_bytes = serde_json::to_vec(&document.payload).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "collection {expected_role} JSON payload cannot be encoded: {error}"
+        ))
+    })?;
+    let actual_checksum = blake3::hash(&payload_bytes).to_hex().to_string();
+    if document.payload_checksum_blake3 != actual_checksum {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection {expected_role} JSON payload checksum mismatch"
+        )));
+    }
+    Ok(document.payload)
 }
 
 fn write_collection_commit_fields(
@@ -388,6 +481,15 @@ fn validate_collection_snapshot(snapshot: &CollectionSnapshot) -> Result<()> {
     if let Some(checksum) = &snapshot.previous_snapshot_checksum {
         validate_checksum(checksum, "previous snapshot checksum")?;
     }
+    for watermark in &snapshot.positioned_materialized_watermarks {
+        watermark.validate()?;
+    }
+    if snapshot.modalities.len() > COLLECTION_MAX_MODALITIES {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection snapshot named modality count exceeds {}",
+            COLLECTION_MAX_MODALITIES - 1
+        )));
+    }
     validate_canonical_modalities(
         snapshot
             .modalities
@@ -404,7 +506,7 @@ fn validate_collection_snapshot(snapshot: &CollectionSnapshot) -> Result<()> {
 fn validate_collection_current(current: &CollectionCurrent) -> Result<()> {
     validate_checksum(&current.snapshot_checksum, "snapshot checksum")?;
     validate_relative_path(&current.snapshot_path, "snapshot path")?;
-    let expected_path = format!("collection/snapshots/{}.bin", current.snapshot_checksum);
+    let expected_path = format!("collection/snapshots/{}.json", current.snapshot_checksum);
     if current.snapshot_path != expected_path {
         return Err(BorsukError::InvalidStorage(format!(
             "collection snapshot path must be `{expected_path}`, got `{}`",
@@ -586,6 +688,11 @@ fn validate_modality_name(modality: &str) -> Result<()> {
     if modality == PRIMARY_MODALITY {
         return Ok(());
     }
+    if modality.len() > COLLECTION_MAX_MODALITY_NAME_BYTES {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection modality name exceeds {COLLECTION_MAX_MODALITY_NAME_BYTES} bytes"
+        )));
+    }
     if modality.is_empty()
         || !modality
             .bytes()
@@ -609,6 +716,11 @@ fn validate_modality_prefix(modality: &str, prefix: &str) -> Result<()> {
 }
 
 fn validate_relative_path(path: &str, label: &str) -> Result<()> {
+    if path.len() > COLLECTION_MAX_RELATIVE_PATH_BYTES {
+        return Err(BorsukError::InvalidStorage(format!(
+            "collection {label} exceeds {COLLECTION_MAX_RELATIVE_PATH_BYTES} bytes"
+        )));
+    }
     if path.is_empty()
         || path.starts_with('/')
         || path.ends_with('/')
@@ -651,45 +763,6 @@ fn validate_checksum(checksum: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_manifest_ref(
-    writer: &mut PackedCollectionWriter,
-    reference: &CollectionManifestRef,
-) -> Result<()> {
-    writer.write_string(&reference.modality, "modality")?;
-    writer.write_string(&reference.prefix, "modality prefix")?;
-    writer.write_u64(reference.version);
-    writer.write_string(&reference.manifest_path, "manifest path")?;
-    writer.write_string(&reference.manifest_checksum, "manifest checksum")?;
-    writer.write_string(&reference.routing_path, "routing path")?;
-    writer.write_string(&reference.routing_checksum, "routing checksum")?;
-    writer.write_string(&reference.pivots_path, "pivots path")?;
-    writer.write_string(&reference.pivots_checksum, "pivots checksum")?;
-    writer.write_string(
-        &reference.consumed_wal_frontier_checksum,
-        "consumed WAL frontier checksum",
-    )?;
-    writer.write_u64(reference.resident_bytes_estimate);
-    writer.write_u64(reference.resident_routing_bytes_estimate);
-    Ok(())
-}
-
-fn read_manifest_ref(reader: &mut PackedCollectionReader<'_>) -> Result<CollectionManifestRef> {
-    Ok(CollectionManifestRef {
-        modality: reader.read_string("modality")?,
-        prefix: reader.read_string("modality prefix")?,
-        version: reader.read_u64()?,
-        manifest_path: reader.read_string("manifest path")?,
-        manifest_checksum: reader.read_string("manifest checksum")?,
-        routing_path: reader.read_string("routing path")?,
-        routing_checksum: reader.read_string("routing checksum")?,
-        pivots_path: reader.read_string("pivots path")?,
-        pivots_checksum: reader.read_string("pivots checksum")?,
-        consumed_wal_frontier_checksum: reader.read_string("consumed WAL frontier checksum")?,
-        resident_bytes_estimate: reader.read_u64()?,
-        resident_routing_bytes_estimate: reader.read_u64()?,
-    })
-}
-
 fn write_descriptor_ref(
     writer: &mut PackedCollectionWriter,
     reference: &CollectionDescriptorRef,
@@ -722,10 +795,6 @@ impl PackedCollectionWriter {
         }
     }
 
-    fn write_u8(&mut self, value: u8) {
-        self.payload.push(value);
-    }
-
     fn write_u32(&mut self, value: u32) {
         self.payload.extend_from_slice(&value.to_le_bytes());
     }
@@ -749,19 +818,6 @@ impl PackedCollectionWriter {
         self.write_u32(length);
         self.payload.extend_from_slice(value.as_bytes());
         Ok(())
-    }
-
-    fn write_optional_string(&mut self, value: Option<&str>, label: &str) -> Result<()> {
-        match value {
-            Some(value) => {
-                self.write_u8(1);
-                self.write_string(value, label)
-            }
-            None => {
-                self.write_u8(0);
-                Ok(())
-            }
-        }
     }
 
     fn finish(self) -> Result<Vec<u8>> {
@@ -858,10 +914,6 @@ impl<'a> PackedCollectionReader<'a> {
         Ok(value)
     }
 
-    fn read_u8(&mut self) -> Result<u8> {
-        Ok(self.take(1)?[0])
-    }
-
     fn read_u32(&mut self) -> Result<u32> {
         Ok(u32::from_le_bytes(
             self.take(4)?
@@ -906,17 +958,6 @@ impl<'a> PackedCollectionReader<'a> {
         })
     }
 
-    fn read_optional_string(&mut self, label: &str) -> Result<Option<String>> {
-        match self.read_u8()? {
-            0 => Ok(None),
-            1 => self.read_string(label).map(Some),
-            value => Err(BorsukError::InvalidStorage(format!(
-                "collection optional {label} in `{}` has invalid tag {value}",
-                self.path
-            ))),
-        }
-    }
-
     fn finish(self) -> Result<()> {
         if self.cursor != self.payload.len() {
             return Err(BorsukError::InvalidStorage(format!(
@@ -959,7 +1000,9 @@ mod tests {
             schema_fingerprint: checksum('e'),
             previous_snapshot_checksum: Some(checksum('f')),
             positioned_source_epoch: 3,
-            positioned_materialized_sequences: std::array::from_fn(|index| index as u64),
+            positioned_materialized_watermarks: std::array::from_fn(|_| {
+                PositionedMaterializationWatermark::empty()
+            }),
             modalities: vec![
                 manifest_ref(PRIMARY_MODALITY, "", 3),
                 manifest_ref("dense", "vectors/dense/", 4),
@@ -989,11 +1032,71 @@ mod tests {
         }
     }
 
+    fn legacy_packed_control(magic: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(9 + payload.len() + 32);
+        bytes.extend_from_slice(magic);
+        bytes.push(4);
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(payload);
+        let checksum = blake3::hash(&bytes);
+        bytes.extend_from_slice(checksum.as_bytes());
+        bytes
+    }
+
+    fn legacy_write_string(payload: &mut Vec<u8>, value: &str) {
+        payload.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        payload.extend_from_slice(value.as_bytes());
+    }
+
+    fn legacy_manifest_ref(payload: &mut Vec<u8>, reference: &CollectionManifestRef) {
+        legacy_write_string(payload, &reference.modality);
+        legacy_write_string(payload, &reference.prefix);
+        payload.extend_from_slice(&reference.version.to_le_bytes());
+        legacy_write_string(payload, &reference.manifest_path);
+        legacy_write_string(payload, &reference.manifest_checksum);
+        legacy_write_string(payload, &reference.routing_path);
+        legacy_write_string(payload, &reference.routing_checksum);
+        legacy_write_string(payload, &reference.pivots_path);
+        legacy_write_string(payload, &reference.pivots_checksum);
+        legacy_write_string(payload, &reference.consumed_wal_frontier_checksum);
+        payload.extend_from_slice(&reference.resident_bytes_estimate.to_le_bytes());
+        payload.extend_from_slice(&reference.resident_routing_bytes_estimate.to_le_bytes());
+    }
+
+    fn legacy_packed_current(current: &CollectionCurrent) -> Vec<u8> {
+        let mut payload = Vec::new();
+        legacy_write_string(&mut payload, &current.snapshot_path);
+        legacy_write_string(&mut payload, &current.snapshot_checksum);
+        legacy_packed_control(b"BCCP", &payload)
+    }
+
+    fn legacy_packed_snapshot(snapshot: &CollectionSnapshot) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&snapshot.generation.to_le_bytes());
+        legacy_write_string(&mut payload, &snapshot.schema_fingerprint);
+        match &snapshot.previous_snapshot_checksum {
+            Some(checksum) => {
+                payload.push(1);
+                legacy_write_string(&mut payload, checksum);
+            }
+            None => payload.push(0),
+        }
+        payload.extend_from_slice(&snapshot.positioned_source_epoch.to_le_bytes());
+        for watermark in &snapshot.positioned_materialized_watermarks {
+            payload.extend_from_slice(&watermark.sequence().to_le_bytes());
+        }
+        payload.extend_from_slice(&(snapshot.modalities.len() as u32).to_le_bytes());
+        for reference in &snapshot.modalities {
+            legacy_manifest_ref(&mut payload, reference);
+        }
+        legacy_packed_control(b"BCSN", &payload)
+    }
+
     #[test]
     fn collection_current_round_trips_snapshot_reference() {
         let snapshot_checksum = checksum('a');
         let current = CollectionCurrent {
-            snapshot_path: format!("collection/snapshots/{snapshot_checksum}.bin"),
+            snapshot_path: format!("collection/snapshots/{snapshot_checksum}.json"),
             snapshot_checksum,
         };
         let bytes = collection_current_bytes(&current).unwrap();
@@ -1009,8 +1112,225 @@ mod tests {
         let snapshot = sample_snapshot();
         let bytes = collection_snapshot_bytes(&snapshot).unwrap();
         assert_eq!(
-            collection_snapshot_from_slice(&bytes, "collection/snapshots/test.bin").unwrap(),
+            collection_snapshot_from_slice(&bytes, "collection/snapshots/test.json").unwrap(),
             snapshot
+        );
+    }
+
+    fn assert_checked_json_document<T: DeserializeOwned + Serialize>(
+        role: &str,
+        bytes: &[u8],
+    ) -> Vec<u8> {
+        assert!(
+            bytes.len() <= COLLECTION_CONTROL_MAX_BYTES,
+            "{role} control is unbounded"
+        );
+        let typed: CollectionControlDocument<T> = serde_json::from_slice(bytes)
+            .unwrap_or_else(|error| panic!("{role} is not stock UTF-8 JSON: {error}"));
+        assert_eq!(typed.object_role, role);
+        assert_eq!(typed.schema_version, 1);
+        let payload = serde_json::to_vec(&typed.payload).unwrap();
+        assert_eq!(
+            typed.payload_checksum_blake3,
+            blake3::hash(&payload).to_hex().to_string()
+        );
+        let mut document: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(document["object_role"], role);
+        assert_eq!(document["schema_version"], 1);
+        document
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_owned(), serde_json::Value::Bool(true));
+        serde_json::to_vec(&document).unwrap()
+    }
+
+    #[test]
+    fn collection_current_is_a_checked_bounded_json_document() {
+        let bytes = collection_current_bytes(&CollectionCurrent {
+            snapshot_path: format!("collection/snapshots/{}.json", checksum('a')),
+            snapshot_checksum: checksum('a'),
+        })
+        .unwrap();
+        let unknown =
+            assert_checked_json_document::<CollectionCurrent>("collection_current", &bytes);
+        let error = collection_current_from_slice(&unknown, "collection/CURRENT").unwrap_err();
+        assert!(error.to_string().contains("JSON"), "{error}");
+    }
+
+    #[test]
+    fn collection_current_checksum_pins_direct_typed_payload_bytes() {
+        let current = CollectionCurrent {
+            snapshot_path: format!("collection/snapshots/{}.json", checksum('a')),
+            snapshot_checksum: checksum('a'),
+        };
+        let payload = format!(
+            "{{\"snapshot_path\":\"collection/snapshots/{}.json\",\"snapshot_checksum\":\"{}\"}}",
+            checksum('a'),
+            checksum('a')
+        );
+        let payload_checksum = blake3::hash(payload.as_bytes()).to_hex().to_string();
+        let expected = format!(
+            "{{\"schema_version\":1,\"object_role\":\"collection_current\",\"payload_checksum_blake3\":\"{payload_checksum}\",\"payload\":{payload}}}"
+        );
+
+        assert_eq!(
+            collection_current_bytes(&current).unwrap(),
+            expected.as_bytes()
+        );
+        assert_eq!(
+            collection_current_bytes(&current).unwrap(),
+            expected.as_bytes()
+        );
+    }
+
+    #[test]
+    fn collection_snapshot_is_a_checked_bounded_json_document() {
+        let bytes = collection_snapshot_bytes(&sample_snapshot()).unwrap();
+        let unknown =
+            assert_checked_json_document::<CollectionSnapshot>("collection_snapshot", &bytes);
+        let error =
+            collection_snapshot_from_slice(&unknown, "collection/snapshots/test.json").unwrap_err();
+        assert!(error.to_string().contains("JSON"), "{error}");
+    }
+
+    #[test]
+    fn collection_current_rejects_old_packed_control() {
+        let checksum = checksum('a');
+        let current = CollectionCurrent {
+            snapshot_path: format!("collection/snapshots/{checksum}.bin"),
+            snapshot_checksum: checksum,
+        };
+        let current_error =
+            collection_current_from_slice(&legacy_packed_current(&current), "collection/CURRENT")
+                .unwrap_err()
+                .to_string();
+        assert!(current_error.contains("JSON"), "{current_error}");
+    }
+
+    #[test]
+    fn collection_snapshot_rejects_old_packed_control() {
+        let snapshot_error = collection_snapshot_from_slice(
+            &legacy_packed_snapshot(&sample_snapshot()),
+            "collection/snapshots/legacy.bin",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(snapshot_error.contains("JSON"), "{snapshot_error}");
+    }
+
+    #[test]
+    fn snapshot_round_trip_binds_exact_sixty_four_shard_prefix_watermarks() {
+        let mut watermarks = std::array::from_fn(|_| {
+            crate::positioned_log::PositionedMaterializationWatermark::empty()
+        });
+        watermarks[3] = watermarks[3].advanced(3, 3, 1, &checksum('1')).unwrap();
+        let snapshot = CollectionSnapshot {
+            generation: 7,
+            schema_fingerprint: checksum('e'),
+            previous_snapshot_checksum: Some(checksum('f')),
+            positioned_source_epoch: 3,
+            positioned_materialized_watermarks: watermarks.clone(),
+            modalities: vec![manifest_ref(PRIMARY_MODALITY, "", 3)],
+        };
+
+        let bytes = collection_snapshot_bytes(&snapshot).unwrap();
+        let decoded =
+            collection_snapshot_from_slice(&bytes, "collection/snapshots/test.json").unwrap();
+        assert_eq!(decoded.positioned_materialized_watermarks, watermarks);
+        assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn collection_snapshot_limits_admit_sixty_four_modalities_and_future_previous_checksum() {
+        let mut snapshot = sample_snapshot();
+        snapshot.modalities = std::iter::once(manifest_ref(PRIMARY_MODALITY, "", 1))
+            .chain((0..63).map(|ordinal| {
+                let modality = format!("m{ordinal:03}");
+                let prefix = format!("vectors/{modality}/");
+                manifest_ref(&modality, &prefix, ordinal + 2)
+            }))
+            .collect();
+        snapshot.previous_snapshot_checksum = None;
+
+        let initial = collection_snapshot_bytes(&snapshot).unwrap();
+        assert!(initial.len() <= COLLECTION_CONTROL_MAX_BYTES);
+        snapshot.previous_snapshot_checksum = Some(checksum('f'));
+        let advanced = collection_snapshot_bytes(&snapshot).unwrap();
+        assert!(advanced.len() <= COLLECTION_CONTROL_MAX_BYTES);
+    }
+
+    #[test]
+    fn collection_snapshot_joint_worst_case_limits_fit_the_control_envelope() {
+        fn exact_path(prefix: &str, marker: char) -> String {
+            let suffix = ".parquet";
+            let fill = 512_usize.checked_sub(prefix.len() + suffix.len()).unwrap();
+            format!("{prefix}{}{suffix}", marker.to_string().repeat(fill))
+        }
+
+        let mut snapshot = sample_snapshot();
+        snapshot.modalities = std::iter::once(manifest_ref(PRIMARY_MODALITY, "", 1))
+            .chain((0..63).map(|ordinal| {
+                let stem = format!("m{ordinal:03}");
+                let modality = format!("{stem}{}", "n".repeat(128 - stem.len()));
+                let prefix = format!("vectors/{modality}/");
+                let mut reference = manifest_ref(&modality, &prefix, ordinal + 2);
+                reference.manifest_path = exact_path(&prefix, 'm');
+                reference.routing_path = exact_path(&prefix, 'r');
+                reference.pivots_path = exact_path(&prefix, 'p');
+                assert_eq!(modality.len(), 128);
+                assert_eq!(reference.manifest_path.len(), 512);
+                assert_eq!(reference.routing_path.len(), 512);
+                assert_eq!(reference.pivots_path.len(), 512);
+                reference
+            }))
+            .collect();
+        snapshot.previous_snapshot_checksum = Some(checksum('f'));
+
+        let bytes = collection_snapshot_bytes(&snapshot).unwrap();
+        assert!(
+            bytes.len() <= COLLECTION_CONTROL_MAX_BYTES,
+            "{} bytes",
+            bytes.len()
+        );
+    }
+
+    #[test]
+    fn collection_snapshot_rejects_modality_name_and_path_bound_violations_by_name() {
+        let mut too_many = sample_snapshot();
+        too_many.modalities = std::iter::once(manifest_ref(PRIMARY_MODALITY, "", 1))
+            .chain((0..64).map(|ordinal| {
+                let modality = format!("m{ordinal:03}");
+                let prefix = format!("vectors/{modality}/");
+                manifest_ref(&modality, &prefix, ordinal + 2)
+            }))
+            .collect();
+        let error = collection_snapshot_bytes(&too_many)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("named modality count"), "{error}");
+
+        let mut oversized_name = sample_snapshot();
+        let name = "n".repeat(129);
+        oversized_name.modalities = vec![
+            manifest_ref(PRIMARY_MODALITY, "", 1),
+            manifest_ref(&name, &format!("vectors/{name}/"), 2),
+        ];
+        let error = collection_snapshot_bytes(&oversized_name)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("modality name") && error.contains("128"),
+            "{error}"
+        );
+
+        let mut oversized_path = sample_snapshot();
+        oversized_path.modalities[0].manifest_path = format!("{}.parquet", "p".repeat(512));
+        let error = collection_snapshot_bytes(&oversized_path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("manifest path") && error.contains("512"),
+            "{error}"
         );
     }
 

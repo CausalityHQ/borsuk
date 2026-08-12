@@ -118,6 +118,46 @@ fn read(store: &Arc<dyn ObjectStore>, path: &str) -> Vec<u8> {
         .to_vec()
 }
 
+fn checkpoint_target(
+    writer: &PositionedLogWriter,
+    shard: u8,
+    target_sequence: u64,
+) -> borsuk::PositionedMaterializationWatermark {
+    let snapshot = writer.reader().snapshot().unwrap();
+    let mut watermark = snapshot.materialized_watermarks[usize::from(shard)].clone();
+    let prior_sequence = watermark.sequence();
+    for (envelope, checksum) in snapshot
+        .transactions
+        .iter()
+        .zip(&snapshot.envelope_checksums)
+        .filter(|(envelope, _)| {
+            envelope.position.shard == shard
+                && envelope.position.sequence <= target_sequence
+                && envelope.position.sequence > prior_sequence
+        })
+    {
+        watermark = watermark
+            .advanced(
+                envelope.position.source_epoch,
+                shard,
+                envelope.position.sequence,
+                checksum,
+            )
+            .unwrap();
+    }
+    watermark
+}
+
+fn checkpoint(
+    writer: &PositionedLogWriter,
+    shard: u8,
+    target_sequence: u64,
+    generation: u64,
+) -> borsuk::Result<()> {
+    let target = checkpoint_target(writer, shard, target_sequence);
+    writer.checkpoint_materialized_through(shard, &target, generation)
+}
+
 fn payload(role: impl Into<String>, hlc: u64) -> PositionedMutationPayloadInput {
     PositionedMutationPayloadInput {
         modality: PositionedMutationModality::PrimaryDense,
@@ -777,9 +817,13 @@ fn checkpoint_preserves_recent_idempotence_then_evicts_exactly_at_sixty_four() {
         if ordinal == 0 {
             first = Some(committed.clone());
         }
-        writer
-            .checkpoint_materialized_through(shard, committed.position.sequence, ordinal as u64 + 1)
-            .unwrap();
+        checkpoint(
+            &writer,
+            shard,
+            committed.position.sequence,
+            ordinal as u64 + 1,
+        )
+        .unwrap();
         if ordinal + 1 == MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD {
             let oldest = writer
                 .append(&ids[0], SCHEMA_FINGERPRINT, vec![payload("primary", 1)])
@@ -807,9 +851,7 @@ fn stale_cached_receipt_refreshes_after_external_recent_eviction() {
         .unwrap();
     let external =
         PositionedLogWriter::open("memory:///positioned-log", Arc::clone(&base), 7).unwrap();
-    external
-        .checkpoint_materialized_through(shard, first.position.sequence, 1)
-        .unwrap();
+    checkpoint(&external, shard, first.position.sequence, 1).unwrap();
     for (ordinal, transaction_id) in ids.iter().enumerate().skip(1) {
         let committed = external
             .append(
@@ -818,9 +860,13 @@ fn stale_cached_receipt_refreshes_after_external_recent_eviction() {
                 vec![payload("primary", ordinal as u64 + 1)],
             )
             .unwrap();
-        external
-            .checkpoint_materialized_through(shard, committed.position.sequence, ordinal as u64 + 1)
-            .unwrap();
+        checkpoint(
+            &external,
+            shard,
+            committed.position.sequence,
+            ordinal as u64 + 1,
+        )
+        .unwrap();
     }
 
     let reused = stale
@@ -855,9 +901,7 @@ fn stale_full_cache_refreshes_after_external_checkpoint() {
     }
     let external =
         PositionedLogWriter::open("memory:///positioned-log", Arc::clone(&base), 7).unwrap();
-    external
-        .checkpoint_materialized_through(shard, last.unwrap().position.sequence, 1)
-        .unwrap();
+    checkpoint(&external, shard, last.unwrap().position.sequence, 1).unwrap();
 
     let committed = stale
         .append(
@@ -885,9 +929,13 @@ fn checkpoint_refreshes_when_writer_opened_before_external_append() {
         )
         .unwrap();
 
-    stale
-        .checkpoint_materialized_through(committed.position.shard, committed.position.sequence, 1)
-        .unwrap();
+    checkpoint(
+        &stale,
+        committed.position.shard,
+        committed.position.sequence,
+        1,
+    )
+    .unwrap();
     assert!(stale.reader().snapshot().unwrap().transactions.is_empty());
 }
 
@@ -904,9 +952,11 @@ fn concurrent_checkpoint_generation_race_converges_on_one_materialized_prefix() 
         .unwrap();
     let shard = committed.position.shard;
     let sequence = committed.position.sequence;
+    let target = checkpoint_target(&initializer, shard, sequence);
     let barrier = Arc::new(Barrier::new(2));
     let threads = (0..2)
         .map(|_| {
+            let target = target.clone();
             let wrapped = common::FaultInjectingObjectStore::new(Arc::clone(&base))
                 .with_put_barrier(Arc::clone(&barrier), |operation, path| {
                     operation == common::StoreOperation::Put
@@ -915,7 +965,7 @@ fn concurrent_checkpoint_generation_race_converges_on_one_materialized_prefix() 
             let writer =
                 PositionedLogWriter::open("memory:///positioned-log", Arc::new(wrapped), 7)
                     .unwrap();
-            std::thread::spawn(move || writer.checkpoint_materialized_through(shard, sequence, 7))
+            std::thread::spawn(move || writer.checkpoint_materialized_through(shard, &target, 7))
         })
         .collect::<Vec<_>>();
     for thread in threads {
@@ -927,7 +977,7 @@ fn concurrent_checkpoint_generation_race_converges_on_one_materialized_prefix() 
         .snapshot()
         .unwrap();
     assert_eq!(
-        snapshot.materialized_sequences[usize::from(shard)],
+        snapshot.materialized_watermarks[usize::from(shard)].sequence(),
         sequence
     );
     assert_eq!(
@@ -960,9 +1010,9 @@ fn checkpoint_rebase_rejects_a_head_from_another_schema() {
     let (wrapped, operations) = wrapped.with_operation_log();
     let writer =
         PositionedLogWriter::open("memory:///positioned-log", Arc::new(wrapped), 7).unwrap();
-    let checkpoint = std::thread::spawn(move || {
-        writer.checkpoint_materialized_through(shard, committed.position.sequence, 1)
-    });
+    let target = checkpoint_target(&writer, shard, committed.position.sequence);
+    let checkpoint =
+        std::thread::spawn(move || writer.checkpoint_materialized_through(shard, &target, 1));
 
     while operations.count_matching(|operation, path| {
         operation == common::StoreOperation::Put && path.starts_with("positioned-log/heads/")
@@ -1486,6 +1536,7 @@ fn stale_epoch_and_sequence_overflow_fail_closed() {
     let mut head = serde_json::from_slice::<serde_json::Value>(&read(&base, &path)).unwrap();
     head["durable_sequence"] = u64::MAX.into();
     head["materialized_sequence"] = u64::MAX.into();
+    head["materialized_prefix_digest"] = "c".repeat(64).into();
     head["materialized_collection_generation"] = 1.into();
     head["evicted_recent_through_collection_generation"] = 1.into();
     head["recent"] = serde_json::Value::Array(
@@ -1551,28 +1602,30 @@ fn checkpoint_generation_must_advance_and_cannot_skip_durable_positions() {
             vec![payload("primary", 1)],
         )
         .unwrap();
+    let target = checkpoint_target(
+        &writer,
+        committed.position.shard,
+        committed.position.sequence,
+    );
+    let beyond = borsuk::PositionedMaterializationWatermark::from_parts(
+        committed.position.sequence + 1,
+        target.prefix_digest().to_owned(),
+    )
+    .unwrap();
     assert!(
         writer
-            .checkpoint_materialized_through(
-                committed.position.shard,
-                committed.position.sequence + 1,
-                1,
-            )
+            .checkpoint_materialized_through(committed.position.shard, &beyond, 1,)
             .is_err()
     );
     writer
-        .checkpoint_materialized_through(committed.position.shard, committed.position.sequence, 2)
+        .checkpoint_materialized_through(committed.position.shard, &target, 2)
         .unwrap();
     writer
-        .checkpoint_materialized_through(committed.position.shard, committed.position.sequence, 2)
+        .checkpoint_materialized_through(committed.position.shard, &target, 2)
         .unwrap();
     assert!(
         writer
-            .checkpoint_materialized_through(
-                committed.position.shard,
-                committed.position.sequence,
-                3
-            )
+            .checkpoint_materialized_through(committed.position.shard, &target, 3)
             .is_err()
     );
     let snapshot = writer.reader().snapshot().unwrap();
@@ -1593,9 +1646,13 @@ fn reader_pinned_before_checkpoint_loads_bounded_recent_envelopes() {
             vec![payload("primary", 1)],
         )
         .unwrap();
-    writer
-        .checkpoint_materialized_through(committed.position.shard, committed.position.sequence, 7)
-        .unwrap();
+    checkpoint(
+        &writer,
+        committed.position.shard,
+        committed.position.sequence,
+        7,
+    )
+    .unwrap();
 
     assert!(writer.reader().snapshot().unwrap().transactions.is_empty());
     let pinned_before = writer
@@ -1624,9 +1681,13 @@ fn generation_visibility_fails_closed_after_bounded_recent_eviction() {
                 vec![payload("primary", ordinal as u64 + 1)],
             )
             .unwrap();
-        writer
-            .checkpoint_materialized_through(shard, committed.position.sequence, ordinal as u64 + 1)
-            .unwrap();
+        checkpoint(
+            &writer,
+            shard,
+            committed.position.sequence,
+            ordinal as u64 + 1,
+        )
+        .unwrap();
     }
 
     let expired = writer

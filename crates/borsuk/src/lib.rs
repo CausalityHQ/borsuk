@@ -51,6 +51,7 @@ mod parallel;
 mod physical_layout;
 mod positioned_candidate;
 mod positioned_log;
+mod positioned_materializer;
 mod quantizer_sidecar;
 mod record;
 mod rotated_product_quantizer;
@@ -187,9 +188,9 @@ pub use positioned_log::{
     MAX_HEAD_CAS_ATTEMPTS, MAX_PAYLOADS_PER_TRANSACTION, MAX_PENDING_ENVELOPES_PER_SHARD,
     MAX_RECENT_COMMIT_RECEIPTS_PER_SHARD, MAX_SHARD_HEAD_BYTES, MAX_UNMATERIALIZED_BYTES_PER_SHARD,
     MAX_UNMATERIALIZED_ROWS_PER_SHARD, PositionedLogReader, PositionedLogSnapshot,
-    PositionedLogWriter, PositionedMutationEnvelope, PositionedMutationModality,
-    PositionedMutationPayloadInput, PositionedMutationPayloadRef, PositionedMutationStamp,
-    PositionedPayloadFormat, SOURCE_SHARD_COUNT,
+    PositionedLogWriter, PositionedMaterializationWatermark, PositionedMutationEnvelope,
+    PositionedMutationModality, PositionedMutationPayloadInput, PositionedMutationPayloadRef,
+    PositionedMutationStamp, PositionedPayloadFormat, SOURCE_SHARD_COUNT,
 };
 pub use record::{
     AddReport, BuildConfig, CacheExecutionPolicy, CompactionOptions, CompactionReport,
