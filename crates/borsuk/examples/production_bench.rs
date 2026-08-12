@@ -197,6 +197,7 @@ struct Dataset {
 }
 
 enum DatasetVectorSource {
+    Unavailable,
     RawF32,
     Parquet { train_files: Vec<PathBuf> },
 }
@@ -1166,8 +1167,8 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
             read_ground_truth(&neighbors_path, query_count, meta.k, meta.n_train)?,
         )
     } else {
-        let train_files = find_parquet_train_files(&config.dataset_dir)?;
-        validate_parquet_row_count(&train_files, meta.n_train, "training")?;
+        let train_files =
+            parquet_train_files_for_phase(&config.dataset_dir, meta.n_train, config.recall_only)?;
         let test_path = config.dataset_dir.join("test.parquet");
         let neighbors_path = config.dataset_dir.join("neighbors.parquet");
         let queries = read_parquet_vectors(&test_path, query_count, meta.dim, "emb")?;
@@ -1179,7 +1180,9 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
             "neighbors_id",
         )?;
         (
-            DatasetVectorSource::Parquet { train_files },
+            train_files.map_or(DatasetVectorSource::Unavailable, |train_files| {
+                DatasetVectorSource::Parquet { train_files }
+            }),
             queries,
             neighbors,
         )
@@ -1199,6 +1202,11 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
     // only a full-corpus run uses the file's precomputed neighbors.
     let ground_truth = if train_count < meta.n_train {
         let corpus = match &source {
+            DatasetVectorSource::Unavailable => {
+                return Err(
+                    invalid_input("a subset recall run requires local corpus vectors").into(),
+                );
+            }
             DatasetVectorSource::RawF32 => read_f32_rows(&raw_train_path, train_count, meta.dim)?,
             DatasetVectorSource::Parquet { train_files } => {
                 read_parquet_vectors_from_files(train_files, train_count, meta.dim, "emb")?
@@ -1353,6 +1361,19 @@ fn find_parquet_train_files(dataset_dir: &Path) -> BenchResult<Vec<PathBuf>> {
         .into());
     }
     Ok(files)
+}
+
+fn parquet_train_files_for_phase(
+    dataset_dir: &Path,
+    expected_rows: usize,
+    recall_only: bool,
+) -> BenchResult<Option<Vec<PathBuf>>> {
+    if recall_only {
+        return Ok(None);
+    }
+    let train_files = find_parquet_train_files(dataset_dir)?;
+    validate_parquet_row_count(&train_files, expected_rows, "training")?;
+    Ok(Some(train_files))
 }
 
 fn validate_parquet_row_count(
@@ -1655,6 +1676,9 @@ fn ingest_train(index: &mut BorsukIndex, dataset_dir: &Path, dataset: &Dataset) 
     // VectorDBBench acquisition must use its unshuffled train files so row ids
     // remain identical to the shipped ground-truth neighbor ids.
     match &dataset.source {
+        DatasetVectorSource::Unavailable => {
+            return Err(invalid_input("index build requires local corpus vectors").into());
+        }
         DatasetVectorSource::RawF32 => {
             let mut reader = BufReader::new(File::open(dataset_dir.join("train.f32"))?);
             let mut start = 0_usize;
@@ -3399,6 +3423,9 @@ fn stream_dataset_batches(
 ) -> BenchResult<()> {
     let mut offset = 0_usize;
     match &dataset.source {
+        DatasetVectorSource::Unavailable => {
+            return Err(invalid_input("mutation workload requires local source vectors").into());
+        }
         DatasetVectorSource::RawF32 => {
             let mut reader = BufReader::new(File::open(config.dataset_dir.join("train.f32"))?);
             while offset < count {
@@ -3881,14 +3908,15 @@ mod tests {
         cache_coverage_enabled, dataset_metric, default_build_leaf_capability,
         default_recall_leaf_mode, default_serving_leaf_mode, dollars_per_million_queries,
         ingest_batch_size, is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
-        normalized_cache_access_fractions, parse_flag_value, parse_global_pq_layout,
-        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, permuted_positions, preload_query_count, read_logical_cell_catalog,
-        recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
-        sample_stddev, update_vector_reservoir, uses_bounded_decoded_cache_phases,
-        uses_memory_preloaded_phase, validate_build_only, validate_disk_cached_network,
-        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_phase_selection, vector_row, write_batch_len, write_operation_count,
+        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
+        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
+        parse_positive_list, parse_serving_mode, permuted_positions, preload_query_count,
+        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count,
+        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
+        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase, validate_build_only,
+        validate_disk_cached_network, validate_generated_id_range, validate_insert_only,
+        validate_leaf_capability_modes, validate_phase_selection, vector_row, write_batch_len,
+        write_operation_count,
     };
 
     #[test]
@@ -4527,6 +4555,16 @@ mod tests {
             parse_optional_byte_cap("BORSUK_BENCH_DISK_CACHE_MAX_BYTES", "1073741824").unwrap(),
             Some(1_073_741_824)
         );
+    }
+
+    #[test]
+    fn recall_only_runtime_dataset_does_not_require_local_corpus_shards() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            parquet_train_files_for_phase(directory.path(), 100_000_000, true).unwrap(),
+            None
+        );
+        assert!(parquet_train_files_for_phase(directory.path(), 100_000_000, false).is_err());
     }
 
     #[test]

@@ -245,8 +245,20 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         self.assertTrue(publication["publishable"])
         self.assertEqual(publication["effective_rows"], cell["dataset"]["scale"]["rows"])
+        self.assertNotIn("steps", publication)
+        self.assertEqual(publication["build"]["worker"]["instance_type"], "r7g.8xlarge")
+        self.assertEqual(publication["runtime"]["client"]["instance_type"], "c7g.xlarge")
+        build_env = publication["build"]["steps"][-1]["env"]
+        runtime_env = publication["runtime"]["steps"][-1]["env"]
+        self.assertEqual(build_env["BORSUK_BENCH_BUILD_INDEX"], "1")
+        self.assertEqual(build_env["BORSUK_BENCH_BUILD_ONLY"], "1")
+        self.assertNotIn("BORSUK_BENCH_READ_ONLY", build_env)
+        self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "1")
+        self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
+        self.assertEqual(runtime_env["BORSUK_BENCH_URI"], cell["index_prefix"])
+        self.assertNotEqual(runtime_env["BORSUK_BENCH_DATASET"], build_env["BORSUK_BENCH_DATASET"])
         self.assertEqual(
-            publication["steps"][-1]["env"]["BORSUK_BENCH_LOGICAL_CELLS"],
+            build_env["BORSUK_BENCH_LOGICAL_CELLS"],
             str(cell["index_profile"]["logical_cells"]),
         )
 

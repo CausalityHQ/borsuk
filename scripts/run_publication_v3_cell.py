@@ -117,6 +117,11 @@ def build_execution_plan(
         or disk_cache_limit_mib <= 0
     ):
         raise ValueError("BORSUK runtime-client limits are invalid")
+    build_workers = environment.get("build_workers")
+    build_storage = environment.get("build_storage")
+    build_worker = build_workers.get("borsuk") if isinstance(build_workers, dict) else None
+    if not isinstance(build_worker, dict) or not isinstance(build_storage, dict):
+        raise ValueError("cell has no BORSUK offline-build contract")
 
     factors = workload.get("factors")
     scale = dataset.get("scale")
@@ -243,19 +248,64 @@ def build_execution_plan(
             "BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES": str(code_bytes),
         }
     )
-    if mode == "smoke":
-        benchmark_env["BORSUK_BENCH_LIMIT"] = str(effective_rows)
-    steps.append(
-        {
-            "argv": [str(borsuk_bench)],
-            "env": benchmark_env,
+    if mode == "publication":
+        index_uri = str(cell.get("index_prefix"))
+        runtime_dataset_dir = workspace / "runtime-dataset"
+        build_output_dir = workspace / "build-output"
+        runtime_output_dir = workspace / "runtime-output"
+        build_env = {
+            **benchmark_env,
+            "BORSUK_BENCH_DATASET": str(dataset_dir),
+            "BORSUK_BENCH_URI": index_uri,
+            "BORSUK_BENCH_OUTPUT_DIR": str(build_output_dir),
+            "BORSUK_BENCH_BUILD_INDEX": "1",
+            "BORSUK_BENCH_BUILD_ONLY": "1",
         }
-    )
+        for field in (
+            "BORSUK_BENCH_READ_ONLY",
+            "BORSUK_BENCH_RECALL_ONLY",
+            "BORSUK_BENCH_CACHE_PROFILE",
+            "BORSUK_BENCH_RAM_BUDGET_BYTES",
+            "BORSUK_BENCH_DISK_CACHE_MAX_BYTES",
+        ):
+            build_env.pop(field, None)
+        runtime_env = {
+            **benchmark_env,
+            "BORSUK_BENCH_DATASET": str(runtime_dataset_dir),
+            "BORSUK_BENCH_URI": index_uri,
+            "BORSUK_BENCH_OUTPUT_DIR": str(runtime_output_dir),
+            "BORSUK_BENCH_RECALL_ONLY": "1",
+            "BORSUK_BENCH_READ_ONLY": "1",
+        }
+        return {
+            "schema_version": 1,
+            "cell_id": cell.get("cell_id"),
+            "mode": mode,
+            "publishable": True,
+            "effective_rows": effective_rows,
+            "effective_queries": effective_queries,
+            "workspace": str(workspace),
+            "build": {
+                "worker": build_worker,
+                "storage": build_storage,
+                "output_dir": str(build_output_dir),
+                "steps": [*steps, {"argv": [str(borsuk_bench)], "env": build_env}],
+            },
+            "runtime": {
+                "client": runtime_client,
+                "storage": runtime_storage,
+                "dataset_dir": str(runtime_dataset_dir),
+                "output_dir": str(runtime_output_dir),
+                "steps": [{"argv": [str(borsuk_bench)], "env": runtime_env}],
+            },
+        }
+    benchmark_env["BORSUK_BENCH_LIMIT"] = str(effective_rows)
+    steps.append({"argv": [str(borsuk_bench)], "env": benchmark_env})
     return {
         "schema_version": 1,
         "cell_id": cell.get("cell_id"),
         "mode": mode,
-        "publishable": mode == "publication",
+        "publishable": False,
         "effective_rows": effective_rows,
         "effective_queries": effective_queries,
         "runtime_client": runtime_client,
