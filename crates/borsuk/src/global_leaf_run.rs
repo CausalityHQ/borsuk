@@ -5,7 +5,11 @@ use crate::{
     mutation::MutationStamp, record::VectorElementType, storage::Storage,
 };
 
-pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 11;
+pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 12;
+// The current segment-derived coarse quantizer still emits u16 cell IDs.
+// The durable V12 leaf schema is already u32; catalog pinning removes this
+// temporary producer bound atomically in the next reviewed slice.
+const SEGMENT_DERIVED_COARSE_QUANTIZER_MAX_CELLS: u32 = 65_536;
 pub(crate) const MAX_GLOBAL_LEAF_LEVELS: usize = u64::BITS as usize;
 pub(crate) const DRIFT_WINDOW_ROWS: usize = 4096;
 
@@ -23,16 +27,16 @@ pub(crate) struct LaneSourceRange {
 impl LaneSourceRange {
     fn validate(&self) -> Result<()> {
         if self.lane >= GROUP_COMMIT_STRIPE_COUNT {
-            return invalid("V11 source-range lane is outside the group-commit stripe count");
+            return invalid("V12 source-range lane is outside the group-commit stripe count");
         }
         if self.lease_epoch == 0 {
-            return invalid("V11 source-range lease epoch must be positive");
+            return invalid("V12 source-range lease epoch must be positive");
         }
         if self.first_sequence == 0 || self.last_sequence == 0 {
-            return invalid("V11 source-range sequences must be positive");
+            return invalid("V12 source-range sequences must be positive");
         }
         if self.first_sequence > self.last_sequence {
-            return invalid("V11 source-range first sequence exceeds last sequence");
+            return invalid("V12 source-range first sequence exceeds last sequence");
         }
         Ok(())
     }
@@ -65,7 +69,7 @@ impl SourceRangeSet {
             {
                 if left.last_sequence >= range.first_sequence {
                     return Err(BorsukError::InvalidStorage(
-                        "V11 source ranges overlap within one lane lease epoch".to_owned(),
+                        "V12 source ranges overlap within one lane lease epoch".to_owned(),
                     ));
                 }
                 if left.last_sequence.checked_add(1) == Some(range.first_sequence) {
@@ -84,7 +88,7 @@ impl SourceRangeSet {
                 .len()
                 .checked_add(other.ranges.len())
                 .ok_or_else(|| {
-                    BorsukError::InvalidStorage("V11 source-range count overflow".to_owned())
+                    BorsukError::InvalidStorage("V12 source-range count overflow".to_owned())
                 })?,
         );
         ranges.extend_from_slice(&self.ranges);
@@ -95,7 +99,7 @@ impl SourceRangeSet {
     fn validate_canonical(&self) -> Result<()> {
         let canonical = Self::new(self.ranges.clone())?;
         if canonical != *self {
-            return invalid("V11 source ranges must be sorted canonically");
+            return invalid("V12 source ranges must be sorted canonically");
         }
         Ok(())
     }
@@ -300,7 +304,7 @@ enum ResidentGlobalLeafShardState {
 fn resident_global_leaf_runtime_overhead(page_count: usize, shard_count: usize) -> usize {
     std::mem::size_of::<ResidentGlobalLeafRun>()
         .saturating_add(
-            page_count.saturating_mul(crate::global_leaf::GLOBAL_LEAF_V11_CELL_BOUND_BYTES),
+            page_count.saturating_mul(crate::global_leaf::GLOBAL_LEAF_V12_CELL_BOUND_BYTES),
         )
         .saturating_add(
             shard_count.saturating_mul(
@@ -327,7 +331,7 @@ impl ResidentGlobalLeafRun {
             .iter()
             .try_fold(0_usize, |total, page| {
                 total.checked_add(page.rows as usize).ok_or_else(|| {
-                    BorsukError::InvalidStorage("V11 leaf-run row count exceeds usize".to_owned())
+                    BorsukError::InvalidStorage("V12 leaf-run row count exceeds usize".to_owned())
                 })
             })?;
         let pages = u64::try_from(validated_directory.pages.len()).unwrap_or(u64::MAX);
@@ -352,14 +356,14 @@ impl ResidentGlobalLeafRun {
             )
             .try_fold(0_u64, |total, bytes| {
                 total.checked_add(bytes).ok_or_else(|| {
-                    BorsukError::InvalidStorage("V11 leaf-run encoded bytes overflow".to_owned())
+                    BorsukError::InvalidStorage("V12 leaf-run encoded bytes overflow".to_owned())
                 })
             })?;
         let decoded_shards = (0..root.shards().len())
             .map(|_| ResidentGlobalLeafShardSlot::default())
             .collect::<Vec<_>>();
-        // V11 persists the exact decoded full-directory size. Runtime-only
-        // fixed-slot overhead is accounted separately so the established V11
+        // V12 persists the exact decoded full-directory size. Runtime-only
+        // fixed-slot overhead is accounted separately so the established V12
         // serialized contract does not change under the same format marker.
         let persisted_resident_bytes = validated_directory.resident_bytes();
         Ok(Self {
@@ -423,14 +427,14 @@ impl ResidentGlobalLeafRun {
     {
         let slot = self.decoded_shards.get(ordinal).ok_or_else(|| {
             BorsukError::InvalidStorage(
-                "V11 directory shard ordinal exceeds its authenticated root".to_owned(),
+                "V12 directory shard ordinal exceeds its authenticated root".to_owned(),
             )
         })?;
         let mut loader = Some(loader);
         loop {
             let mut state = slot.state.lock().map_err(|_| {
                 BorsukError::InvalidStorage(
-                    "V11 decoded directory shard slot lock is poisoned".to_owned(),
+                    "V12 decoded directory shard slot lock is poisoned".to_owned(),
                 )
             })?;
             match &*state {
@@ -440,7 +444,7 @@ impl ResidentGlobalLeafRun {
                 ResidentGlobalLeafShardState::Loading => {
                     state = slot.ready.wait(state).map_err(|_| {
                         BorsukError::InvalidStorage(
-                            "V11 decoded directory shard slot lock is poisoned".to_owned(),
+                            "V12 decoded directory shard slot lock is poisoned".to_owned(),
                         )
                     })?;
                     drop(state);
@@ -450,14 +454,14 @@ impl ResidentGlobalLeafRun {
                     drop(state);
                     let result = loader
                         .take()
-                        .expect("V11 shard-slot leader owns one loader")(
+                        .expect("V12 shard-slot leader owns one loader")(
                     );
                     match result {
                         Ok((pages, physical_bytes)) => {
                             let pages = Arc::new(pages);
                             let mut state = slot.state.lock().map_err(|_| {
                                 BorsukError::InvalidStorage(
-                                    "V11 decoded directory shard slot lock is poisoned".to_owned(),
+                                    "V12 decoded directory shard slot lock is poisoned".to_owned(),
                                 )
                             })?;
                             *state = ResidentGlobalLeafShardState::Ready(Arc::clone(&pages));
@@ -468,7 +472,7 @@ impl ResidentGlobalLeafRun {
                         Err(error) => {
                             let mut state = slot.state.lock().map_err(|_| {
                                 BorsukError::InvalidStorage(
-                                    "V11 decoded directory shard slot lock is poisoned".to_owned(),
+                                    "V12 decoded directory shard slot lock is poisoned".to_owned(),
                                 )
                             })?;
                             *state = ResidentGlobalLeafShardState::Empty;
@@ -488,7 +492,7 @@ impl ResidentGlobalLeafRun {
     ) -> Result<Option<Arc<Vec<crate::global_leaf::GlobalLeafPageRef>>>> {
         let slot = self.decoded_shards.get(ordinal).ok_or_else(|| {
             BorsukError::InvalidStorage(
-                "V11 directory shard ordinal exceeds its authenticated root".to_owned(),
+                "V12 directory shard ordinal exceeds its authenticated root".to_owned(),
             )
         })?;
         slot.state
@@ -499,7 +503,7 @@ impl ResidentGlobalLeafRun {
             })
             .map_err(|_| {
                 BorsukError::InvalidStorage(
-                    "V11 decoded directory shard slot lock is poisoned".to_owned(),
+                    "V12 decoded directory shard slot lock is poisoned".to_owned(),
                 )
             })
     }
@@ -656,13 +660,13 @@ impl GlobalAnnRef {
             .storage_bytes
             .checked_add(base.encoded_bytes)
             .ok_or_else(|| {
-                BorsukError::InvalidStorage("V11 global ANN storage total overflow".to_owned())
+                BorsukError::InvalidStorage("V12 global ANN storage total overflow".to_owned())
             })?;
         let resident_bytes = codebook
             .resident_bytes
             .checked_add(base.resident_bytes)
             .ok_or_else(|| {
-                BorsukError::InvalidStorage("V11 global ANN resident total overflow".to_owned())
+                BorsukError::InvalidStorage("V12 global ANN resident total overflow".to_owned())
             })?;
         let reference = Self {
             layout_version: GLOBAL_PQ_REF_LAYOUT_VERSION,
@@ -761,13 +765,13 @@ impl GlobalAnnRef {
 
     pub(crate) fn validate(&self) -> Result<()> {
         if self.layout_version != GLOBAL_PQ_REF_LAYOUT_VERSION {
-            return invalid("V11 global ANN layout version is invalid");
+            return invalid("V12 global ANN layout version is invalid");
         }
         if self.leaf_epoch == 0 {
-            return invalid("V11 global ANN leaf epoch must be nonzero");
+            return invalid("V12 global ANN leaf epoch must be nonzero");
         }
         if self.purge_epoch > self.leaf_epoch {
-            return invalid("V11 global ANN purge epoch exceeds leaf epoch");
+            return invalid("V12 global ANN purge epoch exceeds leaf epoch");
         }
         validate_codebook(&self.codebook)?;
         self.coverage.validate_canonical()?;
@@ -786,21 +790,21 @@ impl GlobalAnnRef {
 
         for run in &self.incremental_runs {
             if usize::from(run.level) >= MAX_GLOBAL_LEAF_LEVELS {
-                return invalid("V11 leaf-run level exceeds the supported level count");
+                return invalid("V12 leaf-run level exceeds the supported level count");
             }
             if let Some(prior) = previous_level {
                 if run.level == prior {
-                    return invalid("duplicate V11 leaf-run level");
+                    return invalid("duplicate V12 leaf-run level");
                 }
                 if run.level < prior {
-                    return invalid("V11 leaf-run levels must be sorted ascending");
+                    return invalid("V12 leaf-run levels must be sorted ascending");
                 }
             }
             previous_level = Some(run.level);
             validate_run(run, &self.codebook, false)?;
             if run.rows == 0 {
                 if saw_coverage_only_deletion {
-                    return invalid("V11 global ANN has more than one coverage-only deletion run");
+                    return invalid("V12 global ANN has more than one coverage-only deletion run");
                 }
                 saw_coverage_only_deletion = true;
             }
@@ -809,41 +813,41 @@ impl GlobalAnnRef {
             resident_bytes = checked_add(resident_bytes, run.resident_bytes, "resident total")?;
         }
         if union != self.coverage {
-            return invalid("V11 global ANN source-range coverage does not equal the run union");
+            return invalid("V12 global ANN source-range coverage does not equal the run union");
         }
 
         let row_total = checked_add(self.base_rows, self.appended_live_rows, "row total")?;
         if row_total != self.rows {
-            return invalid("V11 global ANN row total is inconsistent");
+            return invalid("V12 global ANN row total is inconsistent");
         }
         if self.obsolete_rows > self.rows {
-            return invalid("V11 global ANN obsolete rows exceed rows");
+            return invalid("V12 global ANN obsolete rows exceed rows");
         }
         if storage_bytes != self.storage_bytes {
-            return invalid("V11 global ANN storage total is inconsistent");
+            return invalid("V12 global ANN storage total is inconsistent");
         }
         if resident_bytes != self.resident_bytes {
-            return invalid("V11 global ANN resident total is inconsistent");
+            return invalid("V12 global ANN resident total is inconsistent");
         }
         if self.drift.pending_reconstruction_errors_micros.len() >= DRIFT_WINDOW_ROWS {
-            return invalid("V11 global ANN drift pending errors exceed the drift window");
+            return invalid("V12 global ANN drift pending errors exceed the drift window");
         }
         if self.drift.consecutive_breaches > 3 {
-            return invalid("V11 global ANN drift breach count exceeds three");
+            return invalid("V12 global ANN drift breach count exceeds three");
         }
         Ok(())
     }
 
-    /// Validate a complete V11 serving shape. Unlike the Task 3 base-only
+    /// Validate a complete V12 serving shape. Unlike the Task 3 base-only
     /// gate, this accepts authenticated incremental levels while retaining the
     /// invariant that every retired lane range has exactly one searchable run.
     pub(crate) fn validate_serving_shape(&self) -> Result<()> {
         self.validate()?;
         let Some(base) = &self.base else {
-            return invalid("V11 serving reference is missing its base run");
+            return invalid("V12 serving reference is missing its base run");
         };
         if base.level != 0 || self.base_rows != base.rows {
-            return invalid("V11 serving base counters are inconsistent");
+            return invalid("V12 serving base counters are inconsistent");
         }
         Ok(())
     }
@@ -851,39 +855,42 @@ impl GlobalAnnRef {
 
 fn validate_codebook(codebook: &GlobalCodebookRef) -> Result<()> {
     if codebook.layout_version != GLOBAL_PQ_REF_LAYOUT_VERSION {
-        return invalid("V11 global codebook layout version is invalid");
+        return invalid("V12 global codebook layout version is invalid");
     }
     validate_object_ref(
-        "V11 global codebook descriptor",
+        "V12 global codebook descriptor",
         &codebook.descriptor_path,
         &codebook.descriptor_checksum,
         codebook.storage_bytes,
     )?;
     if codebook.dimensions == 0 {
-        return invalid("V11 global codebook dimensions must be positive");
+        return invalid("V12 global codebook dimensions must be positive");
     }
     codebook
         .element_type
         .fixed_width_bytes(codebook.dimensions)?;
     if codebook.code_width == 0 {
-        return invalid("V11 global codebook code width must be positive");
+        return invalid("V12 global codebook code width must be positive");
     }
-    if codebook.cell_count == 0 || codebook.cell_count > u32::from(u16::MAX) + 1 {
-        return invalid("V11 global codebook cell count must fit the u16 identity space");
+    if codebook.cell_count == 0 || codebook.cell_count > SEGMENT_DERIVED_COARSE_QUANTIZER_MAX_CELLS
+    {
+        return invalid(
+            "V12 global codebook cell count exceeds the temporary segment-derived coarse quantizer bound",
+        );
     }
     if codebook.candidates == 0 || codebook.candidates > codebook.cell_count {
-        return invalid("V11 global codebook candidates must be within the cell count");
+        return invalid("V12 global codebook candidates must be within the cell count");
     }
     if codebook.probes == 0
         || codebook.probes > codebook.cell_count
         || codebook.probes > codebook.candidates
     {
-        return invalid("V11 global codebook probes must be within candidates and the cell count");
+        return invalid("V12 global codebook probes must be within candidates and the cell count");
     }
     if let VectorMetric::Minkowski { p } = codebook.metric
         && (!p.is_finite() || p < 1.0)
     {
-        return invalid("V11 global codebook metric is invalid");
+        return invalid("V12 global codebook metric is invalid");
     }
     Ok(())
 }
@@ -898,37 +905,37 @@ fn validate_run_against_checksum(
     is_base: bool,
 ) -> Result<()> {
     if run.layout_version != GLOBAL_PQ_REF_LAYOUT_VERSION {
-        return invalid("V11 leaf-run layout version is invalid");
+        return invalid("V12 leaf-run layout version is invalid");
     }
     if run.codebook_checksum != codebook_checksum {
-        return invalid("V11 leaf-run codebook checksum does not match the global codebook");
+        return invalid("V12 leaf-run codebook checksum does not match the global codebook");
     }
     validate_object_ref(
-        "V11 leaf-run directory",
+        "V12 leaf-run directory",
         &run.directory.path,
         &run.directory.checksum,
         run.directory.encoded_bytes,
     )?;
     if run.directory.shard_count == 0 {
-        return invalid("V11 leaf-run directory shard count must be positive");
+        return invalid("V12 leaf-run directory shard count must be positive");
     }
     run.source_ranges.validate_canonical()?;
     if is_base {
         if !run.source_ranges.ranges.is_empty() {
-            return invalid("V11 base leaf run must not have lane source ranges");
+            return invalid("V12 base leaf run must not have lane source ranges");
         }
         if run.rows == 0 || run.pages == 0 || run.bundles == 0 {
-            return invalid("V11 base leaf run must have positive rows, pages, and bundles");
+            return invalid("V12 base leaf run must have positive rows, pages, and bundles");
         }
     } else {
         if run.source_ranges.ranges.is_empty() {
-            return invalid("V11 incremental leaf run must have lane source ranges");
+            return invalid("V12 incremental leaf run must have lane source ranges");
         }
         let has_leaf_rows = run.rows > 0 || run.pages > 0 || run.bundles > 0;
         let complete_leaf_rows = run.rows > 0 && run.pages > 0 && run.bundles > 0;
         if has_leaf_rows && !complete_leaf_rows {
             return invalid(
-                "V11 incremental leaf run rows, pages, and bundles must be all positive or all zero",
+                "V12 incremental leaf run rows, pages, and bundles must be all positive or all zero",
             );
         }
     }
@@ -938,15 +945,15 @@ fn validate_run_against_checksum(
         run.max_stamp.is_some(),
     ) {
         (true, true, true) | (false, false, false) => {}
-        _ => return invalid("V11 leaf-run mutation bounds must match leaf rows"),
+        _ => return invalid("V12 leaf-run mutation bounds must match leaf rows"),
     }
     if run
         .sealed_pages
         .checked_add(run.partial_pages)
-        .ok_or_else(|| BorsukError::InvalidStorage("V11 leaf-run page total overflow".to_owned()))?
+        .ok_or_else(|| BorsukError::InvalidStorage("V12 leaf-run page total overflow".to_owned()))?
         != run.pages
     {
-        return invalid("V11 leaf-run sealed and partial pages do not equal pages");
+        return invalid("V12 leaf-run sealed and partial pages do not equal pages");
     }
     Ok(())
 }
@@ -981,11 +988,14 @@ pub(crate) struct GlobalLeafPersistenceWriter<'a> {
     element_type: VectorElementType,
     bundle_pages: Vec<crate::global_leaf::GlobalLeafPageInput>,
     bundle_partial_run_counts: Vec<u8>,
+    bundle_exact_estimated_bytes: u64,
+    bundle_code_rows: usize,
+    bundle_code_bytes: u64,
     bundles: Vec<crate::global_leaf::GlobalLeafBundleRef>,
     page_refs: Vec<crate::global_leaf::GlobalLeafPageRef>,
     codebook_checksum: String,
-    active_cell: Option<(u16, u32)>,
-    last_finalized_cell: Option<u16>,
+    active_cell: Option<(u32, u32)>,
+    last_finalized_cell: Option<u32>,
     page_count: usize,
     rows: usize,
     storage_bytes: u64,
@@ -1007,6 +1017,9 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
             bundle_partial_run_counts: Vec::with_capacity(
                 crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_PAGES,
             ),
+            bundle_exact_estimated_bytes: 0,
+            bundle_code_rows: 0,
+            bundle_code_bytes: 0,
             bundles: Vec::new(),
             page_refs: Vec::new(),
             codebook_checksum,
@@ -1085,7 +1098,7 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
         Ok(())
     }
 
-    pub(crate) fn finalize_cell(&mut self, cell_index: u16) -> Result<()> {
+    pub(crate) fn finalize_cell(&mut self, cell_index: u32) -> Result<()> {
         if self.active_cell.map(|(active, _)| active) != Some(cell_index)
             || !self.bundle_pages.is_empty()
         {
@@ -1118,11 +1131,69 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
         page: crate::global_leaf::GlobalLeafPageInput,
         partial_run_count: u8,
     ) -> Result<()> {
-        if self.bundle_pages.len() == crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_PAGES {
+        let page_estimate = crate::global_leaf::estimate_global_leaf_bundle_page(
+            &page,
+            self.dimensions,
+            self.element_type,
+        )?;
+        let candidate_exact_bytes = self
+            .bundle_exact_estimated_bytes
+            .checked_add(page_estimate.exact_batch_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf bundle estimate overflows".to_owned())
+            })?;
+        let candidate_code_rows = self
+            .bundle_code_rows
+            .checked_add(page_estimate.rows)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf bundle row estimate overflows".to_owned())
+            })?;
+        let candidate_code_bytes = self
+            .bundle_code_bytes
+            .checked_add(page_estimate.code_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf bundle code estimate overflows".to_owned())
+            })?;
+        let candidate_bytes = crate::global_leaf::estimate_global_leaf_bundle_bytes(
+            candidate_exact_bytes,
+            candidate_code_rows,
+            candidate_code_bytes,
+        )?;
+        if !self.bundle_pages.is_empty()
+            && (self.bundle_pages.len() == crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_PAGES
+                || candidate_bytes > crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES)
+        {
             self.flush_bundle()?;
+        }
+        let (candidate_exact_bytes, candidate_code_rows, candidate_code_bytes) =
+            if self.bundle_pages.is_empty() {
+                (
+                    page_estimate.exact_batch_bytes,
+                    page_estimate.rows,
+                    page_estimate.code_bytes,
+                )
+            } else {
+                (
+                    candidate_exact_bytes,
+                    candidate_code_rows,
+                    candidate_code_bytes,
+                )
+            };
+        if crate::global_leaf::estimate_global_leaf_bundle_bytes(
+            candidate_exact_bytes,
+            candidate_code_rows,
+            candidate_code_bytes,
+        )? > crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES
+        {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf page cannot fit the conservative V12 bundle byte cap".to_owned(),
+            ));
         }
         self.bundle_pages.push(page);
         self.bundle_partial_run_counts.push(partial_run_count);
+        self.bundle_exact_estimated_bytes = candidate_exact_bytes;
+        self.bundle_code_rows = candidate_code_rows;
+        self.bundle_code_bytes = candidate_code_bytes;
         Ok(())
     }
 
@@ -1132,11 +1203,24 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
         }
         let pages = std::mem::take(&mut self.bundle_pages);
         let partial_run_counts = std::mem::take(&mut self.bundle_partial_run_counts);
+        let estimated_bytes = crate::global_leaf::estimate_global_leaf_bundle_bytes(
+            self.bundle_exact_estimated_bytes,
+            self.bundle_code_rows,
+            self.bundle_code_bytes,
+        )?;
+        self.bundle_exact_estimated_bytes = 0;
+        self.bundle_code_rows = 0;
+        self.bundle_code_bytes = 0;
         let encoded = crate::global_leaf::encode_global_leaf_bundle(
             &pages,
             self.dimensions,
             self.element_type,
         )?;
+        if u64::try_from(encoded.bytes.len()).map_or(true, |actual| actual > estimated_bytes) {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf conservative bundle estimate was below encoded bytes".to_owned(),
+            ));
+        }
         let checksum = *blake3::hash(&encoded.bytes).as_bytes();
         let checksum_hex = blake3::Hash::from_bytes(checksum).to_hex().to_string();
         let path = format!(
@@ -1161,6 +1245,9 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
             path,
             checksum,
             encoded_bytes,
+            code_plane_offset: encoded.code_plane_offset,
+            code_plane_bytes: encoded.code_plane_bytes,
+            code_plane_checksum: encoded.code_plane_checksum,
         });
         if encoded.pages.len() != partial_run_counts.len() {
             return Err(BorsukError::InvalidStorage(
@@ -1180,6 +1267,9 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
                     metadata_bytes: page.metadata_bytes,
                     body_bytes: page.body_bytes,
                     batch_bytes: page.batch_bytes,
+                    code_offset: page.code_offset,
+                    code_bytes: page.code_bytes,
+                    code_checksum: page.code_checksum,
                     rows: u32::try_from(page.rows).map_err(|_| {
                         BorsukError::InvalidStorage(
                             "global leaf page row count exceeds u32".to_owned(),
@@ -1248,7 +1338,7 @@ fn persist_directory_artifacts(
     }
     let root_checksum = blake3::hash(&encoded.root).to_hex().to_string();
     let root_path = format!(
-        "global-leaf/v11/directories/{}/directory-{root_checksum}.parquet",
+        "global-leaf/v12/directories/{}/directory-{root_checksum}.parquet",
         &root_checksum[..2]
     );
     storage.write_bytes_content_addressed(&root_path, &encoded.root)?;
@@ -1269,7 +1359,7 @@ fn persist_directory_artifacts(
                 .map(|shard| shard.bytes.clone())
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage(
-                        "V11 encoded directory lost an external shard".to_owned(),
+                        "V12 encoded directory lost an external shard".to_owned(),
                     )
                 })
         },
@@ -1291,7 +1381,7 @@ fn persist_directory_artifacts(
 
 fn checked_add(left: u64, right: u64, label: &str) -> Result<u64> {
     left.checked_add(right)
-        .ok_or_else(|| BorsukError::InvalidStorage(format!("V11 global ANN {label} overflow")))
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("V12 global ANN {label} overflow")))
 }
 
 fn invalid(message: &str) -> Result<()> {
@@ -1398,7 +1488,7 @@ mod tests {
     fn valid_offline_ann_ref() -> GlobalAnnRef {
         let codebook = GlobalCodebookRef {
             layout_version: GLOBAL_PQ_REF_LAYOUT_VERSION,
-            descriptor_path: "global-leaf/v11/codebooks/ab/codebook.parquet".to_owned(),
+            descriptor_path: "global-leaf/v12/codebooks/ab/codebook.parquet".to_owned(),
             descriptor_checksum: "ab".repeat(32),
             metric: VectorMetric::Euclidean,
             dimensions: 4,
@@ -1416,7 +1506,7 @@ mod tests {
             level: 0,
             codebook_checksum: codebook.descriptor_checksum.clone(),
             directory: GlobalLeafDirectoryRef {
-                path: "global-leaf/v11/directories/cd/directory.parquet".to_owned(),
+                path: "global-leaf/v12/directories/cd/directory.parquet".to_owned(),
                 checksum: "cd".repeat(32),
                 encoded_bytes: 30,
                 shard_count: 1,
@@ -1444,7 +1534,124 @@ mod tests {
     }
 
     #[test]
-    fn v11_serialized_resident_bytes_stay_stable_while_runtime_slots_are_estimated() {
+    fn v12_reference_rejects_old_v11_layout_version() {
+        let mut reference = valid_ann_ref();
+        reference.layout_version = 11;
+        let error = reference.validate().unwrap_err();
+        assert!(error.to_string().contains("layout version"), "{error}");
+    }
+
+    #[test]
+    fn v12_persisted_storage_counts_complete_code_and_exact_union_bundle() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(directory.path().to_string_lossy().as_ref()).unwrap();
+        // This format-layer fixture intentionally exceeds the temporary
+        // segment-derived codebook bound to exercise the durable u32 schema.
+        let page = crate::global_leaf::GlobalLeafPageInput {
+            cell_index: 70_000,
+            leaf_ordinal: 0,
+            centroid_code: vec![1, 2],
+            rows: (0..2)
+                .map(|ordinal| crate::global_leaf::GlobalLeafRowInput {
+                    id: crate::RecordId::from(format!("storage-row-{ordinal}")),
+                    stamp: crate::mutation::MutationStamp::new(
+                        crate::mutation::MutationVersion::from_parts(ordinal + 1, [1; 16]),
+                        [2; 32],
+                    ),
+                    code: vec![ordinal as u8, 9].into(),
+                    exact: [ordinal as f32, ordinal as f32 + 0.5]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                })
+                .collect(),
+        };
+        let encoded = crate::global_leaf::encode_global_leaf_bundle(
+            std::slice::from_ref(&page),
+            2,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        let complete_bundle_bytes = encoded.bytes.len() as u64;
+        assert!(
+            complete_bundle_bytes
+                > encoded.code_plane_bytes
+                    + encoded
+                        .pages
+                        .iter()
+                        .map(|page| u64::from(page.batch_bytes))
+                        .sum::<u64>(),
+            "complete object accounting omitted code-batch metadata/schema/footer overhead"
+        );
+
+        let mut writer = GlobalLeafPersistenceWriter::new(
+            &storage,
+            2,
+            VectorElementType::Float32,
+            "11aa".to_string(),
+        )
+        .unwrap();
+        writer.push_cell_chunk(vec![page]).unwrap();
+        writer.finalize_cell(70_000).unwrap();
+        let artifacts = writer.finish().unwrap();
+        assert_eq!(
+            artifacts.storage_bytes,
+            complete_bundle_bytes + artifacts.directory.encoded_bytes(),
+            "persisted storage bytes must charge the complete Arrow bundle and directory"
+        );
+    }
+
+    #[test]
+    fn v12_writer_splits_near_cap_int8_pages_before_bundle_overflow() {
+        const DIMENSIONS: usize = 128;
+        const ROWS_PER_PAGE: usize = 480;
+        const CODE_WIDTH: usize = 32;
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri(directory.path().to_string_lossy().as_ref()).unwrap();
+        let pages = (0..crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_PAGES)
+            .map(|page_ordinal| crate::global_leaf::GlobalLeafPageInput {
+                cell_index: 0,
+                leaf_ordinal: u32::try_from(page_ordinal).unwrap(),
+                centroid_code: vec![page_ordinal as u8; CODE_WIDTH],
+                rows: (0..ROWS_PER_PAGE)
+                    .map(|row_ordinal| crate::global_leaf::GlobalLeafRowInput {
+                        id: crate::RecordId::from(format!("p{page_ordinal}-r{row_ordinal}")),
+                        stamp: crate::mutation::MutationStamp::new(
+                            crate::mutation::MutationVersion::from_parts(
+                                u64::try_from(page_ordinal * ROWS_PER_PAGE + row_ordinal + 1)
+                                    .unwrap(),
+                                [7; 16],
+                            ),
+                            [8; 32],
+                        ),
+                        code: vec![row_ordinal as u8; CODE_WIDTH].into(),
+                        exact: vec![row_ordinal as u8; DIMENSIONS],
+                    })
+                    .collect(),
+            })
+            .collect();
+        let mut writer = GlobalLeafPersistenceWriter::new(
+            &storage,
+            DIMENSIONS,
+            VectorElementType::Int8,
+            "11aa".to_string(),
+        )
+        .unwrap();
+
+        writer
+            .push_cell_chunk(pages)
+            .expect("writer must split before the 48 MiB encoder backstop");
+        assert!(
+            writer.bundles.len() > 1,
+            "near-cap V12 pages must split by bytes before the 376-page count limit"
+        );
+        assert!(writer.bundles.iter().all(|bundle| {
+            bundle.encoded_bytes <= crate::global_leaf::GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES
+        }));
+    }
+
+    #[test]
+    fn v12_serialized_resident_bytes_stay_stable_while_runtime_slots_are_estimated() {
         let inline = valid_ann_ref();
         let mut sharded = inline.clone();
         sharded.incremental_runs[0].directory.shard_count = 3;
@@ -1473,10 +1680,13 @@ mod tests {
                 cell_index: 7,
                 leaf_ordinal: ordinal as u32,
                 bundle_index: 0,
-                batch_offset: 64 + ordinal as u64 * 1536,
+                batch_offset: 16_384 + ordinal as u64 * 1536,
                 metadata_bytes: 512,
                 body_bytes: 1024,
                 batch_bytes: 1536,
+                code_offset: 64 + ordinal as u64 * 2,
+                code_bytes: 2,
+                code_checksum: [(ordinal % 251) as u8; 32],
                 rows: 1,
                 partial_run_count: 0,
                 checksum: [(ordinal % 251) as u8; 32],
@@ -1486,11 +1696,14 @@ mod tests {
                 cell_index: 9,
                 leaf_ordinal: 0,
                 bundle_index: 0,
-                batch_offset: 64
+                batch_offset: 16_384
                     + crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES as u64 * 1536,
                 metadata_bytes: 512,
                 body_bytes: 1024,
                 batch_bytes: 1536,
+                code_offset: 64 + crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES as u64 * 2,
+                code_bytes: 2,
+                code_checksum: [9; 32],
                 rows: 1,
                 partial_run_count: 0,
                 checksum: [9; 32],
@@ -1501,6 +1714,9 @@ mod tests {
             path: "global-leaf/bundles/fixed-slots.arrow".to_owned(),
             checksum: [9; 32],
             encoded_bytes: 16 * 1024 * 1024,
+            code_plane_offset: 64,
+            code_plane_bytes: page_count as u64 * 2,
+            code_plane_checksum: [10; 32],
         }];
         let encoded =
             crate::global_leaf::encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
@@ -1554,7 +1770,7 @@ mod tests {
         assert_eq!(
             resident.resident_bytes(),
             decoded_directory_bytes,
-            "V11 persisted resident bytes changed from the full-directory contract"
+            "V12 persisted resident bytes changed from the full-directory contract"
         );
         assert!(
             resident.runtime_resident_bytes()
@@ -1601,7 +1817,7 @@ mod tests {
             ann.validate()
                 .unwrap_err()
                 .to_string()
-                .contains("duplicate V11 leaf-run level")
+                .contains("duplicate V12 leaf-run level")
         );
 
         let mut ann = valid_ann_ref();
@@ -1624,17 +1840,18 @@ mod tests {
     }
 
     #[test]
-    fn global_ann_rejects_cell_count_beyond_u16_identity_space() {
+    fn global_ann_temporarily_caps_segment_derived_coarse_quantizer_cells() {
         let mut ann = valid_ann_ref();
         ann.codebook.cell_count = 65_536;
         ann.validate().unwrap();
 
         ann.codebook.cell_count = 65_537;
+        let error = ann.validate().unwrap_err();
         assert!(
-            ann.validate()
-                .unwrap_err()
+            error
                 .to_string()
-                .contains("cell count")
+                .contains("temporary segment-derived coarse quantizer bound"),
+            "{error}"
         );
     }
 

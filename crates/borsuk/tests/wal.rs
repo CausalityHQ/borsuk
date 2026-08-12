@@ -251,13 +251,13 @@ fn wal_disabled_add_after_finalization_invalidates_stale_global_ann() {
         )
         .unwrap();
     index.finish_bulk_load().unwrap();
-    assert_eq!(index.stats().global_ann_layout_version, Some(11));
+    assert_eq!(index.stats().global_ann_layout_version, Some(12));
 
     index
         .add(vec![VectorRecord::new("new", vec![1_000.0, 1_000.0])])
         .unwrap();
 
-    assert_eq!(index.stats().global_ann_layout_version, Some(11));
+    assert_eq!(index.stats().global_ann_layout_version, Some(12));
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(
         reopened
@@ -291,13 +291,13 @@ fn wal_disabled_paged_add_after_finalization_invalidates_stale_global_ann() {
         .unwrap();
     index.finish_bulk_load().unwrap();
     assert!(index.stats().routing_max_level > 0);
-    assert_eq!(index.stats().global_ann_layout_version, Some(11));
+    assert_eq!(index.stats().global_ann_layout_version, Some(12));
 
     index
         .add(vec![VectorRecord::new("new", vec![1_000.0, 1_000.0])])
         .unwrap();
 
-    assert_eq!(index.stats().global_ann_layout_version, Some(11));
+    assert_eq!(index.stats().global_ann_layout_version, Some(12));
     let reopened = BorsukIndex::open(&uri).unwrap();
     assert_eq!(
         reopened

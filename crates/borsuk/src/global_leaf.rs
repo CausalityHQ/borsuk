@@ -6,15 +6,16 @@ use std::{
 
 use arrow_array::{
     Array, BinaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array, Float32Array,
-    Int8Array, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    Int8Array, RecordBatch, StringArray, StructArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array, UnionArray, new_empty_array,
 };
-use arrow_buffer::Buffer;
+use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_ipc::{
-    Block, MetadataVersion,
+    Block, MessageHeader, MetadataVersion,
     reader::FileDecoder,
     writer::{FileWriter, IpcWriteOptions},
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Fields, Schema, UnionFields, UnionMode};
 use bytes::Bytes;
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
@@ -31,24 +32,78 @@ use crate::{
 pub(crate) const GLOBAL_LEAF_MAX_ENCODED_BYTES: u64 = 128 * 1024;
 pub(crate) const GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES: usize = 96 * 1024;
 pub(crate) const GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES: u64 = 48 * 1024 * 1024;
-// Leave eight maximum-sized page slots for the Arrow footer and schema while
-// bounding the writer's in-memory page queue independently of corpus size.
+// Secondary block-count/in-memory bound. V12's code plane means page count no
+// longer implies the byte cap; the persistence writer also maintains a running
+// conservative encoded-byte estimate and flushes on whichever bound comes first.
 pub(crate) const GLOBAL_LEAF_BUNDLE_MAX_PAGES: usize = 376;
+// Conservatively covers file magic, schema messages, footer block tables, and
+// footer alignment for at most GLOBAL_LEAF_BUNDLE_MAX_PAGES exact batches.
+pub(crate) const GLOBAL_LEAF_BUNDLE_FIXED_OVERHEAD_BYTES: u64 = 256 * 1024;
 pub(crate) const GLOBAL_LEAF_DIRECTORY_SHARD_PAGES: usize = 4096;
 const GLOBAL_LEAF_DIRECTORY_SHARD_MAX_ENCODED_BYTES: usize = 4 * 1024 * 1024;
 const GLOBAL_LEAF_MAX_METADATA_BYTES: u32 = 16 * 1024;
-const GLOBAL_LEAF_LAYOUT: &str = "bounded-arrow-leaf-v11";
+const GLOBAL_LEAF_LAYOUT: &str = "bounded-arrow-leaf-v12";
+
+#[derive(Debug, Clone)]
+pub(crate) struct GlobalLeafCodeInput {
+    bytes: Arc<[u8]>,
+    offset: usize,
+    len: usize,
+}
+
+impl GlobalLeafCodeInput {
+    pub(crate) fn shared(bytes: Arc<[u8]>, range: std::ops::Range<usize>) -> Result<Self> {
+        let len = range.end.checked_sub(range.start).ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf code range is reversed".to_string())
+        })?;
+        if len == 0 || range.end > bytes.len() {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf code range exceeds its shared backing".to_string(),
+            ));
+        }
+        Ok(Self {
+            bytes,
+            offset: range.start,
+            len,
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.bytes[self.offset..self.offset + self.len]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_backing(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.bytes, &other.bytes)
+    }
+}
+
+impl From<Vec<u8>> for GlobalLeafCodeInput {
+    fn from(bytes: Vec<u8>) -> Self {
+        let len = bytes.len();
+        Self {
+            bytes: Arc::from(bytes),
+            offset: 0,
+            len,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct GlobalLeafRowInput {
     pub(crate) id: RecordId,
     pub(crate) stamp: MutationStamp,
+    pub(crate) code: GlobalLeafCodeInput,
     pub(crate) exact: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct GlobalLeafPageInput {
-    pub(crate) cell_index: u16,
+    pub(crate) cell_index: u32,
     pub(crate) leaf_ordinal: u32,
     pub(crate) centroid_code: Vec<u8>,
     pub(crate) rows: Vec<GlobalLeafRowInput>,
@@ -56,12 +111,15 @@ pub(crate) struct GlobalLeafPageInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EncodedGlobalLeafPage {
-    pub(crate) cell_index: u16,
+    pub(crate) cell_index: u32,
     pub(crate) leaf_ordinal: u32,
     pub(crate) batch_offset: u64,
     pub(crate) metadata_bytes: u32,
     pub(crate) body_bytes: u32,
     pub(crate) batch_bytes: u32,
+    pub(crate) code_offset: u64,
+    pub(crate) code_bytes: u32,
+    pub(crate) code_checksum: [u8; 32],
     pub(crate) rows: usize,
     pub(crate) checksum: [u8; 32],
     pub(crate) centroid_code: Vec<u8>,
@@ -70,21 +128,27 @@ pub(crate) struct EncodedGlobalLeafPage {
 #[derive(Debug)]
 pub(crate) struct EncodedGlobalLeafBundle {
     pub(crate) bytes: Vec<u8>,
+    pub(crate) code_plane_offset: u64,
+    pub(crate) code_plane_bytes: u64,
+    pub(crate) code_plane_checksum: [u8; 32],
     pub(crate) pages: Vec<EncodedGlobalLeafPage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GlobalLeafPageRef {
-    pub(crate) cell_index: u16,
+    pub(crate) cell_index: u32,
     pub(crate) leaf_ordinal: u32,
     pub(crate) bundle_index: u32,
     pub(crate) batch_offset: u64,
     pub(crate) metadata_bytes: u32,
     pub(crate) body_bytes: u32,
     pub(crate) batch_bytes: u32,
+    pub(crate) code_offset: u64,
+    pub(crate) code_bytes: u32,
+    pub(crate) code_checksum: [u8; 32],
     pub(crate) rows: u32,
-    /// Zero marks a sealed page. V11 directories persist `1..=4` for a
+    /// Zero marks a sealed page. V12 directories persist `1..=4` for a
     /// bounded partial-run page.
     pub(crate) partial_run_count: u8,
     pub(crate) checksum: [u8; 32],
@@ -97,6 +161,109 @@ pub(crate) struct GlobalLeafBundleRef {
     pub(crate) path: String,
     pub(crate) checksum: [u8; 32],
     pub(crate) encoded_bytes: u64,
+    pub(crate) code_plane_offset: u64,
+    pub(crate) code_plane_bytes: u64,
+    pub(crate) code_plane_checksum: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// The Task 3 read contract is exercised before Task 4 wires publication/query use.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct GlobalLeafCodeRead {
+    pub(crate) bundle_index: u32,
+    pub(crate) offset: u64,
+    pub(crate) bytes: u64,
+    pub(crate) selected_bytes: u64,
+}
+
+// The Task 3 read contract is exercised before Task 4 wires publication/query use.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn coalesce_global_leaf_code_reads(
+    pages: &[GlobalLeafPageRef],
+    bundles: &[GlobalLeafBundleRef],
+) -> Result<Vec<GlobalLeafCodeRead>> {
+    for bundle in bundles {
+        let code_end = bundle
+            .code_plane_offset
+            .checked_add(bundle.code_plane_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf code-plane range overflows".to_string())
+            })?;
+        if bundle.code_plane_bytes == 0
+            || code_end > bundle.encoded_bytes
+            || bundle.encoded_bytes > GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES
+        {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf code read references an invalid authenticated bundle".to_string(),
+            ));
+        }
+    }
+    let mut selected = pages.iter().collect::<Vec<_>>();
+    selected.sort_unstable_by_key(|page| (page.bundle_index, page.code_offset));
+    for pair in selected.windows(2) {
+        let prior_end = pair[0]
+            .code_offset
+            .checked_add(u64::from(pair[0].code_bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf PQ-code read range overflows".to_string())
+            })?;
+        if pair[0].bundle_index == pair[1].bundle_index && prior_end > pair[1].code_offset {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf selected PQ-code ranges overlap".to_string(),
+            ));
+        }
+    }
+    let mut reads: Vec<GlobalLeafCodeRead> = Vec::new();
+    for page in selected {
+        let bundle = bundles.get(page.bundle_index as usize).ok_or_else(|| {
+            BorsukError::InvalidStorage(format!(
+                "global leaf code read references missing bundle {}",
+                page.bundle_index
+            ))
+        })?;
+        if page.rows == 0
+            || page.code_bytes == 0
+            || page.code_bytes % page.rows != 0
+            || page.code_offset < bundle.code_plane_offset
+        {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf page has an invalid PQ-code range".to_string(),
+            ));
+        }
+        let page_end = page
+            .code_offset
+            .checked_add(u64::from(page.code_bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf PQ-code read range overflows".to_string())
+            })?;
+        let bundle_end = bundle.code_plane_offset + bundle.code_plane_bytes;
+        if page_end > bundle_end {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf page PQ-code range exceeds its authenticated code plane".to_string(),
+            ));
+        }
+        if let Some(read) = reads.last_mut()
+            && read.bundle_index == page.bundle_index
+        {
+            read.bytes = page_end - read.offset;
+            read.selected_bytes = read
+                .selected_bytes
+                .checked_add(u64::from(page.code_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf selected PQ-code bytes overflow".to_string(),
+                    )
+                })?;
+            continue;
+        }
+        reads.push(GlobalLeafCodeRead {
+            bundle_index: page.bundle_index,
+            offset: page.code_offset,
+            bytes: u64::from(page.code_bytes),
+            selected_bytes: u64::from(page.code_bytes),
+        });
+    }
+    Ok(reads)
 }
 
 pub(crate) fn fit_global_leaf_page_ranges(
@@ -160,28 +327,22 @@ fn global_leaf_page_fits(
     element_type: VectorElementType,
     row_bytes: usize,
 ) -> Result<bool> {
-    let id_bytes = rows.iter().try_fold(0_usize, |total, row| {
-        total.checked_add(row.id.as_bytes().len()).ok_or_else(|| {
-            BorsukError::InvalidStorage("global leaf identity bytes overflow".to_string())
-        })
-    })?;
-    let fixed_bytes_per_row = row_bytes.checked_add(8 + 16 + 32 + 32).ok_or_else(|| {
-        BorsukError::InvalidStorage("global leaf fixed row bytes overflow".to_string())
-    })?;
-    let raw_body = rows
-        .len()
-        .checked_mul(fixed_bytes_per_row)
-        .and_then(|bytes| bytes.checked_add(id_bytes))
-        .and_then(|bytes| bytes.checked_add(rows.len().checked_add(1)?.checked_mul(4)?))
+    let code_width = rows
+        .first()
+        .map(|row| row.code.len())
+        .filter(|width| *width > 0)
         .ok_or_else(|| {
-            BorsukError::InvalidStorage("global leaf body bytes overflow".to_string())
+            BorsukError::InvalidStorage("global leaf PQ code width must be positive".to_string())
         })?;
-    // Seven non-null data buffers can each require at most 63 bytes of IPC
-    // alignment padding. The encoder separately rejects record metadata above
-    // the fixed V11 bound, making this a conservative no-allocation fast path.
-    let conservative = raw_body
-        .checked_add(7 * 63)
-        .and_then(|bytes| bytes.checked_add(GLOBAL_LEAF_MAX_METADATA_BYTES as usize))
+    if rows.iter().any(|row| row.code.len() != code_width) {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf rows disagree on PQ code width".to_string(),
+        ));
+    }
+    let conservative_body =
+        global_leaf_conservative_exact_body_bytes(rows, dimensions, element_type, row_bytes)?;
+    let conservative = conservative_body
+        .checked_add(GLOBAL_LEAF_MAX_METADATA_BYTES as usize)
         .ok_or_else(|| {
             BorsukError::InvalidStorage("global leaf conservative size overflows".to_string())
         })?;
@@ -193,6 +354,142 @@ fn global_leaf_page_fits(
         global_leaf_probe_batch_bytes(rows, dimensions, element_type)?
             <= GLOBAL_LEAF_MAX_ENCODED_BYTES,
     )
+}
+
+fn global_leaf_conservative_exact_body_bytes(
+    rows: &[GlobalLeafRowInput],
+    dimensions: usize,
+    element_type: VectorElementType,
+    row_bytes: usize,
+) -> Result<usize> {
+    let id_bytes = rows.iter().try_fold(0_usize, |total, row| {
+        total.checked_add(row.id.as_bytes().len()).ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf identity bytes overflow".to_string())
+        })
+    })?;
+    let fixed_bytes_per_row = row_bytes
+        // Dense-union exact rows store one type ID plus one i32 child offset.
+        // PQ bytes live only in the bundle code plane, not in this page body.
+        .checked_add(5)
+        .and_then(|bytes| bytes.checked_add(8 + 16 + 32 + 32))
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf fixed row bytes overflow".to_string())
+        })?;
+    let row_validity_bytes = rows.len().div_ceil(u8::BITS as usize);
+    let validity_bytes = if element_type == VectorElementType::Binary {
+        // Binary vectors are direct FixedSizeBinary values, so every emitted
+        // validity bitmap is row-level. Its exact batch has seven physical
+        // validity buffers; FixedSizeList adds the eighth child bitmap below.
+        7_usize.checked_mul(row_validity_bytes)
+    } else {
+        // FixedSizeList emits seven row-level bitmaps plus one bitmap for its
+        // scalar child values, whose physical length is rows * dimensions.
+        rows.len()
+            .checked_mul(dimensions)
+            .map(|values| values.div_ceil(u8::BITS as usize))
+            .and_then(|child| 7_usize.checked_mul(row_validity_bytes)?.checked_add(child))
+    }
+    .ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf validity bytes overflow".to_string())
+    })?;
+    let raw_body = rows
+        .len()
+        .checked_mul(fixed_bytes_per_row)
+        .and_then(|bytes| bytes.checked_add(id_bytes))
+        .and_then(|bytes| bytes.checked_add(rows.len().checked_add(1)?.checked_mul(4)?))
+        .and_then(|bytes| bytes.checked_add(validity_bytes))
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf body bytes overflow".to_string())
+        })?;
+    // Every physically nonempty buffer can require at most 63 bytes of IPC
+    // alignment: 17 for FixedSizeList (nine data/offset plus eight validity),
+    // or 16 for direct Binary (nine data/offset plus seven validity).
+    // The encoder separately rejects record metadata above the fixed V12 bound,
+    // making this a conservative no-allocation fast path.
+    let nonempty_buffers = if element_type == VectorElementType::Binary {
+        16
+    } else {
+        17
+    };
+    raw_body.checked_add(nonempty_buffers * 63).ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf conservative size overflows".to_string())
+    })
+}
+
+pub(crate) struct GlobalLeafBundlePageEstimate {
+    pub(crate) exact_batch_bytes: u64,
+    pub(crate) rows: usize,
+    pub(crate) code_bytes: u64,
+}
+
+pub(crate) fn estimate_global_leaf_bundle_page(
+    page: &GlobalLeafPageInput,
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<GlobalLeafBundlePageEstimate> {
+    if page.rows.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf page must contain at least one row".to_string(),
+        ));
+    }
+    let row_bytes = element_type.fixed_width_bytes(dimensions)?;
+    if page.rows.iter().any(|row| row.exact.len() != row_bytes) {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf row does not match its fixed vector width".to_string(),
+        ));
+    }
+    let code_width = page.rows[0].code.len();
+    if code_width == 0 || page.rows.iter().any(|row| row.code.len() != code_width) {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf rows disagree on positive PQ code width".to_string(),
+        ));
+    }
+    let exact_batch_bytes =
+        global_leaf_conservative_exact_body_bytes(&page.rows, dimensions, element_type, row_bytes)?
+            .checked_add(GLOBAL_LEAF_MAX_METADATA_BYTES as usize)
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf page estimate overflows".to_string())
+            })?;
+    let code_bytes = page
+        .rows
+        .len()
+        .checked_mul(code_width)
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf code byte estimate overflows".to_string())
+        })?;
+    Ok(GlobalLeafBundlePageEstimate {
+        exact_batch_bytes,
+        rows: page.rows.len(),
+        code_bytes,
+    })
+}
+
+pub(crate) fn estimate_global_leaf_bundle_bytes(
+    exact_batch_bytes: u64,
+    code_rows: usize,
+    code_bytes: u64,
+) -> Result<u64> {
+    let union_bytes = code_rows.checked_mul(5).ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf code-plane union estimate overflows".to_string())
+    })?;
+    let validity_bytes = code_rows.div_ceil(u8::BITS as usize);
+    let code_body_bytes = union_bytes
+        .checked_add(validity_bytes)
+        .and_then(|bytes| bytes.checked_add(4 * 63))
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .and_then(|bytes| bytes.checked_add(code_bytes))
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf code-plane estimate overflows".to_string())
+        })?;
+    GLOBAL_LEAF_BUNDLE_FIXED_OVERHEAD_BYTES
+        .checked_add(exact_batch_bytes)
+        .and_then(|bytes| bytes.checked_add(GLOBAL_LEAF_MAX_METADATA_BYTES as u64))
+        .and_then(|bytes| bytes.checked_add(code_body_bytes))
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf bundle estimate overflows".to_string())
+        })
 }
 
 pub(crate) fn encode_global_leaf_bundle(
@@ -225,11 +522,34 @@ fn encode_global_leaf_bundle_with_max_bytes(
             "global leaf vector row must not be empty".to_string(),
         ));
     }
-    let schema = global_leaf_schema(dimensions, element_type)?;
+    let code_width = pages
+        .first()
+        .and_then(|page| page.rows.first())
+        .map(|row| row.code.len())
+        .filter(|width| *width > 0)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf PQ code width must be positive".to_string())
+        })?;
+    if pages
+        .iter()
+        .flat_map(|page| &page.rows)
+        .any(|row| row.code.len() != code_width)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf rows disagree on PQ code width".to_string(),
+        ));
+    }
+    let schema = global_leaf_schema(dimensions, element_type, code_width)?;
     let mut bytes = Vec::new();
     {
         let mut writer =
             FileWriter::try_new_with_options(&mut bytes, &schema, IpcWriteOptions::default())?;
+        writer.write(&global_leaf_code_record_batch(
+            pages,
+            Arc::clone(&schema),
+            dimensions,
+            element_type,
+        )?)?;
         for page in pages {
             writer.write(&global_leaf_record_batch(
                 &page.rows,
@@ -245,14 +565,35 @@ fn encode_global_leaf_bundle_with_max_bytes(
             "global leaf bundle exceeds its {max_bytes} byte complete object cap"
         )));
     }
-    let batch_ranges = global_leaf_batch_ranges(&bytes, pages.len())?;
+    let mut batch_ranges = global_leaf_batch_ranges(&bytes, pages.len() + 1)?.into_iter();
+    let code_block = batch_ranges.next().ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf bundle has no code plane".to_string())
+    })?;
+    let total_rows = pages.iter().try_fold(0_usize, |total, page| {
+        total.checked_add(page.rows.len()).ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf bundle row count overflows".to_string())
+        })
+    })?;
+    let code_plane_range =
+        global_leaf_code_buffer_range(&bytes, &code_block, total_rows, code_width, element_type)?;
+    let code_plane = bytes.get(code_plane_range.clone()).ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf code plane exceeds its bundle".to_string())
+    })?;
+    let code_plane_offset = u64::try_from(code_plane_range.start).map_err(|_| {
+        BorsukError::InvalidStorage("global leaf code-plane offset exceeds u64".to_string())
+    })?;
+    let code_plane_bytes = u64::try_from(code_plane.len()).map_err(|_| {
+        BorsukError::InvalidStorage("global leaf code-plane bytes exceed u64".to_string())
+    })?;
+    let code_plane_checksum = *blake3::hash(code_plane).as_bytes();
+    let mut code_row_start = 0_usize;
     let encoded_pages = pages
         .iter()
         .zip(batch_ranges)
         .map(|(page, block)| {
             if block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES {
                 return Err(BorsukError::InvalidStorage(format!(
-                    "global leaf page metadata is {} bytes, exceeding the {} byte V11 bound",
+                    "global leaf page metadata is {} bytes, exceeding the {} byte V12 bound",
                     block.metadata_bytes, GLOBAL_LEAF_MAX_METADATA_BYTES
                 )));
             }
@@ -274,6 +615,34 @@ fn encode_global_leaf_bundle_with_max_bytes(
             let stored = bytes.get(start..end).ok_or_else(|| {
                 BorsukError::InvalidStorage("global leaf batch range exceeds bundle".to_string())
             })?;
+            let code_start = code_row_start.checked_mul(code_width).ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf page code offset overflows".to_string())
+            })?;
+            let code_len = page.rows.len().checked_mul(code_width).ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf page code bytes overflow".to_string())
+            })?;
+            let code_end = code_start.checked_add(code_len).ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf page code end overflows".to_string())
+            })?;
+            let absolute_start = code_plane_range.start.checked_add(code_start).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global leaf page absolute code offset overflows".to_string(),
+                )
+            })?;
+            let absolute_end = code_plane_range.start.checked_add(code_end).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global leaf page absolute code end overflows".to_string(),
+                )
+            })?;
+            let code_range = absolute_start..absolute_end;
+            let code_stored = bytes.get(code_range.clone()).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global leaf PQ-code range exceeds bundle".to_string(),
+                )
+            })?;
+            code_row_start = code_row_start.checked_add(page.rows.len()).ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf code row count overflows".to_string())
+            })?;
             Ok(EncodedGlobalLeafPage {
                 cell_index: page.cell_index,
                 leaf_ordinal: page.leaf_ordinal,
@@ -281,6 +650,17 @@ fn encode_global_leaf_bundle_with_max_bytes(
                 metadata_bytes: block.metadata_bytes,
                 body_bytes: block.body_bytes,
                 batch_bytes,
+                code_offset: u64::try_from(code_range.start).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "global leaf PQ-code offset exceeds u64".to_string(),
+                    )
+                })?,
+                code_bytes: u32::try_from(code_stored.len()).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "global leaf PQ-code range exceeds u32".to_string(),
+                    )
+                })?,
+                code_checksum: *blake3::hash(code_stored).as_bytes(),
                 rows: page.rows.len(),
                 checksum: *blake3::hash(stored).as_bytes(),
                 centroid_code: page.centroid_code.clone(),
@@ -289,6 +669,9 @@ fn encode_global_leaf_bundle_with_max_bytes(
         .collect::<Result<Vec<_>>>()?;
     Ok(EncodedGlobalLeafBundle {
         bytes,
+        code_plane_offset,
+        code_plane_bytes,
+        code_plane_checksum,
         pages: encoded_pages,
     })
 }
@@ -315,7 +698,7 @@ pub(crate) fn decode_global_leaf_page(
     }
     if page.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES {
         return Err(BorsukError::InvalidStorage(
-            "global leaf metadata exceeds the V11 bound".to_string(),
+            "global leaf metadata exceeds the V12 bound".to_string(),
         ));
     }
     if blake3::hash(stored).as_bytes() != &page.checksum {
@@ -329,7 +712,8 @@ pub(crate) fn decode_global_leaf_page(
     crate::arrow_vector_sidecar::validate_record_batch_block(
         &block, stored, page.rows, dimensions,
     )?;
-    let schema = global_leaf_schema(dimensions, element_type)?;
+    let code_width = checked_global_leaf_code_width(page.rows, page.code_bytes)?;
+    let schema = global_leaf_schema(dimensions, element_type, code_width)?;
     let decoder = FileDecoder::new(Arc::clone(&schema), MetadataVersion::V5);
     let decoded = catch_unwind(AssertUnwindSafe(|| {
         decoder.read_record_batch(&block, &Buffer::from(stored.to_vec()))
@@ -342,22 +726,60 @@ pub(crate) fn decode_global_leaf_page(
     .ok_or_else(|| {
         BorsukError::InvalidStorage("global leaf Arrow block decoded no batch".to_string())
     })?;
-    if decoded.num_rows() != page.rows || decoded.num_columns() != 6 {
+    if decoded.num_rows() != page.rows || decoded.num_columns() != 1 {
         return Err(BorsukError::InvalidStorage(
             "global leaf Arrow page shape does not match its reference".to_string(),
         ));
     }
-    if decoded
+    let payload = decoded
+        .column(0)
+        .as_any()
+        .downcast_ref::<UnionArray>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf Arrow payload is not a union".to_string())
+        })?;
+    if payload.type_ids().iter().any(|type_id| *type_id != 1)
+        || payload.offsets().is_none_or(|offsets| {
+            offsets
+                .iter()
+                .enumerate()
+                .any(|(row, offset)| usize::try_from(*offset).ok() != Some(row))
+        })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf Arrow page does not contain canonical exact rows".to_string(),
+        ));
+    }
+    let exact = payload
+        .child(1)
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf exact payload is not a struct".to_string())
+        })?;
+    if exact.len() != page.rows || exact.null_count() != 0 {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf exact payload row count is invalid".to_string(),
+        ));
+    }
+    let exact = RecordBatch::try_new(
+        Arc::new(Schema::new(global_leaf_exact_fields(
+            dimensions,
+            element_type,
+        )?)),
+        exact.columns().to_vec(),
+    )?;
+    if exact
         .columns()
         .iter()
         .any(|column| column.null_count() != 0)
     {
         return Err(BorsukError::InvalidStorage(
-            "global leaf Arrow page contains null values".to_string(),
+            "global leaf exact page contains null values".to_string(),
         ));
     }
-    validate_global_leaf_row_integrity(&decoded, dimensions, element_type)?;
-    Ok(decoded)
+    validate_global_leaf_row_integrity(&exact, dimensions, element_type)?;
+    Ok(exact)
 }
 
 pub(crate) fn decode_global_leaf_page_ref(
@@ -374,6 +796,9 @@ pub(crate) fn decode_global_leaf_page_ref(
             metadata_bytes: page.metadata_bytes,
             body_bytes: page.body_bytes,
             batch_bytes: page.batch_bytes,
+            code_offset: page.code_offset,
+            code_bytes: page.code_bytes,
+            code_checksum: page.code_checksum,
             rows: page.rows as usize,
             checksum: page.checksum,
             centroid_code: page.centroid_code.to_vec(),
@@ -382,6 +807,66 @@ pub(crate) fn decode_global_leaf_page_ref(
         dimensions,
         element_type,
     )
+}
+
+#[derive(Debug)]
+// The Task 3 read contract is exercised before Task 4 wires publication/query use.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct VerifiedGlobalLeafCodes<'a> {
+    bytes: &'a [u8],
+    width: usize,
+    rows: usize,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl<'a> VerifiedGlobalLeafCodes<'a> {
+    pub(crate) fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub(crate) fn width(&self) -> usize {
+        self.width
+    }
+
+    pub(crate) fn code(&self, row: usize) -> Option<&'a [u8]> {
+        (row < self.rows).then(|| {
+            let start = row * self.width;
+            &self.bytes[start..start + self.width]
+        })
+    }
+}
+
+// The Task 3 read contract is exercised before Task 4 wires publication/query use.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn decode_global_leaf_codes<'a>(
+    page: &EncodedGlobalLeafPage,
+    stored: &'a [u8],
+) -> Result<VerifiedGlobalLeafCodes<'a>> {
+    if stored.len() != page.code_bytes as usize {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf fetched PQ-code range does not match its page reference".to_string(),
+        ));
+    }
+    if blake3::hash(stored).as_bytes() != &page.code_checksum {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf PQ-code checksum mismatch".to_string(),
+        ));
+    }
+    let code_width = checked_global_leaf_code_width(page.rows, page.code_bytes)?;
+    Ok(VerifiedGlobalLeafCodes {
+        bytes: stored,
+        width: code_width,
+        rows: page.rows,
+    })
+}
+
+fn checked_global_leaf_code_width(rows: usize, code_bytes: u32) -> Result<usize> {
+    if rows == 0 || code_bytes == 0 || !(code_bytes as usize).is_multiple_of(rows) {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf PQ-code range is not row aligned".to_string(),
+        ));
+    }
+    Ok(code_bytes as usize / rows)
 }
 
 #[derive(Debug, Clone)]
@@ -455,12 +940,12 @@ pub(crate) fn decode_global_leaf_rows(
         .collect()
 }
 
-const GLOBAL_LEAF_V11_LAYOUT: &str = "bounded-arrow-leaf-v11";
-const V11_ROW_EMPTY: u8 = 0;
-const V11_ROW_CELL: u8 = 1;
-const V11_ROW_BUNDLE: u8 = 2;
-const V11_ROW_PAGE: u8 = 3;
-const V11_ROW_SHARD: u8 = 4;
+const GLOBAL_LEAF_V12_LAYOUT: &str = "bounded-arrow-leaf-v12";
+const V12_ROW_EMPTY: u8 = 0;
+const V12_ROW_CELL: u8 = 1;
+const V12_ROW_BUNDLE: u8 = 2;
+const V12_ROW_PAGE: u8 = 3;
+const V12_ROW_SHARD: u8 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -468,8 +953,8 @@ pub(crate) struct GlobalLeafDirectoryShardRef {
     pub(crate) path: String,
     pub(crate) checksum: String,
     pub(crate) encoded_bytes: u64,
-    pub(crate) first_cell: u16,
-    pub(crate) last_cell: u16,
+    pub(crate) first_cell: u32,
+    pub(crate) last_cell: u32,
     pub(crate) page_count: u32,
 }
 
@@ -491,7 +976,7 @@ impl EncodedGlobalLeafRunDirectory {
         u32::try_from(self.shards.len())
             .ok()
             .and_then(|shards| shards.checked_add(1))
-            .ok_or_else(|| invalid_leaf_directory("V11 directory object count exceeds u32"))
+            .ok_or_else(|| invalid_leaf_directory("V12 directory object count exceeds u32"))
     }
 }
 
@@ -547,18 +1032,18 @@ impl GlobalLeafRunDirectory {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct V11CellBounds {
-    cell_index: u16,
+struct V12CellBounds {
+    cell_index: u32,
     first_page: u64,
     page_count: u32,
 }
 
-pub(crate) const GLOBAL_LEAF_V11_CELL_BOUND_BYTES: usize = std::mem::size_of::<V11CellBounds>();
+pub(crate) const GLOBAL_LEAF_V12_CELL_BOUND_BYTES: usize = std::mem::size_of::<V12CellBounds>();
 
 #[derive(Debug)]
 pub(crate) struct GlobalLeafRunDirectoryRoot {
     code_width: usize,
-    cells: Vec<V11CellBounds>,
+    cells: Vec<V12CellBounds>,
     pages: Vec<GlobalLeafPageRef>,
     bundles: Vec<GlobalLeafBundleRef>,
     shards: Vec<GlobalLeafDirectoryShardRef>,
@@ -579,7 +1064,7 @@ impl GlobalLeafRunDirectoryRoot {
 
     pub(crate) fn selected_shards(
         &self,
-        selected_cells: &[u16],
+        selected_cells: &[u32],
     ) -> Result<Vec<(usize, &GlobalLeafDirectoryShardRef)>> {
         let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
         let present = self
@@ -612,7 +1097,7 @@ impl GlobalLeafRunDirectoryRoot {
         {
             if !pages.is_empty() {
                 return Err(invalid_leaf_directory(
-                    "V11 empty root cannot complete with shard pages",
+                    "V12 empty root cannot complete with shard pages",
                 ));
             }
             return Ok(GlobalLeafRunDirectory {
@@ -624,20 +1109,20 @@ impl GlobalLeafRunDirectoryRoot {
         let pages = if self.shards.is_empty() {
             if !pages.is_empty() {
                 return Err(invalid_leaf_directory(
-                    "V11 inline root cannot complete with shard pages",
+                    "V12 inline root cannot complete with shard pages",
                 ));
             }
             self.pages.clone()
         } else {
             if !self.pages.is_empty() {
                 return Err(invalid_leaf_directory(
-                    "V11 sharded root contains inline pages",
+                    "V12 sharded root contains inline pages",
                 ));
             }
             pages
         };
-        validate_v11_pages(&pages, &self.bundles, self.code_width)?;
-        validate_v11_cell_bounds(&self.cells, &pages)?;
+        validate_v12_pages(&pages, &self.bundles, self.code_width)?;
+        validate_v12_cell_bounds(&self.cells, &pages)?;
         Ok(GlobalLeafRunDirectory {
             pages,
             bundles: self.bundles.clone(),
@@ -647,14 +1132,14 @@ impl GlobalLeafRunDirectoryRoot {
 }
 
 #[derive(Debug, Clone)]
-struct V11DirectoryTable {
-    cells: Vec<V11CellBounds>,
+struct V12DirectoryTable {
+    cells: Vec<V12CellBounds>,
     pages: Vec<GlobalLeafPageRef>,
     bundles: Vec<GlobalLeafBundleRef>,
     shards: Vec<GlobalLeafDirectoryShardRef>,
 }
 
-/// Encode the V11 run directory as ordinary Parquet. Small runs keep the page
+/// Encode the V12 run directory as ordinary Parquet. Small runs keep the page
 /// rows and deduplicated bundle refs in one root object; larger runs put at
 /// most 4096 page refs in each authenticated Parquet shard.
 pub(crate) fn encode_global_leaf_run_directory(
@@ -662,36 +1147,36 @@ pub(crate) fn encode_global_leaf_run_directory(
     pages: &[GlobalLeafPageRef],
     bundles: &[GlobalLeafBundleRef],
 ) -> Result<EncodedGlobalLeafRunDirectory> {
-    validate_v11_checksum(codebook_checksum)?;
+    validate_v12_checksum(codebook_checksum)?;
     let mut pages = pages.to_vec();
     pages.sort_unstable_by_key(|page| (page.cell_index, page.leaf_ordinal));
     let code_width = if pages.is_empty() {
         if !bundles.is_empty() {
             return Err(invalid_leaf_directory(
-                "V11 empty directory must not reference bundles",
+                "V12 empty directory must not reference bundles",
             ));
         }
         // A coverage-only deletion run has no page code whose width could be
         // inferred. Keep positive typed metadata while carrying no code bytes.
         1
     } else {
-        let code_width = v11_code_width(&pages)?;
-        validate_v11_pages(&pages, bundles, code_width)?;
+        let code_width = v12_code_width(&pages)?;
+        validate_v12_pages(&pages, bundles, code_width)?;
         code_width
     };
     if pages.len() <= GLOBAL_LEAF_DIRECTORY_SHARD_PAGES {
-        let root = encode_v11_directory_table(
+        let root = encode_v12_directory_table(
             codebook_checksum,
             "leaf-run-directory-root",
             code_width,
-            &V11DirectoryTable {
-                cells: v11_cell_bounds(&pages)?,
+            &V12DirectoryTable {
+                cells: v12_cell_bounds(&pages)?,
                 pages,
                 bundles: bundles.to_vec(),
                 shards: Vec::new(),
             },
         )?;
-        validate_v11_directory_object_size(root.len(), "root")?;
+        validate_v12_directory_object_size(root.len(), "root")?;
         return Ok(EncodedGlobalLeafRunDirectory {
             root,
             shards: Vec::new(),
@@ -701,11 +1186,11 @@ pub(crate) fn encode_global_leaf_run_directory(
     let mut shards = Vec::new();
     let mut references = Vec::new();
     for (ordinal, page_chunk) in pages.chunks(GLOBAL_LEAF_DIRECTORY_SHARD_PAGES).enumerate() {
-        let bytes = encode_v11_directory_table(
+        let bytes = encode_v12_directory_table(
             codebook_checksum,
             "leaf-run-directory-shard",
             code_width,
-            &V11DirectoryTable {
+            &V12DirectoryTable {
                 cells: Vec::new(),
                 pages: page_chunk.to_vec(),
                 bundles: Vec::new(),
@@ -714,32 +1199,32 @@ pub(crate) fn encode_global_leaf_run_directory(
         )?;
         if bytes.len() > GLOBAL_LEAF_DIRECTORY_SHARD_MAX_ENCODED_BYTES {
             return Err(invalid_leaf_directory(
-                "V11 encoded directory shard exceeds the bounded four MiB object cap",
+                "V12 encoded directory shard exceeds the bounded four MiB object cap",
             ));
         }
         let first = page_chunk.first().expect("nonempty page chunks");
         let last = page_chunk.last().expect("nonempty page chunks");
         let hash = blake3::hash(&bytes).to_hex().to_string();
         let reference = GlobalLeafDirectoryShardRef {
-            path: format!("global-leaf/v11/directories/directory-{ordinal}-{hash}.parquet"),
+            path: format!("global-leaf/v12/directories/directory-{ordinal}-{hash}.parquet"),
             checksum: hash,
             encoded_bytes: u64::try_from(bytes.len())
-                .map_err(|_| invalid_leaf_directory("V11 directory shard size exceeds u64"))?,
+                .map_err(|_| invalid_leaf_directory("V12 directory shard size exceeds u64"))?,
             first_cell: first.cell_index,
             last_cell: last.cell_index,
             page_count: u32::try_from(page_chunk.len()).map_err(|_| {
-                invalid_leaf_directory("V11 directory shard page count exceeds u32")
+                invalid_leaf_directory("V12 directory shard page count exceeds u32")
             })?,
         };
         references.push(reference.clone());
         shards.push(EncodedGlobalLeafDirectoryShard { reference, bytes });
     }
-    let root = encode_v11_directory_table(
+    let root = encode_v12_directory_table(
         codebook_checksum,
         "leaf-run-directory-root",
         code_width,
-        &V11DirectoryTable {
-            cells: v11_cell_bounds(&pages)?,
+        &V12DirectoryTable {
+            cells: v12_cell_bounds(&pages)?,
             pages: Vec::new(),
             bundles: bundles.to_vec(),
             shards: references,
@@ -747,7 +1232,7 @@ pub(crate) fn encode_global_leaf_run_directory(
     )?;
     if root.len() > GLOBAL_LEAF_DIRECTORY_SHARD_MAX_ENCODED_BYTES {
         return Err(invalid_leaf_directory(
-            "V11 encoded directory root exceeds the bounded four MiB object cap",
+            "V12 encoded directory root exceeds the bounded four MiB object cap",
         ));
     }
     Ok(EncodedGlobalLeafRunDirectory { root, shards })
@@ -776,10 +1261,10 @@ pub(crate) fn decode_global_leaf_run_directory_root(
     codebook_checksum: &str,
     root_bytes: &[u8],
 ) -> Result<GlobalLeafRunDirectoryRoot> {
-    validate_v11_checksum(codebook_checksum)?;
-    validate_v11_directory_object_size(root_bytes.len(), "root")?;
+    validate_v12_checksum(codebook_checksum)?;
+    validate_v12_directory_object_size(root_bytes.len(), "root")?;
     let (code_width, root) =
-        decode_v11_directory_table(codebook_checksum, "leaf-run-directory-root", root_bytes)?;
+        decode_v12_directory_table(codebook_checksum, "leaf-run-directory-root", root_bytes)?;
     if root.pages.is_empty()
         && root.bundles.is_empty()
         && root.cells.is_empty()
@@ -796,11 +1281,11 @@ pub(crate) fn decode_global_leaf_run_directory_root(
     if !root.pages.is_empty() {
         if !root.shards.is_empty() || root.pages.len() > GLOBAL_LEAF_DIRECTORY_SHARD_PAGES {
             return Err(invalid_leaf_directory(
-                "V11 inline root mixes page rows and shards",
+                "V12 inline root mixes page rows and shards",
             ));
         }
-        validate_v11_pages(&root.pages, &root.bundles, code_width)?;
-        validate_v11_cell_bounds(&root.cells, &root.pages)?;
+        validate_v12_pages(&root.pages, &root.bundles, code_width)?;
+        validate_v12_cell_bounds(&root.cells, &root.pages)?;
         return Ok(GlobalLeafRunDirectoryRoot {
             code_width,
             cells: root.cells,
@@ -811,11 +1296,11 @@ pub(crate) fn decode_global_leaf_run_directory_root(
     }
     if root.shards.is_empty() {
         return Err(invalid_leaf_directory(
-            "V11 directory root contains no page rows or shards",
+            "V12 directory root contains no page rows or shards",
         ));
     }
-    validate_v11_shard_refs(&root.shards)?;
-    validate_v11_root_cell_bounds(&root.cells, &root.shards)?;
+    validate_v12_shard_refs(&root.shards)?;
+    validate_v12_root_cell_bounds(&root.cells, &root.shards)?;
     Ok(GlobalLeafRunDirectoryRoot {
         code_width,
         cells: root.cells,
@@ -831,17 +1316,17 @@ pub(crate) fn decode_global_leaf_run_directory_shard(
     reference: &GlobalLeafDirectoryShardRef,
     bytes: &[u8],
 ) -> Result<Vec<GlobalLeafPageRef>> {
-    validate_v11_directory_object_size(bytes.len(), "shard")?;
+    validate_v12_directory_object_size(bytes.len(), "shard")?;
     if u64::try_from(bytes.len()).ok() != Some(reference.encoded_bytes)
         || blake3::hash(bytes).to_hex().as_str() != reference.checksum
         || !root.shards.iter().any(|shard| shard == reference)
     {
         return Err(invalid_leaf_directory(
-            "V11 shard bytes do not match their authenticated root reference",
+            "V12 shard bytes do not match their authenticated root reference",
         ));
     }
     let (shard_width, payload) =
-        decode_v11_directory_table(codebook_checksum, "leaf-run-directory-shard", bytes)?;
+        decode_v12_directory_table(codebook_checksum, "leaf-run-directory-shard", bytes)?;
     if shard_width != root.code_width
         || !payload.cells.is_empty()
         || !payload.bundles.is_empty()
@@ -853,26 +1338,26 @@ pub(crate) fn decode_global_leaf_run_directory_shard(
         || payload.pages.len() != reference.page_count as usize
     {
         return Err(invalid_leaf_directory(
-            "V11 shard rows do not match root bounds",
+            "V12 shard rows do not match root bounds",
         ));
     }
-    validate_global_leaf_directory(&payload.pages, &root.bundles, root.code_width)?;
+    validate_global_leaf_directory(&payload.pages, &root.bundles, root.code_width, false)?;
     if payload.pages.iter().any(|page| page.partial_run_count > 4) {
         return Err(invalid_leaf_directory(
-            "V11 partial page run count must be zero or in 1..=4",
+            "V12 partial page run count must be zero or in 1..=4",
         ));
     }
     Ok(payload.pages)
 }
 
-fn validate_v11_root_cell_bounds(
-    cells: &[V11CellBounds],
+fn validate_v12_root_cell_bounds(
+    cells: &[V12CellBounds],
     shards: &[GlobalLeafDirectoryShardRef],
 ) -> Result<()> {
     let total_pages = shards.iter().try_fold(0_u64, |total, shard| {
         total
             .checked_add(u64::from(shard.page_count))
-            .ok_or_else(|| invalid_leaf_directory("V11 root page count overflows"))
+            .ok_or_else(|| invalid_leaf_directory("V12 root page count overflows"))
     })?;
     let mut next_page = 0_u64;
     let mut prior_cell = None;
@@ -882,63 +1367,63 @@ fn validate_v11_root_cell_bounds(
             || prior_cell.is_some_and(|prior| prior >= cell.cell_index)
         {
             return Err(invalid_leaf_directory(
-                "V11 root cell bounds are not canonical",
+                "V12 root cell bounds are not canonical",
             ));
         }
         next_page = next_page
             .checked_add(u64::from(cell.page_count))
-            .ok_or_else(|| invalid_leaf_directory("V11 root cell page count overflows"))?;
+            .ok_or_else(|| invalid_leaf_directory("V12 root cell page count overflows"))?;
         prior_cell = Some(cell.cell_index);
     }
     if cells.is_empty() || next_page != total_pages {
         return Err(invalid_leaf_directory(
-            "V11 root cell bounds do not cover its shard pages",
+            "V12 root cell bounds do not cover its shard pages",
         ));
     }
     Ok(())
 }
 
-fn validate_v11_directory_object_size(encoded_bytes: usize, kind: &str) -> Result<()> {
+fn validate_v12_directory_object_size(encoded_bytes: usize, kind: &str) -> Result<()> {
     if encoded_bytes > GLOBAL_LEAF_DIRECTORY_SHARD_MAX_ENCODED_BYTES {
         return Err(invalid_leaf_directory(&format!(
-            "V11 encoded directory {kind} exceeds the bounded four MiB object cap"
+            "V12 encoded directory {kind} exceeds the bounded four MiB object cap"
         )));
     }
     Ok(())
 }
 
-fn encode_v11_directory_table(
+fn encode_v12_directory_table(
     codebook_checksum: &str,
     table: &str,
     code_width: usize,
-    payload: &V11DirectoryTable,
+    payload: &V12DirectoryTable,
 ) -> Result<Vec<u8>> {
-    let schema = v11_directory_schema(codebook_checksum, table, code_width);
+    let schema = v12_directory_schema(codebook_checksum, table, code_width);
     let mut rows = Vec::new();
     for cell in &payload.cells {
-        rows.push(V11TypedRow::cell(cell));
+        rows.push(V12TypedRow::cell(cell));
     }
     for (index, bundle) in payload.bundles.iter().enumerate() {
-        rows.push(V11TypedRow::bundle(
+        rows.push(V12TypedRow::bundle(
             u32::try_from(index)
-                .map_err(|_| invalid_leaf_directory("V11 bundle index exceeds u32"))?,
+                .map_err(|_| invalid_leaf_directory("V12 bundle index exceeds u32"))?,
             bundle,
         ));
     }
     for page in &payload.pages {
-        rows.push(V11TypedRow::page(page));
+        rows.push(V12TypedRow::page(page));
     }
     for shard in &payload.shards {
-        rows.push(V11TypedRow::shard(shard));
+        rows.push(V12TypedRow::shard(shard));
     }
     if rows.is_empty() {
-        rows.push(V11TypedRow::default());
+        rows.push(V12TypedRow::default());
     }
     let columns: Vec<Arc<dyn Array>> = vec![
         Arc::new(UInt8Array::from_iter_values(
             rows.iter().map(|row| row.kind),
         )),
-        Arc::new(UInt16Array::from_iter(
+        Arc::new(UInt32Array::from_iter(
             rows.iter().map(|row| row.cell_index),
         )),
         Arc::new(UInt64Array::from_iter(
@@ -966,6 +1451,15 @@ fn encode_v11_directory_table(
             rows.iter().map(|row| row.batch_bytes),
         )),
         Arc::new(UInt32Array::from_iter(rows.iter().map(|row| row.rows))),
+        Arc::new(UInt64Array::from_iter(
+            rows.iter().map(|row| row.code_offset),
+        )),
+        Arc::new(UInt32Array::from_iter(
+            rows.iter().map(|row| row.code_bytes),
+        )),
+        Arc::new(StringArray::from_iter(
+            rows.iter().map(|row| row.code_checksum.as_deref()),
+        )),
         Arc::new(UInt8Array::from_iter(
             rows.iter().map(|row| row.partial_run_count),
         )),
@@ -984,6 +1478,16 @@ fn encode_v11_directory_table(
         Arc::new(UInt64Array::from_iter(
             rows.iter().map(|row| row.bundle_encoded_bytes),
         )),
+        Arc::new(UInt64Array::from_iter(
+            rows.iter().map(|row| row.bundle_code_plane_offset),
+        )),
+        Arc::new(UInt64Array::from_iter(
+            rows.iter().map(|row| row.bundle_code_plane_bytes),
+        )),
+        Arc::new(StringArray::from_iter(
+            rows.iter()
+                .map(|row| row.bundle_code_plane_checksum.as_deref()),
+        )),
         Arc::new(StringArray::from_iter(
             rows.iter().map(|row| row.shard_path.as_deref()),
         )),
@@ -993,10 +1497,10 @@ fn encode_v11_directory_table(
         Arc::new(UInt64Array::from_iter(
             rows.iter().map(|row| row.shard_encoded_bytes),
         )),
-        Arc::new(UInt16Array::from_iter(
+        Arc::new(UInt32Array::from_iter(
             rows.iter().map(|row| row.shard_first_cell),
         )),
-        Arc::new(UInt16Array::from_iter(
+        Arc::new(UInt32Array::from_iter(
             rows.iter().map(|row| row.shard_last_cell),
         )),
         Arc::new(UInt32Array::from_iter(
@@ -1012,17 +1516,17 @@ fn encode_v11_directory_table(
     Ok(bytes)
 }
 
-fn decode_v11_directory_table(
+fn decode_v12_directory_table(
     codebook_checksum: &str,
     table: &str,
     bytes: &[u8],
-) -> Result<(usize, V11DirectoryTable)> {
+) -> Result<(usize, V12DirectoryTable)> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
     let metadata = builder.metadata().file_metadata().key_value_metadata();
     let required = HashMap::from([
         (
             "borsuk.ann.layout".to_string(),
-            GLOBAL_LEAF_V11_LAYOUT.to_string(),
+            GLOBAL_LEAF_V12_LAYOUT.to_string(),
         ),
         (
             "borsuk.ann.codebook_checksum".to_string(),
@@ -1030,7 +1534,7 @@ fn decode_v11_directory_table(
         ),
         ("borsuk.ann.table".to_string(), table.to_string()),
     ]);
-    validate_v11_directory_metadata(metadata, &required)?;
+    validate_v12_directory_metadata(metadata, &required)?;
     let code_width = metadata
         .and_then(|entries| {
             entries
@@ -1040,25 +1544,25 @@ fn decode_v11_directory_table(
         .and_then(|entry| entry.value.as_deref())
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|width| *width > 0)
-        .ok_or_else(|| invalid_leaf_directory("V11 directory code width metadata is invalid"))?;
-    let expected = v11_directory_schema(codebook_checksum, table, code_width);
+        .ok_or_else(|| invalid_leaf_directory("V12 directory code width metadata is invalid"))?;
+    let expected = v12_directory_schema(codebook_checksum, table, code_width);
     let mut rows = Vec::new();
     for batch in builder.build()? {
         let batch = batch?;
         if batch.schema().fields() != expected.fields() {
             return Err(invalid_leaf_directory(
-                "V11 directory Parquet schema is invalid",
+                "V12 directory Parquet schema is invalid",
             ));
         }
-        rows.extend(v11_rows_from_batch(&batch)?);
+        rows.extend(v12_rows_from_batch(&batch)?);
     }
-    v11_table_from_rows(rows, table).map(|table| (code_width, table))
+    v12_table_from_rows(rows, table).map(|table| (code_width, table))
 }
 
 #[derive(Default)]
-struct V11TypedRow {
+struct V12TypedRow {
     kind: u8,
-    cell_index: Option<u16>,
+    cell_index: Option<u32>,
     cell_first_page: Option<u64>,
     cell_page_count: Option<u32>,
     leaf_ordinal: Option<u32>,
@@ -1068,23 +1572,29 @@ struct V11TypedRow {
     body_bytes: Option<u32>,
     batch_bytes: Option<u32>,
     rows: Option<u32>,
+    code_offset: Option<u64>,
+    code_bytes: Option<u32>,
+    code_checksum: Option<String>,
     partial_run_count: Option<u8>,
     page_checksum: Option<String>,
     centroid_code: Option<Vec<u8>>,
     bundle_path: Option<String>,
     bundle_checksum: Option<String>,
     bundle_encoded_bytes: Option<u64>,
+    bundle_code_plane_offset: Option<u64>,
+    bundle_code_plane_bytes: Option<u64>,
+    bundle_code_plane_checksum: Option<String>,
     shard_path: Option<String>,
     shard_checksum: Option<String>,
     shard_encoded_bytes: Option<u64>,
-    shard_first_cell: Option<u16>,
-    shard_last_cell: Option<u16>,
+    shard_first_cell: Option<u32>,
+    shard_last_cell: Option<u32>,
     shard_page_count: Option<u32>,
 }
-impl V11TypedRow {
-    fn cell(cell: &V11CellBounds) -> Self {
+impl V12TypedRow {
+    fn cell(cell: &V12CellBounds) -> Self {
         Self {
-            kind: V11_ROW_CELL,
+            kind: V12_ROW_CELL,
             cell_index: Some(cell.cell_index),
             cell_first_page: Some(cell.first_page),
             cell_page_count: Some(cell.page_count),
@@ -1093,7 +1603,7 @@ impl V11TypedRow {
     }
     fn bundle(index: u32, bundle: &GlobalLeafBundleRef) -> Self {
         Self {
-            kind: V11_ROW_BUNDLE,
+            kind: V12_ROW_BUNDLE,
             bundle_index: Some(index),
             bundle_path: Some(bundle.path.clone()),
             bundle_checksum: Some(
@@ -1102,12 +1612,19 @@ impl V11TypedRow {
                     .to_string(),
             ),
             bundle_encoded_bytes: Some(bundle.encoded_bytes),
+            bundle_code_plane_offset: Some(bundle.code_plane_offset),
+            bundle_code_plane_bytes: Some(bundle.code_plane_bytes),
+            bundle_code_plane_checksum: Some(
+                blake3::Hash::from_bytes(bundle.code_plane_checksum)
+                    .to_hex()
+                    .to_string(),
+            ),
             ..Self::default()
         }
     }
     fn page(page: &GlobalLeafPageRef) -> Self {
         Self {
-            kind: V11_ROW_PAGE,
+            kind: V12_ROW_PAGE,
             cell_index: Some(page.cell_index),
             leaf_ordinal: Some(page.leaf_ordinal),
             bundle_index: Some(page.bundle_index),
@@ -1116,6 +1633,13 @@ impl V11TypedRow {
             body_bytes: Some(page.body_bytes),
             batch_bytes: Some(page.batch_bytes),
             rows: Some(page.rows),
+            code_offset: Some(page.code_offset),
+            code_bytes: Some(page.code_bytes),
+            code_checksum: Some(
+                blake3::Hash::from_bytes(page.code_checksum)
+                    .to_hex()
+                    .to_string(),
+            ),
             partial_run_count: Some(page.partial_run_count),
             page_checksum: Some(blake3::Hash::from_bytes(page.checksum).to_hex().to_string()),
             centroid_code: Some(page.centroid_code.to_vec()),
@@ -1124,7 +1648,7 @@ impl V11TypedRow {
     }
     fn shard(shard: &GlobalLeafDirectoryShardRef) -> Self {
         Self {
-            kind: V11_ROW_SHARD,
+            kind: V12_ROW_SHARD,
             shard_path: Some(shard.path.clone()),
             shard_checksum: Some(shard.checksum.clone()),
             shard_encoded_bytes: Some(shard.encoded_bytes),
@@ -1136,12 +1660,12 @@ impl V11TypedRow {
     }
 }
 
-fn v11_directory_schema(codebook_checksum: &str, table: &str, code_width: usize) -> Arc<Schema> {
+fn v12_directory_schema(codebook_checksum: &str, table: &str, code_width: usize) -> Arc<Schema> {
     let nullable = |name, data_type| Field::new(name, data_type, true);
     Arc::new(Schema::new_with_metadata(
         vec![
             Field::new("row_kind", DataType::UInt8, false),
-            nullable("cell_index", DataType::UInt16),
+            nullable("cell_index", DataType::UInt32),
             nullable("cell_first_page", DataType::UInt64),
             nullable("cell_page_count", DataType::UInt32),
             nullable("leaf_ordinal", DataType::UInt32),
@@ -1151,23 +1675,29 @@ fn v11_directory_schema(codebook_checksum: &str, table: &str, code_width: usize)
             nullable("body_bytes", DataType::UInt32),
             nullable("batch_bytes", DataType::UInt32),
             nullable("rows", DataType::UInt32),
+            nullable("code_offset", DataType::UInt64),
+            nullable("code_bytes", DataType::UInt32),
+            nullable("code_checksum", DataType::Utf8),
             nullable("partial_run_count", DataType::UInt8),
             nullable("page_checksum", DataType::Utf8),
             nullable("centroid_code", DataType::Binary),
             nullable("bundle_path", DataType::Utf8),
             nullable("bundle_checksum", DataType::Utf8),
             nullable("bundle_encoded_bytes", DataType::UInt64),
+            nullable("bundle_code_plane_offset", DataType::UInt64),
+            nullable("bundle_code_plane_bytes", DataType::UInt64),
+            nullable("bundle_code_plane_checksum", DataType::Utf8),
             nullable("shard_path", DataType::Utf8),
             nullable("shard_checksum", DataType::Utf8),
             nullable("shard_encoded_bytes", DataType::UInt64),
-            nullable("shard_first_cell", DataType::UInt16),
-            nullable("shard_last_cell", DataType::UInt16),
+            nullable("shard_first_cell", DataType::UInt32),
+            nullable("shard_last_cell", DataType::UInt32),
             nullable("shard_page_count", DataType::UInt32),
         ],
         HashMap::from([
             (
                 "borsuk.ann.layout".to_string(),
-                GLOBAL_LEAF_V11_LAYOUT.to_string(),
+                GLOBAL_LEAF_V12_LAYOUT.to_string(),
             ),
             (
                 "borsuk.ann.codebook_checksum".to_string(),
@@ -1179,7 +1709,7 @@ fn v11_directory_schema(codebook_checksum: &str, table: &str, code_width: usize)
     ))
 }
 
-fn v11_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V11TypedRow>> {
+fn v12_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V12TypedRow>> {
     macro_rules! array {
         ($index:expr, $ty:ty, $name:literal) => {
             batch
@@ -1188,7 +1718,7 @@ fn v11_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V11TypedRow>> {
                 .downcast_ref::<$ty>()
                 .ok_or_else(|| {
                     invalid_leaf_directory(concat!(
-                        "V11 directory ",
+                        "V12 directory ",
                         $name,
                         " column has wrong type"
                     ))
@@ -1196,7 +1726,7 @@ fn v11_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V11TypedRow>> {
         };
     }
     let kind = array!(0, UInt8Array, "row_kind");
-    let cell = array!(1, UInt16Array, "cell_index");
+    let cell = array!(1, UInt32Array, "cell_index");
     let first = array!(2, UInt64Array, "cell_first_page");
     let cell_pages = array!(3, UInt32Array, "cell_page_count");
     let leaf = array!(4, UInt32Array, "leaf_ordinal");
@@ -1206,29 +1736,35 @@ fn v11_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V11TypedRow>> {
     let body = array!(8, UInt32Array, "body_bytes");
     let bytes = array!(9, UInt32Array, "batch_bytes");
     let rows = array!(10, UInt32Array, "rows");
-    let partial = array!(11, UInt8Array, "partial_run_count");
-    let page_hash = array!(12, StringArray, "page_checksum");
-    let code = array!(13, BinaryArray, "centroid_code");
-    let bundle_path = array!(14, StringArray, "bundle_path");
-    let bundle_hash = array!(15, StringArray, "bundle_checksum");
-    let bundle_bytes = array!(16, UInt64Array, "bundle_encoded_bytes");
-    let shard_path = array!(17, StringArray, "shard_path");
-    let shard_hash = array!(18, StringArray, "shard_checksum");
-    let shard_bytes = array!(19, UInt64Array, "shard_encoded_bytes");
-    let shard_first = array!(20, UInt16Array, "shard_first_cell");
-    let shard_last = array!(21, UInt16Array, "shard_last_cell");
-    let shard_pages = array!(22, UInt32Array, "shard_page_count");
+    let code_offset = array!(11, UInt64Array, "code_offset");
+    let code_bytes = array!(12, UInt32Array, "code_bytes");
+    let code_hash = array!(13, StringArray, "code_checksum");
+    let partial = array!(14, UInt8Array, "partial_run_count");
+    let page_hash = array!(15, StringArray, "page_checksum");
+    let code = array!(16, BinaryArray, "centroid_code");
+    let bundle_path = array!(17, StringArray, "bundle_path");
+    let bundle_hash = array!(18, StringArray, "bundle_checksum");
+    let bundle_bytes = array!(19, UInt64Array, "bundle_encoded_bytes");
+    let bundle_code_offset = array!(20, UInt64Array, "bundle_code_plane_offset");
+    let bundle_code_bytes = array!(21, UInt64Array, "bundle_code_plane_bytes");
+    let bundle_code_hash = array!(22, StringArray, "bundle_code_plane_checksum");
+    let shard_path = array!(23, StringArray, "shard_path");
+    let shard_hash = array!(24, StringArray, "shard_checksum");
+    let shard_bytes = array!(25, UInt64Array, "shard_encoded_bytes");
+    let shard_first = array!(26, UInt32Array, "shard_first_cell");
+    let shard_last = array!(27, UInt32Array, "shard_last_cell");
+    let shard_pages = array!(28, UInt32Array, "shard_page_count");
     let mut out = Vec::new();
     for row in 0..batch.num_rows() {
         if kind.is_null(row) {
-            return Err(invalid_leaf_directory("V11 directory row kind is null"));
+            return Err(invalid_leaf_directory("V12 directory row kind is null"));
         }
         macro_rules! number {
             ($a:ident, $v:expr) => {
                 if $a.is_null(row) { None } else { Some($v) }
             };
         }
-        out.push(V11TypedRow {
+        out.push(V12TypedRow {
             kind: kind.value(row),
             cell_index: number!(cell, cell.value(row)),
             cell_first_page: number!(first, first.value(row)),
@@ -1240,6 +1776,13 @@ fn v11_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V11TypedRow>> {
             body_bytes: number!(body, body.value(row)),
             batch_bytes: number!(bytes, bytes.value(row)),
             rows: number!(rows, rows.value(row)),
+            code_offset: number!(code_offset, code_offset.value(row)),
+            code_bytes: number!(code_bytes, code_bytes.value(row)),
+            code_checksum: if code_hash.is_null(row) {
+                None
+            } else {
+                Some(code_hash.value(row).to_string())
+            },
             partial_run_count: number!(partial, partial.value(row)),
             page_checksum: if page_hash.is_null(row) {
                 None
@@ -1262,6 +1805,13 @@ fn v11_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V11TypedRow>> {
                 Some(bundle_hash.value(row).to_string())
             },
             bundle_encoded_bytes: number!(bundle_bytes, bundle_bytes.value(row)),
+            bundle_code_plane_offset: number!(bundle_code_offset, bundle_code_offset.value(row)),
+            bundle_code_plane_bytes: number!(bundle_code_bytes, bundle_code_bytes.value(row)),
+            bundle_code_plane_checksum: if bundle_code_hash.is_null(row) {
+                None
+            } else {
+                Some(bundle_code_hash.value(row).to_string())
+            },
             shard_path: if shard_path.is_null(row) {
                 None
             } else {
@@ -1281,8 +1831,8 @@ fn v11_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V11TypedRow>> {
     Ok(out)
 }
 
-fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11DirectoryTable> {
-    let mut result = V11DirectoryTable {
+fn v12_table_from_rows(rows: Vec<V12TypedRow>, table: &str) -> Result<V12DirectoryTable> {
+    let mut result = V12DirectoryTable {
         cells: Vec::new(),
         pages: Vec::new(),
         bundles: Vec::new(),
@@ -1293,12 +1843,12 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
     for row in rows {
         if row.kind < prior_kind {
             return Err(invalid_leaf_directory(
-                "V11 directory rows are out of canonical kind order",
+                "V12 directory rows are out of canonical kind order",
             ));
         }
         prior_kind = row.kind;
         match row.kind {
-            V11_ROW_EMPTY => {
+            V12_ROW_EMPTY => {
                 if row.cell_index.is_some()
                     || row.cell_first_page.is_some()
                     || row.cell_page_count.is_some()
@@ -1309,12 +1859,18 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     || row.body_bytes.is_some()
                     || row.batch_bytes.is_some()
                     || row.rows.is_some()
+                    || row.code_offset.is_some()
+                    || row.code_bytes.is_some()
+                    || row.code_checksum.is_some()
                     || row.partial_run_count.is_some()
                     || row.page_checksum.is_some()
                     || row.centroid_code.is_some()
                     || row.bundle_path.is_some()
                     || row.bundle_checksum.is_some()
                     || row.bundle_encoded_bytes.is_some()
+                    || row.bundle_code_plane_offset.is_some()
+                    || row.bundle_code_plane_bytes.is_some()
+                    || row.bundle_code_plane_checksum.is_some()
                     || row.shard_path.is_some()
                     || row.shard_checksum.is_some()
                     || row.shard_encoded_bytes.is_some()
@@ -1323,16 +1879,16 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     || row.shard_page_count.is_some()
                 {
                     return Err(invalid_leaf_directory(
-                        "V11 empty directory row contains values",
+                        "V12 empty directory row contains values",
                     ));
                 }
                 empty_rows = empty_rows.saturating_add(1);
             }
-            V11_ROW_CELL => {
+            V12_ROW_CELL => {
                 let (Some(cell_index), Some(first_page), Some(page_count)) =
                     (row.cell_index, row.cell_first_page, row.cell_page_count)
                 else {
-                    return Err(invalid_leaf_directory("V11 cell row is incomplete"));
+                    return Err(invalid_leaf_directory("V12 cell row is incomplete"));
                 };
                 if row.leaf_ordinal.is_some()
                     || row.bundle_index.is_some()
@@ -1341,12 +1897,18 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     || row.body_bytes.is_some()
                     || row.batch_bytes.is_some()
                     || row.rows.is_some()
+                    || row.code_offset.is_some()
+                    || row.code_bytes.is_some()
+                    || row.code_checksum.is_some()
                     || row.partial_run_count.is_some()
                     || row.page_checksum.is_some()
                     || row.centroid_code.is_some()
                     || row.bundle_path.is_some()
                     || row.bundle_checksum.is_some()
                     || row.bundle_encoded_bytes.is_some()
+                    || row.bundle_code_plane_offset.is_some()
+                    || row.bundle_code_plane_bytes.is_some()
+                    || row.bundle_code_plane_checksum.is_some()
                     || row.shard_path.is_some()
                     || row.shard_checksum.is_some()
                     || row.shard_encoded_bytes.is_some()
@@ -1355,23 +1917,35 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     || row.shard_page_count.is_some()
                 {
                     return Err(invalid_leaf_directory(
-                        "V11 cell row contains unrelated values",
+                        "V12 cell row contains unrelated values",
                     ));
                 }
-                result.cells.push(V11CellBounds {
+                result.cells.push(V12CellBounds {
                     cell_index,
                     first_page,
                     page_count,
                 });
             }
-            V11_ROW_BUNDLE => {
-                let (Some(index), Some(path), Some(checksum), Some(encoded_bytes)) = (
+            V12_ROW_BUNDLE => {
+                let (
+                    Some(index),
+                    Some(path),
+                    Some(checksum),
+                    Some(encoded_bytes),
+                    Some(code_plane_offset),
+                    Some(code_plane_bytes),
+                    Some(code_plane_checksum),
+                ) = (
                     row.bundle_index,
                     row.bundle_path,
                     row.bundle_checksum,
                     row.bundle_encoded_bytes,
-                ) else {
-                    return Err(invalid_leaf_directory("V11 bundle row is incomplete"));
+                    row.bundle_code_plane_offset,
+                    row.bundle_code_plane_bytes,
+                    row.bundle_code_plane_checksum,
+                )
+                else {
+                    return Err(invalid_leaf_directory("V12 bundle row is incomplete"));
                 };
                 if index as usize != result.bundles.len()
                     || row.cell_index.is_some()
@@ -1383,6 +1957,9 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     || row.body_bytes.is_some()
                     || row.batch_bytes.is_some()
                     || row.rows.is_some()
+                    || row.code_offset.is_some()
+                    || row.code_bytes.is_some()
+                    || row.code_checksum.is_some()
                     || row.partial_run_count.is_some()
                     || row.page_checksum.is_some()
                     || row.centroid_code.is_some()
@@ -1393,15 +1970,18 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     || row.shard_last_cell.is_some()
                     || row.shard_page_count.is_some()
                 {
-                    return Err(invalid_leaf_directory("V11 bundle rows are not canonical"));
+                    return Err(invalid_leaf_directory("V12 bundle rows are not canonical"));
                 }
                 result.bundles.push(GlobalLeafBundleRef {
                     path,
-                    checksum: v11_hash(&checksum)?,
+                    checksum: v12_hash(&checksum)?,
                     encoded_bytes,
+                    code_plane_offset,
+                    code_plane_bytes,
+                    code_plane_checksum: v12_hash(&code_plane_checksum)?,
                 });
             }
-            V11_ROW_PAGE => {
+            V12_ROW_PAGE => {
                 let (
                     Some(cell_index),
                     Some(leaf_ordinal),
@@ -1411,6 +1991,9 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     Some(body_bytes),
                     Some(batch_bytes),
                     Some(rows),
+                    Some(code_offset),
+                    Some(code_bytes),
+                    Some(code_checksum),
                     Some(partial_run_count),
                     Some(checksum),
                     Some(centroid_code),
@@ -1423,18 +2006,24 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     row.body_bytes,
                     row.batch_bytes,
                     row.rows,
+                    row.code_offset,
+                    row.code_bytes,
+                    row.code_checksum,
                     row.partial_run_count,
                     row.page_checksum,
                     row.centroid_code,
                 )
                 else {
-                    return Err(invalid_leaf_directory("V11 page row is incomplete"));
+                    return Err(invalid_leaf_directory("V12 page row is incomplete"));
                 };
                 if row.cell_first_page.is_some()
                     || row.cell_page_count.is_some()
                     || row.bundle_path.is_some()
                     || row.bundle_checksum.is_some()
                     || row.bundle_encoded_bytes.is_some()
+                    || row.bundle_code_plane_offset.is_some()
+                    || row.bundle_code_plane_bytes.is_some()
+                    || row.bundle_code_plane_checksum.is_some()
                     || row.shard_path.is_some()
                     || row.shard_checksum.is_some()
                     || row.shard_encoded_bytes.is_some()
@@ -1443,7 +2032,7 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     || row.shard_page_count.is_some()
                 {
                     return Err(invalid_leaf_directory(
-                        "V11 page row contains unrelated values",
+                        "V12 page row contains unrelated values",
                     ));
                 }
                 result.pages.push(GlobalLeafPageRef {
@@ -1454,13 +2043,16 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     metadata_bytes,
                     body_bytes,
                     batch_bytes,
+                    code_offset,
+                    code_bytes,
+                    code_checksum: v12_hash(&code_checksum)?,
                     rows,
                     partial_run_count,
-                    checksum: v11_hash(&checksum)?,
+                    checksum: v12_hash(&checksum)?,
                     centroid_code: centroid_code.into_boxed_slice(),
                 });
             }
-            V11_ROW_SHARD => {
+            V12_ROW_SHARD => {
                 let (
                     Some(path),
                     Some(checksum),
@@ -1477,7 +2069,7 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     row.shard_page_count,
                 )
                 else {
-                    return Err(invalid_leaf_directory("V11 shard row is incomplete"));
+                    return Err(invalid_leaf_directory("V12 shard row is incomplete"));
                 };
                 if row.cell_index.is_some()
                     || row.cell_first_page.is_some()
@@ -1489,15 +2081,21 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     || row.body_bytes.is_some()
                     || row.batch_bytes.is_some()
                     || row.rows.is_some()
+                    || row.code_offset.is_some()
+                    || row.code_bytes.is_some()
+                    || row.code_checksum.is_some()
                     || row.partial_run_count.is_some()
                     || row.page_checksum.is_some()
                     || row.centroid_code.is_some()
                     || row.bundle_path.is_some()
                     || row.bundle_checksum.is_some()
                     || row.bundle_encoded_bytes.is_some()
+                    || row.bundle_code_plane_offset.is_some()
+                    || row.bundle_code_plane_bytes.is_some()
+                    || row.bundle_code_plane_checksum.is_some()
                 {
                     return Err(invalid_leaf_directory(
-                        "V11 shard row contains unrelated values",
+                        "V12 shard row contains unrelated values",
                     ));
                 }
                 result.shards.push(GlobalLeafDirectoryShardRef {
@@ -1509,7 +2107,7 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
                     page_count,
                 });
             }
-            _ => return Err(invalid_leaf_directory("V11 directory row kind is invalid")),
+            _ => return Err(invalid_leaf_directory("V12 directory row kind is invalid")),
         }
     }
     let invalid_role = if table == "leaf-run-directory-shard" {
@@ -1531,16 +2129,16 @@ fn v11_table_from_rows(rows: Vec<V11TypedRow>, table: &str) -> Result<V11Directo
     };
     if invalid_role {
         return Err(invalid_leaf_directory(
-            "V11 directory table row kinds are invalid for its role",
+            "V12 directory table row kinds are invalid for its role",
         ));
     }
     Ok(result)
 }
 
-fn v11_hash(value: &str) -> Result<[u8; 32]> {
+fn v12_hash(value: &str) -> Result<[u8; 32]> {
     let encoded = value.as_bytes();
     if encoded.len() != 64 || encoded.iter().any(|byte| !byte.is_ascii_hexdigit()) {
-        return Err(invalid_leaf_directory("V11 checksum hex width is invalid"));
+        return Err(invalid_leaf_directory("V12 checksum hex width is invalid"));
     }
     let mut bytes = [0_u8; 32];
     for (byte, pair) in bytes.iter_mut().zip(encoded.chunks_exact(2)) {
@@ -1555,7 +2153,7 @@ fn v11_hash(value: &str) -> Result<[u8; 32]> {
     Ok(bytes)
 }
 
-fn v11_cell_bounds(pages: &[GlobalLeafPageRef]) -> Result<Vec<V11CellBounds>> {
+fn v12_cell_bounds(pages: &[GlobalLeafPageRef]) -> Result<Vec<V12CellBounds>> {
     let mut bounds = Vec::new();
     let mut offset = 0_u64;
     let mut index = 0_usize;
@@ -1567,12 +2165,12 @@ fn v11_cell_bounds(pages: &[GlobalLeafPageRef]) -> Result<Vec<V11CellBounds>> {
             index += 1;
             offset = offset
                 .checked_add(1)
-                .ok_or_else(|| invalid_leaf_directory("V11 page offset overflows"))?;
+                .ok_or_else(|| invalid_leaf_directory("V12 page offset overflows"))?;
             count = count
                 .checked_add(1)
-                .ok_or_else(|| invalid_leaf_directory("V11 cell page count overflows"))?;
+                .ok_or_else(|| invalid_leaf_directory("V12 cell page count overflows"))?;
         }
-        bounds.push(V11CellBounds {
+        bounds.push(V12CellBounds {
             cell_index,
             first_page: start,
             page_count: count,
@@ -1581,32 +2179,32 @@ fn v11_cell_bounds(pages: &[GlobalLeafPageRef]) -> Result<Vec<V11CellBounds>> {
     Ok(bounds)
 }
 
-fn validate_v11_cell_bounds(bounds: &[V11CellBounds], pages: &[GlobalLeafPageRef]) -> Result<()> {
-    if bounds != v11_cell_bounds(pages)?.as_slice() {
+fn validate_v12_cell_bounds(bounds: &[V12CellBounds], pages: &[GlobalLeafPageRef]) -> Result<()> {
+    if bounds != v12_cell_bounds(pages)?.as_slice() {
         return Err(invalid_leaf_directory(
-            "V11 cell bounds do not match page coverage",
+            "V12 cell bounds do not match page coverage",
         ));
     }
     Ok(())
 }
 
-fn validate_v11_directory_metadata(
+fn validate_v12_directory_metadata(
     metadata: Option<&Vec<KeyValue>>,
     required: &HashMap<String, String>,
 ) -> Result<()> {
     let metadata = metadata
-        .ok_or_else(|| invalid_leaf_directory("V11 directory footer is missing metadata"))?;
+        .ok_or_else(|| invalid_leaf_directory("V12 directory footer is missing metadata"))?;
     let mut seen = BTreeSet::new();
     for entry in metadata {
         if !seen.insert(entry.key.as_str()) {
             return Err(invalid_leaf_directory(
-                "V11 directory footer has duplicate metadata keys",
+                "V12 directory footer has duplicate metadata keys",
             ));
         }
         if entry.key == "ARROW:schema" {
             if entry.value.as_deref().is_none_or(str::is_empty) {
                 return Err(invalid_leaf_directory(
-                    "V11 directory footer ARROW schema is empty",
+                    "V12 directory footer ARROW schema is empty",
                 ));
             }
             continue;
@@ -1615,22 +2213,22 @@ fn validate_v11_directory_metadata(
             continue;
         }
         if entry.key == "borsuk.ann.layout"
-            && entry.value.as_deref() != Some(GLOBAL_LEAF_V11_LAYOUT)
+            && entry.value.as_deref() != Some(GLOBAL_LEAF_V12_LAYOUT)
         {
             return Err(invalid_leaf_directory(
-                "V11 directory layout is incompatible; rebuild the unreleased index",
+                "V12 directory layout is incompatible; rebuild the unreleased index",
             ));
         }
         if entry.key == "borsuk.ann.codebook_checksum"
             && required.get(&entry.key).map(String::as_str) != entry.value.as_deref()
         {
             return Err(invalid_leaf_directory(
-                "V11 directory codebook checksum does not match the requested codebook",
+                "V12 directory codebook checksum does not match the requested codebook",
             ));
         }
         if required.get(&entry.key).map(String::as_str) != entry.value.as_deref() {
             return Err(invalid_leaf_directory(
-                "V11 directory footer metadata is invalid",
+                "V12 directory footer metadata is invalid",
             ));
         }
     }
@@ -1639,30 +2237,30 @@ fn validate_v11_directory_metadata(
         || required.keys().any(|key| !seen.contains(key.as_str()))
     {
         return Err(invalid_leaf_directory(
-            "V11 directory footer is missing required metadata",
+            "V12 directory footer is missing required metadata",
         ));
     }
     Ok(())
 }
 
-fn validate_v11_checksum(checksum: &str) -> Result<()> {
+fn validate_v12_checksum(checksum: &str) -> Result<()> {
     if checksum.is_empty() || checksum.bytes().any(|byte| byte.is_ascii_whitespace()) {
-        return Err(invalid_leaf_directory("V11 codebook checksum is invalid"));
+        return Err(invalid_leaf_directory("V12 codebook checksum is invalid"));
     }
     Ok(())
 }
 
-fn v11_code_width(pages: &[GlobalLeafPageRef]) -> Result<usize> {
+fn v12_code_width(pages: &[GlobalLeafPageRef]) -> Result<usize> {
     pages
         .first()
         .map(|page| page.centroid_code.len())
         .filter(|width| *width > 0)
         .ok_or_else(|| {
-            invalid_leaf_directory("V11 directory must contain a positive-width page code")
+            invalid_leaf_directory("V12 directory must contain a positive-width page code")
         })
 }
 
-fn validate_v11_pages(
+fn validate_v12_pages(
     pages: &[GlobalLeafPageRef],
     bundles: &[GlobalLeafBundleRef],
     code_width: usize,
@@ -1671,22 +2269,22 @@ fn validate_v11_pages(
     for page in pages {
         if prior_cell != Some(page.cell_index) && page.leaf_ordinal != 0 {
             return Err(invalid_leaf_directory(&format!(
-                "V11 cell {} starts at leaf ordinal {} (expected 0)",
+                "V12 cell {} starts at leaf ordinal {} (expected 0)",
                 page.cell_index, page.leaf_ordinal
             )));
         }
         prior_cell = Some(page.cell_index);
     }
-    validate_global_leaf_directory(pages, bundles, code_width)?;
+    validate_global_leaf_directory(pages, bundles, code_width, true)?;
     if pages.iter().any(|page| page.partial_run_count > 4) {
         return Err(invalid_leaf_directory(
-            "V11 partial page run count must be zero or in 1..=4",
+            "V12 partial page run count must be zero or in 1..=4",
         ));
     }
     Ok(())
 }
 
-fn validate_v11_shard_refs(shards: &[GlobalLeafDirectoryShardRef]) -> Result<()> {
+fn validate_v12_shard_refs(shards: &[GlobalLeafDirectoryShardRef]) -> Result<()> {
     let mut paths = BTreeSet::new();
     for (index, shard) in shards.iter().enumerate() {
         if shard.path.is_empty()
@@ -1699,7 +2297,7 @@ fn validate_v11_shard_refs(shards: &[GlobalLeafDirectoryShardRef]) -> Result<()>
             || (index > 0 && shards[index - 1].last_cell > shard.first_cell)
         {
             return Err(invalid_leaf_directory(
-                "V11 root shard references are invalid",
+                "V12 root shard references are invalid",
             ));
         }
     }
@@ -1709,6 +2307,7 @@ fn validate_global_leaf_directory(
     pages: &[GlobalLeafPageRef],
     bundles: &[GlobalLeafBundleRef],
     code_width: usize,
+    require_full_code_coverage: bool,
 ) -> Result<()> {
     if code_width == 0 {
         return Err(BorsukError::InvalidStorage(
@@ -1722,12 +2321,23 @@ fn validate_global_leaf_directory(
     }
     let mut paths = BTreeSet::new();
     for bundle in bundles {
+        let code_plane_end = bundle
+            .code_plane_offset
+            .checked_add(bundle.code_plane_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf code-plane range overflows".to_string())
+            })?;
         if bundle.encoded_bytes > GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES {
             return Err(BorsukError::InvalidStorage(
                 "global leaf bundle reference exceeds the complete bundle object cap".to_string(),
             ));
         }
-        if bundle.path.is_empty() || bundle.encoded_bytes == 0 || !paths.insert(&bundle.path) {
+        if bundle.path.is_empty()
+            || bundle.encoded_bytes == 0
+            || bundle.code_plane_bytes == 0
+            || code_plane_end > bundle.encoded_bytes
+            || !paths.insert(&bundle.path)
+        {
             return Err(BorsukError::InvalidStorage(
                 "global leaf bundle references must have unique paths and positive sizes"
                     .to_string(),
@@ -1736,6 +2346,8 @@ fn validate_global_leaf_directory(
     }
     let mut prior_cell = None;
     let mut next_leaf = 0_u32;
+    let mut code_coverage = vec![None::<u64>; bundles.len()];
+    let mut exact_coverage = vec![None::<u64>; bundles.len()];
     for page in pages {
         if prior_cell != Some(page.cell_index) {
             if prior_cell.is_some_and(|cell| cell >= page.cell_index) {
@@ -1759,7 +2371,8 @@ fn validate_global_leaf_directory(
         next_leaf = next_leaf.checked_add(1).ok_or_else(|| {
             BorsukError::InvalidStorage("global leaf ordinal overflows".to_string())
         })?;
-        let bundle = bundles.get(page.bundle_index as usize).ok_or_else(|| {
+        let bundle_index = page.bundle_index as usize;
+        let bundle = bundles.get(bundle_index).ok_or_else(|| {
             BorsukError::InvalidStorage(format!(
                 "global leaf page references missing bundle {}",
                 page.bundle_index
@@ -1777,27 +2390,71 @@ fn validate_global_leaf_directory(
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("global leaf page range overflows".to_string())
             })?;
+        let code_end = page
+            .code_offset
+            .checked_add(u64::from(page.code_bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf page PQ-code range overflows".to_string())
+            })?;
+        let bundle_code_end = bundle
+            .code_plane_offset
+            .checked_add(bundle.code_plane_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf bundle code plane overflows".to_string())
+            })?;
         if page.rows == 0
             || page.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES
             || declared != page.batch_bytes
             || u64::from(page.batch_bytes) > GLOBAL_LEAF_MAX_ENCODED_BYTES
             || end > bundle.encoded_bytes
+            || page.code_offset < bundle.code_plane_offset
+            || code_end > bundle_code_end
+            || u64::from(page.code_bytes)
+                != u64::from(page.rows)
+                    .saturating_mul(u64::try_from(code_width).unwrap_or(u64::MAX))
+            || page.batch_offset < bundle_code_end
             || page.centroid_code.len() != code_width
         {
             return Err(BorsukError::InvalidStorage(
-                "global leaf page reference violates its V11 bounds".to_string(),
+                "global leaf page reference violates its V12 bounds".to_string(),
             ));
         }
-    }
-    let mut by_bundle = pages.iter().collect::<Vec<_>>();
-    by_bundle.sort_unstable_by_key(|page| (page.bundle_index, page.batch_offset));
-    for pair in by_bundle.windows(2) {
-        if pair[0].bundle_index == pair[1].bundle_index
-            && pair[0].batch_offset + u64::from(pair[0].batch_bytes) > pair[1].batch_offset
-        {
+        let expected_code_offset = code_coverage[bundle_index].unwrap_or({
+            if require_full_code_coverage {
+                bundle.code_plane_offset
+            } else {
+                page.code_offset
+            }
+        });
+        if page.code_offset != expected_code_offset {
             return Err(BorsukError::InvalidStorage(
-                "global leaf page ranges overlap inside a bundle".to_string(),
+                "global leaf page PQ-code ranges are not contiguous in page order".to_string(),
             ));
+        }
+        code_coverage[bundle_index] = Some(code_end);
+        if exact_coverage[bundle_index].is_some_and(|prior_end| prior_end > page.batch_offset) {
+            return Err(BorsukError::InvalidStorage(
+                "global leaf page ranges overlap or are out of order inside a bundle".to_string(),
+            ));
+        }
+        exact_coverage[bundle_index] = Some(end);
+    }
+    if require_full_code_coverage {
+        for (bundle, covered_end) in bundles.iter().zip(code_coverage) {
+            let bundle_end = bundle
+                .code_plane_offset
+                .checked_add(bundle.code_plane_bytes)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf bundle code plane overflows".to_string(),
+                    )
+                })?;
+            if covered_end != Some(bundle_end) {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf page PQ-code ranges do not cover their bundle code plane"
+                        .to_string(),
+                ));
+            }
         }
     }
     Ok(())
@@ -1975,20 +2632,33 @@ fn global_leaf_exact_rows(
         .collect()
 }
 
-fn global_leaf_schema(dimensions: usize, element_type: VectorElementType) -> Result<Arc<Schema>> {
-    Ok(Arc::new(Schema::new_with_metadata(
-        vec![
-            Field::new("record_id", DataType::Binary, false),
-            Field::new("mutation_hlc", DataType::UInt64, false),
-            Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
-            Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
-            Field::new("row_integrity", DataType::FixedSizeBinary(32), false),
-            Field::new(
-                "exact_vector",
-                crate::arrow_vector_sidecar::vector_data_type(element_type, dimensions)?,
-                false,
-            ),
+fn global_leaf_schema(
+    dimensions: usize,
+    element_type: VectorElementType,
+    code_width: usize,
+) -> Result<Arc<Schema>> {
+    let code_width = i32::try_from(code_width).map_err(|_| {
+        BorsukError::InvalidStorage("global leaf PQ code width exceeds i32".to_string())
+    })?;
+    if code_width <= 0 {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf PQ code width must be positive".to_string(),
+        ));
+    }
+    let exact_fields = global_leaf_exact_fields(dimensions, element_type)?;
+    let union_fields = UnionFields::try_new(
+        [0_i8, 1_i8],
+        [
+            Field::new("pq_code", DataType::FixedSizeBinary(code_width), false),
+            Field::new("exact_row", DataType::Struct(exact_fields), false),
         ],
+    )?;
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![Field::new(
+            "payload",
+            DataType::Union(union_fields, UnionMode::Dense),
+            false,
+        )],
         HashMap::from([
             (
                 "borsuk.ann.layout".to_string(),
@@ -2004,6 +2674,77 @@ fn global_leaf_schema(dimensions: usize, element_type: VectorElementType) -> Res
             ),
         ]),
     )))
+}
+
+fn global_leaf_exact_fields(dimensions: usize, element_type: VectorElementType) -> Result<Fields> {
+    Ok(Fields::from(vec![
+        Field::new("record_id", DataType::Binary, false),
+        Field::new("mutation_hlc", DataType::UInt64, false),
+        Field::new("mutation_writer", DataType::FixedSizeBinary(16), false),
+        Field::new("mutation_digest", DataType::FixedSizeBinary(32), false),
+        Field::new("row_integrity", DataType::FixedSizeBinary(32), false),
+        Field::new(
+            "exact_vector",
+            crate::arrow_vector_sidecar::vector_data_type(element_type, dimensions)?,
+            false,
+        ),
+    ]))
+}
+
+fn empty_global_leaf_exact_array(
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<StructArray> {
+    let fields = global_leaf_exact_fields(dimensions, element_type)?;
+    let columns = fields
+        .iter()
+        .map(|field| new_empty_array(field.data_type()))
+        .collect();
+    Ok(StructArray::new(fields, columns, None))
+}
+
+fn global_leaf_code_record_batch(
+    pages: &[GlobalLeafPageInput],
+    schema: Arc<Schema>,
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<RecordBatch> {
+    let rows = pages.iter().flat_map(|page| &page.rows).collect::<Vec<_>>();
+    let code_width = rows
+        .first()
+        .map(|row| row.code.len())
+        .filter(|width| *width > 0)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf PQ code width must be positive".to_string())
+        })?;
+    if rows.iter().any(|row| row.code.len() != code_width) {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf rows disagree on positive PQ code width".to_string(),
+        ));
+    }
+    let code = Arc::new(FixedSizeBinaryArray::try_from_iter(
+        rows.iter().map(|row| row.code.as_slice()),
+    )?) as Arc<dyn Array>;
+    let exact =
+        Arc::new(empty_global_leaf_exact_array(dimensions, element_type)?) as Arc<dyn Array>;
+    let union_fields = match schema.field(0).data_type() {
+        DataType::Union(fields, UnionMode::Dense) => fields.clone(),
+        _ => unreachable!("global leaf schema is a dense union"),
+    };
+    let offsets = (0..rows.len())
+        .map(|row| {
+            i32::try_from(row).map_err(|_| {
+                BorsukError::InvalidStorage("global leaf code-plane row exceeds i32".to_string())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let payload = UnionArray::try_new(
+        union_fields,
+        ScalarBuffer::from(vec![0_i8; rows.len()]),
+        Some(ScalarBuffer::from(offsets)),
+        vec![code, exact],
+    )?;
+    Ok(RecordBatch::try_new(schema, vec![Arc::new(payload)])?)
 }
 
 fn global_leaf_record_batch(
@@ -2023,6 +2764,12 @@ fn global_leaf_record_batch(
             "global leaf row does not match its fixed vector width".to_string(),
         ));
     }
+    let code_width = rows[0].code.len();
+    if code_width == 0 || rows.iter().any(|row| row.code.len() != code_width) {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf rows disagree on positive PQ code width".to_string(),
+        ));
+    }
     let exact = rows
         .iter()
         .flat_map(|row| row.exact.iter().copied())
@@ -2031,7 +2778,7 @@ fn global_leaf_record_batch(
         .iter()
         .map(|row| global_leaf_row_integrity(row.id.as_bytes(), row.stamp, &row.exact))
         .collect::<Vec<_>>();
-    let columns: Vec<Arc<dyn Array>> = vec![
+    let exact_columns: Vec<Arc<dyn Array>> = vec![
         Arc::new(BinaryArray::from_iter_values(
             rows.iter().map(|row| row.id.as_bytes()),
         )),
@@ -2054,7 +2801,30 @@ fn global_leaf_record_batch(
             element_type,
         )?,
     ];
-    Ok(RecordBatch::try_new(schema, columns)?)
+    let exact = Arc::new(StructArray::new(
+        global_leaf_exact_fields(dimensions, element_type)?,
+        exact_columns,
+        None,
+    )) as Arc<dyn Array>;
+    let union_fields = match schema.field(0).data_type() {
+        DataType::Union(fields, UnionMode::Dense) => fields.clone(),
+        _ => unreachable!("global leaf schema is a dense union"),
+    };
+    let code = new_empty_array(union_fields.iter().next().unwrap().1.data_type());
+    let offsets = (0..rows.len())
+        .map(|row| {
+            i32::try_from(row).map_err(|_| {
+                BorsukError::InvalidStorage("global leaf exact-page row exceeds i32".to_string())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let payload = UnionArray::try_new(
+        union_fields,
+        ScalarBuffer::from(vec![1_i8; rows.len()]),
+        Some(ScalarBuffer::from(offsets)),
+        vec![code, exact],
+    )?;
+    Ok(RecordBatch::try_new(schema, vec![Arc::new(payload)])?)
 }
 
 fn global_leaf_probe_batch_bytes(
@@ -2062,7 +2832,14 @@ fn global_leaf_probe_batch_bytes(
     dimensions: usize,
     element_type: VectorElementType,
 ) -> Result<u64> {
-    let schema = global_leaf_schema(dimensions, element_type)?;
+    let code_width = rows
+        .first()
+        .map(|row| row.code.len())
+        .filter(|width| *width > 0)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf PQ code width must be positive".to_string())
+        })?;
+    let schema = global_leaf_schema(dimensions, element_type, code_width)?;
     let batch = global_leaf_record_batch(rows, Arc::clone(&schema), dimensions, element_type)?;
     let mut bytes = Vec::new();
     {
@@ -2076,7 +2853,7 @@ fn global_leaf_probe_batch_bytes(
         .ok_or_else(|| BorsukError::InvalidStorage("global leaf probe has no batch".to_string()))?;
     if block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES {
         return Err(BorsukError::InvalidStorage(format!(
-            "global leaf page metadata is {} bytes, exceeding the {} byte V11 bound",
+            "global leaf page metadata is {} bytes, exceeding the {} byte V12 bound",
             block.metadata_bytes, GLOBAL_LEAF_MAX_METADATA_BYTES
         )));
     }
@@ -2085,7 +2862,7 @@ fn global_leaf_probe_batch_bytes(
 
 fn global_leaf_row_integrity(id: &[u8], stamp: MutationStamp, exact: &[u8]) -> [u8; 32] {
     let mut hash = blake3::Hasher::new();
-    hash.update(b"borsuk.global-leaf.row.v11\0");
+    hash.update(b"borsuk.global-leaf.row.v12\0");
     hash.update(&(id.len() as u64).to_le_bytes());
     hash.update(id);
     hash.update(&stamp.version().hlc().to_le_bytes());
@@ -2169,21 +2946,144 @@ fn global_leaf_batch_ranges(
         .collect()
 }
 
+fn global_leaf_code_buffer_range(
+    bytes: &[u8],
+    block: &GlobalLeafBatchBlock,
+    rows: usize,
+    code_width: usize,
+    element_type: VectorElementType,
+) -> Result<std::ops::Range<usize>> {
+    let block_start = usize::try_from(block.offset).map_err(|_| {
+        BorsukError::InvalidStorage("global leaf batch offset exceeds usize".to_string())
+    })?;
+    let metadata_bytes = block.metadata_bytes as usize;
+    let metadata_end = block_start.checked_add(metadata_bytes).ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf metadata end overflows".to_string())
+    })?;
+    let metadata = bytes.get(block_start..metadata_end).ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf metadata range exceeds bundle".to_string())
+    })?;
+    if metadata.len() < 4 {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf metadata prefix is truncated".to_string(),
+        ));
+    }
+    let continuation = metadata[..4] == [0xFF; 4];
+    let prefix = if continuation { 8 } else { 4 };
+    if metadata.len() < prefix {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf metadata continuation is truncated".to_string(),
+        ));
+    }
+    let length_offset = if continuation { 4 } else { 0 };
+    let message_bytes = u32::from_le_bytes(
+        metadata[length_offset..length_offset + 4]
+            .try_into()
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "global leaf metadata message length is truncated".to_string(),
+                )
+            })?,
+    ) as usize;
+    let message_end = prefix.checked_add(message_bytes).ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf metadata message overflows".to_string())
+    })?;
+    let message =
+        arrow_ipc::root_as_message(metadata.get(prefix..message_end).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "global leaf metadata message exceeds its block".to_string(),
+            )
+        })?)
+        .map_err(|error| {
+            BorsukError::InvalidStorage(format!("global leaf metadata message is invalid: {error}"))
+        })?;
+    if message.header_type() != MessageHeader::RecordBatch {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf metadata does not describe a record batch".to_string(),
+        ));
+    }
+    let record_batch = message.header_as_record_batch().ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf metadata has no record batch".to_string())
+    })?;
+    let buffers = record_batch.buffers().ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf record batch has no buffers".to_string())
+    })?;
+    let expected = rows.checked_mul(code_width).ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf PQ-code byte count overflows".to_string())
+    })?;
+    // Arrow IPC emits dense-union type IDs and offsets first, followed by the
+    // FixedSizeBinary code child's validity and value buffers. Use that exact
+    // schema position: matching by length would permit an unrelated offsets or
+    // exact-child buffer to be substituted when the lengths happen to agree.
+    let expected_buffers = if element_type == VectorElementType::Binary {
+        18
+    } else {
+        19
+    };
+    if buffers.len() != expected_buffers
+        || usize::try_from(buffers.get(0).length()).ok() != Some(rows)
+        || usize::try_from(buffers.get(1).length()).ok()
+            != rows.checked_mul(std::mem::size_of::<i32>())
+        || usize::try_from(buffers.get(2).length()).ok() != Some(rows.div_ceil(u8::BITS as usize))
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "global leaf code plane has an incompatible dense-union buffer layout ({} buffers; first lengths [{}, {}, {}, {}])",
+            buffers.len(),
+            buffers.get(0).length(),
+            buffers.get(1).length(),
+            buffers.get(2).length(),
+            buffers.get(3).length(),
+        )));
+    }
+    let code_buffer = buffers.get(3);
+    let relative = usize::try_from(code_buffer.offset()).map_err(|_| {
+        BorsukError::InvalidStorage("global leaf PQ-code buffer offset is negative".to_string())
+    })?;
+    let length = usize::try_from(code_buffer.length()).map_err(|_| {
+        BorsukError::InvalidStorage("global leaf PQ-code buffer length is negative".to_string())
+    })?;
+    if length != expected {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf PQ-code buffer length does not match its rows".to_string(),
+        ));
+    }
+    let start = metadata_end.checked_add(relative).ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf PQ-code buffer start overflows".to_string())
+    })?;
+    let end = start.checked_add(length).ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf PQ-code buffer end overflows".to_string())
+    })?;
+    let body_end = metadata_end
+        .checked_add(block.body_bytes as usize)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf record body end overflows".to_string())
+        })?;
+    if start < metadata_end || end > body_end {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf PQ-code buffer exceeds its Arrow body".to_string(),
+        ));
+    }
+    Ok(start..end)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{io::Cursor, sync::Arc};
 
-    use arrow_array::{RecordBatch, UInt8Array};
-    use arrow_schema::{DataType, Field};
+    use arrow_array::{Array, FixedSizeBinaryArray, RecordBatch, UInt8Array, UnionArray};
+    use arrow_ipc::reader::FileReader;
+    use arrow_schema::{DataType, Field, UnionMode};
     use bytes::Bytes;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     use super::{
-        GLOBAL_LEAF_DIRECTORY_SHARD_PAGES, GlobalLeafBundleRef, GlobalLeafPageInput,
-        GlobalLeafPageRef, GlobalLeafRowInput, decode_global_leaf_page, decode_global_leaf_rows,
-        decode_global_leaf_run_directory, decode_global_leaf_run_directory_root,
-        encode_global_leaf_bundle, encode_global_leaf_bundle_with_max_bytes,
-        encode_global_leaf_run_directory, fit_global_leaf_page_ranges,
+        GLOBAL_LEAF_BUNDLE_MAX_PAGES, GLOBAL_LEAF_DIRECTORY_SHARD_PAGES,
+        GLOBAL_LEAF_MAX_ENCODED_BYTES, GlobalLeafBundleRef, GlobalLeafPageInput, GlobalLeafPageRef,
+        GlobalLeafRowInput, coalesce_global_leaf_code_reads, decode_global_leaf_page,
+        decode_global_leaf_rows, decode_global_leaf_run_directory,
+        decode_global_leaf_run_directory_root, encode_global_leaf_bundle,
+        encode_global_leaf_bundle_with_max_bytes, encode_global_leaf_run_directory,
+        fit_global_leaf_page_ranges,
     };
     use crate::{
         VectorElementType,
@@ -2201,6 +3101,9 @@ mod tests {
                 metadata_bytes: 512,
                 body_bytes: 1024,
                 batch_bytes: 1536,
+                code_offset: 32,
+                code_bytes: 2,
+                code_checksum: [6; 32],
                 rows: 1,
                 partial_run_count: 0,
                 checksum: [7; 32],
@@ -2210,11 +3113,14 @@ mod tests {
                 path: "global-leaf/bundles/fixture.arrow".to_string(),
                 checksum: [8; 32],
                 encoded_bytes: 4096,
+                code_plane_offset: 32,
+                code_plane_bytes: 2,
+                code_plane_checksum: [6; 32],
             }],
         )
     }
 
-    fn rewrite_v11_directory_metadata(
+    fn rewrite_v12_directory_metadata(
         bytes: &[u8],
         metadata: Vec<parquet::file::metadata::KeyValue>,
     ) -> Vec<u8> {
@@ -2235,7 +3141,7 @@ mod tests {
     }
 
     #[test]
-    fn v11_directory_is_bound_to_one_codebook_checksum() {
+    fn v12_directory_is_bound_to_one_codebook_checksum() {
         let (pages, bundles) = one_page_directory_fixture();
         let encoded = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
         assert!(
@@ -2249,7 +3155,7 @@ mod tests {
     }
 
     #[test]
-    fn v11_directory_uses_typed_rows_for_cells_bundles_and_pages() {
+    fn v12_directory_uses_typed_rows_for_cells_bundles_and_pages() {
         let (pages, bundles) = one_page_directory_fixture();
         let encoded = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(encoded.root)).unwrap();
@@ -2276,12 +3182,18 @@ mod tests {
                 "body_bytes",
                 "batch_bytes",
                 "rows",
+                "code_offset",
+                "code_bytes",
+                "code_checksum",
                 "partial_run_count",
                 "page_checksum",
                 "centroid_code",
                 "bundle_path",
                 "bundle_checksum",
                 "bundle_encoded_bytes",
+                "bundle_code_plane_offset",
+                "bundle_code_plane_bytes",
+                "bundle_code_plane_checksum",
                 "shard_path",
                 "shard_checksum",
                 "shard_encoded_bytes",
@@ -2307,21 +3219,21 @@ mod tests {
     }
 
     #[test]
-    fn v11_checksum_decoder_rejects_non_ascii_without_panicking() {
+    fn v12_checksum_decoder_rejects_non_ascii_without_panicking() {
         let malformed = format!("{}a", "€".repeat(21));
         assert_eq!(malformed.len(), 64);
-        let error = super::v11_hash(&malformed).unwrap_err();
+        let error = super::v12_hash(&malformed).unwrap_err();
         assert!(error.to_string().contains("checksum hex"), "{error}");
     }
 
     #[test]
-    fn v11_directory_rejects_oversized_roots_before_decode() {
+    fn v12_directory_rejects_oversized_roots_before_decode() {
         let oversized = vec![0_u8; super::GLOBAL_LEAF_DIRECTORY_SHARD_MAX_ENCODED_BYTES + 1];
         let error =
             decode_global_leaf_run_directory("11aa", &oversized, |_| unreachable!()).unwrap_err();
         assert!(error.to_string().contains("four MiB"), "{error}");
 
-        let (mut pages, bundles) = one_page_directory_fixture();
+        let (mut pages, mut bundles) = one_page_directory_fixture();
         let mut state = 1_u64;
         pages[0].centroid_code = (0..5 * 1024 * 1024)
             .map(|_| {
@@ -2332,12 +3244,19 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let code_width = pages[0].centroid_code.len();
+        pages[0].code_offset = 64;
+        pages[0].code_bytes = u32::try_from(code_width).unwrap();
+        pages[0].batch_offset = 64 + code_width as u64;
+        bundles[0].code_plane_offset = 64;
+        bundles[0].code_plane_bytes = code_width as u64;
+        bundles[0].encoded_bytes = pages[0].batch_offset + u64::from(pages[0].batch_bytes);
         let error = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap_err();
         assert!(error.to_string().contains("four MiB"), "{error}");
     }
 
     #[test]
-    fn v11_full_run_requires_every_cell_to_start_at_leaf_zero() {
+    fn v12_full_run_requires_every_cell_to_start_at_leaf_zero() {
         let (mut pages, bundles) = one_page_directory_fixture();
         pages[0].leaf_ordinal = 1;
         let error = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap_err();
@@ -2345,7 +3264,7 @@ mod tests {
     }
 
     #[test]
-    fn v11_directory_object_count_includes_the_root() {
+    fn v12_directory_object_count_includes_the_root() {
         let (pages, bundles) = one_page_directory_fixture();
         let inline = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
         assert_eq!(inline.directory_object_count().unwrap(), 1);
@@ -2369,7 +3288,7 @@ mod tests {
     }
 
     #[test]
-    fn v11_inline_and_sharded_directories_round_trip() {
+    fn v12_inline_and_sharded_directories_round_trip() {
         let (pages, bundles) = one_page_directory_fixture();
         let inline = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
         let decoded =
@@ -2382,10 +3301,13 @@ mod tests {
                 cell_index: 7,
                 leaf_ordinal: ordinal as u32,
                 bundle_index: 0,
-                batch_offset: 64 + ordinal as u64 * 1536,
+                batch_offset: 16_384 + ordinal as u64 * 1536,
                 metadata_bytes: 512,
                 body_bytes: 1024,
                 batch_bytes: 1536,
+                code_offset: 64 + ordinal as u64 * 2,
+                code_bytes: 2,
+                code_checksum: [(ordinal % 251) as u8; 32],
                 rows: 1,
                 partial_run_count: u8::from(ordinal == GLOBAL_LEAF_DIRECTORY_SHARD_PAGES),
                 checksum: [(ordinal % 251) as u8; 32],
@@ -2396,6 +3318,9 @@ mod tests {
             path: "global-leaf/bundles/sharded.arrow".to_string(),
             checksum: [9; 32],
             encoded_bytes: 16 * 1024 * 1024,
+            code_plane_offset: 64,
+            code_plane_bytes: sharded_pages.len() as u64 * 2,
+            code_plane_checksum: [10; 32],
         }];
         let sharded =
             encode_global_leaf_run_directory("11aa", &sharded_pages, &sharded_bundles).unwrap();
@@ -2416,16 +3341,19 @@ mod tests {
     }
 
     #[test]
-    fn v11_root_selects_only_shards_covering_requested_cells() {
+    fn v12_root_selects_only_shards_covering_requested_cells() {
         let pages = (0..GLOBAL_LEAF_DIRECTORY_SHARD_PAGES)
             .map(|ordinal| GlobalLeafPageRef {
                 cell_index: 7,
                 leaf_ordinal: ordinal as u32,
                 bundle_index: 0,
-                batch_offset: 64 + ordinal as u64 * 1536,
+                batch_offset: 16_384 + ordinal as u64 * 1536,
                 metadata_bytes: 512,
                 body_bytes: 1024,
                 batch_bytes: 1536,
+                code_offset: 64 + ordinal as u64 * 2,
+                code_bytes: 2,
+                code_checksum: [(ordinal % 251) as u8; 32],
                 rows: 1,
                 partial_run_count: 0,
                 checksum: [(ordinal % 251) as u8; 32],
@@ -2435,10 +3363,13 @@ mod tests {
                 cell_index: 9,
                 leaf_ordinal: 0,
                 bundle_index: 0,
-                batch_offset: 64 + GLOBAL_LEAF_DIRECTORY_SHARD_PAGES as u64 * 1536,
+                batch_offset: 16_384 + GLOBAL_LEAF_DIRECTORY_SHARD_PAGES as u64 * 1536,
                 metadata_bytes: 512,
                 body_bytes: 1024,
                 batch_bytes: 1536,
+                code_offset: 64 + GLOBAL_LEAF_DIRECTORY_SHARD_PAGES as u64 * 2,
+                code_bytes: 2,
+                code_checksum: [9; 32],
                 rows: 1,
                 partial_run_count: 0,
                 checksum: [9; 32],
@@ -2449,6 +3380,9 @@ mod tests {
             path: "global-leaf/bundles/shard-routing.arrow".to_owned(),
             checksum: [9; 32],
             encoded_bytes: 16 * 1024 * 1024,
+            code_plane_offset: 64,
+            code_plane_bytes: pages.len() as u64 * 2,
+            code_plane_checksum: [10; 32],
         }];
         let encoded = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
         let root = decode_global_leaf_run_directory_root("11aa", &encoded.root).unwrap();
@@ -2462,11 +3396,44 @@ mod tests {
     }
 
     #[test]
-    fn v11_directory_metadata_rejects_missing_and_duplicate_authentication() {
+    fn v12_directory_metadata_rejects_missing_and_duplicate_authentication() {
         use parquet::file::metadata::KeyValue;
         let (pages, bundles) = one_page_directory_fixture();
         let encoded = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
         let base = vec![
+            KeyValue::new("borsuk.ann.code_width".to_string(), "2".to_string()),
+            KeyValue::new(
+                "borsuk.ann.layout".to_string(),
+                "bounded-arrow-leaf-v12".to_string(),
+            ),
+            KeyValue::new(
+                "borsuk.ann.codebook_checksum".to_string(),
+                "11aa".to_string(),
+            ),
+            KeyValue::new(
+                "borsuk.ann.table".to_string(),
+                "leaf-run-directory-root".to_string(),
+            ),
+        ];
+        let mut missing = base.clone();
+        missing.retain(|entry| entry.key != "borsuk.ann.codebook_checksum");
+        let missing = rewrite_v12_directory_metadata(&encoded.root, missing);
+        assert!(decode_global_leaf_run_directory("11aa", &missing, |_| unreachable!()).is_err());
+        let mut duplicate = base;
+        duplicate.push(KeyValue::new(
+            "borsuk.ann.layout".to_string(),
+            "bounded-arrow-leaf-v12".to_string(),
+        ));
+        let duplicate = rewrite_v12_directory_metadata(&encoded.root, duplicate);
+        assert!(decode_global_leaf_run_directory("11aa", &duplicate, |_| unreachable!()).is_err());
+    }
+
+    #[test]
+    fn v12_directory_rejects_old_v11_layout_metadata() {
+        use parquet::file::metadata::KeyValue;
+        let (pages, bundles) = one_page_directory_fixture();
+        let encoded = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
+        let mut old_v11 = vec![
             KeyValue::new("borsuk.ann.code_width".to_string(), "2".to_string()),
             KeyValue::new(
                 "borsuk.ann.layout".to_string(),
@@ -2481,21 +3448,15 @@ mod tests {
                 "leaf-run-directory-root".to_string(),
             ),
         ];
-        let mut missing = base.clone();
-        missing.retain(|entry| entry.key != "borsuk.ann.codebook_checksum");
-        let missing = rewrite_v11_directory_metadata(&encoded.root, missing);
-        assert!(decode_global_leaf_run_directory("11aa", &missing, |_| unreachable!()).is_err());
-        let mut duplicate = base;
-        duplicate.push(KeyValue::new(
-            "borsuk.ann.layout".to_string(),
-            "bounded-arrow-leaf-v11".to_string(),
-        ));
-        let duplicate = rewrite_v11_directory_metadata(&encoded.root, duplicate);
-        assert!(decode_global_leaf_run_directory("11aa", &duplicate, |_| unreachable!()).is_err());
+        old_v11.sort_unstable_by(|left, right| left.key.cmp(&right.key));
+        let old_v11 = rewrite_v12_directory_metadata(&encoded.root, old_v11);
+        let error =
+            decode_global_leaf_run_directory("11aa", &old_v11, |_| unreachable!()).unwrap_err();
+        assert!(error.to_string().contains("incompatible"), "{error}");
     }
 
     #[test]
-    fn v11_directory_rejects_partial_run_count_above_four() {
+    fn v12_directory_rejects_partial_run_count_above_four() {
         let (mut pages, bundles) = one_page_directory_fixture();
         pages[0].partial_run_count = 5;
         let error = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap_err();
@@ -2545,6 +3506,7 @@ mod tests {
                         MutationVersion::from_parts(ordinal as u64 + 1, [ordinal as u8; 16]),
                         [ordinal as u8 + 11; 32],
                     ),
+                    code: vec![ordinal as u8, ordinal as u8 + 1].into(),
                     exact: vec![ordinal as u8; row_bytes],
                 })
                 .collect::<Vec<_>>();
@@ -2591,29 +3553,33 @@ mod tests {
                     .unwrap()
                     .collect::<std::result::Result<Vec<RecordBatch>, _>>()
                     .unwrap();
-            assert_eq!(batches.len(), 1);
-            let fields = batches[0].schema().fields().clone();
+            assert_eq!(
+                batches.len(),
+                2,
+                "one code plane followed by one exact page"
+            );
+            assert_eq!(batches[0].num_rows(), 3);
+            assert_eq!(batches[1].num_rows(), 3);
+            let schema = batches[0].schema();
+            assert_eq!(schema.fields().len(), 1);
+            let DataType::Union(children, UnionMode::Dense) = schema.field(0).data_type() else {
+                panic!("global leaf payload is not a dense union");
+            };
+            let children = children.iter().collect::<Vec<_>>();
+            assert_eq!(children[0].0, 0);
+            assert_eq!(children[0].1.name(), "pq_code");
+            assert_eq!(children[0].1.data_type(), &DataType::FixedSizeBinary(2));
+            assert_eq!(children[1].0, 1);
+            assert_eq!(children[1].1.name(), "exact_row");
+            let DataType::Struct(fields) = children[1].1.data_type() else {
+                panic!("global leaf exact payload is not a struct");
+            };
             assert_eq!(fields.len(), 6);
-            assert_eq!(
-                fields[0].as_ref(),
-                &Field::new("record_id", DataType::Binary, false)
-            );
-            assert_eq!(
-                fields[1].as_ref(),
-                &Field::new("mutation_hlc", DataType::UInt64, false)
-            );
-            assert_eq!(
-                fields[2].as_ref(),
-                &Field::new("mutation_writer", DataType::FixedSizeBinary(16), false)
-            );
-            assert_eq!(
-                fields[3].as_ref(),
-                &Field::new("mutation_digest", DataType::FixedSizeBinary(32), false)
-            );
-            assert_eq!(
-                fields[4].as_ref(),
-                &Field::new("row_integrity", DataType::FixedSizeBinary(32), false)
-            );
+            assert_eq!(fields[0].name(), "record_id");
+            assert_eq!(fields[1].name(), "mutation_hlc");
+            assert_eq!(fields[2].data_type(), &DataType::FixedSizeBinary(16));
+            assert_eq!(fields[3].data_type(), &DataType::FixedSizeBinary(32));
+            assert_eq!(fields[4].name(), "row_integrity");
             assert_eq!(fields[5].name(), "exact_vector");
             assert_eq!(fields[5].data_type(), &expected_vector_type);
         }
@@ -2629,6 +3595,7 @@ mod tests {
                 rows: vec![GlobalLeafRowInput {
                     id: RecordId::from("bounded-bundle"),
                     stamp: MutationStamp::new(MutationVersion::from_parts(1, [1; 16]), [2; 32]),
+                    code: vec![0].into(),
                     exact: 1.0_f32.to_le_bytes().to_vec(),
                 }],
             }],
@@ -2651,6 +3618,7 @@ mod tests {
                 rows: vec![GlobalLeafRowInput {
                     id: RecordId::from("x".repeat(132 * 1024)),
                     stamp: MutationStamp::new(MutationVersion::from_parts(1, [1; 16]), [2; 32]),
+                    code: vec![0].into(),
                     exact: vec![0],
                 }],
             }],
@@ -2678,6 +3646,7 @@ mod tests {
                     MutationVersion::from_parts(ordinal as u64 + 1, [1; 16]),
                     [2; 32],
                 ),
+                code: vec![0].into(),
                 exact: vec![0; 768 * 4],
             })
             .collect::<Vec<_>>();
@@ -2689,12 +3658,47 @@ mod tests {
     }
 
     #[test]
+    fn exact_page_size_model_charges_fixed_size_list_child_validity_bitmap() {
+        const DIMENSIONS: usize = super::GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES;
+        let inputs = [GlobalLeafPageInput {
+            cell_index: 0,
+            leaf_ordinal: 0,
+            centroid_code: vec![0],
+            rows: vec![GlobalLeafRowInput {
+                id: RecordId::from("high-dimensional-int8"),
+                stamp: MutationStamp::new(MutationVersion::from_parts(1, [1; 16]), [2; 32]),
+                code: vec![7].into(),
+                exact: vec![0; DIMENSIONS],
+            }],
+        }];
+        let encoded = encode_global_leaf_bundle(&inputs, DIMENSIONS, VectorElementType::Int8)
+            .expect("the maximum target payload still fits one exact page");
+        let conservative_body = super::global_leaf_conservative_exact_body_bytes(
+            &inputs[0].rows,
+            DIMENSIONS,
+            VectorElementType::Int8,
+            DIMENSIONS,
+        )
+        .unwrap();
+
+        assert!(
+            conservative_body >= encoded.pages[0].body_bytes as usize,
+            "the body model must cover the physical Arrow body without borrowing metadata slack"
+        );
+        assert!(
+            (inputs[0].rows.len() * DIMENSIONS).div_ceil(u8::BITS as usize) > 17 * 63,
+            "fixture must make the child validity bitmap larger than alignment slack"
+        );
+    }
+
+    #[test]
     fn leaf_page_fitter_rejects_one_exact_row_above_the_96_kib_payload_ceiling() {
         const DIMENSIONS: usize = super::GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / 4 + 1;
         let error = fit_global_leaf_page_ranges(
             &[GlobalLeafRowInput {
                 id: RecordId::from("too-wide"),
                 stamp: MutationStamp::new(MutationVersion::from_parts(1, [1; 16]), [2; 32]),
+                code: vec![0].into(),
                 exact: vec![0; DIMENSIONS * 4],
             }],
             DIMENSIONS,
@@ -2717,6 +3721,7 @@ mod tests {
                     MutationVersion::from_parts(ordinal + 1, [1; 16]),
                     [2; 32],
                 ),
+                code: vec![0].into(),
                 exact: vec![0],
             })
             .collect::<Vec<_>>();
@@ -2739,6 +3744,7 @@ mod tests {
                     MutationVersion::from_parts(leaf_ordinal as u64 + 7, [3; 16]),
                     [4; 32],
                 ),
+                code: vec![cell_index as u8, leaf_ordinal as u8].into(),
                 exact: exact.into_iter().flat_map(f32::to_le_bytes).collect(),
             }],
         };
@@ -2794,6 +3800,7 @@ mod tests {
                 rows: vec![GlobalLeafRowInput {
                     id: RecordId::from("typed-row"),
                     stamp,
+                    code: vec![1].into(),
                     exact: [1.5_f32, -2.25_f32]
                         .into_iter()
                         .flat_map(f32::to_le_bytes)
@@ -2832,6 +3839,7 @@ mod tests {
                 rows: vec![GlobalLeafRowInput {
                     id: RecordId::from("checksum-row"),
                     stamp: MutationStamp::new(MutationVersion::from_parts(1, [1; 16]), [2; 32]),
+                    code: vec![1].into(),
                     exact: 3.0_f32.to_le_bytes().to_vec(),
                 }],
             }],
@@ -2862,6 +3870,7 @@ mod tests {
                 rows: vec![GlobalLeafRowInput {
                     id: RecordId::from("integrity-row"),
                     stamp: MutationStamp::new(MutationVersion::from_parts(1, [1; 16]), [2; 32]),
+                    code: vec![1].into(),
                     exact: 3.0_f32.to_le_bytes().to_vec(),
                 }],
             }],
@@ -2884,5 +3893,429 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("integrity mismatch"), "{error}");
+    }
+
+    #[test]
+    fn arrow_leaf_format_preserves_u32_cell_identity_above_temporary_codebook_bound() {
+        let codes = [[1_u8, 2], [3, 4]];
+        let encoded = encode_global_leaf_bundle(
+            &[GlobalLeafPageInput {
+                cell_index: 70_000,
+                leaf_ordinal: 0,
+                centroid_code: vec![9, 8],
+                rows: codes
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, code)| GlobalLeafRowInput {
+                        id: RecordId::from(format!("pq-row-{ordinal}")),
+                        stamp: MutationStamp::new(
+                            MutationVersion::from_parts(ordinal as u64 + 1, [1; 16]),
+                            [2; 32],
+                        ),
+                        code: code.to_vec().into(),
+                        exact: [ordinal as f32, ordinal as f32 + 1.0]
+                            .into_iter()
+                            .flat_map(f32::to_le_bytes)
+                            .collect(),
+                    })
+                    .collect(),
+            }],
+            2,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        let page = &encoded.pages[0];
+        let start = page.code_offset as usize;
+        let end = start + page.code_bytes as usize;
+        let stored_codes = &encoded.bytes[start..end];
+
+        assert_eq!(page.cell_index, 70_000);
+        assert_eq!(page.code_bytes, 4);
+        let verified = super::decode_global_leaf_codes(page, stored_codes).unwrap();
+        assert_eq!(verified.rows(), 2);
+        assert_eq!(verified.width(), 2);
+        assert_eq!(verified.code(0), Some(codes[0].as_slice()));
+        assert_eq!(verified.code(1), Some(codes[1].as_slice()));
+        assert_eq!(page.code_checksum, *blake3::hash(stored_codes).as_bytes());
+
+        let mut corrupt = stored_codes.to_vec();
+        corrupt[0] ^= 1;
+        let error = super::decode_global_leaf_codes(page, &corrupt).unwrap_err();
+        assert!(error.to_string().contains("PQ-code checksum"), "{error}");
+    }
+
+    #[test]
+    fn nonfirst_page_code_ranges_decode_every_varied_input_row() {
+        // These cell ordinals intentionally exercise only the forward u32
+        // format layer, above the temporary segment-derived producer bound.
+        let inputs = [1_usize, 4, 2, 7]
+            .into_iter()
+            .enumerate()
+            .map(|(page_ordinal, rows)| GlobalLeafPageInput {
+                cell_index: 70_000 + u32::try_from(page_ordinal).unwrap(),
+                leaf_ordinal: u32::try_from(page_ordinal).unwrap(),
+                centroid_code: vec![page_ordinal as u8, 0xCC, 0xDD],
+                rows: (0..rows)
+                    .map(|row_ordinal| GlobalLeafRowInput {
+                        id: RecordId::from(format!(
+                            "varied-code-page-{page_ordinal}-row-{row_ordinal}"
+                        )),
+                        stamp: MutationStamp::new(
+                            MutationVersion::from_parts(
+                                u64::try_from(page_ordinal * 10 + row_ordinal + 1).unwrap(),
+                                [5; 16],
+                            ),
+                            [6; 32],
+                        ),
+                        code: vec![
+                            page_ordinal as u8,
+                            row_ordinal as u8,
+                            (page_ordinal ^ row_ordinal) as u8,
+                        ]
+                        .into(),
+                        exact: vec![row_ordinal as u8],
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let encoded = encode_global_leaf_bundle(&inputs, 1, VectorElementType::Int8).unwrap();
+
+        for (page_ordinal, page) in encoded.pages.iter().enumerate().skip(1) {
+            let start = usize::try_from(page.code_offset).unwrap();
+            let end = start + usize::try_from(page.code_bytes).unwrap();
+            let verified = super::decode_global_leaf_codes(page, &encoded.bytes[start..end])
+                .expect("every non-first physical page code range authenticates");
+            assert_eq!(verified.rows(), inputs[page_ordinal].rows.len());
+            for (row_ordinal, input) in inputs[page_ordinal].rows.iter().enumerate() {
+                assert_eq!(
+                    verified.code(row_ordinal),
+                    Some(input.code.as_slice()),
+                    "page {page_ordinal} row {row_ordinal} decoded from the wrong physical range"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn global_leaf_bundle_code_plane_coalesces_376_sparse_pages() {
+        let inputs = (0..GLOBAL_LEAF_BUNDLE_MAX_PAGES)
+            .map(|ordinal| GlobalLeafPageInput {
+                cell_index: u32::try_from(ordinal).unwrap(),
+                leaf_ordinal: 0,
+                centroid_code: vec![ordinal as u8, 1, 2, 3],
+                rows: vec![GlobalLeafRowInput {
+                    id: RecordId::from(format!("code-plane-{ordinal}")),
+                    stamp: MutationStamp::new(
+                        MutationVersion::from_parts(ordinal as u64 + 1, [3; 16]),
+                        [4; 32],
+                    ),
+                    code: vec![ordinal as u8, 11, 22, 33].into(),
+                    exact: (ordinal as f32).to_le_bytes().to_vec(),
+                }],
+            })
+            .collect::<Vec<_>>();
+        let encoded = encode_global_leaf_bundle(&inputs, 1, VectorElementType::Float32).unwrap();
+        assert_eq!(encoded.pages.len(), GLOBAL_LEAF_BUNDLE_MAX_PAGES);
+        assert_eq!(
+            encoded.code_plane_bytes,
+            (GLOBAL_LEAF_BUNDLE_MAX_PAGES * 4) as u64
+        );
+        assert!(encoded.pages.iter().all(|page| {
+            page.batch_offset >= encoded.code_plane_offset + encoded.code_plane_bytes
+        }));
+        for pair in encoded.pages.windows(2) {
+            assert_eq!(
+                pair[0].code_offset + u64::from(pair[0].code_bytes),
+                pair[1].code_offset
+            );
+        }
+
+        let refs = encoded
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(ordinal, page)| GlobalLeafPageRef {
+                cell_index: page.cell_index,
+                leaf_ordinal: page.leaf_ordinal,
+                bundle_index: 0,
+                batch_offset: page.batch_offset,
+                metadata_bytes: page.metadata_bytes,
+                body_bytes: page.body_bytes,
+                batch_bytes: page.batch_bytes,
+                code_offset: page.code_offset,
+                code_bytes: page.code_bytes,
+                code_checksum: page.code_checksum,
+                rows: u32::try_from(page.rows).unwrap(),
+                partial_run_count: 0,
+                checksum: page.checksum,
+                centroid_code: inputs[ordinal].centroid_code.clone().into_boxed_slice(),
+            })
+            .collect::<Vec<_>>();
+        let bundles = vec![GlobalLeafBundleRef {
+            path: "global-leaf/bundles/376-pages.arrow".to_string(),
+            checksum: *blake3::hash(&encoded.bytes).as_bytes(),
+            encoded_bytes: encoded.bytes.len() as u64,
+            code_plane_offset: encoded.code_plane_offset,
+            code_plane_bytes: encoded.code_plane_bytes,
+            code_plane_checksum: encoded.code_plane_checksum,
+        }];
+        let selected = vec![refs[0].clone(), refs[100].clone(), refs[375].clone()];
+        let reads = coalesce_global_leaf_code_reads(&selected, &bundles).unwrap();
+        assert_eq!(reads.len(), 1);
+        assert_eq!(reads[0].bundle_index, 0);
+        assert_eq!(reads[0].offset, selected[0].code_offset);
+        assert_eq!(reads[0].bytes, encoded.code_plane_bytes);
+        assert_eq!(reads[0].selected_bytes, 3 * 4);
+
+        let mut second_bundle = bundles[0].clone();
+        second_bundle.path = "global-leaf/bundles/second.arrow".to_string();
+        second_bundle.code_plane_offset = encoded.bytes.len() as u64 + 64;
+        second_bundle.encoded_bytes = second_bundle.code_plane_offset
+            + second_bundle.code_plane_bytes
+            + GLOBAL_LEAF_MAX_ENCODED_BYTES;
+        let mut second_page = refs[200].clone();
+        second_page.bundle_index = 1;
+        second_page.code_offset = second_bundle.code_plane_offset + 200 * 4;
+        let selected = vec![refs[0].clone(), refs[375].clone(), second_page];
+        let reads =
+            coalesce_global_leaf_code_reads(&selected, &[bundles[0].clone(), second_bundle])
+                .unwrap();
+        assert_eq!(reads.len(), 2);
+        assert_eq!(reads[0].bundle_index, 0);
+        assert_eq!(reads[1].bundle_index, 1);
+        assert_eq!(reads[1].bytes, 4);
+    }
+
+    #[test]
+    fn global_leaf_bundle_round_trips_through_stock_arrow_without_codes_in_exact_bodies() {
+        let sentinel = (0..32).map(|byte| byte as u8 ^ 0xA5).collect::<Vec<_>>();
+        let inputs = (0..2)
+            .map(|ordinal| GlobalLeafPageInput {
+                cell_index: ordinal,
+                leaf_ordinal: 0,
+                centroid_code: vec![ordinal as u8; 32],
+                rows: vec![GlobalLeafRowInput {
+                    id: RecordId::from(format!("stock-arrow-{ordinal}")),
+                    stamp: MutationStamp::new(
+                        MutationVersion::from_parts(ordinal as u64 + 1, [7; 16]),
+                        [8; 32],
+                    ),
+                    code: sentinel
+                        .iter()
+                        .enumerate()
+                        .map(|(index, byte)| byte ^ (ordinal as u8).wrapping_mul(index as u8 + 1))
+                        .collect::<Vec<_>>()
+                        .into(),
+                    exact: [ordinal as f32, ordinal as f32 + 0.5]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                }],
+            })
+            .collect::<Vec<_>>();
+        let encoded = encode_global_leaf_bundle(&inputs, 2, VectorElementType::Float32).unwrap();
+
+        let batches = FileReader::try_new(Cursor::new(encoded.bytes.clone()), None)
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(batches.len(), inputs.len() + 1);
+        let code_payload = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .unwrap();
+        assert!(code_payload.type_ids().iter().all(|type_id| *type_id == 0));
+        assert_eq!(
+            code_payload
+                .child(0)
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap()
+                .len(),
+            inputs.len()
+        );
+        for (ordinal, batch) in batches.iter().enumerate().skip(1) {
+            let payload = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .unwrap();
+            assert!(payload.type_ids().iter().all(|type_id| *type_id == 1));
+            assert_eq!(
+                payload
+                    .child(0)
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap()
+                    .len(),
+                0,
+                "stock Arrow sees no code child in exact page {ordinal}"
+            );
+            let page = &encoded.pages[ordinal - 1];
+            let body_start = page.batch_offset as usize + page.metadata_bytes as usize;
+            let body_end = body_start + page.body_bytes as usize;
+            let code = inputs[ordinal - 1].rows[0].code.as_slice();
+            assert!(
+                !encoded.bytes[body_start..body_end]
+                    .windows(code.len())
+                    .any(|window| window == code),
+                "exact page body duplicates its PQ code"
+            );
+        }
+    }
+
+    #[test]
+    fn global_leaf_dense_union_pins_arrow_buffer_count_and_order() {
+        let inputs = [GlobalLeafPageInput {
+            cell_index: 0,
+            leaf_ordinal: 0,
+            centroid_code: vec![0, 1],
+            rows: (0..2)
+                .map(|ordinal| GlobalLeafRowInput {
+                    id: RecordId::from(format!("buffer-order-{ordinal}")),
+                    stamp: MutationStamp::new(
+                        MutationVersion::from_parts(ordinal + 1, [9; 16]),
+                        [10; 32],
+                    ),
+                    code: vec![ordinal as u8, 42].into(),
+                    exact: [ordinal as f32, ordinal as f32 + 0.25]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                })
+                .collect(),
+        }];
+        let encoded = encode_global_leaf_bundle(&inputs, 2, VectorElementType::Float32).unwrap();
+        let blocks = super::global_leaf_batch_ranges(&encoded.bytes, 2).unwrap();
+        let buffer_lengths = |bytes: &[u8], block: &super::GlobalLeafBatchBlock| {
+            let start = block.offset as usize;
+            let metadata = &bytes[start..start + block.metadata_bytes as usize];
+            let continuation = metadata[..4] == [0xFF; 4];
+            let prefix = if continuation { 8 } else { 4 };
+            let length_offset = if continuation { 4 } else { 0 };
+            let message_bytes = u32::from_le_bytes(
+                metadata[length_offset..length_offset + 4]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            let message =
+                arrow_ipc::root_as_message(&metadata[prefix..prefix + message_bytes]).unwrap();
+            message
+                .header_as_record_batch()
+                .unwrap()
+                .buffers()
+                .unwrap()
+                .iter()
+                .map(|buffer| usize::try_from(buffer.length()).unwrap())
+                .collect::<Vec<_>>()
+        };
+
+        let code = buffer_lengths(&encoded.bytes, &blocks[0]);
+        assert_eq!(code.len(), 19);
+        assert_eq!(&code[..4], &[2, 8, 1, 4]);
+        let exact = buffer_lengths(&encoded.bytes, &blocks[1]);
+        assert_eq!(exact.len(), 19);
+        assert_eq!(
+            exact,
+            vec![
+                2, 8, 0, 0, 1, 1, 12, 28, 1, 16, 1, 32, 1, 64, 1, 64, 1, 1, 16
+            ]
+        );
+
+        let binary_inputs = [GlobalLeafPageInput {
+            cell_index: 0,
+            leaf_ordinal: 0,
+            centroid_code: vec![0, 1],
+            rows: (0..2)
+                .map(|ordinal| GlobalLeafRowInput {
+                    id: RecordId::from(format!("buffer-order-{ordinal}")),
+                    stamp: MutationStamp::new(
+                        MutationVersion::from_parts(ordinal + 1, [9; 16]),
+                        [10; 32],
+                    ),
+                    code: vec![ordinal as u8, 42].into(),
+                    exact: vec![ordinal as u8, 0x80],
+                })
+                .collect(),
+        }];
+        let binary =
+            encode_global_leaf_bundle(&binary_inputs, 9, VectorElementType::Binary).unwrap();
+        let binary_blocks = super::global_leaf_batch_ranges(&binary.bytes, 2).unwrap();
+        assert_eq!(
+            buffer_lengths(&binary.bytes, &binary_blocks[0]),
+            vec![2, 8, 1, 4, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            buffer_lengths(&binary.bytes, &binary_blocks[1]),
+            vec![2, 8, 0, 0, 1, 1, 12, 28, 1, 16, 1, 32, 1, 64, 1, 64, 1, 4]
+        );
+    }
+
+    #[test]
+    fn v12_directory_rejects_reordered_or_cross_plane_code_ranges() {
+        let inputs = (0..2)
+            .map(|ordinal| GlobalLeafPageInput {
+                cell_index: ordinal,
+                leaf_ordinal: 0,
+                centroid_code: vec![ordinal as u8, 9],
+                rows: vec![GlobalLeafRowInput {
+                    id: RecordId::from(format!("code-corruption-{ordinal}")),
+                    stamp: MutationStamp::new(
+                        MutationVersion::from_parts(ordinal as u64 + 1, [5; 16]),
+                        [6; 32],
+                    ),
+                    code: vec![ordinal as u8, 17].into(),
+                    exact: (ordinal as f32).to_le_bytes().to_vec(),
+                }],
+            })
+            .collect::<Vec<_>>();
+        let encoded = encode_global_leaf_bundle(&inputs, 1, VectorElementType::Float32).unwrap();
+        let mut pages = encoded
+            .pages
+            .iter()
+            .map(|page| GlobalLeafPageRef {
+                cell_index: page.cell_index,
+                leaf_ordinal: page.leaf_ordinal,
+                bundle_index: 0,
+                batch_offset: page.batch_offset,
+                metadata_bytes: page.metadata_bytes,
+                body_bytes: page.body_bytes,
+                batch_bytes: page.batch_bytes,
+                code_offset: page.code_offset,
+                code_bytes: page.code_bytes,
+                code_checksum: page.code_checksum,
+                rows: page.rows as u32,
+                partial_run_count: 0,
+                checksum: page.checksum,
+                centroid_code: page.centroid_code.clone().into_boxed_slice(),
+            })
+            .collect::<Vec<_>>();
+        let bundles = vec![GlobalLeafBundleRef {
+            path: "global-leaf/bundles/corruption.arrow".to_string(),
+            checksum: *blake3::hash(&encoded.bytes).as_bytes(),
+            encoded_bytes: encoded.bytes.len() as u64,
+            code_plane_offset: encoded.code_plane_offset,
+            code_plane_bytes: encoded.code_plane_bytes,
+            code_plane_checksum: encoded.code_plane_checksum,
+        }];
+
+        pages.swap(0, 1);
+        pages[0].cell_index = 0;
+        pages[1].cell_index = 1;
+        let error = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap_err();
+        assert!(error.to_string().contains("page order"), "{error}");
+
+        pages.swap(0, 1);
+        pages[0].cell_index = 0;
+        pages[1].cell_index = 1;
+        let exact_offset = pages[0].batch_offset as usize;
+        pages[0].code_offset = pages[0].batch_offset;
+        pages[0].code_checksum = *blake3::hash(
+            &encoded.bytes[exact_offset..exact_offset + pages[0].code_bytes as usize],
+        )
+        .as_bytes();
+        let error = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap_err();
+        assert!(error.to_string().contains("V12 bounds"), "{error}");
     }
 }

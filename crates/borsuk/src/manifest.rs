@@ -195,7 +195,7 @@ pub struct Manifest {
     /// so an older manifest (which lacks the field) reloads with no reference.
     #[serde(default)]
     pub(crate) quantizer_ref: Option<QuantizerRef>,
-    /// Reference to the V11 global codebook and leaf-run epoch. The field is
+    /// Reference to the V12 global codebook and leaf-run epoch. The field is
     /// null until an offline bulk-load finish or full compaction publishes a
     /// complete base run.
     pub(crate) global_ann_ref: Option<GlobalAnnRef>,
@@ -345,7 +345,7 @@ mod global_pq_layout_tests {
     }
 
     #[test]
-    fn offline_v11_base_has_one_codebook_one_base_and_no_incremental_levels() {
+    fn offline_v12_base_has_one_codebook_one_base_and_no_incremental_levels() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -371,7 +371,7 @@ mod global_pq_layout_tests {
             .global_ann_ref
             .as_ref()
             .unwrap();
-        assert_eq!(ann.layout_version(), 11);
+        assert_eq!(ann.layout_version(), 12);
         assert!(ann.base().is_some());
         assert!(ann.incremental_runs().is_empty());
         ann.validate().unwrap();

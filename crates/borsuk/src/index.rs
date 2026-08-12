@@ -183,10 +183,10 @@ const COARSE_QUANTIZER_OVERFETCH: usize = 4;
 const DEFAULT_LEXICAL_RUN_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_LEXICAL_TERM_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
-/// Maximum complete mutation view admitted for bounded V11 leaf routing.
+/// Maximum complete mutation view admitted for bounded V12 leaf routing.
 ///
 /// Larger overlays retain the ordinary query-paged MVCC architecture and make
-/// V11 falls back before it reads a directory or leaf. The full reservation is
+/// V12 falls back before it reads a directory or leaf. The full reservation is
 /// held while the view is live, so this optimization cannot silently turn a
 /// 100M-row mutation map into unaccounted process memory.
 const GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES: u64 = 32 * 1024 * 1024;
@@ -377,7 +377,7 @@ struct RoutedDecodedGlobalLeafRow {
 }
 
 #[derive(Clone, Copy)]
-struct ResidentGlobalV11Context<'a> {
+struct ResidentGlobalV12Context<'a> {
     page_budget: usize,
     mutation_states: Option<&'a FrozenMutationOverlay>,
 }
@@ -559,7 +559,7 @@ pub const DEFAULT_ROUTING_PAGE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 /// Defaults use paged routing (`resident_routing: false`), no local cache, no
 /// decoded-segment cache, and a bounded concurrent-search admission gate.
 ///
-/// V11 leaf routing owns its bounded Arrow fetch wave and has no legacy range,
+/// V12 leaf routing owns its bounded Arrow fetch wave and has no legacy range,
 /// hedge, or global-cell-graph cache controls:
 ///
 /// ```compile_fail
@@ -814,8 +814,8 @@ pub struct BorsukIndex {
     /// hash bucket plus the bounded foreground frontier; cloned handles share
     /// the same read-only pages.
     tombstone_cache: TombstoneCache,
-    /// Complete mutation state for the exact pinned snapshot used by V11.
-    /// When this bounded, byte-reserved view is unavailable, V11 falls back
+    /// Complete mutation state for the exact pinned snapshot used by V12.
+    /// When this bounded, byte-reserved view is unavailable, V12 falls back
     /// before issuing directory or leaf GETs rather than starting a dependent
     /// post-decode tombstone wave.
     resident_global_mutations: Option<Arc<ResidentGlobalMutationOverlay>>,
@@ -2023,7 +2023,7 @@ impl<T> BoundedResidentCache<T> {
     }
 }
 
-/// Loaded V11 descriptor/codebook state keyed by the complete durable reference.
+/// Loaded V12 descriptor/codebook state keyed by the complete durable reference.
 type ResidentGlobalCodebookCache = Arc<BoundedResidentCache<ResidentGlobalCodebook>>;
 type ResidentGlobalLeafRunCache = Arc<BoundedResidentCache<ResidentGlobalLeafRun>>;
 
@@ -3951,7 +3951,7 @@ impl BorsukIndex {
             .map(|overlay| Some(&overlay.states))
     }
 
-    /// Build the complete mutation view V11 needs before the handle serves a
+    /// Build the complete mutation view V12 needs before the handle serves a
     /// request. Refuse large snapshots by declared ID count before reading any
     /// tombstone object, reserve the full fixed cap before decoding, and keep
     /// that reservation pinned with the exact snapshot key.
@@ -10100,7 +10100,7 @@ impl BorsukIndex {
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
-        // Until every direct-write path publishes a matching V11 incremental
+        // Until every direct-write path publishes a matching V12 incremental
         // run, a segment change must invalidate the prior offline base. Keeping
         // it would let approximate search serve only the old base and omit the
         // newly published segment.
@@ -10137,7 +10137,7 @@ impl BorsukIndex {
         // Direct writes are an ingest path, not an index-finalization boundary.
         // Building a corpus-wide artifact after every batch makes a 10M-vector
         // load rescan the growing corpus repeatedly. Segment fallback remains
-        // authoritative until a later finalization or direct V11 run publish.
+        // authoritative until a later finalization or direct V12 run publish.
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let (published, storage_report) = self
             .publish_manifest_reusing_routing_pages_with_recovery_report(
@@ -10246,6 +10246,22 @@ impl BorsukIndex {
                     "logical cell routing catalog contains no usable centroid".to_string(),
                 )
             })
+    }
+
+    fn resident_global_selected_cells(
+        &self,
+        codebook: &ResidentGlobalCodebook,
+        query: &[f32],
+        probes: usize,
+    ) -> Result<Vec<u32>> {
+        if probes == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "global codebook probe count must be positive".to_string(),
+            ));
+        }
+        codebook
+            .nearest_cells(query, probes)
+            .map(|cells| cells.into_iter().map(u32::from).collect())
     }
 
     /// Resolve the logical write cell using this handle's configured routing
@@ -11391,7 +11407,7 @@ impl BorsukIndex {
             manifest.rebuild_pivots();
         }
         // A segment-changing online flush invalidates the offline base run;
-        // this path does not publish incremental V11 leaf runs.
+        // this path does not publish incremental V12 leaf runs.
         manifest.global_ann_ref = None;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let published = if paged_manifest {
@@ -12181,7 +12197,7 @@ impl BorsukIndex {
 
         let chunks = records.chunks(self.manifest.config.segment_max_vectors);
         let mut manifest = self.manifest.next_version();
-        // New right-edge routing pages are not represented by the existing V11
+        // New right-edge routing pages are not represented by the existing V12
         // base. Invalidate it atomically so approximate search cannot omit them.
         manifest.global_ann_ref = None;
         manifest.segments.clear();
@@ -12216,7 +12232,7 @@ impl BorsukIndex {
         }
         // Existing routing pages and their segment rows are unchanged. The new
         // right-edge pages use authoritative segment fallback until an explicit
-        // finalization or direct V11 run publication covers them.
+        // finalization or direct V12 run publication covers them.
         if self.manifest.config.text
             || self
                 .manifest
@@ -14432,7 +14448,7 @@ impl BorsukIndex {
                     != Some(codebook.resident_bytes())
             {
                 return Err(BorsukError::InvalidStorage(
-                    "V11 GC codebook does not match its manifest reference".to_string(),
+                    "V12 GC codebook does not match its manifest reference".to_string(),
                 ));
             }
             read.bytes_read = read
@@ -14914,7 +14930,7 @@ impl BorsukIndex {
     ) -> Result<Arc<ResidentGlobalCodebook>> {
         let key = serde_json::to_string(reference).map_err(|error| {
             BorsukError::InvalidStorage(format!(
-                "V11 global codebook reference cannot be keyed: {error}"
+                "V12 global codebook reference cannot be keyed: {error}"
             ))
         })?;
         let loaded = if let Some(pinned) = self
@@ -14978,7 +14994,7 @@ impl BorsukIndex {
             || reference.element_type() != manifest.build_config.vector_element_type
         {
             return Err(BorsukError::InvalidStorage(
-                "V11 global codebook reference does not match its descriptor".to_string(),
+                "V12 global codebook reference does not match its descriptor".to_string(),
             ));
         }
         Ok(())
@@ -14991,7 +15007,7 @@ impl BorsukIndex {
     ) -> Result<Arc<ResidentGlobalLeafRun>> {
         let key = serde_json::to_string(reference).map_err(|error| {
             BorsukError::InvalidStorage(format!(
-                "V11 global leaf-run reference cannot be keyed: {error}"
+                "V12 global leaf-run reference cannot be keyed: {error}"
             ))
         })?;
         let loaded = if let Some(pinned) = self
@@ -15007,7 +15023,7 @@ impl BorsukIndex {
         };
         if loaded.level() != level {
             return Err(BorsukError::InvalidStorage(
-                "V11 leaf-run cache identity has the wrong level".to_owned(),
+                "V12 leaf-run cache identity has the wrong level".to_owned(),
             ));
         }
         self.validate_resident_global_leaf_run(reference, &loaded)?;
@@ -15119,13 +15135,13 @@ impl BorsukIndex {
             .ok()
             .and_then(|shards| shards.checked_add(1))
             .ok_or_else(|| {
-                BorsukError::InvalidStorage("V11 directory object count exceeds u32".into())
+                BorsukError::InvalidStorage("V12 directory object count exceeds u32".into())
             })?;
         let encoded_bytes = loaded
             .encoded_bytes()
             .checked_add(reference.directory().encoded_bytes())
             .ok_or_else(|| {
-                BorsukError::InvalidStorage("V11 leaf-run encoded bytes overflow".into())
+                BorsukError::InvalidStorage("V12 leaf-run encoded bytes overflow".into())
             })?;
         if directory_objects != reference.directory().object_count()
             || u64::try_from(loaded.rows()).ok() != Some(reference.rows())
@@ -15137,7 +15153,7 @@ impl BorsukIndex {
             || u64::try_from(loaded.resident_bytes()).ok() != Some(reference.resident_bytes())
         {
             return Err(BorsukError::InvalidStorage(
-                "V11 leaf-run reference does not match its directory".to_string(),
+                "V12 leaf-run reference does not match its directory".to_string(),
             ));
         }
         Ok(())
@@ -15156,7 +15172,7 @@ impl BorsukIndex {
         let codebook_reference = reference.codebook();
         let codebook_key = serde_json::to_string(codebook_reference).map_err(|error| {
             BorsukError::InvalidStorage(format!(
-                "V11 global codebook reference cannot be keyed: {error}"
+                "V12 global codebook reference cannot be keyed: {error}"
             ))
         })?;
         let codebook_loaded =
@@ -15178,7 +15194,7 @@ impl BorsukIndex {
             .map(|(level, run)| {
                 let key = serde_json::to_string(run).map_err(|error| {
                     BorsukError::InvalidStorage(format!(
-                        "V11 global leaf-run reference cannot be keyed: {error}"
+                        "V12 global leaf-run reference cannot be keyed: {error}"
                     ))
                 })?;
                 Ok::<_, BorsukError>((key, level, run))
@@ -15226,12 +15242,12 @@ impl BorsukIndex {
             |pending| {
                 let run = run_specs.get(pending.run_ordinal).ok_or_else(|| {
                     BorsukError::InvalidStorage(
-                        "V11 preload shard references a missing run".to_owned(),
+                        "V12 preload shard references a missing run".to_owned(),
                     )
                 })?;
                 let root = roots.get(pending.run_ordinal).ok_or_else(|| {
                     BorsukError::InvalidStorage(
-                        "V11 preload shard references a missing root".to_owned(),
+                        "V12 preload shard references a missing root".to_owned(),
                     )
                 })?;
                 let read = self.storage.read_known_size_from_backing_with_checksum(
@@ -15255,7 +15271,7 @@ impl BorsukIndex {
                 .get_mut(run_ordinal)
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage(
-                        "V11 preload shard references a missing page accumulator".to_owned(),
+                        "V12 preload shard references a missing page accumulator".to_owned(),
                     )
                 })?
                 .append(&mut pages);
@@ -15285,7 +15301,7 @@ impl BorsukIndex {
         &self,
         codebook: &GlobalCodebookRef,
         runs: &[(Option<u8>, &GlobalLeafRunRef)],
-        selected_cells: &[u16],
+        selected_cells: &[u32],
         options: &SearchOptions,
         started: Instant,
     ) -> Result<GlobalLeafDirectoryLoads> {
@@ -15304,7 +15320,7 @@ impl BorsukIndex {
                 || resident.level() != *level
             {
                 return Err(BorsukError::InvalidStorage(
-                    "V11 routed leaf run is not bound to the shared codebook and level".to_owned(),
+                    "V12 routed leaf run is not bound to the shared codebook and level".to_owned(),
                 ));
             }
             self.validate_resident_global_leaf_run(reference, &resident)?;
@@ -15326,7 +15342,7 @@ impl BorsukIndex {
                     .get(page.bundle_index as usize)
                     .ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "V11 directory page references a missing bundle".to_owned(),
+                            "V12 directory page references a missing bundle".to_owned(),
                         )
                     })?;
                 load.pages.push(RoutedGlobalLeafPage {
@@ -15343,7 +15359,7 @@ impl BorsukIndex {
                     .checked_add(shard.encoded_bytes)
                     .ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "V11 directory admission byte count overflows".to_owned(),
+                            "V12 directory admission byte count overflows".to_owned(),
                         )
                     })?;
                 if let Some(pages) = resident.cached_shard(shard_ordinal)? {
@@ -15356,7 +15372,7 @@ impl BorsukIndex {
                                 .get(page.bundle_index as usize)
                                 .ok_or_else(|| {
                                     BorsukError::InvalidStorage(
-                                        "V11 directory page references a missing bundle".to_owned(),
+                                        "V12 directory page references a missing bundle".to_owned(),
                                     )
                                 })?;
                         load.pages.push(RoutedGlobalLeafPage {
@@ -15387,7 +15403,7 @@ impl BorsukIndex {
                 |request| {
                     let run = resident_runs.get(request.run_ordinal).ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "V11 directory shard references a missing resident run".to_owned(),
+                            "V12 directory shard references a missing resident run".to_owned(),
                         )
                     })?;
                     run.load_shard(request.shard_ordinal, || {
@@ -15400,7 +15416,7 @@ impl BorsukIndex {
                             )?;
                         let physical_bytes = u64::try_from(read.bytes.len()).map_err(|_| {
                             BorsukError::InvalidStorage(
-                                "V11 physical directory bytes exceed u64".to_owned(),
+                                "V12 physical directory bytes exceed u64".to_owned(),
                             )
                         })?;
                         let pages = crate::global_leaf::decode_global_leaf_run_directory_shard(
@@ -15415,12 +15431,12 @@ impl BorsukIndex {
                 |request, (pages, physical_bytes, _shared)| {
                     let run = resident_runs.get(request.run_ordinal).ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "V11 directory shard references a missing resident run".to_owned(),
+                            "V12 directory shard references a missing resident run".to_owned(),
                         )
                     })?;
                     let load = directories.get_mut(request.run_ordinal).ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "V11 directory shard references a missing load".to_owned(),
+                            "V12 directory shard references a missing load".to_owned(),
                         )
                     })?;
                     load.physical_reads = load
@@ -15428,7 +15444,7 @@ impl BorsukIndex {
                         .checked_add(usize::from(physical_bytes > 0))
                         .ok_or_else(|| {
                             BorsukError::InvalidStorage(
-                                "V11 physical directory read count overflows".to_owned(),
+                                "V12 physical directory read count overflows".to_owned(),
                             )
                         })?;
                     load.physical_bytes = load
@@ -15436,7 +15452,7 @@ impl BorsukIndex {
                         .checked_add(physical_bytes)
                         .ok_or_else(|| {
                             BorsukError::InvalidStorage(
-                                "V11 physical directory byte count overflows".to_owned(),
+                                "V12 physical directory byte count overflows".to_owned(),
                             )
                         })?;
                     let root = run.root();
@@ -15449,7 +15465,7 @@ impl BorsukIndex {
                                 .get(page.bundle_index as usize)
                                 .ok_or_else(|| {
                                     BorsukError::InvalidStorage(
-                                        "V11 directory page references a missing bundle".to_owned(),
+                                        "V12 directory page references a missing bundle".to_owned(),
                                     )
                                 })?;
                         load.pages.push(RoutedGlobalLeafPage {
@@ -15649,10 +15665,10 @@ impl BorsukIndex {
         Ok(())
     }
 
-    fn resident_global_v11_context(
+    fn resident_global_v12_context(
         &self,
         options: &SearchOptions,
-    ) -> Result<Option<ResidentGlobalV11Context<'_>>> {
+    ) -> Result<Option<ResidentGlobalV12Context<'_>>> {
         let expected_leaf_mode = self.manifest.build_config.global_scan_codec.leaf_mode();
         let eligible = matches!(options.mode, SearchMode::Approx { .. })
             && options.mode.leaf_mode() == expected_leaf_mode
@@ -15674,7 +15690,7 @@ impl BorsukIndex {
         self.manifest
             .global_ann_ref
             .as_ref()
-            .expect("eligibility requires a V11 reference")
+            .expect("eligibility requires a V12 reference")
             .validate_serving_shape()?;
         let page_budget = match options.mode {
             SearchMode::Approx { max_segments, .. } => match max_segments.unwrap_or(16) {
@@ -15686,7 +15702,7 @@ impl BorsukIndex {
         let Some(mutation_states) = self.resident_global_mutations_for_current_snapshot() else {
             return Ok(None);
         };
-        Ok(Some(ResidentGlobalV11Context {
+        Ok(Some(ResidentGlobalV12Context {
             page_budget,
             mutation_states,
         }))
@@ -15700,7 +15716,7 @@ impl BorsukIndex {
         started: Instant,
         requests_before: &RequestCounts,
     ) -> Result<Option<SearchExecution>> {
-        let Some(context) = self.resident_global_v11_context(options)? else {
+        let Some(context) = self.resident_global_v12_context(options)? else {
             return Ok(None);
         };
         let page_budget = context.page_budget;
@@ -15713,7 +15729,7 @@ impl BorsukIndex {
             return Ok(Some(SearchExecution {
                 report: SearchReport {
                     hits: Vec::new(),
-                    leaf_mode: "bounded-arrow-leaf-v11".to_string(),
+                    leaf_mode: "bounded-arrow-leaf-v12".to_string(),
                     termination_reason: SearchTerminationReason::MaxLatency,
                     recall_guarantee: RecallGuarantee::Degraded,
                     segments_total,
@@ -15783,7 +15799,8 @@ impl BorsukIndex {
         } else {
             query.to_vec()
         };
-        let selected_cells = codebook.nearest_cells(
+        let selected_cells = self.resident_global_selected_cells(
+            &codebook,
             &pq_query,
             usize::try_from(global_ref.codebook().probes())
                 .unwrap_or(usize::MAX)
@@ -15825,7 +15842,7 @@ impl BorsukIndex {
                 .iter()
                 .try_fold(0_usize, |total, load| {
                     total.checked_add(load.physical_reads).ok_or_else(|| {
-                        BorsukError::InvalidStorage("V11 directory read count overflows".to_owned())
+                        BorsukError::InvalidStorage("V12 directory read count overflows".to_owned())
                     })
                 })?;
         let directory_bytes =
@@ -15834,7 +15851,7 @@ impl BorsukIndex {
                 .iter()
                 .try_fold(0_u64, |total, load| {
                     total.checked_add(load.physical_bytes).ok_or_else(|| {
-                        BorsukError::InvalidStorage("V11 directory byte count overflows".to_owned())
+                        BorsukError::InvalidStorage("V12 directory byte count overflows".to_owned())
                     })
                 })?;
         let directory_admission_bytes =
@@ -15844,7 +15861,7 @@ impl BorsukIndex {
                 .try_fold(0_u64, |total, load| {
                     total.checked_add(load.admission_bytes).ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "V11 directory admission byte count overflows".to_owned(),
+                            "V12 directory admission byte count overflows".to_owned(),
                         )
                     })
                 })?;
@@ -16023,7 +16040,7 @@ impl BorsukIndex {
         Ok(Some(SearchExecution {
             report: SearchReport {
                 hits,
-                leaf_mode: "bounded-arrow-leaf-v11".to_string(),
+                leaf_mode: "bounded-arrow-leaf-v12".to_string(),
                 termination_reason,
                 recall_guarantee: RecallGuarantee::Degraded,
                 segments_total,
@@ -16376,13 +16393,13 @@ impl BorsukIndex {
             self.manifest.config.metric.clone(),
             self.manifest.build_config.vector_element_type,
             u32::try_from(coarse_cell_count).map_err(|_| {
-                BorsukError::InvalidStorage("V11 global codebook cell count exceeds u32".into())
+                BorsukError::InvalidStorage("V12 global codebook cell count exceeds u32".into())
             })?,
             u32::try_from(candidates).map_err(|_| {
-                BorsukError::InvalidStorage("V11 global candidate count exceeds u32".into())
+                BorsukError::InvalidStorage("V12 global candidate count exceeds u32".into())
             })?,
             u32::try_from(probes).map_err(|_| {
-                BorsukError::InvalidStorage("V11 global probe count exceeds u32".into())
+                BorsukError::InvalidStorage("V12 global probe count exceeds u32".into())
             })?,
             reconstruction_error_p95_micros,
         )?;
@@ -16390,19 +16407,19 @@ impl BorsukIndex {
             u64::try_from(ResidentGlobalCodebook::load(descriptor.clone())?.resident_bytes())
                 .map_err(|_| {
                     BorsukError::InvalidStorage(
-                        "V11 global codebook resident bytes exceed u64".into(),
+                        "V12 global codebook resident bytes exceed u64".into(),
                     )
                 })?;
         let descriptor_bytes = descriptor.encode()?;
         let descriptor_checksum = blake3::hash(&descriptor_bytes).to_hex().to_string();
         let descriptor_path = format!(
-            "global-leaf/v11/codebooks/{}/codebook-{descriptor_checksum}.parquet",
+            "global-leaf/v12/codebooks/{}/codebook-{descriptor_checksum}.parquet",
             &descriptor_checksum[..2]
         );
         self.storage
             .write_bytes_content_addressed(&descriptor_path, &descriptor_bytes)?;
         let codebook_storage_bytes = u64::try_from(descriptor_bytes.len()).map_err(|_| {
-            BorsukError::InvalidStorage("V11 global codebook bytes exceed u64".into())
+            BorsukError::InvalidStorage("V12 global codebook bytes exceed u64".into())
         })?;
         drop(training_sample);
 
@@ -16493,12 +16510,12 @@ impl BorsukIndex {
                             "resident global PQ row count overflows".to_string(),
                         )
                     })?;
-                    let source = PendingGlobalPqChunk {
+                    let mut source = PendingGlobalPqChunk {
                         cell_index: cell,
                         chunk,
                     };
                     let pages = build_global_leaf_pages(
-                        std::slice::from_ref(&source),
+                        std::slice::from_mut(&mut source),
                         global_code_width,
                         quantizer_state.uses_product_code_locality(),
                         dimensions,
@@ -16534,13 +16551,13 @@ impl BorsukIndex {
             self.manifest.build_config.vector_element_type,
             global_code_width,
             u32::try_from(coarse_cell_count).map_err(|_| {
-                BorsukError::InvalidStorage("V11 global codebook cell count exceeds u32".into())
+                BorsukError::InvalidStorage("V12 global codebook cell count exceeds u32".into())
             })?,
             u32::try_from(candidates).map_err(|_| {
-                BorsukError::InvalidStorage("V11 global candidate count exceeds u32".into())
+                BorsukError::InvalidStorage("V12 global candidate count exceeds u32".into())
             })?,
             u32::try_from(probes).map_err(|_| {
-                BorsukError::InvalidStorage("V11 global probe count exceeds u32".into())
+                BorsukError::InvalidStorage("V12 global probe count exceeds u32".into())
             })?,
             reconstruction_error_p95_micros,
             codebook_resident_bytes,
@@ -16550,25 +16567,25 @@ impl BorsukIndex {
             descriptor_checksum,
             artifacts.directory,
             u64::try_from(artifacts.rows).map_err(|_| {
-                BorsukError::InvalidStorage("V11 base row count exceeds u64".into())
+                BorsukError::InvalidStorage("V12 base row count exceeds u64".into())
             })?,
             u64::try_from(artifacts.page_count).map_err(|_| {
-                BorsukError::InvalidStorage("V11 base page count exceeds u64".into())
+                BorsukError::InvalidStorage("V12 base page count exceeds u64".into())
             })?,
             u64::try_from(artifacts.bundle_count).map_err(|_| {
-                BorsukError::InvalidStorage("V11 base bundle count exceeds u64".into())
+                BorsukError::InvalidStorage("V12 base bundle count exceeds u64".into())
             })?,
             u64::try_from(artifacts.page_count).map_err(|_| {
-                BorsukError::InvalidStorage("V11 base page count exceeds u64".into())
+                BorsukError::InvalidStorage("V12 base page count exceeds u64".into())
             })?,
             0,
             artifacts.storage_bytes,
             artifacts.resident_bytes,
             min_stamp.ok_or_else(|| {
-                BorsukError::InvalidStorage("V11 base run has no minimum mutation stamp".into())
+                BorsukError::InvalidStorage("V12 base run has no minimum mutation stamp".into())
             })?,
             max_stamp.ok_or_else(|| {
-                BorsukError::InvalidStorage("V11 base run has no maximum mutation stamp".into())
+                BorsukError::InvalidStorage("V12 base run has no maximum mutation stamp".into())
             })?,
         );
         GlobalAnnRef::new_offline_base(codebook, base, leaf_epoch, purge_epoch).map(Some)
@@ -16579,7 +16596,7 @@ impl BorsukIndex {
         self.refresh_resident_global_ann_from_summaries(&summaries, 0)
     }
 
-    /// Rebuild and atomically publish one offline V11 codebook plus one base run.
+    /// Rebuild and atomically publish one offline V12 codebook plus one base run.
     fn refresh_resident_global_ann_from_summaries(
         &mut self,
         summaries: &[SegmentSummary],
@@ -17599,11 +17616,11 @@ impl BorsukIndex {
 
         let requests_before = self.storage.request_counts();
         let started = Instant::now();
-        let resident_global_v11_context = self.resident_global_v11_context(&options)?;
+        let resident_global_v12_context = self.resident_global_v12_context(&options)?;
         let wal_query_cells = self.wal_query_cells(query, &options)?;
         let live_wal_tail = if options.k == 0 {
             Arc::new(Vec::new())
-        } else if let Some(context) = resident_global_v11_context {
+        } else if let Some(context) = resident_global_v12_context {
             self.dense_live_wal_records_with_resident_mutations(
                 wal_query_cells.as_ref(),
                 context.mutation_states,
@@ -17613,7 +17630,7 @@ impl BorsukIndex {
         };
         let live_wal_norms = if options.k == 0 || wal_query_cells.is_some() {
             None
-        } else if let Some(context) = resident_global_v11_context {
+        } else if let Some(context) = resident_global_v12_context {
             self.live_wal_snapshot_with_resident_mutations(context.mutation_states)?
                 .stored_norms
                 .clone()
@@ -17622,9 +17639,9 @@ impl BorsukIndex {
         };
         let zero_distance_wal_eligible = matches!(options.mode, SearchMode::Approx { .. })
             && self.manifest.config.metric.supports_centroid_lower_bound();
-        let global_eligible = resident_global_v11_context.is_some();
+        let global_eligible = resident_global_v12_context.is_some();
         // Online segment-changing publishes clear the Task 3 base. Presence of
-        // a V11 reference therefore certifies the active immutable set without
+        // a V12 reference therefore certifies the active immutable set without
         // a routing-tree walk or a dual-format fallback.
         let global_available = global_eligible;
         let global_active_segment_count = global_eligible.then_some(self.manifest.segments.len());
@@ -21951,13 +21968,13 @@ fn splitmix_index(state: &mut u64, len: usize) -> usize {
 }
 
 struct PendingGlobalPqChunk {
-    cell_index: u16,
+    cell_index: u32,
     chunk: crate::global_pq_sidecar::GlobalPqChunkBytes,
 }
 
 #[derive(Clone, Copy)]
 struct GlobalLeafPartitionRow<'a> {
-    cell_index: u16,
+    cell_index: u32,
     code: &'a [u8],
     record_id: &'a [u8],
     source_ordinal: usize,
@@ -21990,7 +22007,7 @@ fn global_leaf_partition_order(
         ));
     }
     let max_rows = GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / exact_row_bytes;
-    let mut by_cell = BTreeMap::<u16, Vec<usize>>::new();
+    let mut by_cell = BTreeMap::<u32, Vec<usize>>::new();
     for (index, row) in rows.iter().enumerate() {
         by_cell.entry(row.cell_index).or_default().push(index);
     }
@@ -22081,7 +22098,7 @@ fn partition_global_leaf_code_rows(
 
 #[allow(clippy::too_many_arguments)]
 fn build_global_leaf_pages(
-    pending: &[PendingGlobalPqChunk],
+    pending: &mut [PendingGlobalPqChunk],
     code_width: usize,
     use_code_space: bool,
     dimensions: usize,
@@ -22096,9 +22113,7 @@ fn build_global_leaf_pages(
             BorsukError::InvalidStorage("global leaf source row count overflows".to_string())
         })
     })?;
-    let mut partition_rows = Vec::with_capacity(total_rows);
-    let mut sources = Vec::with_capacity(total_rows);
-    for (chunk_index, entry) in pending.iter().enumerate() {
+    for entry in pending.iter() {
         if entry.chunk.bytes.len() != entry.chunk.rows.saturating_mul(scan_row_bytes)
             || entry.chunk.exact_bytes.len() != entry.chunk.rows.saturating_mul(exact_row_bytes)
             || entry.chunk.identities.len() != entry.chunk.rows
@@ -22107,11 +22122,19 @@ fn build_global_leaf_pages(
                 "global leaf source chunk columns disagree on row count".to_string(),
             ));
         }
+    }
+    let code_chunks = pending
+        .iter_mut()
+        .map(|entry| Arc::<[u8]>::from(std::mem::take(&mut entry.chunk.bytes)))
+        .collect::<Vec<_>>();
+    let mut partition_rows = Vec::with_capacity(total_rows);
+    let mut sources = Vec::with_capacity(total_rows);
+    for (chunk_index, entry) in pending.iter().enumerate() {
         for local_row in 0..entry.chunk.rows {
             let scan_start = local_row * scan_row_bytes;
             partition_rows.push(GlobalLeafPartitionRow {
                 cell_index: entry.cell_index,
-                code: &entry.chunk.bytes[scan_start..scan_start + code_width],
+                code: &code_chunks[chunk_index][scan_start..scan_start + code_width],
                 record_id: entry.chunk.identities[local_row].0.as_bytes(),
                 source_ordinal: sources.len(),
             });
@@ -22121,7 +22144,7 @@ fn build_global_leaf_pages(
     let partitions =
         global_leaf_partition_order(&partition_rows, code_width, exact_row_bytes, use_code_space)?;
     let quantizer = GlobalScanQuantizer::from_state(quantizer_state.into())?;
-    let mut next_leaf = BTreeMap::<u16, u32>::new();
+    let mut next_leaf = BTreeMap::<u32, u32>::new();
     let mut pages = Vec::new();
     for partition in partitions {
         let cell_index = partition_rows[partition[0]].cell_index;
@@ -22131,13 +22154,17 @@ fn build_global_leaf_pages(
                 let (chunk_index, local_row) = sources[*source];
                 let entry = &pending[chunk_index];
                 let start = local_row * exact_row_bytes;
-                crate::global_leaf::GlobalLeafRowInput {
+                Ok(crate::global_leaf::GlobalLeafRowInput {
                     id: entry.chunk.identities[local_row].0.clone(),
                     stamp: entry.chunk.identities[local_row].1,
+                    code: crate::global_leaf::GlobalLeafCodeInput::shared(
+                        Arc::clone(&code_chunks[chunk_index]),
+                        local_row * scan_row_bytes..(local_row + 1) * scan_row_bytes,
+                    )?,
                     exact: entry.chunk.exact_bytes[start..start + exact_row_bytes].to_vec(),
-                }
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         for range in crate::global_leaf::fit_global_leaf_page_ranges(
             &ordered_rows,
             dimensions,
@@ -23114,8 +23141,8 @@ fn is_vector_sidecar_path(path: &str) -> bool {
 
 fn is_global_pq_path(path: &str) -> bool {
     (path.starts_with("global-leaf/bundles/") && path.ends_with(".arrow"))
-        || ((path.starts_with("global-leaf/v11/codebooks/")
-            || path.starts_with("global-leaf/v11/directories/"))
+        || ((path.starts_with("global-leaf/v12/codebooks/")
+            || path.starts_with("global-leaf/v12/directories/"))
             && path.ends_with(".parquet"))
 }
 
@@ -25437,7 +25464,7 @@ mod tests {
 
     use super::*;
     use std::sync::{Barrier, Mutex};
-    fn build_finished_resident_global_v11_index() -> (tempfile::TempDir, BorsukIndex) {
+    fn build_finished_resident_global_v12_index() -> (tempfile::TempDir, BorsukIndex) {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -25460,7 +25487,7 @@ mod tests {
         (directory, index)
     }
 
-    fn build_cached_finished_resident_global_v11_index()
+    fn build_cached_finished_resident_global_v12_index()
     -> (tempfile::TempDir, tempfile::TempDir, BorsukIndex) {
         let directory = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
@@ -25777,7 +25804,7 @@ mod tests {
         );
     }
     #[test]
-    fn resident_v11_deadline_stops_before_descriptor_and_root_setup() {
+    fn resident_v12_deadline_stops_before_descriptor_and_root_setup() {
         let dir = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: dir.path().to_string_lossy().into_owned(),
@@ -25824,12 +25851,12 @@ mod tests {
         assert_eq!(
             index.storage.request_counts().delta(&requests_before).gets,
             0,
-            "expired V11 request performed descriptor/root setup I/O"
+            "expired V12 request performed descriptor/root setup I/O"
         );
     }
 
     #[test]
-    fn resident_v11_deadline_is_resampled_after_scoring_and_hit_materialization() {
+    fn resident_v12_deadline_is_resampled_after_scoring_and_hit_materialization() {
         let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
             .with_max_segments(4)
             .with_max_latency_ms(1);
@@ -25844,7 +25871,7 @@ mod tests {
     }
 
     #[test]
-    fn public_resident_v11_deadline_is_resampled_after_live_wal_result_merge() {
+    fn public_resident_v12_deadline_is_resampled_after_live_wal_result_merge() {
         let dir = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: dir.path().to_string_lossy().into_owned(),
@@ -25888,7 +25915,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.hits.len(), 2);
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v12");
         assert!(report.wal_records_examined > 0);
         assert!(report.elapsed_ms >= 100);
         assert_eq!(
@@ -29128,7 +29155,7 @@ mod tests {
         for exact in &exact_rows {
             bytes.extend_from_slice(&quantizer.encode(exact).unwrap());
         }
-        let pending = vec![PendingGlobalPqChunk {
+        let mut pending = vec![PendingGlobalPqChunk {
             cell_index: 9,
             chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
                 bytes,
@@ -29152,7 +29179,7 @@ mod tests {
         }];
 
         let pages = build_global_leaf_pages(
-            &pending,
+            &mut pending,
             quantizer.code_bytes_per_vector(),
             true,
             2,
@@ -29166,6 +29193,8 @@ mod tests {
         assert_eq!(pages[0].cell_index, 9);
         assert_eq!(pages[0].leaf_ordinal, 0);
         assert_eq!(pages[0].rows.len(), 2);
+        assert!(pending[0].chunk.bytes.is_empty());
+        assert!(pages[0].rows[0].code.shares_backing(&pages[0].rows[1].code));
         assert_eq!(
             pages[0].centroid_code,
             quantizer.encode(&[2.0, 4.0]).unwrap()
@@ -29214,7 +29243,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_base_routes_and_exact_scores_without_segment_payloads() {
+    fn resident_global_v12_base_routes_and_exact_scores_without_segment_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -29263,7 +29292,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("row-37"));
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11");
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v12");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.segments_skipped, report.segments_total);
         assert_eq!(report.global_scan_chunks_searched, 0);
@@ -29279,12 +29308,87 @@ mod tests {
         assert!(
             report.requests.gets
                 <= (report.global_leaf_directory_reads + report.global_leaf_pages_read) as u64,
-            "V11 issued a dependent identity/exact GET wave: {report:?}"
+            "V12 issued a dependent identity/exact GET wave: {report:?}"
         );
     }
 
     #[test]
-    fn resident_global_v11_stats_are_exact() {
+    fn resident_global_nprobe_one_self_query_uses_codebook_cells_without_catalog() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..256)
+            .map(|row| {
+                let cluster = (row % 4) as f32 * 1_000.0;
+                (0..8)
+                    .map(|dimension| cluster + row as f32 * 0.01 + dimension as f32 * 0.001)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        index
+            .add(
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| {
+                        VectorRecord::new(format!("nprobe-self-{row}"), vector.clone())
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index.manifest.logical_cell_catalog_ref = None;
+        index.manifest.logical_cell_catalog = None;
+
+        let global = index.manifest.global_ann_ref.as_ref().unwrap();
+        let codebook = index
+            .load_resident_global_codebook(global.codebook())
+            .unwrap();
+        assert!(codebook.cell_count() > 1);
+        let query = &vectors[173];
+        let selected = index
+            .resident_global_selected_cells(&codebook, query, 1)
+            .unwrap();
+        assert_eq!(selected.len(), 1);
+        let runs = global
+            .base()
+            .map(|run| (None, run))
+            .into_iter()
+            .collect::<Vec<_>>();
+        let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
+            .with_max_segments(1)
+            .with_max_candidates_per_segment(256);
+        let loaded = index
+            .load_selected_global_leaf_directories(
+                global.codebook(),
+                &runs,
+                &selected,
+                &options,
+                Instant::now(),
+            )
+            .unwrap();
+        let pages = loaded
+            .directories
+            .iter()
+            .flat_map(|directory| directory.pages.iter().cloned())
+            .collect::<Vec<_>>();
+        let (rows, _) = index.fetch_global_leaf_wave(&pages, &loaded.runs).unwrap();
+        assert!(
+            rows.iter().any(|row| row.row.id == "nprobe-self-173"),
+            "nprobe=1 did not route the self-query to its build-time codebook cell"
+        );
+    }
+
+    #[test]
+    fn resident_global_v12_stats_are_exact() {
         let dir = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: dir.path().to_string_lossy().into_owned(),
@@ -29309,7 +29413,7 @@ mod tests {
         reference.validate().unwrap();
 
         let stats = index.stats();
-        assert_eq!(stats.global_ann_layout_version, Some(11));
+        assert_eq!(stats.global_ann_layout_version, Some(12));
         assert_eq!(
             stats.global_ann_codebook_checksum.as_deref(),
             Some(reference.codebook().descriptor_checksum())
@@ -29324,7 +29428,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_rejects_corrupt_codebook_and_directory_objects() {
+    fn resident_global_v12_rejects_corrupt_codebook_and_directory_objects() {
         fn finished_index() -> (tempfile::TempDir, BorsukIndex) {
             let dir = tempfile::tempdir().unwrap();
             let mut index = BorsukIndex::create(IndexConfig {
@@ -29398,8 +29502,8 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_preload_rejects_mismatched_incremental_directory() {
-        let (_directory, index) = build_finished_resident_global_v11_index();
+    fn resident_global_v12_preload_rejects_mismatched_incremental_directory() {
+        let (_directory, index) = build_finished_resident_global_v12_index();
         let mut manifest = index.manifest.clone();
         let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
             let mut incremental = value["base"].clone();
@@ -29446,18 +29550,21 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_preload_authenticates_every_shard_before_retaining_root_only() {
-        let (_directory, index) = build_finished_resident_global_v11_index();
+    fn resident_global_v12_preload_authenticates_every_shard_before_retaining_root_only() {
+        let (_directory, index) = build_finished_resident_global_v12_index();
         let page_count = crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES + 1;
         let pages = (0..page_count)
             .map(|ordinal| crate::global_leaf::GlobalLeafPageRef {
                 cell_index: 7,
                 leaf_ordinal: ordinal as u32,
                 bundle_index: 0,
-                batch_offset: 64 + ordinal as u64 * 1536,
+                batch_offset: 16_384 + ordinal as u64 * 1536,
                 metadata_bytes: 512,
                 body_bytes: 1024,
                 batch_bytes: 1536,
+                code_offset: 64 + ordinal as u64 * 2,
+                code_bytes: 2,
+                code_checksum: [(ordinal % 251) as u8; 32],
                 rows: 1,
                 partial_run_count: 0,
                 checksum: [(ordinal % 251) as u8; 32],
@@ -29468,6 +29575,9 @@ mod tests {
             path: "global-leaf/bundles/preload-auth.arrow".to_owned(),
             checksum: [9; 32],
             encoded_bytes: 16 * 1024 * 1024,
+            code_plane_offset: 64,
+            code_plane_bytes: page_count as u64 * 2,
+            code_plane_checksum: [10; 32],
         }];
         let encoded =
             crate::global_leaf::encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
@@ -29487,7 +29597,7 @@ mod tests {
         )
         .unwrap();
         let expected_resident_bytes = decoded.resident_bytes() as u64;
-        let root_path = "global-leaf/v11/directories/preload-auth-root.parquet";
+        let root_path = "global-leaf/v12/directories/preload-auth-root.parquet";
         index.storage.write_bytes(root_path, &encoded.root).unwrap();
         for shard in &encoded.shards {
             index
@@ -29546,18 +29656,18 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_warm_cache_cannot_substitute_missing_durable_paths() {
-        let (_directory, index) = build_finished_resident_global_v11_index();
+    fn resident_global_v12_warm_cache_cannot_substitute_missing_durable_paths() {
+        let (_directory, index) = build_finished_resident_global_v12_index();
 
         for field in ["codebook", "directory"] {
             let mut manifest = index.manifest.clone();
             let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
                 if field == "codebook" {
                     value["codebook"]["descriptor_path"] =
-                        serde_json::Value::from("global-leaf/v11/codebooks/missing.parquet");
+                        serde_json::Value::from("global-leaf/v12/codebooks/missing.parquet");
                 } else {
                     value["base"]["directory"]["path"] =
-                        serde_json::Value::from("global-leaf/v11/directories/missing.parquet");
+                        serde_json::Value::from("global-leaf/v12/directories/missing.parquet");
                 }
             });
             ann.validate().unwrap();
@@ -29570,8 +29680,8 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_refresh_rejects_deleted_backing_object_when_cached_without_swapping() {
-        let (directory, cache, mut writer) = build_cached_finished_resident_global_v11_index();
+    fn resident_global_v12_refresh_rejects_deleted_backing_object_when_cached_without_swapping() {
+        let (directory, cache, mut writer) = build_cached_finished_resident_global_v12_index();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut reader =
             BorsukIndex::open_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
@@ -29658,7 +29768,7 @@ mod tests {
             reader
                 .resident_global_mutations
                 .as_ref()
-                .expect("the positioned tombstone must prepare a resident V11 overlay"),
+                .expect("the positioned tombstone must prepare a resident V12 overlay"),
         );
         let resident_snapshot_key_before = resident_before.snapshot_key;
         let primary_hits_before = reader
@@ -29783,8 +29893,8 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_transactional_preload_rejects_false_known_size_when_cached() {
-        let (_directory, _cache, index) = build_cached_finished_resident_global_v11_index();
+    fn resident_global_v12_transactional_preload_rejects_false_known_size_when_cached() {
+        let (_directory, _cache, index) = build_cached_finished_resident_global_v12_index();
         let version = index.manifest.version;
         let mut candidate = index.manifest.clone();
         candidate.global_ann_ref = Some(ann_from_mutated_json(
@@ -29812,7 +29922,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_binds_all_durable_run_counters() {
+    fn resident_global_v12_binds_all_durable_run_counters() {
         for field in [
             "rows",
             "pages",
@@ -29821,7 +29931,7 @@ mod tests {
             "encoded_bytes",
             "resident_bytes",
         ] {
-            let (_directory, mut index) = build_finished_resident_global_v11_index();
+            let (_directory, mut index) = build_finished_resident_global_v12_index();
             index.resident_global_ann_pins = None;
             index.resident_global_leaf_runs.clear();
             let mut manifest = index.manifest.clone();
@@ -29888,9 +29998,9 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_binds_all_codebook_reference_fields() {
+    fn resident_global_v12_binds_all_codebook_reference_fields() {
         for field in ["metric", "candidates", "probes", "reconstruction"] {
-            let (_directory, index) = build_finished_resident_global_v11_index();
+            let (_directory, index) = build_finished_resident_global_v12_index();
             let mut manifest = index.manifest.clone();
             let ann =
                 ann_from_mutated_json(
@@ -29940,8 +30050,8 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_overflow_cannot_bypass_ram_admission() {
-        let (_directory, index) = build_finished_resident_global_v11_index();
+    fn resident_global_v12_overflow_cannot_bypass_ram_admission() {
+        let (_directory, index) = build_finished_resident_global_v12_index();
         let mut manifest = index.manifest.clone();
         let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
             let base_resident = value["base"]["resident_bytes"].as_u64().unwrap();
@@ -29956,8 +30066,8 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_runtime_slot_overhead_is_ram_admitted() {
-        let (_directory, index) = build_finished_resident_global_v11_index();
+    fn resident_global_v12_runtime_slot_overhead_is_ram_admitted() {
+        let (_directory, index) = build_finished_resident_global_v12_index();
         let manifest = index.manifest.clone();
         let ann = manifest.global_ann_ref.as_ref().unwrap();
         let runtime_overhead = ann.runtime_resident_overhead();
@@ -30029,7 +30139,7 @@ mod tests {
         assert_eq!(production.get(b"missing"), None);
     }
     #[test]
-    fn resident_global_v11_dispatch_accepts_only_qualified_page_budgets() {
+    fn resident_global_v12_dispatch_accepts_only_qualified_page_budgets() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -30061,8 +30171,8 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                report.leaf_mode, "bounded-arrow-leaf-v11",
-                "qualified page budget {budget} did not dispatch V11"
+                report.leaf_mode, "bounded-arrow-leaf-v12",
+                "qualified page budget {budget} did not dispatch V12"
             );
             assert!(report.global_leaf_pages_read <= budget);
         }
@@ -30076,7 +30186,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 report.leaf_mode, "srht-pq-scan",
-                "unqualified page budget {budget} entered V11"
+                "unqualified page budget {budget} entered V12"
             );
             assert_eq!(report.global_leaf_pages_read, 0);
             assert!(
@@ -30087,7 +30197,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_refuses_a_100m_mutation_overlay_before_object_reads() {
+    fn resident_global_v12_refuses_a_100m_mutation_overlay_before_object_reads() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -30121,7 +30231,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_continues_after_mvcc_suppresses_the_first_leaf() {
+    fn resident_global_v12_continues_after_mvcc_suppresses_the_first_leaf() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let suffix = "x".repeat(100 * 1024);
@@ -30163,7 +30273,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v11", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v12", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
         assert_eq!(report.global_leaf_continuations, 1, "{report:?}");
         assert_eq!(report.global_leaf_waves, 2);
@@ -30221,7 +30331,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v11_reports_filtered_and_nonmatching_dense_fallbacks_explicitly() {
+    fn resident_global_v12_reports_filtered_and_nonmatching_dense_fallbacks_explicitly() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -32055,7 +32165,7 @@ mod tests {
     }
 
     #[test]
-    fn gc_path_filters_accept_only_current_v11_global_ann_objects() {
+    fn gc_path_filters_accept_only_current_v12_global_ann_objects() {
         assert!(is_segment_table_path("segments/L0/aa/seg-1.parquet"));
         assert!(!is_segment_table_path("segments/L0/aa/seg-1.vortex"));
         assert!(!is_segment_table_path("segments/L0/aa/seg-1.arrow"));
@@ -32070,10 +32180,10 @@ mod tests {
 
         assert!(is_global_pq_path("global-leaf/bundles/ab/a.arrow"));
         assert!(is_global_pq_path(
-            "global-leaf/v11/codebooks/ab/codebook-a.parquet"
+            "global-leaf/v12/codebooks/ab/codebook-a.parquet"
         ));
         assert!(is_global_pq_path(
-            "global-leaf/v11/directories/ab/directory-a.parquet"
+            "global-leaf/v12/directories/ab/directory-a.parquet"
         ));
         assert!(!is_global_pq_path("global-leaf/directories/ab/a.parquet"));
         assert!(!is_global_pq_path("global-leaf/roots/ab/cells-a.parquet"));
@@ -32090,7 +32200,7 @@ mod tests {
     }
 
     #[test]
-    fn gc_reclaims_unreferenced_v11_leaf_objects_from_every_leaf_namespace() {
+    fn gc_reclaims_unreferenced_v12_leaf_objects_from_every_leaf_namespace() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -32104,13 +32214,13 @@ mod tests {
         .unwrap();
         let paths = [
             "global-leaf/bundles/aa/orphan.arrow",
-            "global-leaf/v11/codebooks/aa/orphan.parquet",
-            "global-leaf/v11/directories/aa/orphan.parquet",
+            "global-leaf/v12/codebooks/aa/orphan.parquet",
+            "global-leaf/v12/directories/aa/orphan.parquet",
         ];
         for path in paths {
             index
                 .storage
-                .write_bytes_content_addressed(path, b"orphan-v11")
+                .write_bytes_content_addressed(path, b"orphan-v12")
                 .unwrap();
         }
         index

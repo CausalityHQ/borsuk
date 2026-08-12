@@ -841,15 +841,15 @@ pub struct IndexStats {
     pub global_scan_bytes: u64,
     /// Active global ANN manifest layout version.
     pub global_ann_layout_version: Option<u8>,
-    /// Checksum of the single active V11 codebook descriptor.
+    /// Checksum of the single active V12 codebook descriptor.
     pub global_ann_codebook_checksum: Option<String>,
-    /// Monotonic leaf-run epoch of the active V11 ANN.
+    /// Monotonic leaf-run epoch of the active V12 ANN.
     pub global_leaf_epoch: Option<u64>,
     /// Number of active leaf runs, including the optional base.
     pub global_leaf_runs: usize,
     /// Highest active leaf-run level; the offline base is level zero.
     pub global_leaf_max_level: Option<u8>,
-    /// Number of partially filled active V11 leaf pages.
+    /// Number of partially filled active V12 leaf pages.
     pub global_leaf_partial_pages: usize,
     /// Collection-wide resident manifest/config/routing/pivot bytes.
     pub resident_bytes_estimate: u64,
@@ -1103,25 +1103,25 @@ pub struct SearchReport {
     /// Logical lossless vector rows fetched and validated after MVCC.
     #[serde(default)]
     pub global_exact_vectors_fetched: usize,
-    /// Authenticated V11 leaf-directory shard objects read for selected cells.
+    /// Authenticated V12 leaf-directory shard objects read for selected cells.
     #[serde(default)]
     pub global_leaf_directory_reads: usize,
-    /// Encoded bytes read from authenticated V11 leaf-directory shards.
+    /// Encoded bytes read from authenticated V12 leaf-directory shards.
     #[serde(default)]
     pub global_leaf_directory_bytes: u64,
-    /// Logical V11 Arrow leaf pages read, independent of physical range coalescing.
+    /// Logical V12 Arrow leaf pages read, independent of physical range coalescing.
     #[serde(default)]
     pub global_leaf_pages_read: usize,
-    /// Encoded V11 Arrow batch bytes read for selected logical leaf pages.
+    /// Encoded V12 Arrow batch bytes read for selected logical leaf pages.
     #[serde(default)]
     pub global_leaf_page_bytes: u64,
-    /// Live canonical vectors exact-scored from V11 Arrow leaf pages.
+    /// Live canonical vectors exact-scored from V12 Arrow leaf pages.
     #[serde(default)]
     pub global_leaf_exact_scores: usize,
     /// Additional ranked-page batches consumed after MVCC suppressed initial rows.
     #[serde(default)]
     pub global_leaf_continuations: usize,
-    /// Critical-path V11 Arrow page-fetch waves.
+    /// Critical-path V12 Arrow page-fetch waves.
     #[serde(default)]
     pub global_leaf_waves: usize,
     /// Aggregate microseconds spent routing and producing approximate candidates
@@ -1721,7 +1721,7 @@ impl FromStr for GlobalPqLayout {
 /// lossless regardless of compression, and centroid sampling only perturbs which
 /// segment a vector lands in (rerank still re-scores the true vectors).
 ///
-/// V11 persists bounded Arrow leaves and does not accept the removed custom
+/// V12 persists bounded Arrow leaves and does not accept the removed custom
 /// global-cell-graph build control:
 ///
 /// ```compile_fail
@@ -2021,7 +2021,7 @@ impl SearchMode {
 
 /// Search options.
 ///
-/// V11 exact-scores every admitted Arrow leaf row; approximate-only global
+/// V12 exact-scores every admitted Arrow leaf row; approximate-only global
 /// result controls from the V9 code-scan path are not part of this API:
 ///
 /// ```compile_fail
