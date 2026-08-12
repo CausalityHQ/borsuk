@@ -128,6 +128,7 @@ def build_execution_plan(
                     "BORSUK_SYNTHETIC_DIMENSIONS": str(dimensions),
                     "BORSUK_SYNTHETIC_QUERIES": str(effective_queries),
                     "BORSUK_SYNTHETIC_GROUP_SIZE": "100",
+                    "BORSUK_SYNTHETIC_SEED": str(dataset_source.get("seed")),
                 },
             }
         )

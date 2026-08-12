@@ -54,6 +54,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         benchmark_env = plan["steps"][1]["env"]
         self.assertEqual(int(generator_env["BORSUK_SYNTHETIC_TRAIN"]), 1_000)
         self.assertEqual(int(generator_env["BORSUK_SYNTHETIC_DIMENSIONS"]), cell["dataset"]["dimensions"])
+        self.assertEqual(
+            generator_env["BORSUK_SYNTHETIC_SEED"],
+            str(cell["dataset"]["source"]["seed"]),
+        )
         self.assertEqual(benchmark_env["BORSUK_BENCH_QUERY_SEED"], str(cell["query_seed"]))
         self.assertEqual(benchmark_env["BORSUK_BENCH_QUERIES"], "10")
         self.assertEqual(benchmark_env["BORSUK_BENCH_NPROBES"], str(arm["routing_cell_budget"]))
