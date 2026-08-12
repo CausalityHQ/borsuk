@@ -3537,15 +3537,39 @@ impl BorsukIndex {
         config: IndexConfig,
         primary_centroids: Vec<Vec<f32>>,
     ) -> Result<Self> {
+        Self::create_with_logical_cell_catalog_and_build_config(
+            config,
+            primary_centroids,
+            WalConfig::default(),
+            LeafCapability::PqScanOnly,
+            BuildConfig::default(),
+        )
+    }
+
+    /// Create generation one with an explicit primary logical-cell catalog and
+    /// the exact persisted write/query build profile.
+    ///
+    /// This is the qualification seam used by publication benchmarks. Keeping
+    /// catalog and scan configuration in one constructor prevents a benchmark
+    /// from silently creating the default one-cell topology before applying
+    /// the intended immutable build controls.
+    #[doc(hidden)]
+    pub fn create_with_logical_cell_catalog_and_build_config(
+        config: IndexConfig,
+        primary_centroids: Vec<Vec<f32>>,
+        wal: WalConfig,
+        leaf_capability: LeafCapability,
+        build_config: BuildConfig,
+    ) -> Result<Self> {
         let storage = Storage::from_uri(&config.uri)?;
         Self::create_modality_with_storage_wal_capability_and_build(
             config,
             storage,
             DEFAULT_ROUTING_PAGE_FANOUT,
             LOCAL_GRAPH_NEIGHBORS,
-            WalConfig::default(),
-            LeafCapability::PqScanOnly,
-            BuildConfig::default(),
+            wal,
+            leaf_capability,
+            build_config,
             PRIMARY_MODALITY,
             true,
             Some(primary_centroids),
@@ -28524,6 +28548,57 @@ mod tests {
             reopened.logical_cell_for_research(&[730.0, 0.0]).unwrap(),
             routed
         );
+    }
+
+    #[test]
+    fn supplied_catalog_creation_preserves_the_exact_build_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let wal = WalConfig {
+            flush_threshold_records: 37,
+            flush_threshold_bytes: 2 * 1024 * 1024,
+            ..WalConfig::default()
+        };
+        let build = BuildConfig {
+            kmeans_sample_fraction: 0.5,
+            kmeans_max_iterations: Some(7),
+            persist_coarse_quantizer: false,
+            global_pq_code_bytes: Some(2),
+            ..BuildConfig::default()
+        };
+        let index = BorsukIndex::create_with_logical_cell_catalog_and_build_config(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            (0..128)
+                .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+                .collect(),
+            wal.clone(),
+            LeafCapability::GraphEnabled,
+            build.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(index.manifest.logical_cells().len(), 128);
+        assert_eq!(index.manifest.wal_config, wal);
+        assert_eq!(index.manifest.leaf_capability, LeafCapability::GraphEnabled);
+        assert_eq!(index.build_config(), &build);
+        drop(index);
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(reopened.manifest.logical_cells().len(), 128);
+        assert_eq!(reopened.manifest.wal_config, wal);
+        assert_eq!(
+            reopened.manifest.leaf_capability,
+            LeafCapability::GraphEnabled
+        );
+        assert_eq!(reopened.build_config(), &build);
     }
 
     #[test]
