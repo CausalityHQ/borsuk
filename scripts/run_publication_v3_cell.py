@@ -206,6 +206,9 @@ def build_execution_plan(
     environment = cell.get("environment_contract")
     if not isinstance(environment, dict):
         raise ValueError("cell environment contract is invalid")
+    region = environment.get("region")
+    if not isinstance(region, str) or not region:
+        raise ValueError("cell environment region is invalid")
     runtime_clients = environment.get("runtime_clients")
     runtime_storage = environment.get("runtime_storage")
     if not isinstance(runtime_clients, dict) or not isinstance(runtime_storage, dict):
@@ -309,6 +312,8 @@ def build_execution_plan(
         routing_budget = 32
         candidate_budget = 4096
     benchmark_env = {
+        "AWS_REGION": region,
+        "AWS_DEFAULT_REGION": region,
         "BORSUK_BENCH_DATASET": str(dataset_dir),
         "BORSUK_BENCH_URI": str(index_dir),
         "BORSUK_BENCH_CACHE": str(cache_dir),

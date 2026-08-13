@@ -132,6 +132,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 borsuk_bench=Path("/bin/true"),
                 mode="publication",
             )
+        for phase in ("build", "runtime"):
+            environment = plan[phase]["steps"][-1]["env"]
+            self.assertEqual(environment["AWS_REGION"], "eu-central-1")
+            self.assertEqual(environment["AWS_DEFAULT_REGION"], "eu-central-1")
         receipt = build_index_receipt(
             cell=cell,
             source_archive_sha256="a" * 64,
