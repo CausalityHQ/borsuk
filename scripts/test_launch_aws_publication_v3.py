@@ -1,5 +1,5 @@
-import json
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -8,7 +8,6 @@ import unittest
 from pathlib import Path
 
 from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "launch_aws_publication_v3.sh"
@@ -28,6 +27,7 @@ def make_clean_repository(root: Path) -> None:
         "python/uv.lock",
         "packages/borsuk/package-lock.json",
         "scripts/publication_v3_protocol.py",
+        "scripts/publication_v3_aws.py",
         "scripts/validate_publication_v3_results.py",
         "scripts/launch_aws_publication_v3.sh",
         "docs/research/publication-v3-manifest.json",
@@ -76,6 +76,19 @@ class LaunchAwsPublicationV3Tests(unittest.TestCase):
             self.assertEqual(reports[0], reports[1])
             self.assertFalse(reports[0]["paid_ready"])
             self.assertEqual(reports[0]["unstaged_datasets"], 12)
+            self.assertEqual(reports[0]["staging_jobs"], 12)
+            self.assertRegex(reports[0]["staging_plan_sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(reports[0]["staging_plan"]["job_count"], 12)
+            self.assertEqual(
+                reports[0]["staging_plan_sha256"],
+                hashlib.sha256(
+                    canonical_json_bytes(reports[0]["staging_plan"])
+                ).hexdigest(),
+            )
+            self.assertEqual(
+                reports[0]["staging_plan"]["manifest_sha256"],
+                reports[0]["manifest_sha256"],
+            )
             self.assertEqual(
                 reports[0]["structural_replay"], "blocked-until-paid-ready"
             )

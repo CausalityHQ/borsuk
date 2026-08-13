@@ -25,6 +25,7 @@ trap 'rm -rf "$temporary"' EXIT
 archive="$temporary/source-archive.tar.gz"
 manifest="$temporary/manifest.json"
 schedule="$temporary/schedule.json"
+staging_plan="$temporary/staging-plan.json"
 replay="$temporary/replay"
 commit="$(git rev-parse HEAD)"
 
@@ -64,6 +65,7 @@ output.write_bytes(canonical_json_bytes(validated) + b"\n")
 PY
 
 validation="$(python3 scripts/publication_v3_protocol.py validate "$manifest")"
+python3 scripts/publication_v3_aws.py plan-staging "$manifest" >"$staging_plan"
 paid_ready="$(python3 -c 'import json,sys; print(str(json.loads(sys.argv[1])["paid_ready"]).lower())' "$validation")"
 structural_replay="blocked-until-paid-ready"
 schedule_sha256=""
@@ -77,7 +79,7 @@ if [[ "$paid_ready" == "true" ]]; then
   structural_replay="structurally-valid"
 fi
 
-python3 - "$manifest" "$archive" "$validation" "$structural_replay" "$schedule_sha256" <<'PY'
+python3 - "$manifest" "$archive" "$validation" "$structural_replay" "$schedule_sha256" "$staging_plan" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -89,12 +91,25 @@ manifest_path = pathlib.Path(sys.argv[1])
 archive_path = pathlib.Path(sys.argv[2])
 validation = json.loads(sys.argv[3])
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+staging_plan_path = pathlib.Path(sys.argv[6])
+staging_plan = json.loads(staging_plan_path.read_text(encoding="utf-8"))
+if staging_plan["job_count"] != validation["unstaged_datasets"]:
+    raise SystemExit("staging plan job count differs from unstaged datasets")
+if staging_plan["manifest_sha256"] != hashlib.sha256(
+    canonical_json_bytes(manifest)
+).hexdigest():
+    raise SystemExit("staging plan manifest identity differs")
 report = {
     "schema_version": 1,
     "source_commit": manifest["source"]["git_commit"],
     "source_archive_sha256": hashlib.sha256(archive_path.read_bytes()).hexdigest(),
     "manifest_sha256": hashlib.sha256(canonical_json_bytes(manifest)).hexdigest(),
     "schedule_sha256": sys.argv[5] or None,
+    "staging_jobs": staging_plan["job_count"],
+    "staging_plan_sha256": hashlib.sha256(
+        canonical_json_bytes(staging_plan)
+    ).hexdigest(),
+    "staging_plan": staging_plan,
     "cargo_lock_sha256": manifest["source"]["cargo_lock_sha256"],
     "python_lock_sha256": manifest["source"]["python_lock_sha256"],
     "node_lock_sha256": manifest["source"]["node_lock_sha256"],
