@@ -10,7 +10,13 @@ import unittest
 from pathlib import Path
 
 from scripts.publication_v3_aws import build_staging_receipt, staging_jobs
-from scripts.publication_v3_controller import AwsCli, LaunchEnvironment, stage_dataset
+from scripts.publication_v3_controller import (
+    AwsCli,
+    LaunchEnvironment,
+    run_execution_job,
+    stage_dataset,
+)
+from scripts.publication_v3_execution import ExecutionJob, qualification_cell
 from scripts.publication_v3_protocol import canonical_json_bytes
 
 MANIFEST = (
@@ -123,6 +129,146 @@ class FakeAws:
 
 
 class PublicationV3ControllerTests(unittest.TestCase):
+    def test_execution_job_launches_once_accepts_bound_terminal_and_terminates(
+        self,
+    ) -> None:
+        manifest = unstaged_sift_manifest()
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        cell = qualification_cell(
+            manifest, dataset_id="sift-128", workload_kind="read-recall"
+        )
+        job = ExecutionJob.build(cell, attempt=1)
+
+        class FakeExecutionAws:
+            def __init__(self) -> None:
+                self.launched = 0
+                self.terminated: list[str] = []
+                self.observations = 0
+
+            def find_execution_instance(self, _job: object):
+                return None
+
+            def execution_markers(self, _job: object):
+                self.observations += 1
+                return () if self.observations == 1 else ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "role": "build",
+                    "attempt": 1,
+                    "attempt_id": "build-0001",
+                    "instance_id": "i-0123456789abcdef0",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": "6" * 64,
+                    "protocol_sha256": "7" * 64,
+                    "index_uri": job.index_uri,
+                    "binary_sha256": "8" * 64,
+                }
+
+            def launch(self, _job: object, _request: object):
+                self.launched += 1
+                return "i-0123456789abcdef0"
+
+            def instance_state(self, _instance: str):
+                return "running"
+
+            def terminate(self, instance: str):
+                self.terminated.append(instance)
+
+            def wait(self, _seconds: float):
+                pass
+
+        aws = FakeExecutionAws()
+        receipt = run_execution_job(
+            job,
+            request={"InstanceType": "r7g.8xlarge"},
+            expected={
+                "attempt_id": "build-0001",
+                "source_archive_sha256": "2" * 64,
+                "manifest_sha256": "6" * 64,
+                "protocol_sha256": "7" * 64,
+            },
+            aws=aws,
+            timeout_seconds=60,
+            poll_seconds=0.01,
+        )
+        self.assertEqual(receipt["binary_sha256"], "8" * 64)
+        self.assertEqual(aws.launched, 1)
+        self.assertEqual(aws.terminated, ["i-0123456789abcdef0"])
+
+    def test_execution_instance_identity_is_role_cell_and_attempt_bound(self) -> None:
+        manifest = unstaged_sift_manifest()
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        cell = qualification_cell(
+            manifest, dataset_id="sift-128", workload_kind="read-recall"
+        )
+        job = ExecutionJob.build(cell, attempt=1)
+        commands: list[list[str]] = []
+
+        def run(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            commands.append(command)
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "Reservations": [
+                            {
+                                "Instances": [
+                                    {
+                                        "InstanceId": "i-0123456789abcdef0",
+                                        "InstanceLifecycle": "spot",
+                                        "State": {"Name": "running"},
+                                        "Tags": [
+                                            {
+                                                "Key": "Project",
+                                                "Value": "BorsukBenchmark",
+                                            },
+                                            {
+                                                "Key": "Campaign",
+                                                "Value": manifest["campaign_id"],
+                                            },
+                                            {"Key": "Cell", "Value": job.cell_tag},
+                                            {"Key": "Attempt", "Value": "1"},
+                                            {"Key": "Role", "Value": "build"},
+                                            {"Key": "AutoTerminate", "Value": "true"},
+                                        ],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+
+        client = AwsCli(manifest, profile="causality", run=run)
+        self.assertEqual(
+            client.find_execution_instance(job),
+            ("i-0123456789abcdef0", "running"),
+        )
+        joined = " ".join(commands[0])
+        self.assertIn(f"Name=tag:Cell,Values={job.cell_tag}", joined)
+        self.assertIn("Name=tag:Role,Values=build", joined)
+
     def test_direct_controller_entrypoint_reaches_argparse(self) -> None:
         completed = subprocess.run(
             [
@@ -137,7 +283,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             },
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("{stage}", completed.stdout)
+        self.assertIn("{stage,build-sift}", completed.stdout)
 
     def test_stale_completed_receipt_advances_to_fresh_spot_attempt(self) -> None:
         manifest = unstaged_sift_manifest()

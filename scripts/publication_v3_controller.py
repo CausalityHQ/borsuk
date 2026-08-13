@@ -23,6 +23,11 @@ if __package__:
         staging_jobs,
         validate_staging_receipt,
     )
+    from scripts.publication_v3_execution import (
+        ExecutionJob,
+        build_worker_script,
+        qualification_cell,
+    )
     from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
 else:
     from publication_v3_aws import (
@@ -30,6 +35,11 @@ else:
         build_staging_worker_script,
         staging_jobs,
         validate_staging_receipt,
+    )
+    from publication_v3_execution import (
+        ExecutionJob,
+        build_worker_script,
+        qualification_cell,
     )
     from publication_v3_protocol import canonical_json_bytes, validate_manifest
 
@@ -114,6 +124,14 @@ class AwsCli:
             markers.append("STAGING_FAILED.json")
         return tuple(markers)
 
+    def execution_markers(self, job: Any) -> tuple[str, ...]:
+        markers = []
+        if self._head(job.complete_uri) is not None:
+            markers.append("complete")
+        if self._head(job.failed_uri) is not None:
+            markers.append("failed")
+        return tuple(markers)
+
     def read_receipt(self, job: Any) -> dict[str, object]:
         head = self._head(job.terminal_uri)
         if head is None:
@@ -192,6 +210,55 @@ class AwsCli:
             or instance.get("InstanceLifecycle") != "spot"
         ):
             raise ValueError("EC2 instance identity differs from staging attempt")
+        return str(instance["InstanceId"]), str(instance["State"]["Name"])
+
+    def find_execution_instance(self, job: Any) -> tuple[str, str] | None:
+        completed = self._run(
+            [
+                "ec2",
+                "describe-instances",
+                "--filters",
+                f"Name=tag:Campaign,Values={self.manifest['campaign_id']}",
+                f"Name=tag:Cell,Values={job.cell_tag}",
+                f"Name=tag:Attempt,Values={job.attempt}",
+                f"Name=tag:Role,Values={job.role}",
+                "Name=instance-state-name,Values=pending,running,stopping,stopped",
+                "--output",
+                "json",
+            ]
+        )
+        value = json.loads(completed.stdout)
+        instances = [
+            instance
+            for reservation in value.get("Reservations", [])
+            for instance in reservation.get("Instances", [])
+        ]
+        if not instances:
+            return None
+        if len(instances) != 1:
+            raise ValueError("execution attempt has multiple active instances")
+        instance = instances[0]
+        tags = {
+            str(item.get("Key")): str(item.get("Value"))
+            for item in instance.get("Tags", [])
+            if isinstance(item, dict)
+        }
+        expected = {
+            "Project": "BorsukBenchmark",
+            "Campaign": str(self.manifest["campaign_id"]),
+            "Cell": job.cell_tag,
+            "Attempt": str(job.attempt),
+            "Role": job.role,
+            "AutoTerminate": "true",
+        }
+        if (
+            any(
+                tags.get(key) != expected_value
+                for key, expected_value in expected.items()
+            )
+            or instance.get("InstanceLifecycle") != "spot"
+        ):
+            raise ValueError("EC2 instance identity differs from execution attempt")
         return str(instance["InstanceId"]), str(instance["State"]["Name"])
 
     def launch(self, _job: Any, request: dict[str, object]) -> str:
@@ -371,6 +438,59 @@ def stage_dataset(
     raise ValueError(f"staging dataset {dataset_id} exhausted {max_attempts} attempts")
 
 
+def run_execution_job(
+    job: Any,
+    *,
+    request: dict[str, object],
+    expected: dict[str, str],
+    aws: Any,
+    timeout_seconds: int,
+    poll_seconds: float = 15.0,
+) -> dict[str, object]:
+    if timeout_seconds <= 0 or poll_seconds <= 0:
+        raise ValueError("execution timeout and poll interval must be positive")
+    instance = aws.find_execution_instance(job)
+    deadline = time.monotonic() + timeout_seconds + 15 * 60
+    try:
+        while True:
+            markers = set(aws.execution_markers(job))
+            if markers - {"complete", "failed"} or len(markers) > 1:
+                raise ValueError("execution terminal markers conflict or differ")
+            if "complete" in markers:
+                value = aws.read_receipt(job)
+                required = {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "role": job.role,
+                    "attempt": job.attempt,
+                    **expected,
+                }
+                if any(
+                    value.get(key) != expected_value
+                    for key, expected_value in required.items()
+                ):
+                    raise ValueError("execution receipt differs from frozen authority")
+                if job.role == "build" and value.get("index_uri") != job.index_uri:
+                    raise ValueError("build receipt differs from scheduled index")
+                return value
+            if "failed" in markers:
+                raise ValueError(f"{job.role} execution failed")
+            if instance is None:
+                instance = (aws.launch(job, request), "pending")
+            else:
+                instance = (instance[0], aws.instance_state(instance[0]))
+                if instance[1] in {"stopped", "terminated"}:
+                    raise ValueError(
+                        f"{job.role} instance stopped before terminal marker"
+                    )
+            if time.monotonic() >= deadline:
+                raise ValueError(f"{job.role} execution exceeded its deadline")
+            aws.wait(poll_seconds)
+    finally:
+        if instance is not None and instance[1] != "terminated":
+            aws.terminate(instance[0])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
@@ -384,6 +504,14 @@ def main() -> int:
     stage.add_argument("--security-group-id", required=True)
     stage.add_argument("--instance-profile-arn", required=True)
     stage.add_argument("--max-attempts", type=int, default=4)
+    build = subparsers.add_parser("build-sift")
+    build.add_argument("--manifest", type=Path, required=True)
+    build.add_argument("--source-archive", type=Path, required=True)
+    build.add_argument("--profile", default="causality")
+    build.add_argument("--image-id", required=True)
+    build.add_argument("--subnet-id", required=True)
+    build.add_argument("--security-group-id", required=True)
+    build.add_argument("--instance-profile-arn", required=True)
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -407,24 +535,81 @@ def main() -> int:
     aws.upload_immutable(
         args.manifest, manifest_uri, hashlib.sha256(manifest_bytes).hexdigest()
     )
-    receipt = stage_dataset(
-        normalized,
-        dataset_id=args.dataset,
-        source_uri=source_uri,
-        source_archive_sha256=source_sha,
-        manifest_uri=manifest_uri,
-        manifest_sha256=manifest_sha,
-        launch=LaunchEnvironment(
-            args.image_id,
-            args.subnet_id,
-            args.security_group_id,
-            args.instance_profile_arn,
-            str(normalized["environment_contract"]["architecture"]),
-            str(normalized["environment_contract"]["region"]),
-        ),
-        aws=aws,
-        max_attempts=args.max_attempts,
+    launch = LaunchEnvironment(
+        args.image_id,
+        args.subnet_id,
+        args.security_group_id,
+        args.instance_profile_arn,
+        str(normalized["environment_contract"]["architecture"]),
+        str(normalized["environment_contract"]["region"]),
     )
+    if args.operation == "stage":
+        receipt = stage_dataset(
+            normalized,
+            dataset_id=args.dataset,
+            source_uri=source_uri,
+            source_archive_sha256=source_sha,
+            manifest_uri=manifest_uri,
+            manifest_sha256=manifest_sha,
+            launch=launch,
+            aws=aws,
+            max_attempts=args.max_attempts,
+        )
+    else:
+        cell = qualification_cell(
+            normalized, dataset_id="sift-128", workload_kind="read-recall"
+        )
+        job = ExecutionJob.build(cell, attempt=1)
+        protocol_bytes = canonical_json_bytes(cell) + b"\n"
+        protocol_sha = hashlib.sha256(protocol_bytes).hexdigest()
+        protocol_uri = f"{campaign_root}/protocols/{protocol_sha}.json"
+        with tempfile.TemporaryDirectory(
+            prefix="borsuk-publication-protocol-"
+        ) as directory:
+            protocol_path = Path(directory) / "protocol.json"
+            protocol_path.write_bytes(protocol_bytes)
+            aws.upload_immutable(protocol_path, protocol_uri, protocol_sha)
+        attempt_id = f"{job.cell_tag}-a{job.attempt:04d}"
+        worker = build_worker_script(
+            job=job,
+            source_uri=source_uri,
+            source_sha256=source_sha,
+            manifest_uri=manifest_uri,
+            manifest_sha256=manifest_sha,
+            protocol_uri=protocol_uri,
+            protocol_sha256=protocol_sha,
+            attempt_id=attempt_id,
+            terminal_prefix=job.terminal_prefix,
+        )
+        maximum = int(normalized["budget_contract"]["max_index_build_seconds"])
+        request = build_spot_launch_request(
+            normalized,
+            role="build",
+            system="borsuk",
+            image_id=launch.image_id,
+            subnet_id=launch.subnet_id,
+            security_group_id=launch.security_group_id,
+            instance_profile_arn=launch.instance_profile_arn,
+            image_architecture=launch.image_architecture,
+            subnet_region=launch.subnet_region,
+            campaign_id=str(normalized["campaign_id"]),
+            cell_id=job.cell_tag,
+            attempt=job.attempt,
+            worker_script=worker,
+            max_seconds=maximum,
+        )
+        receipt = run_execution_job(
+            job,
+            request=request,
+            expected={
+                "attempt_id": attempt_id,
+                "source_archive_sha256": source_sha,
+                "manifest_sha256": manifest_sha,
+                "protocol_sha256": protocol_sha,
+            },
+            aws=aws,
+            timeout_seconds=maximum,
+        )
     print(canonical_json_bytes(receipt).decode("utf-8"))
     return 0
 

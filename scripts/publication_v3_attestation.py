@@ -168,6 +168,15 @@ def _instance_identity_document() -> dict[str, object]:
 
 
 def _measured_source_revision(source_root: Path) -> str:
+    marker = source_root / ".borsuk-source-revision"
+    if marker.is_file():
+        try:
+            value = marker.read_text(encoding="utf-8").strip()
+        except OSError as error:
+            raise ValueError("runtime source revision cannot be measured") from error
+        if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            raise ValueError("runtime source revision is invalid")
+        return value
     try:
         value = subprocess.run(
             ["git", "-C", str(source_root), "rev-parse", "HEAD"],
@@ -210,7 +219,9 @@ def collect_runtime_attestation(
     cgroup_mount: Path = Path("/sys/fs/cgroup"),
 ) -> dict[str, object]:
     environment = cell.get("environment_contract")
-    clients = environment.get("runtime_clients") if isinstance(environment, dict) else None
+    clients = (
+        environment.get("runtime_clients") if isinstance(environment, dict) else None
+    )
     client = clients.get(cell.get("system")) if isinstance(clients, dict) else None
     if not isinstance(client, dict):
         raise ValueError("runtime collector has no scheduled client")
@@ -270,9 +281,13 @@ def validate_runtime_attestation(
         raise ValueError("runtime attestation execution identity differs")
     environment = cell.get("environment_contract")
     system = cell.get("system")
-    clients = environment.get("runtime_clients") if isinstance(environment, dict) else None
+    clients = (
+        environment.get("runtime_clients") if isinstance(environment, dict) else None
+    )
     client = clients.get(system) if isinstance(clients, dict) else None
-    storage = environment.get("runtime_storage") if isinstance(environment, dict) else None
+    storage = (
+        environment.get("runtime_storage") if isinstance(environment, dict) else None
+    )
     if not isinstance(client, dict) or not isinstance(storage, dict):
         raise ValueError("runtime attestation has no scheduled host contract")
     if value["instance_type"] != client.get("instance_type"):
@@ -300,14 +315,22 @@ def validate_runtime_attestation(
     cache_filesystem_bytes = _positive(
         value["cache_filesystem_bytes"], "runtime cache filesystem"
     )
-    if cache_filesystem_bytes < cache_limit or cache_filesystem_bytes > storage.get(
-        "volume_size_gib"
-    ) * 1024**3:
+    if (
+        cache_filesystem_bytes < cache_limit
+        or cache_filesystem_bytes > storage.get("volume_size_gib") * 1024**3
+    ):
         raise ValueError("runtime cache filesystem exceeds its contract")
     for field in ("instance_id", "cache_device", "root_device"):
-        if not isinstance(value[field], str) or not value[field] or len(value[field]) > 256:
+        if (
+            not isinstance(value[field], str)
+            or not value[field]
+            or len(value[field]) > 256
+        ):
             raise ValueError(f"runtime {field} is invalid")
-    if value["cache_is_mount"] is not True or value["cache_device"] == value["root_device"]:
+    if (
+        value["cache_is_mount"] is not True
+        or value["cache_device"] == value["root_device"]
+    ):
         raise ValueError("runtime cache must be a dedicated mounted filesystem")
     source = cell.get("source")
     expected_revision = source.get("git_commit") if isinstance(source, dict) else None

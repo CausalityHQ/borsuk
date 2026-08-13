@@ -179,6 +179,40 @@ print(json.dumps({'dataset_id':'sift-128','attempt':4}, sort_keys=True))
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(json.loads(completed.stdout)["dataset_id"], "sift-128")
 
+    def test_build_sift_passes_frozen_archive_and_manifest_to_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            repository = temp / "repository"
+            repository.mkdir()
+            make_clean_repository(repository)
+            fake = temp / "controller.py"
+            fake.write_text(
+                """#!/usr/bin/env python3
+import hashlib, json, pathlib, sys
+assert sys.argv[1:3] == ['build-sift', '--manifest']
+manifest_path = pathlib.Path(sys.argv[3])
+archive_path = pathlib.Path(sys.argv[sys.argv.index('--source-archive') + 1])
+manifest = json.loads(manifest_path.read_text())
+assert manifest['source']['state'] == 'frozen'
+assert manifest['source']['archive_sha256'] == hashlib.sha256(archive_path.read_bytes()).hexdigest()
+print(json.dumps({'role':'build','attempt':1}, sort_keys=True))
+""",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            completed = subprocess.run(
+                ["bash", "scripts/launch_aws_publication_v3.sh", "--build-sift"],
+                cwd=repository,
+                env={
+                    **os.environ,
+                    "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                },
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(json.loads(completed.stdout)["role"], "build")
+
 
 if __name__ == "__main__":
     unittest.main()

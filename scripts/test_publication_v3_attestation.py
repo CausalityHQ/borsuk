@@ -5,6 +5,7 @@ from unittest import mock
 
 from scripts.publication_v3_attestation import (
     _current_cgroup_root,
+    _measured_source_revision,
     collect_runtime_attestation,
     validate_runtime_attestation,
 )
@@ -13,6 +14,12 @@ from scripts.test_publication_v3_protocol import paid_v3_manifest
 
 
 class PublicationV3AttestationTests(unittest.TestCase):
+    def test_frozen_archive_revision_marker_is_runtime_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            (source / ".borsuk-source-revision").write_text("1" * 40 + "\n")
+            self.assertEqual(_measured_source_revision(source), "1" * 40)
+
     def test_process_cgroup_must_resolve_on_a_cgroup_v2_filesystem(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             mount = Path(root) / "cgroup"
@@ -20,18 +27,21 @@ class PublicationV3AttestationTests(unittest.TestCase):
             process = Path(root) / "self.cgroup"
             process.write_text("0::/runtime.slice\n", encoding="utf-8")
             (mount / "runtime.slice").mkdir()
-            with mock.patch(
-                "scripts.publication_v3_attestation._filesystem_magic",
-                return_value=0xEF53,
-            ), self.assertRaisesRegex(ValueError, "cgroup v2"):
-                _current_cgroup_root(
-                    proc_self_cgroup=process, cgroup_mount=mount
-                )
+            with (
+                mock.patch(
+                    "scripts.publication_v3_attestation._filesystem_magic",
+                    return_value=0xEF53,
+                ),
+                self.assertRaisesRegex(ValueError, "cgroup v2"),
+            ):
+                _current_cgroup_root(proc_self_cgroup=process, cgroup_mount=mount)
 
     def test_collector_reads_cgroup_v2_and_cache_filesystem_evidence(self) -> None:
         cell = next(
             cell
-            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))["cells"]
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))[
+                "cells"
+            ]
             if cell["system"] == "borsuk" and cell["workload"]["kind"] == "read-recall"
         )
         with tempfile.TemporaryDirectory() as root:
@@ -50,11 +60,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
             (cgroup / "cpuset.cpus.effective").write_text("0-1,4-5", encoding="utf-8")
             proc_cgroup = Path(root) / "self.cgroup"
             proc_cgroup.write_text("0::/\n", encoding="utf-8")
-            runtime = {
-                "steps": [
-                    {"env": {"BORSUK_BENCH_CACHE": str(cache)}}
-                ]
-            }
+            runtime = {"steps": [{"env": {"BORSUK_BENCH_CACHE": str(cache)}}]}
             with (
                 mock.patch(
                     "scripts.publication_v3_attestation._filesystem_magic",
@@ -95,7 +101,9 @@ class PublicationV3AttestationTests(unittest.TestCase):
     def test_small_runtime_requires_cgroup_swap_and_cache_attestation(self) -> None:
         cell = next(
             cell
-            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))["cells"]
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))[
+                "cells"
+            ]
             if cell["system"] == "borsuk" and cell["workload"]["kind"] == "read-recall"
         )
         client = cell["environment_contract"]["runtime_clients"]["borsuk"]
