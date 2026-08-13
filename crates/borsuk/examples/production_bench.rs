@@ -3698,10 +3698,16 @@ fn serving_options(config: &ResolvedConfig) -> SearchOptions {
 }
 
 fn reset_cache(path: &Path) -> io::Result<()> {
-    if path.exists() {
-        fs::remove_dir_all(path)?;
+    fs::create_dir_all(path)?;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        } else {
+            fs::remove_file(entry.path())?;
+        }
     }
-    fs::create_dir_all(path)
+    Ok(())
 }
 
 fn csv_writer(path: &Path) -> io::Result<BufWriter<File>> {
@@ -4018,13 +4024,35 @@ mod tests {
         parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
         parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
         parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
-        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count,
+        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
         rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
         uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase, validate_build_only,
         validate_disk_cached_network, validate_generated_id_range, validate_insert_only,
         validate_leaf_capability_modes, validate_phase_selection, vector_row, write_batch_len,
         write_operation_count,
     };
+
+    #[test]
+    fn cache_reset_preserves_the_dedicated_mount_point() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let parent = tempfile::tempdir().unwrap();
+        let cache = parent.path().join("cache");
+        std::fs::create_dir(&cache).unwrap();
+        std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o750)).unwrap();
+        std::fs::create_dir(cache.join("nested")).unwrap();
+        std::fs::write(cache.join("nested/object"), b"cached").unwrap();
+        let inode = std::fs::metadata(&cache).unwrap().ino();
+
+        reset_cache(&cache).unwrap();
+
+        assert_eq!(std::fs::metadata(&cache).unwrap().ino(), inode);
+        assert_eq!(
+            std::fs::metadata(&cache).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 0);
+    }
 
     #[test]
     fn direct_query_permutation_is_seeded_and_membership_preserving() {
