@@ -446,10 +446,7 @@ const GLOBAL_LEAF_DIRECTORY_READ_WIDTH: usize = 8;
 const GLOBAL_LEAF_CODE_READ_WIDTH: usize = 32;
 const GLOBAL_LEAF_QUERY_WAVE_PAGES: usize = 32;
 const _: () = assert!(GLOBAL_LEAF_QUERY_WAVE_PAGES <= DEFAULT_GLOBAL_PQ_RERANK_READS);
-// V13 exact-block voting does not benefit enough from a four-times-wider code
-// pool to justify its cold object-store cost. Keep the prefilter wider than
-// the exact block budget, but bound it to two code pages per exact block.
-const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 2;
+const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 4;
 
 fn global_leaf_code_byte_ceiling(
     limit: u64,
@@ -35026,11 +35023,6 @@ mod tests {
         assert_eq!(production.get(b"beta-with-a-longer-id"), Some(beta));
         assert_eq!(production.get(b"missing"), None);
     }
-    #[test]
-    fn resident_global_v13_prefilter_reads_at_most_two_code_pages_per_exact_budget() {
-        assert_eq!(GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER, 2);
-    }
-
     #[test]
     fn resident_global_v12_dispatch_accepts_only_qualified_page_budgets() {
         let dir = tempfile::tempdir().unwrap();
