@@ -180,6 +180,13 @@ class PublicationV3AwsTests(unittest.TestCase):
         job = next(job for job in staging_jobs(self.manifest) if job.dataset_id == "sift-128")
         common = {
             "source_archive_sha256": "a" * 64,
+            "source_provenance": {
+                "schema_version": 1,
+                "dataset": "sift-128",
+                "source": "https://ann-benchmarks.com/sift-128-euclidean.hdf5",
+                "source_sha256": "b" * 64,
+                "materialization_sha256": "c66ceeb981504f9de03a84700e3ef410b3298f67dd92a3768a8cab6de4b2c3ee",
+            },
             "instance_id": "i-0123456789abcdef0",
             "instance_type": "r7g.8xlarge",
             "availability_zone": "eu-central-1a",
@@ -228,11 +235,26 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertEqual(receipt["campaign_id"], "publication-v3-20260812")
         self.assertRegex(receipt["manifest_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(receipt["failure_uri"], job.failure_uri)
+        self.assertEqual(receipt["source_provenance"], common["source_provenance"])
+        self.assertEqual(receipt["provenance_uri"], job.provenance_uri)
         self.assertEqual(receipt["purchase_option"], "spot")
         self.assertEqual(receipt["terminal_uri"], job.terminal_uri)
         self.assertEqual(
             receipt["object_bytes"], sum(item["bytes"] for item in receipt["objects"])
         )
+        with self.assertRaisesRegex(ValueError, "source provenance"):
+            build_staging_receipt(
+                self.manifest,
+                job,
+                objects=receipt["objects"],
+                **{
+                    **common,
+                    "source_provenance": {
+                        **common["source_provenance"],
+                        "materialization_sha256": "0" * 64,
+                    },
+                },
+            )
         with self.assertRaisesRegex(ValueError, "Spot"):
             build_staging_receipt(
                 self.manifest,

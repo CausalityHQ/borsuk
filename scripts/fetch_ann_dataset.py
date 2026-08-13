@@ -19,7 +19,6 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-
 BASE_URL = "https://ann-benchmarks.com"
 METRIC_MAP = {"angular": "cosine", "euclidean": "euclidean"}
 TRAIN_SHARD_TARGET_BYTES = 64 * 1024 * 1024
@@ -163,7 +162,10 @@ def convert_hdf5_dataset(
     (output / "meta.json").write_text(
         json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n"
     )
-    from publication_v3_datasets import dataset_materialization_sha256
+    if __package__:
+        from scripts.publication_v3_datasets import dataset_materialization_sha256
+    else:
+        from publication_v3_datasets import dataset_materialization_sha256
 
     provenance = {
         "schema_version": 1,

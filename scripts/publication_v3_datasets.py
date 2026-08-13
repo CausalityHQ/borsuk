@@ -8,7 +8,10 @@ import json
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from scripts.publication_v3_protocol import canonical_json_bytes
+if __package__:
+    from scripts.publication_v3_protocol import canonical_json_bytes
+else:
+    from publication_v3_protocol import canonical_json_bytes
 
 
 DESCRIPTOR_FIELDS = frozenset(
@@ -216,7 +219,7 @@ def _object_identity(objects: list[dict[str, object]]) -> list[dict[str, object]
             "bytes": item["bytes"],
             "rows": item["rows"],
         }
-        for item in objects
+        for item in sorted(objects, key=lambda item: str(item["path"]))
     ]
 
 

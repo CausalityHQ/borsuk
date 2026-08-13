@@ -41,6 +41,7 @@ class StagingJob:
     adapter: str
     attempt: int
     output_uri: str
+    provenance_uri: str
     terminal_uri: str
     failure_uri: str
 
@@ -89,6 +90,7 @@ def staging_jobs(
                 adapter=_adapter(dataset),
                 attempt=attempt,
                 output_uri=f"{attempt_root}/materialized",
+                provenance_uri=f"{attempt_root}/materialized.provenance.json",
                 terminal_uri=f"{attempt_root}/STAGING_COMPLETE.json",
                 failure_uri=f"{attempt_root}/STAGING_FAILED.json",
             )
@@ -303,6 +305,7 @@ def build_staging_receipt(
     job: StagingJob,
     *,
     source_archive_sha256: str,
+    source_provenance: dict[str, object],
     objects: tuple[dict[str, object], ...] | list[dict[str, object]],
     instance_id: str,
     instance_type: str,
@@ -421,6 +424,32 @@ def build_staging_receipt(
     dataset_content_sha256 = hashlib.sha256(
         canonical_json_bytes(content_identity)
     ).hexdigest()
+    dataset = next(
+        item
+        for item in normalized_manifest["datasets"]
+        if item["id"] == job.dataset_id
+    )
+    required_provenance = {
+        "schema_version",
+        "dataset",
+        "source",
+        "source_sha256",
+        "materialization_sha256",
+    }
+    allowed_provenance = required_provenance | {"source_descriptor_sha256"}
+    digest_fields = {"source_sha256", "materialization_sha256"}
+    if "source_descriptor_sha256" in source_provenance:
+        digest_fields.add("source_descriptor_sha256")
+    if (
+        frozenset(source_provenance) - allowed_provenance
+        or not required_provenance.issubset(source_provenance)
+        or source_provenance["schema_version"] != 1
+        or source_provenance["dataset"] != job.dataset_id
+        or source_provenance["source"] != dataset["source"]["expected_source"]
+        or source_provenance["materialization_sha256"] != dataset_content_sha256
+        or any(HEX_64.fullmatch(str(source_provenance[field])) is None for field in digest_fields)
+    ):
+        raise ValueError("source provenance differs from the staged dataset or manifest")
     return {
         "schema_version": 1,
         "campaign_id": normalized_manifest["campaign_id"],
@@ -431,8 +460,10 @@ def build_staging_receipt(
         "adapter": job.adapter,
         "attempt": job.attempt,
         "source_archive_sha256": source_archive_sha256,
+        "source_provenance": dict(source_provenance),
         "dataset_content_sha256": dataset_content_sha256,
         "output_uri": job.output_uri,
+        "provenance_uri": job.provenance_uri,
         "terminal_uri": job.terminal_uri,
         "failure_uri": job.failure_uri,
         "instance_id": instance_id,

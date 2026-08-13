@@ -353,7 +353,10 @@ def materialize_publication_dataset(
     metadata["name"] = PUBLICATION_IDS[dataset]
     metadata["metric"] = contract.metric
     write_json(output_dir / "meta.json", metadata)
-    from publication_v3_datasets import dataset_materialization_sha256
+    if __package__:
+        from scripts.publication_v3_datasets import dataset_materialization_sha256
+    else:
+        from publication_v3_datasets import dataset_materialization_sha256
 
     provenance = {
         "schema_version": 1,
