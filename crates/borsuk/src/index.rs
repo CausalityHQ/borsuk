@@ -56,8 +56,8 @@ use crate::{
     global_pq_sidecar::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCoarseQuantizer, GlobalCodebookDescriptor,
         GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalPqChunkBytes, GlobalScanQuantizer,
-        HierarchicalCoarseQuantizer, ResidentGlobalCodebook, RoutedGlobalLeafPage,
-        ValidatedGlobalCodebookMetadata,
+        HierarchicalCoarseQuantizer, ResidentGlobalCodebook, RoutedGlobalLeafCodes,
+        RoutedGlobalLeafPage, ValidatedGlobalCodebookMetadata,
     },
     late_interaction::{LateInteractionSearchOptions, LateInteractionSearchReport},
     lexical_build::{
@@ -357,6 +357,15 @@ struct GlobalLeafReadGroup {
 }
 
 #[derive(Debug)]
+struct GlobalLeafCodeReadGroup {
+    path: String,
+    start: u64,
+    end: u64,
+    selected_bytes: u64,
+    pages: Vec<RoutedGlobalLeafPage>,
+}
+
+#[derive(Debug)]
 struct GlobalLeafDirectoryLoad {
     pages: Vec<RoutedGlobalLeafPage>,
     admission_bytes: u64,
@@ -380,6 +389,16 @@ struct PendingGlobalLeafDirectoryShard {
 
 const GLOBAL_LEAF_DIRECTORY_READ_WIDTH: usize = 8;
 const GLOBAL_LEAF_QUERY_WAVE_PAGES: usize = 8;
+const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 4;
+
+fn global_leaf_code_byte_ceiling(
+    limit: u64,
+    directory_admission_bytes: u64,
+    first_exact_page_bytes: u64,
+) -> u64 {
+    let remaining = limit.saturating_sub(directory_admission_bytes);
+    (remaining / 4).min(remaining.saturating_sub(first_exact_page_bytes))
+}
 
 #[derive(Debug)]
 struct RoutedDecodedGlobalLeafRow {
@@ -10629,6 +10648,8 @@ impl BorsukIndex {
             global_exact_vectors_fetched: 0,
             global_leaf_directory_reads: 0,
             global_leaf_directory_bytes: 0,
+            global_leaf_code_pages_read: 0,
+            global_leaf_code_bytes: 0,
             global_leaf_pages_read: 0,
             global_leaf_page_bytes: 0,
             global_leaf_exact_scores: 0,
@@ -16410,6 +16431,141 @@ impl BorsukIndex {
         Ok((rows, bytes))
     }
 
+    fn global_leaf_code_read_groups(
+        &self,
+        pages: &[RoutedGlobalLeafPage],
+        runs: &[Arc<ResidentGlobalLeafRun>],
+        expected_code_width: usize,
+    ) -> Result<Vec<GlobalLeafCodeReadGroup>> {
+        let mut by_run: BTreeMap<usize, Vec<RoutedGlobalLeafPage>> = BTreeMap::new();
+        for page in pages {
+            by_run
+                .entry(page.run_ordinal)
+                .or_default()
+                .push(page.clone());
+        }
+        let mut groups = Vec::new();
+        for (run_ordinal, run_pages) in by_run {
+            let run = runs.get(run_ordinal).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global leaf PQ-code page references a missing run".to_string(),
+                )
+            })?;
+            if run_pages.iter().any(|page| page.level != run.level()) {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf PQ-code page level does not match its run".to_string(),
+                ));
+            }
+            if run_pages.iter().any(|page| {
+                usize::try_from(page.page.rows)
+                    .ok()
+                    .and_then(|rows| rows.checked_mul(expected_code_width))
+                    != Some(page.page.code_bytes as usize)
+            }) {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf PQ-code width does not match its authenticated codebook"
+                        .to_string(),
+                ));
+            }
+            let page_refs = run_pages
+                .iter()
+                .map(|page| page.page.clone())
+                .collect::<Vec<_>>();
+            for read in crate::global_leaf::coalesce_global_leaf_code_reads(
+                &page_refs,
+                run.root().bundles(),
+            )? {
+                let bundle = run
+                    .root()
+                    .bundles()
+                    .get(read.bundle_index as usize)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global leaf PQ-code read references a missing bundle".to_string(),
+                        )
+                    })?;
+                let end = read.offset.checked_add(read.bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf PQ-code coalesced range overflows".to_string(),
+                    )
+                })?;
+                let selected = run_pages
+                    .iter()
+                    .filter(|page| page.page.bundle_index == read.bundle_index)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if selected.iter().any(|page| page.bundle_path != bundle.path) {
+                    return Err(BorsukError::InvalidStorage(
+                        "global leaf PQ-code page path does not match its bundle".to_string(),
+                    ));
+                }
+                groups.push(GlobalLeafCodeReadGroup {
+                    path: bundle.path.clone(),
+                    start: read.offset,
+                    end,
+                    selected_bytes: read.selected_bytes,
+                    pages: selected,
+                });
+            }
+        }
+        Ok(groups)
+    }
+
+    fn fetch_global_leaf_codes(
+        &self,
+        groups: &[GlobalLeafCodeReadGroup],
+        options: &SearchOptions,
+        started: Instant,
+    ) -> Result<(Vec<RoutedGlobalLeafCodes>, u64, usize, bool)> {
+        let mut verified = Vec::new();
+        let mut physical_bytes = 0_u64;
+        let mut pages_read = 0_usize;
+        let latency_limited = for_each_bounded_io_wave_until(
+            groups,
+            GLOBAL_LEAF_DIRECTORY_READ_WIDTH,
+            || resident_global_latency_expired(options, started),
+            |group| {
+                let stored = self
+                    .storage
+                    .read_range(&group.path, group.start..group.end)?;
+                let mut decoded = Vec::with_capacity(group.pages.len());
+                for page in &group.pages {
+                    let local_start = usize::try_from(page.page.code_offset - group.start)
+                        .map_err(|_| {
+                            BorsukError::InvalidStorage(
+                                "global leaf PQ-code local offset exceeds usize".to_string(),
+                            )
+                        })?;
+                    let local_end = local_start
+                        .checked_add(page.page.code_bytes as usize)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global leaf PQ-code local range overflows".to_string(),
+                            )
+                        })?;
+                    let bytes = stored.get(local_start..local_end).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global leaf PQ-code coalesced range is truncated".to_string(),
+                        )
+                    })?;
+                    crate::global_leaf::decode_global_leaf_page_codes(&page.page, bytes)?;
+                    decoded.push(RoutedGlobalLeafCodes {
+                        page: page.clone(),
+                        codes: bytes.to_vec(),
+                    });
+                }
+                Ok::<_, BorsukError>((decoded, stored.len() as u64))
+            },
+            |_group, (mut decoded, bytes)| {
+                pages_read = pages_read.saturating_add(decoded.len());
+                physical_bytes = physical_bytes.saturating_add(bytes);
+                verified.append(&mut decoded);
+                Ok::<_, BorsukError>(())
+            },
+        )?;
+        Ok((verified, physical_bytes, pages_read, latency_limited))
+    }
+
     fn merge_global_leaf_rows(
         &self,
         winners: &mut BTreeMap<RecordId, RoutedDecodedGlobalLeafRow>,
@@ -16534,6 +16690,8 @@ impl BorsukIndex {
                     global_exact_vectors_fetched: 0,
                     global_leaf_directory_reads: 0,
                     global_leaf_directory_bytes: 0,
+                    global_leaf_code_pages_read: 0,
+                    global_leaf_code_bytes: 0,
                     global_leaf_pages_read: 0,
                     global_leaf_page_bytes: 0,
                     global_leaf_exact_scores: 0,
@@ -16648,14 +16806,160 @@ impl BorsukIndex {
             .flat_map(|load| load.pages.iter().cloned())
             .collect::<Vec<_>>();
         let resident_runs = directory_loads.runs;
-        let mut routed = codebook.rank_pages(&pq_query, &selected_cells, pages, page_budget)?;
+        let pool_budget = page_budget.saturating_mul(GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER);
+        let mut code_pool = codebook.rank_pages(&pq_query, &selected_cells, pages, pool_budget)?;
+        let centroid_fallback = code_pool
+            .iter()
+            .take(page_budget)
+            .cloned()
+            .collect::<Vec<_>>();
         let max_bytes = match options.mode {
             SearchMode::Approx { max_bytes, .. } => max_bytes,
             SearchMode::Exact => None,
         };
         let mut byte_budget_limited = false;
+        // Compressed codes are only a page-selection prefilter. Bound their
+        // physical range reads even when the caller has no explicit byte cap;
+        // otherwise sparse selected pages can span an entire 48 MiB bundle.
+        // With a caller cap, reserve at least one lossless page and three
+        // quarters of the remaining bytes for actual search results.
+        let first_exact_page_bytes = centroid_fallback
+            .first()
+            .map_or(0, |page| u64::from(page.page.batch_bytes));
+        let code_ceiling = max_bytes.map_or_else(
+            || {
+                (page_budget as u64)
+                    .saturating_mul(crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES)
+                    / 4
+            },
+            |limit| {
+                global_leaf_code_byte_ceiling(
+                    limit,
+                    directory_admission_bytes,
+                    first_exact_page_bytes,
+                )
+            },
+        );
+        let available = code_pool.len();
+        let mut prefix_len = 0_usize;
+        let mut physical_code_bytes = 0_u64;
+        let mut code_spans: BTreeMap<(usize, u32), (u64, u64)> = BTreeMap::new();
+        for candidate in &code_pool {
+            let key = (candidate.run_ordinal, candidate.page.bundle_index);
+            let page_end = candidate
+                .page
+                .code_offset
+                .checked_add(u64::from(candidate.page.code_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("global leaf PQ-code range overflows".to_string())
+                })?;
+            let prior = code_spans.get(&key).copied();
+            let next_span = prior.map_or((candidate.page.code_offset, page_end), |(start, end)| {
+                (start.min(candidate.page.code_offset), end.max(page_end))
+            });
+            let prior_bytes = prior.map_or(0, |(start, end)| end - start);
+            let next_physical = physical_code_bytes
+                .checked_sub(prior_bytes)
+                .and_then(|bytes| bytes.checked_add(next_span.1 - next_span.0))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf PQ-code physical byte count overflows".to_string(),
+                    )
+                })?;
+            if next_physical > code_ceiling {
+                break;
+            }
+            code_spans.insert(key, next_span);
+            physical_code_bytes = next_physical;
+            prefix_len += 1;
+        }
+        code_pool.truncate(prefix_len);
         if let Some(limit) = max_bytes {
-            let mut planned = directory_admission_bytes;
+            byte_budget_limited = directory_admission_bytes > limit || prefix_len < available;
+        }
+        let code_read_groups = self.global_leaf_code_read_groups(
+            &code_pool,
+            &resident_runs,
+            codebook.code_bytes_per_vector(),
+        )?;
+        let admitted_physical_code_bytes =
+            code_read_groups.iter().try_fold(0_u64, |total, group| {
+                total.checked_add(group.end - group.start).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf PQ-code physical byte count overflows".to_string(),
+                    )
+                })
+            })?;
+        let admitted_selected_code_bytes =
+            code_read_groups.iter().try_fold(0_u64, |total, group| {
+                total.checked_add(group.selected_bytes).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf selected PQ-code byte count overflows".to_string(),
+                    )
+                })
+            })?;
+        let admitted_code_memory = admitted_physical_code_bytes
+            .checked_add(admitted_selected_code_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global leaf PQ-code transient admission overflows".to_string(),
+                )
+            })?;
+        let (mut routed, code_pages_read, physical_code_bytes) =
+            if latency_limited || resident_global_latency_expired(options, started) {
+                latency_limited = true;
+                (centroid_fallback.clone(), 0, 0)
+            } else if code_read_groups.is_empty() {
+                // Compressed codes are optional selection evidence. A tight
+                // byte budget may reserve no code range while still admitting
+                // lossless pages, in which case retain the authenticated
+                // centroid order instead of returning an empty result.
+                (centroid_fallback.clone(), 0, 0)
+            } else {
+                let _code_memory_permit = self
+                    .read_runtime
+                    .transient_admission
+                    .as_ref()
+                    .map(|gate| gate.acquire_owned(admitted_code_memory.max(1)));
+                let (coded_pages, code_bytes, code_pages_read, code_latency_limited) =
+                    self.fetch_global_leaf_codes(&code_read_groups, options, started)?;
+                latency_limited |= code_latency_limited;
+                let routed = if code_latency_limited {
+                    centroid_fallback.clone()
+                } else {
+                    let mut routed =
+                        codebook.rank_pages_by_row_codes(&pq_query, coded_pages, page_budget)?;
+                    let mut seen = routed
+                        .iter()
+                        .map(|page| {
+                            (
+                                page.run_ordinal,
+                                page.page.cell_index,
+                                page.page.leaf_ordinal,
+                                page.page.batch_offset,
+                            )
+                        })
+                        .collect::<BTreeSet<_>>();
+                    for page in &centroid_fallback {
+                        let identity = (
+                            page.run_ordinal,
+                            page.page.cell_index,
+                            page.page.leaf_ordinal,
+                            page.page.batch_offset,
+                        );
+                        if seen.insert(identity) {
+                            routed.push(page.clone());
+                        }
+                        if routed.len() == page_budget {
+                            break;
+                        }
+                    }
+                    routed
+                };
+                (routed, code_pages_read, code_bytes)
+            };
+        if let Some(limit) = max_bytes {
+            let mut planned = directory_admission_bytes.saturating_add(physical_code_bytes);
             let available = routed.len();
             let mut prefix_len = 0_usize;
             if planned <= limit {
@@ -16672,7 +16976,9 @@ impl BorsukIndex {
                 }
             }
             routed.truncate(prefix_len);
-            byte_budget_limited = directory_admission_bytes > limit || prefix_len < available;
+            byte_budget_limited |= directory_admission_bytes.saturating_add(physical_code_bytes)
+                > limit
+                || prefix_len < available;
         }
         let global_approximate_us =
             u64::try_from(routing_started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -16788,7 +17094,9 @@ impl BorsukIndex {
                 segments_skipped: segments_total,
                 routing_page_indexes_read: 0,
                 routing_pages_read: 0,
-                bytes_read: directory_bytes.saturating_add(logical_page_bytes),
+                bytes_read: directory_bytes
+                    .saturating_add(physical_code_bytes)
+                    .saturating_add(logical_page_bytes),
                 prefetched_bytes_unused: 0,
                 graph_bytes_read: 0,
                 decoded_cache_hits: 0,
@@ -16809,6 +17117,8 @@ impl BorsukIndex {
                 global_exact_vectors_fetched: records_considered,
                 global_leaf_directory_reads: directory_reads,
                 global_leaf_directory_bytes: directory_bytes,
+                global_leaf_code_pages_read: code_pages_read,
+                global_leaf_code_bytes: physical_code_bytes,
                 global_leaf_pages_read: fetched_pages,
                 global_leaf_page_bytes: logical_page_bytes,
                 global_leaf_exact_scores: records_scored,
@@ -19137,6 +19447,14 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_leaf_directory_bytes)
                 .sum(),
+            global_leaf_code_pages_read: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_code_pages_read)
+                .sum(),
+            global_leaf_code_bytes: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_code_bytes)
+                .sum(),
             global_leaf_pages_read: reports
                 .iter()
                 .map(|(_, report)| report.global_leaf_pages_read)
@@ -19310,6 +19628,8 @@ impl BorsukIndex {
                 global_exact_vectors_fetched: 0,
                 global_leaf_directory_reads: 0,
                 global_leaf_directory_bytes: 0,
+                global_leaf_code_pages_read: 0,
+                global_leaf_code_bytes: 0,
                 global_leaf_pages_read: 0,
                 global_leaf_page_bytes: 0,
                 global_leaf_exact_scores: 0,
@@ -19526,6 +19846,8 @@ impl BorsukIndex {
             global_exact_vectors_fetched: 0,
             global_leaf_directory_reads: 0,
             global_leaf_directory_bytes: 0,
+            global_leaf_code_pages_read: 0,
+            global_leaf_code_bytes: 0,
             global_leaf_pages_read: 0,
             global_leaf_page_bytes: 0,
             global_leaf_exact_scores: 0,
@@ -19869,6 +20191,8 @@ impl BorsukIndex {
                     global_exact_vectors_fetched: 0,
                     global_leaf_directory_reads: 0,
                     global_leaf_directory_bytes: 0,
+                    global_leaf_code_pages_read: 0,
+                    global_leaf_code_bytes: 0,
                     global_leaf_pages_read: 0,
                     global_leaf_page_bytes: 0,
                     global_leaf_exact_scores: 0,
@@ -20630,6 +20954,8 @@ impl BorsukIndex {
                 global_exact_vectors_fetched: 0,
                 global_leaf_directory_reads: 0,
                 global_leaf_directory_bytes: 0,
+                global_leaf_code_pages_read: 0,
+                global_leaf_code_bytes: 0,
                 global_leaf_pages_read: 0,
                 global_leaf_page_bytes: 0,
                 global_leaf_exact_scores: 0,
@@ -20738,6 +21064,8 @@ impl BorsukIndex {
                 global_exact_vectors_fetched: 0,
                 global_leaf_directory_reads: 0,
                 global_leaf_directory_bytes: 0,
+                global_leaf_code_pages_read: 0,
+                global_leaf_code_bytes: 0,
                 global_leaf_pages_read: 0,
                 global_leaf_page_bytes: 0,
                 global_leaf_exact_scores: 0,
@@ -33580,16 +33908,22 @@ mod tests {
         assert_eq!(report.global_scan_chunks_searched, 0);
         assert_eq!(report.global_graph_chunks_searched, 0);
         assert!(report.global_leaf_pages_read <= 4);
+        assert!(report.global_leaf_code_pages_read >= report.global_leaf_pages_read);
+        assert!(report.global_leaf_code_bytes > 0);
         assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
         assert_eq!(report.global_leaf_exact_scores, report.records_scored);
         assert_eq!(report.global_leaf_waves, 1);
         assert_eq!(
             report.bytes_read,
-            report.global_leaf_directory_bytes + report.global_leaf_page_bytes
+            report.global_leaf_directory_bytes
+                + report.global_leaf_code_bytes
+                + report.global_leaf_page_bytes
         );
         assert!(
             report.requests.gets
-                <= (report.global_leaf_directory_reads + report.global_leaf_pages_read) as u64,
+                <= (report.global_leaf_directory_reads
+                    + report.global_leaf_code_pages_read
+                    + report.global_leaf_pages_read) as u64,
             "V12 issued a dependent identity/exact GET wave: {report:?}"
         );
     }
@@ -33710,7 +34044,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v12_rejects_corrupt_codebook_and_directory_objects() {
+    fn resident_global_v12_rejects_corrupt_codebook_directory_and_code_plane_objects() {
         fn finished_index() -> (tempfile::TempDir, BorsukIndex) {
             let dir = tempfile::tempdir().unwrap();
             let mut index = BorsukIndex::create(IndexConfig {
@@ -33781,6 +34115,42 @@ mod tests {
         drop(directory_index);
         let error = BorsukIndex::open(directory_dir.path().to_string_lossy().as_ref()).unwrap_err();
         assert!(error.to_string().contains("checksum"), "{error}");
+
+        let (_code_dir, code_index) = finished_index();
+        let run_ref = code_index
+            .manifest
+            .global_ann_ref
+            .as_ref()
+            .unwrap()
+            .base()
+            .unwrap();
+        let resident = code_index
+            .load_resident_global_leaf_run(run_ref, None)
+            .unwrap();
+        let bundle = resident.root().bundles().first().unwrap();
+        let mut bundle_bytes = code_index
+            .storage
+            .read_bytes_with_cache_status(&bundle.path)
+            .unwrap()
+            .bytes;
+        let code_start = usize::try_from(bundle.code_plane_offset).unwrap();
+        let code_end = usize::try_from(bundle.code_plane_offset + bundle.code_plane_bytes).unwrap();
+        for byte in &mut bundle_bytes[code_start..code_end] {
+            *byte ^= 1;
+        }
+        code_index
+            .storage
+            .write_bytes(&bundle.path, &bundle_bytes)
+            .unwrap();
+        let error = code_index
+            .search_with_report(
+                &[7.0; 8],
+                SearchOptions::approx(3, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("PQ-code checksum"), "{error}");
     }
 
     #[test]
@@ -34457,6 +34827,10 @@ mod tests {
                 "qualified page budget {budget} did not dispatch V12"
             );
             assert!(report.global_leaf_pages_read <= budget);
+            assert!(
+                report.global_leaf_code_pages_read
+                    <= budget * GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER
+            );
         }
 
         for budget in [1, 2, 3, 5, 6, 7, 9, 15, 17, 31, 33] {
@@ -34476,6 +34850,13 @@ mod tests {
                 "fallback exceeded caller maximum {budget}: {report:?}"
             );
         }
+    }
+
+    #[test]
+    fn resident_global_code_prefilter_reserves_one_lossless_page() {
+        assert_eq!(global_leaf_code_byte_ceiling(1_000, 200, 700), 100);
+        assert_eq!(global_leaf_code_byte_ceiling(1_000, 200, 900), 0);
+        assert_eq!(global_leaf_code_byte_ceiling(100, 200, 1), 0);
     }
 
     #[test]

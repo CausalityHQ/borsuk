@@ -1851,6 +1851,57 @@ impl ResidentGlobalCodebook {
         Ok(ranked)
     }
 
+    pub(crate) fn rank_pages_by_row_codes(
+        &self,
+        query: &[f32],
+        pages: impl IntoIterator<Item = RoutedGlobalLeafCodes>,
+        page_budget: usize,
+    ) -> Result<Vec<RoutedGlobalLeafPage>> {
+        let prepared = self.quantizer.prepare_query(query)?;
+        let mut ranked = pages
+            .into_iter()
+            .map(|coded| {
+                let RoutedGlobalLeafCodes { mut page, codes } = coded;
+                let rows = usize::try_from(page.page.rows)
+                    .map_err(|_| invalid_error("bounded leaf page row count exceeds usize"))?;
+                let expected = rows.checked_mul(self.code_width).ok_or_else(|| {
+                    invalid_error("bounded leaf page PQ-code byte count overflows")
+                })?;
+                if rows == 0 || codes.len() != expected {
+                    return invalid("bounded leaf page PQ codes do not match its row count");
+                }
+                page.distance = codes.chunks_exact(self.code_width).try_fold(
+                    f32::INFINITY,
+                    |nearest, code| {
+                        let distance = self.quantizer.distance(&prepared, code)?;
+                        if !distance.is_finite() {
+                            return invalid("V12 row-code ranking produced a non-finite distance");
+                        }
+                        Ok(nearest.min(distance))
+                    },
+                )?;
+                Ok(page)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ranked.sort_by(|left, right| {
+            left.distance
+                .total_cmp(&right.distance)
+                .then_with(|| match (left.level, right.level) {
+                    (Some(left_level), Some(right_level)) => left_level.cmp(&right_level),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                })
+                .then_with(|| left.page.cell_index.cmp(&right.page.cell_index))
+                .then_with(|| left.page.leaf_ordinal.cmp(&right.page.leaf_ordinal))
+                .then_with(|| left.bundle_path.cmp(&right.bundle_path))
+                .then_with(|| left.page.batch_offset.cmp(&right.page.batch_offset))
+                .then_with(|| left.run_ordinal.cmp(&right.run_ordinal))
+        });
+        ranked.truncate(page_budget);
+        Ok(ranked)
+    }
+
     pub(crate) fn code_bytes_per_vector(&self) -> usize {
         self.code_width
     }
@@ -1945,6 +1996,12 @@ pub(crate) struct RoutedGlobalLeafPage {
     pub(crate) distance: f32,
     pub(crate) bundle_path: String,
     pub(crate) page: crate::global_leaf::GlobalLeafPageRef,
+}
+
+#[derive(Debug)]
+pub(crate) struct RoutedGlobalLeafCodes {
+    pub(crate) page: RoutedGlobalLeafPage,
+    pub(crate) codes: Vec<u8>,
 }
 
 fn invalid<T>(message: &str) -> Result<T> {
@@ -2430,6 +2487,53 @@ mod tests {
                     <= budget as u64 * crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
             );
         }
+    }
+
+    #[test]
+    fn row_codes_rescue_a_page_whose_centroid_misses_the_query() {
+        let descriptor = test_v12_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vec![0.0_f32; 64];
+        let misleading = vec![20.0_f32; 64];
+        let close_centroid = vec![1.0_f32; 64];
+        let far_row = quantizer.encode(&misleading).unwrap();
+        let exact_row = quantizer.encode(&query).unwrap();
+        let close_row = quantizer.encode(&close_centroid).unwrap();
+        let mut misleading_page = leaf_page(&quantizer, &misleading, 7, 0);
+        misleading_page.rows = 2;
+        misleading_page.code_bytes = u32::try_from(far_row.len() + exact_row.len()).unwrap();
+        let mut centroid_page = leaf_page(&quantizer, &close_centroid, 7, 1);
+        centroid_page.rows = 2;
+        centroid_page.code_bytes = u32::try_from(close_row.len().checked_mul(2).unwrap()).unwrap();
+        let pages = vec![
+            RoutedGlobalLeafCodes {
+                page: RoutedGlobalLeafPage {
+                    run_ordinal: 0,
+                    level: None,
+                    distance: f32::NAN,
+                    bundle_path: "misleading.arrow".to_owned(),
+                    page: misleading_page,
+                },
+                codes: [far_row, exact_row].concat(),
+            },
+            RoutedGlobalLeafCodes {
+                page: RoutedGlobalLeafPage {
+                    run_ordinal: 0,
+                    level: None,
+                    distance: f32::NAN,
+                    bundle_path: "centroid.arrow".to_owned(),
+                    page: centroid_page,
+                },
+                codes: [close_row.clone(), close_row].concat(),
+            },
+        ];
+
+        let ranked = resident.rank_pages_by_row_codes(&query, pages, 1).unwrap();
+
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].bundle_path, "misleading.arrow");
+        assert!(ranked[0].distance.is_finite());
     }
 
     #[test]

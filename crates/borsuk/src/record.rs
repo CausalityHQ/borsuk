@@ -1113,6 +1113,12 @@ pub struct SearchReport {
     /// Encoded bytes read from authenticated V12 leaf-directory shards.
     #[serde(default)]
     pub global_leaf_directory_bytes: u64,
+    /// Logical V12 compressed-code page ranges authenticated before exact reranking.
+    #[serde(default)]
+    pub global_leaf_code_pages_read: usize,
+    /// Physical compressed-code range bytes read before exact page selection.
+    #[serde(default)]
+    pub global_leaf_code_bytes: u64,
     /// Logical V12 Arrow leaf pages read, independent of physical range coalescing.
     #[serde(default)]
     pub global_leaf_pages_read: usize,

@@ -167,8 +167,6 @@ pub(crate) struct GlobalLeafBundleRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// The Task 3 read contract is exercised before Task 4 wires publication/query use.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct GlobalLeafCodeRead {
     pub(crate) bundle_index: u32,
     pub(crate) offset: u64,
@@ -176,8 +174,6 @@ pub(crate) struct GlobalLeafCodeRead {
     pub(crate) selected_bytes: u64,
 }
 
-// The Task 3 read contract is exercised before Task 4 wires publication/query use.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn coalesce_global_leaf_code_reads(
     pages: &[GlobalLeafPageRef],
     bundles: &[GlobalLeafBundleRef],
@@ -842,21 +838,42 @@ pub(crate) fn decode_global_leaf_codes<'a>(
     page: &EncodedGlobalLeafPage,
     stored: &'a [u8],
 ) -> Result<VerifiedGlobalLeafCodes<'a>> {
-    if stored.len() != page.code_bytes as usize {
+    decode_global_leaf_code_range(page.rows, page.code_bytes, &page.code_checksum, stored)
+}
+
+pub(crate) fn decode_global_leaf_page_codes<'a>(
+    page: &GlobalLeafPageRef,
+    stored: &'a [u8],
+) -> Result<VerifiedGlobalLeafCodes<'a>> {
+    decode_global_leaf_code_range(
+        page.rows as usize,
+        page.code_bytes,
+        &page.code_checksum,
+        stored,
+    )
+}
+
+fn decode_global_leaf_code_range<'a>(
+    rows: usize,
+    code_bytes: u32,
+    checksum: &[u8; 32],
+    stored: &'a [u8],
+) -> Result<VerifiedGlobalLeafCodes<'a>> {
+    if stored.len() != code_bytes as usize {
         return Err(BorsukError::InvalidStorage(
             "global leaf fetched PQ-code range does not match its page reference".to_string(),
         ));
     }
-    if blake3::hash(stored).as_bytes() != &page.code_checksum {
+    if blake3::hash(stored).as_bytes() != checksum {
         return Err(BorsukError::InvalidStorage(
             "global leaf PQ-code checksum mismatch".to_string(),
         ));
     }
-    let code_width = checked_global_leaf_code_width(page.rows, page.code_bytes)?;
+    let code_width = checked_global_leaf_code_width(rows, code_bytes)?;
     Ok(VerifiedGlobalLeafCodes {
         bytes: stored,
         width: code_width,
-        rows: page.rows,
+        rows,
     })
 }
 
@@ -3942,6 +3959,26 @@ mod tests {
         corrupt[0] ^= 1;
         let error = super::decode_global_leaf_codes(page, &corrupt).unwrap_err();
         assert!(error.to_string().contains("PQ-code checksum"), "{error}");
+
+        let page_ref = GlobalLeafPageRef {
+            cell_index: page.cell_index,
+            leaf_ordinal: page.leaf_ordinal,
+            bundle_index: 0,
+            batch_offset: page.batch_offset,
+            metadata_bytes: page.metadata_bytes,
+            body_bytes: page.body_bytes,
+            batch_bytes: page.batch_bytes,
+            code_offset: page.code_offset,
+            code_bytes: page.code_bytes,
+            code_checksum: page.code_checksum,
+            rows: u32::try_from(page.rows).unwrap(),
+            partial_run_count: 0,
+            checksum: page.checksum,
+            centroid_code: page.centroid_code.clone().into_boxed_slice(),
+        };
+        let verified_ref = super::decode_global_leaf_page_codes(&page_ref, stored_codes).unwrap();
+        assert_eq!(verified_ref.code(0), Some(codes[0].as_slice()));
+        assert_eq!(verified_ref.code(1), Some(codes[1].as_slice()));
     }
 
     #[test]

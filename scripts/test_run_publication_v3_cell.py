@@ -621,7 +621,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         for index, (latency, recall) in enumerate(((1.0, 0.96), (2.0, 0.95), (4.0, 0.99))):
             rows.append(
                 {
-                    "schema_version": "borsuk-production-bench-v10",
+                    "schema_version": "borsuk-production-bench-v11",
                     "sample_index": str(index),
                     "latency_ms": str(latency),
                     "recall_at_10": str(recall),

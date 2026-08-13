@@ -38,7 +38,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v10",
+                    "borsuk-production-bench-v11",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -80,6 +80,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "transient_peak_bytes",
                 "global_leaf_directory_reads",
                 "global_leaf_directory_bytes",
+                "global_leaf_code_pages_read",
+                "global_leaf_code_bytes",
                 "global_leaf_pages_read",
                 "global_leaf_page_bytes",
                 "global_leaf_waves",
@@ -90,7 +92,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v10",
+                    "borsuk-production-bench-v11",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -109,6 +111,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     1024,
                     100,
                     1,
+                    16,
+                    1,
                     100,
                     1,
                     100,
@@ -119,7 +123,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     100,
                 ],
                 [
-                    "borsuk-production-bench-v10",
+                    "borsuk-production-bench-v11",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -140,6 +144,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     1,
                     100,
                     1,
+                    16,
+                    1,
                     100,
                     1,
                     0,
@@ -150,7 +156,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
         )
 
-    def test_query_samples_require_exact_v10_schema_and_telemetry(self) -> None:
+    def test_query_samples_require_exact_v11_schema_and_telemetry(self) -> None:
         mutations = (
             ("missing", lambda rows: [row.pop("schema_version") for row in rows]),
             (

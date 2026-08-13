@@ -349,6 +349,8 @@ fn synthetic_report(
         global_exact_vectors_fetched: 0,
         global_leaf_directory_reads: 0,
         global_leaf_directory_bytes: 0,
+        global_leaf_code_pages_read: 0,
+        global_leaf_code_bytes: 0,
         global_leaf_pages_read: 0,
         global_leaf_page_bytes: 0,
         global_leaf_exact_scores: 0,
