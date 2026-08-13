@@ -289,6 +289,7 @@ def build_spot_launch_request(
     worker_payload = base64.b64encode(worker_script.encode("utf-8")).decode("ascii")
     user_data = f"""#!/usr/bin/env bash
 set -euo pipefail
+export HOME=/root
 finish() {{
   status=$?
   trap - EXIT

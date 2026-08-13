@@ -86,6 +86,11 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertIn("timeout --signal=TERM --kill-after=60 7200", user_data)
         self.assertIn("shutdown -h now", user_data)
         self.assertIn(base64.b64encode(b"echo run-cell").decode("ascii"), user_data)
+        self.assertIn("export HOME=/root", user_data)
+        self.assertLess(
+            user_data.index("export HOME=/root"),
+            user_data.index("/bin/bash /var/lib/borsuk-publication-worker.sh"),
+        )
         volume = request["BlockDeviceMappings"][0]["Ebs"]
         self.assertEqual(volume["VolumeSize"], 32)
         self.assertEqual(volume["VolumeType"], "gp3")
