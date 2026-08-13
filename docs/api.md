@@ -69,7 +69,7 @@ remaining API parity gate before late-interaction is benchmark-promoted.
 
 The process also has two independent worker budgets. `BORSUK_CPU_THREADS`
 defaults to 4 and caps compute-heavy build, PQ scan, and exact-scoring work.
-`BORSUK_IO_THREADS` defaults to 24 and supplies process-wide 256 KiB-stack
+`BORSUK_IO_THREADS` defaults to 32 and supplies process-wide 1 MiB-stack
 waiters for blocking object-store reads. I/O waiters do not increase the CPU
 scoring budget, create per-query pools, or bypass the shared search/read gates;
 they prevent a four-core compute pool from serializing network waits. Valid

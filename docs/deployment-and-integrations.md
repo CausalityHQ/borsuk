@@ -202,7 +202,7 @@ exists only to measure the research ceiling and must not be copied into a
 production deployment.
 
 Keep CPU and I/O concurrency separate. `BORSUK_CPU_THREADS=4` is the default
-compute ceiling. `BORSUK_IO_THREADS=24` provides one shared set of 256 KiB-stack
+compute ceiling. `BORSUK_IO_THREADS=32` provides one shared set of 1 MiB-stack
 waiters for S3 reads; it does not permit extra scoring work or bypass the
 24-read/decode gate. Raise either only from a matched-recall concurrency run
 that includes peak CPU, RSS/VMS, and tail latency.

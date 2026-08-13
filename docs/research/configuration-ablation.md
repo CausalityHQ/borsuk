@@ -22,7 +22,7 @@ temporary build working set.
 | prefetch width | no if all probes finish | latency waves, burst I/O, transient state | 16 per query, under the shared cap of 24 |
 | query admission cap | no | queueing and total concurrent query state | 4 |
 | `BORSUK_CPU_THREADS` | no | build/query scoring CPU saturation vs latency | 4 process-wide compute workers; research sweeps 1/2/4/8 |
-| `BORSUK_IO_THREADS` | no | object-store wait overlap, thread stacks, tail latency | 24 process-wide 256 KiB-stack waiters; research sweeps 4/8/16/24/32 |
+| `BORSUK_IO_THREADS` | no | object-store wait overlap, thread stacks, tail latency | 32 process-wide 1 MiB-stack waiters; research sweeps 4/8/16/24/32 |
 | global decode cap | no | active Parquet/Arrow/code decode state | 24 |
 | resident RAM budget | no | resident routing/codebook/chunk metadata | hard 512 MiB library default |
 | exact-sidecar metadata cache | no | range-index hits vs RAM | global 128 MiB LRU |

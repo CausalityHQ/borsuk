@@ -115,10 +115,10 @@ pub const DEFAULT_BUILD_THREADS: usize = 4;
 /// Process-wide build/query CPU worker override. Values must be in `1..=64`;
 /// missing or invalid values use [`DEFAULT_BUILD_THREADS`].
 pub const CPU_THREADS_ENV: &str = "BORSUK_CPU_THREADS";
-/// Default shared blocking-I/O waiter count. These are small-stack waiters,
-/// separate from CPU workers, so object-store fan-out does not consume more
-/// compute cores.
-pub const DEFAULT_IO_THREADS: usize = 24;
+/// Default shared blocking-I/O waiter count. These are parked network waiters,
+/// separate from CPU workers, and cover one qualified page-32 object-store
+/// wave without adding a hidden second round trip.
+pub const DEFAULT_IO_THREADS: usize = 32;
 /// Process-wide blocking-I/O waiter override. Values must be in `1..=128`.
 pub const IO_THREADS_ENV: &str = "BORSUK_IO_THREADS";
 /// Default process-wide concurrency limit for physical backing-store GETs.
@@ -219,6 +219,11 @@ pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_freq
 
 #[cfg(test)]
 mod configuration_tests {
+    #[test]
+    fn default_io_waiters_cover_one_page_32_query_wave() {
+        assert_eq!(super::DEFAULT_IO_THREADS, 32);
+    }
+
     #[test]
     fn physical_get_admission_configuration_is_fail_closed() {
         assert_eq!(super::parse_backing_get_concurrency(None), 128);
