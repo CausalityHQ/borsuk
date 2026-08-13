@@ -1795,6 +1795,27 @@ impl ResidentGlobalCodebook {
         }
     }
 
+    pub(crate) fn score_cell_card_codes<'a>(
+        &self,
+        query: &[f32],
+        codes: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<Vec<f32>> {
+        let prepared = self.quantizer.prepare_query(query)?;
+        codes
+            .into_iter()
+            .map(|code| {
+                if code.len() != self.code_width {
+                    return invalid("V14 cell-card code width does not match its codebook");
+                }
+                let distance = self.quantizer.distance(&prepared, code)?;
+                if !distance.is_finite() {
+                    return invalid("V14 cell-card code distance is non-finite");
+                }
+                Ok(distance)
+            })
+            .collect()
+    }
+
     pub(crate) fn rank_pages(
         &self,
         query: &[f32],
@@ -2600,6 +2621,29 @@ mod tests {
             cells
                 .iter()
                 .all(|cell| (*cell as usize) < resident.cell_count())
+        );
+    }
+
+    #[test]
+    fn v14_cell_card_codes_use_the_authenticated_scan_quantizer() {
+        let descriptor = test_v12_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vectors(1, 64).pop().unwrap();
+        let mut far = query.clone();
+        far.iter_mut().for_each(|value| *value += 20.0);
+        let near_code = quantizer.encode(&query).unwrap();
+        let far_code = quantizer.encode(&far).unwrap();
+
+        let distances = resident
+            .score_cell_card_codes(&query, [near_code.as_slice(), far_code.as_slice()])
+            .unwrap();
+        assert_eq!(distances.len(), 2);
+        assert!(distances[0] < distances[1]);
+        assert!(
+            resident
+                .score_cell_card_codes(&query, [near_code[..near_code.len() - 1].as_ref()])
+                .is_err()
         );
     }
 
