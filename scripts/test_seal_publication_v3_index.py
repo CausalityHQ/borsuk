@@ -5,6 +5,7 @@ import unittest
 from scripts.seal_publication_v3_index import (
     classify_index_object,
     seal_index_inventory,
+    session_configuration,
 )
 
 
@@ -47,6 +48,16 @@ class _FakeS3:
 
 
 class PublicationV3IndexSealTests(unittest.TestCase):
+    def test_worker_uses_instance_credentials_when_no_named_profile_is_supplied(self) -> None:
+        self.assertEqual(
+            session_configuration(None, "eu-central-1"),
+            {"region_name": "eu-central-1"},
+        )
+        self.assertEqual(
+            session_configuration("causality", "eu-central-1"),
+            {"profile_name": "causality", "region_name": "eu-central-1"},
+        )
+
     def test_classification_matches_real_standard_and_packed_path_families(self) -> None:
         cases = {
             "segments/L0/segment.parquet": ("data-bundle", "parquet"),

@@ -32,6 +32,13 @@ class _S3(Protocol):
 ParquetRows = Callable[[str, bytes], int]
 
 
+def session_configuration(profile: str | None, region: str) -> dict[str, str]:
+    configuration = {"region_name": region}
+    if profile:
+        configuration["profile_name"] = profile
+    return configuration
+
+
 def classify_index_object(path: str) -> tuple[str, str]:
     """Return the evidence role and truthful physical format for a known path."""
 
@@ -222,14 +229,14 @@ def main() -> int:
     parser.add_argument("--logical-cells", required=True, type=int)
     parser.add_argument("--roster-output", required=True, type=Path)
     parser.add_argument("--inventory-output", required=True, type=Path)
-    parser.add_argument("--profile", default="causality")
+    parser.add_argument("--profile")
     parser.add_argument("--region", required=True)
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
     import boto3
 
     bucket, prefix = _s3_parts(args.index_uri)
-    client = boto3.Session(profile_name=args.profile, region_name=args.region).client("s3")
+    client = boto3.Session(**session_configuration(args.profile, args.region)).client("s3")
     roster, inventory = seal_index_inventory(
         client, bucket=bucket, prefix=prefix, workers=args.workers
     )
