@@ -60,6 +60,15 @@ class AttemptDecision:
     discard_measurements: bool
 
 
+@dataclass(frozen=True)
+class StagingReconciliation:
+    action: str
+    instance_id: str
+    terminate_instance: bool
+    discard_measurements: bool
+    next_job: StagingJob | None
+
+
 def _adapter(dataset: dict[str, object]) -> str:
     kind = str(dataset["kind"])
     if kind == "standard-ann":
@@ -353,6 +362,16 @@ timeout --signal=TERM --kill-after=60 {max_seconds} /bin/bash /var/lib/borsuk-pu
 def classify_attempt(observation: AttemptObservation) -> AttemptDecision:
     """Choose an action without opening any incomplete measurement artifact."""
 
+    known_states = {
+        "pending",
+        "running",
+        "stopping",
+        "stopped",
+        "shutting-down",
+        "terminated",
+    }
+    if observation.instance_state not in known_states:
+        raise ValueError(f"unrecognized EC2 instance state: {observation.instance_state}")
     markers = set(observation.terminal_markers)
     unknown = markers - KNOWN_MARKERS
     if unknown:
@@ -367,14 +386,81 @@ def classify_attempt(observation: AttemptObservation) -> AttemptDecision:
         return AttemptDecision("terminate-failure", True)
     if observation.instance_state in {"terminated", "stopped"}:
         return AttemptDecision("retry-fresh-attempt", True)
-    if observation.instance_state in {
-        "pending",
-        "running",
-        "stopping",
-        "shutting-down",
-    }:
+    if observation.instance_state in {"pending", "running", "stopping", "shutting-down"}:
         return AttemptDecision("monitor", False)
-    raise ValueError(f"unrecognized EC2 instance state: {observation.instance_state}")
+    raise AssertionError("validated EC2 instance state was not classified")
+
+
+def reconcile_staging_attempt(
+    manifest: dict[str, object],
+    job: StagingJob,
+    *,
+    instance_id: str,
+    observation: AttemptObservation,
+    terminal_receipt: dict[str, object] | None,
+    max_attempts: int,
+) -> StagingReconciliation:
+    """Plan one idempotent staging action from authenticated terminal state."""
+
+    expected = {
+        item.dataset_id: item
+        for item in staging_jobs(manifest, attempt=job.attempt)
+    }
+    if expected.get(job.dataset_id) != job:
+        raise ValueError("reconciled staging job differs from the manifest")
+    if re.fullmatch(r"i-[0-9a-f]{17}", instance_id) is None:
+        raise ValueError("reconciled staging instance ID is invalid")
+    if max_attempts <= 0 or max_attempts > 9_999:
+        raise ValueError("staging retry cap must be in 1..=9999")
+    if job.attempt > max_attempts:
+        raise ValueError("staging attempt exceeds its retry cap")
+    staging_markers = {"STAGING_COMPLETE.json", "STAGING_FAILED.json"}
+    unexpected_markers = set(observation.terminal_markers) - staging_markers
+    if unexpected_markers:
+        raise ValueError(
+            f"unrecognized staging terminal marker: {sorted(unexpected_markers)[0]}"
+        )
+
+    decision = classify_attempt(observation)
+    if decision.action == "terminate-success":
+        if terminal_receipt is None:
+            raise ValueError("successful staging attempt is missing its receipt")
+        receipt = validate_staging_receipt(manifest, terminal_receipt)
+        if (
+            receipt["dataset_id"] != job.dataset_id
+            or receipt["attempt"] != job.attempt
+            or receipt["instance_id"] != instance_id
+        ):
+            raise ValueError("staging receipt differs from the observed attempt")
+    elif terminal_receipt is not None:
+        raise ValueError("non-successful staging attempt must not carry a receipt")
+
+    retry = decision.action in {"terminate-failure", "retry-fresh-attempt"}
+    terminate_instance = observation.instance_state != "terminated" and (
+        retry or decision.action == "terminate-success"
+    )
+    if retry and job.attempt == max_attempts:
+        return StagingReconciliation(
+            action="exhausted-failure",
+            instance_id=instance_id,
+            terminate_instance=terminate_instance,
+            discard_measurements=True,
+            next_job=None,
+        )
+    next_job = None
+    if retry:
+        next_job = next(
+            item
+            for item in staging_jobs(manifest, attempt=job.attempt + 1)
+            if item.dataset_id == job.dataset_id
+        )
+    return StagingReconciliation(
+        action=decision.action,
+        instance_id=instance_id,
+        terminate_instance=terminate_instance,
+        discard_measurements=decision.discard_measurements,
+        next_job=next_job,
+    )
 
 
 def _required_roles(adapter: str) -> dict[str, tuple[int, int | None]]:
@@ -658,15 +744,70 @@ def _staging_plan(manifest: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _reconciliation_value(value: StagingReconciliation) -> dict[str, object]:
+    next_job = None
+    if value.next_job is not None:
+        next_job = {
+            "dataset_id": value.next_job.dataset_id,
+            "adapter": value.next_job.adapter,
+            "attempt": value.next_job.attempt,
+            "output_uri": value.next_job.output_uri,
+            "provenance_uri": value.next_job.provenance_uri,
+            "terminal_uri": value.next_job.terminal_uri,
+            "failure_uri": value.next_job.failure_uri,
+        }
+    return {
+        "schema_version": 1,
+        "action": value.action,
+        "instance_id": value.instance_id,
+        "terminate_instance": value.terminate_instance,
+        "discard_measurements": value.discard_measurements,
+        "next_job": next_job,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
     plan = subparsers.add_parser("plan-staging")
     plan.add_argument("manifest", type=Path)
+    reconcile = subparsers.add_parser("reconcile-staging")
+    reconcile.add_argument("manifest", type=Path)
+    reconcile.add_argument("--dataset", required=True)
+    reconcile.add_argument("--attempt", type=int, required=True)
+    reconcile.add_argument("--instance-id", required=True)
+    reconcile.add_argument("--instance-state", required=True)
+    reconcile.add_argument("--terminal-marker", action="append", default=[])
+    reconcile.add_argument("--receipt", type=Path)
+    reconcile.add_argument("--max-attempts", type=int, default=3)
     args = parser.parse_args()
+    manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     if args.operation == "plan-staging":
-        manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
         print(canonical_json_bytes(_staging_plan(manifest)).decode("utf-8"))
+        return 0
+    if args.operation == "reconcile-staging":
+        jobs = {
+            job.dataset_id: job
+            for job in staging_jobs(manifest, attempt=args.attempt)
+        }
+        job = jobs.get(args.dataset)
+        if job is None:
+            raise ValueError("reconciled dataset is not an unstaged manifest dataset")
+        receipt = None
+        if args.receipt is not None:
+            receipt = json.loads(args.receipt.read_text(encoding="utf-8"))
+        value = reconcile_staging_attempt(
+            manifest,
+            job,
+            instance_id=args.instance_id,
+            observation=AttemptObservation(
+                instance_state=args.instance_state,
+                terminal_markers=tuple(args.terminal_marker),
+            ),
+            terminal_receipt=receipt,
+            max_attempts=args.max_attempts,
+        )
+        print(canonical_json_bytes(_reconciliation_value(value)).decode("utf-8"))
         return 0
     raise AssertionError("unreachable operation")
 

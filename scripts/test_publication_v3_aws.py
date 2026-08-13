@@ -11,6 +11,7 @@ from scripts.publication_v3_aws import (
     build_staging_receipt,
     build_staging_worker_script,
     classify_attempt,
+    reconcile_staging_attempt,
     staging_jobs,
     validate_staging_receipt,
 )
@@ -158,6 +159,13 @@ class PublicationV3AwsTests(unittest.TestCase):
                     terminal_markers=("CELL_COMPLETE", "CELL_FAILED"),
                 )
             )
+        with self.assertRaisesRegex(ValueError, "EC2 instance state"):
+            classify_attempt(
+                AttemptObservation(
+                    instance_state="not-an-ec2-state",
+                    terminal_markers=("CELL_COMPLETE",),
+                )
+            )
 
     def test_plan_staging_cli_is_canonical_and_contains_no_aws_side_effect(self) -> None:
         command = [
@@ -177,6 +185,31 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertEqual(value["job_count"], 12)
         self.assertEqual(len(value["jobs"]), 12)
         self.assertNotIn("instance_id", first.stdout)
+
+    def test_reconcile_staging_cli_emits_a_fresh_attempt_without_aws(self) -> None:
+        command = [
+            sys.executable,
+            "scripts/publication_v3_aws.py",
+            "reconcile-staging",
+            str(MANIFEST),
+            "--dataset",
+            "sift-128",
+            "--attempt",
+            "2",
+            "--instance-id",
+            "i-0123456789abcdef0",
+            "--instance-state",
+            "terminated",
+            "--max-attempts",
+            "3",
+        ]
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        value = json.loads(completed.stdout)
+        self.assertEqual(value["action"], "retry-fresh-attempt")
+        self.assertFalse(value["terminate_instance"])
+        self.assertEqual(value["next_job"]["attempt"], 3)
+        self.assertEqual(value["next_job"]["dataset_id"], "sift-128")
 
     def test_staging_receipt_rejects_single_object_and_attests_spot_inventory(self) -> None:
         job = next(job for job in staging_jobs(self.manifest) if job.dataset_id == "sift-128")
@@ -347,6 +380,149 @@ class PublicationV3AwsTests(unittest.TestCase):
             validate_staging_receipt(
                 self.manifest, {**receipt, "dataset_content_sha256": "0" * 64}
             )
+
+    def test_reconciler_validates_success_and_bounds_fresh_attempts(self) -> None:
+        job = next(
+            job
+            for job in staging_jobs(self.manifest, attempt=2)
+            if job.dataset_id == "sift-128"
+        )
+        objects = tuple(
+            {
+                "role": role,
+                "format": "json" if role == "metadata" else "parquet",
+                "uri": f"{job.output_uri}/{name}",
+                "sha256": f"{index + 1:064x}",
+                "bytes": 1024,
+                "rows": rows,
+            }
+            for index, (role, name, rows) in enumerate(
+                (
+                    ("train", "train-00000000.parquet", 10),
+                    ("query", "test.parquet", 2),
+                    ("ground-truth", "neighbors.parquet", 2),
+                    ("metadata", "meta.json", 1),
+                )
+            )
+        )
+        receipt = build_staging_receipt(
+            self.manifest,
+            job,
+            source_archive_sha256="a" * 64,
+            source_provenance={
+                "schema_version": 1,
+                "dataset": "sift-128",
+                "source": "https://ann-benchmarks.com/sift-128-euclidean.hdf5",
+                "source_sha256": "b" * 64,
+                "materialization_sha256": "c66ceeb981504f9de03a84700e3ef410b3298f67dd92a3768a8cab6de4b2c3ee",
+            },
+            provenance_sha256="d" * 64,
+            objects=objects,
+            instance_id="i-0123456789abcdef0",
+            instance_type="r7g.8xlarge",
+            availability_zone="eu-central-1a",
+            purchase_option="spot",
+        )
+        success = reconcile_staging_attempt(
+            self.manifest,
+            job,
+            instance_id="i-0123456789abcdef0",
+            observation=AttemptObservation(
+                instance_state="running",
+                terminal_markers=("STAGING_COMPLETE.json",),
+            ),
+            terminal_receipt=receipt,
+            max_attempts=3,
+        )
+        self.assertEqual(success.action, "terminate-success")
+        self.assertTrue(success.terminate_instance)
+        self.assertIsNone(success.next_job)
+        with self.assertRaisesRegex(ValueError, "receipt"):
+            reconcile_staging_attempt(
+                self.manifest,
+                job,
+                instance_id="i-0123456789abcdef0",
+                observation=AttemptObservation(
+                    instance_state="running",
+                    terminal_markers=("STAGING_COMPLETE.json",),
+                ),
+                terminal_receipt={**receipt, "dataset_content_sha256": "0" * 64},
+                max_attempts=3,
+            )
+        with self.assertRaisesRegex(ValueError, "observed attempt"):
+            reconcile_staging_attempt(
+                self.manifest,
+                job,
+                instance_id="i-fffffffffffffffff",
+                observation=AttemptObservation(
+                    instance_state="running",
+                    terminal_markers=("STAGING_COMPLETE.json",),
+                ),
+                terminal_receipt=receipt,
+                max_attempts=3,
+            )
+        with self.assertRaisesRegex(ValueError, "staging terminal marker"):
+            reconcile_staging_attempt(
+                self.manifest,
+                job,
+                instance_id="i-0123456789abcdef0",
+                observation=AttemptObservation(
+                    instance_state="running",
+                    terminal_markers=("CELL_COMPLETE",),
+                ),
+                terminal_receipt=receipt,
+                max_attempts=3,
+            )
+
+        failed = reconcile_staging_attempt(
+            self.manifest,
+            job,
+            instance_id="i-0123456789abcdef0",
+            observation=AttemptObservation(
+                instance_state="running",
+                terminal_markers=("STAGING_FAILED.json",),
+            ),
+            terminal_receipt=None,
+            max_attempts=3,
+        )
+        self.assertEqual(failed.action, "terminate-failure")
+        self.assertTrue(failed.terminate_instance)
+        self.assertEqual(failed.next_job.attempt, 3)
+
+        stopped = reconcile_staging_attempt(
+            self.manifest,
+            job,
+            instance_id="i-0123456789abcdef0",
+            observation=AttemptObservation(
+                instance_state="stopped",
+                terminal_markers=(),
+            ),
+            terminal_receipt=None,
+            max_attempts=3,
+        )
+        self.assertEqual(stopped.action, "retry-fresh-attempt")
+        self.assertTrue(stopped.terminate_instance)
+        self.assertEqual(stopped.next_job.attempt, 3)
+
+        exhausted_job = next(
+            job
+            for job in staging_jobs(self.manifest, attempt=3)
+            if job.dataset_id == "sift-128"
+        )
+        exhausted = reconcile_staging_attempt(
+            self.manifest,
+            exhausted_job,
+            instance_id="i-0123456789abcdef0",
+            observation=AttemptObservation(
+                instance_state="terminated",
+                terminal_markers=(),
+            ),
+            terminal_receipt=None,
+            max_attempts=3,
+        )
+        self.assertEqual(exhausted.action, "exhausted-failure")
+        self.assertFalse(exhausted.terminate_instance)
+        self.assertIsNone(exhausted.next_job)
 
 
 if __name__ == "__main__":
