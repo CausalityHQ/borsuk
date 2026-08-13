@@ -93,7 +93,7 @@ def validate_publication_cell_authority(
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("frozen manifest is not valid JSON") from error
     manifest = validate_manifest(manifest_value)
-    if payload != canonical_json_bytes(manifest) + b"\n":
+    if payload != canonical_json_bytes(manifest):
         raise ValueError("frozen manifest is not canonical")
     expected = next(
         (

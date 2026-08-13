@@ -110,9 +110,15 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             manifest_path = Path(root) / "manifest.json"
             manifest_path.write_bytes(
-                canonical_json_bytes(validate_manifest(paid_v3_manifest())) + b"\n"
+                canonical_json_bytes(validate_manifest(paid_v3_manifest()))
             )
             self.assertEqual(validate_publication_cell_authority(cell, manifest_path), cell)
+            manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
+            with self.assertRaisesRegex(ValueError, "frozen manifest is not canonical"):
+                validate_publication_cell_authority(cell, manifest_path)
+            manifest_path.write_bytes(
+                canonical_json_bytes(validate_manifest(paid_v3_manifest()))
+            )
             substituted = {
                 **cell,
                 "index_prefix": "s3://attacker-bucket/substituted/"
