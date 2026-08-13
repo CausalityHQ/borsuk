@@ -43,6 +43,20 @@ class RestCoexistenceLoadTest(unittest.TestCase):
         self.assertTrue(any("cheap p99" in failure for failure in failures))
         self.assertTrue(any("recall@10" in failure for failure in failures))
 
+    def test_gate_rejects_any_non_v13_search_engine(self) -> None:
+        baseline = {"cheap": {"p99_ms": 2.0, "errors": 0, "requests": 100}}
+        mixed = {
+            "cheap": {"p99_ms": 2.0, "errors": 0, "requests": 100},
+            "search": {
+                "mean_recall_at_10": 1.0,
+                "requests": 2,
+                "errors": 0,
+                "engines": ["bounded-arrow-leaf-v12", "bounded-arrow-leaf-v13"],
+            },
+        }
+        failures = evaluate_phase("mixed-normal", baseline, mixed)
+        self.assertTrue(any("bounded-arrow-leaf-v13" in failure for failure in failures))
+
 
 if __name__ == "__main__":
     unittest.main()

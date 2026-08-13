@@ -40,7 +40,7 @@ fn validate_page_budget(budget: usize) -> Result<usize, String> {
     matches!(budget, 4 | 8 | 16 | 32)
         .then_some(budget)
         .ok_or_else(|| {
-            format!("V12 REST leaf-page budget must be 4, 8, 16, or 32; received {budget}")
+            format!("V13 REST leaf-block budget must be 4, 8, 16, or 32; received {budget}")
         })
 }
 
@@ -255,7 +255,7 @@ mod tests {
     use super::{AppMetrics, AppState, SearchAdmission, router, validate_page_budget};
 
     #[test]
-    fn rest_search_accepts_only_bounded_v12_page_budgets() {
+    fn rest_search_accepts_only_bounded_v13_block_budgets() {
         for budget in [4, 8, 16, 32] {
             assert_eq!(validate_page_budget(budget).unwrap(), budget);
         }

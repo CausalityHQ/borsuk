@@ -23,6 +23,7 @@ class Sample:
     completed_ns: int
     status: int
     recall_at_10: float | None
+    engine: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -34,6 +35,7 @@ class Sample:
             "latency_ms": (self.completed_ns - self.scheduled_ns) / 1_000_000,
             "schedule_lag_ms": (self.started_ns - self.scheduled_ns) / 1_000_000,
             "recall_at_10": self.recall_at_10,
+            "engine": self.engine,
         }
 
 
@@ -63,6 +65,7 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
     latencies = [(sample.completed_ns - sample.scheduled_ns) / 1_000_000 for sample in samples]
     lags = [(sample.started_ns - sample.scheduled_ns) / 1_000_000 for sample in samples]
     recalls = [sample.recall_at_10 for sample in samples if sample.recall_at_10 is not None]
+    engines = sorted({sample.engine for sample in samples if sample.engine is not None})
     errors = sum(sample.status >= 500 or sample.status == 0 for sample in samples)
     return {
         "requests": len(samples),
@@ -75,6 +78,7 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "max_ms": max(latencies, default=0.0),
         "schedule_lag_p99_ms": percentile(lags, 0.99),
         "mean_recall_at_10": sum(recalls) / len(recalls) if recalls else None,
+        "engines": engines,
     }
 
 
@@ -116,6 +120,12 @@ def evaluate_phase(
         recall = search.get("mean_recall_at_10")
         if recall is None or float(recall) < 0.95:
             failures.append(f"vector recall@10 {recall} is below 0.95")
+        engines = search.get("engines")
+        if engines != ["bounded-arrow-leaf-v13"]:
+            failures.append(
+                "vector engine must be exactly bounded-arrow-leaf-v13; "
+                f"observed {engines}"
+            )
     return failures
 
 
@@ -135,6 +145,7 @@ def _request(
 ) -> Sample:
     started = time.monotonic_ns()
     recall = None
+    engine = None
     if endpoint == "search":
         if query is None:
             raise ValueError("search request has no query")
@@ -162,7 +173,9 @@ def _request(
     if endpoint == "search" and status == 200 and query is not None:
         actual = [str(item["id"]) for item in payload.get("hits", [])]  # type: ignore[union-attr]
         recall = _recall_at_10(actual, [str(item) for item in query["neighbors"]])  # type: ignore[index]
-    return Sample(endpoint, scheduled_ns, started, completed, status, recall)
+        engine_value = payload.get("engine")
+        engine = str(engine_value) if engine_value is not None else None
+    return Sample(endpoint, scheduled_ns, started, completed, status, recall, engine)
 
 
 def run_phase(

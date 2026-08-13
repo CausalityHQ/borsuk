@@ -75,7 +75,7 @@ publication datasets then cover realistic dimensions and scale, including the
 All gates apply independently to every completed repetition:
 
 - vector recall@10 is at least `0.95` against the exact frozen oracle;
-- vector execution engine is always `bounded-arrow-leaf-v12`;
+- vector execution engine is always `bounded-arrow-leaf-v13`;
 - mixed-normal cheap p99 is at most `max(baseline_p99 * 1.25,
   baseline_p99 + 2 ms)` and cheap error rate is below `0.1%`;
 - mixed-overload cheap p99 is at most `max(baseline_p99 * 1.50,
@@ -118,4 +118,3 @@ server.
    three full repetitions.
 5. Extend the unchanged method to the realistic-dimension and 100M datasets,
    then publish only validated frozen results in README/docs/web.
-

@@ -19,7 +19,7 @@ Spot launcher freezes identities and terminal receipts.
 - Modify `crates/borsuk/Cargo.toml` for example-only Axum/Tokio dependencies.
 - Create `crates/borsuk/examples/rest_app_bench.rs`.
 
-1. Add tests that reject unsupported V12 page budgets and prove a saturated
+1. Add tests that reject unsupported V13 block budgets and prove a saturated
    search admission returns immediately rather than queues.
 2. Run the exact example tests and capture the missing-contract RED.
 3. Implement environment parsing, BORSUK open options, `/health`,
@@ -71,4 +71,3 @@ Spot launcher freezes identities and terminal receipts.
 3. Validate all cells without reading incomplete measurements.
 4. Update README, architecture/API/benchmark docs, and the website only from
    complete frozen results; include the workload diagram and explicit limits.
-
