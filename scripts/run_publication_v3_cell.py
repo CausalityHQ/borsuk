@@ -20,6 +20,7 @@ try:
         runtime_attestation_sha256,
         validate_runtime_attestation,
     )
+    from scripts.publication_v3_clones import validate_clone_receipt
     from scripts.publication_v3_protocol import (
         build_schedule_document,
         canonical_json_bytes,
@@ -41,6 +42,7 @@ except ModuleNotFoundError:
         runtime_attestation_sha256,
         validate_runtime_attestation,
     )
+    from publication_v3_clones import validate_clone_receipt
     from publication_v3_protocol import (
         build_schedule_document,
         canonical_json_bytes,
@@ -58,7 +60,7 @@ except ModuleNotFoundError:
     from publication_v3_results import validate_cell_result
 
 
-SUPPORTED_LOCAL_KINDS = frozenset({"read-recall"})
+SUPPORTED_LOCAL_KINDS = frozenset({"read-recall", "write-update-delete-compact"})
 PRODUCTION_BUILD_FIELDS = tuple(
     "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
 )
@@ -102,11 +104,41 @@ def dataset_training_seed(dataset: dict[str, object]) -> int:
 
 def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
     workload = cell.get("workload")
-    if not isinstance(workload, dict) or workload.get("kind") != "read-recall":
-        raise ValueError("only read-recall arms are currently executable")
+    if not isinstance(workload, dict):
+        raise ValueError("cell workload is invalid")
     factors = workload.get("factors")
     if not isinstance(factors, dict):
-        raise ValueError("read-recall factors are invalid")
+        raise ValueError("workload factors are invalid")
+    if workload.get("kind") == "write-update-delete-compact":
+        axes = {
+            "writers": factors.get("writers"),
+            "batch_size": factors.get("batch_sizes"),
+            "update_percent": factors.get("update_percent"),
+            "delete_percent": factors.get("delete_percent"),
+            "compaction_state": factors.get("compaction_states"),
+        }
+        if any(not isinstance(values, list) or not values for values in axes.values()):
+            raise ValueError("lifecycle arm factors are incomplete")
+        duration = factors.get("duration_seconds")
+        if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
+            raise ValueError("lifecycle duration is invalid")
+        return [
+            {
+                "writers": writers,
+                "batch_size": batch_size,
+                "update_percent": update_percent,
+                "delete_percent": delete_percent,
+                "compaction_state": compaction_state,
+                "duration_seconds": duration,
+            }
+            for writers in axes["writers"]
+            for batch_size in axes["batch_size"]
+            for update_percent in axes["update_percent"]
+            for delete_percent in axes["delete_percent"]
+            for compaction_state in axes["compaction_state"]
+        ]
+    if workload.get("kind") != "read-recall":
+        raise ValueError(f"workload kind {workload.get('kind')!r} is not executable")
     k_values = factors.get("k")
     if k_values != [10]:
         unsupported = next((value for value in k_values or [] if value != 10), "missing")
@@ -258,6 +290,13 @@ def build_execution_plan(
     elif dataset_source.get("state") != "staged":
         raise ValueError("dataset must be generated or staged before execution")
 
+    workload_kind = workload.get("kind")
+    if workload_kind == "read-recall":
+        routing_budget = arm["routing_cell_budget"]
+        candidate_budget = arm["candidate_budget"]
+    else:
+        routing_budget = 32
+        candidate_budget = 4096
     benchmark_env = {
         "BORSUK_BENCH_DATASET": str(dataset_dir),
         "BORSUK_BENCH_URI": str(index_dir),
@@ -266,13 +305,13 @@ def build_execution_plan(
         "BORSUK_BENCH_QUERIES": str(effective_queries),
         "BORSUK_BENCH_QUERY_SEED": str(cell.get("query_seed")),
         "BORSUK_BENCH_REPETITION_ID": str(cell.get("repetition_id")),
-        "BORSUK_BENCH_NPROBES": str(arm["routing_cell_budget"]),
-        "BORSUK_BENCH_CANDIDATES": str(arm["candidate_budget"]),
+        "BORSUK_BENCH_NPROBES": str(routing_budget),
+        "BORSUK_BENCH_CANDIDATES": str(candidate_budget),
         "BORSUK_BENCH_READ_ONLY": "1",
         "BORSUK_BENCH_CONCURRENCY": "1",
         "BORSUK_BENCH_SKIP_EXACT_RECALL": "1",
         "BORSUK_BENCH_CACHE_PROFILE": (
-            "uncached" if arm["cache_state"] == "cold" else "disk_cached"
+            "uncached" if arm.get("cache_state", "cold") == "cold" else "disk_cached"
         ),
         "BORSUK_BENCH_RAM_BUDGET_BYTES": str(resident_limit_mib * 1024 * 1024),
         "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": str(
@@ -343,6 +382,19 @@ def build_execution_plan(
             "BORSUK_BENCH_BUILD_INDEX": "0",
             "BORSUK_STORAGE_TRACE": str(runtime_output_dir / "storage-access.csv"),
         }
+        if workload_kind == "write-update-delete-compact":
+            runtime_env.update(
+                {
+                    "BORSUK_BENCH_RECALL_ONLY": "0",
+                    "BORSUK_BENCH_READ_ONLY": "0",
+                    "BORSUK_BENCH_WRITE_BATCH_SIZE": str(arm["batch_size"]),
+                    "BORSUK_BENCH_LIFECYCLE_WRITERS": str(arm["writers"]),
+                    "BORSUK_BENCH_UPDATE_PERCENT": str(arm["update_percent"]),
+                    "BORSUK_BENCH_DELETE_PERCENT": str(arm["delete_percent"]),
+                    "BORSUK_BENCH_COMPACTION_STATE": str(arm["compaction_state"]),
+                    "BORSUK_BENCH_DURATION_SECONDS": str(arm["duration_seconds"]),
+                }
+            )
         return {
             "schema_version": 1,
             "cell_id": cell.get("cell_id"),
@@ -390,6 +442,9 @@ def authorize_publication_runtime(
     source_archive_sha256: str,
     dataset_materialization_sha256: str,
 ) -> dict[str, object]:
+    workload = cell.get("workload")
+    if not isinstance(workload, dict) or workload.get("kind") != "read-recall":
+        raise ValueError("immutable index runtime authorization is read-only")
     if plan.get("mode") != "publication" or plan.get("publishable") is not True:
         raise ValueError("only a publication plan has an authorized runtime phase")
     if plan.get("cell_id") != cell.get("cell_id"):
@@ -421,6 +476,51 @@ def authorize_publication_runtime(
             if forbidden in environment:
                 raise ValueError("publication runtime step contains a build-only flag")
     authorized["index_receipt_sha256"] = receipt_document_sha256(validated_receipt)
+    return authorized
+
+
+def authorize_publication_mutation_runtime(
+    plan: dict[str, object],
+    *,
+    clone_receipt: dict[str, object],
+    base_receipt: dict[str, object],
+    arm: dict[str, object],
+    attempt_id: str,
+    cell: dict[str, object],
+) -> dict[str, object]:
+    workload = cell.get("workload")
+    if not isinstance(workload, dict) or workload.get("kind") != "write-update-delete-compact":
+        raise ValueError("mutation runtime requires a lifecycle cell")
+    if arm.get("writers") != 1:
+        raise ValueError("Publication V3 MVP supports lifecycle writers=1 only")
+    clone = validate_clone_receipt(
+        clone_receipt,
+        cell=cell,
+        arm=arm,
+        attempt_id=attempt_id,
+        base_receipt=base_receipt,
+    )
+    if clone["clone_index_uri"] == base_receipt.get("index_uri"):
+        raise ValueError("mutation runtime must never target the immutable base")
+    runtime = plan.get("runtime")
+    if not isinstance(runtime, dict) or not isinstance(runtime.get("steps"), list):
+        raise ValueError("publication plan has no mutation runtime")
+    authorized = copy.deepcopy(runtime)
+    for step in authorized["steps"]:
+        if not isinstance(step, dict) or not isinstance(step.get("env"), dict):
+            raise ValueError("publication mutation step is invalid")
+        environment = step["env"]
+        if environment.get("BORSUK_BENCH_URI") != base_receipt.get("index_uri"):
+            raise ValueError("mutation plan does not originate from its immutable base")
+        environment["BORSUK_BENCH_URI"] = clone["clone_index_uri"]
+        if (
+            environment.get("BORSUK_BENCH_BUILD_INDEX") != "0"
+            or environment.get("BORSUK_BENCH_READ_ONLY") != "0"
+            or environment.get("BORSUK_BENCH_RECALL_ONLY") != "0"
+        ):
+            raise ValueError("mutation runtime flags are invalid")
+    authorized["base_index_receipt_sha256"] = receipt_document_sha256(base_receipt)
+    authorized["clone_receipt_sha256"] = clone["receipt_sha256"]
     return authorized
 
 

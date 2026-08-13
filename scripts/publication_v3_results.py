@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import re
 
 try:
     from scripts.publication_v3_protocol import canonical_json_bytes
 except ModuleNotFoundError:
     from publication_v3_protocol import canonical_json_bytes
 
-OBJECT_FIELDS = frozenset({"role", "path", "format", "bytes", "rows", "checksum"})
+OBJECT_FIELDS = frozenset({"role", "path", "format", "bytes", "rows", "checksum", "etag"})
+OBJECT_ETAG = re.compile(r'"[0-9a-f]{32}(?:-[1-9][0-9]*)?"')
 OBJECT_ROLES = frozenset({"data-bundle", "query-page", "directory", "control"})
 FORMATS = {
     "data-bundle": frozenset({"parquet", "arrow-ipc"}),
@@ -165,6 +167,8 @@ def validate_object_roster(
         if isinstance(rows, bool) or not isinstance(rows, int) or rows < 0:
             raise ValueError("object rows must be a nonnegative integer")
         _checksum(item["checksum"])
+        if OBJECT_ETAG.fullmatch(str(item["etag"])) is None:
+            raise ValueError("object ETag is invalid")
         cap = MAX_CONTROL_OBJECT_BYTES if role == "control" else MAX_DATA_OBJECT_BYTES
         if byte_count > cap:
             raise ValueError("object exceeds its format byte cap")

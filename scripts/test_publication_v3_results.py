@@ -26,6 +26,7 @@ def data_object(index: int, rows: int, byte_count: int = 64 * 1024 * 1024) -> di
         "bytes": byte_count,
         "rows": rows,
         "checksum": f"{index + 1:064x}",
+        "etag": f'"{index + 1:032x}-2"',
     }
 
 
@@ -37,6 +38,7 @@ def control_object(index: int) -> dict[str, object]:
         "bytes": 1024,
         "rows": 0,
         "checksum": f"{index + 1000:064x}",
+        "etag": f'"{index + 1000:032x}"',
     }
 
 
@@ -282,6 +284,7 @@ class PublicationV3ResultTests(unittest.TestCase):
                     "bytes": 4096,
                     "rows": 0,
                     "checksum": f"{index + 2000:064x}",
+                    "etag": f'"{index + 2000:032x}"',
                 }
             )
         summary = validate_object_roster(roster, logical_rows=3_633)

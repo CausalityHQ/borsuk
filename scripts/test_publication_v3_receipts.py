@@ -35,6 +35,7 @@ def data_roster(cell: dict[str, object]) -> list[dict[str, object]]:
             "bytes": 64 * 1024 * 1024,
             "rows": rows,
             "checksum": "1" * 64,
+            "etag": '"11111111111111111111111111111111-2"',
         },
         {
             "role": "directory",
@@ -43,6 +44,7 @@ def data_roster(cell: dict[str, object]) -> list[dict[str, object]]:
             "bytes": 4096,
             "rows": 0,
             "checksum": "2" * 64,
+            "etag": '"22222222222222222222222222222222"',
         },
     ]
 
@@ -123,15 +125,24 @@ class PublicationV3ReceiptTests(unittest.TestCase):
         self.assertNotIn("object_roster", receipt)
         self.assertLess(len(payload), 256 * 1024)
         inventory = [
-            {key: item[key] for key in ("path", "bytes", "checksum")}
+            {key: item[key] for key in ("path", "bytes", "checksum", "etag")}
             for item in roster
         ]
         reconcile_index_inventory(roster, inventory)
         for mutation in (
             inventory[:-1],
-            [*inventory, {"path": "extra", "bytes": 1, "checksum": "4" * 64}],
+            [
+                *inventory,
+                {
+                    "path": "extra",
+                    "bytes": 1,
+                    "checksum": "4" * 64,
+                    "etag": '"44444444444444444444444444444444"',
+                },
+            ],
             [{**inventory[0], "bytes": inventory[0]["bytes"] + 1}, *inventory[1:]],
             [{**inventory[0], "checksum": "4" * 64}, *inventory[1:]],
+            [{**inventory[0], "etag": '"44444444444444444444444444444444"'}, *inventory[1:]],
         ):
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 reconcile_index_inventory(roster, mutation)

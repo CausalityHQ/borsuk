@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.publication_v3_clones import build_clone_receipt
 from scripts.publication_v3_protocol import (
     build_schedule_document,
     canonical_json_bytes,
@@ -12,6 +13,7 @@ from scripts.publication_v3_receipts import build_index_receipt, receipt_documen
 from scripts.publication_v3_results import validate_cell_result
 from scripts.run_publication_v3_cell import (
     PRODUCTION_BUILD_FIELDS,
+    authorize_publication_mutation_runtime,
     authorize_publication_runtime,
     build_execution_plan,
     build_publication_report,
@@ -102,6 +104,78 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 dataset_materialization_sha256="d" * 64,
             )
 
+    def test_lifecycle_runtime_requires_a_fresh_verified_clone_and_never_mutates_base(self) -> None:
+        cell = scheduled_cell(kind="write-update-delete-compact")
+        arm = next(arm for arm in plan_arms(cell) if arm["writers"] == 1)
+        with tempfile.TemporaryDirectory() as root:
+            plan = build_execution_plan(
+                cell,
+                arm=arm,
+                workspace=Path(root),
+                generator=Path("/bin/true"),
+                borsuk_bench=Path("/bin/true"),
+                mode="publication",
+            )
+        base = build_index_receipt(
+            cell=cell,
+            source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+            build_attempt_id="build-attempt-01",
+            builder_instance_identity="i-builder-01",
+            builder_instance_type=cell["environment_contract"]["build_workers"]["borsuk"]["instance_type"],
+            build_artifact=build_artifact(cell),
+            object_roster=data_roster(cell),
+            build_metrics=build_metrics(),
+        )
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            authorize_publication_runtime(
+                plan,
+                receipt=base,
+                cell=cell,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+            )
+        roster = data_roster(cell)
+        clone = build_clone_receipt(
+            cell=cell,
+            arm=arm,
+            attempt_id="attempt-01",
+            base_receipt=base,
+            base_roster=roster,
+            copy_inventory=[
+                {
+                    "path": item["path"],
+                    "bytes": item["bytes"],
+                    "source_etag": item["etag"],
+                    "destination_etag": f'"{index:032x}"',
+                }
+                for index, item in enumerate(roster)
+            ],
+        )
+        runtime = authorize_publication_mutation_runtime(
+            plan,
+            clone_receipt=clone,
+            base_receipt=base,
+            arm=arm,
+            attempt_id="attempt-01",
+            cell=cell,
+        )
+        environment = runtime["steps"][-1]["env"]
+        self.assertEqual(environment["BORSUK_BENCH_URI"], clone["clone_index_uri"])
+        self.assertNotEqual(environment["BORSUK_BENCH_URI"], base["index_uri"])
+        self.assertEqual(environment["BORSUK_BENCH_READ_ONLY"], "0")
+        self.assertEqual(environment["BORSUK_BENCH_WRITE_BATCH_SIZE"], "1")
+        self.assertEqual(environment["BORSUK_BENCH_LIFECYCLE_WRITERS"], "1")
+
+        with self.assertRaisesRegex(ValueError, "writers=1"):
+            authorize_publication_mutation_runtime(
+                plan,
+                clone_receipt=clone,
+                base_receipt=base,
+                arm={**arm, "writers": 8},
+                attempt_id="attempt-01",
+                cell=cell,
+            )
     def test_build_identity_and_storage_are_read_from_the_real_benchmark_artifact(self) -> None:
         cell = scheduled_cell()
         with tempfile.TemporaryDirectory() as root:
@@ -509,6 +583,25 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         cell["workload"]["factors"]["k"] = [10, 100]
         with self.assertRaisesRegex(ValueError, "k=100"):
             plan_arms(cell)
+
+    def test_lifecycle_arms_expand_every_frozen_mutation_factor(self) -> None:
+        cell = scheduled_cell(kind="write-update-delete-compact")
+        arms = plan_arms(cell)
+        self.assertEqual(len(arms), 18)
+        self.assertEqual(
+            arms[0],
+            {
+                "writers": 1,
+                "batch_size": 1,
+                "update_percent": 10,
+                "delete_percent": 10,
+                "compaction_state": "before",
+                "duration_seconds": 300,
+            },
+        )
+        self.assertEqual(arms[-1]["writers"], 32)
+        self.assertEqual(arms[-1]["batch_size"], 1024)
+        self.assertEqual(arms[-1]["compaction_state"], "after")
 
     def test_smoke_report_is_distinct_from_a_publishable_cell_result(self) -> None:
         cell = scheduled_cell()

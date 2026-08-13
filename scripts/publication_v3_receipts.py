@@ -172,20 +172,20 @@ def reconcile_index_inventory(
     object_roster: list[dict[str, object]], inventory: list[dict[str, object]]
 ) -> None:
     expected = {
-        item["path"]: (item["bytes"], item["checksum"])
+        item["path"]: (item["bytes"], item["checksum"], item["etag"])
         for item in object_roster
         if isinstance(item, dict)
     }
     observed: dict[str, tuple[object, object]] = {}
     for item in inventory:
         if not isinstance(item, dict) or frozenset(item) != frozenset(
-            {"path", "bytes", "checksum"}
+            {"path", "bytes", "checksum", "etag"}
         ):
             raise ValueError("index inventory fields differ")
         path = str(item["path"])
         if path in observed:
             raise ValueError("index inventory paths must be unique")
-        observed[path] = (item["bytes"], item["checksum"])
+        observed[path] = (item["bytes"], item["checksum"], item["etag"])
     if observed != expected:
         raise ValueError("index inventory differs from its immutable receipt")
 
