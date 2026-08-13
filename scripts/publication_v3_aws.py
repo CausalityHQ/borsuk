@@ -113,7 +113,13 @@ def staging_jobs(
 def _s3_parts(uri: str) -> tuple[str, str]:
     parsed = urlparse(uri)
     key = parsed.path.lstrip("/")
-    if parsed.scheme != "s3" or not parsed.netloc or not key or parsed.query or parsed.fragment:
+    if (
+        parsed.scheme != "s3"
+        or not parsed.netloc
+        or not key
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ValueError("worker input must be a canonical S3 URI")
     return parsed.netloc, key
 
@@ -131,14 +137,14 @@ def build_staging_worker_script(
 
     normalized = validate_manifest(manifest)
     expected = {
-        item.dataset_id: item
-        for item in staging_jobs(normalized, attempt=job.attempt)
+        item.dataset_id: item for item in staging_jobs(normalized, attempt=job.attempt)
     }
     if expected.get(job.dataset_id) != job:
         raise ValueError("staging worker job differs from the manifest")
-    if HEX_64.fullmatch(source_archive_sha256) is None or HEX_64.fullmatch(
-        manifest_sha256
-    ) is None:
+    if (
+        HEX_64.fullmatch(source_archive_sha256) is None
+        or HEX_64.fullmatch(manifest_sha256) is None
+    ):
         raise ValueError("worker source checksums must be lowercase SHA-256")
     source_bucket, _ = _s3_parts(source_uri)
     manifest_bucket, _ = _s3_parts(manifest_uri)
@@ -167,8 +173,8 @@ def build_staging_worker_script(
     quoted = {key: shlex.quote(value) for key, value in values.items()}
     return f"""set -euo pipefail
 export AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=12 PYTHONDONTWRITEBYTECODE=1
-region={quoted['region']}; bucket={quoted['bucket']}
-failure_key={quoted['failure_key']}; diagnostic_key={quoted['diagnostic_key']}
+region={quoted["region"]}; bucket={quoted["bucket"]}
+failure_key={quoted["failure_key"]}; diagnostic_key={quoted["diagnostic_key"]}
 work=/var/lib/borsuk-publication-v3/{job.dataset_id}-a{job.attempt:04d}
 mkdir -p "$work/source" "$work/dataset"
 phase=bootstrap
@@ -177,7 +183,7 @@ failed() {{
   status=$?
   if [[ "$status" -ne 0 ]]; then
     aws --region "$region" s3api put-object --bucket "$bucket" --key "$diagnostic_key" --body "$work/worker.log" --content-type text/plain --server-side-encryption AES256 --if-none-match '*' >/dev/null 2>&1 || true
-    printf '{{"schema_version":1,"dataset_id":"%s","attempt":%s,"exit_code":%s,"phase":"%s","diagnostic_uri":"s3://%s/%s"}}\n' {quoted['dataset']} {quoted['attempt']} "$status" "$phase" "$bucket" "$diagnostic_key" >"$work/failure.json"
+    printf '{{"schema_version":1,"dataset_id":"%s","attempt":%s,"exit_code":%s,"phase":"%s","diagnostic_uri":"s3://%s/%s"}}\n' {quoted["dataset"]} {quoted["attempt"]} "$status" "$phase" "$bucket" "$diagnostic_key" >"$work/failure.json"
     aws --region "$region" s3api put-object --bucket "$bucket" --key "$failure_key" --body "$work/failure.json" --content-type application/json --server-side-encryption AES256 --if-none-match '*' >/dev/null 2>&1 || true
   fi
   exit "$status"
@@ -186,10 +192,10 @@ trap failed EXIT
 phase=identity; aws sts get-caller-identity
 phase=python-runtime; dnf install -y python3.12 python3.12-pip
 phase=source-fetch
-aws --region "$region" s3 cp {quoted['source_uri']} "$work/source.tar.gz" --only-show-errors
-printf '%s  %s\n' {quoted['source_sha']} "$work/source.tar.gz" | sha256sum -c -
-aws --region "$region" s3 cp {quoted['manifest_uri']} "$work/manifest.json" --only-show-errors
-printf '%s  %s\n' {quoted['manifest_sha']} "$work/manifest.json" | sha256sum -c -
+aws --region "$region" s3 cp {quoted["source_uri"]} "$work/source.tar.gz" --only-show-errors
+printf '%s  %s\n' {quoted["source_sha"]} "$work/source.tar.gz" | sha256sum -c -
+aws --region "$region" s3 cp {quoted["manifest_uri"]} "$work/manifest.json" --only-show-errors
+printf '%s  %s\n' {quoted["manifest_sha"]} "$work/manifest.json" | sha256sum -c -
 phase=extract; tar -xzf "$work/source.tar.gz" -C "$work/source"
 phase=python-env; python3.12 --version; python3.12 -m venv "$work/venv"
 phase=dependencies; "$work/venv/bin/pip" install --disable-pip-version-check --no-cache-dir -r "$work/source/scripts/requirements-format-bench.txt"
@@ -198,7 +204,7 @@ token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http:/
 instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 az=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/placement/availability-zone)
 phase=promotion; cd "$work/source"
-"$work/venv/bin/python" scripts/promote_publication_v3_dataset.py --manifest "$work/manifest.json" --dataset {quoted['dataset']} --attempt {quoted['attempt']} --work-root "$work/dataset" --source-archive-sha256 {quoted['source_sha']} --instance-id "$instance_id" --instance-type {quoted['instance_type']} --availability-zone "$az" --upload-workers 16 >"$work/receipt.json"
+"$work/venv/bin/python" scripts/promote_publication_v3_dataset.py --manifest "$work/manifest.json" --dataset {quoted["dataset"]} --attempt {quoted["attempt"]} --work-root "$work/dataset" --source-archive-sha256 {quoted["source_sha"]} --instance-id "$instance_id" --instance-type {quoted["instance_type"]} --availability-zone "$az" --upload-workers 16 >"$work/receipt.json"
 phase=complete
 """
 
@@ -218,7 +224,9 @@ def _resource_contract(
         storage = environment["build_storage"]
     elif role == "staging":
         if system != "borsuk":
-            raise ValueError("dataset staging uses the single borsuk build-worker profile")
+            raise ValueError(
+                "dataset staging uses the single borsuk build-worker profile"
+            )
         resources = environment["build_workers"]["borsuk"]
         storage = environment["build_storage"]
     else:
@@ -280,7 +288,9 @@ def build_spot_launch_request(
     )
     if not instance_profile_arn.startswith(expected_profile_prefix):
         raise ValueError("instance profile ARN differs from the manifest AWS account")
-    budget_field = "max_cell_seconds" if role == "runtime" else "max_index_build_seconds"
+    budget_field = (
+        "max_cell_seconds" if role == "runtime" else "max_index_build_seconds"
+    )
     maximum_seconds = int(normalized["budget_contract"][budget_field])
     if max_seconds <= 0 or max_seconds > maximum_seconds:
         raise ValueError("worker timeout exceeds the manifest budget")
@@ -312,6 +322,22 @@ timeout --signal=TERM --kill-after=60 {max_seconds} /bin/bash /var/lib/borsuk-pu
     ):
         if not value:
             raise ValueError(f"{label} must be nonempty")
+    volume = {
+        "DeleteOnTermination": True,
+        "Encrypted": True,
+        "VolumeSize": storage["volume_size_gib"],
+        "VolumeType": storage["volume_type"],
+        "Iops": storage["iops"],
+        "Throughput": storage["throughput_mib_s"],
+    }
+    block_devices = [
+        {
+            "DeviceName": "/dev/xvda",
+            "Ebs": {**volume, "VolumeSize": 16} if role == "runtime" else volume,
+        }
+    ]
+    if role == "runtime":
+        block_devices.append({"DeviceName": "/dev/sdf", "Ebs": volume})
     return {
         "ImageId": image_id,
         "InstanceType": resources["instance_type"],
@@ -338,19 +364,7 @@ timeout --signal=TERM --kill-after=60 {max_seconds} /bin/bash /var/lib/borsuk-pu
             "HttpTokens": "required",
             "HttpPutResponseHopLimit": 1,
         },
-        "BlockDeviceMappings": [
-            {
-                "DeviceName": "/dev/xvda",
-                "Ebs": {
-                    "DeleteOnTermination": True,
-                    "Encrypted": True,
-                    "VolumeSize": storage["volume_size_gib"],
-                    "VolumeType": storage["volume_type"],
-                    "Iops": storage["iops"],
-                    "Throughput": storage["throughput_mib_s"],
-                },
-            }
-        ],
+        "BlockDeviceMappings": block_devices,
         "TagSpecifications": [
             {
                 "ResourceType": resource_type,
@@ -373,7 +387,9 @@ def classify_attempt(observation: AttemptObservation) -> AttemptDecision:
         "terminated",
     }
     if observation.instance_state not in known_states:
-        raise ValueError(f"unrecognized EC2 instance state: {observation.instance_state}")
+        raise ValueError(
+            f"unrecognized EC2 instance state: {observation.instance_state}"
+        )
     markers = set(observation.terminal_markers)
     unknown = markers - KNOWN_MARKERS
     if unknown:
@@ -388,7 +404,12 @@ def classify_attempt(observation: AttemptObservation) -> AttemptDecision:
         return AttemptDecision("terminate-failure", True)
     if observation.instance_state in {"terminated", "stopped"}:
         return AttemptDecision("retry-fresh-attempt", True)
-    if observation.instance_state in {"pending", "running", "stopping", "shutting-down"}:
+    if observation.instance_state in {
+        "pending",
+        "running",
+        "stopping",
+        "shutting-down",
+    }:
         return AttemptDecision("monitor", False)
     raise AssertionError("validated EC2 instance state was not classified")
 
@@ -405,8 +426,7 @@ def reconcile_staging_attempt(
     """Plan one idempotent staging action from authenticated terminal state."""
 
     expected = {
-        item.dataset_id: item
-        for item in staging_jobs(manifest, attempt=job.attempt)
+        item.dataset_id: item for item in staging_jobs(manifest, attempt=job.attempt)
     }
     if expected.get(job.dataset_id) != job:
         raise ValueError("reconciled staging job differs from the manifest")
@@ -611,9 +631,7 @@ def build_staging_receipt(
         canonical_json_bytes(content_identity)
     ).hexdigest()
     dataset = next(
-        item
-        for item in normalized_manifest["datasets"]
-        if item["id"] == job.dataset_id
+        item for item in normalized_manifest["datasets"] if item["id"] == job.dataset_id
     )
     required_provenance = {
         "schema_version",
@@ -633,9 +651,14 @@ def build_staging_receipt(
         or source_provenance["dataset"] != job.dataset_id
         or source_provenance["source"] != dataset["source"]["expected_source"]
         or source_provenance["materialization_sha256"] != dataset_content_sha256
-        or any(HEX_64.fullmatch(str(source_provenance[field])) is None for field in digest_fields)
+        or any(
+            HEX_64.fullmatch(str(source_provenance[field])) is None
+            for field in digest_fields
+        )
     ):
-        raise ValueError("source provenance differs from the staged dataset or manifest")
+        raise ValueError(
+            "source provenance differs from the staged dataset or manifest"
+        )
     return {
         "schema_version": 1,
         "campaign_id": normalized_manifest["campaign_id"],
@@ -698,10 +721,7 @@ def validate_staging_receipt(
     attempt = value["attempt"]
     if not isinstance(attempt, int) or isinstance(attempt, bool):
         raise ValueError("staging receipt attempt is invalid")
-    jobs = {
-        item.dataset_id: item
-        for item in staging_jobs(manifest, attempt=attempt)
-    }
+    jobs = {item.dataset_id: item for item in staging_jobs(manifest, attempt=attempt)}
     job = jobs.get(str(value["dataset_id"]))
     if job is None:
         raise ValueError("staging receipt dataset is not in the manifest")
@@ -760,9 +780,7 @@ def _staging_plan(manifest: dict[str, object]) -> dict[str, object]:
     return {
         "schema_version": 1,
         "campaign_id": normalized["campaign_id"],
-        "manifest_sha256": hashlib.sha256(
-            canonical_json_bytes(normalized)
-        ).hexdigest(),
+        "manifest_sha256": hashlib.sha256(canonical_json_bytes(normalized)).hexdigest(),
         "job_count": len(jobs),
         "jobs": [
             {
@@ -821,8 +839,7 @@ def main() -> int:
         return 0
     if args.operation == "reconcile-staging":
         jobs = {
-            job.dataset_id: job
-            for job in staging_jobs(manifest, attempt=args.attempt)
+            job.dataset_id: job for job in staging_jobs(manifest, attempt=args.attempt)
         }
         job = jobs.get(args.dataset)
         if job is None:

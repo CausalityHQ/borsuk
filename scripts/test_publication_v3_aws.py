@@ -99,7 +99,12 @@ class PublicationV3AwsTests(unittest.TestCase):
             user_data.index("export HOME=/root"),
             user_data.index("/bin/bash /var/lib/borsuk-publication-worker.sh"),
         )
-        volume = request["BlockDeviceMappings"][0]["Ebs"]
+        self.assertEqual(len(request["BlockDeviceMappings"]), 2)
+        root, cache = request["BlockDeviceMappings"]
+        self.assertEqual(root["DeviceName"], "/dev/xvda")
+        self.assertEqual(root["Ebs"]["VolumeSize"], 16)
+        self.assertEqual(cache["DeviceName"], "/dev/sdf")
+        volume = cache["Ebs"]
         self.assertEqual(volume["VolumeSize"], 32)
         self.assertEqual(volume["VolumeType"], "gp3")
         self.assertEqual(volume["Iops"], 3000)
