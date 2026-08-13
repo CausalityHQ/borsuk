@@ -75,10 +75,14 @@ class LaunchAwsPublicationV3Tests(unittest.TestCase):
                 reports.append(json.loads(completed.stdout))
             self.assertEqual(reports[0], reports[1])
             self.assertFalse(reports[0]["paid_ready"])
-            self.assertEqual(reports[0]["unstaged_datasets"], 12)
-            self.assertEqual(reports[0]["staging_jobs"], 12)
+            self.assertEqual(reports[0]["unstaged_datasets"], 11)
+            self.assertEqual(reports[0]["staging_jobs"], 11)
             self.assertRegex(reports[0]["staging_plan_sha256"], r"^[0-9a-f]{64}$")
-            self.assertEqual(reports[0]["staging_plan"]["job_count"], 12)
+            self.assertEqual(reports[0]["staging_plan"]["job_count"], 11)
+            self.assertNotIn(
+                "sift-128",
+                {job["dataset_id"] for job in reports[0]["staging_plan"]["jobs"]},
+            )
             self.assertEqual(
                 reports[0]["staging_plan_sha256"],
                 hashlib.sha256(

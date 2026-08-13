@@ -24,14 +24,24 @@ MANIFEST = ROOT / "docs/research/publication-v3-manifest.json"
 class PublicationV3AwsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        sift = next(
+            item for item in self.manifest["datasets"] if item["id"] == "sift-128"
+        )
+        sift["source"] = {
+            "state": "unstaged",
+            "expected_source": "https://ann-benchmarks.com/sift-128-euclidean.hdf5",
+            "license": "upstream-dataset-license",
+        }
 
-    def test_staging_jobs_cover_only_external_datasets_with_exact_adapters(self) -> None:
+    def test_staging_jobs_cover_only_external_datasets_with_exact_adapters(
+        self,
+    ) -> None:
         jobs = staging_jobs(self.manifest)
         self.assertEqual(len(jobs), 12)
-        self.assertEqual([job.dataset_id for job in jobs], sorted(job.dataset_id for job in jobs))
-        self.assertFalse(
-            any(job.dataset_id.startswith("synthetic-") for job in jobs)
+        self.assertEqual(
+            [job.dataset_id for job in jobs], sorted(job.dataset_id for job in jobs)
         )
+        self.assertFalse(any(job.dataset_id.startswith("synthetic-") for job in jobs))
         by_id = {job.dataset_id: job for job in jobs}
         self.assertEqual(by_id["deep-image-96"].adapter, "ann-benchmarks")
         self.assertEqual(by_id["laion-100m-768"].adapter, "vdbbench")
@@ -46,9 +56,7 @@ class PublicationV3AwsTests(unittest.TestCase):
             self.assertTrue(job.failure_uri.endswith("/STAGING_FAILED.json"))
         retries = staging_jobs(self.manifest, attempt=2)
         self.assertTrue(all(job.attempt == 2 for job in retries))
-        self.assertTrue(
-            all("/attempts/0002/" in job.output_uri for job in retries)
-        )
+        self.assertTrue(all("/attempts/0002/" in job.output_uri for job in retries))
 
     def test_launch_request_is_one_time_spot_hardened_and_role_sized(self) -> None:
         request = build_spot_launch_request(
@@ -129,7 +137,9 @@ class PublicationV3AwsTests(unittest.TestCase):
                 max_seconds=7200,
             )
 
-    def test_attempt_classification_uses_only_terminal_markers_and_instance_state(self) -> None:
+    def test_attempt_classification_uses_only_terminal_markers_and_instance_state(
+        self,
+    ) -> None:
         success = classify_attempt(
             AttemptObservation(
                 instance_state="running",
@@ -173,7 +183,9 @@ class PublicationV3AwsTests(unittest.TestCase):
                 )
             )
 
-    def test_plan_staging_cli_is_canonical_and_contains_no_aws_side_effect(self) -> None:
+    def test_plan_staging_cli_is_canonical_and_contains_no_aws_side_effect(
+        self,
+    ) -> None:
         command = [
             sys.executable,
             "scripts/publication_v3_aws.py",
@@ -188,8 +200,9 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertEqual(value["schema_version"], 1)
         self.assertEqual(value["campaign_id"], "publication-v3-20260812")
         self.assertRegex(value["manifest_sha256"], r"^[0-9a-f]{64}$")
-        self.assertEqual(value["job_count"], 12)
-        self.assertEqual(len(value["jobs"]), 12)
+        self.assertEqual(value["job_count"], 11)
+        self.assertEqual(len(value["jobs"]), 11)
+        self.assertNotIn("sift-128", {job["dataset_id"] for job in value["jobs"]})
         self.assertNotIn("instance_id", first.stdout)
 
     def test_reconcile_staging_cli_emits_a_fresh_attempt_without_aws(self) -> None:
@@ -199,7 +212,7 @@ class PublicationV3AwsTests(unittest.TestCase):
             "reconcile-staging",
             str(MANIFEST),
             "--dataset",
-            "sift-128",
+            "gist-960",
             "--attempt",
             "2",
             "--instance-id",
@@ -215,10 +228,14 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertEqual(value["action"], "retry-fresh-attempt")
         self.assertFalse(value["terminate_instance"])
         self.assertEqual(value["next_job"]["attempt"], 3)
-        self.assertEqual(value["next_job"]["dataset_id"], "sift-128")
+        self.assertEqual(value["next_job"]["dataset_id"], "gist-960")
 
-    def test_staging_receipt_rejects_single_object_and_attests_spot_inventory(self) -> None:
-        job = next(job for job in staging_jobs(self.manifest) if job.dataset_id == "sift-128")
+    def test_staging_receipt_rejects_single_object_and_attests_spot_inventory(
+        self,
+    ) -> None:
+        job = next(
+            job for job in staging_jobs(self.manifest) if job.dataset_id == "sift-128"
+        )
         common = {
             "source_archive_sha256": "a" * 64,
             "source_provenance": {
@@ -320,8 +337,14 @@ class PublicationV3AwsTests(unittest.TestCase):
                 )
             )
 
-    def test_staging_worker_uses_frozen_inputs_python312_and_terminal_diagnostics(self) -> None:
-        job = next(job for job in staging_jobs(self.manifest, attempt=4) if job.dataset_id == "sift-128")
+    def test_staging_worker_uses_frozen_inputs_python312_and_terminal_diagnostics(
+        self,
+    ) -> None:
+        job = next(
+            job
+            for job in staging_jobs(self.manifest, attempt=4)
+            if job.dataset_id == "sift-128"
+        )
         script = build_staging_worker_script(
             self.manifest,
             job,
@@ -343,7 +366,9 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertNotIn("python3 -m venv", script)
 
     def test_staging_receipt_roundtrip_verifier_rejects_substitution(self) -> None:
-        job = next(job for job in staging_jobs(self.manifest) if job.dataset_id == "sift-128")
+        job = next(
+            job for job in staging_jobs(self.manifest) if job.dataset_id == "sift-128"
+        )
         objects = tuple(
             {
                 "role": role,
@@ -396,7 +421,11 @@ class PublicationV3AwsTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            next(dataset for dataset in promoted["datasets"] if dataset["id"] == "gist-960")["source"]["state"],
+            next(
+                dataset
+                for dataset in promoted["datasets"]
+                if dataset["id"] == "gist-960"
+            )["source"]["state"],
             "unstaged",
         )
         with self.assertRaisesRegex(ValueError, "receipt"):

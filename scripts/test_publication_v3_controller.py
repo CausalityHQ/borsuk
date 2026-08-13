@@ -18,6 +18,17 @@ MANIFEST = (
 )
 
 
+def unstaged_sift_manifest() -> dict[str, object]:
+    manifest = json.loads(MANIFEST.read_text())
+    sift = next(item for item in manifest["datasets"] if item["id"] == "sift-128")
+    sift["source"] = {
+        "state": "unstaged",
+        "expected_source": "https://ann-benchmarks.com/sift-128-euclidean.hdf5",
+        "license": "upstream-dataset-license",
+    }
+    return manifest
+
+
 def receipt_for(manifest: dict[str, object], attempt: int) -> dict[str, object]:
     job = next(
         j for j in staging_jobs(manifest, attempt=attempt) if j.dataset_id == "sift-128"
@@ -129,7 +140,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertIn("{stage}", completed.stdout)
 
     def test_stale_completed_receipt_advances_to_fresh_spot_attempt(self) -> None:
-        manifest = json.loads(MANIFEST.read_text())
+        manifest = unstaged_sift_manifest()
         aws = FakeAws(receipt_for(manifest, 4))
         prefix = "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812"
         result = stage_dataset(
@@ -156,7 +167,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(aws.terminated, ["i-0123456789abcdef0"])
 
     def test_corrupt_terminal_receipt_fails_closed_instead_of_advancing(self) -> None:
-        manifest = json.loads(MANIFEST.read_text())
+        manifest = unstaged_sift_manifest()
         aws = FakeAws(receipt_for(manifest, 4))
         aws.terminal_markers = lambda _job: ("STAGING_COMPLETE.json",)
         aws.read_receipt = lambda _job: (_ for _ in ()).throw(
@@ -188,7 +199,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(aws.launched, [])
 
     def test_terminal_receipt_is_bound_to_observed_attempt_and_source(self) -> None:
-        manifest = json.loads(MANIFEST.read_text())
+        manifest = unstaged_sift_manifest()
         prefix = "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812"
         for candidate, message in (
             (receipt_for(manifest, 4), "observed attempt"),
@@ -227,7 +238,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 )
 
     def test_valid_complete_receipt_wins_over_late_failure_marker(self) -> None:
-        manifest = json.loads(MANIFEST.read_text())
+        manifest = unstaged_sift_manifest()
         candidate = receipt_for(manifest, 1)
         aws = FakeAws(candidate)
         aws.terminal_markers = lambda _job: (
@@ -260,7 +271,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
     def test_controller_terminates_launched_or_stopped_instance_on_failure(
         self,
     ) -> None:
-        manifest = json.loads(MANIFEST.read_text())
+        manifest = unstaged_sift_manifest()
         prefix = "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812"
         launch = LaunchEnvironment(
             "ami-x",
@@ -303,7 +314,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             self.assertEqual(aws.terminated, ["i-0123456789abcdef0"])
 
     def test_aws_client_rejects_foreign_active_instance_before_reuse(self) -> None:
-        manifest = json.loads(MANIFEST.read_text())
+        manifest = unstaged_sift_manifest()
         job = next(j for j in staging_jobs(manifest) if j.dataset_id == "sift-128")
 
         def response(
