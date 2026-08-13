@@ -99,8 +99,26 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("INDEX_OBJECTS.json", script)
         self.assertIn("INDEX_INVENTORY.json", script)
         self.assertIn("BINARY_COMPLETE.json", script)
+        self.assertIn(
+            'binary="$work/source/target/release/examples/production_bench"',
+            script,
+        )
+        self.assertIn(
+            '--generator "$work/source/target/release/examples/generate_synthetic_dataset"',
+            script,
+        )
         self.assertIn("BUILD_TERMINAL_COMPLETE.json", script)
         self.assertIn("BUILD_TERMINAL_FAILED.json", script)
+        self.assertIn('"stage":"%s"', script)
+        self.assertIn('exec > >(tee -a "$work/worker.log") 2>&1', script)
+        self.assertIn("FAILURE.log", script)
+        self.assertNotIn('find "$work"', script)
+        self.assertLess(
+            script.index('put_immutable "$work/failed.json"'),
+            script.index('tail -c 65536 "$work/worker.log"'),
+        )
+        self.assertIn('tail -c 65536 "$work/worker.log" >"$work/FAILURE.log" || true', script)
+        self.assertIn("stage=build-index", script)
         self.assertLess(len(script.encode("utf-8")), 16 * 1024)
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
@@ -143,6 +161,10 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("RESULT_COMPLETE.json", script)
         self.assertIn("RUNTIME_TERMINAL_COMPLETE.json", script)
         self.assertIn("RUNTIME_TERMINAL_FAILED.json", script)
+        self.assertIn("stage=mount-cache", script)
+        self.assertIn("stage=verify-index", script)
+        self.assertIn("stage=execute-runtime", script)
+        self.assertIn("stage=publish-receipts", script)
         self.assertLess(len(script.encode("utf-8")), 16 * 1024)
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0

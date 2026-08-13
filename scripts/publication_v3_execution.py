@@ -116,6 +116,7 @@ def _common_prelude(
         work=/var/lib/borsuk-publication
         mkdir -p "$work"
         complete=0
+        stage=preflight
         put_immutable() {{
           local path=$1 uri=$2 digest checksum bucket key
           digest=$(sha256sum "$path" | awk '{{print $1}}')
@@ -130,12 +131,19 @@ def _common_prelude(
           status=$?
           trap - EXIT
           if [[ $complete -eq 0 ]]; then
-            printf '{{"schema_version":1,"status":"failed","exit_code":%d}}\n' "$status" >"$work/failed.json"
+            printf '{{"schema_version":1,"status":"failed","exit_code":%d,"stage":"%s"}}\n' "$status" "$stage" >"$work/failed.json" || true
             put_immutable "$work/failed.json" {_q(terminal_prefix + "/" + failed_marker)} || true
+            if [[ -f "$work/worker.log" ]]; then
+              tail -c 65536 "$work/worker.log" >"$work/FAILURE.log" || true
+              if [[ -s "$work/FAILURE.log" ]]; then
+                put_immutable "$work/FAILURE.log" {_q(terminal_prefix + "/FAILURE.log")} || true
+              fi
+            fi
           fi
           exit "$status"
         }}
         trap fail EXIT
+        exec > >(tee -a "$work/worker.log") 2>&1
         source_uri={_q(source_uri)}
         manifest_uri={_q(manifest_uri)}
         protocol_uri={_q(protocol_uri)}
@@ -188,15 +196,19 @@ def build_worker_script(
         dataset_step = f'aws s3 cp {_q(source["url"] + "/")} "$work/cell/dataset/" --recursive --only-show-errors'
     return prelude + textwrap.dedent(
         f"""\
+        stage=provision
         dnf install -y gcc gcc-c++ git make cmake openssl-devel python3.12 python3.12-pip xz
         python3.12 -m venv "$work/venv"
         "$work/venv/bin/pip" install -r "$work/source/scripts/requirements-format-bench.txt"
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
         source /root/.cargo/env
         cd "$work/source"
+        stage=compile
         cargo build --locked --release --example production_bench --example generate_synthetic_dataset
+        stage=stage-dataset
         mkdir -p "$work/cell/dataset"
         {dataset_step}
+        stage=preflight-index
         index_uri={_q(job.index_uri)}
         index_bucket=${{index_uri#s3://}}; index_bucket=${{index_bucket%%/*}}
         index_prefix=${{index_uri#s3://$index_bucket/}}/
@@ -208,16 +220,19 @@ def build_worker_script(
         fi
         token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
         instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
-        binary=target/release/examples/production_bench
+        stage=publish-binary
+        binary="$work/source/target/release/examples/production_bench"
         binary_sha=$(sha256sum "$binary" | awk '{{print $1}}')
         put_immutable "$binary" {_q(terminal_prefix + "/production_bench")}
         printf '{{"schema_version":1,"sha256":"%s","bytes":%s}}\n' "$binary_sha" "$(stat -c %s "$binary")" >"$work/BINARY_COMPLETE.json"
         put_immutable "$work/BINARY_COMPLETE.json" {_q(terminal_prefix + "/BINARY_COMPLETE.json")}
+        stage=build-index
         "$work/venv/bin/python" scripts/run_publication_v3_cell.py "$work/protocol.json" "$work/cell" \
           --mode build --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
           --dataset-materialization-sha256 {_q(source.get("sha256", "0" * 64))} \
           --attempt-id {_q(attempt_id)} --instance-identity "$instance_id" \
-          --generator target/release/examples/generate_synthetic_dataset --borsuk-bench "$binary"
+          --generator "$work/source/target/release/examples/generate_synthetic_dataset" --borsuk-bench "$binary"
+        stage=seal-index
         "$work/venv/bin/python" scripts/seal_publication_v3_index.py \
           --index-uri {_q(cell["index_prefix"])} --logical-rows {_q(dataset["scale"]["rows"])} \
           --logical-cells {_q(cell["index_profile"]["logical_cells"])} \
@@ -228,6 +243,7 @@ def build_worker_script(
           --dataset-materialization-sha256 {_q(source.get("sha256", "0" * 64))} \
           --attempt-id {_q(attempt_id)} --instance-identity "$instance_id" \
           --build-complete "$work/cell/BUILD_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json"
+        stage=publish-receipts
         for name in BUILD_COMPLETE.json INDEX_COMPLETE.json INDEX_OBJECTS.json INDEX_INVENTORY.json; do
           path="$work/$name"; [[ -f "$path" ]] || path="$work/cell/$name"
           put_immutable "$path" {_q(terminal_prefix)}/$name
@@ -273,9 +289,11 @@ def runtime_worker_script(
     )
     return prelude + textwrap.dedent(
         f"""\
+        stage=provision
         dnf install -y git python3.12 python3.12-pip util-linux xfsprogs
         python3.12 -m venv "$work/venv"
         "$work/venv/bin/pip" install boto3==1.34.46
+        stage=mount-cache
         root_source=$(findmnt -n -o SOURCE /)
         root_parent=$(lsblk -no PKNAME "$root_source")
         root_device=${{root_parent:+/dev/$root_parent}}
@@ -289,6 +307,7 @@ def runtime_worker_script(
         mkdir -p "$cache_mount"
         mount -o noatime "$cache_device" "$cache_mount"
         swapoff -a
+        stage=verify-index
         aws s3 cp {_q(build_prefix + "/production_bench")} "$work/production_bench" --only-show-errors
         test "$(sha256sum "$work/production_bench" | awk '{{print $1}}')" = {_q(binary_sha256)}
         chmod 700 "$work/production_bench"
@@ -304,6 +323,7 @@ def runtime_worker_script(
         done
         token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
         instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+        stage=execute-runtime
         systemd-run --quiet --wait --collect --service-type=exec -p MemoryMax=8589934592 -p MemorySwapMax=0 \
           /usr/bin/python3.12 "$work/source/scripts/run_publication_v3_cell.py" "$work/protocol.json" "$work/cell" \
           --mode runtime --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
@@ -311,6 +331,7 @@ def runtime_worker_script(
           --instance-identity "$instance_id" --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
           --index-inventory "$work/INDEX_INVENTORY.json"
+        stage=publish-receipts
         put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
         put_immutable "$work/cell/RUNTIME_ATTESTATION.json" {_q(terminal_prefix + "/RUNTIME_ATTESTATION.json")}
         printf '{{"schema_version":1,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)}}}\n' "$instance_id" >"$work/complete.json"
