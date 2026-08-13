@@ -2,6 +2,7 @@ import hashlib
 import json
 import unittest
 
+from scripts.publication_v3_attestation import runtime_attestation_sha256
 from scripts.publication_v3_protocol import (
     build_schedule_document,
     canonical_json_bytes,
@@ -9,7 +10,7 @@ from scripts.publication_v3_protocol import (
 )
 from scripts.publication_v3_receipts import build_index_receipt, receipt_document_sha256
 from scripts.publication_v3_results import validate_cell_result, validate_object_roster
-from scripts.test_publication_v3_protocol import valid_v3_manifest
+from scripts.test_publication_v3_protocol import paid_v3_manifest
 from scripts.test_publication_v3_receipts import (
     build_artifact,
     build_metrics,
@@ -63,9 +64,37 @@ def receipt_for(cell: dict[str, object]) -> dict[str, object]:
     )
 
 
+def runtime_attestation_for(
+    cell: dict[str, object], *, instance_id: str = "local-test"
+) -> dict[str, object]:
+    client = cell["environment_contract"]["runtime_clients"][cell["system"]]
+    return {
+        "schema_version": 1,
+        "cell_id": cell["cell_id"],
+        "attempt_id": "attempt-01",
+        "instance_id": instance_id,
+        "instance_type": client["instance_type"],
+        "architecture": cell["environment_contract"]["architecture"],
+        "vcpus": client["vcpus"],
+        "memory_max_bytes": client["memory_mib"] * 1024 * 1024,
+        "memory_peak_bytes": 1024 * 1024 * 1024,
+        "swap_max_bytes": 0,
+        "swap_current_bytes": 0,
+        "swap_peak_bytes": 0,
+        "oom_events": 0,
+        "oom_kill_events": 0,
+        "cache_limit_bytes": client["disk_cache_limit_mib"] * 1024 * 1024,
+        "cache_filesystem_bytes": 32 * 1024 * 1024 * 1024,
+        "cache_device": "259:1",
+        "root_device": "259:0",
+        "cache_is_mount": True,
+        "source_revision": "1" * 40,
+    }
+
+
 class PublicationV3ResultTests(unittest.TestCase):
     def test_cell_result_binds_protocol_source_quality_latency_and_resources(self) -> None:
-        manifest = validate_manifest(valid_v3_manifest())
+        manifest = validate_manifest(paid_v3_manifest())
         cell = next(
             cell
             for cell in build_schedule_document(manifest)["cells"]
@@ -73,6 +102,7 @@ class PublicationV3ResultTests(unittest.TestCase):
         )
         protocol = canonical_json_bytes(cell) + b"\n"
         receipt = receipt_for(cell)
+        attestation = runtime_attestation_for(cell)
         result = {
             "schema_version": 1,
             "status": "complete",
@@ -100,6 +130,7 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "storage_bytes_written": 0,
             },
             "index_receipt_sha256": receipt_document_sha256(receipt),
+            "runtime_attestation_sha256": runtime_attestation_sha256(attestation),
         }
         validated = validate_cell_result(
             result,
@@ -108,12 +139,14 @@ class PublicationV3ResultTests(unittest.TestCase):
             source_archive_sha256="a" * 64,
             dataset_materialization_sha256="d" * 64,
             index_receipt=receipt,
+            runtime_attestation=attestation,
         )
         self.assertEqual(validated, result)
 
         for mutation in (
             {**result, "protocol_sha256": "b" * 64},
             {**result, "source_archive_sha256": "b" * 64},
+            {**result, "instance_identity": "i-foreign-runtime"},
             {**result, "metrics": {**result["metrics"], "correctness_ppm": 949999}},
             {
                 **result,
@@ -138,10 +171,11 @@ class PublicationV3ResultTests(unittest.TestCase):
                         source_archive_sha256="a" * 64,
                         dataset_materialization_sha256="d" * 64,
                         index_receipt=receipt,
+                        runtime_attestation=attestation,
                     )
 
     def test_cell_result_rejects_missing_resource_or_storage_telemetry(self) -> None:
-        manifest = validate_manifest(valid_v3_manifest())
+        manifest = validate_manifest(paid_v3_manifest())
         cell = next(
             cell
             for cell in build_schedule_document(manifest)["cells"]
@@ -149,6 +183,7 @@ class PublicationV3ResultTests(unittest.TestCase):
         )
         protocol = canonical_json_bytes(cell) + b"\n"
         receipt = receipt_for(cell)
+        attestation = runtime_attestation_for(cell)
         base_metrics = {
             "queries": 1000,
             "correctness_ppm": 950000,
@@ -179,6 +214,7 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "arm": first_read_arm(cell),
                 "metrics": metrics,
                 "index_receipt_sha256": receipt_document_sha256(receipt),
+                "runtime_attestation_sha256": runtime_attestation_sha256(attestation),
             }
             with self.subTest(missing=missing), self.assertRaises(ValueError):
                 validate_cell_result(
@@ -188,6 +224,7 @@ class PublicationV3ResultTests(unittest.TestCase):
                     source_archive_sha256="a" * 64,
                     dataset_materialization_sha256="d" * 64,
                     index_receipt=receipt,
+                    runtime_attestation=attestation,
                 )
 
     def test_large_scale_roster_requires_multiple_bounded_data_bundles(self) -> None:

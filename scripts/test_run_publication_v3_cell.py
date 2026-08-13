@@ -32,6 +32,7 @@ from scripts.test_publication_v3_receipts import (
     build_metrics,
     data_roster,
 )
+from scripts.test_publication_v3_results import runtime_attestation_for
 
 
 def scheduled_cell(*, system: str = "borsuk", kind: str = "read-recall") -> dict[str, object]:
@@ -226,6 +227,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             object_roster=data_roster(cell),
             build_metrics=build_metrics(),
         )
+        attestation = runtime_attestation_for(
+            cell, instance_id="i-0123456789abcdef0"
+        )
         report = build_publication_report(
             cell=cell,
             arm={
@@ -258,6 +262,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             },
             runtime_write_metrics={"storage_puts": 0, "storage_bytes_written": 0},
             index_receipt=receipt,
+            runtime_attestation=attestation,
         )
         self.assertTrue(report["publishable"])
         self.assertEqual(report["result"]["arm"]["candidate_budget"], 128)
@@ -270,6 +275,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             source_archive_sha256="a" * 64,
             dataset_materialization_sha256="d" * 64,
             index_receipt=receipt,
+            runtime_attestation=attestation,
         )
         self.assertEqual(admitted, report["result"])
 
@@ -290,6 +296,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 source_archive_sha256="a" * 64,
                 dataset_materialization_sha256="d" * 64,
                 index_receipt=receipt,
+                runtime_attestation=attestation,
             )
 
     def test_borsuk_read_smoke_plan_invokes_real_generator_and_production_bench(self) -> None:

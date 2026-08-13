@@ -36,6 +36,7 @@ RESULT_FIELDS = frozenset(
         "arm",
         "metrics",
         "index_receipt_sha256",
+        "runtime_attestation_sha256",
     }
 )
 METRIC_FIELDS = frozenset(
@@ -215,6 +216,7 @@ def validate_cell_result(
     source_archive_sha256: str,
     dataset_materialization_sha256: str,
     index_receipt: dict[str, object],
+    runtime_attestation: dict[str, object],
 ) -> dict[str, object]:
     if not isinstance(value, dict) or frozenset(value) != RESULT_FIELDS:
         raise ValueError("cell result fields differ")
@@ -255,6 +257,24 @@ def validate_cell_result(
     )
     if value["index_receipt_sha256"] != receipt_document_sha256(receipt):
         raise ValueError("cell result index receipt differs from its authorized build")
+    try:
+        from scripts.publication_v3_attestation import (
+            runtime_attestation_sha256,
+            validate_runtime_attestation,
+        )
+    except ModuleNotFoundError:
+        from publication_v3_attestation import (
+            runtime_attestation_sha256,
+            validate_runtime_attestation,
+        )
+
+    attestation = validate_runtime_attestation(
+        runtime_attestation, cell=cell, attempt_id=str(value["attempt_id"])
+    )
+    if attestation["instance_id"] != value["instance_identity"]:
+        raise ValueError("cell result runtime instance differs from its attestation")
+    if value["runtime_attestation_sha256"] != runtime_attestation_sha256(attestation):
+        raise ValueError("cell result runtime attestation differs from its measured host")
 
     metrics = value["metrics"]
     if not isinstance(metrics, dict) or frozenset(metrics) != METRIC_FIELDS:

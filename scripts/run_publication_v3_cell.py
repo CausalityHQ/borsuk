@@ -15,6 +15,11 @@ import time
 from pathlib import Path
 
 try:
+    from scripts.publication_v3_attestation import (
+        collect_runtime_attestation,
+        runtime_attestation_sha256,
+        validate_runtime_attestation,
+    )
     from scripts.publication_v3_protocol import (
         build_schedule_document,
         canonical_json_bytes,
@@ -31,6 +36,11 @@ try:
     )
     from scripts.publication_v3_results import validate_cell_result
 except ModuleNotFoundError:
+    from publication_v3_attestation import (
+        collect_runtime_attestation,
+        runtime_attestation_sha256,
+        validate_runtime_attestation,
+    )
     from publication_v3_protocol import (
         build_schedule_document,
         canonical_json_bytes,
@@ -729,6 +739,7 @@ def build_publication_report(
     resource_metrics: dict[str, int],
     runtime_write_metrics: dict[str, int],
     index_receipt: dict[str, object],
+    runtime_attestation: dict[str, object],
 ) -> dict[str, object]:
     if isinstance(elapsed_ns, bool) or not isinstance(elapsed_ns, int) or elapsed_ns <= 0:
         raise ValueError("publication elapsed time must be a positive integer")
@@ -794,6 +805,9 @@ def build_publication_report(
             ),
         },
         "index_receipt_sha256": receipt_document_sha256(index_receipt),
+        "runtime_attestation_sha256": runtime_attestation_sha256(
+            runtime_attestation
+        ),
     }
     validated = validate_cell_result(
         result,
@@ -802,6 +816,7 @@ def build_publication_report(
         source_archive_sha256=source_archive_sha256,
         dataset_materialization_sha256=dataset_materialization_sha256,
         index_receipt=index_receipt,
+        runtime_attestation=runtime_attestation,
     )
     return {"publishable": True, "result": validated}
 
@@ -973,6 +988,19 @@ def main() -> int:
             dataset_materialization_sha256=str(args.dataset_materialization_sha256),
         )
         authorized_plan = {**plan, "runtime": authorized_runtime}
+        source_root = Path(__file__).resolve().parent.parent
+        preflight = validate_runtime_attestation(
+            collect_runtime_attestation(
+                cell=cell,
+                attempt_id=str(args.attempt_id),
+                runtime=authorized_runtime,
+                source_root=source_root,
+            ),
+            cell=cell,
+            attempt_id=str(args.attempt_id),
+        )
+        if preflight["instance_id"] != args.instance_identity:
+            raise ValueError("runtime EC2 identity differs from its scheduled instance")
         output, resources, elapsed_ns = execute_publication_phase(
             authorized_plan, "runtime"
         )
@@ -988,6 +1016,19 @@ def main() -> int:
             expected_queries=int(plan["effective_queries"]),
         )
         runtime_writes = summarize_runtime_write_trace(output / "storage-access.csv")
+        runtime_attestation = validate_runtime_attestation(
+            collect_runtime_attestation(
+                cell=cell,
+                attempt_id=str(args.attempt_id),
+                runtime=authorized_runtime,
+                source_root=source_root,
+            ),
+            cell=cell,
+            attempt_id=str(args.attempt_id),
+        )
+        (args.workspace / "RUNTIME_ATTESTATION.json").write_bytes(
+            canonical_json_bytes(runtime_attestation) + b"\n"
+        )
         report = build_publication_report(
             cell=cell,
             arm=arm,
@@ -1001,6 +1042,7 @@ def main() -> int:
             resource_metrics=resources,
             runtime_write_metrics=runtime_writes,
             index_receipt=receipt,
+            runtime_attestation=runtime_attestation,
         )
         destination = args.workspace / "RESULT_COMPLETE.json"
         destination.write_bytes(canonical_json_bytes(report) + b"\n")
