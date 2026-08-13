@@ -14,6 +14,11 @@ mod collection_control;
 mod error;
 mod float8;
 mod format;
+#[allow(
+    dead_code,
+    reason = "V14 cell-card codec is wired into publication and query in the next planned slices"
+)]
+mod global_cell_card;
 mod global_leaf;
 mod global_leaf_run;
 mod global_pq_sidecar;

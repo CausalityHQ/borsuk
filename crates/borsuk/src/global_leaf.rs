@@ -74,7 +74,7 @@ impl GlobalLeafCodeInput {
         self.len
     }
 
-    fn as_slice(&self) -> &[u8] {
+    pub(crate) fn as_slice(&self) -> &[u8] {
         &self.bytes[self.offset..self.offset + self.len]
     }
 
@@ -2932,7 +2932,7 @@ fn validate_global_leaf_row_integrity(
     Ok(())
 }
 
-fn global_leaf_exact_rows(
+pub(crate) fn global_leaf_exact_rows(
     array: &dyn Array,
     dimensions: usize,
     element_type: VectorElementType,
@@ -3263,7 +3263,7 @@ fn global_leaf_probe_batch_bytes(
     Ok(total)
 }
 
-fn global_leaf_row_integrity(id: &[u8], stamp: MutationStamp, exact: &[u8]) -> [u8; 32] {
+pub(crate) fn global_leaf_row_integrity(id: &[u8], stamp: MutationStamp, exact: &[u8]) -> [u8; 32] {
     let mut hash = blake3::Hasher::new();
     hash.update(b"borsuk.global-leaf.row.v12\0");
     hash.update(&(id.len() as u64).to_le_bytes());
@@ -3276,13 +3276,13 @@ fn global_leaf_row_integrity(id: &[u8], stamp: MutationStamp, exact: &[u8]) -> [
     *hash.finalize().as_bytes()
 }
 
-struct GlobalLeafBatchBlock {
-    offset: u64,
-    metadata_bytes: u32,
-    body_bytes: u32,
+pub(crate) struct GlobalLeafBatchBlock {
+    pub(crate) offset: u64,
+    pub(crate) metadata_bytes: u32,
+    pub(crate) body_bytes: u32,
 }
 
-fn global_leaf_batch_ranges(
+pub(crate) fn global_leaf_batch_ranges(
     bytes: &[u8],
     expected_batches: usize,
 ) -> Result<Vec<GlobalLeafBatchBlock>> {
