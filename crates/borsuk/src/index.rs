@@ -388,7 +388,15 @@ struct PendingGlobalLeafDirectoryShard {
 }
 
 const GLOBAL_LEAF_DIRECTORY_READ_WIDTH: usize = 8;
-const GLOBAL_LEAF_QUERY_WAVE_PAGES: usize = 8;
+// Query data reads are network-bound and share a process-wide 64-read gate.
+// A qualified page-32 search therefore issues its selected code ranges and
+// exact pages in one bounded network wave instead of paying four sequential
+// object-store round trips. Directory loading stays narrower because it may
+// retain decoded metadata, while these payload reads are charged to transient
+// admission and decoded/scored under the fixed CPU pool.
+const GLOBAL_LEAF_CODE_READ_WIDTH: usize = 32;
+const GLOBAL_LEAF_QUERY_WAVE_PAGES: usize = 32;
+const _: () = assert!(GLOBAL_LEAF_QUERY_WAVE_PAGES <= DEFAULT_GLOBAL_PQ_RERANK_READS);
 const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 4;
 
 fn global_leaf_code_byte_ceiling(
@@ -16522,7 +16530,7 @@ impl BorsukIndex {
         let mut pages_read = 0_usize;
         let latency_limited = for_each_bounded_io_wave_until(
             groups,
-            GLOBAL_LEAF_DIRECTORY_READ_WIDTH,
+            GLOBAL_LEAF_CODE_READ_WIDTH,
             || resident_global_latency_expired(options, started),
             |group| {
                 let stored = self
@@ -35473,6 +35481,12 @@ mod tests {
         assert!(deadline_hit);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(consumed, vec![0]);
+    }
+
+    #[test]
+    fn global_leaf_page_32_recall_budget_has_one_bounded_network_wave() {
+        assert_eq!(GLOBAL_LEAF_QUERY_WAVE_PAGES, 32);
+        assert_eq!(GLOBAL_LEAF_CODE_READ_WIDTH, 32);
     }
 
     #[test]
