@@ -583,7 +583,9 @@ pub const DEFAULT_ROUTING_PAGE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 pub struct OpenOptions {
     /// Optional local read-through cache directory.
     pub cache_dir: Option<PathBuf>,
-    /// Optional maximum local cache size in bytes. `None` leaves the cache unbounded.
+    /// Optional maximum local cache size in bytes. When a cache directory is
+    /// configured, `None` uses the safe 1 GiB default. Use `Some(u64::MAX)`
+    /// only for an explicitly measured unbounded research run.
     pub cache_max_bytes: Option<u64>,
     /// Optional runtime resident manifest/routing memory budget in bytes.
     pub ram_budget_bytes: Option<u64>,
@@ -3910,7 +3912,7 @@ impl BorsukIndex {
             uri,
             OpenOptions {
                 cache_dir,
-                cache_max_bytes: None,
+                cache_max_bytes: Some(crate::storage::DEFAULT_DISK_CACHE_BYTES),
                 ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
                 resident_routing: false,
                 segment_cache_max_bytes: None,

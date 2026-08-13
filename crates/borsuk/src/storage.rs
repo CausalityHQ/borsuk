@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex, OnceLock, Weak,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -77,6 +77,8 @@ use crate::{
 
 const MULTIPART_WRITE_THRESHOLD_BYTES: usize = 64 * 1024 * 1024;
 const MULTIPART_PART_BYTES: usize = 8 * 1024 * 1024;
+/// Safe default for convenience APIs that enable a local disk cache.
+pub(crate) const DEFAULT_DISK_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
 const RESIDENT_ROUTING_ESTIMATE_SLACK_BYTES: u64 = 4 * 1024;
 const PENDING_COLLECTION_COMMIT_HARD_BOUND: usize = 2_000;
 
@@ -829,6 +831,7 @@ pub(crate) struct Storage {
     prefix: ObjectPath,
     cache_dir: Option<PathBuf>,
     cache_max_bytes: Option<u64>,
+    cache_budget: Option<Arc<DiskCacheBudget>>,
     runtime: Arc<BlockingRuntime>,
     request_counters: Arc<RequestCounters>,
     cache_read_counters: Arc<CacheReadCounters>,
@@ -1034,6 +1037,7 @@ struct PrefetchReadContext {
     prefix: ObjectPath,
     cache_dir: Option<PathBuf>,
     cache_max_bytes: Option<u64>,
+    cache_budget: Option<Arc<DiskCacheBudget>>,
     request_counters: Arc<RequestCounters>,
     cache_read_counters: Arc<CacheReadCounters>,
     storage_trace: StorageAccessTrace,
@@ -1047,6 +1051,7 @@ impl PrefetchReadContext {
             prefix: storage.prefix.clone(),
             cache_dir: storage.cache_dir.clone(),
             cache_max_bytes: storage.cache_max_bytes,
+            cache_budget: storage.cache_budget.clone(),
             request_counters: Arc::clone(&storage.request_counters),
             cache_read_counters: Arc::clone(&storage.cache_read_counters),
             storage_trace: storage.storage_trace.clone(),
@@ -1216,7 +1221,15 @@ impl PrefetchReadContext {
         }
         let cache_key = range_cache_key(relative, range.start, range.end);
         if cacheable && let Some(bytes) = self.read_cache_file(&cache_key)? {
-            return Ok((bytes, true));
+            let expected =
+                usize::try_from(range.end.saturating_sub(range.start)).unwrap_or(usize::MAX);
+            if bytes.len() == expected {
+                return Ok((bytes, true));
+            }
+            // A corrupt cache entry is only a miss. Failure to remove it must
+            // not turn an otherwise valid backing-store read into a query
+            // failure (for example on a read-only or exhausted cache disk).
+            let _ = self.delete_cache_file(&cache_key);
         }
         let requested_bytes = range.end.saturating_sub(range.start);
         let (bytes, object_bytes) = self.read_range_uncached(relative, range).await?;
@@ -1276,10 +1289,7 @@ impl PrefetchReadContext {
                 Ok(Some(bytes))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(BorsukError::InvalidStorage(format!(
-                "failed to read cache file `{}`: {err}",
-                path.display()
-            ))),
+            Err(_) => Ok(None),
         }
     }
 
@@ -1288,8 +1298,12 @@ impl PrefetchReadContext {
             return Ok(());
         };
 
+        if let Some(budget) = &self.cache_budget {
+            let _cache_result = budget.write(&path, bytes);
+            return Ok(());
+        }
         atomic_write_cache_file(&path, bytes)?;
-        self.enforce_cache_max_bytes()
+        Ok(())
     }
 
     fn delete_cache_file(&self, relative: &str) -> Result<()> {
@@ -1298,16 +1312,27 @@ impl PrefetchReadContext {
         };
 
         match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(BorsukError::InvalidStorage(format!(
-                "failed to delete cache file `{}`: {err}",
-                path.display()
-            ))),
+            Ok(()) => {
+                if let Some(budget) = &self.cache_budget {
+                    let _ = budget.remove(&path);
+                    prune_empty_cache_parents(&path, &budget.root);
+                }
+                Ok(())
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                if let Some(budget) = &self.cache_budget {
+                    let _ = budget.remove(&path);
+                }
+                Ok(())
+            }
+            Err(_) => Ok(()),
         }
     }
 
     fn touch_cache_file(&self, path: &Path) -> Result<()> {
+        if let Some(budget) = &self.cache_budget {
+            return budget.touch(path);
+        }
         if self.cache_max_bytes.is_none() {
             return Ok(());
         }
@@ -1318,10 +1343,6 @@ impl PrefetchReadContext {
                 path.display()
             ))
         })
-    }
-
-    fn enforce_cache_max_bytes(&self) -> Result<()> {
-        enforce_cache_max_bytes(self.cache_dir.as_deref(), self.cache_max_bytes)
     }
 }
 
@@ -1376,7 +1397,7 @@ impl Storage {
     }
 
     pub(crate) fn from_uri_with_cache(uri: &str, cache_dir: Option<PathBuf>) -> Result<Self> {
-        Self::from_uri_with_cache_and_max(uri, cache_dir, None)
+        Self::from_uri_with_cache_and_max(uri, cache_dir, Some(DEFAULT_DISK_CACHE_BYTES))
     }
 
     pub(crate) fn from_uri_with_cache_and_max(
@@ -1420,6 +1441,7 @@ impl Storage {
             prefix,
             cache_dir,
             cache_max_bytes: self.cache_max_bytes,
+            cache_budget: self.cache_budget.clone(),
             runtime: Arc::clone(&self.runtime),
             request_counters: Arc::clone(&self.request_counters),
             cache_read_counters: Arc::clone(&self.cache_read_counters),
@@ -1476,6 +1498,7 @@ impl Storage {
             prefix: self.prefix.clone(),
             cache_dir: self.cache_dir.clone(),
             cache_max_bytes: self.cache_max_bytes,
+            cache_budget: self.cache_budget.clone(),
             runtime: Arc::clone(&self.runtime),
             request_counters,
             cache_read_counters,
@@ -1520,12 +1543,27 @@ impl Storage {
             get_admission,
         ));
 
+        let cache_max_bytes = cache_dir
+            .as_ref()
+            .map(|_| cache_max_bytes.unwrap_or(DEFAULT_DISK_CACHE_BYTES));
+        let cache_budget = cache_dir
+            .as_ref()
+            .zip(cache_max_bytes)
+            .map(|(root, max_bytes)| shared_disk_cache_budget(root, max_bytes))
+            .transpose()?;
+        // Inventory, LRU keys, and empty-parent pruning must all use the same
+        // resolved path even when callers supplied a symlinked cache mount.
+        let cache_dir = cache_budget
+            .as_ref()
+            .map(|budget| budget.root.clone())
+            .or(cache_dir);
         Ok(Self {
             uri,
             store,
             prefix,
             cache_dir,
             cache_max_bytes,
+            cache_budget,
             runtime,
             request_counters,
             cache_read_counters,
@@ -3141,12 +3179,19 @@ impl Storage {
 
         let range_cache_key = range_cache_key(relative, range.start, range.end);
         if cacheable && let Some(bytes) = self.read_cache_file(&range_cache_key)? {
-            self.storage_trace.record(StorageAccessEvent::cached_read(
-                relative,
-                physical_format_for_path(relative),
-                0,
-            ))?;
-            return Ok(bytes);
+            let expected =
+                usize::try_from(range.end.saturating_sub(range.start)).unwrap_or(usize::MAX);
+            if bytes.len() == expected {
+                self.storage_trace.record(StorageAccessEvent::cached_read(
+                    relative,
+                    physical_format_for_path(relative),
+                    0,
+                ))?;
+                return Ok(bytes);
+            }
+            // Cache repair is best effort; backing storage remains the source
+            // of truth even when the local cache cannot be mutated.
+            let _ = self.delete_cache_file(&range_cache_key);
         }
 
         let requested_bytes = range.end.saturating_sub(range.start);
@@ -3795,10 +3840,7 @@ impl Storage {
                 Ok(Some(bytes))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(BorsukError::InvalidStorage(format!(
-                "failed to read cache file `{}`: {err}",
-                path.display()
-            ))),
+            Err(_) => Ok(None),
         }
     }
 
@@ -3807,8 +3849,12 @@ impl Storage {
             return Ok(());
         };
 
+        if let Some(budget) = &self.cache_budget {
+            let _cache_result = budget.write(&path, bytes);
+            return Ok(());
+        }
         atomic_write_cache_file(&path, bytes)?;
-        self.enforce_cache_max_bytes()
+        Ok(())
     }
 
     fn delete_cache_file(&self, relative: &str) -> Result<()> {
@@ -3817,16 +3863,27 @@ impl Storage {
         };
 
         match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(BorsukError::InvalidStorage(format!(
-                "failed to delete cache file `{}`: {err}",
-                path.display()
-            ))),
+            Ok(()) => {
+                if let Some(budget) = &self.cache_budget {
+                    let _ = budget.remove(&path);
+                    prune_empty_cache_parents(&path, &budget.root);
+                }
+                Ok(())
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                if let Some(budget) = &self.cache_budget {
+                    let _ = budget.remove(&path);
+                }
+                Ok(())
+            }
+            Err(_) => Ok(()),
         }
     }
 
     fn touch_cache_file(&self, path: &Path) -> Result<()> {
+        if let Some(budget) = &self.cache_budget {
+            return budget.touch(path);
+        }
         if self.cache_max_bytes.is_none() {
             return Ok(());
         }
@@ -3837,10 +3894,6 @@ impl Storage {
                 path.display()
             ))
         })
-    }
-
-    fn enforce_cache_max_bytes(&self) -> Result<()> {
-        enforce_cache_max_bytes(self.cache_dir.as_deref(), self.cache_max_bytes)
     }
 }
 
@@ -3959,50 +4012,225 @@ struct CacheFile {
     modified: SystemTime,
 }
 
-fn enforce_cache_max_bytes(cache_dir: Option<&Path>, cache_max_bytes: Option<u64>) -> Result<()> {
-    let (Some(cache_dir), Some(cache_max_bytes)) = (cache_dir, cache_max_bytes) else {
-        return Ok(());
+const DISK_CACHE_ENTRY_ACCOUNTING_BYTES: u64 = 32 * 1024;
+
+#[derive(Debug, Default)]
+struct DiskCacheBudgetState {
+    initialized: bool,
+    total_bytes: u64,
+    clock: u64,
+    entries: BTreeMap<PathBuf, (u64, u64)>,
+    lru: BTreeSet<(u64, PathBuf)>,
+}
+
+#[derive(Debug)]
+struct DiskCacheBudget {
+    root: PathBuf,
+    max_bytes: u64,
+    max_entries: usize,
+    state: Mutex<DiskCacheBudgetState>,
+    inventory_scans: AtomicU64,
+}
+
+impl DiskCacheBudget {
+    fn new(root: PathBuf, max_bytes: u64) -> Self {
+        let max_entries = max_bytes
+            .div_ceil(DISK_CACHE_ENTRY_ACCOUNTING_BYTES)
+            .max(1)
+            .try_into()
+            .unwrap_or(usize::MAX);
+        Self {
+            root,
+            max_bytes,
+            max_entries,
+            state: Mutex::new(DiskCacheBudgetState::default()),
+            inventory_scans: AtomicU64::new(0),
+        }
+    }
+
+    fn initialize(&self, state: &mut DiskCacheBudgetState) -> Result<()> {
+        if state.initialized {
+            return Ok(());
+        }
+        let mut files = Vec::new();
+        // The cache is optional. Preserve whatever inventory was readable and
+        // mark the scan complete even if one entry or directory was corrupt,
+        // unreadable, or raced with external cleanup.
+        let _ = collect_cache_files(&self.root, &mut files);
+        files.sort_by(|left, right| {
+            left.modified
+                .cmp(&right.modified)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        for file in files {
+            state.clock = state.clock.saturating_add(1);
+            state.total_bytes = state.total_bytes.saturating_add(file.bytes);
+            state
+                .entries
+                .insert(file.path.clone(), (file.bytes, state.clock));
+            state.lru.insert((state.clock, file.path));
+        }
+        state.initialized = true;
+        self.inventory_scans.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn remove_entry(state: &mut DiskCacheBudgetState, path: &Path) {
+        if let Some((bytes, order)) = state.entries.remove(path) {
+            state.total_bytes = state.total_bytes.saturating_sub(bytes);
+            state.lru.remove(&(order, path.to_path_buf()));
+        }
+    }
+
+    fn write(&self, path: &Path, bytes: &[u8]) -> Result<bool> {
+        let encoded_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if encoded_bytes > self.max_bytes {
+            return Ok(false);
+        }
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        self.initialize(&mut state)?;
+        let previous = state.entries.get(path).copied();
+        Self::remove_entry(&mut state, path);
+        while state.total_bytes.saturating_add(encoded_bytes) > self.max_bytes
+            || state.entries.len() >= self.max_entries
+        {
+            let Some((evicted_order, evicted)) = state.lru.pop_first() else {
+                break;
+            };
+            let evicted_bytes = state
+                .entries
+                .remove(&evicted)
+                .map(|(entry_bytes, _)| entry_bytes)
+                .unwrap_or(0);
+            state.total_bytes = state.total_bytes.saturating_sub(evicted_bytes);
+            match fs::remove_file(&evicted) {
+                Ok(()) => prune_empty_cache_parents(&evicted, &self.root),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => {
+                    state.total_bytes = state.total_bytes.saturating_add(evicted_bytes);
+                    state
+                        .entries
+                        .insert(evicted.clone(), (evicted_bytes, evicted_order));
+                    state.lru.insert((evicted_order, evicted));
+                    return Ok(false);
+                }
+            }
+        }
+        if atomic_write_cache_file(path, bytes).is_err() {
+            if let Some((previous_bytes, previous_order)) = previous {
+                state.total_bytes = state.total_bytes.saturating_add(previous_bytes);
+                state
+                    .entries
+                    .insert(path.to_path_buf(), (previous_bytes, previous_order));
+                state.lru.insert((previous_order, path.to_path_buf()));
+            }
+            return Ok(false);
+        }
+        state.clock = state.clock.saturating_add(1);
+        let order = state.clock;
+        state.total_bytes = state.total_bytes.saturating_add(encoded_bytes);
+        state
+            .entries
+            .insert(path.to_path_buf(), (encoded_bytes, order));
+        state.lru.insert((order, path.to_path_buf()));
+        Ok(true)
+    }
+
+    fn touch(&self, path: &Path) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        self.initialize(&mut state)?;
+        let Some((bytes, previous_order)) = state.entries.get(path).copied() else {
+            return Ok(());
+        };
+        state.lru.remove(&(previous_order, path.to_path_buf()));
+        state.clock = state.clock.saturating_add(1);
+        let order = state.clock;
+        state.entries.insert(path.to_path_buf(), (bytes, order));
+        state.lru.insert((order, path.to_path_buf()));
+        Ok(())
+    }
+
+    fn remove(&self, path: &Path) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        self.initialize(&mut state)?;
+        Self::remove_entry(&mut state, path);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn inventory_scans(&self) -> u64 {
+        self.inventory_scans.load(Ordering::Relaxed)
+    }
+}
+
+fn shared_disk_cache_budget(root: &Path, max_bytes: u64) -> Result<Arc<DiskCacheBudget>> {
+    static REGISTRY: OnceLock<Mutex<BTreeMap<PathBuf, Weak<DiskCacheBudget>>>> = OnceLock::new();
+    let key = match fs::canonicalize(root) {
+        Ok(path) => path,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if root.is_absolute() {
+                root.to_path_buf()
+            } else {
+                env::current_dir()
+                    .map_err(|error| {
+                        BorsukError::InvalidStorage(format!(
+                            "failed to resolve cache directory `{}`: {error}",
+                            root.display()
+                        ))
+                    })?
+                    .join(root)
+            }
+        }
+        Err(err) => {
+            return Err(BorsukError::InvalidStorage(format!(
+                "failed to resolve cache directory `{}`: {err}",
+                root.display()
+            )));
+        }
     };
-    if !cache_dir.exists() {
-        return Ok(());
+    let mut registry = REGISTRY
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    registry.retain(|_, budget| budget.strong_count() > 0);
+    if let Some(existing) = registry.get(&key).and_then(Weak::upgrade) {
+        if existing.max_bytes != max_bytes {
+            return Err(BorsukError::InvalidStorage(format!(
+                "cache directory `{}` is already open with a {} byte budget, not {max_bytes}",
+                key.display(),
+                existing.max_bytes
+            )));
+        }
+        return Ok(existing);
     }
+    let budget = Arc::new(DiskCacheBudget::new(key.clone(), max_bytes));
+    registry.insert(key, Arc::downgrade(&budget));
+    Ok(budget)
+}
 
-    let mut files = Vec::new();
-    collect_cache_files(cache_dir, &mut files).map_err(|err| {
-        BorsukError::InvalidStorage(format!(
-            "failed to scan cache directory `{}`: {err}",
-            cache_dir.display()
-        ))
-    })?;
-    let mut total_bytes = files.iter().map(|file| file.bytes).sum::<u64>();
-    if total_bytes <= cache_max_bytes {
-        return Ok(());
-    }
-
-    files.sort_by(|left, right| {
-        left.modified
-            .cmp(&right.modified)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    for file in files {
-        if total_bytes <= cache_max_bytes {
+fn prune_empty_cache_parents(path: &Path, cache_root: &Path) {
+    let mut current = path.parent();
+    while let Some(directory) = current {
+        if directory == cache_root || !directory.starts_with(cache_root) {
             break;
         }
-        match fs::remove_file(&file.path) {
-            Ok(()) => {
-                total_bytes = total_bytes.saturating_sub(file.bytes);
+        match fs::remove_dir(directory) {
+            Ok(()) => current = directory.parent(),
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
+                ) =>
+            {
+                if err.kind() == io::ErrorKind::NotFound {
+                    current = directory.parent();
+                } else {
+                    break;
+                }
             }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "failed to evict cache file `{}`: {err}",
-                    file.path.display()
-                )));
-            }
+            Err(_) => break,
         }
     }
-
-    Ok(())
 }
 
 fn refresh_cache_file_mtime(path: &Path) -> io::Result<()> {
@@ -5984,6 +6212,241 @@ mod tests {
         assert!(files.is_empty());
     }
 
+    #[test]
+    fn disk_cache_budget_bounds_tiny_entries_without_rescanning_per_write() {
+        let cache = tempfile::tempdir().unwrap();
+        let budget = super::DiskCacheBudget::new(cache.path().to_path_buf(), 64 * 1024);
+
+        for ordinal in 0..100 {
+            let path = cache
+                .path()
+                .join(format!(".borsuk-ranges/{ordinal:04}/0-1"));
+            assert!(budget.write(&path, b"x").unwrap());
+        }
+
+        let mut files = Vec::new();
+        super::collect_cache_files(cache.path(), &mut files).unwrap();
+        assert!(
+            files.len() <= 2,
+            "tiny cache entries must have an inode budget"
+        );
+        let entry_count = fs::read_dir(cache.path().join(".borsuk-ranges"))
+            .unwrap()
+            .count();
+        assert!(
+            entry_count <= 2,
+            "eviction must prune empty range directories, found {entry_count}"
+        );
+        assert_eq!(budget.inventory_scans(), 1);
+    }
+
+    #[test]
+    fn storage_disk_cache_enforces_shared_entry_budget() {
+        let objects = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(objects.path()),
+            Some(cache.path().to_path_buf()),
+            Some(64 * 1024),
+        )
+        .unwrap();
+        let cloned = storage.clone_with_independent_request_counters();
+
+        for ordinal in 0..100 {
+            let relative = format!(".borsuk-ranges/{ordinal:04}/0-1");
+            let writer = if ordinal % 2 == 0 { &storage } else { &cloned };
+            writer.write_cache_file(&relative, b"x").unwrap();
+        }
+
+        let mut files = Vec::new();
+        super::collect_cache_files(cache.path(), &mut files).unwrap();
+        assert!(
+            files.len() <= 2,
+            "storage clones must share the inode budget"
+        );
+    }
+
+    #[test]
+    fn storage_disk_cache_evicts_least_recently_read_entry() {
+        let objects = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(objects.path()),
+            Some(cache.path().to_path_buf()),
+            Some(64 * 1024),
+        )
+        .unwrap();
+        storage.write_cache_file("cache/a", b"a").unwrap();
+        storage.write_cache_file("cache/b", b"b").unwrap();
+        assert_eq!(
+            storage.read_cache_file("cache/a").unwrap(),
+            Some(b"a".to_vec())
+        );
+
+        storage.write_cache_file("cache/c", b"c").unwrap();
+
+        assert!(cache.path().join("cache/a").exists());
+        assert!(!cache.path().join("cache/b").exists());
+        assert!(cache.path().join("cache/c").exists());
+    }
+
+    #[test]
+    fn separately_opened_storages_share_one_cache_budget() {
+        let objects = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let uri = file_uri(objects.path());
+        let first = Storage::from_uri_with_cache_and_max(
+            &uri,
+            Some(cache.path().to_path_buf()),
+            Some(64 * 1024),
+        )
+        .unwrap();
+        let second = Storage::from_uri_with_cache_and_max(
+            &uri,
+            Some(cache.path().to_path_buf()),
+            Some(64 * 1024),
+        )
+        .unwrap();
+
+        assert!(Arc::ptr_eq(
+            first.cache_budget.as_ref().unwrap(),
+            second.cache_budget.as_ref().unwrap()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_cache_uses_one_canonical_budget_path() {
+        use std::os::unix::fs::symlink;
+
+        let objects = tempfile::tempdir().unwrap();
+        let cache_parent = tempfile::tempdir().unwrap();
+        let cache_target = cache_parent.path().join("target");
+        let cache_alias = cache_parent.path().join("alias");
+        fs::create_dir(&cache_target).unwrap();
+        symlink(&cache_target, &cache_alias).unwrap();
+
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(objects.path()),
+            Some(cache_alias),
+            Some(64 * 1024),
+        )
+        .unwrap();
+
+        assert_eq!(storage.cache_dir.as_deref(), Some(cache_target.as_path()));
+        assert_eq!(storage.cache_budget.as_ref().unwrap().root, cache_target);
+    }
+
+    #[test]
+    fn failed_cache_republication_keeps_existing_entry_accounted() {
+        let cache = tempfile::tempdir().unwrap();
+        let path = cache.path().join("entry");
+        fs::write(&path, b"old").unwrap();
+        let budget = super::DiskCacheBudget::new(cache.path().to_path_buf(), 64 * 1024);
+        {
+            let mut state = budget.state.lock().unwrap();
+            budget.initialize(&mut state).unwrap();
+            assert!(state.entries.contains_key(&path));
+        }
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+
+        assert!(!budget.write(&path, b"new").unwrap());
+
+        let state = budget.state.lock().unwrap();
+        assert_eq!(state.entries.get(&path).map(|entry| entry.0), Some(3));
+        assert_eq!(state.total_bytes, 3);
+    }
+
+    #[test]
+    fn convenience_cache_constructor_is_bounded() {
+        let objects = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri_with_cache(
+            &file_uri(objects.path()),
+            Some(cache.path().to_path_buf()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            storage.cache_max_bytes,
+            Some(super::DEFAULT_DISK_CACHE_BYTES)
+        );
+        assert!(storage.cache_budget.is_some());
+    }
+
+    #[test]
+    fn truncated_cached_range_is_deleted_and_refetched() {
+        let objects = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let writer = Storage::from_uri(&file_uri(objects.path())).unwrap();
+        writer
+            .write_bytes("segments/L0/object.bin", b"0123456789")
+            .unwrap();
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(objects.path()),
+            Some(cache.path().to_path_buf()),
+            Some(64 * 1024),
+        )
+        .unwrap();
+        let cache_key = super::range_cache_key("segments/L0/object.bin", 2, 6);
+        let cache_path = cache.path().join(&cache_key);
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        fs::write(&cache_path, b"bad").unwrap();
+
+        let bytes = storage.read_range("segments/L0/object.bin", 2..6).unwrap();
+
+        assert_eq!(bytes, b"2345");
+        assert_eq!(fs::read(cache_path).unwrap(), b"2345");
+    }
+
+    #[test]
+    fn cache_publication_failure_degrades_to_backing_read() {
+        let objects = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let writer = Storage::from_uri(&file_uri(objects.path())).unwrap();
+        writer
+            .write_bytes("segments/L0/object.bin", b"0123456789")
+            .unwrap();
+        fs::write(
+            cache.path().join(".borsuk-ranges"),
+            b"blocks directory creation",
+        )
+        .unwrap();
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(objects.path()),
+            Some(cache.path().to_path_buf()),
+            Some(64 * 1024),
+        )
+        .unwrap();
+
+        let bytes = storage.read_range("segments/L0/object.bin", 2..6).unwrap();
+
+        assert_eq!(bytes, b"2345");
+    }
+
+    #[test]
+    fn cache_inventory_failure_degrades_to_backing_read() {
+        let objects = tempfile::tempdir().unwrap();
+        let cache_parent = tempfile::tempdir().unwrap();
+        let cache = cache_parent.path().join("cache-is-a-file");
+        fs::write(&cache, b"not a directory").unwrap();
+        let writer = Storage::from_uri(&file_uri(objects.path())).unwrap();
+        writer
+            .write_bytes("segments/L0/object.bin", b"0123456789")
+            .unwrap();
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(objects.path()),
+            Some(cache),
+            Some(64 * 1024),
+        )
+        .unwrap();
+
+        let bytes = storage.read_range("segments/L0/object.bin", 2..6).unwrap();
+
+        assert_eq!(bytes, b"2345");
+    }
+
     #[cfg(unix)]
     #[test]
     fn read_cache_file_keeps_valid_bytes_when_touch_refresh_fails() {
@@ -6009,7 +6472,7 @@ mod tests {
     }
 
     #[test]
-    fn touch_cache_file_refreshes_mtime_without_rewriting_contents() {
+    fn touch_cache_file_refreshes_memory_recency_without_disk_write() {
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         let storage = Storage::from_uri_with_cache_and_max(
@@ -6032,9 +6495,9 @@ mod tests {
         storage.touch_cache_file(&path).unwrap();
 
         assert_eq!(fs::read(&path).unwrap(), b"newer cache contents");
-        assert!(
-            fs::metadata(&path).unwrap().modified().unwrap() > old_modified,
-            "touching the cache file should refresh mtime"
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            old_modified
         );
     }
 
