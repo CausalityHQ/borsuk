@@ -379,6 +379,7 @@ struct PendingGlobalLeafDirectoryShard {
 }
 
 const GLOBAL_LEAF_DIRECTORY_READ_WIDTH: usize = 8;
+const GLOBAL_LEAF_QUERY_WAVE_PAGES: usize = 8;
 
 #[derive(Debug)]
 struct RoutedDecodedGlobalLeafRow {
@@ -16676,26 +16677,19 @@ impl BorsukIndex {
         let global_approximate_us =
             u64::try_from(routing_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let exact_started = Instant::now();
-        let mut initial_indices = BTreeSet::new();
-        let mut nominal_rows = 0_usize;
-        for (index, candidate) in routed.iter().enumerate() {
-            if nominal_rows >= options.k && !initial_indices.is_empty() {
-                break;
-            }
-            if initial_indices.insert(index) {
-                nominal_rows = nominal_rows.saturating_add(candidate.page.rows as usize);
-            }
-        }
-        let mut remaining = routed
+        // The ranked page prefix is the caller's bounded recall budget. Fetch
+        // the complete admitted prefix: stopping as soon as one page produces
+        // k live rows turns the budget into a no-op and destroys recall.
+        let admitted_bytes = routed
             .iter()
-            .enumerate()
-            .filter(|(index, _)| !initial_indices.contains(index))
-            .map(|(_, candidate)| candidate.clone())
-            .collect::<VecDeque<_>>();
-        let initial = initial_indices
-            .into_iter()
-            .map(|index| routed[index].clone())
-            .collect::<Vec<_>>();
+            .map(|candidate| u64::from(candidate.page.batch_bytes))
+            .sum::<u64>();
+        let _memory_permit = self
+            .read_runtime
+            .transient_admission
+            .as_ref()
+            .map(|gate| gate.acquire_owned(admitted_bytes.saturating_mul(4).max(1)));
+        let mut remaining = routed.into_iter();
         let mut fetched_pages = 0_usize;
         let mut logical_page_bytes = 0_u64;
         let mut waves = 0_usize;
@@ -16703,71 +16697,41 @@ impl BorsukIndex {
         let mut records_considered = 0_usize;
         let mut winners = BTreeMap::new();
         let mut observed_wave_latency = Duration::ZERO;
-        if !initial.is_empty() {
-            if resident_global_latency_expired(options, started) {
-                latency_limited = true;
-            } else {
-                let planned_bytes = initial
-                    .iter()
-                    .map(|candidate| u64::from(candidate.page.batch_bytes))
-                    .sum::<u64>();
-                let wave_started = Instant::now();
-                let (rows, initial_bytes) =
-                    self.fetch_global_leaf_wave(&initial, &resident_runs)?;
-                observed_wave_latency = wave_started.elapsed();
-                if initial_bytes != planned_bytes {
-                    return Err(BorsukError::InvalidStorage(
-                        "global leaf coalescing changed the logical encoded-byte budget"
-                            .to_string(),
-                    ));
-                }
-                fetched_pages = initial.len();
-                logical_page_bytes = planned_bytes;
-                waves = 1;
-                records_considered = records_considered.saturating_add(rows.len());
-                self.merge_global_leaf_rows(&mut winners, rows, mutation_states)?;
+        loop {
+            let wave = remaining
+                .by_ref()
+                .take(GLOBAL_LEAF_QUERY_WAVE_PAGES)
+                .collect::<Vec<_>>();
+            if wave.is_empty() {
+                break;
             }
-        }
-        while winners.len() < options.k && !remaining.is_empty() {
             if resident_global_latency_expired(options, started)
-                || resident_global_remaining_latency(options, started)
-                    .is_some_and(|remaining| remaining <= observed_wave_latency)
+                || (waves > 0
+                    && resident_global_remaining_latency(options, started)
+                        .is_some_and(|remaining| remaining <= observed_wave_latency))
             {
                 latency_limited = true;
                 break;
             }
-            let missing = options.k - winners.len();
-            let mut continuation = Vec::new();
-            let mut continuation_rows = 0_usize;
-            while continuation_rows < missing {
-                let Some(candidate) = remaining.pop_front() else {
-                    break;
-                };
-                continuation_rows = continuation_rows.saturating_add(candidate.page.rows as usize);
-                continuation.push(candidate);
-            }
-            let continuation_bytes = continuation
+            let planned_bytes = wave
                 .iter()
                 .map(|candidate| u64::from(candidate.page.batch_bytes))
                 .sum::<u64>();
-            if resident_global_latency_expired(options, started) {
-                latency_limited = true;
-                break;
-            }
             let wave_started = Instant::now();
-            let (rows, fetched_bytes) =
-                self.fetch_global_leaf_wave(&continuation, &resident_runs)?;
+            let (rows, fetched_bytes) = self.fetch_global_leaf_wave(&wave, &resident_runs)?;
             observed_wave_latency = observed_wave_latency.max(wave_started.elapsed());
-            if fetched_bytes != continuation_bytes {
+            if fetched_bytes != planned_bytes {
                 return Err(BorsukError::InvalidStorage(
-                    "global leaf continuation changed its logical encoded-byte budget".to_string(),
+                    "global leaf coalescing changed the logical encoded-byte budget".to_string(),
                 ));
             }
-            fetched_pages = fetched_pages.saturating_add(continuation.len());
-            logical_page_bytes = logical_page_bytes.saturating_add(continuation_bytes);
+            fetched_pages = fetched_pages.saturating_add(wave.len());
+            logical_page_bytes = logical_page_bytes.saturating_add(planned_bytes);
             records_considered = records_considered.saturating_add(rows.len());
             self.merge_global_leaf_rows(&mut winners, rows, mutation_states)?;
-            continuations = continuations.saturating_add(1);
+            if waves > 0 {
+                continuations = continuations.saturating_add(1);
+            }
             waves = waves.saturating_add(1);
         }
         latency_limited |= resident_global_latency_expired(options, started);
@@ -34515,6 +34479,62 @@ mod tests {
     }
 
     #[test]
+    fn resident_global_v12_continues_after_finding_k_live_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 128,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+        let vectors = (0..1_024)
+            .map(|row| {
+                (0..128)
+                    .map(|dimension| (((row + 1) * (dimension + 3) * 17) % 1_009) as f32 / 1_009.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        index
+            .add(
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| VectorRecord::new(format!("row-{row}"), vector.clone()))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        drop(index);
+
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &vectors[777],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v12");
+        assert!(
+            report.global_leaf_pages_read > 1,
+            "V12 stopped after its first page found k live rows instead of spending the bounded recall budget"
+        );
+    }
+
+    #[test]
     fn resident_global_v12_refuses_a_100m_mutation_overlay_before_object_reads() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
@@ -34549,7 +34569,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v12_continues_after_mvcc_suppresses_the_first_leaf() {
+    fn resident_global_v12_scores_the_bounded_page_wave_after_mvcc_suppression() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let suffix = "x".repeat(100 * 1024);
@@ -34593,10 +34613,14 @@ mod tests {
             .unwrap();
         assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v12", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
-        assert_eq!(report.global_leaf_continuations, 1, "{report:?}");
-        assert_eq!(report.global_leaf_waves, 2);
-        assert!(report.global_leaf_pages_read <= 4);
+        assert_eq!(report.global_leaf_continuations, 0, "{report:?}");
+        assert_eq!(report.global_leaf_waves, 1);
+        assert_eq!(report.global_leaf_pages_read, 4);
         assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
+        assert!(
+            report.transient_peak_bytes >= report.global_leaf_page_bytes,
+            "the admitted V12 page prefix was not charged to transient memory: {report:?}"
+        );
 
         let mut index = BorsukIndex::open(&uri).unwrap();
         index
@@ -34625,7 +34649,7 @@ mod tests {
             byte_exhausted.termination_reason,
             SearchTerminationReason::MaxBytes
         );
-        // The cap uses the prior two-page average, while physical leaf pages
+        // The cap uses the prior multi-page average, while physical leaf pages
         // may have different encoded sizes. It can therefore admit zero or one
         // complete page, but never a second page or a partial read.
         assert!(byte_exhausted.global_leaf_pages_read <= 1);
@@ -34644,8 +34668,8 @@ mod tests {
             SearchTerminationReason::MaxSegments
         );
         assert_eq!(exhausted.global_leaf_pages_read, 4);
-        assert_eq!(exhausted.global_leaf_continuations, 3);
-        assert_eq!(exhausted.global_leaf_waves, 4);
+        assert_eq!(exhausted.global_leaf_continuations, 0);
+        assert_eq!(exhausted.global_leaf_waves, 1);
     }
 
     #[test]

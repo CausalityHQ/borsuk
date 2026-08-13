@@ -35,15 +35,14 @@ const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
 const INGEST_DENSE_BATCH_BYTES: usize = 16 * 1024 * 1024;
 const INGEST_BATCH_MAX_VECTORS: usize = 16_384;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1_024;
-// On a finalized global scan index, nprobe selects global coarse cells. Each
-// selected semantic cell includes matching product-code chunks from every
-// bounded ingest checkpoint; it does not select individual physical segments.
-// Fallback leaf modes continue to interpret the same public knob as a physical
-// segment budget. In both cases the sweep is the recall-vs-I/O curve.
-const DEFAULT_NPROBE_SWEEP: &[usize] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
-// On the global PQ path this is a whole-query ADC shortlist/rerank budget, not a
-// per-physical-segment budget. The sweep varies both routing coverage and exact
-// rerank work and records both dimensions explicitly.
+// V12 persists the coarse-cell probe count in the authenticated codebook. The
+// query-time sweep controls how many ranked leaf pages may be fetched. Keep the
+// values aligned with the bounded V12 dispatcher so a benchmark can never
+// silently measure the legacy segment path.
+const DEFAULT_NPROBE_SWEEP: &[usize] = &[4, 8, 16, 32];
+// V12 currently exact-scores every row in the admitted leaf-page prefix, so the
+// legacy per-segment candidate knob is a fixed compatibility label rather than
+// a tuning dimension. Fail closed if a publication config tries to sweep it.
 const DEFAULT_RECALL_CANDIDATES: &[usize] = &[4096];
 // Explicit pq-scan defaults for cache-state and concurrency measurements. Recall
 // is recorded against the shipped ground truth in every selected serving row.
@@ -969,6 +968,25 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         serving_leaf_mode,
     )?;
     let serving_nprobe = env_usize("BORSUK_BENCH_SERVING_NPROBE", SERVING_NPROBE)?;
+    if !force_segment_path {
+        validate_v12_leaf_mode(
+            "BORSUK_BENCH_RECALL_LEAF_MODE",
+            recall_leaf_mode,
+            global_scan_codec,
+        )?;
+        if serving_mode == ServingMode::Hybrid {
+            validate_v12_leaf_mode(
+                "BORSUK_BENCH_SERVING_LEAF_MODE",
+                serving_leaf_mode,
+                global_scan_codec,
+            )?;
+        }
+        validate_v12_leaf_page_budgets(&recall_nprobes)?;
+        validate_v12_candidate_budgets(&recall_candidates)?;
+        if serving_mode == ServingMode::Hybrid && serving_nprobe != 0 {
+            validate_v12_leaf_page_budgets(&[serving_nprobe])?;
+        }
+    }
     let serving_candidates = env_usize("BORSUK_BENCH_SERVING_CANDIDATES", SERVING_CANDIDATES)?;
     let serving_prefetch_depth = env_usize(
         "BORSUK_BENCH_SERVING_PREFETCH_DEPTH",
@@ -1954,6 +1972,9 @@ fn write_recall_latency_csv(
             for (phase, summary) in
                 run_recall_cache_phases(config, dataset, index, options, preload_complete)?
             {
+                if !config.force_segment_path {
+                    validate_bounded_v12_execution(&summary)?;
+                }
                 write_query_samples(
                     &mut samples_writer,
                     config,
@@ -3682,6 +3703,50 @@ fn approximate_options(
     }
 }
 
+fn validate_v12_leaf_page_budgets(budgets: &[usize]) -> io::Result<()> {
+    for &budget in budgets {
+        if !matches!(budget, 4 | 8 | 16 | 32) {
+            return Err(invalid_input(&format!(
+                "V12 leaf-page budget must be 4, 8, 16, or 32; received {budget}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_v12_candidate_budgets(budgets: &[usize]) -> io::Result<()> {
+    if budgets != DEFAULT_RECALL_CANDIDATES {
+        return Err(invalid_input(
+            "BORSUK_BENCH_CANDIDATES does not tune V12; keep the fixed compatibility value 4096",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_v12_leaf_mode(
+    name: &str,
+    leaf_mode: LeafMode,
+    global_scan_codec: GlobalScanCodec,
+) -> io::Result<()> {
+    let expected = global_scan_codec.leaf_mode();
+    if leaf_mode != expected {
+        return Err(invalid_input(&format!(
+            "{name}={leaf_mode} cannot execute bounded V12; expected {expected} for BORSUK_BENCH_GLOBAL_SCAN_CODEC={global_scan_codec}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bounded_v12_execution(summary: &QuerySummary) -> io::Result<()> {
+    if summary.execution_engine() != "bounded-arrow-leaf-v12" {
+        return Err(invalid_input(&format!(
+            "production recall expected bounded-arrow-leaf-v12 but observed {}",
+            summary.execution_engine()
+        )));
+    }
+    Ok(())
+}
+
 fn serving_options(config: &ResolvedConfig) -> SearchOptions {
     match config.serving_mode {
         ServingMode::Exact => SearchOptions::exact(RECALL_K),
@@ -4012,24 +4077,25 @@ fn permuted_positions(count: usize, seed: u64) -> Vec<usize> {
 mod tests {
     use super::{
         BUILD_HEADER, BenchmarkCacheProfile, CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER,
-        CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
-        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, LIFECYCLE_HEADER, LeafCapability, LeafMode,
-        MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample,
-        QuerySummary, RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER,
-        WRITE_SAMPLE_HEADER, approximate_options, benchmark_row_ids, cache_coverage_cohort_size,
-        cache_coverage_enabled, dataset_metric, default_build_leaf_capability,
-        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
-        dollars_per_million_queries, ingest_batch_size, is_hot_workload_position,
-        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
-        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
-        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
-        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
-        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
-        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase, validate_build_only,
-        validate_disk_cached_network, validate_generated_id_range, validate_insert_only,
-        validate_leaf_capability_modes, validate_phase_selection, vector_row, write_batch_len,
-        write_operation_count,
+        CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy, DEFAULT_NPROBE_SWEEP,
+        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES, GlobalScanCodec,
+        LIFECYCLE_HEADER, LeafCapability, LeafMode, MUTATION_QUERY_HEADER,
+        MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary,
+        RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
+        approximate_options, benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
+        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
+        default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
+        ingest_batch_size, is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
+        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
+        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
+        parse_positive_list, parse_serving_mode, percentage_operation_count, permuted_positions,
+        preload_query_count, read_logical_cell_catalog, recall_preloads_local_snapshot,
+        recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
+        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        validate_bounded_v12_execution, validate_build_only, validate_disk_cached_network,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
+        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
+        validate_v12_leaf_page_budgets, vector_row, write_batch_len, write_operation_count,
     };
 
     #[test]
@@ -4145,6 +4211,75 @@ mod tests {
                 .contains("must contain comma-separated positive integers"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn production_v12_page_budget_sweep_is_bounded_and_rejects_legacy_nprobe_values() {
+        assert_eq!(DEFAULT_NPROBE_SWEEP, [4, 8, 16, 32]);
+        validate_v12_leaf_page_budgets(DEFAULT_NPROBE_SWEEP).unwrap();
+
+        let error = validate_v12_leaf_page_budgets(&[128])
+            .expect_err("legacy nprobe value silently selected the segment path");
+        assert!(
+            error.to_string().contains("V12 leaf-page budget")
+                && error.to_string().contains("4, 8, 16, or 32"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn production_v12_leaf_mode_mismatch_fails_before_build() {
+        validate_v12_leaf_mode(
+            "BORSUK_BENCH_RECALL_LEAF_MODE",
+            LeafMode::SrhtPqScan,
+            GlobalScanCodec::SrhtPq,
+        )
+        .unwrap();
+
+        let error = validate_v12_leaf_mode(
+            "BORSUK_BENCH_RECALL_LEAF_MODE",
+            LeafMode::Graph,
+            GlobalScanCodec::SrhtPq,
+        )
+        .expect_err("a non-V12 leaf mode survived the pre-build validation");
+        assert!(
+            error
+                .to_string()
+                .contains("BORSUK_BENCH_RECALL_LEAF_MODE=graph")
+                && error.to_string().contains("srht-pq-scan"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn production_v12_rejects_an_inert_candidate_sweep() {
+        validate_v12_candidate_budgets(DEFAULT_RECALL_CANDIDATES).unwrap();
+        let error = validate_v12_candidate_budgets(&[128, 4_096])
+            .expect_err("an inert V12 candidate sweep was accepted");
+        assert!(
+            error.to_string().contains("BORSUK_BENCH_CANDIDATES")
+                && error.to_string().contains("does not tune V12"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn production_recall_rejects_a_silent_v12_engine_fallback() {
+        let mut fallback = QuerySummary::default();
+        fallback.execution_engines.insert("srht-pq-scan".to_owned());
+        let error = validate_bounded_v12_execution(&fallback)
+            .expect_err("legacy segment execution was accepted as a V12 measurement");
+        assert!(
+            error.to_string().contains("bounded-arrow-leaf-v12")
+                && error.to_string().contains("srht-pq-scan"),
+            "{error}"
+        );
+
+        let mut bounded = QuerySummary::default();
+        bounded
+            .execution_engines
+            .insert("bounded-arrow-leaf-v12".to_owned());
+        validate_bounded_v12_execution(&bounded).unwrap();
     }
 
     #[test]
