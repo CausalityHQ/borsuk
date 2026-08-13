@@ -16927,8 +16927,12 @@ impl BorsukIndex {
                 let routed = if code_latency_limited {
                     centroid_fallback.clone()
                 } else {
-                    let mut routed =
-                        codebook.rank_pages_by_row_codes(&pq_query, coded_pages, page_budget)?;
+                    let mut routed = codebook.rank_pages_by_row_codes(
+                        &pq_query,
+                        coded_pages,
+                        page_budget,
+                        options.k,
+                    )?;
                     let mut seen = routed
                         .iter()
                         .map(|page| {
@@ -16941,6 +16945,9 @@ impl BorsukIndex {
                         })
                         .collect::<BTreeSet<_>>();
                     for page in &centroid_fallback {
+                        if routed.len() >= page_budget {
+                            break;
+                        }
                         let identity = (
                             page.run_ordinal,
                             page.page.cell_index,
@@ -16949,9 +16956,6 @@ impl BorsukIndex {
                         );
                         if seen.insert(identity) {
                             routed.push(page.clone());
-                        }
-                        if routed.len() == page_budget {
-                            break;
                         }
                     }
                     routed

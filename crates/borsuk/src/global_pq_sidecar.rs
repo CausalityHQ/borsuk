@@ -1856,9 +1856,10 @@ impl ResidentGlobalCodebook {
         query: &[f32],
         pages: impl IntoIterator<Item = RoutedGlobalLeafCodes>,
         page_budget: usize,
+        target_rows: usize,
     ) -> Result<Vec<RoutedGlobalLeafPage>> {
         let prepared = self.quantizer.prepare_query(query)?;
-        let mut ranked = pages
+        let decoded = pages
             .into_iter()
             .map(|coded| {
                 let RoutedGlobalLeafCodes { mut page, codes } = coded;
@@ -1870,22 +1871,55 @@ impl ResidentGlobalCodebook {
                 if rows == 0 || codes.len() != expected {
                     return invalid("bounded leaf page PQ codes do not match its row count");
                 }
-                page.distance = codes.chunks_exact(self.code_width).try_fold(
-                    f32::INFINITY,
-                    |nearest, code| {
+                let distances = codes
+                    .chunks_exact(self.code_width)
+                    .map(|code| {
                         let distance = self.quantizer.distance(&prepared, code)?;
                         if !distance.is_finite() {
                             return invalid("V12 row-code ranking produced a non-finite distance");
                         }
-                        Ok(nearest.min(distance))
-                    },
-                )?;
-                Ok(page)
+                        Ok(distance)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                page.distance = distances
+                    .iter()
+                    .copied()
+                    .min_by(f32::total_cmp)
+                    .unwrap_or(f32::INFINITY);
+                Ok((page, distances))
             })
             .collect::<Result<Vec<_>>>()?;
-        ranked.sort_by(|left, right| {
-            left.distance
-                .total_cmp(&right.distance)
+        let mut candidates = decoded
+            .iter()
+            .enumerate()
+            .flat_map(|(page, (_, distances))| {
+                distances
+                    .iter()
+                    .copied()
+                    .map(move |distance| (distance, page))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        let vote_limit = target_rows.max(1).saturating_mul(4).min(candidates.len());
+        let mut votes = vec![0_usize; decoded.len()];
+        for (_, page) in candidates.into_iter().take(vote_limit) {
+            votes[page] = votes[page].saturating_add(1);
+        }
+        let mut ranked = decoded
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, (page, _))| (page, votes[ordinal]))
+            .collect::<Vec<_>>();
+        let mut nearest = ranked.clone();
+        nearest.sort_by(|(left, _), (right, _)| left.distance.total_cmp(&right.distance));
+        ranked.sort_by(|(left, left_votes), (right, right_votes)| {
+            right_votes
+                .cmp(left_votes)
+                .then_with(|| left.distance.total_cmp(&right.distance))
                 .then_with(|| match (left.level, right.level) {
                     (Some(left_level), Some(right_level)) => left_level.cmp(&right_level),
                     (Some(_), None) => std::cmp::Ordering::Less,
@@ -1898,8 +1932,26 @@ impl ResidentGlobalCodebook {
                 .then_with(|| left.page.batch_offset.cmp(&right.page.batch_offset))
                 .then_with(|| left.run_ordinal.cmp(&right.run_ordinal))
         });
-        ranked.truncate(page_budget);
-        Ok(ranked)
+        let identity = |page: &RoutedGlobalLeafPage| {
+            (
+                page.run_ordinal,
+                page.page.cell_index,
+                page.page.leaf_ordinal,
+                page.page.batch_offset,
+            )
+        };
+        let nearest_quota = page_budget.div_ceil(4).min(target_rows.max(1));
+        let mut seen = BTreeSet::new();
+        let mut selected = Vec::with_capacity(page_budget);
+        for (page, _) in nearest.into_iter().take(nearest_quota).chain(ranked) {
+            if seen.insert(identity(&page)) {
+                selected.push(page);
+            }
+            if selected.len() == page_budget {
+                break;
+            }
+        }
+        Ok(selected)
     }
 
     pub(crate) fn code_bytes_per_vector(&self) -> usize {
@@ -2529,11 +2581,79 @@ mod tests {
             },
         ];
 
-        let ranked = resident.rank_pages_by_row_codes(&query, pages, 1).unwrap();
+        let ranked = resident
+            .rank_pages_by_row_codes(&query, pages, 1, 1)
+            .unwrap();
 
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].bundle_path, "misleading.arrow");
         assert!(ranked[0].distance.is_finite());
+    }
+
+    #[test]
+    fn row_code_votes_prefer_the_page_with_more_top_k_candidates() {
+        let descriptor = test_v12_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vec![0.0_f32; 64];
+        let exact = quantizer.encode(&query).unwrap();
+        let moderate_vector = vec![1.0_f32; 64];
+        let moderate = quantizer.encode(&moderate_vector).unwrap();
+        let far = quantizer.encode(&vec![20.0_f32; 64]).unwrap();
+        let mut outlier_page = leaf_page(&quantizer, &query, 7, 0);
+        outlier_page.rows = 4;
+        outlier_page.code_bytes = u32::try_from(exact.len() * 4).unwrap();
+        let mut coverage_page = leaf_page(&quantizer, &moderate_vector, 7, 1);
+        coverage_page.rows = 4;
+        coverage_page.code_bytes = u32::try_from(moderate.len() * 4).unwrap();
+        let mut distractor_page = leaf_page(&quantizer, &vec![20.0_f32; 64], 7, 2);
+        distractor_page.rows = 4;
+        distractor_page.code_bytes = u32::try_from(far.len() * 4).unwrap();
+        let pages = vec![
+            RoutedGlobalLeafCodes {
+                page: RoutedGlobalLeafPage {
+                    run_ordinal: 0,
+                    level: None,
+                    distance: f32::NAN,
+                    bundle_path: "one-outlier.arrow".to_owned(),
+                    page: outlier_page,
+                },
+                codes: [exact, far.clone(), far.clone(), far.clone()].concat(),
+            },
+            RoutedGlobalLeafCodes {
+                page: RoutedGlobalLeafPage {
+                    run_ordinal: 0,
+                    level: None,
+                    distance: f32::NAN,
+                    bundle_path: "three-candidates.arrow".to_owned(),
+                    page: coverage_page,
+                },
+                codes: [
+                    moderate.clone(),
+                    moderate.clone(),
+                    moderate.clone(),
+                    moderate,
+                ]
+                .concat(),
+            },
+            RoutedGlobalLeafCodes {
+                page: RoutedGlobalLeafPage {
+                    run_ordinal: 0,
+                    level: None,
+                    distance: f32::NAN,
+                    bundle_path: "distractor.arrow".to_owned(),
+                    page: distractor_page,
+                },
+                codes: [far.clone(), far.clone(), far.clone(), far].concat(),
+            },
+        ];
+
+        let ranked = resident
+            .rank_pages_by_row_codes(&query, pages, 2, 1)
+            .unwrap();
+
+        assert_eq!(ranked[0].bundle_path, "one-outlier.arrow");
+        assert_eq!(ranked[1].bundle_path, "three-candidates.arrow");
     }
 
     #[test]
