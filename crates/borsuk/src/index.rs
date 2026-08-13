@@ -16830,7 +16830,6 @@ impl BorsukIndex {
             || {
                 (page_budget as u64)
                     .saturating_mul(crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES)
-                    / 4
             },
             |limit| {
                 global_leaf_code_byte_ceiling(
