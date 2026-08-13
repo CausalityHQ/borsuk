@@ -43,7 +43,6 @@ class PublicationV3AttestationTests(unittest.TestCase):
             (cgroup / "memory.peak").write_text(str(2 * 1024**3), encoding="utf-8")
             (cgroup / "memory.swap.max").write_text("0", encoding="utf-8")
             (cgroup / "memory.swap.current").write_text("0", encoding="utf-8")
-            (cgroup / "memory.swap.peak").write_text("0", encoding="utf-8")
             (cgroup / "memory.events").write_text(
                 "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
                 encoding="utf-8",
@@ -88,6 +87,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
         self.assertEqual(observed["vcpus"], 4)
         self.assertEqual(observed["memory_max_bytes"], 8 * 1024**3)
         self.assertEqual(observed["swap_max_bytes"], 0)
+        self.assertEqual(observed["swap_peak_bytes"], 0)
         self.assertEqual(observed["cache_limit_bytes"], 1024**3)
         self.assertRegex(observed["cache_device"], r"^[0-9]+:[0-9]+$")
         self.assertRegex(observed["root_device"], r"^[0-9]+:[0-9]+$")

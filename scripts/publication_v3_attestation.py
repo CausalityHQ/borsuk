@@ -61,6 +61,17 @@ def _read_cgroup_integer(root: Path, name: str) -> int:
     return int(value)
 
 
+def _read_swap_peak(root: Path, *, maximum: int, current: int) -> int:
+    """Read swap peak, or derive zero when the kernel cannot expose a peak."""
+
+    path = root / "memory.swap.peak"
+    if path.exists():
+        return _read_cgroup_integer(root, "memory.swap.peak")
+    if maximum == 0 and current == 0:
+        return 0
+    raise ValueError("runtime cgroup memory.swap.peak is unavailable")
+
+
 def _cpuset_count(value: str) -> int:
     members: set[int] = set()
     for component in value.strip().split(","):
@@ -212,6 +223,8 @@ def collect_runtime_attestation(
     device = os.stat(cache_path).st_dev
     root_device = os.stat("/").st_dev
     oom_events, oom_kill_events = _read_memory_events(cgroup_root)
+    swap_max_bytes = _read_cgroup_integer(cgroup_root, "memory.swap.max")
+    swap_current_bytes = _read_cgroup_integer(cgroup_root, "memory.swap.current")
     return {
         "schema_version": 1,
         "cell_id": cell.get("cell_id"),
@@ -224,11 +237,11 @@ def collect_runtime_attestation(
         ),
         "memory_max_bytes": _read_cgroup_integer(cgroup_root, "memory.max"),
         "memory_peak_bytes": _read_cgroup_integer(cgroup_root, "memory.peak"),
-        "swap_max_bytes": _read_cgroup_integer(cgroup_root, "memory.swap.max"),
-        "swap_current_bytes": _read_cgroup_integer(
-            cgroup_root, "memory.swap.current"
+        "swap_max_bytes": swap_max_bytes,
+        "swap_current_bytes": swap_current_bytes,
+        "swap_peak_bytes": _read_swap_peak(
+            cgroup_root, maximum=swap_max_bytes, current=swap_current_bytes
         ),
-        "swap_peak_bytes": _read_cgroup_integer(cgroup_root, "memory.swap.peak"),
         "oom_events": oom_events,
         "oom_kill_events": oom_kill_events,
         "cache_limit_bytes": client.get("disk_cache_limit_mib") * 1024 * 1024,
