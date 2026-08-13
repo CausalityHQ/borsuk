@@ -9,8 +9,10 @@ from scripts.publication_v3_aws import (
     AttemptObservation,
     build_spot_launch_request,
     build_staging_receipt,
+    build_staging_worker_script,
     classify_attempt,
     staging_jobs,
+    validate_staging_receipt,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -277,6 +279,73 @@ class PublicationV3AwsTests(unittest.TestCase):
                     instance_state="running",
                     terminal_markers=("metrics.csv",),
                 )
+            )
+
+    def test_staging_worker_uses_frozen_inputs_python312_and_terminal_diagnostics(self) -> None:
+        job = next(job for job in staging_jobs(self.manifest, attempt=4) if job.dataset_id == "sift-128")
+        script = build_staging_worker_script(
+            self.manifest,
+            job,
+            source_uri="s3://borsuk-bench-453182569524-euc1/source/archive.tar.gz",
+            source_archive_sha256="a" * 64,
+            manifest_uri="s3://borsuk-bench-453182569524-euc1/manifests/frozen.json",
+            manifest_sha256="b" * 64,
+        )
+        self.assertIn("dnf install -y python3.12 python3.12-pip", script)
+        self.assertIn("python3.12 -m venv", script)
+        self.assertIn("WORKER_DIAGNOSTIC.log", script)
+        self.assertIn("bucket=borsuk-bench-453182569524-euc1", script)
+        self.assertIn(
+            "failure_key=publication/v3/20260812/datasets/sift-128/attempts/0004/STAGING_FAILED.json",
+            script,
+        )
+        self.assertIn("--attempt 4", script)
+        self.assertIn("--dataset sift-128", script)
+        self.assertNotIn("python3 -m venv", script)
+
+    def test_staging_receipt_roundtrip_verifier_rejects_substitution(self) -> None:
+        job = next(job for job in staging_jobs(self.manifest) if job.dataset_id == "sift-128")
+        objects = tuple(
+            {
+                "role": role,
+                "format": "json" if role == "metadata" else "parquet",
+                "uri": f"{job.output_uri}/{name}",
+                "sha256": f"{index + 1:064x}",
+                "bytes": 1024,
+                "rows": rows,
+            }
+            for index, (role, name, rows) in enumerate(
+                (
+                    ("train", "train-00000000.parquet", 10),
+                    ("query", "test.parquet", 2),
+                    ("ground-truth", "neighbors.parquet", 2),
+                    ("metadata", "meta.json", 1),
+                )
+            )
+        )
+        provenance = {
+            "schema_version": 1,
+            "dataset": "sift-128",
+            "source": "https://ann-benchmarks.com/sift-128-euclidean.hdf5",
+            "source_sha256": "b" * 64,
+            "materialization_sha256": "c66ceeb981504f9de03a84700e3ef410b3298f67dd92a3768a8cab6de4b2c3ee",
+        }
+        receipt = build_staging_receipt(
+            self.manifest,
+            job,
+            source_archive_sha256="a" * 64,
+            source_provenance=provenance,
+            provenance_sha256="d" * 64,
+            objects=objects,
+            instance_id="i-0123456789abcdef0",
+            instance_type="r7g.8xlarge",
+            availability_zone="eu-central-1a",
+            purchase_option="spot",
+        )
+        self.assertEqual(validate_staging_receipt(self.manifest, receipt), receipt)
+        with self.assertRaisesRegex(ValueError, "receipt"):
+            validate_staging_receipt(
+                self.manifest, {**receipt, "dataset_content_sha256": "0" * 64}
             )
 
 

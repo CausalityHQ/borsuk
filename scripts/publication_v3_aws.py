@@ -15,9 +15,11 @@ import base64
 import hashlib
 import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 if __package__:
     from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
@@ -96,6 +98,99 @@ def staging_jobs(
             )
         )
     return tuple(jobs)
+
+
+def _s3_parts(uri: str) -> tuple[str, str]:
+    parsed = urlparse(uri)
+    key = parsed.path.lstrip("/")
+    if parsed.scheme != "s3" or not parsed.netloc or not key or parsed.query or parsed.fragment:
+        raise ValueError("worker input must be a canonical S3 URI")
+    return parsed.netloc, key
+
+
+def build_staging_worker_script(
+    manifest: dict[str, object],
+    job: StagingJob,
+    *,
+    source_uri: str,
+    source_archive_sha256: str,
+    manifest_uri: str,
+    manifest_sha256: str,
+) -> str:
+    """Build the self-diagnosing worker proven by the real SIFT staging smoke."""
+
+    normalized = validate_manifest(manifest)
+    expected = {
+        item.dataset_id: item
+        for item in staging_jobs(normalized, attempt=job.attempt)
+    }
+    if expected.get(job.dataset_id) != job:
+        raise ValueError("staging worker job differs from the manifest")
+    if HEX_64.fullmatch(source_archive_sha256) is None or HEX_64.fullmatch(
+        manifest_sha256
+    ) is None:
+        raise ValueError("worker source checksums must be lowercase SHA-256")
+    source_bucket, _ = _s3_parts(source_uri)
+    manifest_bucket, _ = _s3_parts(manifest_uri)
+    failure_bucket, failure_key = _s3_parts(job.failure_uri)
+    if len({source_bucket, manifest_bucket, failure_bucket}) != 1:
+        raise ValueError("worker inputs and outputs must share the publication bucket")
+    attempt_root = job.failure_uri.rsplit("/", 1)[0]
+    diagnostic_uri = f"{attempt_root}/WORKER_DIAGNOSTIC.log"
+    _, diagnostic_key = _s3_parts(diagnostic_uri)
+    environment = normalized["environment_contract"]
+    region = str(environment["region"])
+    instance_type = str(environment["build_workers"]["borsuk"]["instance_type"])
+    values = {
+        "region": region,
+        "bucket": failure_bucket,
+        "failure_key": failure_key,
+        "diagnostic_key": diagnostic_key,
+        "source_uri": source_uri,
+        "source_sha": source_archive_sha256,
+        "manifest_uri": manifest_uri,
+        "manifest_sha": manifest_sha256,
+        "dataset": job.dataset_id,
+        "attempt": str(job.attempt),
+        "instance_type": instance_type,
+    }
+    quoted = {key: shlex.quote(value) for key, value in values.items()}
+    return f"""set -euo pipefail
+export AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=12 PYTHONDONTWRITEBYTECODE=1
+region={quoted['region']}; bucket={quoted['bucket']}
+failure_key={quoted['failure_key']}; diagnostic_key={quoted['diagnostic_key']}
+work=/var/lib/borsuk-publication-v3/{job.dataset_id}-a{job.attempt:04d}
+mkdir -p "$work/source" "$work/dataset"
+phase=bootstrap
+exec > >(tee -a "$work/worker.log") 2>&1
+failed() {{
+  status=$?
+  if [[ "$status" -ne 0 ]]; then
+    aws --region "$region" s3api put-object --bucket "$bucket" --key "$diagnostic_key" --body "$work/worker.log" --content-type text/plain --server-side-encryption AES256 --if-none-match '*' >/dev/null 2>&1 || true
+    printf '{{"schema_version":1,"dataset_id":"%s","attempt":%s,"exit_code":%s,"phase":"%s","diagnostic_uri":"s3://%s/%s"}}\n' {quoted['dataset']} {quoted['attempt']} "$status" "$phase" "$bucket" "$diagnostic_key" >"$work/failure.json"
+    aws --region "$region" s3api put-object --bucket "$bucket" --key "$failure_key" --body "$work/failure.json" --content-type application/json --server-side-encryption AES256 --if-none-match '*' >/dev/null 2>&1 || true
+  fi
+  exit "$status"
+}}
+trap failed EXIT
+phase=identity; aws sts get-caller-identity
+phase=python-runtime; dnf install -y python3.12 python3.12-pip
+phase=source-fetch
+aws --region "$region" s3 cp {quoted['source_uri']} "$work/source.tar.gz" --only-show-errors
+printf '%s  %s\n' {quoted['source_sha']} "$work/source.tar.gz" | sha256sum -c -
+aws --region "$region" s3 cp {quoted['manifest_uri']} "$work/manifest.json" --only-show-errors
+printf '%s  %s\n' {quoted['manifest_sha']} "$work/manifest.json" | sha256sum -c -
+phase=extract; tar -xzf "$work/source.tar.gz" -C "$work/source"
+phase=python-env; python3.12 --version; python3.12 -m venv "$work/venv"
+phase=dependencies; "$work/venv/bin/pip" install --disable-pip-version-check --no-cache-dir -r "$work/source/scripts/requirements-format-bench.txt"
+phase=metadata
+token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
+instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+az=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+phase=promotion; cd "$work/source"
+"$work/venv/bin/python" scripts/promote_publication_v3_dataset.py --manifest "$work/manifest.json" --dataset {quoted['dataset']} --attempt {quoted['attempt']} --work-root "$work/dataset" --source-archive-sha256 {quoted['source_sha']} --instance-id "$instance_id" --instance-type {quoted['instance_type']} --availability-zone "$az" --upload-workers 16 >"$work/receipt.json"
+phase=complete
+"""
 
 
 def _resource_contract(
@@ -478,6 +573,65 @@ def build_staging_receipt(
         "object_bytes": object_bytes,
         "objects": normalized,
     }
+
+
+def validate_staging_receipt(
+    manifest: dict[str, object], value: dict[str, object]
+) -> dict[str, object]:
+    """Rebuild a terminal receipt from its authenticated inputs and compare exactly."""
+
+    if not isinstance(value, dict):
+        raise ValueError("staging receipt must be a JSON object")
+    required = {
+        "schema_version",
+        "campaign_id",
+        "manifest_sha256",
+        "dataset_id",
+        "adapter",
+        "attempt",
+        "source_archive_sha256",
+        "source_provenance",
+        "provenance_sha256",
+        "dataset_content_sha256",
+        "output_uri",
+        "provenance_uri",
+        "terminal_uri",
+        "failure_uri",
+        "instance_id",
+        "instance_type",
+        "availability_zone",
+        "purchase_option",
+        "object_count",
+        "object_bytes",
+        "objects",
+    }
+    if frozenset(value) != required:
+        raise ValueError("staging receipt fields differ")
+    attempt = value["attempt"]
+    if not isinstance(attempt, int) or isinstance(attempt, bool):
+        raise ValueError("staging receipt attempt is invalid")
+    jobs = {
+        item.dataset_id: item
+        for item in staging_jobs(manifest, attempt=attempt)
+    }
+    job = jobs.get(str(value["dataset_id"]))
+    if job is None:
+        raise ValueError("staging receipt dataset is not in the manifest")
+    rebuilt = build_staging_receipt(
+        manifest,
+        job,
+        source_archive_sha256=str(value["source_archive_sha256"]),
+        source_provenance=value["source_provenance"],
+        provenance_sha256=str(value["provenance_sha256"]),
+        objects=value["objects"],
+        instance_id=str(value["instance_id"]),
+        instance_type=str(value["instance_type"]),
+        availability_zone=str(value["availability_zone"]),
+        purchase_option=str(value["purchase_option"]),
+    )
+    if rebuilt != value:
+        raise ValueError("staging receipt differs from its manifest-derived identity")
+    return value
 
 
 def _staging_plan(manifest: dict[str, object]) -> dict[str, object]:
