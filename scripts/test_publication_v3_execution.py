@@ -111,13 +111,19 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("BUILD_TERMINAL_FAILED.json", script)
         self.assertIn('"stage":"%s"', script)
         self.assertIn('exec > >(tee -a "$work/worker.log") 2>&1', script)
+        self.assertIn('detail_log="$work/cell/build/step-00.log"', script)
+        self.assertIn('failure_source="$detail_log"', script)
+        self.assertIn('tail -c 65536 "$failure_source"', script)
         self.assertIn("FAILURE.log", script)
         self.assertNotIn('find "$work"', script)
         self.assertLess(
             script.index('put_immutable "$work/failed.json"'),
-            script.index('tail -c 65536 "$work/worker.log"'),
+            script.index('tail -c 65536 "$failure_source"'),
         )
-        self.assertIn('tail -c 65536 "$work/worker.log" >"$work/FAILURE.log" || true', script)
+        self.assertIn(
+            'tail -c 65536 "$failure_source" >"$work/FAILURE.log" || true',
+            script,
+        )
         self.assertIn("stage=build-index", script)
         self.assertLess(len(script.encode("utf-8")), 16 * 1024)
         self.assertEqual(
@@ -164,6 +170,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("stage=mount-cache", script)
         self.assertIn("stage=verify-index", script)
         self.assertIn("stage=execute-runtime", script)
+        self.assertIn('detail_log="$work/cell/runtime/step-00.log"', script)
         self.assertIn("stage=publish-receipts", script)
         self.assertLess(len(script.encode("utf-8")), 16 * 1024)
         self.assertEqual(

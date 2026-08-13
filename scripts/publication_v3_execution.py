@@ -117,6 +117,7 @@ def _common_prelude(
         mkdir -p "$work"
         complete=0
         stage=preflight
+        detail_log="$work/worker.log"
         put_immutable() {{
           local path=$1 uri=$2 digest checksum bucket key
           digest=$(sha256sum "$path" | awk '{{print $1}}')
@@ -133,8 +134,12 @@ def _common_prelude(
           if [[ $complete -eq 0 ]]; then
             printf '{{"schema_version":1,"status":"failed","exit_code":%d,"stage":"%s"}}\n' "$status" "$stage" >"$work/failed.json" || true
             put_immutable "$work/failed.json" {_q(terminal_prefix + "/" + failed_marker)} || true
-            if [[ -f "$work/worker.log" ]]; then
-              tail -c 65536 "$work/worker.log" >"$work/FAILURE.log" || true
+            failure_source="$detail_log"
+            if [[ ! -s "$failure_source" ]]; then
+              failure_source="$work/worker.log"
+            fi
+            if [[ -f "$failure_source" ]]; then
+              tail -c 65536 "$failure_source" >"$work/FAILURE.log" || true
               if [[ -s "$work/FAILURE.log" ]]; then
                 put_immutable "$work/FAILURE.log" {_q(terminal_prefix + "/FAILURE.log")} || true
               fi
@@ -227,6 +232,7 @@ def build_worker_script(
         printf '{{"schema_version":1,"sha256":"%s","bytes":%s}}\n' "$binary_sha" "$(stat -c %s "$binary")" >"$work/BINARY_COMPLETE.json"
         put_immutable "$work/BINARY_COMPLETE.json" {_q(terminal_prefix + "/BINARY_COMPLETE.json")}
         stage=build-index
+        detail_log="$work/cell/build/step-00.log"
         "$work/venv/bin/python" scripts/run_publication_v3_cell.py "$work/protocol.json" "$work/cell" \
           --mode build --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
           --dataset-materialization-sha256 {_q(source.get("sha256", "0" * 64))} \
@@ -324,6 +330,7 @@ def runtime_worker_script(
         token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
         instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
         stage=execute-runtime
+        detail_log="$work/cell/runtime/step-00.log"
         systemd-run --quiet --wait --collect --service-type=exec -p MemoryMax=8589934592 -p MemorySwapMax=0 \
           /usr/bin/python3.12 "$work/source/scripts/run_publication_v3_cell.py" "$work/protocol.json" "$work/cell" \
           --mode runtime --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
