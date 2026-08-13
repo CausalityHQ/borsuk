@@ -208,6 +208,9 @@ pub struct Manifest {
     /// null until an offline bulk-load finish or full compaction publishes a
     /// complete base run.
     pub(crate) global_ann_ref: Option<GlobalAnnRef>,
+    /// V14 full-epoch cell-card serving authority. Mutually exclusive with the
+    /// V13 global ANN reference; fresh WAL/segment rows remain an MVCC overlay.
+    pub(crate) global_cell_card_ann_ref: Option<crate::global_cell_card::GlobalCellCardAnnRef>,
     /// Content-addressed Arrow/Parquet roots for BM25 and named learned-sparse
     /// fields. Empty until lexical data exists; every segment-set change
     /// recreates the affected roots before this manifest is published.
@@ -354,7 +357,7 @@ mod global_pq_layout_tests {
     }
 
     #[test]
-    fn offline_v12_base_has_one_codebook_one_base_and_no_incremental_levels() {
+    fn offline_v14_base_has_one_codebook_root_and_no_v13_authority() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -377,12 +380,12 @@ mod global_pq_layout_tests {
 
         let ann = index
             .manifest_for_format_tests()
-            .global_ann_ref
+            .global_cell_card_ann_ref
             .as_ref()
             .unwrap();
-        assert_eq!(ann.layout_version(), 13);
-        assert!(ann.base().is_some());
-        assert!(ann.incremental_runs().is_empty());
+        assert_eq!(ann.layout_version(), 14);
+        assert!(ann.storage_objects() >= 3);
+        assert!(index.manifest_for_format_tests().global_ann_ref.is_none());
         ann.validate().unwrap();
     }
 
@@ -409,13 +412,13 @@ mod global_pq_layout_tests {
         index.finish_bulk_load().unwrap();
 
         let mut manifest = index.manifest_for_format_tests().clone();
-        let mut value = serde_json::to_value(manifest.global_ann_ref.as_ref().unwrap()).unwrap();
-        let base_resident = value["base"]["resident_bytes"].as_u64().unwrap();
-        value["codebook"]["resident_bytes"] = serde_json::Value::from(u64::MAX - base_resident);
+        let mut value =
+            serde_json::to_value(manifest.global_cell_card_ann_ref.as_ref().unwrap()).unwrap();
         value["resident_bytes"] = serde_json::Value::from(u64::MAX);
-        let ann: crate::global_leaf_run::GlobalAnnRef = serde_json::from_value(value).unwrap();
+        let ann: crate::global_cell_card::GlobalCellCardAnnRef =
+            serde_json::from_value(value).unwrap();
         ann.validate().unwrap();
-        manifest.global_ann_ref = Some(ann);
+        manifest.global_cell_card_ann_ref = Some(ann);
 
         assert_eq!(manifest.resident_bytes_estimate(), u64::MAX);
     }
@@ -533,6 +536,7 @@ impl Manifest {
             cell_wal_visible_tombstone_runs: 0,
             quantizer_ref: None,
             global_ann_ref: None,
+            global_cell_card_ann_ref: None,
             lexical_roots: Vec::new(),
             bm25_stats_delta: None,
             bm25_stats_delta_frontier: Vec::new(),
@@ -574,6 +578,7 @@ impl Manifest {
             // clears this before publishing (see the compaction/flush paths).
             quantizer_ref: self.quantizer_ref.clone(),
             global_ann_ref: self.global_ann_ref.clone(),
+            global_cell_card_ann_ref: self.global_cell_card_ann_ref.clone(),
             lexical_roots: self.lexical_roots.clone(),
             bm25_stats_delta: self.bm25_stats_delta.clone(),
             bm25_stats_delta_frontier: self.bm25_stats_delta_frontier.clone(),
@@ -809,6 +814,15 @@ impl Manifest {
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "manifest resident RAM budget estimate overflow".into(),
+                    )
+                })?;
+        }
+        if let Some(global_ann) = &self.global_cell_card_ann_ref {
+            total = total
+                .checked_add(global_ann.resident_bytes())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "manifest V14 resident RAM budget estimate overflow".into(),
                     )
                 })?;
         }

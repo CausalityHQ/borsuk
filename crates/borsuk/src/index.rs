@@ -48,6 +48,12 @@ use crate::{
         segment_to_parquet, sparse_postings_from_batches, tombstone_ids_from_parquet,
         tombstone_ids_to_parquet, wal_records_from_table,
     },
+    global_cell_card::{
+        CellCardGroupWriter, CellCardPush, GlobalCellCardAnnRef, decode_cell_card_exact_wave,
+        decode_cell_card_head_wave, decode_cell_card_run_root, encode_cell_card_run_root,
+        plan_ranked_cell_card_exact_wave, plan_ranked_cell_card_head_wave,
+        rank_cell_card_exact_blocks, rank_cell_card_head_indexes, score_loaded_cell_card_heads,
+    },
     global_leaf_run::{
         CarriedPrimaryDenseRun, GlobalAnnRef, GlobalCodebookRef, GlobalLeafArtifactRole,
         GlobalLeafPersistenceWriter, GlobalLeafRunRef, PrimaryDenseArtifactCandidate,
@@ -346,17 +352,6 @@ struct SearchExecution {
     vectors: Vec<Vec<f32>>,
 }
 
-#[cfg(test)]
-#[derive(Debug)]
-struct GlobalLeafReadGroup {
-    run_ordinal: usize,
-    bundle_index: u32,
-    path: String,
-    start: u64,
-    end: u64,
-    pages: Vec<crate::global_leaf::GlobalLeafPageRef>,
-}
-
 #[derive(Debug)]
 struct GlobalLeafExactBlockReadGroup {
     run_ordinal: usize,
@@ -445,6 +440,8 @@ const GLOBAL_LEAF_DIRECTORY_READ_WIDTH: usize = 8;
 // admission and decoded/scored under the fixed CPU pool.
 const GLOBAL_LEAF_CODE_READ_WIDTH: usize = 32;
 const GLOBAL_LEAF_QUERY_WAVE_PAGES: usize = 32;
+const GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS: usize = 16;
+const GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const _: () = assert!(GLOBAL_LEAF_QUERY_WAVE_PAGES <= DEFAULT_GLOBAL_PQ_RERANK_READS);
 const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 4;
 
@@ -2649,6 +2646,7 @@ struct ResidentGlobalAnnPins {
     codebook_key: String,
     codebook: Arc<ResidentGlobalCodebook>,
     leaf_runs: Vec<(String, Arc<ResidentGlobalLeafRun>)>,
+    cell_card_root: Option<Arc<crate::global_cell_card::ResidentCellCardRoot>>,
 }
 
 impl ResidentGlobalAnnPins {
@@ -4613,7 +4611,7 @@ impl BorsukIndex {
         cell_wal_snapshot: &[CommittedCellWalTransaction],
         lane_log_head_checksums: &[[u8; 32]],
     ) -> Result<Option<Arc<ResidentGlobalMutationOverlay>>> {
-        if manifest.global_ann_ref.is_none()
+        if manifest.global_ann_ref.is_none() && manifest.global_cell_card_ann_ref.is_none()
             || !Self::global_leaf_mutation_state_required_for(manifest, cell_wal_snapshot)
         {
             return Ok(None);
@@ -5041,22 +5039,47 @@ impl BorsukIndex {
                 .manifest
                 .global_ann_ref
                 .as_ref()
-                .map_or(0, GlobalAnnRef::storage_bytes),
+                .map(GlobalAnnRef::storage_bytes)
+                .or_else(|| {
+                    self.manifest
+                        .global_cell_card_ann_ref
+                        .as_ref()
+                        .map(GlobalCellCardAnnRef::storage_bytes)
+                })
+                .unwrap_or(0),
             global_ann_layout_version: self
                 .manifest
                 .global_ann_ref
                 .as_ref()
-                .map(GlobalAnnRef::layout_version),
+                .map(GlobalAnnRef::layout_version)
+                .or_else(|| {
+                    self.manifest
+                        .global_cell_card_ann_ref
+                        .as_ref()
+                        .map(GlobalCellCardAnnRef::layout_version)
+                }),
             global_ann_codebook_checksum: self
                 .manifest
                 .global_ann_ref
                 .as_ref()
-                .map(|reference| reference.codebook().descriptor_checksum().to_string()),
+                .map(|reference| reference.codebook().descriptor_checksum().to_string())
+                .or_else(|| {
+                    self.manifest
+                        .global_cell_card_ann_ref
+                        .as_ref()
+                        .map(|reference| reference.codebook().descriptor_checksum().to_string())
+                }),
             global_leaf_epoch: self
                 .manifest
                 .global_ann_ref
                 .as_ref()
-                .map(GlobalAnnRef::leaf_epoch),
+                .map(GlobalAnnRef::leaf_epoch)
+                .or_else(|| {
+                    self.manifest
+                        .global_cell_card_ann_ref
+                        .as_ref()
+                        .map(GlobalCellCardAnnRef::leaf_epoch)
+                }),
             global_leaf_runs: self
                 .manifest
                 .global_ann_ref
@@ -5064,15 +5087,23 @@ impl BorsukIndex {
                 .map_or(0, |reference| {
                     usize::from(reference.base().is_some())
                         .saturating_add(reference.incremental_runs().len())
-                }),
-            global_leaf_max_level: self.manifest.global_ann_ref.as_ref().and_then(|reference| {
-                reference
-                    .incremental_runs()
-                    .iter()
-                    .map(GlobalLeafRunRef::level)
-                    .chain(reference.base().map(|_| 0))
-                    .max()
-            }),
+                })
+                .max(usize::from(
+                    self.manifest.global_cell_card_ann_ref.is_some(),
+                )),
+            global_leaf_max_level: self
+                .manifest
+                .global_ann_ref
+                .as_ref()
+                .and_then(|reference| {
+                    reference
+                        .incremental_runs()
+                        .iter()
+                        .map(GlobalLeafRunRef::level)
+                        .chain(reference.base().map(|_| 0))
+                        .max()
+                })
+                .or_else(|| self.manifest.global_cell_card_ann_ref.as_ref().map(|_| 0)),
             global_leaf_partial_pages: self.manifest.global_ann_ref.as_ref().map_or(
                 0,
                 |reference| {
@@ -8299,11 +8330,12 @@ impl BorsukIndex {
         manifest.bm25_stats_delta = None;
         manifest.bm25_stats_delta_frontier.clear();
         let global_ann_summaries = manifest.segments.clone();
-        manifest.global_ann_ref = self.rebuild_global_ann_epoch_from_segments(
+        manifest.global_cell_card_ann_ref = self.rebuild_global_ann_epoch_from_segments(
             &global_ann_summaries,
             manifest.version,
             manifest.version,
         )?;
+        manifest.global_ann_ref = None;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
         // Generation shard counters are shared monotonic allocators and must
@@ -8759,6 +8791,7 @@ impl BorsukIndex {
             manifest.segments.extend(added.iter().cloned());
             manifest.rebuild_pivots();
             manifest.global_ann_ref = None;
+            manifest.global_cell_card_ann_ref = None;
             self.rebuild_lexical_roots(&mut manifest)?;
             enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
             let prepared_global_ann_pins =
@@ -10902,6 +10935,7 @@ impl BorsukIndex {
         // it would let approximate search serve only the old base and omit the
         // newly published segment.
         manifest.global_ann_ref = None;
+        manifest.global_cell_card_ann_ref = None;
         manifest.next_generated_id = next_generated_id;
         let _ = tombstone_update;
         let _ = bm25_stats_delta_update;
@@ -12217,6 +12251,7 @@ impl BorsukIndex {
         // A segment-changing online flush invalidates the offline base run;
         // this path does not publish incremental V12 leaf runs.
         manifest.global_ann_ref = None;
+        manifest.global_cell_card_ann_ref = None;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let published = if paged_manifest {
             self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
@@ -13008,6 +13043,7 @@ impl BorsukIndex {
         // New right-edge routing pages are not represented by the existing V12
         // base. Invalidate it atomically so approximate search cannot omit them.
         manifest.global_ann_ref = None;
+        manifest.global_cell_card_ann_ref = None;
         manifest.segments.clear();
         manifest.pivots.clear();
         manifest.next_generated_id = next_generated_id;
@@ -14016,13 +14052,15 @@ impl BorsukIndex {
         manifest.rebuild_pivots();
         if options.max_segments.is_none() {
             let global_ann_summaries = manifest.segments.clone();
-            manifest.global_ann_ref = self.rebuild_global_ann_epoch_from_segments(
+            manifest.global_cell_card_ann_ref = self.rebuild_global_ann_epoch_from_segments(
                 &global_ann_summaries,
                 manifest.version,
                 0,
             )?;
+            manifest.global_ann_ref = None;
         } else {
             manifest.global_ann_ref = None;
+            manifest.global_cell_card_ann_ref = None;
         }
         let routing_pages_written = routing_page_tree_content_page_count(
             manifest.segments.len(),
@@ -14218,6 +14256,7 @@ impl BorsukIndex {
         manifest.segments.clear();
         manifest.pivots.clear();
         manifest.global_ann_ref = None;
+        manifest.global_cell_card_ann_ref = None;
 
         let mut segments_written = 0_usize;
         let mut bytes_written = 0_u64;
@@ -14264,6 +14303,20 @@ impl BorsukIndex {
             replacement_summaries.push(summary);
         }
 
+        if options.max_segments.is_none() {
+            let mut global_ann_summaries = match lexical_active_summaries.as_ref() {
+                Some(summaries) => summaries.clone(),
+                None => self.active_segment_summaries()?,
+            };
+            global_ann_summaries.retain(|summary| !selected_ids.contains(summary.id.as_str()));
+            global_ann_summaries.extend(new_lexical_summaries.iter().cloned());
+            manifest.global_cell_card_ann_ref = self.rebuild_global_ann_epoch_from_segments(
+                &global_ann_summaries,
+                manifest.version,
+                0,
+            )?;
+        }
+
         if let Some(active) = lexical_active_summaries.as_mut() {
             active.retain(|summary| !selected_ids.contains(summary.id.as_str()));
             active.append(&mut new_lexical_summaries);
@@ -14279,6 +14332,12 @@ impl BorsukIndex {
             dirty_page_count,
             manifest.routing_page_fanout,
         );
+        // Fail the candidate manifest's resident admission before authenticating
+        // and decoding its codebook/root. Otherwise a compaction that already
+        // exceeds the configured budget can transiently allocate the very
+        // resident state that the budget is meant to prevent.
+        enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
+        let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
         let needs_leaf_page_append = replacement_pages.len() > dirty_page_count;
         if let Some(mut page_refs) = full_leaf_page_refs {
             let mut occupied_leaf_ranges = leaf_page_occupied_ranges_from_cached_tree(
@@ -14411,11 +14470,7 @@ impl BorsukIndex {
         // quantizer from the full active summary set so a cold/paged query routes
         // through the IVF probe list instead of the degraded routing tree.
         self.refresh_persisted_quantizer()?;
-        if options.max_segments.is_none() {
-            self.refresh_resident_global_ann()?;
-        } else {
-            self.resident_global_ann_pins = None;
-        }
+        self.resident_global_ann_pins = prepared_global_ann_pins;
 
         Ok(CompactionReport {
             compacted: true,
@@ -14955,6 +15010,12 @@ impl BorsukIndex {
                 &mut scan,
             )?;
             self.collect_gc_candidates(
+                "global-cell-cards",
+                is_global_cell_card_path,
+                GarbageCollectionObjectKind::SegmentOrGraph,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
                 "lexical",
                 is_parquet_path,
                 GarbageCollectionObjectKind::SegmentOrGraph,
@@ -15324,6 +15385,71 @@ impl BorsukIndex {
                 )?;
                 paths.extend(directory.bundles.into_iter().map(|bundle| bundle.path));
             }
+        }
+        if let Some(global_ann_ref) = &self.manifest.global_cell_card_ann_ref {
+            global_ann_ref.validate()?;
+            let codebook = global_ann_ref.codebook();
+            paths.insert(codebook.descriptor_path().to_string());
+            let descriptor_read = self
+                .storage
+                .read_known_size_with_cache_status_and_checksum(
+                    codebook.descriptor_path(),
+                    codebook.storage_bytes(),
+                    codebook.descriptor_checksum(),
+                )?;
+            let descriptor_metadata = ValidatedGlobalCodebookMetadata::for_retained_manifest(
+                GlobalCodebookDescriptor::decode(&descriptor_read.bytes)?,
+                self.manifest.logical_cell_catalog_ref.as_ref(),
+                self.manifest.logical_cell_routing_strategy,
+            )?;
+            if descriptor_metadata.code_width != codebook.code_width()
+                || descriptor_metadata.cell_count
+                    != usize::try_from(codebook.cell_count()).unwrap_or(usize::MAX)
+                || u64::try_from(descriptor_metadata.resident_bytes).ok()
+                    != Some(codebook.resident_bytes())
+                || &descriptor_metadata.metric != codebook.metric()
+                || descriptor_metadata.dimensions != codebook.dimensions()
+                || descriptor_metadata.vector_element_type != codebook.element_type()
+                || descriptor_metadata.candidates != codebook.candidates()
+                || descriptor_metadata.probes != codebook.probes()
+                || descriptor_metadata.reconstruction_error_p95_micros
+                    != codebook.reconstruction_error_p95_micros()
+                || codebook.metric() != &self.manifest.config.metric
+                || codebook.dimensions() != self.manifest.config.dimensions
+                || codebook.element_type() != self.manifest.build_config.vector_element_type
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "V14 GC codebook does not match its manifest reference".to_string(),
+                ));
+            }
+            read.bytes_read = read
+                .bytes_read
+                .saturating_add(descriptor_read.bytes.len() as u64);
+            if descriptor_read.cache_hit {
+                read.object_cache_hits += 1;
+            } else {
+                read.object_cache_misses += 1;
+            }
+            paths.insert(global_ann_ref.root_path().to_string());
+            let root_read = self
+                .storage
+                .read_known_size_with_cache_status_and_checksum(
+                    global_ann_ref.root_path(),
+                    global_ann_ref.root().encoded_bytes,
+                    &global_ann_ref.root_checksum(),
+                )?;
+            read.bytes_read = read.bytes_read.saturating_add(root_read.bytes.len() as u64);
+            if root_read.cache_hit {
+                read.object_cache_hits += 1;
+            } else {
+                read.object_cache_misses += 1;
+            }
+            let root = decode_cell_card_run_root(
+                global_ann_ref.root(),
+                &root_read.bytes,
+                codebook.descriptor_checksum(),
+            )?;
+            paths.extend(root.groups().iter().map(|group| group.path.clone()));
         }
         for root_ref in &self.manifest.lexical_roots {
             paths.insert(root_ref.path.clone());
@@ -16017,13 +16143,27 @@ impl BorsukIndex {
         &self,
         manifest: &Manifest,
     ) -> Result<Option<ResidentGlobalAnnPins>> {
-        let Some(reference) = manifest.global_ann_ref.as_ref() else {
+        let v13 = manifest.global_ann_ref.as_ref();
+        let v14 = manifest.global_cell_card_ann_ref.as_ref();
+        if v13.is_some() && v14.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "manifest contains both V13 and V14 global ANN authority".into(),
+            ));
+        }
+        let Some(codebook_reference) = v13
+            .map(GlobalAnnRef::codebook)
+            .or_else(|| v14.map(GlobalCellCardAnnRef::codebook))
+        else {
             return Ok(None);
         };
-        reference.validate_serving_shape()?;
+        if let Some(reference) = v13 {
+            reference.validate_serving_shape()?;
+        }
+        if let Some(reference) = v14 {
+            reference.validate()?;
+        }
         // Transactional preload always authenticates the manifest's exact durable
         // identities before any warm cache entry or pin can become visible.
-        let codebook_reference = reference.codebook();
         let codebook_key = serde_json::to_string(codebook_reference).map_err(|error| {
             BorsukError::InvalidStorage(format!(
                 "V12 global codebook reference cannot be keyed: {error}"
@@ -16035,6 +16175,62 @@ impl BorsukIndex {
         let codebook = self
             .resident_global_codebooks
             .load(&codebook_key, || Ok(codebook_loaded))?;
+        if let Some(reference) = v14 {
+            let root_read = self.storage.read_known_size_from_backing_with_checksum(
+                reference.root_path(),
+                reference.root().encoded_bytes,
+                &reference.root_checksum(),
+            )?;
+            let root = decode_cell_card_run_root(
+                reference.root(),
+                &root_read.bytes,
+                codebook_reference.descriptor_checksum(),
+            )?;
+            let durable_storage_bytes = root.groups().iter().try_fold(
+                codebook_reference
+                    .storage_bytes()
+                    .checked_add(reference.root().encoded_bytes)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V14 durable storage byte count overflows".into(),
+                        )
+                    })?,
+                |total, group| {
+                    total.checked_add(group.encoded_bytes).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V14 durable storage byte count overflows".into(),
+                        )
+                    })
+                },
+            )?;
+            let durable_storage_objects = u64::try_from(root.groups().len())
+                .ok()
+                .and_then(|groups| groups.checked_add(2))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V14 durable storage object count overflows".into())
+                })?;
+            let durable_resident_bytes = (root.resident_bytes() as u64)
+                .checked_add(codebook_reference.resident_bytes())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V14 durable resident byte count overflows".into())
+                })?;
+            if root.rows() != reference.rows()
+                || durable_resident_bytes != reference.resident_bytes()
+                || durable_storage_bytes != reference.storage_bytes()
+                || durable_storage_objects != reference.storage_objects()
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "V14 resident root does not match its manifest reference".into(),
+                ));
+            }
+            return Ok(Some(ResidentGlobalAnnPins {
+                codebook_key,
+                codebook,
+                leaf_runs: Vec::new(),
+                cell_card_root: Some(Arc::new(root)),
+            }));
+        }
+        let reference = v13.expect("V13 authority exists after V14 branch");
         let run_specs = reference
             .base()
             .map(|run| (None, run))
@@ -16148,6 +16344,7 @@ impl BorsukIndex {
             codebook_key,
             codebook,
             leaf_runs,
+            cell_card_root: None,
         }))
     }
 
@@ -16339,155 +16536,6 @@ impl BorsukIndex {
             directories,
             latency_limited,
         })
-    }
-
-    #[cfg(test)]
-    fn global_leaf_read_groups(
-        &self,
-        pages: &[RoutedGlobalLeafPage],
-        runs: &[Arc<ResidentGlobalLeafRun>],
-    ) -> Result<Vec<GlobalLeafReadGroup>> {
-        let mut planned = Vec::with_capacity(pages.len());
-        for routed in pages {
-            let run = runs.get(routed.run_ordinal).ok_or_else(|| {
-                BorsukError::InvalidStorage("global leaf page references a missing run".to_string())
-            })?;
-            if run.level() != routed.level {
-                return Err(BorsukError::InvalidStorage(
-                    "global leaf page level does not match its run".to_string(),
-                ));
-            }
-            let bundle = run
-                .root()
-                .bundles()
-                .get(routed.page.bundle_index as usize)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "global leaf page references a missing bundle".to_string(),
-                    )
-                })?;
-            let end = routed
-                .page
-                .batch_offset
-                .checked_add(u64::from(routed.page.batch_bytes))
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("global leaf page range overflows".to_string())
-                })?;
-            if end > bundle.encoded_bytes
-                || bundle.path != routed.bundle_path
-                || u64::from(routed.page.batch_bytes)
-                    > crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES
-            {
-                return Err(BorsukError::InvalidStorage(
-                    "global leaf page range exceeds its authenticated bundle".to_string(),
-                ));
-            }
-            planned.push((
-                routed.run_ordinal,
-                routed.page.bundle_index,
-                bundle.path.clone(),
-                routed.page.batch_offset,
-                end,
-                routed.page.clone(),
-            ));
-        }
-        planned.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.cmp(&right.1))
-                .then_with(|| left.2.cmp(&right.2))
-                .then_with(|| left.3.cmp(&right.3))
-        });
-        let mut groups: Vec<GlobalLeafReadGroup> = Vec::new();
-        for (run_ordinal, bundle_index, path, start, end, page) in planned {
-            if let Some(group) = groups.last_mut()
-                && group.run_ordinal == run_ordinal
-                && group.bundle_index == bundle_index
-                && group.path == path
-                && group.end == start
-            {
-                group.end = end;
-                group.pages.push(page);
-                continue;
-            }
-            groups.push(GlobalLeafReadGroup {
-                run_ordinal,
-                bundle_index,
-                path,
-                start,
-                end,
-                pages: vec![page],
-            });
-        }
-        Ok(groups)
-    }
-
-    #[cfg(test)]
-    fn fetch_global_leaf_wave(
-        &self,
-        pages: &[RoutedGlobalLeafPage],
-        runs: &[Arc<ResidentGlobalLeafRun>],
-    ) -> Result<(Vec<RoutedDecodedGlobalLeafRow>, u64)> {
-        if pages.is_empty() {
-            return Ok((Vec::new(), 0));
-        }
-        let groups = self.global_leaf_read_groups(pages, runs)?;
-        let dimensions = self.manifest.config.dimensions;
-        let reads = bounded_io_map_with_gate(
-            &groups,
-            groups.len(),
-            Some(&self.global_pq_rerank_admission),
-            |group| {
-                let stored = self
-                    .storage
-                    .read_range(&group.path, group.start..group.end)?;
-                let mut decoded = Vec::new();
-                for page in &group.pages {
-                    let local_start =
-                        usize::try_from(page.batch_offset - group.start).map_err(|_| {
-                            BorsukError::InvalidStorage(
-                                "global leaf local page offset exceeds usize".to_string(),
-                            )
-                        })?;
-                    let local_end = local_start
-                        .checked_add(page.batch_bytes as usize)
-                        .ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "global leaf local page range overflows".to_string(),
-                            )
-                        })?;
-                    let block = stored.get(local_start..local_end).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "global leaf coalesced range is truncated".to_string(),
-                        )
-                    })?;
-                    let batch = crate::global_leaf::decode_global_leaf_page_ref(
-                        page,
-                        block,
-                        dimensions,
-                        self.manifest.build_config.vector_element_type,
-                    )?;
-                    decoded.extend(
-                        crate::global_leaf::decode_global_leaf_rows(
-                            &batch,
-                            dimensions,
-                            self.manifest.build_config.vector_element_type,
-                        )?
-                        .into_iter()
-                        .map(|row| RoutedDecodedGlobalLeafRow { row }),
-                    );
-                }
-                Ok::<_, BorsukError>((decoded, stored.len() as u64))
-            },
-        );
-        let mut rows = Vec::new();
-        let mut bytes = 0_u64;
-        for read in reads {
-            let (mut decoded, read_bytes) = read?;
-            rows.append(&mut decoded);
-            bytes = bytes.saturating_add(read_bytes);
-        }
-        Ok((rows, bytes))
     }
 
     fn global_leaf_exact_block_read_groups(
@@ -16814,24 +16862,29 @@ impl BorsukIndex {
             && options.mode.leaf_mode() == expected_leaf_mode
             && !options.guaranteed_recall
             && !options.disable_coarse_quantizer
-            && !matches!(
+            && (!matches!(
                 options.mode,
                 SearchMode::Approx {
                     projected_reads: Some(true),
                     ..
                 }
-            )
+            ) || self.manifest.global_cell_card_ann_ref.is_some())
             && options.filter.is_none()
             && !options.include_metadata
-            && self.manifest.global_ann_ref.is_some();
+            && (self.manifest.global_ann_ref.is_some()
+                ^ self.manifest.global_cell_card_ann_ref.is_some());
         if !eligible {
             return Ok(None);
         }
-        self.manifest
-            .global_ann_ref
-            .as_ref()
-            .expect("eligibility requires a V12 reference")
-            .validate_serving_shape()?;
+        if let Some(reference) = self.manifest.global_ann_ref.as_ref() {
+            reference.validate_serving_shape()?;
+        } else {
+            self.manifest
+                .global_cell_card_ann_ref
+                .as_ref()
+                .expect("eligibility requires one global ANN reference")
+                .validate()?;
+        }
         let page_budget = match options.mode {
             SearchMode::Approx { max_segments, .. } => match max_segments.unwrap_or(16) {
                 budget @ (4 | 8 | 16 | 32) => budget,
@@ -16848,6 +16901,363 @@ impl BorsukIndex {
         }))
     }
 
+    fn search_resident_global_cell_cards(
+        &self,
+        query: &[f32],
+        options: &SearchOptions,
+        include_vectors: bool,
+        started: Instant,
+        requests_before: &RequestCounts,
+        context: ResidentGlobalV12Context<'_>,
+    ) -> Result<Option<SearchExecution>> {
+        let Some(global_ref) = self.manifest.global_cell_card_ann_ref.as_ref() else {
+            return Ok(None);
+        };
+        global_ref.validate()?;
+        let pins = self.resident_global_ann_pins.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V14 manifest is visible without authenticated resident pins".to_string(),
+            )
+        })?;
+        let root = pins.cell_card_root.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V14 manifest is visible without its authenticated resident root".to_string(),
+            )
+        })?;
+        let codebook = self.load_resident_global_codebook(global_ref.codebook())?;
+        let pq_query = if self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry()
+        {
+            crate::metric::unit_l2_normalized(query)
+        } else {
+            query.to_vec()
+        };
+        let selected_cells = self.resident_global_selected_cells(
+            &codebook,
+            &pq_query,
+            usize::try_from(global_ref.codebook().probes())
+                .unwrap_or(usize::MAX)
+                .max(1)
+                .min(codebook.cell_count()),
+        )?;
+        let caller_max_bytes = match options.mode {
+            SearchMode::Approx { max_bytes, .. } => max_bytes,
+            SearchMode::Exact => unreachable!("V14 eligibility requires approximate search"),
+        };
+        let max_bytes = caller_max_bytes.unwrap_or(GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES);
+        let card_indexes = root.card_indexes_for_cells(&selected_cells)?;
+        let centroid_distances = codebook.score_cell_card_codes(
+            &pq_query,
+            card_indexes
+                .iter()
+                .map(|index| root.centroid_code(*index))
+                .collect::<Result<Vec<_>>>()?,
+        )?;
+        let head_card_budget = context
+            .page_budget
+            .saturating_mul(GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER)
+            .max(context.page_budget);
+        let ranked_card_indexes = rank_cell_card_head_indexes(
+            root,
+            &card_indexes,
+            &centroid_distances,
+            head_card_budget,
+        )?;
+        let (head_plan, head_limited) = match plan_ranked_cell_card_head_wave(
+            root,
+            &ranked_card_indexes,
+            max_bytes,
+            GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
+        ) {
+            Ok(plan) => plan,
+            Err(BorsukError::RecallGuaranteeViolated { .. }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        // Reserve both dependent waves with one permit. Retaining a head permit
+        // and then acquiring another permit from the same weighted gate can
+        // self-deadlock when the head wave already fills the configured cap.
+        let _wave_memory_permit = self
+            .read_runtime
+            .transient_admission
+            .as_ref()
+            .map(|gate| gate.acquire_owned(max_bytes.saturating_mul(4).max(1)));
+        let head_reads = bounded_io_map_with_gate(
+            head_plan.reads(),
+            GLOBAL_LEAF_CODE_READ_WIDTH,
+            Some(&self.global_pq_rerank_admission),
+            |read| {
+                self.storage
+                    .read_range(&read.group.path, read.start..read.end)
+            },
+        );
+        let mut fetched_heads = Vec::with_capacity(head_reads.len());
+        for read in head_reads {
+            fetched_heads.push(read?);
+        }
+        let heads = decode_cell_card_head_wave(
+            &head_plan,
+            &fetched_heads,
+            self.manifest.config.dimensions,
+            self.manifest.build_config.vector_element_type,
+        )?;
+        let approximate_started = Instant::now();
+        let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
+        let ranked = rank_cell_card_exact_blocks(
+            &heads,
+            &distances,
+            global_leaf_exact_block_budget(context.page_budget, options.k)
+                .min(GLOBAL_LEAF_QUERY_WAVE_PAGES),
+            options.k,
+        )?;
+        let global_approximate_us =
+            u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let declined_execution = |reason| {
+            let segments_total =
+                usize::try_from(global_ref.source_segments()).unwrap_or(usize::MAX);
+            SearchExecution {
+                report: SearchReport {
+                    hits: Vec::new(),
+                    leaf_mode: "bounded-cell-card-v14".to_string(),
+                    termination_reason: reason,
+                    recall_guarantee: RecallGuarantee::Degraded,
+                    segments_total,
+                    segments_searched: 0,
+                    segments_skipped: segments_total,
+                    routing_page_indexes_read: 0,
+                    routing_pages_read: 0,
+                    bytes_read: head_plan.physical_bytes(),
+                    prefetched_bytes_unused: head_plan.speculative_bytes(),
+                    graph_bytes_read: 0,
+                    decoded_cache_hits: 0,
+                    decoded_cache_bytes_read: 0,
+                    object_cache_hits: 0,
+                    object_cache_misses: 0,
+                    disk_cache_bytes_read: 0,
+                    backing_bytes_read: 0,
+                    disk_cache_reads: 0,
+                    backing_reads: 0,
+                    cache_repairs: 0,
+                    records_considered: 0,
+                    records_scored: 0,
+                    graph_candidates_added: 0,
+                    global_graph_chunks_searched: 0,
+                    global_scan_chunks_searched: 0,
+                    global_identity_rows_resolved: 0,
+                    global_exact_vectors_fetched: 0,
+                    global_leaf_directory_reads: 0,
+                    global_leaf_directory_bytes: 0,
+                    global_leaf_code_pages_read: head_plan.cards(),
+                    global_leaf_code_bytes: head_plan.physical_bytes(),
+                    global_leaf_pages_read: 0,
+                    global_leaf_page_bytes: 0,
+                    global_leaf_exact_scores: 0,
+                    global_leaf_continuations: 0,
+                    global_leaf_waves: 1,
+                    global_base_approximate_us: global_approximate_us,
+                    global_base_exact_rerank_us: 0,
+                    resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                    prepared_positioned_bytes: 0,
+                    collection_resident_bytes: 0,
+                    retained_bytes: 0,
+                    retained_capacity_bytes: 0,
+                    retained_peak_bytes: 0,
+                    transient_bytes: 0,
+                    transient_capacity_bytes: 0,
+                    transient_peak_bytes: 0,
+                    elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    requests: self.storage.request_counts().delta(requests_before),
+                    rows_evaluated: 0,
+                    rows_passed_filter: 0,
+                    segments_pruned_by_filter: 0,
+                    wal_cells_examined: 0,
+                    wal_lanes_examined: 0,
+                    wal_runs_examined: 0,
+                    wal_records_examined: 0,
+                    wal_snapshot_retries: 0,
+                },
+                vectors: Vec::new(),
+            }
+        };
+        let Some(exact_budget) = max_bytes
+            .checked_sub(head_plan.physical_bytes())
+            .filter(|remaining| *remaining > 0)
+        else {
+            return Ok(Some(declined_execution(SearchTerminationReason::MaxBytes)));
+        };
+        if resident_global_latency_expired(options, started) {
+            return Ok(Some(declined_execution(
+                SearchTerminationReason::MaxLatency,
+            )));
+        }
+        let (exact_plan, exact_limited) = match plan_ranked_cell_card_exact_wave(
+            &ranked,
+            exact_budget,
+            GLOBAL_LEAF_QUERY_WAVE_PAGES,
+        ) {
+            Ok(plan) => plan,
+            Err(BorsukError::RecallGuaranteeViolated { reason }) => {
+                return Ok(Some(declined_execution(reason)));
+            }
+            Err(error) => return Err(error),
+        };
+        let exact_started = Instant::now();
+        let exact_reads = bounded_io_map_with_gate(
+            exact_plan.reads(),
+            GLOBAL_LEAF_CODE_READ_WIDTH,
+            Some(&self.global_pq_rerank_admission),
+            |read| {
+                self.storage
+                    .read_range(&read.group.path, read.start..read.end)
+            },
+        );
+        let mut fetched_exact = Vec::with_capacity(exact_reads.len());
+        for read in exact_reads {
+            fetched_exact.push(read?);
+        }
+        let exact_blocks = decode_cell_card_exact_wave(
+            &exact_plan,
+            &heads,
+            &fetched_exact,
+            self.manifest.config.dimensions,
+            self.manifest.build_config.vector_element_type,
+        )?;
+        let identity_rows = heads
+            .iter()
+            .try_fold(0_usize, |total, head| {
+                total.checked_add(head.head.codes.len())
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V14 identity row count overflows".to_string())
+            })?;
+        let rows = exact_blocks
+            .into_iter()
+            .flat_map(|block| block.rows)
+            .map(|row| RoutedDecodedGlobalLeafRow { row })
+            .collect::<Vec<_>>();
+        let records_considered = rows.len();
+        let mut winners = BTreeMap::new();
+        self.merge_global_leaf_rows(&mut winners, rows, context.mutation_states)?;
+        let mut scored = winners
+            .into_values()
+            .map(|candidate| {
+                Ok((
+                    self.manifest
+                        .config
+                        .metric
+                        .distance_unchecked(query, &candidate.row.vector)?,
+                    candidate.row.id,
+                    candidate.row.vector,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        scored.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        let records_scored = scored.len();
+        scored.truncate(options.k);
+        let hits = scored
+            .iter()
+            .map(|(distance, id, _)| SearchHit {
+                id: id.clone(),
+                distance: *distance,
+                metadata: None,
+            })
+            .collect::<Vec<_>>();
+        let vectors = if include_vectors {
+            scored.into_iter().map(|(_, _, vector)| vector).collect()
+        } else {
+            Vec::new()
+        };
+        let bytes_read = head_plan
+            .physical_bytes()
+            .checked_add(exact_plan.physical_bytes())
+            .ok_or_else(|| BorsukError::InvalidStorage("V14 query bytes overflow".to_string()))?;
+        let speculative_bytes = head_plan
+            .speculative_bytes()
+            .checked_add(exact_plan.speculative_bytes())
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V14 speculative bytes overflow".to_string())
+            })?;
+        let termination_reason = resident_global_termination_reason(
+            options,
+            started,
+            head_limited || exact_limited,
+            hits.len(),
+            options.k,
+            false,
+        );
+        let segments_total = usize::try_from(global_ref.source_segments()).unwrap_or(usize::MAX);
+        Ok(Some(SearchExecution {
+            report: SearchReport {
+                hits,
+                leaf_mode: "bounded-cell-card-v14".to_string(),
+                termination_reason,
+                recall_guarantee: RecallGuarantee::Degraded,
+                segments_total,
+                segments_searched: 0,
+                segments_skipped: segments_total,
+                routing_page_indexes_read: 0,
+                routing_pages_read: 0,
+                bytes_read,
+                prefetched_bytes_unused: speculative_bytes,
+                graph_bytes_read: 0,
+                decoded_cache_hits: 0,
+                decoded_cache_bytes_read: 0,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
+                cache_repairs: 0,
+                records_considered,
+                records_scored,
+                graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
+                global_identity_rows_resolved: identity_rows,
+                global_exact_vectors_fetched: records_considered,
+                global_leaf_directory_reads: 0,
+                global_leaf_directory_bytes: 0,
+                global_leaf_code_pages_read: head_plan.cards(),
+                global_leaf_code_bytes: head_plan.physical_bytes(),
+                global_leaf_pages_read: ranked.len(),
+                global_leaf_page_bytes: exact_plan.physical_bytes(),
+                global_leaf_exact_scores: records_scored,
+                global_leaf_continuations: 1,
+                global_leaf_waves: 2,
+                global_base_approximate_us: global_approximate_us,
+                global_base_exact_rerank_us: u64::try_from(exact_started.elapsed().as_micros())
+                    .unwrap_or(u64::MAX),
+                resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                prepared_positioned_bytes: 0,
+                collection_resident_bytes: 0,
+                retained_bytes: 0,
+                retained_capacity_bytes: 0,
+                retained_peak_bytes: 0,
+                transient_bytes: 0,
+                transient_capacity_bytes: 0,
+                transient_peak_bytes: 0,
+                elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                requests: self.storage.request_counts().delta(requests_before),
+                rows_evaluated: records_considered,
+                rows_passed_filter: records_considered,
+                segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
+            },
+            vectors,
+        }))
+    }
+
     fn search_resident_global_ann(
         &self,
         query: &[f32],
@@ -16861,15 +17271,18 @@ impl BorsukIndex {
         };
         let page_budget = context.page_budget;
         let mutation_states = context.mutation_states;
-        let Some(global_ref) = self.manifest.global_ann_ref.clone() else {
-            return Ok(None);
-        };
+        let cell_card_v14 = self.manifest.global_cell_card_ann_ref.is_some();
         if resident_global_latency_expired(options, started) {
             let segments_total = self.manifest.segments.len();
             return Ok(Some(SearchExecution {
                 report: SearchReport {
                     hits: Vec::new(),
-                    leaf_mode: "bounded-arrow-leaf-v13".to_string(),
+                    leaf_mode: if cell_card_v14 {
+                        "bounded-cell-card-v14"
+                    } else {
+                        "bounded-arrow-leaf-v13"
+                    }
+                    .to_string(),
                     termination_reason: SearchTerminationReason::MaxLatency,
                     recall_guarantee: RecallGuarantee::Degraded,
                     segments_total,
@@ -16930,6 +17343,19 @@ impl BorsukIndex {
                 vectors: Vec::new(),
             }));
         }
+        if cell_card_v14 {
+            return self.search_resident_global_cell_cards(
+                query,
+                options,
+                include_vectors,
+                started,
+                requests_before,
+                context,
+            );
+        }
+        let Some(global_ref) = self.manifest.global_ann_ref.clone() else {
+            return Ok(None);
+        };
         let routing_started = Instant::now();
         let codebook = self.load_resident_global_codebook(global_ref.codebook())?;
         let pq_query = if self
@@ -17589,7 +18015,7 @@ impl BorsukIndex {
         summaries: &[SegmentSummary],
         leaf_epoch: u64,
         purge_epoch: u64,
-    ) -> Result<Option<GlobalAnnRef>> {
+    ) -> Result<Option<GlobalCellCardAnnRef>> {
         if summaries.is_empty() {
             return Ok(None);
         }
@@ -17705,13 +18131,12 @@ impl BorsukIndex {
             dimensions,
             self.manifest.build_config.vector_element_type,
         )?;
-        let mut leaf_writer = GlobalLeafPersistenceWriter::new(
-            &self.storage,
-            dimensions,
-            self.manifest.build_config.vector_element_type,
-            descriptor_checksum.clone(),
-        )?;
+        let mut cell_writer = None::<CellCardGroupWriter>;
+        let mut cell_groups = Vec::new();
+        let mut cell_cards = Vec::new();
+        let mut cell_group_storage_bytes = 0_u64;
         let mut row_start = 0_usize;
+        let mut next_leaf_by_cell = BTreeMap::new();
         let mut min_stamp = None::<MutationStamp>;
         let mut max_stamp = None::<MutationStamp>;
         for_each_bounded_io_wave(
@@ -17787,6 +18212,7 @@ impl BorsukIndex {
                     };
                     let pages = build_global_leaf_pages(
                         std::slice::from_mut(&mut source),
+                        &mut next_leaf_by_cell,
                         global_code_width,
                         leaf_quantizer.uses_product_code_locality(),
                         dimensions,
@@ -17794,24 +18220,74 @@ impl BorsukIndex {
                         normalize,
                         &leaf_quantizer,
                     )?;
-                    leaf_writer.push_cell_chunk(pages)?;
+                    for page in pages {
+                        if cell_writer.is_none() {
+                            cell_writer = Some(CellCardGroupWriter::new(
+                                dimensions,
+                                self.manifest.build_config.vector_element_type,
+                                global_code_width,
+                            )?);
+                        }
+                        let push = cell_writer
+                            .as_mut()
+                            .expect("cell-card writer was initialized")
+                            .try_push(page)?;
+                        if let CellCardPush::Full(page) = push {
+                            let encoded = cell_writer
+                                .take()
+                                .expect("full cell-card writer is present")
+                                .finish()?;
+                            let path =
+                                encoded.content_addressed_path("global-cell-cards/v14/groups")?;
+                            self.storage
+                                .write_bytes_content_addressed(&path, &encoded.bytes)?;
+                            cell_group_storage_bytes = cell_group_storage_bytes
+                                .checked_add(encoded.bytes.len() as u64)
+                                .ok_or_else(|| {
+                                    BorsukError::InvalidStorage(
+                                        "V14 cell-card storage bytes overflow".into(),
+                                    )
+                                })?;
+                            let (group, cards) = encoded.references(&path)?;
+                            cell_groups.push(group);
+                            cell_cards.extend(cards);
+                            let mut next = CellCardGroupWriter::new(
+                                dimensions,
+                                self.manifest.build_config.vector_element_type,
+                                global_code_width,
+                            )?;
+                            if !matches!(next.try_push(page)?, CellCardPush::Accepted) {
+                                return Err(BorsukError::InvalidStorage(
+                                    "V14 cell-card page does not fit an empty group".into(),
+                                ));
+                            }
+                            cell_writer = Some(next);
+                        }
+                    }
                 }
                 GlobalPqCellSpoolEvent::FinalizeCell { cell } => {
-                    leaf_writer.finalize_cell(cell)?;
+                    let _ = cell;
                 }
             }
             Ok(())
         })?;
-        let artifacts = leaf_writer.finish()?;
+        if let Some(writer) = cell_writer.take() {
+            let encoded = writer.finish()?;
+            let path = encoded.content_addressed_path("global-cell-cards/v14/groups")?;
+            self.storage
+                .write_bytes_content_addressed(&path, &encoded.bytes)?;
+            cell_group_storage_bytes = cell_group_storage_bytes
+                .checked_add(encoded.bytes.len() as u64)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V14 cell-card storage bytes overflow".into())
+                })?;
+            let (group, cards) = encoded.references(&path)?;
+            cell_groups.push(group);
+            cell_cards.extend(cards);
+        }
         if spooled_rows != vectors_seen || row_start != vectors_seen {
             return Err(BorsukError::InvalidStorage(format!(
                 "resident global PQ row count changed during build: sampled {vectors_seen}, spooled {spooled_rows}, encoded {row_start}"
-            )));
-        }
-        if artifacts.rows != vectors_seen {
-            return Err(BorsukError::InvalidStorage(format!(
-                "resident global leaf coverage is {}, expected {vectors_seen}",
-                artifacts.rows
             )));
         }
         let codebook = GlobalCodebookRef::new(
@@ -17834,37 +18310,43 @@ impl BorsukIndex {
             codebook_resident_bytes,
             codebook_storage_bytes,
         );
-        let base = GlobalLeafRunRef::new_base(
-            descriptor_checksum,
-            artifacts.directory,
-            u64::try_from(artifacts.rows).map_err(|_| {
-                BorsukError::InvalidStorage("V12 base row count exceeds u64".into())
-            })?,
-            u64::try_from(artifacts.page_count).map_err(|_| {
-                BorsukError::InvalidStorage("V12 base page count exceeds u64".into())
-            })?,
-            u64::try_from(artifacts.bundle_count).map_err(|_| {
-                BorsukError::InvalidStorage("V12 base bundle count exceeds u64".into())
-            })?,
-            u64::try_from(artifacts.page_count).map_err(|_| {
-                BorsukError::InvalidStorage("V12 base page count exceeds u64".into())
-            })?,
-            0,
-            artifacts.storage_bytes,
-            artifacts.resident_bytes,
-            min_stamp.ok_or_else(|| {
-                BorsukError::InvalidStorage("V12 base run has no minimum mutation stamp".into())
-            })?,
-            max_stamp.ok_or_else(|| {
-                BorsukError::InvalidStorage("V12 base run has no maximum mutation stamp".into())
-            })?,
+        let _ = (min_stamp, max_stamp);
+        let root = encode_cell_card_run_root(&descriptor_checksum, &cell_groups, &cell_cards)?;
+        let root_checksum = blake3::Hash::from_bytes(root.reference.checksum)
+            .to_hex()
+            .to_string();
+        let root_path = format!(
+            "global-cell-cards/v14/roots/{}/root-{root_checksum}.parquet",
+            &root_checksum[..2]
         );
-        GlobalAnnRef::new_offline_base(codebook, base, leaf_epoch, purge_epoch).map(Some)
-    }
-
-    fn refresh_resident_global_ann(&mut self) -> Result<()> {
-        let summaries = self.active_segment_summaries()?;
-        self.refresh_resident_global_ann_from_summaries(&summaries, 0)
+        self.storage
+            .write_bytes_content_addressed(&root_path, &root.bytes)?;
+        let resident_root =
+            decode_cell_card_run_root(&root.reference, &root.bytes, &descriptor_checksum)?;
+        if resident_root.card_count() != cell_cards.len() {
+            return Err(BorsukError::InvalidStorage(
+                "V14 resident root changed its card coverage".into(),
+            ));
+        }
+        let storage_bytes = codebook_storage_bytes
+            .checked_add(cell_group_storage_bytes)
+            .and_then(|bytes| bytes.checked_add(root.reference.encoded_bytes))
+            .ok_or_else(|| BorsukError::InvalidStorage("V14 storage total overflows".into()))?;
+        GlobalCellCardAnnRef::new(
+            codebook,
+            root_path,
+            root.reference,
+            u64::try_from(summaries.len()).map_err(|_| {
+                BorsukError::InvalidStorage("V14 source segment count exceeds u64".into())
+            })?,
+            vectors_seen as u64,
+            storage_bytes,
+            cell_groups.len() as u64 + 2,
+            resident_root.resident_bytes() as u64 + codebook_resident_bytes,
+            leaf_epoch,
+            purge_epoch,
+        )
+        .map(Some)
     }
 
     #[allow(dead_code, reason = "Task 3 candidate is consumed by Task 4")]
@@ -17964,6 +18446,7 @@ impl BorsukIndex {
         let code_width = codebook.code_bytes_per_vector();
         let mut minimum_stamp = None::<MutationStamp>;
         let mut maximum_stamp = None::<MutationStamp>;
+        let mut next_leaf_by_cell = BTreeMap::new();
         let mut start = 0;
         while start < rows.len() {
             let cell = rows[start].cell_ordinal;
@@ -18012,6 +18495,7 @@ impl BorsukIndex {
             }];
             let pages = build_global_leaf_pages(
                 &mut pending,
+                &mut next_leaf_by_cell,
                 code_width,
                 codebook.scan_quantizer().uses_product_code_locality(),
                 dimensions,
@@ -19120,6 +19604,7 @@ impl BorsukIndex {
         let code_width = codebook.code_bytes_per_vector();
         let mut minimum_stamp = None::<MutationStamp>;
         let mut maximum_stamp = None::<MutationStamp>;
+        let mut next_leaf_by_cell = BTreeMap::new();
         for (cell, records) in cells {
             let mut code_bytes = Vec::with_capacity(records.len().saturating_mul(code_width));
             let mut exact_bytes = Vec::new();
@@ -19165,6 +19650,7 @@ impl BorsukIndex {
             }];
             let pages = build_global_leaf_pages(
                 &mut pending,
+                &mut next_leaf_by_cell,
                 code_width,
                 codebook.scan_quantizer().uses_product_code_locality(),
                 dimensions,
@@ -19211,7 +19697,8 @@ impl BorsukIndex {
             self.rebuild_global_ann_epoch_from_segments(summaries, leaf_epoch, purge_epoch)?;
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
-        manifest.global_ann_ref = desired;
+        manifest.global_cell_card_ann_ref = desired;
+        manifest.global_ann_ref = None;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
         if manifest.segments.is_empty() {
@@ -24762,6 +25249,7 @@ fn partition_global_leaf_code_rows(
 #[allow(clippy::too_many_arguments)]
 fn build_global_leaf_pages(
     pending: &mut [PendingGlobalPqChunk],
+    next_leaf: &mut BTreeMap<u32, u32>,
     code_width: usize,
     use_code_space: bool,
     dimensions: usize,
@@ -24806,7 +25294,6 @@ fn build_global_leaf_pages(
     }
     let partitions =
         global_leaf_partition_order(&partition_rows, code_width, exact_row_bytes, use_code_space)?;
-    let mut next_leaf = BTreeMap::<u32, u32>::new();
     let mut pages = Vec::new();
     for partition in partitions {
         let cell_index = partition_rows[partition[0]].cell_index;
@@ -25806,6 +26293,11 @@ fn is_global_pq_path(path: &str) -> bool {
         || ((path.starts_with("global-leaf/v12/codebooks/")
             || path.starts_with("global-leaf/v12/directories/"))
             && path.ends_with(".parquet"))
+}
+
+fn is_global_cell_card_path(path: &str) -> bool {
+    (path.starts_with("global-cell-cards/v14/groups/") && path.ends_with(".arrow"))
+        || (path.starts_with("global-cell-cards/v14/roots/") && path.ends_with(".parquet"))
 }
 
 /// Whether the filter's shape could ever be answered by the per-segment index
@@ -28286,10 +28778,10 @@ mod tests {
         (directory, cache, index)
     }
 
-    fn ann_from_mutated_json(
-        reference: &GlobalAnnRef,
+    fn cell_card_ann_from_mutated_json(
+        reference: &GlobalCellCardAnnRef,
         mutate: impl FnOnce(&mut serde_json::Value),
-    ) -> GlobalAnnRef {
+    ) -> GlobalCellCardAnnRef {
         let mut value = serde_json::to_value(reference).unwrap();
         mutate(&mut value);
         serde_json::from_value(value).unwrap()
@@ -28944,7 +29436,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.hits.len(), 2);
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v13");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v14");
         assert!(report.wal_records_examined > 0);
         assert!(report.elapsed_ms >= 100);
         assert_eq!(
@@ -29267,61 +29759,15 @@ mod tests {
     fn retained_manifest_gc_walk_validates_catalog_codebook_without_building_router() {
         let (_directory, mut index) = build_finished_resident_global_v12_index();
         let catalog_ref = index.manifest.logical_cell_catalog_ref.clone().unwrap();
-        let router = Arc::clone(index.manifest.logical_cell_router.as_ref().unwrap());
-        let descriptor = GlobalCodebookDescriptor::new_catalog_pinned(
-            GlobalScanQuantizer::from(
-                crate::turboquant::FastTurboQuantProdScanQuantizer::new(
-                    crate::DEFAULT_TURBOQUANT_SEED,
-                    8,
-                    4,
-                )
-                .unwrap(),
-            )
-            .state(),
-            VectorMetric::Euclidean,
-            crate::VectorElementType::Float32,
-            &catalog_ref,
-            index.manifest.logical_cell_routing_strategy,
-            1,
-            1,
-            0,
-        )
-        .unwrap();
-        let descriptor_bytes = descriptor.encode().unwrap();
-        let descriptor_checksum = blake3::hash(&descriptor_bytes).to_hex().to_string();
-        let descriptor_path = format!("global-pq/codebooks/{descriptor_checksum}.parquet");
-        index
-            .storage
-            .write_bytes(&descriptor_path, &descriptor_bytes)
-            .unwrap();
-        let resident =
-            ResidentGlobalCodebook::load_for_catalog(descriptor, &catalog_ref, router).unwrap();
-        let codebook_ref = GlobalCodebookRef::new(
-            descriptor_path.clone(),
-            descriptor_checksum.clone(),
-            VectorMetric::Euclidean,
-            8,
-            crate::VectorElementType::Float32,
-            resident.code_bytes_per_vector(),
-            catalog_ref.cell_count,
-            1,
-            1,
-            0,
-            resident.resident_bytes() as u64,
-            descriptor_bytes.len() as u64,
-        );
-        let current_ann = index.manifest.global_ann_ref.as_ref().unwrap();
-        let retained_ann = ann_from_mutated_json(current_ann, |value| {
-            value["codebook"] = serde_json::to_value(&codebook_ref).unwrap();
-            value["base"] = serde_json::Value::Null;
-            value["base_rows"] = serde_json::Value::from(0);
-            value["rows"] = serde_json::Value::from(0);
-            value["storage_bytes"] = serde_json::Value::from(codebook_ref.storage_bytes());
-            value["resident_bytes"] = serde_json::Value::from(codebook_ref.resident_bytes());
-        });
-        retained_ann.validate().unwrap();
+        let descriptor_path = index
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .unwrap()
+            .codebook()
+            .descriptor_path()
+            .to_string();
         let mut retained_manifest = index.manifest.clone();
-        retained_manifest.global_ann_ref = Some(retained_ann);
         retained_manifest.logical_cell_catalog = None;
         retained_manifest.logical_cell_router = None;
 
@@ -33855,6 +34301,12 @@ mod tests {
         assert_eq!(recommended_segment_max_vectors(96), 43_690);
         assert_eq!(deep_100m_segments, 2_289);
         assert_eq!(deep_100m_probes, 256);
+        assert_eq!(GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS, 16);
+        assert_eq!(
+            GLOBAL_LEAF_QUERY_WAVE_PAGES * GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER,
+            128,
+            "the resident centroid wave narrows 256 logical probes to at most 128 card heads before the 16-GET planner cap"
+        );
         assert!(
             deep_100m_probes * 64 <= deep_100m_coarse_cells,
             "100M Deep-Image probes no more than 1/64 of the coarse routing space by default"
@@ -34009,6 +34461,7 @@ mod tests {
 
         let pages = build_global_leaf_pages(
             &mut pending,
+            &mut BTreeMap::new(),
             quantizer.code_bytes_per_vector(),
             true,
             2,
@@ -34041,6 +34494,73 @@ mod tests {
                 .collect::<Vec<_>>()
         );
     }
+
+    #[test]
+    fn global_leaf_pages_continue_ordinals_across_spool_chunks_for_one_cell() {
+        let training = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let quantizer = GlobalScanQuantizer::from(
+            RotatedProductQuantizer::fit(
+                ProductQuantizerConfig {
+                    rotation: crate::rotated_product_quantizer::ProductRotation::Identity,
+                    seed: 11,
+                    dimensions: 2,
+                    subspaces: 1,
+                    centroids: 2,
+                    sample_limit: training.len(),
+                    iterations: 2,
+                },
+                &training,
+            )
+            .unwrap(),
+        );
+        let chunk = |id: &str, version: u64| {
+            let vector = [version as f32, version as f32];
+            PendingGlobalPqChunk {
+                cell_index: 9,
+                chunk: crate::global_pq_sidecar::GlobalPqChunkBytes {
+                    bytes: quantizer.encode(&vector).unwrap(),
+                    exact_bytes: vector.into_iter().flat_map(f32::to_le_bytes).collect(),
+                    identities: vec![(
+                        RecordId::from(id),
+                        MutationStamp::new(
+                            MutationVersion::from_parts(version, [version as u8; 16]),
+                            [version as u8 + 1; 32],
+                        ),
+                    )],
+                    rows: 1,
+                },
+            }
+        };
+        let mut next_leaf = BTreeMap::new();
+        let mut first = [chunk("first", 1)];
+        let first = build_global_leaf_pages(
+            &mut first,
+            &mut next_leaf,
+            quantizer.code_bytes_per_vector(),
+            true,
+            2,
+            crate::VectorElementType::Float32,
+            false,
+            &quantizer,
+        )
+        .unwrap();
+        let mut second = [chunk("second", 2)];
+        let second = build_global_leaf_pages(
+            &mut second,
+            &mut next_leaf,
+            quantizer.code_bytes_per_vector(),
+            true,
+            2,
+            crate::VectorElementType::Float32,
+            false,
+            &quantizer,
+        )
+        .unwrap();
+
+        assert_eq!(first[0].leaf_ordinal, 0);
+        assert_eq!(second[0].leaf_ordinal, 1);
+        assert_eq!(next_leaf.get(&9), Some(&2));
+    }
     #[test]
     fn create_refuses_to_replace_an_existing_index() {
         let dir = tempfile::tempdir().unwrap();
@@ -34069,6 +34589,211 @@ mod tests {
 
         let reopened = BorsukIndex::open(&uri).unwrap();
         assert_eq!(reopened.stats().records, 1);
+    }
+
+    #[test]
+    fn resident_global_v14_base_routes_and_exact_scores_without_v13_leaf_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Angular,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..128)
+            .map(|row| {
+                (0..8)
+                    .map(|dimension| {
+                        (((row + 1) * (dimension + 3) * 17) % 101) as f32 / 100.0 + 0.01
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        index
+            .add(
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| {
+                        VectorRecord::new(format!("v14-row-{row}"), vector.clone())
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let reference = index
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .expect("bulk-load finish must publish V14 cell cards");
+        reference.validate().unwrap();
+        assert!(reference.storage_objects() >= 3, "{reference:?}");
+        assert!(index.manifest.global_ann_ref.is_none());
+        let root = index
+            .resident_global_ann_pins
+            .as_ref()
+            .and_then(|pins| pins.cell_card_root.as_ref())
+            .unwrap();
+        let live_v14_paths = std::iter::once(reference.root_path().to_string())
+            .chain(root.groups().iter().map(|group| group.path.clone()))
+            .collect::<Vec<_>>();
+        let orphan = "global-cell-cards/v14/groups/orphan.arrow";
+        index.storage.write_bytes(orphan, b"orphan").unwrap();
+        let gc = index
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: true,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+        assert!(gc.candidates.iter().any(|path| path == orphan));
+        assert!(
+            live_v14_paths
+                .iter()
+                .all(|path| !gc.candidates.contains(path)),
+            "live V14 roots/groups must be retained: {gc:?}"
+        );
+        drop(index);
+
+        let legacy_leaf = dir.path().join("global-leaf/v13");
+        if legacy_leaf.exists() {
+            std::fs::remove_dir_all(&legacy_leaf).unwrap();
+        }
+        std::fs::remove_dir_all(dir.path().join("vectors")).unwrap();
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &vectors[37],
+                SearchOptions::approx(3, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64)
+                    .with_projected_reads(true),
+            )
+            .unwrap();
+        assert_eq!(report.hits[0].id, RecordId::from("v14-row-37"));
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v14");
+        assert_eq!(report.segments_searched, 0);
+        assert_eq!(report.global_leaf_directory_reads, 0);
+        assert_eq!(report.global_leaf_continuations, 1);
+        assert_eq!(report.global_leaf_waves, 2);
+    }
+
+    #[test]
+    fn resident_global_v14_applies_positioned_delete_overlay_without_segment_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("v14-mvcc-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index.delete(["v14-mvcc-0"]).unwrap();
+        drop(index);
+        std::fs::remove_dir_all(dir.path().join("vectors")).unwrap();
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        let report = reopened
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v14", "{report:?}");
+        assert_eq!(report.hits[0].id, RecordId::from("v14-mvcc-1"));
+        assert_eq!(report.segments_searched, 0);
+        assert_eq!(report.global_leaf_waves, 2);
+    }
+
+    #[test]
+    fn resident_global_v14_tracks_online_flush_and_compaction_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 32,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("v14-life-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        assert!(index.manifest.global_cell_card_ann_ref.is_some());
+
+        index
+            .upsert(vec![VectorRecord::new("v14-life-0", vec![0.25; 8])])
+            .unwrap();
+        index.flush().unwrap();
+        assert!(
+            index.manifest.global_cell_card_ann_ref.is_none(),
+            "an online segment change must not leave the prior offline ANN visible"
+        );
+
+        index
+            .compact(CompactionOptions {
+                source_level: 0,
+                target_level: 1,
+                max_segments: None,
+                min_segments: 1,
+                target_segment_max_vectors: Some(64),
+                target_segment_max_radius: None,
+            })
+            .unwrap();
+        let rebuilt = index
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .expect("a full compaction must publish a fresh V14 authority");
+        assert_eq!(
+            rebuilt.source_segments() as usize,
+            index.active_segment_summaries().unwrap().len()
+        );
+
+        index
+            .compact(CompactionOptions {
+                source_level: 1,
+                target_level: 2,
+                max_segments: Some(1),
+                min_segments: 1,
+                target_segment_max_vectors: Some(64),
+                target_segment_max_radius: None,
+            })
+            .unwrap();
+        assert!(
+            index.manifest.global_cell_card_ann_ref.is_none(),
+            "a partial compaction must clear an authority that no longer covers every segment"
+        );
+        drop(index);
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(
+            reopened.get_vector("v14-life-0").unwrap(),
+            Some(vec![0.25; 8])
+        );
     }
 
     #[test]
@@ -34102,7 +34827,7 @@ mod tests {
         index.add(records).unwrap();
         index.finish_bulk_load().unwrap();
         assert!(
-            index.manifest.global_ann_ref.is_some(),
+            index.manifest.global_cell_card_ann_ref.is_some(),
             "version={} leaf={:?} active={} resident={}",
             index.manifest.version,
             index.manifest.leaf_capability,
@@ -34121,12 +34846,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("row-37"));
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v13");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v14");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.segments_skipped, report.segments_total);
         assert_eq!(report.global_scan_chunks_searched, 0);
         assert_eq!(report.global_graph_chunks_searched, 0);
-        assert!(report.global_leaf_pages_read <= 4);
+        assert!(report.global_leaf_pages_read <= global_leaf_exact_block_budget(4, 3));
         assert!(report.global_leaf_code_pages_read >= report.global_leaf_pages_read);
         assert!(report.global_leaf_code_bytes > 0);
         assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
@@ -34135,12 +34860,10 @@ mod tests {
             "V13 exact rerank fetched whole pages instead of bounded row blocks: {report:?}"
         );
         assert_eq!(report.global_leaf_exact_scores, report.records_scored);
-        assert_eq!(report.global_leaf_waves, 1);
+        assert_eq!(report.global_leaf_waves, 2);
         assert_eq!(
             report.bytes_read,
-            report.global_leaf_directory_bytes
-                + report.global_leaf_code_bytes
-                + report.global_leaf_page_bytes
+            report.global_leaf_code_bytes + report.global_leaf_page_bytes
         );
         assert!(
             report.requests.gets
@@ -34152,7 +34875,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_nprobe_one_self_query_uses_codebook_cells_without_catalog() {
+    fn resident_global_self_query_uses_v14_with_catalog_routing() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -34184,10 +34907,7 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
-        index.manifest.logical_cell_catalog_ref = None;
-        index.manifest.logical_cell_catalog = None;
-
-        let global = index.manifest.global_ann_ref.as_ref().unwrap();
+        let global = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
         let codebook = index
             .load_resident_global_codebook(global.codebook())
             .unwrap();
@@ -34197,33 +34917,14 @@ mod tests {
             .resident_global_selected_cells(&codebook, query, 1)
             .unwrap();
         assert_eq!(selected.len(), 1);
-        let runs = global
-            .base()
-            .map(|run| (None, run))
-            .into_iter()
-            .collect::<Vec<_>>();
         let options = SearchOptions::approx(1, LeafMode::SrhtPqScan)
-            .with_max_segments(1)
+            .with_max_segments(4)
             .with_max_candidates_per_segment(256);
-        let loaded = index
-            .load_selected_global_leaf_directories(
-                global.codebook(),
-                &runs,
-                &selected,
-                &options,
-                Instant::now(),
-            )
-            .unwrap();
-        let pages = loaded
-            .directories
-            .iter()
-            .flat_map(|directory| directory.pages.iter().cloned())
-            .collect::<Vec<_>>();
-        let (rows, _) = index.fetch_global_leaf_wave(&pages, &loaded.runs).unwrap();
-        assert!(
-            rows.iter().any(|row| row.row.id == "nprobe-self-173"),
-            "nprobe=1 did not route the self-query to its build-time codebook cell"
-        );
+        let report = index.search_with_report(query, options).unwrap();
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v14");
+        assert_eq!(report.segments_searched, 0);
+        assert_eq!(report.global_leaf_waves, 2);
+        assert_eq!(report.hits[0].id, RecordId::from("nprobe-self-173"));
     }
 
     #[test]
@@ -34248,11 +34949,11 @@ mod tests {
             .unwrap();
         index.finish_bulk_load().unwrap();
 
-        let reference = index.manifest.global_ann_ref.as_ref().unwrap();
+        let reference = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
         reference.validate().unwrap();
 
         let stats = index.stats();
-        assert_eq!(stats.global_ann_layout_version, Some(13));
+        assert_eq!(stats.global_ann_layout_version, Some(14));
         assert_eq!(
             stats.global_ann_codebook_checksum.as_deref(),
             Some(reference.codebook().descriptor_checksum())
@@ -34260,14 +34961,11 @@ mod tests {
         assert_eq!(stats.global_leaf_epoch, Some(reference.leaf_epoch()));
         assert_eq!(stats.global_leaf_runs, 1);
         assert_eq!(stats.global_leaf_max_level, Some(0));
-        assert_eq!(
-            stats.global_leaf_partial_pages,
-            usize::try_from(reference.base().unwrap().partial_pages()).unwrap()
-        );
+        assert_eq!(stats.global_leaf_partial_pages, 0);
     }
 
     #[test]
-    fn resident_global_v12_rejects_corrupt_codebook_directory_and_code_plane_objects() {
+    fn resident_global_v14_rejects_corrupt_codebook_root_and_card_group_objects() {
         fn finished_index() -> (tempfile::TempDir, BorsukIndex) {
             let dir = tempfile::tempdir().unwrap();
             let mut index = BorsukIndex::create(IndexConfig {
@@ -34294,7 +34992,7 @@ mod tests {
         let (codebook_dir, codebook_index) = finished_index();
         let codebook_path = codebook_index
             .manifest
-            .global_ann_ref
+            .global_cell_card_ann_ref
             .as_ref()
             .unwrap()
             .codebook()
@@ -34314,58 +35012,47 @@ mod tests {
         let error = BorsukIndex::open(codebook_dir.path().to_string_lossy().as_ref()).unwrap_err();
         assert!(error.to_string().contains("checksum"), "{error}");
 
-        let (directory_dir, directory_index) = finished_index();
-        let directory_path = directory_index
+        let (root_dir, root_index) = finished_index();
+        let root_path = root_index
             .manifest
-            .global_ann_ref
+            .global_cell_card_ann_ref
             .as_ref()
             .unwrap()
-            .base()
-            .unwrap()
-            .directory()
-            .path()
+            .root_path()
             .to_string();
-        let mut directory_bytes = directory_index
+        let mut root_bytes = root_index
             .storage
-            .read_bytes_with_cache_status(&directory_path)
+            .read_bytes_with_cache_status(&root_path)
             .unwrap()
             .bytes;
-        directory_bytes[0] ^= 1;
-        directory_index
+        root_bytes[0] ^= 1;
+        root_index
             .storage
-            .write_bytes(&directory_path, &directory_bytes)
+            .write_bytes(&root_path, &root_bytes)
             .unwrap();
-        drop(directory_index);
-        let error = BorsukIndex::open(directory_dir.path().to_string_lossy().as_ref()).unwrap_err();
+        drop(root_index);
+        let error = BorsukIndex::open(root_dir.path().to_string_lossy().as_ref()).unwrap_err();
         assert!(error.to_string().contains("checksum"), "{error}");
 
-        let (_code_dir, code_index) = finished_index();
-        let run_ref = code_index
-            .manifest
-            .global_ann_ref
+        let (_group_dir, group_index) = finished_index();
+        let root = group_index
+            .resident_global_ann_pins
             .as_ref()
+            .and_then(|pins| pins.cell_card_root.as_ref())
             .unwrap()
-            .base()
-            .unwrap();
-        let resident = code_index
-            .load_resident_global_leaf_run(run_ref, None)
-            .unwrap();
-        let bundle = resident.root().bundles().first().unwrap();
-        let mut bundle_bytes = code_index
+            .clone();
+        let (group, head) = root.head_ref(0).unwrap();
+        let mut group_bytes = group_index
             .storage
-            .read_bytes_with_cache_status(&bundle.path)
+            .read_bytes_with_cache_status(&group.path)
             .unwrap()
             .bytes;
-        let code_start = usize::try_from(bundle.code_plane_offset).unwrap();
-        let code_end = usize::try_from(bundle.code_plane_offset + bundle.code_plane_bytes).unwrap();
-        for byte in &mut bundle_bytes[code_start..code_end] {
-            *byte ^= 1;
-        }
-        code_index
+        group_bytes[usize::try_from(head.offset).unwrap()] ^= 1;
+        group_index
             .storage
-            .write_bytes(&bundle.path, &bundle_bytes)
+            .write_bytes(&group.path, &group_bytes)
             .unwrap();
-        let error = code_index
+        let error = group_index
             .search_with_report(
                 &[7.0; 8],
                 SearchOptions::approx(3, LeafMode::SrhtPqScan)
@@ -34373,55 +35060,7 @@ mod tests {
                     .with_max_candidates_per_segment(64),
             )
             .unwrap_err();
-        assert!(error.to_string().contains("PQ-code checksum"), "{error}");
-    }
-
-    #[test]
-    fn resident_global_v12_preload_rejects_mismatched_incremental_directory() {
-        let (_directory, index) = build_finished_resident_global_v12_index();
-        let mut manifest = index.manifest.clone();
-        let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
-            let mut incremental = value["base"].clone();
-            incremental["level"] = serde_json::Value::from(1);
-            incremental["source_ranges"] = serde_json::json!({
-                "ranges": [{
-                    "lane": 0,
-                    "lease_epoch": 1,
-                    "first_sequence": 1,
-                    "last_sequence": 1
-                }]
-            });
-            let appended = incremental["rows"].as_u64().unwrap();
-            value["incremental_runs"] = serde_json::Value::Array(vec![incremental.clone()]);
-            value["coverage"] = incremental["source_ranges"].clone();
-            value["appended_live_rows"] = serde_json::Value::from(appended);
-            value["rows"] =
-                serde_json::Value::from(value["base_rows"].as_u64().unwrap() + appended);
-            value["storage_bytes"] = serde_json::Value::from(
-                value["storage_bytes"].as_u64().unwrap()
-                    + incremental["encoded_bytes"].as_u64().unwrap(),
-            );
-            value["resident_bytes"] = serde_json::Value::from(
-                value["resident_bytes"].as_u64().unwrap()
-                    + incremental["resident_bytes"].as_u64().unwrap(),
-            );
-            value["incremental_runs"][0]["directory"]["shard_count"] = serde_json::Value::from(
-                value["incremental_runs"][0]["directory"]["shard_count"]
-                    .as_u64()
-                    .unwrap()
-                    + 1,
-            );
-        });
-        ann.validate().unwrap();
-        manifest.global_ann_ref = Some(ann);
-
-        let error = index
-            .preload_resident_global_ann_for_manifest(&manifest)
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("does not match its directory"),
-            "{error}"
-        );
+        assert!(error.to_string().contains("checksum"), "{error}");
     }
 
     #[test]
@@ -34542,25 +35181,19 @@ mod tests {
 
     #[test]
     fn resident_global_v12_warm_cache_cannot_substitute_missing_durable_paths() {
-        let (_directory, index) = build_finished_resident_global_v12_index();
-
-        for field in ["codebook", "directory"] {
-            let mut manifest = index.manifest.clone();
-            let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
-                if field == "codebook" {
-                    value["codebook"]["descriptor_path"] =
-                        serde_json::Value::from("global-leaf/v12/codebooks/missing.parquet");
-                } else {
-                    value["base"]["directory"]["path"] =
-                        serde_json::Value::from("global-leaf/v12/directories/missing.parquet");
-                }
-            });
-            ann.validate().unwrap();
-            manifest.global_ann_ref = Some(ann);
+        for field in ["codebook", "root"] {
+            let (directory, index) = build_finished_resident_global_v12_index();
+            let reference = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
+            let path = if field == "codebook" {
+                reference.codebook().descriptor_path()
+            } else {
+                reference.root_path()
+            };
+            std::fs::remove_file(directory.path().join(path)).unwrap();
             let error = index
-                .preload_resident_global_ann_for_manifest(&manifest)
+                .preload_resident_global_ann_for_manifest(&index.manifest)
                 .expect_err(field);
-            assert!(error.to_string().contains("missing"), "{field}: {error}");
+            assert!(error.to_string().contains("not found"), "{field}: {error}");
         }
     }
 
@@ -34573,7 +35206,7 @@ mod tests {
         let version = reader.manifest.version;
         let descriptor_path = reader
             .manifest
-            .global_ann_ref
+            .global_cell_card_ann_ref
             .as_ref()
             .unwrap()
             .codebook()
@@ -34782,8 +35415,8 @@ mod tests {
         let (_directory, _cache, index) = build_cached_finished_resident_global_v12_index();
         let version = index.manifest.version;
         let mut candidate = index.manifest.clone();
-        candidate.global_ann_ref = Some(ann_from_mutated_json(
-            candidate.global_ann_ref.as_ref().unwrap(),
+        candidate.global_cell_card_ann_ref = Some(cell_card_ann_from_mutated_json(
+            candidate.global_cell_card_ann_ref.as_ref().unwrap(),
             |value| {
                 value["codebook"]["storage_bytes"] = serde_json::Value::from(
                     value["codebook"]["storage_bytes"].as_u64().unwrap() + 1,
@@ -34793,7 +35426,7 @@ mod tests {
             },
         ));
         candidate
-            .global_ann_ref
+            .global_cell_card_ann_ref
             .as_ref()
             .unwrap()
             .validate()
@@ -34807,76 +35440,51 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v12_binds_all_durable_run_counters() {
+    fn resident_global_v14_binds_loaded_root_counters() {
         for field in [
             "rows",
-            "pages",
-            "bundles",
-            "objects",
-            "encoded_bytes",
+            "root_bytes",
             "resident_bytes",
+            "storage_bytes",
+            "storage_objects",
         ] {
-            let (_directory, mut index) = build_finished_resident_global_v12_index();
-            index.resident_global_ann_pins = None;
-            index.resident_global_leaf_runs.clear();
+            let (_directory, index) = build_finished_resident_global_v12_index();
             let mut manifest = index.manifest.clone();
-            let ann =
-                ann_from_mutated_json(
-                    manifest.global_ann_ref.as_ref().unwrap(),
-                    |value| match field {
-                        "rows" => {
-                            value["base"]["rows"] = serde_json::Value::from(
-                                value["base"]["rows"].as_u64().unwrap() + 1,
-                            );
-                            value["base_rows"] =
-                                serde_json::Value::from(value["base_rows"].as_u64().unwrap() + 1);
-                            value["rows"] =
-                                serde_json::Value::from(value["rows"].as_u64().unwrap() + 1);
-                        }
-                        "pages" => {
-                            value["base"]["pages"] = serde_json::Value::from(
-                                value["base"]["pages"].as_u64().unwrap() + 1,
-                            );
-                            value["base"]["sealed_pages"] = serde_json::Value::from(
-                                value["base"]["sealed_pages"].as_u64().unwrap() + 1,
-                            );
-                        }
-                        "bundles" => {
-                            value["base"]["bundles"] = serde_json::Value::from(
-                                value["base"]["bundles"].as_u64().unwrap() + 1,
-                            );
-                        }
-                        "objects" => {
-                            value["base"]["directory"]["shard_count"] = serde_json::Value::from(
-                                value["base"]["directory"]["shard_count"].as_u64().unwrap() + 1,
-                            );
-                        }
-                        "encoded_bytes" => {
-                            value["base"]["encoded_bytes"] = serde_json::Value::from(
-                                value["base"]["encoded_bytes"].as_u64().unwrap() + 1,
-                            );
-                            value["storage_bytes"] = serde_json::Value::from(
-                                value["storage_bytes"].as_u64().unwrap() + 1,
-                            );
-                        }
-                        "resident_bytes" => {
-                            value["base"]["resident_bytes"] = serde_json::Value::from(
-                                value["base"]["resident_bytes"].as_u64().unwrap() + 1,
-                            );
-                            value["resident_bytes"] = serde_json::Value::from(
-                                value["resident_bytes"].as_u64().unwrap() + 1,
-                            );
-                        }
-                        _ => unreachable!(),
-                    },
-                );
+            let ann = cell_card_ann_from_mutated_json(
+                manifest.global_cell_card_ann_ref.as_ref().unwrap(),
+                |value| match field {
+                    "rows" => {
+                        value["rows"] =
+                            serde_json::Value::from(value["rows"].as_u64().unwrap() + 1);
+                    }
+                    "root_bytes" => {
+                        value["root"]["encoded_bytes"] = serde_json::Value::from(
+                            value["root"]["encoded_bytes"].as_u64().unwrap() + 1,
+                        );
+                    }
+                    "resident_bytes" => {
+                        value["resident_bytes"] =
+                            serde_json::Value::from(value["resident_bytes"].as_u64().unwrap() + 1);
+                    }
+                    "storage_bytes" => {
+                        value["storage_bytes"] =
+                            serde_json::Value::from(value["storage_bytes"].as_u64().unwrap() + 1);
+                    }
+                    "storage_objects" => {
+                        value["storage_objects"] =
+                            serde_json::Value::from(value["storage_objects"].as_u64().unwrap() + 1);
+                    }
+                    _ => unreachable!(),
+                },
+            );
             ann.validate().unwrap();
-            manifest.global_ann_ref = Some(ann);
+            manifest.global_cell_card_ann_ref = Some(ann);
             let error = index
                 .preload_resident_global_ann_for_manifest(&manifest)
                 .expect_err(field);
             assert!(
-                error.to_string().contains("does not match"),
+                error.to_string().contains("expected")
+                    || error.to_string().contains("does not match"),
                 "{field}: {error}"
             );
         }
@@ -34887,46 +35495,45 @@ mod tests {
         for field in ["metric", "candidates", "probes", "reconstruction"] {
             let (_directory, index) = build_finished_resident_global_v12_index();
             let mut manifest = index.manifest.clone();
-            let ann =
-                ann_from_mutated_json(
-                    manifest.global_ann_ref.as_ref().unwrap(),
-                    |value| match field {
-                        "metric" => {
-                            value["codebook"]["metric"] =
-                                serde_json::to_value(VectorMetric::Angular).unwrap();
-                        }
-                        "candidates" => {
-                            let current = value["codebook"]["candidates"].as_u64().unwrap();
-                            value["codebook"]["candidates"] =
-                                serde_json::Value::from(current.saturating_sub(1).max(1));
-                            let candidates = value["codebook"]["candidates"].as_u64().unwrap();
-                            value["codebook"]["probes"] = serde_json::Value::from(
-                                value["codebook"]["probes"]
+            let ann = cell_card_ann_from_mutated_json(
+                manifest.global_cell_card_ann_ref.as_ref().unwrap(),
+                |value| match field {
+                    "metric" => {
+                        value["codebook"]["metric"] =
+                            serde_json::to_value(VectorMetric::Angular).unwrap();
+                    }
+                    "candidates" => {
+                        let current = value["codebook"]["candidates"].as_u64().unwrap();
+                        value["codebook"]["candidates"] =
+                            serde_json::Value::from(current.saturating_sub(1).max(1));
+                        let candidates = value["codebook"]["candidates"].as_u64().unwrap();
+                        value["codebook"]["probes"] = serde_json::Value::from(
+                            value["codebook"]["probes"]
+                                .as_u64()
+                                .unwrap()
+                                .min(candidates),
+                        );
+                    }
+                    "probes" => {
+                        let current = value["codebook"]["probes"].as_u64().unwrap();
+                        let candidates = value["codebook"]["candidates"].as_u64().unwrap();
+                        let replacement = if current == 1 { candidates } else { 1 };
+                        value["codebook"]["probes"] = serde_json::Value::from(replacement);
+                    }
+                    "reconstruction" => {
+                        value["codebook"]["reconstruction_error_p95_micros"] =
+                            serde_json::Value::from(
+                                value["codebook"]["reconstruction_error_p95_micros"]
                                     .as_u64()
                                     .unwrap()
-                                    .min(candidates),
+                                    + 1,
                             );
-                        }
-                        "probes" => {
-                            let current = value["codebook"]["probes"].as_u64().unwrap();
-                            let candidates = value["codebook"]["candidates"].as_u64().unwrap();
-                            let replacement = if current == 1 { candidates } else { 1 };
-                            value["codebook"]["probes"] = serde_json::Value::from(replacement);
-                        }
-                        "reconstruction" => {
-                            value["codebook"]["reconstruction_error_p95_micros"] =
-                                serde_json::Value::from(
-                                    value["codebook"]["reconstruction_error_p95_micros"]
-                                        .as_u64()
-                                        .unwrap()
-                                        + 1,
-                                );
-                        }
-                        _ => unreachable!(),
-                    },
-                );
+                    }
+                    _ => unreachable!(),
+                },
+            );
             ann.validate().unwrap();
-            manifest.global_ann_ref = Some(ann);
+            manifest.global_cell_card_ann_ref = Some(ann);
             let error = index
                 .preload_resident_global_ann_for_manifest(&manifest)
                 .expect_err(field);
@@ -34938,43 +35545,15 @@ mod tests {
     fn resident_global_v12_overflow_cannot_bypass_ram_admission() {
         let (_directory, index) = build_finished_resident_global_v12_index();
         let mut manifest = index.manifest.clone();
-        let ann = ann_from_mutated_json(manifest.global_ann_ref.as_ref().unwrap(), |value| {
-            let base_resident = value["base"]["resident_bytes"].as_u64().unwrap();
-            value["codebook"]["resident_bytes"] = serde_json::Value::from(u64::MAX - base_resident);
-            value["resident_bytes"] = serde_json::Value::from(u64::MAX);
-        });
+        let ann = cell_card_ann_from_mutated_json(
+            manifest.global_cell_card_ann_ref.as_ref().unwrap(),
+            |value| value["resident_bytes"] = serde_json::Value::from(u64::MAX),
+        );
         ann.validate().unwrap();
-        manifest.global_ann_ref = Some(ann);
+        manifest.global_cell_card_ann_ref = Some(ann);
 
         let error = enforce_ram_budget(&manifest, Some(u64::MAX - 1)).unwrap_err();
         assert!(error.to_string().contains("RAM budget"), "{error}");
-    }
-
-    #[test]
-    fn resident_global_v12_runtime_slot_overhead_is_ram_admitted() {
-        let (_directory, index) = build_finished_resident_global_v12_index();
-        let manifest = index.manifest.clone();
-        let ann = manifest.global_ann_ref.as_ref().unwrap();
-        let runtime_overhead = ann.runtime_resident_overhead();
-        let resident_estimate = manifest.try_resident_bytes_estimate().unwrap();
-        let budget_without_runtime_overhead = resident_estimate
-            .checked_sub(runtime_overhead)
-            .expect("runtime overhead fits within the complete estimate");
-
-        assert!(runtime_overhead > 0);
-        let error = enforce_ram_budget(&manifest, Some(budget_without_runtime_overhead))
-            .expect_err("runtime slot overhead escaped RAM admission");
-        assert!(
-            matches!(
-                error,
-                BorsukError::RamBudgetExceeded {
-                    resident_bytes,
-                    budget_bytes
-                } if resident_bytes == resident_estimate
-                    && budget_bytes == budget_without_runtime_overhead
-            ),
-            "{error}"
-        );
     }
 
     #[test]
@@ -35056,14 +35635,14 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                report.leaf_mode, "bounded-arrow-leaf-v13",
+                report.leaf_mode, "bounded-cell-card-v14",
                 "qualified page budget {budget} did not dispatch V12"
             );
-            assert!(report.global_leaf_pages_read <= budget);
             assert!(
-                report.global_leaf_code_pages_read
-                    <= budget * GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER
+                report.global_leaf_pages_read
+                    <= global_leaf_exact_block_budget(budget, report.hits.len().max(1))
             );
+            assert!(report.global_leaf_code_pages_read > 0);
         }
 
         for budget in [1, 2, 3, 5, 6, 7, 9, 15, 17, 31, 33] {
@@ -35141,7 +35720,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v13");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v14");
         assert!(
             report.global_leaf_pages_read > 1,
             "V12 stopped after its first page found k live rows instead of spending the bounded recall budget"
@@ -35225,10 +35804,10 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v13", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v14", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
-        assert_eq!(report.global_leaf_continuations, 0, "{report:?}");
-        assert_eq!(report.global_leaf_waves, 1);
+        assert_eq!(report.global_leaf_continuations, 1, "{report:?}");
+        assert_eq!(report.global_leaf_waves, 2);
         assert_eq!(report.global_leaf_pages_read, 4);
         assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
         assert!(
@@ -35246,10 +35825,10 @@ mod tests {
             .checked_div(report.global_leaf_pages_read as u64)
             .unwrap();
         let max_bytes = report
-            .global_leaf_directory_bytes
+            .global_leaf_code_bytes
             .saturating_add(one_page_bytes)
             .saturating_add(1);
-        let byte_exhausted = BorsukIndex::open(&uri)
+        let fallback_complete = BorsukIndex::open(&uri)
             .unwrap()
             .search_with_report(
                 &[0.0; 8],
@@ -35258,16 +35837,31 @@ mod tests {
                     .with_max_bytes(max_bytes),
             )
             .unwrap();
-        assert!(byte_exhausted.hits.is_empty());
-        assert_eq!(
-            byte_exhausted.termination_reason,
-            SearchTerminationReason::MaxBytes
+        assert!(fallback_complete.hits.is_empty());
+        assert!(
+            matches!(
+                fallback_complete.termination_reason,
+                SearchTerminationReason::MaxBytes | SearchTerminationReason::MaxLatency
+            ),
+            "{fallback_complete:?}"
         );
-        // The cap uses the prior multi-page average, while physical leaf pages
-        // may have different encoded sizes. It can therefore admit zero or one
-        // complete page, but never a second page or a partial read.
-        assert!(byte_exhausted.global_leaf_pages_read <= 1);
-        assert!(byte_exhausted.bytes_read <= max_bytes);
+        // This cap admits the authenticated V14 head wave and one exact-block
+        // prefix, but not the complete exact wave. The query must return the
+        // affordable prefix on the V14 path instead of starting a second
+        // storage path that can spend the caller's cap again.
+        assert_eq!(fallback_complete.leaf_mode, "bounded-cell-card-v14");
+        assert!((1..=4).contains(&fallback_complete.global_leaf_pages_read));
+        assert_eq!(fallback_complete.global_leaf_waves, 2);
+        assert!(fallback_complete.global_leaf_code_pages_read > 0);
+        assert!(fallback_complete.global_leaf_code_bytes > 0);
+        assert!(
+            fallback_complete.bytes_read >= fallback_complete.global_leaf_code_bytes,
+            "spent V14 head bytes were omitted from the fallback report: {fallback_complete:?}"
+        );
+        assert!(
+            fallback_complete.bytes_read <= max_bytes,
+            "max_bytes={max_bytes} report={fallback_complete:?}"
+        );
 
         let exhausted = BorsukIndex::open(&uri)
             .unwrap()
@@ -35282,8 +35876,8 @@ mod tests {
             SearchTerminationReason::MaxSegments
         );
         assert_eq!(exhausted.global_leaf_pages_read, 4);
-        assert_eq!(exhausted.global_leaf_continuations, 0);
-        assert_eq!(exhausted.global_leaf_waves, 1);
+        assert_eq!(exhausted.global_leaf_continuations, 1);
+        assert_eq!(exhausted.global_leaf_waves, 2);
     }
 
     #[test]

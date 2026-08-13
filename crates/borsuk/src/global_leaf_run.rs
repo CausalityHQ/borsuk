@@ -583,6 +583,7 @@ impl ResidentGlobalLeafRun {
 }
 
 impl GlobalLeafRunRef {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_base(
         codebook_checksum: String,
@@ -746,6 +747,7 @@ pub(crate) struct GlobalAnnRef {
 }
 
 impl GlobalAnnRef {
+    #[cfg(test)]
     pub(crate) fn new_offline_base(
         codebook: GlobalCodebookRef,
         base: GlobalLeafRunRef,
@@ -950,7 +952,7 @@ impl GlobalAnnRef {
     }
 }
 
-fn validate_codebook(codebook: &GlobalCodebookRef) -> Result<()> {
+pub(crate) fn validate_codebook(codebook: &GlobalCodebookRef) -> Result<()> {
     if codebook.layout_version != GLOBAL_PQ_REF_LAYOUT_VERSION {
         return invalid("V12 global codebook layout version is invalid");
     }

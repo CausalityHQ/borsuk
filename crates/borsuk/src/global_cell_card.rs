@@ -1327,33 +1327,113 @@ impl CellCardHeadWavePlan {
     }
 }
 
+pub(crate) fn rank_cell_card_head_indexes(
+    root: &ResidentCellCardRoot,
+    candidates: &[usize],
+    distances: &[f32],
+    max_cards: usize,
+) -> Result<Vec<usize>> {
+    if candidates.is_empty() || candidates.len() != distances.len() || max_cards == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card resident ranking inputs are invalid".to_string(),
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ranked = candidates
+        .iter()
+        .copied()
+        .zip(distances.iter().copied())
+        .map(|(index, distance)| {
+            if index >= root.card_count() || !seen.insert(index) || !distance.is_finite() {
+                return Err(BorsukError::InvalidStorage(
+                    "cell-card resident ranking contains invalid authority".to_string(),
+                ));
+            }
+            Ok((index, distance))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ranked.sort_by(
+        |(left_index, left_distance), (right_index, right_distance)| {
+            left_distance
+                .total_cmp(right_distance)
+                .then_with(|| root.cell_indexes[*left_index].cmp(&root.cell_indexes[*right_index]))
+                .then_with(|| {
+                    root.card_ordinals[*left_index].cmp(&root.card_ordinals[*right_index])
+                })
+                .then_with(|| {
+                    root.leaf_ordinals[*left_index].cmp(&root.leaf_ordinals[*right_index])
+                })
+                .then_with(|| left_index.cmp(right_index))
+        },
+    );
+    ranked.truncate(max_cards);
+    Ok(ranked.into_iter().map(|(index, _)| index).collect())
+}
+
 pub(crate) fn plan_cell_card_head_wave(
     root: &ResidentCellCardRoot,
     selected_cells: &[u32],
     max_physical_bytes: u64,
     max_requests: usize,
 ) -> Result<CellCardHeadWavePlan> {
-    if selected_cells.is_empty() || max_physical_bytes == 0 || max_requests == 0 {
+    let indexes = root.card_indexes_for_cells(selected_cells)?;
+    plan_cell_card_head_indexes(root, &indexes, max_physical_bytes, max_requests)
+}
+
+pub(crate) fn plan_ranked_cell_card_head_wave(
+    root: &ResidentCellCardRoot,
+    ranked_indexes: &[usize],
+    max_physical_bytes: u64,
+    max_requests: usize,
+) -> Result<(CellCardHeadWavePlan, bool)> {
+    if ranked_indexes.is_empty() {
         return Err(BorsukError::InvalidStorage(
-            "cell-card head wave bounds and selected cells must be non-empty".to_string(),
+            "ranked cell-card head selection is empty".to_string(),
         ));
     }
-    let selected = selected_cells
-        .iter()
-        .copied()
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut cards = Vec::new();
-    for cell_index in selected {
-        for root_index in root.card_range_for_cell(cell_index) {
-            let (group, reference) = root.head_ref(root_index)?;
-            cards.push((
-                group,
-                PlannedCellCardHead {
-                    root_index,
-                    reference,
-                },
+    let mut last_limit = None;
+    for prefix in (1..=ranked_indexes.len()).rev() {
+        match plan_cell_card_head_indexes(
+            root,
+            &ranked_indexes[..prefix],
+            max_physical_bytes,
+            max_requests,
+        ) {
+            Ok(plan) => return Ok((plan, prefix < ranked_indexes.len())),
+            Err(error @ BorsukError::RecallGuaranteeViolated { .. }) => last_limit = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_limit.expect("one non-empty ranked prefix was attempted"))
+}
+
+fn plan_cell_card_head_indexes(
+    root: &ResidentCellCardRoot,
+    root_indexes: &[usize],
+    max_physical_bytes: u64,
+    max_requests: usize,
+) -> Result<CellCardHeadWavePlan> {
+    if root_indexes.is_empty() || max_physical_bytes == 0 || max_requests == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card head wave bounds and indexes must be non-empty".to_string(),
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut cards = Vec::with_capacity(root_indexes.len());
+    for root_index in root_indexes.iter().copied() {
+        if !seen.insert(root_index) {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card head wave repeats a resident index".to_string(),
             ));
         }
+        let (group, reference) = root.head_ref(root_index)?;
+        cards.push((
+            group,
+            PlannedCellCardHead {
+                root_index,
+                reference,
+            },
+        ));
     }
     if cards.is_empty() {
         return Err(BorsukError::InvalidStorage(
@@ -1776,6 +1856,24 @@ pub(crate) fn plan_cell_card_exact_wave(
     })
 }
 
+pub(crate) fn plan_ranked_cell_card_exact_wave(
+    ranked: &[RankedCellCardExactBlock],
+    max_physical_bytes: u64,
+    max_requests: usize,
+) -> Result<(CellCardExactWavePlan, bool)> {
+    let mut last_limit = None;
+    for prefix in (1..=ranked.len()).rev() {
+        match plan_cell_card_exact_wave(&ranked[..prefix], max_physical_bytes, max_requests) {
+            Ok(plan) => return Ok((plan, prefix < ranked.len())),
+            Err(error @ BorsukError::RecallGuaranteeViolated { .. }) => last_limit = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_limit.unwrap_or_else(|| {
+        BorsukError::InvalidStorage("cell-card exact wave selected no blocks".to_string())
+    }))
+}
+
 #[derive(Debug)]
 pub(crate) struct LoadedCellCardExactBlock {
     pub(crate) block: RankedCellCardExactBlock,
@@ -1861,10 +1959,133 @@ pub(crate) fn decode_cell_card_exact_wave(
     Ok(loaded)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CellCardRunRootRef {
     pub(crate) checksum: [u8; 32],
     pub(crate) encoded_bytes: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GlobalCellCardAnnRef {
+    layout_version: u8,
+    codebook: crate::global_leaf_run::GlobalCodebookRef,
+    root_path: String,
+    root: CellCardRunRootRef,
+    source_segments: u64,
+    rows: u64,
+    storage_bytes: u64,
+    storage_objects: u64,
+    resident_bytes: u64,
+    leaf_epoch: u64,
+    purge_epoch: u64,
+}
+
+impl GlobalCellCardAnnRef {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        codebook: crate::global_leaf_run::GlobalCodebookRef,
+        root_path: String,
+        root: CellCardRunRootRef,
+        source_segments: u64,
+        rows: u64,
+        storage_bytes: u64,
+        storage_objects: u64,
+        resident_bytes: u64,
+        leaf_epoch: u64,
+        purge_epoch: u64,
+    ) -> Result<Self> {
+        let reference = Self {
+            layout_version: 14,
+            codebook,
+            root_path,
+            root,
+            source_segments,
+            rows,
+            storage_bytes,
+            storage_objects,
+            resident_bytes,
+            leaf_epoch,
+            purge_epoch,
+        };
+        reference.validate()?;
+        Ok(reference)
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        crate::global_leaf_run::validate_codebook(&self.codebook)?;
+        let checksum = blake3::Hash::from_bytes(self.root.checksum)
+            .to_hex()
+            .to_string();
+        if self.layout_version != 14
+            || self.root_path
+                != format!(
+                    "global-cell-cards/v14/roots/{}/root-{checksum}.parquet",
+                    &checksum[..2]
+                )
+            || self.root.encoded_bytes == 0
+            || self.root.encoded_bytes > CELL_CARD_ROOT_MAX_BYTES
+            || self.source_segments == 0
+            || self.rows == 0
+            || self.storage_objects < 3
+            || self.storage_bytes < self.root.encoded_bytes
+            || self.resident_bytes == 0
+            || self.leaf_epoch == 0
+            || self.purge_epoch > self.leaf_epoch
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V14 global cell-card reference is invalid".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn codebook(&self) -> &crate::global_leaf_run::GlobalCodebookRef {
+        &self.codebook
+    }
+
+    pub(crate) fn root_path(&self) -> &str {
+        &self.root_path
+    }
+
+    pub(crate) fn root(&self) -> &CellCardRunRootRef {
+        &self.root
+    }
+
+    pub(crate) fn root_checksum(&self) -> String {
+        blake3::Hash::from_bytes(self.root.checksum)
+            .to_hex()
+            .to_string()
+    }
+
+    pub(crate) fn rows(&self) -> u64 {
+        self.rows
+    }
+
+    pub(crate) fn source_segments(&self) -> u64 {
+        self.source_segments
+    }
+
+    pub(crate) fn layout_version(&self) -> u8 {
+        self.layout_version
+    }
+
+    pub(crate) fn storage_bytes(&self) -> u64 {
+        self.storage_bytes
+    }
+
+    pub(crate) fn storage_objects(&self) -> u64 {
+        self.storage_objects
+    }
+
+    pub(crate) fn resident_bytes(&self) -> u64 {
+        self.resident_bytes
+    }
+
+    pub(crate) fn leaf_epoch(&self) -> u64 {
+        self.leaf_epoch
+    }
 }
 
 #[derive(Debug)]
@@ -1880,6 +2101,9 @@ impl ResidentCellCardRoot {
     pub(crate) fn card_count(&self) -> usize {
         self.cell_indexes.len()
     }
+    pub(crate) fn rows(&self) -> u64 {
+        self.rows.iter().map(|rows| u64::from(*rows)).sum()
+    }
     pub(crate) fn resident_bytes(&self) -> usize {
         self.resident_bytes
     }
@@ -1888,6 +2112,35 @@ impl ResidentCellCardRoot {
         let start = self.cell_indexes.partition_point(|cell| *cell < cell_index);
         let end = self.cell_indexes[start..].partition_point(|cell| *cell == cell_index) + start;
         start..end
+    }
+
+    pub(crate) fn card_indexes_for_cells(&self, selected_cells: &[u32]) -> Result<Vec<usize>> {
+        let selected = selected_cells
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let indexes = selected
+            .into_iter()
+            .flat_map(|cell_index| self.card_range_for_cell(cell_index))
+            .collect::<Vec<_>>();
+        if indexes.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card selection contains no resident cards".to_string(),
+            ));
+        }
+        Ok(indexes)
+    }
+
+    pub(crate) fn centroid_code(&self, index: usize) -> Result<&[u8]> {
+        let start = *self.centroid_offsets.get(index).ok_or_else(|| {
+            BorsukError::InvalidStorage("cell-card centroid index is out of range".to_string())
+        })? as usize;
+        let end = *self.centroid_offsets.get(index + 1).ok_or_else(|| {
+            BorsukError::InvalidStorage("cell-card centroid end is out of range".to_string())
+        })? as usize;
+        self.centroid_codes.get(start..end).ok_or_else(|| {
+            BorsukError::InvalidStorage("cell-card centroid range is invalid".to_string())
+        })
     }
 
     pub(crate) fn head_ref(
@@ -3165,6 +3418,19 @@ mod tests {
         let plan = super::plan_cell_card_exact_wave(&selected, selected_bytes, 2).unwrap();
         assert_eq!(plan.requests(), 2);
         assert_eq!(plan.physical_bytes(), selected_bytes);
+
+        let (prefix, limited) = super::plan_ranked_cell_card_exact_wave(
+            &selected,
+            u64::from(selected[0].reference.bytes),
+            2,
+        )
+        .unwrap();
+        assert!(limited);
+        assert_eq!(prefix.requests(), 1);
+        assert_eq!(
+            prefix.physical_bytes(),
+            u64::from(selected[0].reference.bytes)
+        );
         assert_eq!(plan.selected_bytes(), selected_bytes);
         assert_eq!(plan.speculative_bytes(), 0);
     }
@@ -3205,5 +3471,97 @@ mod tests {
         assert_eq!(plan.cards(), 2);
         assert_eq!(plan.requests(), 1);
         assert_eq!(plan.reads()[0].cards.len(), 2);
+    }
+
+    #[test]
+    fn wave_one_ranks_resident_card_centroids_before_fetch() {
+        let encoded = encode_cell_card_group(
+            &[
+                GlobalLeafPageInput {
+                    cell_index: 4,
+                    leaf_ordinal: 0,
+                    centroid_code: vec![4, 9],
+                    rows: rows(3, 4),
+                },
+                GlobalLeafPageInput {
+                    cell_index: 4,
+                    leaf_ordinal: 1,
+                    centroid_code: vec![4, 1],
+                    rows: rows(3, 4),
+                },
+            ],
+            4,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/run-0")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &[group], &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+
+        let candidates = root.card_indexes_for_cells(&[4]).unwrap();
+        assert_eq!(candidates, vec![0, 1]);
+        let codes = candidates
+            .iter()
+            .map(|index| root.centroid_code(*index).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(codes, vec![&[4, 9][..], &[4, 1][..]]);
+        let ranked =
+            super::rank_cell_card_head_indexes(&root, &candidates, &[9.0, 1.0], 1).unwrap();
+        assert_eq!(ranked, vec![1]);
+        assert_eq!(root.head_ref(ranked[0]).unwrap().1.leaf_ordinal, 1);
+    }
+
+    #[test]
+    fn wave_one_keeps_the_largest_ranked_prefix_within_the_request_cap() {
+        let mut groups = Vec::new();
+        let mut cards = Vec::new();
+        for cell_index in 0..17_u32 {
+            let encoded = encode_cell_card_group(
+                &[GlobalLeafPageInput {
+                    cell_index,
+                    leaf_ordinal: 0,
+                    centroid_code: vec![cell_index as u8, 0],
+                    rows: rows(3, 4),
+                }],
+                4,
+                VectorElementType::Int8,
+            )
+            .unwrap();
+            let path = encoded
+                .content_addressed_path(&format!("global-cell-cards/run-{cell_index}"))
+                .unwrap();
+            let (group, mut group_cards) = encoded.references(&path).unwrap();
+            groups.push(group);
+            cards.append(&mut group_cards);
+        }
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &groups, &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let ranked = (0..17).collect::<Vec<_>>();
+
+        let (plan, limited) =
+            super::plan_ranked_cell_card_head_wave(&root, &ranked, 2 * 1024 * 1024, 4).unwrap();
+        assert!(limited);
+        assert_eq!(plan.cards(), 4);
+        assert_eq!(plan.requests(), 4);
+        assert_eq!(
+            plan.reads()
+                .iter()
+                .flat_map(|read| read.cards.iter().map(|card| card.root_index))
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
     }
 }

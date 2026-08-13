@@ -148,7 +148,9 @@ use crate::{
 // parameters became required manifest authority. Recomputing them from current
 // defaults on open could route an old collection differently after a constant
 // change, so format-35 experiments are rejected rather than inferred.
-const CURRENT_VERSION: u16 = 36;
+// Bumped 36 -> 37 when full materialization gained one mutually exclusive V14
+// cell-card ANN authority. Pre-release v36 manifests cannot name its groups.
+const CURRENT_VERSION: u16 = 37;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -178,6 +180,11 @@ pub(crate) const LEAN_SEGMENT_SCORING_COLUMNS: &[&str] = &[
     "mutation_digest",
 ];
 pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
+    if manifest.global_ann_ref.is_some() && manifest.global_cell_card_ann_ref.is_some() {
+        return Err(BorsukError::InvalidStorage(
+            "manifest cannot publish V13 and V14 global ANN authority together".to_string(),
+        ));
+    }
     validate_manifest_config(
         manifest.config.dimensions,
         manifest.config.segment_max_vectors,
@@ -228,6 +235,16 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     // without a persisted quantizer stays byte-identical to a pre-quantizer one.
     let quantizer_ref_json = quantizer_ref_manifest_json(manifest)?;
     let global_ann_ref_json = global_ann_ref_manifest_json(manifest)?;
+    let global_cell_card_ann_ref_json = manifest
+        .global_cell_card_ann_ref
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "failed to serialize V14 global cell-card ref: {error}"
+            ))
+        })?;
     let lexical_roots_json = serde_json::to_string(&manifest.lexical_roots).map_err(|err| {
         BorsukError::InvalidStorage(format!("failed to serialize lexical root refs: {err}"))
     })?;
@@ -311,6 +328,9 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
         columns.push(array(StringArray::from_iter([quantizer_ref_json])));
     }
     columns.push(array(StringArray::from_iter([global_ann_ref_json])));
+    columns.push(array(StringArray::from_iter([
+        global_cell_card_ann_ref_json,
+    ])));
     columns.push(array(StringArray::from_iter_values([
         lexical_roots_json.as_str()
     ])));
@@ -408,6 +428,40 @@ fn manifest_global_ann_ref(
     }
     let json = string_value(batch, column, 0, "global_ann_ref_json")?;
     decode_global_ann_ref_json(json).map(Some)
+}
+
+fn manifest_global_cell_card_ann_ref(
+    batch: &RecordBatch,
+) -> Result<Option<crate::global_cell_card::GlobalCellCardAnnRef>> {
+    let column = batch
+        .schema()
+        .index_of("global_cell_card_ann_ref_json")
+        .map_err(|_| {
+            BorsukError::InvalidStorage(
+                "manifest is missing required global_cell_card_ann_ref_json column; rebuild the unreleased index"
+                    .to_string(),
+            )
+        })?;
+    if batch.column(column).is_null(0) {
+        return Ok(None);
+    }
+    let reference: crate::global_cell_card::GlobalCellCardAnnRef = serde_json::from_str(
+        string_value(batch, column, 0, "global_cell_card_ann_ref_json")?,
+    )
+    .map_err(|error| {
+        BorsukError::InvalidStorage(format!("failed to parse V14 global cell-card ref: {error}"))
+    })?;
+    reference.validate()?;
+    Ok(Some(reference))
+}
+
+fn validate_manifest_global_ann_authority(manifest: &Manifest) -> Result<()> {
+    if manifest.global_ann_ref.is_some() && manifest.global_cell_card_ann_ref.is_some() {
+        return Err(BorsukError::InvalidStorage(
+            "manifest contains both V13 and V14 global ANN authority".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn manifest_lexical_roots(batch: &RecordBatch) -> Result<Vec<crate::manifest::LexicalRootRef>> {
@@ -771,6 +825,7 @@ pub(crate) fn manifest_from_parquet(
         cell_wal_visible_tombstone_runs: 0,
         quantizer_ref: manifest_quantizer_ref(&batch)?,
         global_ann_ref: manifest_global_ann_ref(&batch)?,
+        global_cell_card_ann_ref: manifest_global_cell_card_ann_ref(&batch)?,
         lexical_roots: manifest_lexical_roots(&batch)?,
         bm25_stats_delta: manifest_bm25_stats_delta(&batch)?,
         bm25_stats_delta_frontier,
@@ -787,6 +842,7 @@ pub(crate) fn manifest_from_parquet(
             segment.dimensions,
         )?;
     }
+    validate_manifest_global_ann_authority(&manifest)?;
 
     Ok(manifest)
 }
@@ -840,7 +896,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
     let metric = VectorMetric::from_str(string_value_by_name(&batch, 0, "metric")?)?;
     let logical_cell_routing_strategy = manifest_catalog_routing_strategy(&batch, &metric)?;
 
-    Ok(Manifest {
+    let manifest = Manifest {
         version: primitive_value_by_name::<UInt64Type>(&batch, 0, "version")?,
         config: IndexConfig {
             uri: string_value_by_name(&batch, 0, "uri")?.to_string(),
@@ -884,6 +940,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         cell_wal_visible_tombstone_runs: 0,
         quantizer_ref: manifest_quantizer_ref(&batch)?,
         global_ann_ref: manifest_global_ann_ref(&batch)?,
+        global_cell_card_ann_ref: manifest_global_cell_card_ann_ref(&batch)?,
         lexical_roots: manifest_lexical_roots(&batch)?,
         bm25_stats_delta: manifest_bm25_stats_delta(&batch)?,
         bm25_stats_delta_frontier,
@@ -892,7 +949,9 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
             0,
             "created_at_ms",
         )?)?,
-    })
+    };
+    validate_manifest_global_ann_authority(&manifest)?;
+    Ok(manifest)
 }
 
 pub(crate) fn manifest_has_next_generated_id(manifest_bytes: &[u8]) -> Result<bool> {
@@ -4867,6 +4926,11 @@ fn manifest_schema_with_named_vectors_and_wal(
         fields.push(Field::new("quantizer_ref_json", DataType::Utf8, true));
     }
     fields.push(Field::new("global_ann_ref_json", DataType::Utf8, true));
+    fields.push(Field::new(
+        "global_cell_card_ann_ref_json",
+        DataType::Utf8,
+        true,
+    ));
     fields.push(Field::new("lexical_roots_json", DataType::Utf8, false));
     fields.push(Field::new("bm25_stats_delta_json", DataType::Utf8, true));
     Arc::new(Schema::new(fields))
@@ -10382,6 +10446,7 @@ mod tests {
             cell_wal_visible_tombstone_runs: 0,
             quantizer_ref: None,
             global_ann_ref: None,
+            global_cell_card_ann_ref: None,
             lexical_roots: Vec::new(),
             bm25_stats_delta: None,
             bm25_stats_delta_frontier: Vec::new(),
@@ -11069,6 +11134,7 @@ mod tests {
                 array(UInt64Array::from_iter([None::<u64>])),
                 array(BinaryArray::from_iter([None::<&[u8]>])),
                 array(Int64Array::from_iter([None::<i64>])),
+                array(StringArray::from_iter([None::<String>])),
                 array(StringArray::from_iter([None::<String>])),
                 array(StringArray::from_iter_values(["[]"])),
                 array(StringArray::from_iter([None::<String>])),
