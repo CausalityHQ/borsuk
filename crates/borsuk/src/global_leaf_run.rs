@@ -6,7 +6,7 @@ use crate::{
     mutation::MutationStamp, record::VectorElementType, storage::Storage,
 };
 
-pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 12;
+pub(crate) const GLOBAL_PQ_REF_LAYOUT_VERSION: u8 = 13;
 // The durable V12 reference accepts the catalog's full u32 ordinal space. The
 // still-wired segment-derived descriptor enforces its own 65,536-cell producer
 // bound until Task 4 switches publication to catalog-pinned artifacts.
@@ -1710,6 +1710,7 @@ impl<'a> GlobalLeafPersistenceWriter<'a> {
                     partial_run_count,
                     checksum: page.checksum,
                     centroid_code: page.centroid_code.into_boxed_slice(),
+                    exact_blocks: page.exact_blocks.into_boxed_slice(),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -2027,9 +2028,9 @@ mod tests {
     }
 
     #[test]
-    fn v12_reference_rejects_old_v11_layout_version() {
+    fn v13_reference_rejects_old_v12_layout_version() {
         let mut reference = valid_ann_ref();
-        reference.layout_version = 11;
+        reference.layout_version = 12;
         let error = reference.validate().unwrap_err();
         assert!(error.to_string().contains("layout version"), "{error}");
     }
@@ -2298,6 +2299,16 @@ mod tests {
                 partial_run_count: 0,
                 checksum: [(ordinal % 251) as u8; 32],
                 centroid_code: vec![7, (ordinal % 251) as u8].into_boxed_slice(),
+                exact_blocks: vec![crate::global_leaf::GlobalLeafExactBlockRef {
+                    first_row: 0,
+                    rows: 1,
+                    batch_offset: 16_384 + ordinal as u64 * 1536,
+                    metadata_bytes: 512,
+                    body_bytes: 1024,
+                    batch_bytes: 1536,
+                    checksum: [(ordinal % 251) as u8; 32],
+                }]
+                .into_boxed_slice(),
             })
             .chain(std::iter::once(crate::global_leaf::GlobalLeafPageRef {
                 cell_index: 9,
@@ -2315,6 +2326,17 @@ mod tests {
                 partial_run_count: 0,
                 checksum: [9; 32],
                 centroid_code: vec![9, 0].into_boxed_slice(),
+                exact_blocks: vec![crate::global_leaf::GlobalLeafExactBlockRef {
+                    first_row: 0,
+                    rows: 1,
+                    batch_offset: 16_384
+                        + crate::global_leaf::GLOBAL_LEAF_DIRECTORY_SHARD_PAGES as u64 * 1536,
+                    metadata_bytes: 512,
+                    body_bytes: 1024,
+                    batch_bytes: 1536,
+                    checksum: [9; 32],
+                }]
+                .into_boxed_slice(),
             }))
             .collect::<Vec<_>>();
         let bundles = vec![crate::global_leaf::GlobalLeafBundleRef {

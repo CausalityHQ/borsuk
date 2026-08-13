@@ -1107,31 +1107,34 @@ pub struct SearchReport {
     /// Logical lossless vector rows fetched and validated after MVCC.
     #[serde(default)]
     pub global_exact_vectors_fetched: usize,
-    /// Authenticated V12 leaf-directory shard objects read for selected cells.
+    /// Authenticated V13 leaf-directory shard objects read for selected cells.
     #[serde(default)]
     pub global_leaf_directory_reads: usize,
-    /// Encoded bytes read from authenticated V12 leaf-directory shards.
+    /// Encoded bytes read from authenticated V13 leaf-directory shards.
     #[serde(default)]
     pub global_leaf_directory_bytes: u64,
-    /// Logical V12 compressed-code page ranges authenticated before exact reranking.
+    /// Logical V13 compressed-code page ranges authenticated before exact reranking.
     #[serde(default)]
     pub global_leaf_code_pages_read: usize,
     /// Physical compressed-code range bytes read before exact page selection.
     #[serde(default)]
     pub global_leaf_code_bytes: u64,
-    /// Logical V12 Arrow leaf pages read, independent of physical range coalescing.
+    /// Logical V13 exact-row blocks read, independent of physical range coalescing.
+    ///
+    /// The field keeps its pre-release `pages` name to avoid duplicating benchmark
+    /// plumbing. Its V13 unit is blocks; cross-format counter comparisons are invalid.
     #[serde(default)]
     pub global_leaf_pages_read: usize,
-    /// Encoded V12 Arrow batch bytes read for selected logical leaf pages.
+    /// Encoded V13 Arrow batch bytes read for selected exact-row blocks.
     #[serde(default)]
     pub global_leaf_page_bytes: u64,
-    /// Live canonical vectors exact-scored from V12 Arrow leaf pages.
+    /// Live canonical vectors exact-scored from V13 Arrow exact-row blocks.
     #[serde(default)]
     pub global_leaf_exact_scores: usize,
     /// Additional ranked-page batches consumed after MVCC suppressed initial rows.
     #[serde(default)]
     pub global_leaf_continuations: usize,
-    /// Critical-path V12 Arrow page-fetch waves.
+    /// Critical-path V13 Arrow block-fetch waves.
     #[serde(default)]
     pub global_leaf_waves: usize,
     /// Aggregate microseconds spent routing and producing approximate candidates

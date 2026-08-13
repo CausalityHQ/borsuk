@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
 };
@@ -36,13 +36,15 @@ pub(crate) const GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES: u64 = 48 * 1024 * 1024;
 // longer implies the byte cap; the persistence writer also maintains a running
 // conservative encoded-byte estimate and flushes on whichever bound comes first.
 pub(crate) const GLOBAL_LEAF_BUNDLE_MAX_PAGES: usize = 376;
-// Conservatively covers file magic, schema messages, footer block tables, and
-// footer alignment for at most GLOBAL_LEAF_BUNDLE_MAX_PAGES exact batches.
+pub(crate) const GLOBAL_LEAF_EXACT_BLOCK_ROWS: usize = 32;
+// Conservatively covers file magic, schema messages, the bounded exact-block
+// table, footer metadata, and alignment. Per-block body and metadata are
+// charged separately by `estimate_global_leaf_bundle_page`.
 pub(crate) const GLOBAL_LEAF_BUNDLE_FIXED_OVERHEAD_BYTES: u64 = 256 * 1024;
-pub(crate) const GLOBAL_LEAF_DIRECTORY_SHARD_PAGES: usize = 4096;
+pub(crate) const GLOBAL_LEAF_DIRECTORY_SHARD_PAGES: usize = 512;
 const GLOBAL_LEAF_DIRECTORY_SHARD_MAX_ENCODED_BYTES: usize = 4 * 1024 * 1024;
 const GLOBAL_LEAF_MAX_METADATA_BYTES: u32 = 16 * 1024;
-const GLOBAL_LEAF_LAYOUT: &str = "bounded-arrow-leaf-v12";
+const GLOBAL_LEAF_LAYOUT: &str = "bounded-arrow-leaf-v13";
 
 #[derive(Debug, Clone)]
 pub(crate) struct GlobalLeafCodeInput {
@@ -123,6 +125,19 @@ pub(crate) struct EncodedGlobalLeafPage {
     pub(crate) rows: usize,
     pub(crate) checksum: [u8; 32],
     pub(crate) centroid_code: Vec<u8>,
+    pub(crate) exact_blocks: Vec<GlobalLeafExactBlockRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GlobalLeafExactBlockRef {
+    pub(crate) first_row: u32,
+    pub(crate) rows: u32,
+    pub(crate) batch_offset: u64,
+    pub(crate) metadata_bytes: u32,
+    pub(crate) body_bytes: u32,
+    pub(crate) batch_bytes: u32,
+    pub(crate) checksum: [u8; 32],
 }
 
 #[derive(Debug)]
@@ -153,6 +168,7 @@ pub(crate) struct GlobalLeafPageRef {
     pub(crate) partial_run_count: u8,
     pub(crate) checksum: [u8; 32],
     pub(crate) centroid_code: Box<[u8]>,
+    pub(crate) exact_blocks: Box<[GlobalLeafExactBlockRef]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -335,13 +351,27 @@ fn global_leaf_page_fits(
             "global leaf rows disagree on PQ code width".to_string(),
         ));
     }
-    let conservative_body =
-        global_leaf_conservative_exact_body_bytes(rows, dimensions, element_type, row_bytes)?;
-    let conservative = conservative_body
-        .checked_add(GLOBAL_LEAF_MAX_METADATA_BYTES as usize)
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage("global leaf conservative size overflows".to_string())
-        })?;
+    let conservative =
+        rows.chunks(GLOBAL_LEAF_EXACT_BLOCK_ROWS)
+            .try_fold(0_usize, |total, block_rows| {
+                let block = global_leaf_conservative_exact_body_bytes(
+                    block_rows,
+                    dimensions,
+                    element_type,
+                    row_bytes,
+                )?
+                .checked_add(GLOBAL_LEAF_MAX_METADATA_BYTES as usize)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf conservative block size overflows".to_string(),
+                    )
+                })?;
+                total.checked_add(block).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf conservative size overflows".to_string(),
+                    )
+                })
+            })?;
     if conservative <= GLOBAL_LEAF_MAX_ENCODED_BYTES as usize {
         return Ok(true);
     }
@@ -441,11 +471,26 @@ pub(crate) fn estimate_global_leaf_bundle_page(
         ));
     }
     let exact_batch_bytes =
-        global_leaf_conservative_exact_body_bytes(&page.rows, dimensions, element_type, row_bytes)?
-            .checked_add(GLOBAL_LEAF_MAX_METADATA_BYTES as usize)
-            .and_then(|bytes| u64::try_from(bytes).ok())
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("global leaf page estimate overflows".to_string())
+        page.rows
+            .chunks(GLOBAL_LEAF_EXACT_BLOCK_ROWS)
+            .try_fold(0_u64, |total, rows| {
+                let body = global_leaf_conservative_exact_body_bytes(
+                    rows,
+                    dimensions,
+                    element_type,
+                    row_bytes,
+                )?;
+                let block = body
+                    .checked_add(GLOBAL_LEAF_MAX_METADATA_BYTES as usize)
+                    .and_then(|bytes| u64::try_from(bytes).ok())
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global leaf exact-block estimate overflows".to_string(),
+                        )
+                    })?;
+                total.checked_add(block).ok_or_else(|| {
+                    BorsukError::InvalidStorage("global leaf page estimate overflows".to_string())
+                })
             })?;
     let code_bytes = page
         .rows
@@ -547,12 +592,14 @@ fn encode_global_leaf_bundle_with_max_bytes(
             element_type,
         )?)?;
         for page in pages {
-            writer.write(&global_leaf_record_batch(
-                &page.rows,
-                Arc::clone(&schema),
-                dimensions,
-                element_type,
-            )?)?;
+            for rows in page.rows.chunks(GLOBAL_LEAF_EXACT_BLOCK_ROWS) {
+                writer.write(&global_leaf_record_batch(
+                    rows,
+                    Arc::clone(&schema),
+                    dimensions,
+                    element_type,
+                )?)?;
+            }
         }
         writer.finish()?;
     }
@@ -561,7 +608,15 @@ fn encode_global_leaf_bundle_with_max_bytes(
             "global leaf bundle exceeds its {max_bytes} byte complete object cap"
         )));
     }
-    let mut batch_ranges = global_leaf_batch_ranges(&bytes, pages.len() + 1)?.into_iter();
+    let exact_block_count = pages
+        .iter()
+        .try_fold(0_usize, |total, page| {
+            total.checked_add(page.rows.len().div_ceil(GLOBAL_LEAF_EXACT_BLOCK_ROWS))
+        })
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf exact block count overflows".to_string())
+        })?;
+    let mut batch_ranges = global_leaf_batch_ranges(&bytes, exact_block_count + 1)?.into_iter();
     let code_block = batch_ranges.next().ok_or_else(|| {
         BorsukError::InvalidStorage("global leaf bundle has no code plane".to_string())
     })?;
@@ -585,32 +640,98 @@ fn encode_global_leaf_bundle_with_max_bytes(
     let mut code_row_start = 0_usize;
     let encoded_pages = pages
         .iter()
-        .zip(batch_ranges)
-        .map(|(page, block)| {
-            if block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "global leaf page metadata is {} bytes, exceeding the {} byte V12 bound",
-                    block.metadata_bytes, GLOBAL_LEAF_MAX_METADATA_BYTES
-                )));
+        .map(|page| {
+            let mut exact_blocks = Vec::with_capacity(
+                page.rows.len().div_ceil(GLOBAL_LEAF_EXACT_BLOCK_ROWS),
+            );
+            for (block_ordinal, rows) in page
+                .rows
+                .chunks(GLOBAL_LEAF_EXACT_BLOCK_ROWS)
+                .enumerate()
+            {
+                let block = batch_ranges.next().ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact block table is truncated".to_string(),
+                    )
+                })?;
+                if block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "global leaf exact block metadata is {} bytes, exceeding the {} byte V13 bound",
+                        block.metadata_bytes, GLOBAL_LEAF_MAX_METADATA_BYTES
+                    )));
+                }
+                let batch_bytes = block
+                    .metadata_bytes
+                    .checked_add(block.body_bytes)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global leaf exact block size overflows".to_string(),
+                        )
+                    })?;
+                if u64::from(batch_bytes) > GLOBAL_LEAF_MAX_ENCODED_BYTES {
+                    return Err(BorsukError::InvalidStorage(format!(
+                        "global leaf exact block encodes to {batch_bytes} bytes, exceeding the {} byte hard cap",
+                        GLOBAL_LEAF_MAX_ENCODED_BYTES
+                    )));
+                }
+                let start = usize::try_from(block.offset).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact block start exceeds usize".to_string(),
+                    )
+                })?;
+                let end = start.checked_add(batch_bytes as usize).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact block end overflows".to_string(),
+                    )
+                })?;
+                let stored = bytes.get(start..end).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact block range exceeds bundle".to_string(),
+                    )
+                })?;
+                exact_blocks.push(GlobalLeafExactBlockRef {
+                    first_row: u32::try_from(
+                        block_ordinal.saturating_mul(GLOBAL_LEAF_EXACT_BLOCK_ROWS),
+                    )
+                    .map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "global leaf exact block row exceeds u32".to_string(),
+                        )
+                    })?,
+                    rows: u32::try_from(rows.len()).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "global leaf exact block rows exceed u32".to_string(),
+                        )
+                    })?,
+                    batch_offset: block.offset,
+                    metadata_bytes: block.metadata_bytes,
+                    body_bytes: block.body_bytes,
+                    batch_bytes,
+                    checksum: *blake3::hash(stored).as_bytes(),
+                });
             }
-            let batch_bytes = block.metadata_bytes.checked_add(block.body_bytes).ok_or_else(|| {
-                BorsukError::InvalidStorage("global leaf batch size overflows".to_string())
+            let first = exact_blocks.first().ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf page has no exact blocks".to_string())
             })?;
-            if u64::from(batch_bytes) > GLOBAL_LEAF_MAX_ENCODED_BYTES {
-                return Err(BorsukError::InvalidStorage(format!(
-                    "global leaf page encodes to {batch_bytes} bytes, exceeding the {} byte hard cap",
-                    GLOBAL_LEAF_MAX_ENCODED_BYTES
-                )));
-            }
-            let start = usize::try_from(block.offset).map_err(|_| {
-                BorsukError::InvalidStorage("global leaf batch start exceeds usize".to_string())
+            let last = exact_blocks.last().expect("nonempty exact blocks");
+            let span_end = last
+                .batch_offset
+                .checked_add(u64::from(last.batch_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact page span overflows".to_string(),
+                    )
+                })?;
+            let span_bytes = span_end.checked_sub(first.batch_offset).ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf exact page span reverses".to_string())
             })?;
-            let end = start.checked_add(batch_bytes as usize).ok_or_else(|| {
-                BorsukError::InvalidStorage("global leaf batch end overflows".to_string())
-            })?;
-            let stored = bytes.get(start..end).ok_or_else(|| {
-                BorsukError::InvalidStorage("global leaf batch range exceeds bundle".to_string())
-            })?;
+            let stored = bytes
+                .get(first.batch_offset as usize..span_end as usize)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact page span exceeds bundle".to_string(),
+                    )
+                })?;
             let code_start = code_row_start.checked_mul(code_width).ok_or_else(|| {
                 BorsukError::InvalidStorage("global leaf page code offset overflows".to_string())
             })?;
@@ -642,10 +763,13 @@ fn encode_global_leaf_bundle_with_max_bytes(
             Ok(EncodedGlobalLeafPage {
                 cell_index: page.cell_index,
                 leaf_ordinal: page.leaf_ordinal,
-                batch_offset: block.offset,
-                metadata_bytes: block.metadata_bytes,
-                body_bytes: block.body_bytes,
-                batch_bytes,
+                batch_offset: first.batch_offset,
+                metadata_bytes: first.metadata_bytes,
+                body_bytes: u32::try_from(span_bytes.saturating_sub(u64::from(first.metadata_bytes)))
+                    .map_err(|_| BorsukError::InvalidStorage("global leaf exact page span exceeds u32".to_string()))?,
+                batch_bytes: u32::try_from(span_bytes).map_err(|_| {
+                    BorsukError::InvalidStorage("global leaf exact page span exceeds u32".to_string())
+                })?,
                 code_offset: u64::try_from(code_range.start).map_err(|_| {
                     BorsukError::InvalidStorage(
                         "global leaf PQ-code offset exceeds u64".to_string(),
@@ -660,6 +784,7 @@ fn encode_global_leaf_bundle_with_max_bytes(
                 rows: page.rows.len(),
                 checksum: *blake3::hash(stored).as_bytes(),
                 centroid_code: page.centroid_code.clone(),
+                exact_blocks,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -672,6 +797,7 @@ fn encode_global_leaf_bundle_with_max_bytes(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn decode_global_leaf_page(
     page: &EncodedGlobalLeafPage,
     stored: &[u8],
@@ -778,6 +904,91 @@ pub(crate) fn decode_global_leaf_page(
     Ok(exact)
 }
 
+pub(crate) fn decode_global_leaf_exact_block(
+    block: &GlobalLeafExactBlockRef,
+    stored: &[u8],
+    code_width: usize,
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<RecordBatch> {
+    if block.rows == 0
+        || block.rows as usize > GLOBAL_LEAF_EXACT_BLOCK_ROWS
+        || block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES
+        || block.metadata_bytes.checked_add(block.body_bytes) != Some(block.batch_bytes)
+        || stored.len() != block.batch_bytes as usize
+        || blake3::hash(stored).as_bytes() != &block.checksum
+    {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf exact block checksum or bounds mismatch".to_string(),
+        ));
+    }
+    let metadata_bytes = i32::try_from(block.metadata_bytes)
+        .map_err(|_| BorsukError::InvalidStorage("global leaf metadata exceeds i32".to_string()))?;
+    let ipc_block = Block::new(0, metadata_bytes, i64::from(block.body_bytes));
+    crate::arrow_vector_sidecar::validate_record_batch_block(
+        &ipc_block,
+        stored,
+        block.rows as usize,
+        dimensions,
+    )?;
+    let schema = global_leaf_schema(dimensions, element_type, code_width)?;
+    let decoder = FileDecoder::new(Arc::clone(&schema), MetadataVersion::V5);
+    let decoded = catch_unwind(AssertUnwindSafe(|| {
+        decoder.read_record_batch(&ipc_block, &Buffer::from(stored.to_vec()))
+    }))
+    .map_err(|_| {
+        BorsukError::InvalidStorage(
+            "global leaf exact block contains invalid buffer ranges".to_string(),
+        )
+    })??
+    .ok_or_else(|| {
+        BorsukError::InvalidStorage("global leaf exact block decoded no batch".to_string())
+    })?;
+    if decoded.num_rows() != block.rows as usize || decoded.num_columns() != 1 {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf exact block shape does not match its reference".to_string(),
+        ));
+    }
+    let payload = decoded
+        .column(0)
+        .as_any()
+        .downcast_ref::<UnionArray>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("global leaf exact block is not a union".to_string())
+        })?;
+    if payload.type_ids().iter().any(|type_id| *type_id != 1)
+        || payload.offsets().is_none_or(|offsets| {
+            offsets
+                .iter()
+                .enumerate()
+                .any(|(row, offset)| usize::try_from(*offset).ok() != Some(row))
+        })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf exact block is not canonical".to_string(),
+        ));
+    }
+    let exact = payload
+        .child(1)
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "global leaf exact block payload is not a struct".to_string(),
+            )
+        })?;
+    let exact = RecordBatch::try_new(
+        Arc::new(Schema::new(global_leaf_exact_fields(
+            dimensions,
+            element_type,
+        )?)),
+        exact.columns().to_vec(),
+    )?;
+    validate_global_leaf_row_integrity(&exact, dimensions, element_type)?;
+    Ok(exact)
+}
+
+#[cfg(test)]
 pub(crate) fn decode_global_leaf_page_ref(
     page: &GlobalLeafPageRef,
     stored: &[u8],
@@ -798,6 +1009,7 @@ pub(crate) fn decode_global_leaf_page_ref(
             rows: page.rows as usize,
             checksum: page.checksum,
             centroid_code: page.centroid_code.to_vec(),
+            exact_blocks: Vec::new(),
         },
         stored,
         dimensions,
@@ -957,12 +1169,13 @@ pub(crate) fn decode_global_leaf_rows(
         .collect()
 }
 
-const GLOBAL_LEAF_V12_LAYOUT: &str = "bounded-arrow-leaf-v12";
+const GLOBAL_LEAF_V12_LAYOUT: &str = "bounded-arrow-leaf-v13";
 const V12_ROW_EMPTY: u8 = 0;
 const V12_ROW_CELL: u8 = 1;
 const V12_ROW_BUNDLE: u8 = 2;
 const V12_ROW_PAGE: u8 = 3;
-const V12_ROW_SHARD: u8 = 4;
+const V12_ROW_EXACT_BLOCK: u8 = 4;
+const V12_ROW_SHARD: u8 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1015,7 +1228,13 @@ impl GlobalLeafRunDirectory {
             .saturating_add(
                 self.pages
                     .iter()
-                    .map(|page| page.centroid_code.len())
+                    .map(|page| {
+                        page.centroid_code.len().saturating_add(
+                            page.exact_blocks
+                                .len()
+                                .saturating_mul(std::mem::size_of::<GlobalLeafExactBlockRef>()),
+                        )
+                    })
                     .sum::<usize>(),
             )
             .saturating_add(
@@ -1430,6 +1649,11 @@ fn encode_v12_directory_table(
     for page in &payload.pages {
         rows.push(V12TypedRow::page(page));
     }
+    for page in &payload.pages {
+        for block in &page.exact_blocks {
+            rows.push(V12TypedRow::exact_block(page, block));
+        }
+    }
     for shard in &payload.shards {
         rows.push(V12TypedRow::shard(shard));
     }
@@ -1468,6 +1692,9 @@ fn encode_v12_directory_table(
             rows.iter().map(|row| row.batch_bytes),
         )),
         Arc::new(UInt32Array::from_iter(rows.iter().map(|row| row.rows))),
+        Arc::new(UInt32Array::from_iter(
+            rows.iter().map(|row| row.exact_first_row),
+        )),
         Arc::new(UInt64Array::from_iter(
             rows.iter().map(|row| row.code_offset),
         )),
@@ -1589,6 +1816,7 @@ struct V12TypedRow {
     body_bytes: Option<u32>,
     batch_bytes: Option<u32>,
     rows: Option<u32>,
+    exact_first_row: Option<u32>,
     code_offset: Option<u64>,
     code_bytes: Option<u32>,
     code_checksum: Option<String>,
@@ -1663,6 +1891,26 @@ impl V12TypedRow {
             ..Self::default()
         }
     }
+    fn exact_block(page: &GlobalLeafPageRef, block: &GlobalLeafExactBlockRef) -> Self {
+        Self {
+            kind: V12_ROW_EXACT_BLOCK,
+            cell_index: Some(page.cell_index),
+            leaf_ordinal: Some(page.leaf_ordinal),
+            bundle_index: Some(page.bundle_index),
+            batch_offset: Some(block.batch_offset),
+            metadata_bytes: Some(block.metadata_bytes),
+            body_bytes: Some(block.body_bytes),
+            batch_bytes: Some(block.batch_bytes),
+            rows: Some(block.rows),
+            exact_first_row: Some(block.first_row),
+            page_checksum: Some(
+                blake3::Hash::from_bytes(block.checksum)
+                    .to_hex()
+                    .to_string(),
+            ),
+            ..Self::default()
+        }
+    }
     fn shard(shard: &GlobalLeafDirectoryShardRef) -> Self {
         Self {
             kind: V12_ROW_SHARD,
@@ -1692,6 +1940,7 @@ fn v12_directory_schema(codebook_checksum: &str, table: &str, code_width: usize)
             nullable("body_bytes", DataType::UInt32),
             nullable("batch_bytes", DataType::UInt32),
             nullable("rows", DataType::UInt32),
+            nullable("exact_first_row", DataType::UInt32),
             nullable("code_offset", DataType::UInt64),
             nullable("code_bytes", DataType::UInt32),
             nullable("code_checksum", DataType::Utf8),
@@ -1753,24 +2002,25 @@ fn v12_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V12TypedRow>> {
     let body = array!(8, UInt32Array, "body_bytes");
     let bytes = array!(9, UInt32Array, "batch_bytes");
     let rows = array!(10, UInt32Array, "rows");
-    let code_offset = array!(11, UInt64Array, "code_offset");
-    let code_bytes = array!(12, UInt32Array, "code_bytes");
-    let code_hash = array!(13, StringArray, "code_checksum");
-    let partial = array!(14, UInt8Array, "partial_run_count");
-    let page_hash = array!(15, StringArray, "page_checksum");
-    let code = array!(16, BinaryArray, "centroid_code");
-    let bundle_path = array!(17, StringArray, "bundle_path");
-    let bundle_hash = array!(18, StringArray, "bundle_checksum");
-    let bundle_bytes = array!(19, UInt64Array, "bundle_encoded_bytes");
-    let bundle_code_offset = array!(20, UInt64Array, "bundle_code_plane_offset");
-    let bundle_code_bytes = array!(21, UInt64Array, "bundle_code_plane_bytes");
-    let bundle_code_hash = array!(22, StringArray, "bundle_code_plane_checksum");
-    let shard_path = array!(23, StringArray, "shard_path");
-    let shard_hash = array!(24, StringArray, "shard_checksum");
-    let shard_bytes = array!(25, UInt64Array, "shard_encoded_bytes");
-    let shard_first = array!(26, UInt32Array, "shard_first_cell");
-    let shard_last = array!(27, UInt32Array, "shard_last_cell");
-    let shard_pages = array!(28, UInt32Array, "shard_page_count");
+    let exact_first_row = array!(11, UInt32Array, "exact_first_row");
+    let code_offset = array!(12, UInt64Array, "code_offset");
+    let code_bytes = array!(13, UInt32Array, "code_bytes");
+    let code_hash = array!(14, StringArray, "code_checksum");
+    let partial = array!(15, UInt8Array, "partial_run_count");
+    let page_hash = array!(16, StringArray, "page_checksum");
+    let code = array!(17, BinaryArray, "centroid_code");
+    let bundle_path = array!(18, StringArray, "bundle_path");
+    let bundle_hash = array!(19, StringArray, "bundle_checksum");
+    let bundle_bytes = array!(20, UInt64Array, "bundle_encoded_bytes");
+    let bundle_code_offset = array!(21, UInt64Array, "bundle_code_plane_offset");
+    let bundle_code_bytes = array!(22, UInt64Array, "bundle_code_plane_bytes");
+    let bundle_code_hash = array!(23, StringArray, "bundle_code_plane_checksum");
+    let shard_path = array!(24, StringArray, "shard_path");
+    let shard_hash = array!(25, StringArray, "shard_checksum");
+    let shard_bytes = array!(26, UInt64Array, "shard_encoded_bytes");
+    let shard_first = array!(27, UInt32Array, "shard_first_cell");
+    let shard_last = array!(28, UInt32Array, "shard_last_cell");
+    let shard_pages = array!(29, UInt32Array, "shard_page_count");
     let mut out = Vec::new();
     for row in 0..batch.num_rows() {
         if kind.is_null(row) {
@@ -1793,6 +2043,7 @@ fn v12_rows_from_batch(batch: &RecordBatch) -> Result<Vec<V12TypedRow>> {
             body_bytes: number!(body, body.value(row)),
             batch_bytes: number!(bytes, bytes.value(row)),
             rows: number!(rows, rows.value(row)),
+            exact_first_row: number!(exact_first_row, exact_first_row.value(row)),
             code_offset: number!(code_offset, code_offset.value(row)),
             code_bytes: number!(code_bytes, code_bytes.value(row)),
             code_checksum: if code_hash.is_null(row) {
@@ -1857,6 +2108,7 @@ fn v12_table_from_rows(rows: Vec<V12TypedRow>, table: &str) -> Result<V12Directo
     };
     let mut prior_kind = 0_u8;
     let mut empty_rows = 0_usize;
+    let mut exact_blocks = BTreeMap::<(u32, u32, u32), Vec<GlobalLeafExactBlockRef>>::new();
     for row in rows {
         if row.kind < prior_kind {
             return Err(invalid_leaf_directory(
@@ -1876,6 +2128,7 @@ fn v12_table_from_rows(rows: Vec<V12TypedRow>, table: &str) -> Result<V12Directo
                     || row.body_bytes.is_some()
                     || row.batch_bytes.is_some()
                     || row.rows.is_some()
+                    || row.exact_first_row.is_some()
                     || row.code_offset.is_some()
                     || row.code_bytes.is_some()
                     || row.code_checksum.is_some()
@@ -1914,6 +2167,7 @@ fn v12_table_from_rows(rows: Vec<V12TypedRow>, table: &str) -> Result<V12Directo
                     || row.body_bytes.is_some()
                     || row.batch_bytes.is_some()
                     || row.rows.is_some()
+                    || row.exact_first_row.is_some()
                     || row.code_offset.is_some()
                     || row.code_bytes.is_some()
                     || row.code_checksum.is_some()
@@ -1974,6 +2228,7 @@ fn v12_table_from_rows(rows: Vec<V12TypedRow>, table: &str) -> Result<V12Directo
                     || row.body_bytes.is_some()
                     || row.batch_bytes.is_some()
                     || row.rows.is_some()
+                    || row.exact_first_row.is_some()
                     || row.code_offset.is_some()
                     || row.code_bytes.is_some()
                     || row.code_checksum.is_some()
@@ -2035,6 +2290,7 @@ fn v12_table_from_rows(rows: Vec<V12TypedRow>, table: &str) -> Result<V12Directo
                 };
                 if row.cell_first_page.is_some()
                     || row.cell_page_count.is_some()
+                    || row.exact_first_row.is_some()
                     || row.bundle_path.is_some()
                     || row.bundle_checksum.is_some()
                     || row.bundle_encoded_bytes.is_some()
@@ -2067,7 +2323,72 @@ fn v12_table_from_rows(rows: Vec<V12TypedRow>, table: &str) -> Result<V12Directo
                     partial_run_count,
                     checksum: v12_hash(&checksum)?,
                     centroid_code: centroid_code.into_boxed_slice(),
+                    exact_blocks: Box::new([]),
                 });
+            }
+            V12_ROW_EXACT_BLOCK => {
+                let (
+                    Some(cell_index),
+                    Some(leaf_ordinal),
+                    Some(bundle_index),
+                    Some(batch_offset),
+                    Some(metadata_bytes),
+                    Some(body_bytes),
+                    Some(batch_bytes),
+                    Some(rows),
+                    Some(first_row),
+                    Some(checksum),
+                ) = (
+                    row.cell_index,
+                    row.leaf_ordinal,
+                    row.bundle_index,
+                    row.batch_offset,
+                    row.metadata_bytes,
+                    row.body_bytes,
+                    row.batch_bytes,
+                    row.rows,
+                    row.exact_first_row,
+                    row.page_checksum,
+                )
+                else {
+                    return Err(invalid_leaf_directory("V13 exact-block row is incomplete"));
+                };
+                if row.cell_first_page.is_some()
+                    || row.cell_page_count.is_some()
+                    || row.code_offset.is_some()
+                    || row.code_bytes.is_some()
+                    || row.code_checksum.is_some()
+                    || row.partial_run_count.is_some()
+                    || row.centroid_code.is_some()
+                    || row.bundle_path.is_some()
+                    || row.bundle_checksum.is_some()
+                    || row.bundle_encoded_bytes.is_some()
+                    || row.bundle_code_plane_offset.is_some()
+                    || row.bundle_code_plane_bytes.is_some()
+                    || row.bundle_code_plane_checksum.is_some()
+                    || row.shard_path.is_some()
+                    || row.shard_checksum.is_some()
+                    || row.shard_encoded_bytes.is_some()
+                    || row.shard_first_cell.is_some()
+                    || row.shard_last_cell.is_some()
+                    || row.shard_page_count.is_some()
+                {
+                    return Err(invalid_leaf_directory(
+                        "V13 exact-block row contains unrelated values",
+                    ));
+                }
+                exact_blocks
+                    .entry((cell_index, leaf_ordinal, bundle_index))
+                    .or_default()
+                    .push(GlobalLeafExactBlockRef {
+                        first_row,
+                        rows,
+                        batch_offset,
+                        metadata_bytes,
+                        body_bytes,
+                        batch_bytes,
+                        checksum: v12_hash(&checksum)?,
+                    });
             }
             V12_ROW_SHARD => {
                 let (
@@ -2098,6 +2419,7 @@ fn v12_table_from_rows(rows: Vec<V12TypedRow>, table: &str) -> Result<V12Directo
                     || row.body_bytes.is_some()
                     || row.batch_bytes.is_some()
                     || row.rows.is_some()
+                    || row.exact_first_row.is_some()
                     || row.code_offset.is_some()
                     || row.code_bytes.is_some()
                     || row.code_checksum.is_some()
@@ -2126,6 +2448,17 @@ fn v12_table_from_rows(rows: Vec<V12TypedRow>, table: &str) -> Result<V12Directo
             }
             _ => return Err(invalid_leaf_directory("V12 directory row kind is invalid")),
         }
+    }
+    for page in &mut result.pages {
+        page.exact_blocks = exact_blocks
+            .remove(&(page.cell_index, page.leaf_ordinal, page.bundle_index))
+            .ok_or_else(|| invalid_leaf_directory("V13 page has no exact-block rows"))?
+            .into_boxed_slice();
+    }
+    if !exact_blocks.is_empty() {
+        return Err(invalid_leaf_directory(
+            "V13 exact-block rows do not belong to directory pages",
+        ));
     }
     let invalid_role = if table == "leaf-run-directory-shard" {
         empty_rows != 0
@@ -2413,6 +2746,44 @@ fn validate_global_leaf_directory(
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("global leaf page PQ-code range overflows".to_string())
             })?;
+        let mut next_exact_row = 0_u32;
+        let mut next_exact_offset = page.batch_offset;
+        for block in &page.exact_blocks {
+            let declared = block
+                .metadata_bytes
+                .checked_add(block.body_bytes)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact-block byte count overflows".to_string(),
+                    )
+                })?;
+            let block_end = block
+                .batch_offset
+                .checked_add(u64::from(block.batch_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact-block range overflows".to_string(),
+                    )
+                })?;
+            if block.rows == 0
+                || block.rows as usize > GLOBAL_LEAF_EXACT_BLOCK_ROWS
+                || block.first_row != next_exact_row
+                || block.batch_offset != next_exact_offset
+                || block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES
+                || declared != block.batch_bytes
+                || block_end > end
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf exact-block references are not canonical".to_string(),
+                ));
+            }
+            next_exact_row = next_exact_row.checked_add(block.rows).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global leaf exact-block row coverage overflows".to_string(),
+                )
+            })?;
+            next_exact_offset = block_end;
+        }
         let bundle_code_end = bundle
             .code_plane_offset
             .checked_add(bundle.code_plane_bytes)
@@ -2431,6 +2802,8 @@ fn validate_global_leaf_directory(
                     .saturating_mul(u64::try_from(code_width).unwrap_or(u64::MAX))
             || page.batch_offset < bundle_code_end
             || page.centroid_code.len() != code_width
+            || next_exact_row != page.rows
+            || next_exact_offset != end
         {
             return Err(BorsukError::InvalidStorage(
                 "global leaf page reference violates its V12 bounds".to_string(),
@@ -2857,24 +3230,37 @@ fn global_leaf_probe_batch_bytes(
             BorsukError::InvalidStorage("global leaf PQ code width must be positive".to_string())
         })?;
     let schema = global_leaf_schema(dimensions, element_type, code_width)?;
-    let batch = global_leaf_record_batch(rows, Arc::clone(&schema), dimensions, element_type)?;
     let mut bytes = Vec::new();
     {
         let mut writer =
             FileWriter::try_new_with_options(&mut bytes, &schema, IpcWriteOptions::default())?;
-        writer.write(&batch)?;
+        for block_rows in rows.chunks(GLOBAL_LEAF_EXACT_BLOCK_ROWS) {
+            writer.write(&global_leaf_record_batch(
+                block_rows,
+                Arc::clone(&schema),
+                dimensions,
+                element_type,
+            )?)?;
+        }
         writer.finish()?;
     }
-    let block = global_leaf_batch_ranges(&bytes, 1)?
-        .pop()
-        .ok_or_else(|| BorsukError::InvalidStorage("global leaf probe has no batch".to_string()))?;
-    if block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES {
-        return Err(BorsukError::InvalidStorage(format!(
-            "global leaf page metadata is {} bytes, exceeding the {} byte V12 bound",
-            block.metadata_bytes, GLOBAL_LEAF_MAX_METADATA_BYTES
-        )));
+    let blocks =
+        global_leaf_batch_ranges(&bytes, rows.len().div_ceil(GLOBAL_LEAF_EXACT_BLOCK_ROWS))?;
+    let mut total = 0_u64;
+    for block in blocks {
+        if block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES {
+            return Err(BorsukError::InvalidStorage(format!(
+                "global leaf exact-block metadata is {} bytes, exceeding the {} byte V13 bound",
+                block.metadata_bytes, GLOBAL_LEAF_MAX_METADATA_BYTES
+            )));
+        }
+        total = total
+            .checked_add(u64::from(block.metadata_bytes) + u64::from(block.body_bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("global leaf probe size overflows".to_string())
+            })?;
     }
-    Ok(u64::from(block.metadata_bytes) + u64::from(block.body_bytes))
+    Ok(total)
 }
 
 fn global_leaf_row_integrity(id: &[u8], stamp: MutationStamp, exact: &[u8]) -> [u8; 32] {
@@ -3095,12 +3481,12 @@ mod tests {
 
     use super::{
         GLOBAL_LEAF_BUNDLE_MAX_PAGES, GLOBAL_LEAF_DIRECTORY_SHARD_PAGES,
-        GLOBAL_LEAF_MAX_ENCODED_BYTES, GlobalLeafBundleRef, GlobalLeafPageInput, GlobalLeafPageRef,
-        GlobalLeafRowInput, coalesce_global_leaf_code_reads, decode_global_leaf_page,
-        decode_global_leaf_rows, decode_global_leaf_run_directory,
-        decode_global_leaf_run_directory_root, encode_global_leaf_bundle,
-        encode_global_leaf_bundle_with_max_bytes, encode_global_leaf_run_directory,
-        fit_global_leaf_page_ranges,
+        GLOBAL_LEAF_MAX_ENCODED_BYTES, GlobalLeafBundleRef, GlobalLeafExactBlockRef,
+        GlobalLeafPageInput, GlobalLeafPageRef, GlobalLeafRowInput,
+        coalesce_global_leaf_code_reads, decode_global_leaf_page, decode_global_leaf_rows,
+        decode_global_leaf_run_directory, decode_global_leaf_run_directory_root,
+        encode_global_leaf_bundle, encode_global_leaf_bundle_with_max_bytes,
+        encode_global_leaf_run_directory, fit_global_leaf_page_ranges,
     };
     use crate::{
         VectorElementType,
@@ -3125,6 +3511,16 @@ mod tests {
                 partial_run_count: 0,
                 checksum: [7; 32],
                 centroid_code: vec![7, 0].into_boxed_slice(),
+                exact_blocks: vec![super::GlobalLeafExactBlockRef {
+                    first_row: 0,
+                    rows: 1,
+                    batch_offset: 64,
+                    metadata_bytes: 512,
+                    body_bytes: 1024,
+                    batch_bytes: 1536,
+                    checksum: [7; 32],
+                }]
+                .into_boxed_slice(),
             }],
             vec![GlobalLeafBundleRef {
                 path: "global-leaf/bundles/fixture.arrow".to_string(),
@@ -3199,6 +3595,7 @@ mod tests {
                 "body_bytes",
                 "batch_bytes",
                 "rows",
+                "exact_first_row",
                 "code_offset",
                 "code_bytes",
                 "code_checksum",
@@ -3232,7 +3629,11 @@ mod tests {
                     .copied()
             })
             .collect::<Vec<_>>();
-        assert_eq!(kinds, vec![1, 2, 3], "cell, bundle, then page rows");
+        assert_eq!(
+            kinds,
+            vec![1, 2, 3, 4],
+            "cell, bundle, page, then exact-block rows"
+        );
     }
 
     #[test]
@@ -3265,6 +3666,7 @@ mod tests {
         pages[0].code_offset = 64;
         pages[0].code_bytes = u32::try_from(code_width).unwrap();
         pages[0].batch_offset = 64 + code_width as u64;
+        pages[0].exact_blocks[0].batch_offset = pages[0].batch_offset;
         bundles[0].code_plane_offset = 64;
         bundles[0].code_plane_bytes = code_width as u64;
         bundles[0].encoded_bytes = pages[0].batch_offset + u64::from(pages[0].batch_bytes);
@@ -3329,6 +3731,16 @@ mod tests {
                 partial_run_count: u8::from(ordinal == GLOBAL_LEAF_DIRECTORY_SHARD_PAGES),
                 checksum: [(ordinal % 251) as u8; 32],
                 centroid_code: vec![7, (ordinal % 251) as u8].into_boxed_slice(),
+                exact_blocks: vec![GlobalLeafExactBlockRef {
+                    first_row: 0,
+                    rows: 1,
+                    batch_offset: 16_384 + ordinal as u64 * 1536,
+                    metadata_bytes: 512,
+                    body_bytes: 1024,
+                    batch_bytes: 1536,
+                    checksum: [(ordinal % 251) as u8; 32],
+                }]
+                .into_boxed_slice(),
             })
             .collect::<Vec<_>>();
         let sharded_bundles = vec![GlobalLeafBundleRef {
@@ -3375,6 +3787,16 @@ mod tests {
                 partial_run_count: 0,
                 checksum: [(ordinal % 251) as u8; 32],
                 centroid_code: vec![7, (ordinal % 251) as u8].into_boxed_slice(),
+                exact_blocks: vec![GlobalLeafExactBlockRef {
+                    first_row: 0,
+                    rows: 1,
+                    batch_offset: 16_384 + ordinal as u64 * 1536,
+                    metadata_bytes: 512,
+                    body_bytes: 1024,
+                    batch_bytes: 1536,
+                    checksum: [(ordinal % 251) as u8; 32],
+                }]
+                .into_boxed_slice(),
             })
             .chain(std::iter::once(GlobalLeafPageRef {
                 cell_index: 9,
@@ -3391,6 +3813,16 @@ mod tests {
                 partial_run_count: 0,
                 checksum: [9; 32],
                 centroid_code: vec![9, 0].into_boxed_slice(),
+                exact_blocks: vec![GlobalLeafExactBlockRef {
+                    first_row: 0,
+                    rows: 1,
+                    batch_offset: 16_384 + GLOBAL_LEAF_DIRECTORY_SHARD_PAGES as u64 * 1536,
+                    metadata_bytes: 512,
+                    body_bytes: 1024,
+                    batch_bytes: 1536,
+                    checksum: [9; 32],
+                }]
+                .into_boxed_slice(),
             }))
             .collect::<Vec<_>>();
         let bundles = vec![GlobalLeafBundleRef {
@@ -3421,7 +3853,7 @@ mod tests {
             KeyValue::new("borsuk.ann.code_width".to_string(), "2".to_string()),
             KeyValue::new(
                 "borsuk.ann.layout".to_string(),
-                "bounded-arrow-leaf-v12".to_string(),
+                "bounded-arrow-leaf-v13".to_string(),
             ),
             KeyValue::new(
                 "borsuk.ann.codebook_checksum".to_string(),
@@ -3439,22 +3871,22 @@ mod tests {
         let mut duplicate = base;
         duplicate.push(KeyValue::new(
             "borsuk.ann.layout".to_string(),
-            "bounded-arrow-leaf-v12".to_string(),
+            "bounded-arrow-leaf-v13".to_string(),
         ));
         let duplicate = rewrite_v12_directory_metadata(&encoded.root, duplicate);
         assert!(decode_global_leaf_run_directory("11aa", &duplicate, |_| unreachable!()).is_err());
     }
 
     #[test]
-    fn v12_directory_rejects_old_v11_layout_metadata() {
+    fn v13_directory_rejects_old_v12_layout_metadata() {
         use parquet::file::metadata::KeyValue;
         let (pages, bundles) = one_page_directory_fixture();
         let encoded = encode_global_leaf_run_directory("11aa", &pages, &bundles).unwrap();
-        let mut old_v11 = vec![
+        let mut old_v12 = vec![
             KeyValue::new("borsuk.ann.code_width".to_string(), "2".to_string()),
             KeyValue::new(
                 "borsuk.ann.layout".to_string(),
-                "bounded-arrow-leaf-v11".to_string(),
+                "bounded-arrow-leaf-v12".to_string(),
             ),
             KeyValue::new(
                 "borsuk.ann.codebook_checksum".to_string(),
@@ -3465,10 +3897,10 @@ mod tests {
                 "leaf-run-directory-root".to_string(),
             ),
         ];
-        old_v11.sort_unstable_by(|left, right| left.key.cmp(&right.key));
-        let old_v11 = rewrite_v12_directory_metadata(&encoded.root, old_v11);
+        old_v12.sort_unstable_by(|left, right| left.key.cmp(&right.key));
+        let old_v12 = rewrite_v12_directory_metadata(&encoded.root, old_v12);
         let error =
-            decode_global_leaf_run_directory("11aa", &old_v11, |_| unreachable!()).unwrap_err();
+            decode_global_leaf_run_directory("11aa", &old_v12, |_| unreachable!()).unwrap_err();
         assert!(error.to_string().contains("incompatible"), "{error}");
     }
 
@@ -3672,6 +4104,41 @@ mod tests {
             fit_global_leaf_page_ranges(&rows, 768, VectorElementType::Float32).unwrap(),
             vec![0..32, 32..64, 64..65]
         );
+    }
+
+    #[test]
+    fn v13_leaf_page_fitter_accounts_for_every_exact_block_frame() {
+        let rows = (0..2048)
+            .map(|ordinal| GlobalLeafRowInput {
+                id: RecordId::from(format!("row-{ordinal:04}-{}", "x".repeat(24))),
+                stamp: MutationStamp::new(
+                    MutationVersion::from_parts(ordinal as u64 + 1, [1; 16]),
+                    [2; 32],
+                ),
+                code: vec![ordinal as u8].into(),
+                exact: vec![0; 8 * 4],
+            })
+            .collect::<Vec<_>>();
+        let ranges = fit_global_leaf_page_ranges(&rows, 8, VectorElementType::Float32).unwrap();
+
+        for (leaf_ordinal, range) in ranges.into_iter().enumerate() {
+            let encoded = encode_global_leaf_bundle(
+                &[GlobalLeafPageInput {
+                    cell_index: 0,
+                    leaf_ordinal: leaf_ordinal as u32,
+                    centroid_code: vec![0],
+                    rows: rows[range].to_vec(),
+                }],
+                8,
+                VectorElementType::Float32,
+            )
+            .unwrap();
+            assert!(
+                u64::from(encoded.pages[0].batch_bytes) <= GLOBAL_LEAF_MAX_ENCODED_BYTES,
+                "fitter admitted a {}-byte multi-block page",
+                encoded.pages[0].batch_bytes
+            );
+        }
     }
 
     #[test]
@@ -3975,10 +4442,74 @@ mod tests {
             partial_run_count: 0,
             checksum: page.checksum,
             centroid_code: page.centroid_code.clone().into_boxed_slice(),
+            exact_blocks: page.exact_blocks.clone().into_boxed_slice(),
         };
         let verified_ref = super::decode_global_leaf_page_codes(&page_ref, stored_codes).unwrap();
         assert_eq!(verified_ref.code(0), Some(codes[0].as_slice()));
         assert_eq!(verified_ref.code(1), Some(codes[1].as_slice()));
+    }
+
+    #[test]
+    fn v13_exact_rows_are_independently_authenticated_in_bounded_blocks() {
+        let input = GlobalLeafPageInput {
+            cell_index: 7,
+            leaf_ordinal: 0,
+            centroid_code: vec![1, 2],
+            rows: (0..65)
+                .map(|row| GlobalLeafRowInput {
+                    id: RecordId::from(format!("exact-block-{row:02}")),
+                    stamp: MutationStamp::new(
+                        MutationVersion::from_parts(row + 1, [3; 16]),
+                        [4; 32],
+                    ),
+                    code: vec![row as u8, 9].into(),
+                    exact: [row as f32, row as f32 + 0.5]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                        .collect(),
+                })
+                .collect(),
+        };
+        let encoded = encode_global_leaf_bundle(&[input], 2, VectorElementType::Float32).unwrap();
+        let page = &encoded.pages[0];
+
+        assert_eq!(page.exact_blocks.len(), 3);
+        assert_eq!(
+            page.exact_blocks
+                .iter()
+                .map(|block| (block.first_row, block.rows))
+                .collect::<Vec<_>>(),
+            vec![(0, 32), (32, 32), (64, 1)]
+        );
+        for block in &page.exact_blocks {
+            let start = usize::try_from(block.batch_offset).unwrap();
+            let end = start + usize::try_from(block.batch_bytes).unwrap();
+            let stored = &encoded.bytes[start..end];
+            let decoded = super::decode_global_leaf_exact_block(
+                block,
+                stored,
+                2,
+                2,
+                VectorElementType::Float32,
+            )
+            .unwrap();
+            assert_eq!(decoded.num_rows(), block.rows as usize);
+
+            let mut corrupt = stored.to_vec();
+            *corrupt.last_mut().unwrap() ^= 1;
+            assert!(
+                super::decode_global_leaf_exact_block(
+                    block,
+                    &corrupt,
+                    2,
+                    2,
+                    VectorElementType::Float32,
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("checksum")
+            );
+        }
     }
 
     #[test]
@@ -4086,6 +4617,7 @@ mod tests {
                 partial_run_count: 0,
                 checksum: page.checksum,
                 centroid_code: inputs[ordinal].centroid_code.clone().into_boxed_slice(),
+                exact_blocks: page.exact_blocks.clone().into_boxed_slice(),
             })
             .collect::<Vec<_>>();
         let bundles = vec![GlobalLeafBundleRef {
@@ -4326,6 +4858,7 @@ mod tests {
                 partial_run_count: 0,
                 checksum: page.checksum,
                 centroid_code: page.centroid_code.clone().into_boxed_slice(),
+                exact_blocks: page.exact_blocks.clone().into_boxed_slice(),
             })
             .collect::<Vec<_>>();
         let bundles = vec![GlobalLeafBundleRef {

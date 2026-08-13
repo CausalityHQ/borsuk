@@ -1166,7 +1166,7 @@ impl GlobalPqCellSpool {
     }
 }
 
-const V12_CODEBOOK_LAYOUT: &str = "bounded-arrow-leaf-v12";
+const V12_CODEBOOK_LAYOUT: &str = "bounded-arrow-leaf-v13";
 const V12_CODEBOOK_QUANTIZER_COLUMN: &str = "quantizer_json";
 const V12_CODEBOOK_COARSE_QUANTIZER_COLUMN: &str = "coarse_quantizer_json";
 
@@ -1851,6 +1851,7 @@ impl ResidentGlobalCodebook {
         Ok(ranked)
     }
 
+    #[cfg(test)]
     pub(crate) fn rank_pages_by_row_codes(
         &self,
         query: &[f32],
@@ -1948,6 +1949,135 @@ impl ResidentGlobalCodebook {
                 selected.push(page);
             }
             if selected.len() == page_budget {
+                break;
+            }
+        }
+        Ok(selected)
+    }
+
+    pub(crate) fn rank_exact_blocks_by_row_codes(
+        &self,
+        query: &[f32],
+        pages: impl IntoIterator<Item = RoutedGlobalLeafCodes>,
+        block_budget: usize,
+        target_rows: usize,
+    ) -> Result<Vec<RoutedGlobalLeafExactBlock>> {
+        let prepared = self.quantizer.prepare_query(query)?;
+        let mut blocks = Vec::new();
+        for coded in pages {
+            let RoutedGlobalLeafCodes { mut page, codes } = coded;
+            let rows = usize::try_from(page.page.rows)
+                .map_err(|_| invalid_error("bounded leaf page row count exceeds usize"))?;
+            let expected = rows
+                .checked_mul(self.code_width)
+                .ok_or_else(|| invalid_error("bounded leaf page PQ-code byte count overflows"))?;
+            if rows == 0 || codes.len() != expected || page.page.exact_blocks.is_empty() {
+                return invalid("bounded leaf page PQ codes or exact blocks are incomplete");
+            }
+            let distances = codes
+                .chunks_exact(self.code_width)
+                .map(|code| {
+                    let distance = self.quantizer.distance(&prepared, code)?;
+                    if !distance.is_finite() {
+                        return invalid("V13 row-code ranking produced a non-finite distance");
+                    }
+                    Ok(distance)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            page.distance = distances
+                .iter()
+                .copied()
+                .min_by(f32::total_cmp)
+                .unwrap_or(f32::INFINITY);
+            let mut covered = 0_usize;
+            for (block_ordinal, block) in page.page.exact_blocks.iter().enumerate() {
+                let first = usize::try_from(block.first_row)
+                    .map_err(|_| invalid_error("exact-block first row exceeds usize"))?;
+                let block_rows = usize::try_from(block.rows)
+                    .map_err(|_| invalid_error("exact-block row count exceeds usize"))?;
+                let end = first
+                    .checked_add(block_rows)
+                    .ok_or_else(|| invalid_error("exact-block row coverage overflows"))?;
+                if block_rows == 0 || first != covered || end > distances.len() {
+                    return invalid("exact-block rows do not canonically cover their page");
+                }
+                blocks.push((
+                    RoutedGlobalLeafExactBlock {
+                        page: page.clone(),
+                        block_ordinal: u32::try_from(block_ordinal)
+                            .map_err(|_| invalid_error("exact-block ordinal exceeds u32"))?,
+                        block: block.clone(),
+                        distance: distances[first..end]
+                            .iter()
+                            .copied()
+                            .min_by(f32::total_cmp)
+                            .unwrap_or(f32::INFINITY),
+                    },
+                    distances[first..end].to_vec(),
+                ));
+                covered = end;
+            }
+            if covered != distances.len() {
+                return invalid("exact-block rows do not cover their page");
+            }
+        }
+        let mut candidates = blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(block, (_, distances))| {
+                distances
+                    .iter()
+                    .copied()
+                    .map(move |distance| (distance, block))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        let vote_limit = target_rows.max(1).saturating_mul(4).min(candidates.len());
+        let mut votes = vec![0_usize; blocks.len()];
+        for (_, block) in candidates.into_iter().take(vote_limit) {
+            votes[block] = votes[block].saturating_add(1);
+        }
+        let mut ranked = blocks
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, (block, _))| (block, votes[ordinal]))
+            .collect::<Vec<_>>();
+        let mut nearest = ranked.clone();
+        nearest.sort_by(|(left, _), (right, _)| left.distance.total_cmp(&right.distance));
+        ranked.sort_by(|(left, left_votes), (right, right_votes)| {
+            right_votes
+                .cmp(left_votes)
+                .then_with(|| left.distance.total_cmp(&right.distance))
+                .then_with(|| left.page.run_ordinal.cmp(&right.page.run_ordinal))
+                .then_with(|| left.page.page.cell_index.cmp(&right.page.page.cell_index))
+                .then_with(|| {
+                    left.page
+                        .page
+                        .leaf_ordinal
+                        .cmp(&right.page.page.leaf_ordinal)
+                })
+                .then_with(|| left.block_ordinal.cmp(&right.block_ordinal))
+        });
+        let identity = |block: &RoutedGlobalLeafExactBlock| {
+            (
+                block.page.run_ordinal,
+                block.page.page.cell_index,
+                block.page.page.leaf_ordinal,
+                block.block_ordinal,
+            )
+        };
+        let nearest_quota = block_budget.div_ceil(4).min(target_rows.max(1));
+        let mut seen = BTreeSet::new();
+        let mut selected = Vec::with_capacity(block_budget);
+        for (block, _) in nearest.into_iter().take(nearest_quota).chain(ranked) {
+            if seen.insert(identity(&block)) {
+                selected.push(block);
+            }
+            if selected.len() == block_budget {
                 break;
             }
         }
@@ -2054,6 +2184,14 @@ pub(crate) struct RoutedGlobalLeafPage {
 pub(crate) struct RoutedGlobalLeafCodes {
     pub(crate) page: RoutedGlobalLeafPage,
     pub(crate) codes: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RoutedGlobalLeafExactBlock {
+    pub(crate) page: RoutedGlobalLeafPage,
+    pub(crate) block_ordinal: u32,
+    pub(crate) block: crate::global_leaf::GlobalLeafExactBlockRef,
+    pub(crate) distance: f32,
 }
 
 fn invalid<T>(message: &str) -> Result<T> {
@@ -2341,14 +2479,14 @@ mod tests {
     }
 
     #[test]
-    fn v12_codebook_rejects_old_v11_layout_metadata() {
+    fn v13_codebook_rejects_old_v12_layout_metadata() {
         let mut encoded = test_v12_codebook_descriptor().encode().unwrap();
-        let marker = b"bounded-arrow-leaf-v12";
+        let marker = b"bounded-arrow-leaf-v13";
         let offset = encoded
             .windows(marker.len())
             .position(|window| window == marker)
             .expect("new codebooks must persist the V12 marker");
-        encoded[offset + marker.len() - 1] = b'1';
+        encoded[offset + marker.len() - 1] = b'2';
 
         let error = GlobalCodebookDescriptor::decode(&encoded).unwrap_err();
         assert!(error.to_string().contains("incompatible"), "{error}");
@@ -2486,6 +2624,7 @@ mod tests {
             partial_run_count: 0,
             checksum: [leaf_ordinal as u8; 32],
             centroid_code: quantizer.encode(vector).unwrap().into_boxed_slice(),
+            exact_blocks: Box::new([]),
         }
     }
 
@@ -2588,6 +2727,135 @@ mod tests {
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].bundle_path, "misleading.arrow");
         assert!(ranked[0].distance.is_finite());
+    }
+
+    #[test]
+    fn v13_row_codes_select_only_the_promising_exact_block() {
+        let descriptor = test_v12_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vec![0.0_f32; 64];
+        let exact = quantizer.encode(&query).unwrap();
+        let prepared = quantizer.prepare_query(&query).unwrap();
+        let exact_distance = quantizer.distance(&prepared, &exact).unwrap();
+        let (far_vector, far) = (1..=100)
+            .map(|scale| {
+                let vector = vec![scale as f32; 64];
+                let code = quantizer.encode(&vector).unwrap();
+                (vector, code)
+            })
+            .find(|(_, code)| quantizer.distance(&prepared, code).unwrap() > exact_distance)
+            .expect("fixture must expose a code farther from the query");
+        let mut page = leaf_page(&quantizer, &far_vector, 7, 0);
+        page.rows = 64;
+        page.code_bytes = u32::try_from(page.rows as usize * far.len()).unwrap();
+        page.exact_blocks = vec![
+            crate::global_leaf::GlobalLeafExactBlockRef {
+                first_row: 0,
+                rows: 32,
+                batch_offset: page.batch_offset,
+                metadata_bytes: 512,
+                body_bytes: 1024,
+                batch_bytes: 1536,
+                checksum: [1; 32],
+            },
+            crate::global_leaf::GlobalLeafExactBlockRef {
+                first_row: 32,
+                rows: 32,
+                batch_offset: page.batch_offset + 1536,
+                metadata_bytes: 512,
+                body_bytes: 1024,
+                batch_bytes: 1536,
+                checksum: [2; 32],
+            },
+        ]
+        .into_boxed_slice();
+        page.batch_bytes = 3072;
+        page.body_bytes = page.batch_bytes - page.metadata_bytes;
+        let coded = RoutedGlobalLeafCodes {
+            page: RoutedGlobalLeafPage {
+                run_ordinal: 0,
+                level: None,
+                distance: f32::NAN,
+                bundle_path: "two-blocks.arrow".to_owned(),
+                page,
+            },
+            codes: (0..64)
+                .flat_map(|row| {
+                    if row == 63 {
+                        exact.clone()
+                    } else {
+                        far.clone()
+                    }
+                })
+                .collect(),
+        };
+
+        let ranked = resident
+            .rank_exact_blocks_by_row_codes(&query, [coded], 1, 1)
+            .unwrap();
+
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].block.first_row, 32);
+        assert_eq!(ranked[0].block.rows, 32);
+    }
+
+    #[test]
+    fn v13_block_votes_prefer_coverage_after_the_nearest_reserve() {
+        let descriptor = test_v12_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vec![0.0_f32; 64];
+        let exact = quantizer.encode(&query).unwrap();
+        let close = quantizer.encode(&vec![1.0_f32; 64]).unwrap();
+        let covered = quantizer.encode(&vec![2.0_f32; 64]).unwrap();
+        let far = quantizer.encode(&vec![20.0_f32; 64]).unwrap();
+        let page = |leaf_ordinal: u32, codes: Vec<Vec<u8>>| {
+            let mut page = leaf_page(&quantizer, &query, 7, leaf_ordinal);
+            page.rows = u32::try_from(codes.len()).unwrap();
+            page.code_bytes = u32::try_from(codes.len() * exact.len()).unwrap();
+            page.exact_blocks = vec![crate::global_leaf::GlobalLeafExactBlockRef {
+                first_row: 0,
+                rows: page.rows,
+                batch_offset: page.batch_offset,
+                metadata_bytes: 512,
+                body_bytes: 1024,
+                batch_bytes: 1536,
+                checksum: [leaf_ordinal as u8; 32],
+            }]
+            .into_boxed_slice();
+            RoutedGlobalLeafCodes {
+                page: RoutedGlobalLeafPage {
+                    run_ordinal: 0,
+                    level: None,
+                    distance: f32::NAN,
+                    bundle_path: format!("page-{leaf_ordinal}.arrow"),
+                    page,
+                },
+                codes: codes.into_iter().flatten().collect(),
+            }
+        };
+        let pages = vec![
+            page(
+                0,
+                vec![exact.clone(), far.clone(), far.clone(), far.clone()],
+            ),
+            page(1, vec![close, far.clone(), far.clone(), far.clone()]),
+            page(
+                2,
+                vec![covered.clone(), covered.clone(), covered.clone(), covered],
+            ),
+        ];
+
+        let ranked = resident
+            .rank_exact_blocks_by_row_codes(&query, pages, 2, 1)
+            .unwrap();
+
+        assert_eq!(ranked[0].page.page.leaf_ordinal, 0);
+        assert_eq!(
+            ranked[1].page.page.leaf_ordinal, 2,
+            "after reserving the nearest block, vote coverage must beat a one-row outlier"
+        );
     }
 
     #[test]

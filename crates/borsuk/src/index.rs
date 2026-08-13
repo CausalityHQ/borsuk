@@ -57,7 +57,7 @@ use crate::{
         DEFAULT_GLOBAL_PQ_CHUNK_BYTES, GlobalCoarseQuantizer, GlobalCodebookDescriptor,
         GlobalPqCellSpool, GlobalPqCellSpoolEvent, GlobalPqChunkBytes, GlobalScanQuantizer,
         HierarchicalCoarseQuantizer, ResidentGlobalCodebook, RoutedGlobalLeafCodes,
-        RoutedGlobalLeafPage, ValidatedGlobalCodebookMetadata,
+        RoutedGlobalLeafExactBlock, RoutedGlobalLeafPage, ValidatedGlobalCodebookMetadata,
     },
     late_interaction::{LateInteractionSearchOptions, LateInteractionSearchReport},
     lexical_build::{
@@ -346,6 +346,7 @@ struct SearchExecution {
     vectors: Vec<Vec<f32>>,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct GlobalLeafReadGroup {
     run_ordinal: usize,
@@ -354,6 +355,54 @@ struct GlobalLeafReadGroup {
     start: u64,
     end: u64,
     pages: Vec<crate::global_leaf::GlobalLeafPageRef>,
+}
+
+#[derive(Debug)]
+struct GlobalLeafExactBlockReadGroup {
+    run_ordinal: usize,
+    bundle_index: u32,
+    path: String,
+    start: u64,
+    end: u64,
+    blocks: Vec<RoutedGlobalLeafExactBlock>,
+}
+
+fn global_leaf_exact_block_budget(page_budget: usize, target_rows: usize) -> usize {
+    page_budget.max(
+        target_rows
+            .saturating_mul(4)
+            .div_ceil(crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS),
+    )
+}
+
+fn centroid_exact_block_fallback(
+    pages: &[RoutedGlobalLeafPage],
+    block_budget: usize,
+) -> Vec<RoutedGlobalLeafExactBlock> {
+    let mut selected = Vec::with_capacity(block_budget);
+    let mut block_ordinal = 0_usize;
+    while selected.len() < block_budget {
+        let before = selected.len();
+        for page in pages {
+            let Some(block) = page.page.exact_blocks.get(block_ordinal) else {
+                continue;
+            };
+            selected.push(RoutedGlobalLeafExactBlock {
+                page: page.clone(),
+                block_ordinal: u32::try_from(block_ordinal).unwrap_or(u32::MAX),
+                block: block.clone(),
+                distance: page.distance,
+            });
+            if selected.len() == block_budget {
+                break;
+            }
+        }
+        if selected.len() == before {
+            break;
+        }
+        block_ordinal = block_ordinal.saturating_add(1);
+    }
+    selected
 }
 
 #[derive(Debug)]
@@ -16292,6 +16341,7 @@ impl BorsukIndex {
         })
     }
 
+    #[cfg(test)]
     fn global_leaf_read_groups(
         &self,
         pages: &[RoutedGlobalLeafPage],
@@ -16372,6 +16422,7 @@ impl BorsukIndex {
         Ok(groups)
     }
 
+    #[cfg(test)]
     fn fetch_global_leaf_wave(
         &self,
         pages: &[RoutedGlobalLeafPage],
@@ -16413,6 +16464,155 @@ impl BorsukIndex {
                     let batch = crate::global_leaf::decode_global_leaf_page_ref(
                         page,
                         block,
+                        dimensions,
+                        self.manifest.build_config.vector_element_type,
+                    )?;
+                    decoded.extend(
+                        crate::global_leaf::decode_global_leaf_rows(
+                            &batch,
+                            dimensions,
+                            self.manifest.build_config.vector_element_type,
+                        )?
+                        .into_iter()
+                        .map(|row| RoutedDecodedGlobalLeafRow { row }),
+                    );
+                }
+                Ok::<_, BorsukError>((decoded, stored.len() as u64))
+            },
+        );
+        let mut rows = Vec::new();
+        let mut bytes = 0_u64;
+        for read in reads {
+            let (mut decoded, read_bytes) = read?;
+            rows.append(&mut decoded);
+            bytes = bytes.saturating_add(read_bytes);
+        }
+        Ok((rows, bytes))
+    }
+
+    fn global_leaf_exact_block_read_groups(
+        &self,
+        blocks: &[RoutedGlobalLeafExactBlock],
+        runs: &[Arc<ResidentGlobalLeafRun>],
+    ) -> Result<Vec<GlobalLeafExactBlockReadGroup>> {
+        let mut planned = Vec::with_capacity(blocks.len());
+        for routed in blocks {
+            let run = runs.get(routed.page.run_ordinal).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "global leaf exact block references a missing run".to_string(),
+                )
+            })?;
+            if run.level() != routed.page.level {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf exact block level does not match its run".to_string(),
+                ));
+            }
+            let bundle = run
+                .root()
+                .bundles()
+                .get(routed.page.page.bundle_index as usize)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact block references a missing bundle".to_string(),
+                    )
+                })?;
+            let end = routed
+                .block
+                .batch_offset
+                .checked_add(u64::from(routed.block.batch_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "global leaf exact block range overflows".to_string(),
+                    )
+                })?;
+            if end > bundle.encoded_bytes || bundle.path != routed.page.bundle_path {
+                return Err(BorsukError::InvalidStorage(
+                    "global leaf exact block exceeds its authenticated bundle".to_string(),
+                ));
+            }
+            planned.push((
+                routed.page.run_ordinal,
+                routed.page.page.bundle_index,
+                bundle.path.clone(),
+                routed.block.batch_offset,
+                end,
+                routed.clone(),
+            ));
+        }
+        planned.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
+        let mut groups: Vec<GlobalLeafExactBlockReadGroup> = Vec::new();
+        for (run_ordinal, bundle_index, path, start, end, block) in planned {
+            if let Some(group) = groups.last_mut()
+                && group.run_ordinal == run_ordinal
+                && group.bundle_index == bundle_index
+                && group.path == path
+                && group.end == start
+            {
+                group.end = end;
+                group.blocks.push(block);
+                continue;
+            }
+            groups.push(GlobalLeafExactBlockReadGroup {
+                run_ordinal,
+                bundle_index,
+                path,
+                start,
+                end,
+                blocks: vec![block],
+            });
+        }
+        Ok(groups)
+    }
+
+    fn fetch_global_leaf_exact_block_wave(
+        &self,
+        blocks: &[RoutedGlobalLeafExactBlock],
+        runs: &[Arc<ResidentGlobalLeafRun>],
+        code_width: usize,
+    ) -> Result<(Vec<RoutedDecodedGlobalLeafRow>, u64)> {
+        if blocks.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let groups = self.global_leaf_exact_block_read_groups(blocks, runs)?;
+        let dimensions = self.manifest.config.dimensions;
+        let reads = bounded_io_map_with_gate(
+            &groups,
+            groups.len(),
+            Some(&self.global_pq_rerank_admission),
+            |group| {
+                let stored = self
+                    .storage
+                    .read_range(&group.path, group.start..group.end)?;
+                let mut decoded = Vec::new();
+                for routed in &group.blocks {
+                    let local_start = usize::try_from(routed.block.batch_offset - group.start)
+                        .map_err(|_| {
+                            BorsukError::InvalidStorage(
+                                "global leaf local exact-block offset exceeds usize".to_string(),
+                            )
+                        })?;
+                    let local_end = local_start
+                        .checked_add(routed.block.batch_bytes as usize)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "global leaf local exact-block range overflows".to_string(),
+                            )
+                        })?;
+                    let bytes = stored.get(local_start..local_end).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "global leaf coalesced exact-block range is truncated".to_string(),
+                        )
+                    })?;
+                    let batch = crate::global_leaf::decode_global_leaf_exact_block(
+                        &routed.block,
+                        bytes,
+                        code_width,
                         dimensions,
                         self.manifest.build_config.vector_element_type,
                     )?;
@@ -16669,7 +16869,7 @@ impl BorsukIndex {
             return Ok(Some(SearchExecution {
                 report: SearchReport {
                     hits: Vec::new(),
-                    leaf_mode: "bounded-arrow-leaf-v12".to_string(),
+                    leaf_mode: "bounded-arrow-leaf-v13".to_string(),
                     termination_reason: SearchTerminationReason::MaxLatency,
                     recall_guarantee: RecallGuarantee::Degraded,
                     segments_total,
@@ -16829,11 +17029,12 @@ impl BorsukIndex {
         // Compressed codes are only a page-selection prefilter. Bound their
         // physical range reads even when the caller has no explicit byte cap;
         // otherwise sparse selected pages can span an entire 48 MiB bundle.
-        // With a caller cap, reserve at least one lossless page and three
-        // quarters of the remaining bytes for actual search results.
+        // With a caller cap, reserve at least one lossless exact block and
+        // three quarters of the remaining bytes for actual search results.
         let first_exact_page_bytes = centroid_fallback
             .first()
-            .map_or(0, |page| u64::from(page.page.batch_bytes));
+            .and_then(|page| page.page.exact_blocks.first())
+            .map_or(0, |block| u64::from(block.batch_bytes));
         let code_ceiling = max_bytes.map_or_else(
             || {
                 (page_budget as u64)
@@ -16912,16 +17113,19 @@ impl BorsukIndex {
                     "global leaf PQ-code transient admission overflows".to_string(),
                 )
             })?;
+        let block_budget = global_leaf_exact_block_budget(page_budget, options.k);
+        let centroid_block_fallback =
+            centroid_exact_block_fallback(&centroid_fallback, block_budget);
         let (mut routed, code_pages_read, physical_code_bytes) =
             if latency_limited || resident_global_latency_expired(options, started) {
                 latency_limited = true;
-                (centroid_fallback.clone(), 0, 0)
+                (centroid_block_fallback.clone(), 0, 0)
             } else if code_read_groups.is_empty() {
                 // Compressed codes are optional selection evidence. A tight
                 // byte budget may reserve no code range while still admitting
                 // lossless pages, in which case retain the authenticated
                 // centroid order instead of returning an empty result.
-                (centroid_fallback.clone(), 0, 0)
+                (centroid_block_fallback.clone(), 0, 0)
             } else {
                 let _code_memory_permit = self
                     .read_runtime
@@ -16932,34 +17136,34 @@ impl BorsukIndex {
                     self.fetch_global_leaf_codes(&code_read_groups, options, started)?;
                 latency_limited |= code_latency_limited;
                 let routed = if code_latency_limited {
-                    centroid_fallback.clone()
+                    centroid_block_fallback.clone()
                 } else {
-                    let mut routed = codebook.rank_pages_by_row_codes(
+                    let mut routed = codebook.rank_exact_blocks_by_row_codes(
                         &pq_query,
                         coded_pages,
-                        page_budget,
+                        block_budget,
                         options.k,
                     )?;
                     let mut seen = routed
                         .iter()
                         .map(|page| {
                             (
-                                page.run_ordinal,
-                                page.page.cell_index,
-                                page.page.leaf_ordinal,
-                                page.page.batch_offset,
+                                page.page.run_ordinal,
+                                page.page.page.cell_index,
+                                page.page.page.leaf_ordinal,
+                                page.block_ordinal,
                             )
                         })
                         .collect::<BTreeSet<_>>();
-                    for page in &centroid_fallback {
-                        if routed.len() >= page_budget {
+                    for page in &centroid_block_fallback {
+                        if routed.len() >= block_budget {
                             break;
                         }
                         let identity = (
-                            page.run_ordinal,
-                            page.page.cell_index,
-                            page.page.leaf_ordinal,
-                            page.page.batch_offset,
+                            page.page.run_ordinal,
+                            page.page.page.cell_index,
+                            page.page.page.leaf_ordinal,
+                            page.block_ordinal,
                         );
                         if seen.insert(identity) {
                             routed.push(page.clone());
@@ -16975,7 +17179,7 @@ impl BorsukIndex {
             let mut prefix_len = 0_usize;
             if planned <= limit {
                 for candidate in &routed {
-                    let Some(next) = planned.checked_add(u64::from(candidate.page.batch_bytes))
+                    let Some(next) = planned.checked_add(u64::from(candidate.block.batch_bytes))
                     else {
                         break;
                     };
@@ -16999,7 +17203,7 @@ impl BorsukIndex {
         // k live rows turns the budget into a no-op and destroys recall.
         let admitted_bytes = routed
             .iter()
-            .map(|candidate| u64::from(candidate.page.batch_bytes))
+            .map(|candidate| u64::from(candidate.block.batch_bytes))
             .sum::<u64>();
         let _memory_permit = self
             .read_runtime
@@ -17032,10 +17236,14 @@ impl BorsukIndex {
             }
             let planned_bytes = wave
                 .iter()
-                .map(|candidate| u64::from(candidate.page.batch_bytes))
+                .map(|candidate| u64::from(candidate.block.batch_bytes))
                 .sum::<u64>();
             let wave_started = Instant::now();
-            let (rows, fetched_bytes) = self.fetch_global_leaf_wave(&wave, &resident_runs)?;
+            let (rows, fetched_bytes) = self.fetch_global_leaf_exact_block_wave(
+                &wave,
+                &resident_runs,
+                codebook.code_bytes_per_vector(),
+            )?;
             observed_wave_latency = observed_wave_latency.max(wave_started.elapsed());
             if fetched_bytes != planned_bytes {
                 return Err(BorsukError::InvalidStorage(
@@ -17097,7 +17305,7 @@ impl BorsukIndex {
         Ok(Some(SearchExecution {
             report: SearchReport {
                 hits,
-                leaf_mode: "bounded-arrow-leaf-v12".to_string(),
+                leaf_mode: "bounded-arrow-leaf-v13".to_string(),
                 termination_reason,
                 recall_guarantee: RecallGuarantee::Degraded,
                 segments_total,
@@ -28736,7 +28944,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.hits.len(), 2);
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v12");
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v13");
         assert!(report.wal_records_examined > 0);
         assert!(report.elapsed_ms >= 100);
         assert_eq!(
@@ -33913,7 +34121,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("row-37"));
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v12");
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v13");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.segments_skipped, report.segments_total);
         assert_eq!(report.global_scan_chunks_searched, 0);
@@ -33922,6 +34130,10 @@ mod tests {
         assert!(report.global_leaf_code_pages_read >= report.global_leaf_pages_read);
         assert!(report.global_leaf_code_bytes > 0);
         assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
+        assert!(
+            report.records_considered <= 4 * crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS,
+            "V13 exact rerank fetched whole pages instead of bounded row blocks: {report:?}"
+        );
         assert_eq!(report.global_leaf_exact_scores, report.records_scored);
         assert_eq!(report.global_leaf_waves, 1);
         assert_eq!(
@@ -34040,7 +34252,7 @@ mod tests {
         reference.validate().unwrap();
 
         let stats = index.stats();
-        assert_eq!(stats.global_ann_layout_version, Some(12));
+        assert_eq!(stats.global_ann_layout_version, Some(13));
         assert_eq!(
             stats.global_ann_codebook_checksum.as_deref(),
             Some(reference.codebook().descriptor_checksum())
@@ -34232,6 +34444,16 @@ mod tests {
                 partial_run_count: 0,
                 checksum: [(ordinal % 251) as u8; 32],
                 centroid_code: vec![7, (ordinal % 251) as u8].into_boxed_slice(),
+                exact_blocks: vec![crate::global_leaf::GlobalLeafExactBlockRef {
+                    first_row: 0,
+                    rows: 1,
+                    batch_offset: 16_384 + ordinal as u64 * 1536,
+                    metadata_bytes: 512,
+                    body_bytes: 1024,
+                    batch_bytes: 1536,
+                    checksum: [(ordinal % 251) as u8; 32],
+                }]
+                .into_boxed_slice(),
             })
             .collect::<Vec<_>>();
         let bundles = vec![crate::global_leaf::GlobalLeafBundleRef {
@@ -34834,7 +35056,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                report.leaf_mode, "bounded-arrow-leaf-v12",
+                report.leaf_mode, "bounded-arrow-leaf-v13",
                 "qualified page budget {budget} did not dispatch V12"
             );
             assert!(report.global_leaf_pages_read <= budget);
@@ -34919,7 +35141,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v12");
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v13");
         assert!(
             report.global_leaf_pages_read > 1,
             "V12 stopped after its first page found k live rows instead of spending the bounded recall budget"
@@ -35003,7 +35225,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v12", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-arrow-leaf-v13", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
         assert_eq!(report.global_leaf_continuations, 0, "{report:?}");
         assert_eq!(report.global_leaf_waves, 1);
@@ -37045,4 +37267,55 @@ mod tests {
             index.storage.cache_read_counts().backing_bytes
         );
     }
+}
+#[test]
+fn v13_centroid_fallback_round_robins_across_pages() {
+    let page = |leaf_ordinal: u32| RoutedGlobalLeafPage {
+        run_ordinal: 0,
+        level: None,
+        distance: leaf_ordinal as f32,
+        bundle_path: format!("page-{leaf_ordinal}.arrow"),
+        page: crate::global_leaf::GlobalLeafPageRef {
+            cell_index: 0,
+            leaf_ordinal,
+            bundle_index: 0,
+            batch_offset: 1024 + u64::from(leaf_ordinal) * 4096,
+            metadata_bytes: 512,
+            body_bytes: 3072,
+            batch_bytes: 3584,
+            code_offset: 64,
+            code_bytes: 64,
+            code_checksum: [1; 32],
+            rows: 64,
+            partial_run_count: 0,
+            checksum: [2; 32],
+            centroid_code: vec![0].into_boxed_slice(),
+            exact_blocks: (0..2)
+                .map(|block| crate::global_leaf::GlobalLeafExactBlockRef {
+                    first_row: block * 32,
+                    rows: 32,
+                    batch_offset: 1024 + u64::from(leaf_ordinal) * 4096 + u64::from(block) * 1792,
+                    metadata_bytes: 512,
+                    body_bytes: 1280,
+                    batch_bytes: 1792,
+                    checksum: [block as u8; 32],
+                })
+                .collect(),
+        },
+    };
+    let selected = centroid_exact_block_fallback(&[page(0), page(1), page(2)], 3);
+
+    assert_eq!(
+        selected
+            .iter()
+            .map(|block| (block.page.page.leaf_ordinal, block.block_ordinal))
+            .collect::<Vec<_>>(),
+        vec![(0, 0), (1, 0), (2, 0)]
+    );
+}
+
+#[test]
+fn v13_block_budget_can_return_four_times_k_rows() {
+    assert_eq!(global_leaf_exact_block_budget(4, 100), 13);
+    assert_eq!(global_leaf_exact_block_budget(32, 10), 32);
 }

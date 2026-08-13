@@ -380,7 +380,7 @@ mod global_pq_layout_tests {
             .global_ann_ref
             .as_ref()
             .unwrap();
-        assert_eq!(ann.layout_version(), 12);
+        assert_eq!(ann.layout_version(), 13);
         assert!(ann.base().is_some());
         assert!(ann.incremental_runs().is_empty());
         ann.validate().unwrap();
