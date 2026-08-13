@@ -388,6 +388,12 @@ def build_execution_plan(
             "BORSUK_BENCH_DISK_CACHE_MAX_BYTES",
         ):
             build_env.pop(field, None)
+        # Index construction does not execute recall queries, but the benchmark
+        # validates all query knobs at startup. Keep this build-only phase on a
+        # valid V12 leaf-page/candidate compatibility pair; runtime owns the
+        # scheduled recall sweep and its result labels.
+        build_env["BORSUK_BENCH_NPROBES"] = "4"
+        build_env["BORSUK_BENCH_CANDIDATES"] = "4096"
         runtime_env = {
             **benchmark_env,
             "BORSUK_BENCH_DATASET": str(runtime_dataset_dir),

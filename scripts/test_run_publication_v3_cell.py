@@ -575,10 +575,20 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         runtime_env = publication["runtime"]["steps"][-1]["env"]
         self.assertEqual(build_env["BORSUK_BENCH_BUILD_INDEX"], "1")
         self.assertEqual(build_env["BORSUK_BENCH_BUILD_ONLY"], "1")
+        self.assertEqual(build_env["BORSUK_BENCH_NPROBES"], "4")
+        self.assertEqual(build_env["BORSUK_BENCH_CANDIDATES"], "4096")
         self.assertNotIn("BORSUK_BENCH_READ_ONLY", build_env)
         self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_BUILD_INDEX"], "0")
+        self.assertEqual(
+            runtime_env["BORSUK_BENCH_NPROBES"],
+            str(arm["routing_cell_budget"]),
+        )
+        self.assertEqual(
+            runtime_env["BORSUK_BENCH_CANDIDATES"],
+            str(arm["candidate_budget"]),
+        )
         self.assertEqual(runtime_env["BORSUK_BENCH_URI"], cell["index_prefix"])
         self.assertNotEqual(runtime_env["BORSUK_BENCH_DATASET"], build_env["BORSUK_BENCH_DATASET"])
         self.assertEqual(
