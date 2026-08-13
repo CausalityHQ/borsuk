@@ -187,6 +187,7 @@ class PublicationV3AwsTests(unittest.TestCase):
                 "source_sha256": "b" * 64,
                 "materialization_sha256": "c66ceeb981504f9de03a84700e3ef410b3298f67dd92a3768a8cab6de4b2c3ee",
             },
+            "provenance_sha256": "d" * 64,
             "instance_id": "i-0123456789abcdef0",
             "instance_type": "r7g.8xlarge",
             "availability_zone": "eu-central-1a",
@@ -236,6 +237,7 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertRegex(receipt["manifest_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(receipt["failure_uri"], job.failure_uri)
         self.assertEqual(receipt["source_provenance"], common["source_provenance"])
+        self.assertEqual(receipt["provenance_sha256"], "d" * 64)
         self.assertEqual(receipt["provenance_uri"], job.provenance_uri)
         self.assertEqual(receipt["purchase_option"], "spot")
         self.assertEqual(receipt["terminal_uri"], job.terminal_uri)

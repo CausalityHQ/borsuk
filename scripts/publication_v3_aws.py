@@ -306,6 +306,7 @@ def build_staging_receipt(
     *,
     source_archive_sha256: str,
     source_provenance: dict[str, object],
+    provenance_sha256: str,
     objects: tuple[dict[str, object], ...] | list[dict[str, object]],
     instance_id: str,
     instance_type: str,
@@ -325,6 +326,8 @@ def build_staging_receipt(
         raise ValueError("dataset staging must use Spot capacity")
     if HEX_64.fullmatch(source_archive_sha256) is None:
         raise ValueError("source archive checksum must be lowercase SHA-256")
+    if HEX_64.fullmatch(provenance_sha256) is None:
+        raise ValueError("provenance checksum must be lowercase SHA-256")
     if len(objects) < 4:
         raise ValueError("dataset staging requires a multi-object materialization")
     if len(objects) > MAX_DATASET_OBJECTS:
@@ -461,6 +464,7 @@ def build_staging_receipt(
         "attempt": job.attempt,
         "source_archive_sha256": source_archive_sha256,
         "source_provenance": dict(source_provenance),
+        "provenance_sha256": provenance_sha256,
         "dataset_content_sha256": dataset_content_sha256,
         "output_uri": job.output_uri,
         "provenance_uri": job.provenance_uri,

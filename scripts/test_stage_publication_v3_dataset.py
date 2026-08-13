@@ -1,5 +1,6 @@
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import tempfile
@@ -83,6 +84,7 @@ class StagePublicationV3DatasetTests(unittest.TestCase):
                 job,
                 source_archive_sha256="a" * 64,
                 source_provenance=provenance_value,
+                provenance_sha256=hashlib.sha256(provenance.read_bytes()).hexdigest(),
                 objects=tuple(
                     {
                         **{key: value for key, value in item.items() if key != "path"},
