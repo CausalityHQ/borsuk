@@ -322,13 +322,13 @@ def stage_dataset(
                         raise ValueError(
                             "staging receipt differs from observed attempt"
                         )
+                    if candidate.get("manifest_sha256") != expected_manifest_sha:
+                        # Preserve immutable historical evidence and advance.
+                        break
                     if candidate.get("source_archive_sha256") != source_archive_sha256:
                         raise ValueError(
                             "staging receipt differs from frozen source archive"
                         )
-                    if candidate.get("manifest_sha256") != expected_manifest_sha:
-                        # Preserve immutable historical evidence and advance.
-                        break
                     return validate_staging_receipt(normalized, candidate)
                 if "STAGING_FAILED.json" in markers:
                     break

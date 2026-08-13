@@ -86,7 +86,12 @@ class FakeAws:
 
     def read_receipt(self, job: object) -> dict[str, object]:
         if job.attempt == 3:
-            return {**self.receipt, "attempt": 3, "manifest_sha256": "d" * 64}
+            return {
+                **self.receipt,
+                "attempt": 3,
+                "manifest_sha256": "d" * 64,
+                "source_archive_sha256": "e" * 64,
+            }
         return self.receipt
 
     def find_instance(self, _job: object) -> tuple[str, str] | None:
