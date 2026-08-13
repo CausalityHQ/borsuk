@@ -29,11 +29,11 @@ use serde::Deserialize;
 
 const DEFAULT_QUERIES: usize = 1_000;
 const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
-// Keep the raw dense input of each offline ingest checkpoint within 32 MiB.
-// The record count therefore shrinks as dimensionality grows instead of making
-// a GIST batch retain nearly 4 GiB before indexing starts.
-const INGEST_DENSE_BATCH_BYTES: usize = 32 * 1024 * 1024;
-const INGEST_BATCH_MAX_VECTORS: usize = 1_000_000;
+// A positioned dense insert expands into record, ID-directory, and route-plan
+// rows plus transaction metadata. Keep both its logical dense bytes and vector
+// count comfortably below the immutable 64 MiB / 65,536-row append bounds.
+const INGEST_DENSE_BATCH_BYTES: usize = 16 * 1024 * 1024;
+const INGEST_BATCH_MAX_VECTORS: usize = 16_384;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1_024;
 // On a finalized global scan index, nprobe selects global coarse cells. Each
 // selected semantic cell includes matching product-code chunks from every
@@ -4770,11 +4770,13 @@ mod tests {
     }
 
     #[test]
-    fn bulk_ingest_batch_is_dimension_aware_and_byte_bounded() {
-        assert_eq!(ingest_batch_size(64), 131_072);
-        assert_eq!(ingest_batch_size(100), 83_886);
-        assert_eq!(ingest_batch_size(960), 8_738);
+    fn bulk_ingest_batch_is_dimension_aware_and_positioned_append_bounded() {
+        assert_eq!(ingest_batch_size(64), 16_384);
+        assert_eq!(ingest_batch_size(100), 16_384);
+        assert_eq!(ingest_batch_size(128), 16_384);
+        assert_eq!(ingest_batch_size(960), 4_369);
         assert_eq!(ingest_batch_size(usize::MAX), 1);
+        assert!(3 * ingest_batch_size(128) + 2 <= 65_536);
     }
 
     #[test]
