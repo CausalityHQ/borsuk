@@ -2,10 +2,11 @@
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
-if [[ "$#" -ne 1 || "$1" != "--dry-run" ]]; then
+if [[ "$#" -ne 1 || ( "$1" != "--dry-run" && "$1" != "--stage-sift" ) ]]; then
   printf 'Publication V3 paid launch is unavailable until the AWS execution plan is implemented and reviewed\n' >&2
   exit 2
 fi
+mode="$1"
 
 cd "$(dirname "$0")/.."
 
@@ -19,9 +20,15 @@ if ! git merge-base --is-ancestor origin/main HEAD; then
   printf 'origin/main must be an ancestor of the frozen source commit\n' >&2
   exit 2
 fi
+if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+  printf 'Publication V3 source commit must already be delivered to origin/main\n' >&2
+  exit 2
+fi
 
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 archive="$temporary/source-archive.tar.gz"
 manifest="$temporary/manifest.json"
 schedule="$temporary/schedule.json"
@@ -61,7 +68,7 @@ value["source"] = {
     "node_lock_sha256": digest(pathlib.Path("packages/borsuk/package-lock.json")),
 }
 validated = validate_manifest(value)
-output.write_bytes(canonical_json_bytes(validated) + b"\n")
+output.write_bytes(canonical_json_bytes(validated))
 PY
 
 validation="$(python3 scripts/publication_v3_protocol.py validate "$manifest")"
@@ -77,6 +84,21 @@ if [[ "$paid_ready" == "true" ]]; then
     "$replay" --structural-only >/dev/null
   schedule_sha256="$(sha256sum "$schedule" | cut -d' ' -f1)"
   structural_replay="structurally-valid"
+fi
+
+if [[ "$mode" == "--stage-sift" ]]; then
+  controller="${BORSUK_PUBLICATION_V3_CONTROLLER:-scripts/publication_v3_controller.py}"
+  python3 "$controller" stage \
+    --manifest "$manifest" \
+    --source-archive "$archive" \
+    --dataset sift-128 \
+    --profile "${AWS_PROFILE:-causality}" \
+    --image-id "${BORSUK_PUBLICATION_V3_AMI_ID:-ami-07bcecd13a160173f}" \
+    --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
+    --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
+    --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
+    --max-attempts "${BORSUK_PUBLICATION_V3_MAX_ATTEMPTS:-6}"
+  exit 0
 fi
 
 python3 - "$manifest" "$archive" "$validation" "$structural_replay" "$schedule_sha256" "$staging_plan" <<'PY'
