@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import hashlib
 import json
 import re
@@ -718,6 +719,38 @@ def validate_staging_receipt(
     if rebuilt != value:
         raise ValueError("staging receipt differs from its manifest-derived identity")
     return value
+
+
+def promote_staging_receipts(
+    manifest: dict[str, object], receipts: list[dict[str, object]]
+) -> dict[str, object]:
+    """Fold immutable staging receipts into one partially staged manifest."""
+
+    normalized = validate_manifest(manifest)
+    if not receipts:
+        raise ValueError("manifest promotion requires at least one staging receipt")
+    validated = [validate_staging_receipt(normalized, receipt) for receipt in receipts]
+    by_dataset: dict[str, dict[str, object]] = {}
+    for receipt in validated:
+        dataset_id = str(receipt["dataset_id"])
+        if dataset_id in by_dataset:
+            raise ValueError("manifest promotion has duplicate staging receipts")
+        by_dataset[dataset_id] = receipt
+    promoted = copy.deepcopy(normalized)
+    for dataset in promoted["datasets"]:
+        receipt = by_dataset.get(str(dataset["id"]))
+        if receipt is None:
+            continue
+        source = dataset["source"]
+        if source["state"] != "unstaged":
+            raise ValueError("manifest promotion dataset is not unstaged")
+        dataset["source"] = {
+            "state": "staged",
+            "url": receipt["output_uri"],
+            "sha256": receipt["dataset_content_sha256"],
+            "license": source["license"],
+        }
+    return validate_manifest(promoted)
 
 
 def _staging_plan(manifest: dict[str, object]) -> dict[str, object]:

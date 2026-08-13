@@ -11,6 +11,7 @@ from scripts.publication_v3_aws import (
     build_staging_receipt,
     build_staging_worker_script,
     classify_attempt,
+    promote_staging_receipts,
     reconcile_staging_attempt,
     staging_jobs,
     validate_staging_receipt,
@@ -376,6 +377,23 @@ class PublicationV3AwsTests(unittest.TestCase):
             purchase_option="spot",
         )
         self.assertEqual(validate_staging_receipt(self.manifest, receipt), receipt)
+        promoted = promote_staging_receipts(self.manifest, [receipt])
+        promoted_sift = next(
+            dataset for dataset in promoted["datasets"] if dataset["id"] == "sift-128"
+        )
+        self.assertEqual(
+            promoted_sift["source"],
+            {
+                "state": "staged",
+                "url": job.output_uri,
+                "sha256": receipt["dataset_content_sha256"],
+                "license": "upstream-dataset-license",
+            },
+        )
+        self.assertEqual(
+            next(dataset for dataset in promoted["datasets"] if dataset["id"] == "gist-960")["source"]["state"],
+            "unstaged",
+        )
         with self.assertRaisesRegex(ValueError, "receipt"):
             validate_staging_receipt(
                 self.manifest, {**receipt, "dataset_content_sha256": "0" * 64}
