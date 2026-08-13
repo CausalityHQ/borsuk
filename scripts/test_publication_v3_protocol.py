@@ -168,12 +168,10 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                 "dataset_ids": ["synthetic-clustered-1m-768"],
                 "systems": ["borsuk"],
                 "factors": {
-                    "writers": [1, 8, 32],
+                    "writers": [1],
                     "batch_sizes": [1, 64, 1024],
                     "update_percent": [10],
                     "delete_percent": [10],
-                    "compaction_states": ["before", "after"],
-                    "duration_seconds": 300,
                     "minimum_lifecycle_accuracy_ppm": 1_000_000,
                 },
             },
@@ -649,7 +647,7 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         )
         self.assertEqual(
             by_kind["write-update-delete-compact"]["factors"]["writers"],
-            [1, 8, 32],
+            [1],
         )
         self.assertTrue(
             {

@@ -69,7 +69,7 @@ const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_
 const WRITE_COST_HEADER: &str = "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
 const WRITE_SAMPLE_HEADER: &str =
     "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
-const LIFECYCLE_HEADER: &str = "configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
+const LIFECYCLE_HEADER: &str = "configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
 const MUTATION_QUERY_HEADER: &str =
     "stage,queries,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_bytes_read,avg_network_gets";
 const MUTATION_QUERY_SAMPLE_HEADER: &str =
@@ -102,6 +102,8 @@ struct ResolvedConfig {
     queries: usize,
     write_batch_size: usize,
     write_ops: Option<usize>,
+    update_percent: usize,
+    delete_percent: usize,
     query_seed: u64,
     repetition_id: String,
     output_dir: PathBuf,
@@ -469,6 +471,11 @@ struct InsertMeasurement {
     first_batch_publish_ms: f64,
 }
 
+struct UpsertMeasurement {
+    row: WriteRow,
+    expected_records: Vec<(String, Vec<f32>)>,
+}
+
 struct BuildMeasurement {
     logical_cell_catalog_checksum: String,
     logical_cells: u32,
@@ -822,6 +829,8 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let queries = env_usize("BORSUK_BENCH_QUERIES", DEFAULT_QUERIES)?;
     let write_batch_size = env_usize("BORSUK_BENCH_WRITE_BATCH_SIZE", DEFAULT_WRITE_BATCH_SIZE)?;
     let write_ops = env_optional_cap("BORSUK_BENCH_WRITE_OPS", None)?;
+    let update_percent = env_percentage("BORSUK_BENCH_UPDATE_PERCENT", 100)?;
+    let delete_percent = env_percentage("BORSUK_BENCH_DELETE_PERCENT", 100)?;
     let query_seed = env_u64("BORSUK_BENCH_QUERY_SEED", 0)?;
     let repetition_id =
         non_empty_env("BORSUK_BENCH_REPETITION_ID").unwrap_or_else(|| "unspecified".to_string());
@@ -1013,6 +1022,8 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         queries,
         write_batch_size,
         write_ops,
+        update_percent,
+        delete_percent,
         query_seed,
         repetition_id,
         output_dir,
@@ -2979,6 +2990,8 @@ fn write_write_costs_csv(
     index: &mut BorsukIndex,
 ) -> BenchResult<()> {
     let write_ops = write_operation_count(dataset.train_count, config.write_ops)?;
+    let update_ops = percentage_operation_count(write_ops, config.update_percent)?;
+    let delete_ops = percentage_operation_count(write_ops, config.delete_percent)?;
     let mutation_queries = &dataset.queries[..dataset.queries.len().min(MUTATION_QUERY_SAMPLES)];
     let mut query_stages = vec![(
         "baseline",
@@ -3034,27 +3047,15 @@ fn write_write_costs_csv(
         "after-global-consolidation",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
-    write_lifecycle_csv(
-        config,
-        dataset,
-        write_ops,
-        insert_wall_ms,
-        first_batch_publish_ms,
-        searchable_samples,
-        searchable_fraction,
-        delta_flush_ms,
-        foreground_bytes_written,
-        indexed_delta_bytes,
-        consolidation_ms,
-        consolidated_global_bytes,
-    )?;
-
-    rows.push(measure_upserts(config, dataset, index, write_ops)?);
+    let upsert = measure_upserts(config, dataset, index, update_ops)?;
+    let (upsert_samples, upsert_correct) = verify_upsert_values(index, &upsert.expected_records)?;
+    rows.push(upsert.row);
     query_stages.push((
         "after-upsert",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
-    rows.push(measure_deletes(index, write_ops, config.write_batch_size)?);
+    rows.push(measure_deletes(index, delete_ops, config.write_batch_size)?);
+    let (delete_samples, delete_absent) = verify_delete_absence(index, delete_ops)?;
     query_stages.push((
         "after-delete",
         run_queries(index, mutation_queries, None, serving_options(config))?,
@@ -3081,6 +3082,7 @@ fn write_write_costs_csv(
         bytes_read: compact.bytes_read,
         bytes_written: compact.bytes_written,
     });
+    let (_, compact_delete_absent) = verify_delete_absence(index, delete_ops)?;
     query_stages.push((
         "after-compact",
         run_queries(index, mutation_queries, None, serving_options(config))?,
@@ -3109,10 +3111,32 @@ fn write_write_costs_csv(
         bytes_read: 0,
         bytes_written: 0,
     });
+    let (_, purge_delete_absent) = verify_delete_absence(index, delete_ops)?;
     query_stages.push((
         "after-purge",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
+
+    write_lifecycle_csv(
+        config,
+        dataset,
+        write_ops,
+        insert_wall_ms,
+        first_batch_publish_ms,
+        searchable_samples,
+        searchable_fraction,
+        upsert_samples,
+        mean(upsert_correct as f64, upsert_samples),
+        delete_samples,
+        mean(delete_absent as f64, delete_samples),
+        mean(compact_delete_absent as f64, delete_samples),
+        mean(purge_delete_absent as f64, delete_samples),
+        delta_flush_ms,
+        foreground_bytes_written,
+        indexed_delta_bytes,
+        consolidation_ms,
+        consolidated_global_bytes,
+    )?;
 
     write_cost_artifacts(config, &rows)?;
     write_mutation_query_artifacts(config, &query_stages)?;
@@ -3192,6 +3216,12 @@ fn write_lifecycle_csv(
     first_batch_publish_ms: f64,
     searchable_samples: usize,
     searchable_fraction: f64,
+    upsert_samples: usize,
+    upsert_correct_fraction: f64,
+    delete_samples: usize,
+    delete_absent_fraction: f64,
+    compact_delete_absent_fraction: f64,
+    purge_delete_absent_fraction: f64,
     delta_flush_ms: f64,
     wal_publish_bytes: u64,
     indexed_delta_bytes: u64,
@@ -3224,7 +3254,7 @@ fn write_lifecycle_csv(
     writeln!(writer, "{LIFECYCLE_HEADER}")?;
     writeln!(
         writer,
-        "{},{inserted_vectors},{logical_vector_bytes},{insert_wall_ms:.3},{insert_vectors_per_s:.3},{first_batch_publish_ms:.3},{first_batch_publish_ms:.3},{searchable_samples},{searchable_fraction:.6},{delta_flush_ms:.3},{time_to_fully_indexed_ms:.3},{wal_publish_bytes},{indexed_delta_bytes},{total_indexing_bytes},{write_amplification:.6},true,{consolidation_ms:.3},{time_to_consolidated_ms:.3},{consolidated_global_bytes},{consolidation_amplification:.6}",
+        "{},{inserted_vectors},{logical_vector_bytes},{insert_wall_ms:.3},{insert_vectors_per_s:.3},{first_batch_publish_ms:.3},{first_batch_publish_ms:.3},{searchable_samples},{searchable_fraction:.6},{upsert_samples},{upsert_correct_fraction:.6},{delete_samples},{delete_absent_fraction:.6},{compact_delete_absent_fraction:.6},{purge_delete_absent_fraction:.6},{delta_flush_ms:.3},{time_to_fully_indexed_ms:.3},{wal_publish_bytes},{indexed_delta_bytes},{total_indexing_bytes},{write_amplification:.6},true,{consolidation_ms:.3},{time_to_consolidated_ms:.3},{consolidated_global_bytes},{consolidation_amplification:.6}",
         config.write_batch_size,
     )?;
     writer.flush()?;
@@ -3363,22 +3393,24 @@ fn measure_upserts(
     dataset: &Dataset,
     index: &mut BorsukIndex,
     count: usize,
-) -> BenchResult<WriteRow> {
+) -> BenchResult<UpsertMeasurement> {
     // Re-upsert the first `count` train vectors (nudged so it is a real MVCC
     // upsert), streaming from the selected standard source. Zero-norm vectors
     // are accepted like any other.
     let requests_before = index.request_counts();
     let started = Instant::now();
     let mut samples = Vec::new();
+    let mut expected_records = Vec::with_capacity(count.min(16));
     stream_dataset_batches(config, dataset, count, |offset, vectors| {
         let batch_records = vectors.len();
         let mut records = Vec::with_capacity(vectors.len());
         for (position, mut vector) in vectors.into_iter().enumerate() {
             vector[0] += 1.0e-4;
-            records.push(VectorRecord::new(
-                offset.saturating_add(position).to_string(),
-                vector,
-            ));
+            let id = offset.saturating_add(position).to_string();
+            if expected_records.len() < 16 {
+                expected_records.push((id.clone(), vector.clone()));
+            }
+            records.push(VectorRecord::new(id, vector));
         }
         let batch_requests_before = index.request_counts();
         let batch_started = Instant::now();
@@ -3392,13 +3424,48 @@ fn measure_upserts(
         });
         Ok(())
     })?;
-    Ok(write_row_from_samples(
-        "upsert",
-        count,
-        elapsed_ms(started),
-        samples,
-        index.request_counts().delta(&requests_before),
-    ))
+    Ok(UpsertMeasurement {
+        row: write_row_from_samples(
+            "upsert",
+            count,
+            elapsed_ms(started),
+            samples,
+            index.request_counts().delta(&requests_before),
+        ),
+        expected_records,
+    })
+}
+
+fn verify_upsert_values(
+    index: &BorsukIndex,
+    expected: &[(String, Vec<f32>)],
+) -> BenchResult<(usize, usize)> {
+    let ids = expected
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect::<Vec<_>>();
+    let records = index.get_records(&ids)?;
+    let correct = records
+        .iter()
+        .zip(expected)
+        .filter(|(record, (_, vector))| {
+            record
+                .as_ref()
+                .is_some_and(|(observed, _)| observed == vector)
+        })
+        .count();
+    Ok((expected.len(), correct))
+}
+
+fn verify_delete_absence(index: &BorsukIndex, count: usize) -> BenchResult<(usize, usize)> {
+    let samples = count.min(16);
+    let ids = (0..samples).map(|id| id.to_string()).collect::<Vec<_>>();
+    let absent = index
+        .get_records(&ids)?
+        .into_iter()
+        .filter(Option::is_none)
+        .count();
+    Ok((samples, absent))
 }
 
 fn write_batch_len(count: usize, offset: usize, batch_size: usize) -> usize {
@@ -3414,6 +3481,15 @@ fn write_operation_count(train_count: usize, configured: Option<usize>) -> Bench
         .into());
     }
     Ok(count)
+}
+
+fn percentage_operation_count(base: usize, percent: usize) -> BenchResult<usize> {
+    if base == 0 || !(1..=100).contains(&percent) {
+        return Err(
+            invalid_input("lifecycle mutation percentage must be between 1 and 100").into(),
+        );
+    }
+    Ok(base.saturating_mul(percent).saturating_add(99) / 100)
 }
 
 fn stream_dataset_batches(
@@ -3693,6 +3769,14 @@ fn env_usize(name: &str, default: usize) -> BenchResult<usize> {
     }
 }
 
+fn env_percentage(name: &str, default: usize) -> BenchResult<usize> {
+    let value = env_usize(name, default)?;
+    if !(1..=100).contains(&value) {
+        return Err(invalid_input(&format!("{name} must be between 1 and 100")).into());
+    }
+    Ok(value)
+}
+
 fn env_optional_cap(name: &str, default: Option<usize>) -> BenchResult<Option<usize>> {
     match env::var(name) {
         Ok(value) => {
@@ -3933,12 +4017,13 @@ mod tests {
         mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
         parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
         parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, permuted_positions, preload_query_count, read_logical_cell_catalog,
-        recall_preloads_local_snapshot, recall_row_count, rotated_workload_index, sample_mean,
-        sample_stddev, update_vector_reservoir, uses_bounded_decoded_cache_phases,
-        uses_memory_preloaded_phase, validate_build_only, validate_disk_cached_network,
-        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_phase_selection, vector_row, write_batch_len, write_operation_count,
+        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
+        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count,
+        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
+        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase, validate_build_only,
+        validate_disk_cached_network, validate_generated_id_range, validate_insert_only,
+        validate_leaf_capability_modes, validate_phase_selection, vector_row, write_batch_len,
+        write_operation_count,
     };
 
     #[test]
@@ -4507,6 +4592,12 @@ mod tests {
             "configured_batch_records",
             "time_to_searchable_ms",
             "searchable_fraction",
+            "upsert_samples",
+            "upsert_correct_fraction",
+            "delete_samples",
+            "delete_absent_fraction",
+            "compact_delete_absent_fraction",
+            "purge_delete_absent_fraction",
             "time_to_fully_indexed_ms",
             "indexed_delta_bytes",
             "write_amplification",
@@ -4600,6 +4691,15 @@ mod tests {
                 .iter()
                 .all(|value| value.is_finite() && (-1.0..=1.0).contains(value))
         );
+    }
+
+    #[test]
+    fn lifecycle_mutation_counts_follow_the_scheduled_percentages() {
+        assert_eq!(percentage_operation_count(1_000, 10).unwrap(), 100);
+        assert_eq!(percentage_operation_count(1_001, 10).unwrap(), 101);
+        assert_eq!(percentage_operation_count(1, 1).unwrap(), 1);
+        assert!(percentage_operation_count(1_000, 0).is_err());
+        assert!(percentage_operation_count(1_000, 101).is_err());
     }
 
     #[test]

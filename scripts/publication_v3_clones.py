@@ -85,6 +85,11 @@ def _receipt_sha256(value: dict[str, object]) -> str:
     return hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
 
 
+def clone_receipt_document_sha256(receipt: dict[str, object]) -> str:
+    """Bind a result to the exact canonical clone receipt document."""
+    return hashlib.sha256(canonical_json_bytes(receipt) + b"\n").hexdigest()
+
+
 def _inventory_summary(
     value: object, *, base_roster: list[dict[str, object]]
 ) -> dict[str, int]:

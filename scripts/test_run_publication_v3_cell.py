@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.publication_v3_clones import build_clone_receipt
+from scripts.publication_v3_clones import (
+    build_clone_receipt,
+    clone_receipt_document_sha256,
+)
 from scripts.publication_v3_protocol import (
     build_schedule_document,
     canonical_json_bytes,
@@ -16,6 +19,7 @@ from scripts.run_publication_v3_cell import (
     authorize_publication_mutation_runtime,
     authorize_publication_runtime,
     build_execution_plan,
+    build_lifecycle_publication_report,
     build_publication_report,
     build_receipt_metrics,
     build_smoke_report,
@@ -24,6 +28,7 @@ from scripts.run_publication_v3_cell import (
     execute_publication_phase,
     plan_arms,
     read_build_artifact,
+    summarize_lifecycle_artifacts,
     summarize_query_samples,
     summarize_runtime_write_trace,
     validate_publication_cell_authority,
@@ -47,6 +52,59 @@ def scheduled_cell(*, system: str = "borsuk", kind: str = "read-recall") -> dict
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_lifecycle_artifacts_require_exact_operations_and_visibility_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root)
+            (output / "bench_write_costs.csv").write_text(
+                "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written\n"
+                "insert,64,1000,2,20,50000,10,1,8,12,14,15,0.02,1,10,0,2,0,100,2000\n"
+                "upsert,64,100,2,10,10000,5,1,4,6,7,8,0.1,1,8,0,2,0,100,1000\n"
+                "delete,64,100,2,8,12500,4,1,3,5,6,7,0.08,1,8,0,2,0,100,1000\n"
+                "compact,64,1,1,9,0.111,9,0,9,9,9,9,9,1,2,0,1,0,1000,3000\n"
+                "purge,64,1,1,4,0.25,4,0,4,4,4,4,4,1,2,3,1,0,0,0\n",
+                encoding="utf-8",
+            )
+            (output / "bench_write_samples.csv").write_text(
+                "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists\n"
+                "insert,0,64,8,0.125,0,1,0,0,0\n"
+                "insert,1,936,15,0.016,1,9,0,2,0\n"
+                "upsert,0,64,4,0.063,0,4,0,1,0\n"
+                "upsert,1,36,8,0.222,1,4,0,1,0\n"
+                "delete,0,64,3,0.047,0,4,0,1,0\n"
+                "delete,1,36,7,0.194,1,4,0,1,0\n"
+                "compact,0,100,9,0.09,1,2,0,1,0\n"
+                "purge,0,100,4,0.04,1,2,3,1,0\n",
+                encoding="utf-8",
+            )
+            (output / "bench_lifecycle.csv").write_text(
+                "configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification\n"
+                "64,1000,2000,20,50000,8,8,16,1,16,1,16,1,1,1,3,23,2000,1000,3000,1.5,true,6,29,4000,2\n",
+                encoding="utf-8",
+            )
+
+            summary = summarize_lifecycle_artifacts(output, expected_batch_size=64)
+
+            lifecycle_path = output / "bench_lifecycle.csv"
+            valid_lifecycle = lifecycle_path.read_text(encoding="utf-8")
+            lifecycle_path.write_text(
+                valid_lifecycle.replace("64,1000,2000", "64,999,2000"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "operation totals"):
+                summarize_lifecycle_artifacts(output, expected_batch_size=64)
+
+        self.assertEqual(summary["insert_ops"], 1000)
+        self.assertEqual(summary["upsert_ops"], 100)
+        self.assertEqual(summary["delete_ops"], 100)
+        self.assertEqual(summary["lifecycle_accuracy_ppm"], 1_000_000)
+        self.assertEqual(summary["batch_latency_p50_us"], 7_000)
+        self.assertEqual(summary["batch_latency_p95_us"], 15_000)
+        self.assertEqual(summary["time_to_consolidated_us"], 29_000)
+        self.assertEqual(summary["storage_gets"], 5)
+        self.assertEqual(summary["storage_puts"], 30)
+        self.assertEqual(summary["storage_bytes_read"], 1300)
+        self.assertEqual(summary["storage_bytes_written"], 7000)
+
     def test_publication_cell_must_match_the_frozen_manifest_prefix_authority(self) -> None:
         cell = scheduled_cell()
         with tempfile.TemporaryDirectory() as root:
@@ -166,6 +224,51 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(environment["BORSUK_BENCH_READ_ONLY"], "0")
         self.assertEqual(environment["BORSUK_BENCH_WRITE_BATCH_SIZE"], "1")
         self.assertEqual(environment["BORSUK_BENCH_LIFECYCLE_WRITERS"], "1")
+
+        attestation = runtime_attestation_for(cell)
+        report = build_lifecycle_publication_report(
+            cell=cell,
+            arm=arm,
+            protocol_bytes=canonical_json_bytes(cell) + b"\n",
+            source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+            attempt_id="attempt-01",
+            instance_identity="local-test",
+            lifecycle_metrics={
+                "insert_ops": 1000,
+                "upsert_ops": 100,
+                "delete_ops": 100,
+                "compact_ops": 1,
+                "purge_ops": 1,
+                "lifecycle_accuracy_ppm": 1_000_000,
+                "batch_latency_p50_us": 1000,
+                "batch_latency_p95_us": 2000,
+                "batch_latency_p99_us": 3000,
+                "throughput_milli_per_second": 100_000,
+                "first_publish_us": 500,
+                "time_to_searchable_us": 500,
+                "time_to_fully_indexed_us": 4000,
+                "time_to_consolidated_us": 9000,
+                "write_amplification_ppm": 1_500_000,
+            },
+            resource_metrics={
+                "cpu_ns": 1_000_000,
+                "peak_rss_bytes": 10_000_000,
+                "disk_read_bytes": 0,
+                "disk_write_bytes": 0,
+            },
+            storage_metrics={
+                "storage_gets": 10,
+                "storage_puts": 20,
+                "storage_bytes_read": 4096,
+                "storage_bytes_written": 8192,
+            },
+            index_receipt=base,
+            clone_receipt=clone,
+            runtime_attestation=attestation,
+        )
+        self.assertTrue(report["publishable"])
+        self.assertEqual(report["result"]["clone_receipt_sha256"], clone_receipt_document_sha256(clone))
 
         with self.assertRaisesRegex(ValueError, "writers=1"):
             authorize_publication_mutation_runtime(
@@ -587,7 +690,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_lifecycle_arms_expand_every_frozen_mutation_factor(self) -> None:
         cell = scheduled_cell(kind="write-update-delete-compact")
         arms = plan_arms(cell)
-        self.assertEqual(len(arms), 18)
+        self.assertEqual(len(arms), 3)
         self.assertEqual(
             arms[0],
             {
@@ -595,13 +698,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "batch_size": 1,
                 "update_percent": 10,
                 "delete_percent": 10,
-                "compaction_state": "before",
-                "duration_seconds": 300,
             },
         )
-        self.assertEqual(arms[-1]["writers"], 32)
+        self.assertEqual(arms[-1]["writers"], 1)
         self.assertEqual(arms[-1]["batch_size"], 1024)
-        self.assertEqual(arms[-1]["compaction_state"], "after")
 
     def test_smoke_report_is_distinct_from_a_publishable_cell_result(self) -> None:
         cell = scheduled_cell()

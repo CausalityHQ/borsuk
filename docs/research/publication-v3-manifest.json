@@ -292,7 +292,7 @@
       "kind": "write-update-delete-compact",
       "dataset_ids": ["cohere-medium-1m-768", "cohere-large-10m-768", "synthetic-clustered-1m-768", "synthetic-clustered-100m-768"],
       "systems": ["borsuk", "amazon-s3-vectors"],
-      "factors": {"writers": [1, 8, 32], "batch_sizes": [1, 64, 1024], "update_percent": [10, 50], "delete_percent": [10, 50], "compaction_states": ["before", "after"], "duration_seconds": 300, "minimum_lifecycle_accuracy_ppm": 1000000}
+      "factors": {"writers": [1], "batch_sizes": [1, 64, 1024], "update_percent": [10, 50], "delete_percent": [10, 50], "minimum_lifecycle_accuracy_ppm": 1000000}
     },
     {
       "id": "hybrid-read",

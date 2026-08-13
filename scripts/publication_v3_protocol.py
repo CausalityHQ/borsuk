@@ -98,8 +98,6 @@ WORKLOAD_FACTOR_FIELDS = {
             "batch_sizes",
             "update_percent",
             "delete_percent",
-            "compaction_states",
-            "duration_seconds",
             "minimum_lifecycle_accuracy_ppm",
         }
     ),
@@ -257,12 +255,6 @@ def _validate_workload_factors(kind: str, value: object) -> dict[str, object]:
             ),
             "delete_percent": _bounded_int_list(
                 factors["delete_percent"], "delete percent", minimum=1, maximum=100
-            ),
-            "compaction_states": _unique_strings(
-                factors["compaction_states"], "compaction states"
-            ),
-            "duration_seconds": _positive_int(
-                factors["duration_seconds"], "duration seconds"
             ),
             "minimum_lifecycle_accuracy_ppm": _quality_ppm(
                 factors["minimum_lifecycle_accuracy_ppm"],

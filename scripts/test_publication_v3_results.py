@@ -3,6 +3,10 @@ import json
 import unittest
 
 from scripts.publication_v3_attestation import runtime_attestation_sha256
+from scripts.publication_v3_clones import (
+    build_clone_receipt,
+    clone_receipt_document_sha256,
+)
 from scripts.publication_v3_protocol import (
     build_schedule_document,
     canonical_json_bytes,
@@ -95,6 +99,104 @@ def runtime_attestation_for(
 
 
 class PublicationV3ResultTests(unittest.TestCase):
+    def test_lifecycle_result_binds_clone_operations_accuracy_and_write_metrics(self) -> None:
+        manifest = validate_manifest(paid_v3_manifest())
+        cell = next(
+            cell
+            for cell in build_schedule_document(manifest)["cells"]
+            if cell["system"] == "borsuk"
+            and cell["workload"]["kind"] == "write-update-delete-compact"
+        )
+        from scripts.run_publication_v3_cell import plan_arms
+
+        arm = next(arm for arm in plan_arms(cell) if arm["writers"] == 1)
+        protocol = canonical_json_bytes(cell) + b"\n"
+        receipt = receipt_for(cell)
+        roster = data_roster(cell)
+        clone = build_clone_receipt(
+            cell=cell,
+            arm=arm,
+            attempt_id="attempt-01",
+            base_receipt=receipt,
+            base_roster=roster,
+            copy_inventory=[
+                {
+                    "path": item["path"],
+                    "bytes": item["bytes"],
+                    "source_etag": item["etag"],
+                    "destination_etag": f'"{index + 10:032x}"',
+                }
+                for index, item in enumerate(roster)
+            ],
+        )
+        attestation = runtime_attestation_for(cell)
+        result = {
+            "schema_version": 1,
+            "status": "complete",
+            "cell_id": cell["cell_id"],
+            "manifest_sha256": cell["manifest_sha256"],
+            "protocol_sha256": hashlib.sha256(protocol).hexdigest(),
+            "source_archive_sha256": "a" * 64,
+            "attempt_id": "attempt-01",
+            "instance_identity": "local-test",
+            "arm": arm,
+            "metrics": {
+                "insert_ops": 1000,
+                "upsert_ops": 100,
+                "delete_ops": 100,
+                "compact_ops": 1,
+                "purge_ops": 1,
+                "lifecycle_accuracy_ppm": 1_000_000,
+                "batch_latency_p50_us": 1000,
+                "batch_latency_p95_us": 2000,
+                "batch_latency_p99_us": 3000,
+                "throughput_milli_per_second": 100_000,
+                "first_publish_us": 500,
+                "time_to_searchable_us": 500,
+                "time_to_fully_indexed_us": 4000,
+                "time_to_consolidated_us": 9000,
+                "write_amplification_ppm": 1_500_000,
+                "cpu_ns": 1_000_000,
+                "peak_rss_bytes": 10_000_000,
+                "disk_read_bytes": 0,
+                "disk_write_bytes": 0,
+                "storage_gets": 10,
+                "storage_puts": 20,
+                "storage_bytes_read": 4096,
+                "storage_bytes_written": 8192,
+            },
+            "index_receipt_sha256": receipt_document_sha256(receipt),
+            "clone_receipt_sha256": clone_receipt_document_sha256(clone),
+            "runtime_attestation_sha256": runtime_attestation_sha256(attestation),
+        }
+        self.assertEqual(
+            validate_cell_result(
+                result,
+                cell=cell,
+                protocol_bytes=protocol,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+                index_receipt=receipt,
+                clone_receipt=clone,
+                runtime_attestation=attestation,
+            ),
+            result,
+        )
+        with self.assertRaisesRegex(ValueError, "scheduled mutation mix"):
+            validate_cell_result(
+                {
+                    **result,
+                    "metrics": {**result["metrics"], "upsert_ops": 101},
+                },
+                cell=cell,
+                protocol_bytes=protocol,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+                index_receipt=receipt,
+                clone_receipt=clone,
+                runtime_attestation=attestation,
+            )
+
     def test_cell_result_binds_protocol_source_quality_latency_and_resources(self) -> None:
         manifest = validate_manifest(paid_v3_manifest())
         cell = next(
@@ -132,6 +234,7 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "storage_bytes_written": 0,
             },
             "index_receipt_sha256": receipt_document_sha256(receipt),
+            "clone_receipt_sha256": None,
             "runtime_attestation_sha256": runtime_attestation_sha256(attestation),
         }
         validated = validate_cell_result(
@@ -216,6 +319,7 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "arm": first_read_arm(cell),
                 "metrics": metrics,
                 "index_receipt_sha256": receipt_document_sha256(receipt),
+                "clone_receipt_sha256": None,
                 "runtime_attestation_sha256": runtime_attestation_sha256(attestation),
             }
             with self.subTest(missing=missing), self.assertRaises(ValueError):

@@ -20,7 +20,11 @@ try:
         runtime_attestation_sha256,
         validate_runtime_attestation,
     )
-    from scripts.publication_v3_clones import validate_clone_receipt
+    from scripts.publication_v3_clones import (
+        clone_receipt_document_sha256,
+        require_verified_clone_inventory,
+        validate_clone_receipt,
+    )
     from scripts.publication_v3_protocol import (
         build_schedule_document,
         canonical_json_bytes,
@@ -42,7 +46,11 @@ except ModuleNotFoundError:
         runtime_attestation_sha256,
         validate_runtime_attestation,
     )
-    from publication_v3_clones import validate_clone_receipt
+    from publication_v3_clones import (
+        clone_receipt_document_sha256,
+        require_verified_clone_inventory,
+        validate_clone_receipt,
+    )
     from publication_v3_protocol import (
         build_schedule_document,
         canonical_json_bytes,
@@ -64,6 +72,16 @@ SUPPORTED_LOCAL_KINDS = frozenset({"read-recall", "write-update-delete-compact"}
 PRODUCTION_BUILD_FIELDS = tuple(
     "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
 )
+WRITE_COST_FIELDS = tuple(
+    "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written".split(",")
+)
+WRITE_SAMPLE_FIELDS = tuple(
+    "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists".split(",")
+)
+LIFECYCLE_FIELDS = tuple(
+    "configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification".split(",")
+)
+LIFECYCLE_OPERATIONS = ("insert", "upsert", "delete", "compact", "purge")
 
 
 def validate_publication_cell_authority(
@@ -115,27 +133,20 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
             "batch_size": factors.get("batch_sizes"),
             "update_percent": factors.get("update_percent"),
             "delete_percent": factors.get("delete_percent"),
-            "compaction_state": factors.get("compaction_states"),
         }
         if any(not isinstance(values, list) or not values for values in axes.values()):
             raise ValueError("lifecycle arm factors are incomplete")
-        duration = factors.get("duration_seconds")
-        if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
-            raise ValueError("lifecycle duration is invalid")
         return [
             {
                 "writers": writers,
                 "batch_size": batch_size,
                 "update_percent": update_percent,
                 "delete_percent": delete_percent,
-                "compaction_state": compaction_state,
-                "duration_seconds": duration,
             }
             for writers in axes["writers"]
             for batch_size in axes["batch_size"]
             for update_percent in axes["update_percent"]
             for delete_percent in axes["delete_percent"]
-            for compaction_state in axes["compaction_state"]
         ]
     if workload.get("kind") != "read-recall":
         raise ValueError(f"workload kind {workload.get('kind')!r} is not executable")
@@ -391,8 +402,6 @@ def build_execution_plan(
                     "BORSUK_BENCH_LIFECYCLE_WRITERS": str(arm["writers"]),
                     "BORSUK_BENCH_UPDATE_PERCENT": str(arm["update_percent"]),
                     "BORSUK_BENCH_DELETE_PERCENT": str(arm["delete_percent"]),
-                    "BORSUK_BENCH_COMPACTION_STATE": str(arm["compaction_state"]),
-                    "BORSUK_BENCH_DURATION_SECONDS": str(arm["duration_seconds"]),
                 }
             )
         return {
@@ -705,6 +714,232 @@ def summarize_runtime_write_trace(path: Path) -> dict[str, int]:
     }
 
 
+def _read_exact_csv(path: Path, fields: tuple[str, ...]) -> list[dict[str, str]]:
+    if not path.is_file():
+        raise ValueError(f"publication artifact {path.name} is missing")
+    with path.open(newline="") as source:
+        reader = csv.DictReader(source)
+        if tuple(reader.fieldnames or ()) != fields:
+            raise ValueError(f"publication artifact {path.name} header differs")
+        rows = list(reader)
+    if not rows:
+        raise ValueError(f"publication artifact {path.name} is empty")
+    return rows
+
+
+def _finite_nonnegative_float(value: object, role: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{role} is invalid") from error
+    if not math.isfinite(result) or result < 0:
+        raise ValueError(f"{role} is invalid")
+    return result
+
+
+def summarize_lifecycle_artifacts(
+    output_dir: Path, *, expected_batch_size: int
+) -> dict[str, int]:
+    if isinstance(expected_batch_size, bool) or expected_batch_size <= 0:
+        raise ValueError("publication lifecycle batch size is invalid")
+    costs = _read_exact_csv(output_dir / "bench_write_costs.csv", WRITE_COST_FIELDS)
+    samples = _read_exact_csv(output_dir / "bench_write_samples.csv", WRITE_SAMPLE_FIELDS)
+    lifecycle_rows = _read_exact_csv(output_dir / "bench_lifecycle.csv", LIFECYCLE_FIELDS)
+    if len(costs) != len(LIFECYCLE_OPERATIONS) or len(lifecycle_rows) != 1:
+        raise ValueError("publication lifecycle artifacts have incomplete operation rows")
+    by_operation: dict[str, dict[str, str]] = {}
+    for row in costs:
+        operation = row.get("op", "")
+        if operation not in LIFECYCLE_OPERATIONS or operation in by_operation:
+            raise ValueError("publication lifecycle operations differ")
+        by_operation[operation] = row
+        try:
+            configured_batch = int(row["configured_batch_records"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("publication lifecycle batch size is invalid") from error
+        if configured_batch != expected_batch_size:
+            raise ValueError("publication lifecycle artifact belongs to another batch arm")
+    if tuple(sorted(by_operation)) != tuple(sorted(LIFECYCLE_OPERATIONS)):
+        raise ValueError("publication lifecycle operations differ")
+
+    latencies_us: list[int] = []
+    sample_indices: dict[str, set[int]] = {operation: set() for operation in LIFECYCLE_OPERATIONS}
+    sample_records = {operation: 0 for operation in LIFECYCLE_OPERATIONS}
+    for row in samples:
+        operation = row.get("op", "")
+        if operation not in sample_indices:
+            raise ValueError("publication lifecycle sample operation differs")
+        try:
+            index = int(row["batch_index"])
+            batch_records = int(row["batch_records"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("publication lifecycle sample is invalid") from error
+        if index < 0 or index in sample_indices[operation] or batch_records < 0:
+            raise ValueError("publication lifecycle sample identity is invalid")
+        sample_indices[operation].add(index)
+        sample_records[operation] += batch_records
+        latency_ms = _finite_nonnegative_float(
+            row.get("batch_latency_ms"), "publication lifecycle sample latency"
+        )
+        latencies_us.append(round(latency_ms * 1_000))
+    for operation, row in by_operation.items():
+        try:
+            expected_batches = int(row["batches"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("publication lifecycle operation is invalid") from error
+        if expected_batches <= 0 or sample_indices[operation] != set(range(expected_batches)):
+            raise ValueError("publication lifecycle samples are incomplete")
+
+    lifecycle = lifecycle_rows[0]
+    try:
+        lifecycle_batch = int(lifecycle["configured_batch_records"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("publication lifecycle batch size is invalid") from error
+    if lifecycle_batch != expected_batch_size:
+        raise ValueError("publication lifecycle artifact belongs to another batch arm")
+    fractions = []
+    for sample_field, fraction_field in (
+        ("searchable_samples", "searchable_fraction"),
+        ("upsert_samples", "upsert_correct_fraction"),
+        ("delete_samples", "delete_absent_fraction"),
+        ("delete_samples", "compact_delete_absent_fraction"),
+        ("delete_samples", "purge_delete_absent_fraction"),
+    ):
+        try:
+            sample_count = int(lifecycle[sample_field])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("publication lifecycle verification evidence is invalid") from error
+        fraction = _finite_nonnegative_float(
+            lifecycle.get(fraction_field), "publication lifecycle verification fraction"
+        )
+        if sample_count <= 0 or fraction > 1:
+            raise ValueError("publication lifecycle verification evidence is invalid")
+        fractions.append(fraction)
+
+    operation_counts: dict[str, int] = {}
+    wall_ms = 0.0
+    storage_totals = {
+        "storage_gets": 0,
+        "storage_puts": 0,
+        "storage_bytes_read": 0,
+        "storage_bytes_written": 0,
+    }
+    for operation, row in by_operation.items():
+        try:
+            operations = int(row["ops"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("publication lifecycle operation count is invalid") from error
+        if operations <= 0:
+            raise ValueError("publication lifecycle operation count is invalid")
+        operation_counts[operation] = operations
+        wall_ms += _finite_nonnegative_float(
+            row.get("wall_ms"), "publication lifecycle operation wall time"
+        )
+        for source, destination in (
+            ("gets", "storage_gets"),
+            ("puts", "storage_puts"),
+            ("bytes_read", "storage_bytes_read"),
+            ("bytes_written", "storage_bytes_written"),
+        ):
+            try:
+                observed = int(row[source])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError("publication lifecycle storage telemetry is invalid") from error
+            if observed < 0:
+                raise ValueError("publication lifecycle storage telemetry is invalid")
+            storage_totals[destination] += observed
+    for operation in ("insert", "upsert", "delete"):
+        if sample_records[operation] != operation_counts[operation]:
+            raise ValueError("publication lifecycle sample operation totals differ")
+    if wall_ms <= 0:
+        raise ValueError("publication lifecycle wall time is invalid")
+
+    try:
+        inserted_vectors = int(lifecycle["inserted_vectors"])
+        logical_vector_bytes = int(lifecycle["logical_vector_bytes"])
+        wal_publish_bytes = int(lifecycle["wal_publish_bytes"])
+        indexed_delta_bytes = int(lifecycle["indexed_delta_bytes"])
+        total_indexing_bytes = int(lifecycle["total_indexing_bytes"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("publication lifecycle operation totals are invalid") from error
+    if (
+        inserted_vectors != operation_counts["insert"]
+        or logical_vector_bytes <= 0
+        or wal_publish_bytes < 0
+        or indexed_delta_bytes < 0
+        or total_indexing_bytes <= 0
+        or total_indexing_bytes != wal_publish_bytes + indexed_delta_bytes
+    ):
+        raise ValueError("publication lifecycle operation totals differ")
+
+    first_publish_us = round(
+        _finite_nonnegative_float(lifecycle.get("first_batch_publish_ms"), "first publish")
+        * 1_000
+    )
+    searchable_us = round(
+        _finite_nonnegative_float(lifecycle.get("time_to_searchable_ms"), "searchable time")
+        * 1_000
+    )
+    fully_indexed_us = round(
+        _finite_nonnegative_float(lifecycle.get("time_to_fully_indexed_ms"), "indexed time")
+        * 1_000
+    )
+    consolidated_us = round(
+        _finite_nonnegative_float(lifecycle.get("time_to_consolidated_ms"), "consolidated time")
+        * 1_000
+    )
+    if not 0 < first_publish_us <= searchable_us <= fully_indexed_us <= consolidated_us:
+        raise ValueError("publication lifecycle milestone times are not ordered")
+    write_amplification = _finite_nonnegative_float(
+        lifecycle.get("write_amplification"), "write amplification"
+    )
+    expected_amplification = total_indexing_bytes / logical_vector_bytes
+    if (
+        write_amplification <= 0
+        or abs(write_amplification - expected_amplification) > 0.000_001
+        or lifecycle.get("write_amplification_is_lower_bound") != "true"
+    ):
+        raise ValueError("publication lifecycle write amplification is invalid")
+    insert_wall_ms = _finite_nonnegative_float(
+        lifecycle.get("insert_wall_ms"), "insert wall time"
+    )
+    delta_flush_ms = _finite_nonnegative_float(
+        lifecycle.get("delta_flush_ms"), "delta flush time"
+    )
+    consolidation_ms = _finite_nonnegative_float(
+        lifecycle.get("consolidation_ms"), "consolidation time"
+    )
+    cost_insert_wall_ms = _finite_nonnegative_float(
+        by_operation["insert"].get("wall_ms"), "insert operation wall time"
+    )
+    if (
+        abs(insert_wall_ms - cost_insert_wall_ms) > 0.001
+        or abs(fully_indexed_us / 1_000 - (insert_wall_ms + delta_flush_ms)) > 0.002
+        or abs(consolidated_us / 1_000 - (fully_indexed_us / 1_000 + consolidation_ms))
+        > 0.002
+    ):
+        raise ValueError("publication lifecycle milestone totals differ")
+    total_operations = sum(operation_counts.values())
+    return {
+        "insert_ops": operation_counts["insert"],
+        "upsert_ops": operation_counts["upsert"],
+        "delete_ops": operation_counts["delete"],
+        "compact_ops": operation_counts["compact"],
+        "purge_ops": operation_counts["purge"],
+        "lifecycle_accuracy_ppm": round(min(fractions) * 1_000_000),
+        "batch_latency_p50_us": _nearest_rank(latencies_us, 0.50),
+        "batch_latency_p95_us": _nearest_rank(latencies_us, 0.95),
+        "batch_latency_p99_us": _nearest_rank(latencies_us, 0.99),
+        "throughput_milli_per_second": max(1, round(total_operations * 1_000_000 / wall_ms)),
+        "first_publish_us": first_publish_us,
+        "time_to_searchable_us": searchable_us,
+        "time_to_fully_indexed_us": fully_indexed_us,
+        "time_to_consolidated_us": consolidated_us,
+        "write_amplification_ppm": round(write_amplification * 1_000_000),
+        **storage_totals,
+    }
+
+
 def read_build_artifact(
     output_dir: Path, *, cell: dict[str, object]
 ) -> dict[str, dict[str, int | str]]:
@@ -905,6 +1140,7 @@ def build_publication_report(
             ),
         },
         "index_receipt_sha256": receipt_document_sha256(index_receipt),
+        "clone_receipt_sha256": None,
         "runtime_attestation_sha256": runtime_attestation_sha256(
             runtime_attestation
         ),
@@ -917,6 +1153,86 @@ def build_publication_report(
         dataset_materialization_sha256=dataset_materialization_sha256,
         index_receipt=index_receipt,
         runtime_attestation=runtime_attestation,
+    )
+    return {"publishable": True, "result": validated}
+
+
+def build_lifecycle_publication_report(
+    *,
+    cell: dict[str, object],
+    arm: dict[str, object],
+    protocol_bytes: bytes,
+    source_archive_sha256: str,
+    dataset_materialization_sha256: str,
+    attempt_id: str,
+    instance_identity: str,
+    lifecycle_metrics: dict[str, int],
+    resource_metrics: dict[str, int],
+    storage_metrics: dict[str, int],
+    index_receipt: dict[str, object],
+    clone_receipt: dict[str, object],
+    runtime_attestation: dict[str, object],
+) -> dict[str, object]:
+    expected_lifecycle_fields = frozenset(
+        {
+            "insert_ops",
+            "upsert_ops",
+            "delete_ops",
+            "compact_ops",
+            "purge_ops",
+            "lifecycle_accuracy_ppm",
+            "batch_latency_p50_us",
+            "batch_latency_p95_us",
+            "batch_latency_p99_us",
+            "throughput_milli_per_second",
+            "first_publish_us",
+            "time_to_searchable_us",
+            "time_to_fully_indexed_us",
+            "time_to_consolidated_us",
+            "write_amplification_ppm",
+        }
+    )
+    expected_resource_fields = frozenset(
+        {"cpu_ns", "peak_rss_bytes", "disk_read_bytes", "disk_write_bytes"}
+    )
+    expected_storage_fields = frozenset(
+        {
+            "storage_gets",
+            "storage_puts",
+            "storage_bytes_read",
+            "storage_bytes_written",
+        }
+    )
+    if frozenset(lifecycle_metrics) != expected_lifecycle_fields:
+        raise ValueError("publication lifecycle metric fields differ")
+    if frozenset(resource_metrics) != expected_resource_fields:
+        raise ValueError("publication lifecycle resource fields differ")
+    if frozenset(storage_metrics) != expected_storage_fields:
+        raise ValueError("publication lifecycle storage fields differ")
+    result = {
+        "schema_version": 1,
+        "status": "complete",
+        "cell_id": cell.get("cell_id"),
+        "manifest_sha256": cell.get("manifest_sha256"),
+        "protocol_sha256": hashlib.sha256(protocol_bytes).hexdigest(),
+        "source_archive_sha256": source_archive_sha256,
+        "attempt_id": attempt_id,
+        "instance_identity": instance_identity,
+        "arm": arm,
+        "metrics": {**lifecycle_metrics, **resource_metrics, **storage_metrics},
+        "index_receipt_sha256": receipt_document_sha256(index_receipt),
+        "clone_receipt_sha256": clone_receipt_document_sha256(clone_receipt),
+        "runtime_attestation_sha256": runtime_attestation_sha256(runtime_attestation),
+    }
+    validated = validate_cell_result(
+        result,
+        cell=cell,
+        protocol_bytes=protocol_bytes,
+        source_archive_sha256=source_archive_sha256,
+        dataset_materialization_sha256=dataset_materialization_sha256,
+        index_receipt=index_receipt,
+        runtime_attestation=runtime_attestation,
+        clone_receipt=clone_receipt,
     )
     return {"publishable": True, "result": validated}
 
@@ -952,6 +1268,8 @@ def main() -> int:
     parser.add_argument("--object-roster", type=Path)
     parser.add_argument("--index-receipt", type=Path)
     parser.add_argument("--index-inventory", type=Path)
+    parser.add_argument("--clone-receipt", type=Path)
+    parser.add_argument("--clone-inventory", type=Path)
     parser.add_argument("--build-complete", type=Path)
     args = parser.parse_args()
 
@@ -1080,13 +1398,41 @@ def main() -> int:
             receipt, args.object_roster.read_bytes(), cell=cell
         )
         reconcile_index_inventory(roster, inventory)
-        authorized_runtime = authorize_publication_runtime(
-            plan,
-            receipt=receipt,
-            cell=cell,
-            source_archive_sha256=str(args.source_archive_sha256),
-            dataset_materialization_sha256=str(args.dataset_materialization_sha256),
-        )
+        workload = cell.get("workload")
+        workload_kind = workload.get("kind") if isinstance(workload, dict) else None
+        clone_receipt = None
+        if workload_kind == "read-recall":
+            if args.clone_receipt is not None or args.clone_inventory is not None:
+                raise ValueError("read-only publication runtime cannot use a mutable clone")
+            authorized_runtime = authorize_publication_runtime(
+                plan,
+                receipt=receipt,
+                cell=cell,
+                source_archive_sha256=str(args.source_archive_sha256),
+                dataset_materialization_sha256=str(args.dataset_materialization_sha256),
+            )
+        elif workload_kind == "write-update-delete-compact":
+            if args.clone_receipt is None or args.clone_inventory is None:
+                raise ValueError("lifecycle publication runtime requires clone authority")
+            clone_value = _read_canonical_value(args.clone_receipt, 256 * 1024)
+            if not isinstance(clone_value, dict):
+                raise ValueError("publication clone receipt must be a JSON object")
+            clone_receipt = clone_value
+            require_verified_clone_inventory(
+                clone_receipt,
+                args.clone_inventory.read_bytes(),
+                base_roster=roster,
+            )
+            authorized_runtime = authorize_publication_mutation_runtime(
+                plan,
+                clone_receipt=clone_receipt,
+                base_receipt=receipt,
+                arm=arm,
+                attempt_id=str(args.attempt_id),
+                cell=cell,
+            )
+        else:
+            raise ValueError("publication runtime workload is not implemented")
         authorized_plan = {**plan, "runtime": authorized_runtime}
         source_root = Path(__file__).resolve().parent.parent
         preflight = validate_runtime_attestation(
@@ -1104,18 +1450,6 @@ def main() -> int:
         output, resources, elapsed_ns = execute_publication_phase(
             authorized_plan, "runtime"
         )
-        samples = output / "bench_query_samples.csv"
-        if not samples.is_file() or samples.stat().st_size == 0:
-            raise ValueError("publication runtime emitted no query samples")
-        with samples.open(newline="") as source:
-            rows = list(csv.DictReader(source))
-        metrics = summarize_query_samples(
-            rows,
-            cell=cell,
-            arm=arm,
-            expected_queries=int(plan["effective_queries"]),
-        )
-        runtime_writes = summarize_runtime_write_trace(output / "storage-access.csv")
         runtime_attestation = validate_runtime_attestation(
             collect_runtime_attestation(
                 cell=cell,
@@ -1129,21 +1463,64 @@ def main() -> int:
         (args.workspace / "RUNTIME_ATTESTATION.json").write_bytes(
             canonical_json_bytes(runtime_attestation) + b"\n"
         )
-        report = build_publication_report(
-            cell=cell,
-            arm=arm,
-            protocol_bytes=protocol_bytes,
-            source_archive_sha256=str(args.source_archive_sha256),
-            dataset_materialization_sha256=str(args.dataset_materialization_sha256),
-            attempt_id=str(args.attempt_id),
-            instance_identity=str(args.instance_identity),
-            elapsed_ns=elapsed_ns,
-            query_metrics=metrics,
-            resource_metrics=resources,
-            runtime_write_metrics=runtime_writes,
-            index_receipt=receipt,
-            runtime_attestation=runtime_attestation,
-        )
+        if workload_kind == "read-recall":
+            samples = output / "bench_query_samples.csv"
+            if not samples.is_file() or samples.stat().st_size == 0:
+                raise ValueError("publication runtime emitted no query samples")
+            with samples.open(newline="") as source:
+                rows = list(csv.DictReader(source))
+            metrics = summarize_query_samples(
+                rows,
+                cell=cell,
+                arm=arm,
+                expected_queries=int(plan["effective_queries"]),
+            )
+            runtime_writes = summarize_runtime_write_trace(output / "storage-access.csv")
+            report = build_publication_report(
+                cell=cell,
+                arm=arm,
+                protocol_bytes=protocol_bytes,
+                source_archive_sha256=str(args.source_archive_sha256),
+                dataset_materialization_sha256=str(args.dataset_materialization_sha256),
+                attempt_id=str(args.attempt_id),
+                instance_identity=str(args.instance_identity),
+                elapsed_ns=elapsed_ns,
+                query_metrics=metrics,
+                resource_metrics=resources,
+                runtime_write_metrics=runtime_writes,
+                index_receipt=receipt,
+                runtime_attestation=runtime_attestation,
+            )
+        else:
+            lifecycle = summarize_lifecycle_artifacts(
+                output, expected_batch_size=int(arm["batch_size"])
+            )
+            storage_metrics = {
+                field: lifecycle.pop(field)
+                for field in (
+                    "storage_gets",
+                    "storage_puts",
+                    "storage_bytes_read",
+                    "storage_bytes_written",
+                )
+            }
+            if clone_receipt is None:
+                raise ValueError("lifecycle publication clone authority is missing")
+            report = build_lifecycle_publication_report(
+                cell=cell,
+                arm=arm,
+                protocol_bytes=protocol_bytes,
+                source_archive_sha256=str(args.source_archive_sha256),
+                dataset_materialization_sha256=str(args.dataset_materialization_sha256),
+                attempt_id=str(args.attempt_id),
+                instance_identity=str(args.instance_identity),
+                lifecycle_metrics=lifecycle,
+                resource_metrics=resources,
+                storage_metrics=storage_metrics,
+                index_receipt=receipt,
+                clone_receipt=clone_receipt,
+                runtime_attestation=runtime_attestation,
+            )
         destination = args.workspace / "RESULT_COMPLETE.json"
         destination.write_bytes(canonical_json_bytes(report) + b"\n")
         print(json.dumps(report, sort_keys=True))

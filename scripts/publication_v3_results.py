@@ -38,10 +38,11 @@ RESULT_FIELDS = frozenset(
         "arm",
         "metrics",
         "index_receipt_sha256",
+        "clone_receipt_sha256",
         "runtime_attestation_sha256",
     }
 )
-METRIC_FIELDS = frozenset(
+READ_METRIC_FIELDS = frozenset(
     {
         "queries",
         "correctness_ppm",
@@ -49,6 +50,33 @@ METRIC_FIELDS = frozenset(
         "latency_p95_us",
         "latency_p99_us",
         "throughput_milli_per_second",
+        "cpu_ns",
+        "peak_rss_bytes",
+        "disk_read_bytes",
+        "disk_write_bytes",
+        "storage_gets",
+        "storage_puts",
+        "storage_bytes_read",
+        "storage_bytes_written",
+    }
+)
+LIFECYCLE_METRIC_FIELDS = frozenset(
+    {
+        "insert_ops",
+        "upsert_ops",
+        "delete_ops",
+        "compact_ops",
+        "purge_ops",
+        "lifecycle_accuracy_ppm",
+        "batch_latency_p50_us",
+        "batch_latency_p95_us",
+        "batch_latency_p99_us",
+        "throughput_milli_per_second",
+        "first_publish_us",
+        "time_to_searchable_us",
+        "time_to_fully_indexed_us",
+        "time_to_consolidated_us",
+        "write_amplification_ppm",
         "cpu_ns",
         "peak_rss_bytes",
         "disk_read_bytes",
@@ -117,21 +145,50 @@ def _validate_result_arm(value: object, cell: dict[str, object]) -> dict[str, ob
     if not isinstance(arm, dict) or not isinstance(workload, dict):
         raise ValueError("cell result arm is invalid")
     factors = workload.get("factors")
-    if workload.get("kind") != "read-recall" or not isinstance(factors, dict):
+    kind = workload.get("kind")
+    if not isinstance(factors, dict):
+        raise ValueError("cell result arm kind is not implemented")
+    if kind == "read-recall":
+        expected = frozenset(
+            {"k", "candidate_budget", "routing_cell_budget", "cache_state"}
+        )
+        if frozenset(arm) != expected:
+            raise ValueError("cell result arm fields differ")
+        for field in ("k", "candidate_budget", "routing_cell_budget"):
+            _positive_integer(arm[field], f"cell result arm {field}")
+        _bounded_identity(arm["cache_state"], "cell result arm cache state")
+        if (
+            arm["k"] not in factors.get("k", [])
+            or arm["candidate_budget"] not in factors.get("candidate_budgets", [])
+            or arm["routing_cell_budget"] != factors.get("routing_cell_budget")
+            or arm["cache_state"] not in factors.get("cache_states", [])
+        ):
+            raise ValueError("cell result arm is not scheduled")
+        return copy.deepcopy(arm)
+    if kind != "write-update-delete-compact":
         raise ValueError("cell result arm kind is not implemented")
     expected = frozenset(
-        {"k", "candidate_budget", "routing_cell_budget", "cache_state"}
+        {
+            "writers",
+            "batch_size",
+            "update_percent",
+            "delete_percent",
+        }
     )
     if frozenset(arm) != expected:
         raise ValueError("cell result arm fields differ")
-    for field in ("k", "candidate_budget", "routing_cell_budget"):
+    for field in (
+        "writers",
+        "batch_size",
+        "update_percent",
+        "delete_percent",
+    ):
         _positive_integer(arm[field], f"cell result arm {field}")
-    _bounded_identity(arm["cache_state"], "cell result arm cache state")
     if (
-        arm["k"] not in factors.get("k", [])
-        or arm["candidate_budget"] not in factors.get("candidate_budgets", [])
-        or arm["routing_cell_budget"] != factors.get("routing_cell_budget")
-        or arm["cache_state"] not in factors.get("cache_states", [])
+        arm["writers"] not in factors.get("writers", [])
+        or arm["batch_size"] not in factors.get("batch_sizes", [])
+        or arm["update_percent"] not in factors.get("update_percent", [])
+        or arm["delete_percent"] not in factors.get("delete_percent", [])
     ):
         raise ValueError("cell result arm is not scheduled")
     return copy.deepcopy(arm)
@@ -221,6 +278,7 @@ def validate_cell_result(
     dataset_materialization_sha256: str,
     index_receipt: dict[str, object],
     runtime_attestation: dict[str, object],
+    clone_receipt: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if not isinstance(value, dict) or frozenset(value) != RESULT_FIELDS:
         raise ValueError("cell result fields differ")
@@ -241,7 +299,9 @@ def validate_cell_result(
         raise ValueError("cell result source archive checksum differs")
     _bounded_identity(value["attempt_id"], "attempt identity")
     _bounded_identity(value["instance_identity"], "instance identity")
-    _validate_result_arm(value["arm"], cell)
+    arm = _validate_result_arm(value["arm"], cell)
+    workload = cell.get("workload")
+    workload_kind = workload.get("kind") if isinstance(workload, dict) else None
     try:
         from scripts.publication_v3_receipts import (
             receipt_document_sha256,
@@ -261,6 +321,34 @@ def validate_cell_result(
     )
     if value["index_receipt_sha256"] != receipt_document_sha256(receipt):
         raise ValueError("cell result index receipt differs from its authorized build")
+    if workload_kind == "read-recall":
+        if clone_receipt is not None or value["clone_receipt_sha256"] is not None:
+            raise ValueError("read-only cell result cannot use a mutable clone")
+    elif workload_kind == "write-update-delete-compact":
+        if clone_receipt is None:
+            raise ValueError("lifecycle cell result requires a mutable clone receipt")
+        try:
+            from scripts.publication_v3_clones import (
+                clone_receipt_document_sha256,
+                validate_clone_receipt,
+            )
+        except ModuleNotFoundError:
+            from publication_v3_clones import (
+                clone_receipt_document_sha256,
+                validate_clone_receipt,
+            )
+
+        clone = validate_clone_receipt(
+            clone_receipt,
+            cell=cell,
+            arm=arm,
+            attempt_id=str(value["attempt_id"]),
+            base_receipt=receipt,
+        )
+        if value["clone_receipt_sha256"] != clone_receipt_document_sha256(clone):
+            raise ValueError("cell result clone receipt differs from its mutable index")
+    else:
+        raise ValueError("cell result workload kind is not implemented")
     try:
         from scripts.publication_v3_attestation import (
             runtime_attestation_sha256,
@@ -281,17 +369,58 @@ def validate_cell_result(
         raise ValueError("cell result runtime attestation differs from its measured host")
 
     metrics = value["metrics"]
-    if not isinstance(metrics, dict) or frozenset(metrics) != METRIC_FIELDS:
+    expected_metric_fields = (
+        READ_METRIC_FIELDS
+        if workload_kind == "read-recall"
+        else LIFECYCLE_METRIC_FIELDS
+    )
+    if not isinstance(metrics, dict) or frozenset(metrics) != expected_metric_fields:
         raise ValueError("cell result metric fields differ")
-    queries = _positive_integer(metrics["queries"], "query count")
-    if queries != cell.get("queries_per_repetition"):
-        raise ValueError("cell result query count differs from its protocol")
-    correctness = _nonnegative_integer(metrics["correctness_ppm"], "correctness ppm")
+    correctness_field = (
+        "correctness_ppm"
+        if workload_kind == "read-recall"
+        else "lifecycle_accuracy_ppm"
+    )
+    correctness = _nonnegative_integer(metrics[correctness_field], "correctness ppm")
     if correctness > 1_000_000 or correctness < _correctness_floor(cell):
         raise ValueError("cell result correctness is below its protocol floor")
-    p50 = _nonnegative_integer(metrics["latency_p50_us"], "p50 latency")
-    p95 = _nonnegative_integer(metrics["latency_p95_us"], "p95 latency")
-    p99 = _nonnegative_integer(metrics["latency_p99_us"], "p99 latency")
+    if workload_kind == "read-recall":
+        queries = _positive_integer(metrics["queries"], "query count")
+        if queries != cell.get("queries_per_repetition"):
+            raise ValueError("cell result query count differs from its protocol")
+        latency_prefix = "latency"
+    else:
+        for field in ("insert_ops", "upsert_ops", "delete_ops"):
+            _positive_integer(metrics[field], field.replace("_", " "))
+        expected_upserts = (
+            metrics["insert_ops"] * arm["update_percent"] + 99
+        ) // 100
+        expected_deletes = (
+            metrics["insert_ops"] * arm["delete_percent"] + 99
+        ) // 100
+        if (
+            metrics["upsert_ops"] != expected_upserts
+            or metrics["delete_ops"] != expected_deletes
+        ):
+            raise ValueError("lifecycle result differs from its scheduled mutation mix")
+        if metrics["compact_ops"] != 1 or metrics["purge_ops"] != 1:
+            raise ValueError("lifecycle result must compact and purge exactly once")
+        lifecycle_times = [
+            _positive_integer(metrics[field], field.replace("_", " "))
+            for field in (
+                "first_publish_us",
+                "time_to_searchable_us",
+                "time_to_fully_indexed_us",
+                "time_to_consolidated_us",
+            )
+        ]
+        if lifecycle_times != sorted(lifecycle_times):
+            raise ValueError("lifecycle result milestone times are not ordered")
+        _positive_integer(metrics["write_amplification_ppm"], "write amplification")
+        latency_prefix = "batch_latency"
+    p50 = _nonnegative_integer(metrics[f"{latency_prefix}_p50_us"], "p50 latency")
+    p95 = _nonnegative_integer(metrics[f"{latency_prefix}_p95_us"], "p95 latency")
+    p99 = _nonnegative_integer(metrics[f"{latency_prefix}_p99_us"], "p99 latency")
     if not p50 <= p95 <= p99:
         raise ValueError("cell result latency quantiles are not ordered")
     _positive_integer(metrics["throughput_milli_per_second"], "throughput")
@@ -317,8 +446,7 @@ def validate_cell_result(
         "storage_bytes_written",
     ):
         _nonnegative_integer(metrics[field], field.replace("_", " "))
-    workload = cell.get("workload")
-    if isinstance(workload, dict) and workload.get("kind") == "read-recall" and (
+    if workload_kind == "read-recall" and (
         metrics["storage_puts"] != 0 or metrics["storage_bytes_written"] != 0
     ):
         raise ValueError("read-only publication results cannot write index objects")
