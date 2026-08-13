@@ -373,7 +373,7 @@ class PublicationV3ResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "control-object amplification"):
             validate_object_roster(
                 [data_object(0, 1_000_000), data_object(1, 1_000_000)]
-                + [control_object(index) for index in range(257)],
+                + [control_object(index) for index in range(513)],
                 logical_rows=2_000_000,
             )
 
@@ -393,6 +393,55 @@ class PublicationV3ResultTests(unittest.TestCase):
             )
         summary = validate_object_roster(roster, logical_rows=3_633)
         self.assertEqual(summary["data_objects"], 9)
+
+    def test_roster_represents_real_multi_object_index_formats_without_relabeling(self) -> None:
+        roster = [data_object(0, 1_000_000)]
+        roster.extend(
+            {
+                "role": "query-page",
+                "path": f"fidx/{index:02x}/filter-{index:04x}.fidx",
+                "format": "packed",
+                "bytes": 100,
+                "rows": 0,
+                "checksum": f"{index + 3000:064x}",
+                "etag": f'"{index + 3000:032x}"',
+            }
+            for index in range(62)
+        )
+        roster.extend(
+            {
+                "role": "control",
+                "path": f"collection/snapshots/{index:064x}.json",
+                "format": "json",
+                "bytes": 4096,
+                "rows": 0,
+                "checksum": f"{index + 4000:064x}",
+                "etag": f'"{index + 4000:032x}"',
+            }
+            for index in range(190)
+        )
+        roster.extend(
+            {
+                "role": "control",
+                "path": f"transactions/{index:032x}/STATE",
+                "format": "packed",
+                "bytes": 46,
+                "rows": 0,
+                "checksum": f"{index + 5000:064x}",
+                "etag": f'"{index + 5000:032x}"',
+            }
+            for index in range(150)
+        )
+
+        summary = validate_object_roster(roster, logical_rows=1_000_000)
+
+        self.assertEqual(summary["objects"], 403)
+        self.assertEqual(summary["control_objects"], 340)
+        with self.assertRaisesRegex(ValueError, "role or format"):
+            validate_object_roster(
+                [{**roster[1], "format": "json"}, *roster[2:]],
+                logical_rows=1_000_000,
+            )
 
 
 if __name__ == "__main__":

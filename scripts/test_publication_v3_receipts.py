@@ -154,6 +154,28 @@ class PublicationV3ReceiptTests(unittest.TestCase):
                 dataset_materialization_sha256="d" * 64,
             )
 
+    def test_segment_rows_are_sufficient_without_fabricated_directory_object(self) -> None:
+        cell = scheduled_borsuk_cell()
+        roster = data_roster(cell)[:1]
+        receipt = build_index_receipt(
+            cell=cell,
+            source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+            build_attempt_id="build-attempt-01",
+            builder_instance_identity="i-builder-01",
+            builder_instance_type="r7g.8xlarge",
+            build_artifact=build_artifact(cell),
+            object_roster=roster,
+            build_metrics=build_metrics(),
+        )
+
+        self.assertEqual(
+            require_verified_object_roster(
+                receipt, canonical_json_bytes(roster) + b"\n", cell=cell
+            ),
+            roster,
+        )
+
     def test_index_receipt_binds_build_authority_and_reuses_across_repetitions(self) -> None:
         first = scheduled_borsuk_cell()
         manifest = validate_manifest(paid_v3_manifest())

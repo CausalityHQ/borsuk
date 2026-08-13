@@ -17,13 +17,13 @@ OBJECT_ETAG = re.compile(r'"[0-9a-f]{32}(?:-[1-9][0-9]*)?"')
 OBJECT_ROLES = frozenset({"data-bundle", "query-page", "directory", "control"})
 FORMATS = {
     "data-bundle": frozenset({"parquet", "arrow-ipc"}),
-    "query-page": frozenset({"arrow-ipc", "parquet"}),
+    "query-page": frozenset({"arrow-ipc", "parquet", "packed"}),
     "directory": frozenset({"arrow-ipc", "parquet"}),
-    "control": frozenset({"json"}),
+    "control": frozenset({"json", "packed"}),
 }
 MAX_DATA_OBJECT_BYTES = 128 * 1024 * 1024
 MAX_CONTROL_OBJECT_BYTES = 256 * 1024
-MAX_CONTROL_OBJECTS = 256
+MAX_CONTROL_OBJECTS = 512
 MAX_DATA_OBJECTS = 8192
 RESULT_FIELDS = frozenset(
     {

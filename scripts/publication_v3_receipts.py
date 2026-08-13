@@ -163,8 +163,6 @@ def require_verified_object_roster(
     )
     if summary["objects"] != reference.get("objects") or summary["total_object_bytes"] != reference.get("total_bytes"):
         raise ValueError("index object roster summary differs from its receipt")
-    if not any(item.get("role") == "directory" for item in value):
-        raise ValueError("index object roster must include directory authority")
     return copy.deepcopy(value)
 
 
