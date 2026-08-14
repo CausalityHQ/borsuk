@@ -113,6 +113,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 canonical_json_bytes(validate_manifest(paid_v3_manifest()))
             )
             self.assertEqual(validate_publication_cell_authority(cell, manifest_path), cell)
+            index_root, index_name = cell["index_prefix"].rsplit("/", 1)
+            retry = {
+                **cell,
+                "index_prefix": f"{index_root}/build-attempts/0002/{index_name}",
+            }
+            self.assertEqual(
+                validate_publication_cell_authority(retry, manifest_path), retry
+            )
             manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
             with self.assertRaisesRegex(ValueError, "frozen manifest is not canonical"):
                 validate_publication_cell_authority(cell, manifest_path)

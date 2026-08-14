@@ -138,7 +138,28 @@ def validate_publication_cell_authority(
         ),
         None,
     )
-    if expected is None or canonical_json_bytes(expected) != canonical_json_bytes(cell):
+    if expected is None:
+        raise ValueError("publication cell differs from its frozen manifest authority")
+    expected_index = str(expected["index_prefix"])
+    index_root, index_name = expected_index.rsplit("/", 1)
+    candidate_index = str(cell.get("index_prefix"))
+    attempt_prefix = f"{index_root}/build-attempts/"
+    attempt_tail = candidate_index.removeprefix(attempt_prefix)
+    attempt_parts = attempt_tail.split("/")
+    retry_index = (
+        candidate_index.startswith(attempt_prefix)
+        and len(attempt_parts) == 2
+        and len(attempt_parts[0]) == 4
+        and attempt_parts[0].isdigit()
+        and 0 < int(attempt_parts[0]) <= 9_999
+        and attempt_parts[1] == index_name
+    )
+    normalized = copy.deepcopy(cell)
+    normalized["index_prefix"] = expected_index
+    if (
+        canonical_json_bytes(normalized) != canonical_json_bytes(expected)
+        or (candidate_index != expected_index and not retry_index)
+    ):
         raise ValueError("publication cell differs from its frozen manifest authority")
     return copy.deepcopy(cell)
 
