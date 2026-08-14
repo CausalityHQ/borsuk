@@ -40,7 +40,7 @@ const CELL_CARD_MAX_METADATA_BYTES: u32 = 32 * 1024;
 const CELL_CARD_ROOT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CELL_CARD_ROOT_MAX_CARDS: usize = 4_000_000;
 const CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
-const CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES: u64 = 1024 * 1024;
+pub(crate) const CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES: u64 = 1024 * 1024;
 
 pub(crate) fn cell_card_block_rows(
     dimensions: usize,

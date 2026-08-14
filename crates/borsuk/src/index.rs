@@ -49,9 +49,10 @@ use crate::{
         tombstone_ids_to_parquet, wal_records_from_table,
     },
     global_cell_card::{
-        CELL_CARD_RANGE_READ_MAX_BYTES, CellCardGroupWriter, CellCardHeadRead, CellCardPush,
-        GlobalCellCardAnnRef, decode_cell_card_exact_wave, decode_cell_card_run_root,
-        decode_verified_cell_card_head_wave, encode_cell_card_run_root,
+        CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES, CELL_CARD_RANGE_READ_MAX_BYTES,
+        CellCardExactBlockRef, CellCardGroupWriter, CellCardHeadRead, CellCardHeadWavePlan,
+        CellCardPush, GlobalCellCardAnnRef, LoadedCellCardHead, decode_cell_card_exact_wave,
+        decode_cell_card_run_root, decode_verified_cell_card_head_wave, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave, plan_ranked_cell_card_head_wave,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
         rank_cell_card_exact_blocks, rank_cell_card_head_indexes, score_loaded_cell_card_heads,
@@ -509,6 +510,70 @@ fn global_cell_card_head_request_budget(page_budget: usize) -> usize {
         GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS,
         DEFAULT_GLOBAL_PQ_RERANK_READS,
     )
+}
+
+/// Conservative peak allocation for one V15 code-head plus exact-rerank wave.
+///
+/// The caller byte cap is an I/O ceiling, not an allocation plan. Charging a
+/// fixed multiple of that cap makes a normal 32 MiB query consume an entire
+/// small-runtime transient pool even when the selected wave is only a few MiB.
+/// This estimate instead covers the selected code payload, copied head state,
+/// the largest possible coalesced exact reads, Arrow decode buffers, and the
+/// decoded f32 rows that coexist until scoring completes.
+fn global_cell_card_wave_admission_bytes(
+    head_plan: &CellCardHeadWavePlan,
+    max_bytes: u64,
+    requested_exact_blocks: usize,
+    exact_block_bytes_ceiling: u64,
+    exact_block_rows_ceiling: u64,
+    dimensions: usize,
+) -> u64 {
+    let (head_rows, head_exact_blocks) = head_plan
+        .reads()
+        .iter()
+        .flat_map(|read| read.cards.iter())
+        .fold((0_u64, 0_u64), |(rows, blocks), card| {
+            (
+                rows.saturating_add(u64::from(card.reference.rows)),
+                blocks.saturating_add(card.reference.exact_blocks.len() as u64),
+            )
+        });
+    let head_decoded = head_plan
+        .selected_bytes()
+        .saturating_add(head_rows.saturating_mul(std::mem::size_of::<Vec<u8>>() as u64))
+        .saturating_add(
+            head_exact_blocks.saturating_mul(std::mem::size_of::<CellCardExactBlockRef>() as u64),
+        )
+        .saturating_add(
+            (head_plan.cards() as u64)
+                .saturating_mul(std::mem::size_of::<LoadedCellCardHead>() as u64),
+        );
+    let exact_blocks = (requested_exact_blocks as u64).min(head_exact_blocks);
+    let exact_selected = exact_blocks
+        .saturating_mul(exact_block_bytes_ceiling)
+        .min(max_bytes);
+    let coalesced_gap_ceiling = exact_blocks
+        .saturating_sub(1)
+        .saturating_mul(CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES);
+    let exact_physical = exact_selected
+        .saturating_add(coalesced_gap_ceiling)
+        .min(max_bytes);
+    let decoded_row_bytes = (dimensions as u64)
+        .saturating_mul(std::mem::size_of::<f32>() as u64)
+        .saturating_add(std::mem::size_of::<crate::global_leaf::DecodedGlobalLeafRow>() as u64);
+    let exact_decoded = exact_blocks
+        .saturating_mul(exact_block_rows_ceiling)
+        .saturating_mul(decoded_row_bytes);
+
+    head_plan
+        .physical_bytes()
+        .saturating_add(head_decoded)
+        .saturating_add(exact_physical)
+        // One selected-block copy backs Arrow decoding and another allowance
+        // covers decoded IDs/stamps whose variable widths are in that payload.
+        .saturating_add(exact_selected.saturating_mul(2))
+        .saturating_add(exact_decoded)
+        .max(1)
 }
 const _: () = assert!(GLOBAL_LEAF_QUERY_WAVE_PAGES <= DEFAULT_GLOBAL_PQ_RERANK_READS);
 const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 4;
@@ -17297,23 +17362,35 @@ impl BorsukIndex {
         // authenticated block among the selected cards rather than the global
         // format maximum; otherwise compact V15 code ranges can make an honest
         // `code bytes + one actual block` caller budget look too small.
-        let selected_exact_block_ceiling =
-            ranked_card_indexes
-                .iter()
-                .try_fold(0_u64, |ceiling, index| {
-                    let (_, head) = root.head_ref(*index)?;
-                    let card_ceiling = head
-                        .exact_blocks
-                        .iter()
-                        .map(|block| u64::from(block.bytes))
-                        .max()
-                        .ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "V15 selected card has no exact-block authority".to_string(),
-                            )
-                        })?;
-                    Ok::<_, BorsukError>(ceiling.max(card_ceiling))
-                })?;
+        let (selected_exact_block_ceiling, selected_exact_row_ceiling) = ranked_card_indexes
+            .iter()
+            .try_fold((0_u64, 0_u64), |(byte_ceiling, row_ceiling), index| {
+                let (_, head) = root.head_ref(*index)?;
+                let Some(card_byte_ceiling) = head
+                    .exact_blocks
+                    .iter()
+                    .map(|block| u64::from(block.bytes))
+                    .max()
+                else {
+                    return Err(BorsukError::InvalidStorage(
+                        "V15 selected card has no exact-block authority".to_string(),
+                    ));
+                };
+                let card_row_ceiling = head
+                    .exact_blocks
+                    .iter()
+                    .map(|block| u64::from(block.rows))
+                    .max()
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V15 selected card has no exact-block authority".to_string(),
+                        )
+                    })?;
+                Ok::<_, BorsukError>((
+                    byte_ceiling.max(card_byte_ceiling),
+                    row_ceiling.max(card_row_ceiling),
+                ))
+            })?;
         let head_byte_ceiling =
             global_leaf_code_byte_ceiling(max_bytes, 0, selected_exact_block_ceiling);
         if head_byte_ceiling == 0 {
@@ -17350,14 +17427,24 @@ impl BorsukIndex {
                 }
             },
         )?;
+        let wave_admission_bytes = global_cell_card_wave_admission_bytes(
+            &head_plan,
+            max_bytes,
+            requested_exact_block_budget,
+            selected_exact_block_ceiling,
+            selected_exact_row_ceiling,
+            self.manifest.config.dimensions,
+        );
         // Reserve both dependent waves with one permit. Retaining a head permit
         // and then acquiring another permit from the same weighted gate can
         // self-deadlock when the head wave already fills the configured cap.
+        // Charge the selected plan's conservative decoded peak, not a multiple
+        // of the caller's unrelated I/O ceiling.
         let _wave_memory_permit = self
             .read_runtime
             .transient_admission
             .as_ref()
-            .map(|gate| gate.acquire_owned(max_bytes.saturating_mul(4).max(1)));
+            .map(|gate| gate.acquire_owned(wave_admission_bytes));
         let code_requests_before = self.storage.request_counts();
         let head_reads = bounded_io_map_with_gate(
             head_plan.reads(),
@@ -36893,6 +36980,17 @@ mod tests {
         assert!(
             report.global_leaf_pages_read > 1,
             "V12 stopped after its first page found k live rows instead of spending the bounded recall budget"
+        );
+        let planned_io_bytes = report
+            .global_leaf_code_bytes
+            .saturating_add(report.global_leaf_page_bytes);
+        assert!(
+            report.transient_capacity_bytes > 0,
+            "the admission regression needs a bounded transient pool: {report:?}"
+        );
+        assert!(
+            report.transient_peak_bytes <= planned_io_bytes.saturating_mul(8),
+            "V15 admitted the caller byte cap instead of the selected wave: {report:?}"
         );
     }
 
