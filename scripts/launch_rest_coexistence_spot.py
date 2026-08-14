@@ -18,6 +18,17 @@ from typing import Any
 COMPLETE_MARKER = "ATTEMPT_COMPLETE.json"
 FAILED_MARKER = "ATTEMPT_FAILED.json"
 KNOWN_MARKERS = {COMPLETE_MARKER, FAILED_MARKER}
+RUNTIME_FIELDS = {
+    "cpu_threads",
+    "io_threads",
+    "s3_get_concurrency",
+    "search_admission",
+    "page_budget",
+    "leaf_read_width",
+    "max_inflight_leaf_reads",
+    "ram_budget_bytes",
+    "disk_cache_bytes",
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -47,6 +58,59 @@ def _require_sha256(label: str, value: str) -> None:
         raise ValueError(f"{label} must be a lowercase SHA-256 digest")
 
 
+def _validated_runtime(value: dict[str, int]) -> dict[str, int]:
+    if set(value) != RUNTIME_FIELDS:
+        raise ValueError("runtime must contain exactly the frozen flow-control fields")
+    if any(type(item) is not int for item in value.values()):
+        raise ValueError("runtime flow-control values must be integers")
+    if not 1 <= value["cpu_threads"] <= 64:
+        raise ValueError("runtime cpu_threads must be in 1..=64")
+    if not 1 <= value["s3_get_concurrency"] <= 128:
+        raise ValueError("runtime s3_get_concurrency must be in 1..=128")
+    if not value["s3_get_concurrency"] <= value["io_threads"] <= 256:
+        raise ValueError("runtime io_threads must be at least s3_get_concurrency and at most 256")
+    if value["search_admission"] <= 0:
+        raise ValueError("runtime search_admission must be positive")
+    if value["page_budget"] not in (4, 8, 16, 32):
+        raise ValueError("runtime page_budget must be 4, 8, 16, or 32")
+    for field in ("leaf_read_width", "max_inflight_leaf_reads"):
+        if not 1 <= value[field] <= 1024:
+            raise ValueError(f"runtime {field} must be in 1..=1024")
+    if value["ram_budget_bytes"] <= 0 or value["disk_cache_bytes"] < 0:
+        raise ValueError("runtime RAM must be positive and disk cache nonnegative")
+    return {key: value[key] for key in sorted(value)}
+
+
+def cold_s3_cap_matrix() -> list[dict[str, int | str]]:
+    """Return the frozen small-runtime uncached flow-control qualification cells."""
+    read_planes = (
+        ("narrow", 16, 32, 32, 64),
+        ("balanced", 32, 48, 64, 88),
+        ("wide", 32, 96, 128, 160),
+    )
+    cells: list[dict[str, int | str]] = []
+    for search_admission in (2, 4, 8):
+        for name, leaf_width, inflight, get_cap, io_threads in read_planes:
+            runtime: dict[str, int] = {
+                "cpu_threads": 3,
+                "io_threads": io_threads,
+                "s3_get_concurrency": get_cap,
+                "search_admission": search_admission,
+                "page_budget": 32,
+                "leaf_read_width": leaf_width,
+                "max_inflight_leaf_reads": inflight,
+                "ram_budget_bytes": 2 * 1024**3,
+                "disk_cache_bytes": 0,
+            }
+            cells.append(
+                {
+                    "cell_id": f"a{search_admission}-{name}",
+                    **_validated_runtime(runtime),
+                }
+            )
+    return cells
+
+
 def _tags(campaign_id: str, attempt: int, role: str) -> list[dict[str, str]]:
     values = {
         "Attempt": str(attempt),
@@ -70,6 +134,7 @@ def _user_data(
     index_receipt_sha256: str,
     dataset_receipt_sha256: str,
     output_uri: str,
+    runtime: dict[str, int],
 ) -> str:
     if not worker or "\x00" in worker:
         raise ValueError("worker script must be nonempty UTF-8 text")
@@ -77,11 +142,15 @@ def _user_data(
     if role == "rest-server":
         properties = (
             "-p MemoryMax=6G -p MemorySwapMax=0 -p AllowedCPUs=0-3 "
-            "--setenv=BORSUK_REST_CPU_THREADS=3 "
-            "--setenv=BORSUK_REST_IO_THREADS=88 "
-            "--setenv=BORSUK_REST_S3_GET_CONCURRENCY=64 "
-            "--setenv=BORSUK_RESIDENT_RAM_BUDGET_BYTES=2147483648 "
-            "--setenv=BORSUK_DISK_CACHE_BYTES=1073741824"
+            f"--setenv=BORSUK_REST_CPU_THREADS={runtime['cpu_threads']} "
+            f"--setenv=BORSUK_REST_IO_THREADS={runtime['io_threads']} "
+            f"--setenv=BORSUK_REST_S3_GET_CONCURRENCY={runtime['s3_get_concurrency']} "
+            f"--setenv=BORSUK_REST_SEARCH_ADMISSION={runtime['search_admission']} "
+            f"--setenv=BORSUK_REST_PAGE_BUDGET={runtime['page_budget']} "
+            f"--setenv=BORSUK_REST_LEAF_READ_WIDTH={runtime['leaf_read_width']} "
+            f"--setenv=BORSUK_REST_MAX_INFLIGHT_LEAF_READS={runtime['max_inflight_leaf_reads']} "
+            f"--setenv=BORSUK_REST_RAM_BUDGET_BYTES={runtime['ram_budget_bytes']} "
+            f"--setenv=BORSUK_REST_DISK_CACHE_BYTES={runtime['disk_cache_bytes']}"
         )
     else:
         properties = "-p MemoryMax=3G -p MemorySwapMax=0 -p AllowedCPUs=0-1"
@@ -248,6 +317,7 @@ def build_launch_pair(
     binary_sha256: str,
     index_receipt_sha256: str,
     dataset_receipt_sha256: str,
+    runtime: dict[str, int],
     output_uri: str,
     server_worker: str,
     generator_worker: str,
@@ -276,6 +346,7 @@ def build_launch_pair(
     ):
         if not value:
             raise ValueError(f"{label} must be nonempty")
+    runtime = _validated_runtime(runtime)
     workload = {
         "cheap_baseline": True,
         "measurement_seconds": 120,
@@ -301,6 +372,7 @@ def build_launch_pair(
         "generator_worker_sha256": hashlib.sha256(generator_worker.encode("utf-8")).hexdigest(),
         "workload_sha256": hashlib.sha256(_canonical_bytes(workload)).hexdigest(),
         "output_uri": output_uri,
+        "runtime": runtime,
         "complete_uri": f"{output_uri}/{COMPLETE_MARKER}",
         "failed_uri": f"{output_uri}/{FAILED_MARKER}",
     }
@@ -322,6 +394,7 @@ def build_launch_pair(
         index_receipt_sha256=index_receipt_sha256,
         dataset_receipt_sha256=dataset_receipt_sha256,
         output_uri=output_uri,
+        runtime=runtime,
     )
     generator_user_data = _user_data(
         campaign_id=campaign_id,
@@ -333,6 +406,7 @@ def build_launch_pair(
         index_receipt_sha256=index_receipt_sha256,
         dataset_receipt_sha256=dataset_receipt_sha256,
         output_uri=output_uri,
+        runtime=runtime,
     )
     server_request = _request(
         **common,
@@ -355,6 +429,7 @@ def build_launch_pair(
     return {
         "receipt": receipt,
         "workload": workload,
+        "runtime": runtime,
         "server": server_request,
         "generator": generator_request,
     }

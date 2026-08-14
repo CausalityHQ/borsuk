@@ -7,6 +7,7 @@ import unittest
 from scripts.launch_rest_coexistence_spot import (
     AttemptObservation,
     build_launch_pair,
+    cold_s3_cap_matrix,
     classify_attempt,
     execute_pair,
 )
@@ -27,6 +28,17 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             binary_sha256="2" * 64,
             index_receipt_sha256="3" * 64,
             dataset_receipt_sha256="4" * 64,
+            runtime={
+                "cpu_threads": 3,
+                "io_threads": 88,
+                "s3_get_concurrency": 64,
+                "search_admission": 4,
+                "page_budget": 32,
+                "leaf_read_width": 32,
+                "max_inflight_leaf_reads": 48,
+                "ram_budget_bytes": 2 * 1024**3,
+                "disk_cache_bytes": 0,
+            },
             output_uri=(
                 "s3://borsuk-bench-453182569524-euc1/publication/v3/"
                 "20260812/rest-coexistence/attempts/0001"
@@ -77,8 +89,12 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("BORSUK_REST_IO_THREADS=88", user_data)
         self.assertIn("BORSUK_REST_S3_GET_CONCURRENCY=64", user_data)
         self.assertNotIn("--setenv=BORSUK_CPU_THREADS=", user_data)
-        self.assertIn("BORSUK_RESIDENT_RAM_BUDGET_BYTES=2147483648", user_data)
-        self.assertIn("BORSUK_DISK_CACHE_BYTES=1073741824", user_data)
+        self.assertIn("BORSUK_REST_SEARCH_ADMISSION=4", user_data)
+        self.assertIn("BORSUK_REST_PAGE_BUDGET=32", user_data)
+        self.assertIn("BORSUK_REST_LEAF_READ_WIDTH=32", user_data)
+        self.assertIn("BORSUK_REST_MAX_INFLIGHT_LEAF_READS=48", user_data)
+        self.assertIn("BORSUK_REST_RAM_BUDGET_BYTES=2147483648", user_data)
+        self.assertIn("BORSUK_REST_DISK_CACHE_BYTES=0", user_data)
         self.assertIn("--setenv=BORSUK_SOURCE_SHA256=" + "1" * 64, user_data)
         self.assertIn("--setenv=BORSUK_BINARY_SHA256=" + "2" * 64, user_data)
         self.assertIn("--setenv=BORSUK_OUTPUT_URI=s3://", user_data)
@@ -96,6 +112,8 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
 
     def test_pair_binds_immutable_inputs_and_terminal_prefix(self) -> None:
         receipt = self.pair["receipt"]
+        self.assertEqual(receipt["runtime"], self.pair["runtime"])
+        self.assertEqual(receipt["runtime"]["disk_cache_bytes"], 0)
         self.assertEqual(receipt["source_sha256"], "1" * 64)
         self.assertEqual(receipt["binary_sha256"], "2" * 64)
         self.assertEqual(receipt["index_receipt_sha256"], "3" * 64)
@@ -222,6 +240,17 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             "binary_sha256": "2" * 64,
             "index_receipt_sha256": "3" * 64,
             "dataset_receipt_sha256": "4" * 64,
+            "runtime": {
+                "cpu_threads": 3,
+                "io_threads": 88,
+                "s3_get_concurrency": 64,
+                "search_admission": 4,
+                "page_budget": 32,
+                "leaf_read_width": 32,
+                "max_inflight_leaf_reads": 48,
+                "ram_budget_bytes": 2 * 1024**3,
+                "disk_cache_bytes": 0,
+            },
             "output_uri": (
                 "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/"
                 "rest-coexistence/attempts/0001"
@@ -231,6 +260,51 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "attempt path"):
             build_launch_pair(**config)
+
+    def test_runtime_limits_fail_closed_before_launch(self) -> None:
+        runtime = dict(self.pair["runtime"])
+        runtime["io_threads"] = 32
+        runtime["s3_get_concurrency"] = 64
+        with self.assertRaisesRegex(ValueError, "io_threads"):
+            build_launch_pair(
+                campaign_id="invalid-runtime",
+                attempt=1,
+                image_id="ami-a",
+                subnet_id="subnet-a",
+                security_group_id="sg-a",
+                instance_profile_arn="arn:a",
+                source_sha256="1" * 64,
+                binary_sha256="2" * 64,
+                index_receipt_sha256="3" * 64,
+                dataset_receipt_sha256="4" * 64,
+                runtime=runtime,
+                output_uri="s3://bucket/invalid-runtime/attempts/0001",
+                server_worker="echo server",
+                generator_worker="echo generator",
+            )
+
+    def test_cold_s3_matrix_separates_search_wave_handle_and_process_caps(self) -> None:
+        cells = cold_s3_cap_matrix()
+        self.assertEqual(len(cells), 9)
+        self.assertEqual(len({cell["cell_id"] for cell in cells}), 9)
+        self.assertEqual(
+            {cell["search_admission"] for cell in cells}, {2, 4, 8}
+        )
+        self.assertEqual(
+            {
+                (
+                    cell["leaf_read_width"],
+                    cell["max_inflight_leaf_reads"],
+                    cell["s3_get_concurrency"],
+                )
+                for cell in cells
+            },
+            {(16, 32, 32), (32, 48, 64), (32, 96, 128)},
+        )
+        self.assertTrue(all(cell["disk_cache_bytes"] == 0 for cell in cells))
+        self.assertTrue(
+            all(cell["io_threads"] >= cell["s3_get_concurrency"] for cell in cells)
+        )
 
 
 if __name__ == "__main__":

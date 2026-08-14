@@ -84,6 +84,10 @@ struct SearchResponse {
     engine: String,
     pages_read: usize,
     bytes_read: u64,
+    backing_bytes_read: u64,
+    backing_reads: u64,
+    disk_cache_bytes_read: u64,
+    disk_cache_reads: u64,
     elapsed_ms: u64,
 }
 
@@ -101,6 +105,12 @@ struct MetricsResponse {
     borsuk_search_waiting: usize,
     borsuk_leaf_reads_in_flight: usize,
     borsuk_search_rejected: u64,
+    borsuk_search_capacity: usize,
+    borsuk_leaf_read_width: usize,
+    borsuk_leaf_read_capacity: usize,
+    borsuk_cpu_threads: usize,
+    borsuk_io_threads: usize,
+    borsuk_s3_get_concurrency: usize,
 }
 
 fn router(state: AppState) -> Router {
@@ -139,6 +149,12 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         borsuk_search_waiting: flow.searches.waiting,
         borsuk_leaf_reads_in_flight: flow.leaf_reads.active,
         borsuk_search_rejected: flow.searches.rejected,
+        borsuk_search_capacity: flow.searches.capacity,
+        borsuk_leaf_read_width: flow.leaf_read_width,
+        borsuk_leaf_read_capacity: flow.leaf_reads.capacity,
+        borsuk_cpu_threads: borsuk::configured_cpu_threads(),
+        borsuk_io_threads: borsuk::configured_io_threads(),
+        borsuk_s3_get_concurrency: borsuk::configured_backing_get_concurrency(),
     })
 }
 
@@ -195,6 +211,10 @@ async fn search(State(state): State<AppState>, Json(request): Json<SearchRequest
             engine: report.leaf_mode,
             pages_read: report.global_leaf_pages_read,
             bytes_read: report.bytes_read,
+            backing_bytes_read: report.backing_bytes_read,
+            backing_reads: report.backing_reads,
+            disk_cache_bytes_read: report.disk_cache_bytes_read,
+            disk_cache_reads: report.disk_cache_reads,
             elapsed_ms: report.elapsed_ms,
         })
         .into_response(),
@@ -239,7 +259,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?,
     })?;
     let uri = env::var("BORSUK_REST_INDEX_URI")?;
-    let cache_dir = PathBuf::from(env::var("BORSUK_REST_CACHE_DIR")?);
+    let ram_budget_bytes = env_usize("BORSUK_REST_RAM_BUDGET_BYTES", 2 * 1024 * 1024 * 1024)?;
+    let disk_cache_bytes = env_usize("BORSUK_REST_DISK_CACHE_BYTES", 1024 * 1024 * 1024)?;
+    let cache_dir = if disk_cache_bytes == 0 {
+        None
+    } else {
+        Some(PathBuf::from(env::var("BORSUK_REST_CACHE_DIR")?))
+    };
     let listen = env::var("BORSUK_REST_LISTEN")
         .unwrap_or_else(|_| "0.0.0.0:8080".to_owned())
         .parse::<SocketAddr>()?;
@@ -250,9 +276,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
-            cache_dir: Some(cache_dir),
-            cache_max_bytes: Some(1024 * 1024 * 1024),
-            ram_budget_bytes: Some(2 * 1024 * 1024 * 1024),
+            cache_dir,
+            cache_max_bytes: (disk_cache_bytes > 0).then_some(disk_cache_bytes as u64),
+            ram_budget_bytes: Some(ram_budget_bytes as u64),
             max_active_searches: search_limit,
             max_waiting_searches: 0,
             leaf_read_width,
@@ -275,7 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use axum::{
-        body::Body,
+        body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
     use borsuk::{IndexConfig, VectorMetric};
@@ -346,5 +372,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(search.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn metrics_attest_effective_process_and_handle_limits() {
+        let directory = tempfile::tempdir().unwrap();
+        let index = borsuk::BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let app = router(AppState {
+            index,
+            admission: SearchAdmission::new(1).unwrap(),
+            page_budget: 4,
+            metrics: std::sync::Arc::new(AppMetrics::default()),
+        });
+        let response = app
+            .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["borsuk_search_capacity"], 8);
+        assert_eq!(value["borsuk_leaf_read_width"], 32);
+        assert_eq!(value["borsuk_leaf_read_capacity"], 48);
+        assert_eq!(
+            value["borsuk_cpu_threads"],
+            borsuk::configured_cpu_threads()
+        );
+        assert_eq!(value["borsuk_io_threads"], borsuk::configured_io_threads());
+        assert_eq!(
+            value["borsuk_s3_get_concurrency"],
+            borsuk::configured_backing_get_concurrency()
+        );
     }
 }
