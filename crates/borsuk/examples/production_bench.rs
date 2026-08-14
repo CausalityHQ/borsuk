@@ -40,17 +40,17 @@ const DEFAULT_WRITE_BATCH_SIZE: usize = 1_024;
 // values aligned with the bounded V12 dispatcher so a benchmark can never
 // silently measure the legacy segment path.
 const DEFAULT_NPROBE_SWEEP: &[usize] = &[4, 8, 16, 32];
-// V14 treats the public candidate knob as its whole-index exact-rerank row
-// budget. Publication pins the qualified depth instead of silently falling
+// V15 treats the public candidate knob as its whole-index exact-rerank row
+// budget. Publication pins the preregistered depth instead of silently falling
 // back to the persisted, corpus-size-aware serving default.
-const DEFAULT_RECALL_CANDIDATES: &[usize] = &[4096];
+const DEFAULT_RECALL_CANDIDATES: &[usize] = &[512];
 // Explicit pq-scan defaults for cache-state and concurrency measurements. Recall
 // is recorded against the shipped ground truth in every selected serving row.
 // Zero delegates to the persisted corpus-size-aware production default.
 const SERVING_NPROBE: usize = 0;
 // Serving and recall must measure the same qualified exact-rerank depth. An
 // explicit environment override remains available for non-publication sweeps.
-const SERVING_CANDIDATES: usize = 4096;
+const SERVING_CANDIDATES: usize = 512;
 const SERVING_PREFETCH_DEPTH: usize = 16;
 const RECALL_K: usize = 10;
 const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
@@ -3763,7 +3763,7 @@ fn validate_v12_leaf_page_budgets(budgets: &[usize]) -> io::Result<()> {
 fn validate_v12_candidate_budgets(budgets: &[usize]) -> io::Result<()> {
     if budgets != DEFAULT_RECALL_CANDIDATES {
         return Err(invalid_input(
-            "BORSUK_BENCH_CANDIDATES must keep the qualified V14 exact-rerank budget 4096",
+            "BORSUK_BENCH_CANDIDATES must keep the preregistered V15 exact-rerank budget 512",
         ));
     }
     Ok(())
@@ -4324,16 +4324,16 @@ mod tests {
     }
 
     #[test]
-    fn production_v14_pins_the_qualified_exact_rerank_budget() {
+    fn production_v15_pins_the_preregistered_exact_rerank_budget() {
         validate_v12_candidate_budgets(DEFAULT_RECALL_CANDIDATES).unwrap();
         assert_eq!(SERVING_CANDIDATES, DEFAULT_RECALL_CANDIDATES[0]);
         let error = validate_v12_candidate_budgets(&[128, 4_096])
-            .expect_err("an unqualified V14 exact-rerank sweep was accepted");
+            .expect_err("an unqualified V15 exact-rerank sweep was accepted");
         assert!(
             error.to_string().contains("BORSUK_BENCH_CANDIDATES")
                 && error
                     .to_string()
-                    .contains("qualified V14 exact-rerank budget"),
+                    .contains("preregistered V15 exact-rerank budget"),
             "{error}"
         );
     }

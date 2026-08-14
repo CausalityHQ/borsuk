@@ -70,7 +70,7 @@ except ModuleNotFoundError:
 
 
 SUPPORTED_LOCAL_KINDS = frozenset({"read-recall", "write-update-delete-compact"})
-V12_COMPATIBILITY_CANDIDATES = 4096
+V12_COMPATIBILITY_CANDIDATES = 512
 PRODUCTION_BUILD_FIELDS = tuple(
     "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
 )
@@ -449,7 +449,7 @@ def build_execution_plan(
         # valid V12 leaf-page/candidate compatibility pair; runtime owns the
         # scheduled recall sweep and its result labels.
         build_env["BORSUK_BENCH_NPROBES"] = "4"
-        build_env["BORSUK_BENCH_CANDIDATES"] = "4096"
+        build_env["BORSUK_BENCH_CANDIDATES"] = str(V12_COMPATIBILITY_CANDIDATES)
         runtime_env = {
             **benchmark_env,
             "BORSUK_BENCH_DATASET": str(runtime_dataset_dir),

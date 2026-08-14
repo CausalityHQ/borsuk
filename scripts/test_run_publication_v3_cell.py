@@ -592,7 +592,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(benchmark_env["BORSUK_BENCH_QUERY_SEED"], str(cell["query_seed"]))
         self.assertEqual(benchmark_env["BORSUK_BENCH_QUERIES"], "10")
         self.assertEqual(benchmark_env["BORSUK_BENCH_NPROBES"], str(arm["leaf_page_budget"]))
-        self.assertEqual(benchmark_env["BORSUK_BENCH_CANDIDATES"], "4096")
+        self.assertEqual(benchmark_env["BORSUK_BENCH_CANDIDATES"], "512")
         self.assertEqual(benchmark_env["BORSUK_BENCH_SKIP_EXACT_RECALL"], "1")
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELLS"], "128")
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS"], "4096")
@@ -651,7 +651,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         self.assertEqual(build_env["BORSUK_CPU_THREADS"], "32")
         self.assertEqual(build_env["BORSUK_BENCH_NPROBES"], "4")
-        self.assertEqual(build_env["BORSUK_BENCH_CANDIDATES"], "4096")
+        self.assertEqual(build_env["BORSUK_BENCH_CANDIDATES"], "512")
         self.assertNotIn("BORSUK_BENCH_READ_ONLY", build_env)
         self.assertNotIn("BORSUK_CPU_THREADS", runtime_env)
         self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "1")
@@ -663,7 +663,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime_env["BORSUK_BENCH_CANDIDATES"],
-            "4096",
+            "512",
         )
         self.assertEqual(runtime_env["BORSUK_BENCH_URI"], cell["index_prefix"])
         self.assertNotEqual(runtime_env["BORSUK_BENCH_DATASET"], build_env["BORSUK_BENCH_DATASET"])
@@ -737,7 +737,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "phase": "uncached",
                     "mode": "srht-pq-scan",
                     "nprobe": "32",
-                    "max_candidates": "4096",
+                    "max_candidates": "512",
                 }
             )
         summary = summarize_query_samples(rows, cell=cell, arm=arm, expected_queries=3)
