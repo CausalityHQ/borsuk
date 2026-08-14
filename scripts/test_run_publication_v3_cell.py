@@ -19,6 +19,7 @@ from scripts.run_publication_v3_cell import (
     authorize_publication_mutation_runtime,
     authorize_publication_runtime,
     build_execution_plan,
+    concurrency_result_arm,
     build_lifecycle_publication_report,
     build_publication_report,
     build_receipt_metrics,
@@ -707,6 +708,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(runtime_env["BORSUK_BENCH_MAX_CONCURRENT_SEARCHES"], "4")
         self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_BUILD_INDEX"], "0")
+
+        arm = plan_arms(cell)[0]
+        self.assertEqual(concurrency_result_arm(arm), arm)
+        self.assertNotIn("arm_id", concurrency_result_arm(arm))
 
         contract = runtime_execution_contract(plan, "concurrency")
         self.assertEqual(

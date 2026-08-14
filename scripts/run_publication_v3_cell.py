@@ -234,6 +234,12 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
     ]
 
 
+def concurrency_result_arm(arm: dict[str, object]) -> dict[str, object]:
+    if frozenset(arm) != frozenset({"k", "leaf_page_budget", "cache_state"}):
+        raise ValueError("concurrency result arm fields differ")
+    return copy.deepcopy(arm)
+
+
 def build_execution_plan(
     cell: dict[str, object],
     *,
@@ -1823,7 +1829,7 @@ def main() -> int:
                 "result": {
                     "schema_version": 1,
                     "cell_id": cell["cell_id"],
-                    "arm_id": arm["arm_id"],
+                    "arm": concurrency_result_arm(arm),
                     "attempt_id": args.attempt_id,
                     "instance_identity": args.instance_identity,
                     "source_archive_sha256": args.source_archive_sha256,
