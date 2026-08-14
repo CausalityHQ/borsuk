@@ -1995,7 +1995,7 @@ fn write_recall_latency_csv(
                 run_recall_cache_phases(config, dataset, index, options, preload_complete)?
             {
                 if !config.force_segment_path {
-                    validate_bounded_v13_execution(&summary)?;
+                    validate_bounded_v14_execution(&summary)?;
                 }
                 write_query_samples(
                     &mut samples_writer,
@@ -3777,10 +3777,10 @@ fn validate_v12_leaf_mode(
     Ok(())
 }
 
-fn validate_bounded_v13_execution(summary: &QuerySummary) -> io::Result<()> {
-    if summary.execution_engine() != "bounded-arrow-leaf-v13" {
+fn validate_bounded_v14_execution(summary: &QuerySummary) -> io::Result<()> {
+    if summary.execution_engine() != "bounded-cell-card-v14" {
         return Err(invalid_input(&format!(
-            "production recall expected bounded-arrow-leaf-v13 but observed {}",
+            "production recall expected bounded-cell-card-v14 but observed {}",
             summary.execution_engine()
         )));
     }
@@ -4133,7 +4133,7 @@ mod tests {
         preload_query_count, read_logical_cell_catalog, recall_preloads_local_snapshot,
         recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
         update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
-        validate_bounded_v13_execution, validate_build_only, validate_disk_cached_network,
+        validate_bounded_v14_execution, validate_build_only, validate_disk_cached_network,
         validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
         validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
         validate_v12_leaf_page_budgets, vector_row, write_batch_len, write_operation_count,
@@ -4328,13 +4328,13 @@ mod tests {
     }
 
     #[test]
-    fn production_recall_requires_the_frozen_v13_engine() {
+    fn production_recall_requires_the_frozen_v14_engine() {
         let mut fallback = QuerySummary::default();
         fallback.execution_engines.insert("srht-pq-scan".to_owned());
-        let error = validate_bounded_v13_execution(&fallback)
-            .expect_err("legacy segment execution was accepted as a V13 measurement");
+        let error = validate_bounded_v14_execution(&fallback)
+            .expect_err("legacy segment execution was accepted as a V14 measurement");
         assert!(
-            error.to_string().contains("bounded-arrow-leaf-v13")
+            error.to_string().contains("bounded-cell-card-v14")
                 && error.to_string().contains("srht-pq-scan"),
             "{error}"
         );
@@ -4342,8 +4342,8 @@ mod tests {
         let mut bounded = QuerySummary::default();
         bounded
             .execution_engines
-            .insert("bounded-arrow-leaf-v13".to_owned());
-        validate_bounded_v13_execution(&bounded).unwrap();
+            .insert("bounded-cell-card-v14".to_owned());
+        validate_bounded_v14_execution(&bounded).unwrap();
     }
 
     #[test]

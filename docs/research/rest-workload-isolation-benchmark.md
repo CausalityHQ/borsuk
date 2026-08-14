@@ -75,7 +75,7 @@ publication datasets then cover realistic dimensions and scale, including the
 All gates apply independently to every completed repetition:
 
 - vector recall@10 is at least `0.95` against the exact frozen oracle;
-- vector execution engine is always `bounded-arrow-leaf-v13`;
+- vector execution engine is always `bounded-cell-card-v14`;
 - mixed-normal cheap p99 is at most `max(baseline_p99 * 1.25,
   baseline_p99 + 2 ms)` and cheap error rate is below `0.1%`;
 - mixed-overload cheap p99 is at most `max(baseline_p99 * 1.50,

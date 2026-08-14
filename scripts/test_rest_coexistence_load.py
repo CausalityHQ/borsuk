@@ -51,11 +51,11 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 "mean_recall_at_10": 1.0,
                 "requests": 2,
                 "errors": 0,
-                "engines": ["bounded-arrow-leaf-v12", "bounded-arrow-leaf-v13"],
+                "engines": ["bounded-arrow-leaf-v13", "bounded-cell-card-v14"],
             },
         }
         failures = evaluate_phase("mixed-normal", baseline, mixed)
-        self.assertTrue(any("bounded-arrow-leaf-v13" in failure for failure in failures))
+        self.assertTrue(any("bounded-cell-card-v14" in failure for failure in failures))
 
 
 if __name__ == "__main__":
