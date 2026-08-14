@@ -277,6 +277,81 @@ fn schema_mismatch_is_rejected_before_immutable_or_head_writes() {
 }
 
 #[test]
+fn positioned_storage_fanouts_use_only_the_bounded_io_pool() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let (traced, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(traced);
+    let writer = create_writer(Arc::clone(&store), 7);
+    operations.clear();
+
+    writer
+        .append(
+            "bounded-positioned-io",
+            SCHEMA_FINGERPRINT,
+            (0..8)
+                .map(|ordinal| payload(format!("payload-{ordinal}"), ordinal + 1))
+                .collect(),
+        )
+        .unwrap();
+    let immutable_puts = operations
+        .entries()
+        .into_iter()
+        .filter(|entry| {
+            entry.operation == common::StoreOperation::Put
+                && (entry.path.starts_with("positioned-log/payloads/")
+                    || entry.path.starts_with("positioned-log/envelopes/"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(immutable_puts.len(), 9);
+    assert!(
+        immutable_puts.iter().all(|entry| entry
+            .thread_name
+            .as_deref()
+            .is_some_and(|name| name.starts_with("borsuk-io-"))),
+        "positioned immutable writes escaped the bounded pool: {immutable_puts:?}"
+    );
+
+    operations.clear();
+    let reopened =
+        PositionedLogWriter::open("memory:///positioned-log", Arc::clone(&store), 7).unwrap();
+    let head_gets = operations
+        .entries()
+        .into_iter()
+        .filter(|entry| {
+            entry.operation == common::StoreOperation::Get
+                && entry.path.starts_with("positioned-log/heads/")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(head_gets.len(), usize::from(SOURCE_SHARD_COUNT));
+    assert!(
+        head_gets.iter().all(|entry| entry
+            .thread_name
+            .as_deref()
+            .is_some_and(|name| name.starts_with("borsuk-io-"))),
+        "positioned head reads escaped the bounded pool: {head_gets:?}"
+    );
+
+    operations.clear();
+    assert_eq!(reopened.reader().snapshot().unwrap().transactions.len(), 1);
+    let envelope_gets = operations
+        .entries()
+        .into_iter()
+        .filter(|entry| {
+            entry.operation == common::StoreOperation::Get
+                && entry.path.starts_with("positioned-log/envelopes/")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(envelope_gets.len(), 1);
+    assert!(
+        envelope_gets.iter().all(|entry| entry
+            .thread_name
+            .as_deref()
+            .is_some_and(|name| name.starts_with("borsuk-io-"))),
+        "positioned envelope reads escaped the bounded pool: {envelope_gets:?}"
+    );
+}
+
+#[test]
 fn two_writers_rebase_one_shard_without_duplicate_visibility() {
     let base: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     create_writer(Arc::clone(&base), 7);

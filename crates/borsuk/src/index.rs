@@ -12160,20 +12160,22 @@ impl BorsukIndex {
                 "collection positioned source epoch differs from the active writer".to_string(),
             ));
         }
-        collection
-            .snapshot
-            .positioned_materialized_watermarks
-            .par_iter()
-            .enumerate()
-            .filter(|(_, watermark)| watermark.sequence() > 0)
-            .map(|(shard, watermark)| {
-                writer.checkpoint_materialized_through_if_behind(
-                    u8::try_from(shard).expect("fixed positioned shard index fits u8"),
-                    watermark,
-                    collection.snapshot.generation,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
+        crate::parallel::install_io(|| {
+            collection
+                .snapshot
+                .positioned_materialized_watermarks
+                .par_iter()
+                .enumerate()
+                .filter(|(_, watermark)| watermark.sequence() > 0)
+                .map(|(shard, watermark)| {
+                    writer.checkpoint_materialized_through_if_behind(
+                        u8::try_from(shard).expect("fixed positioned shard index fits u8"),
+                        watermark,
+                        collection.snapshot.generation,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
         Ok(())
     }
 

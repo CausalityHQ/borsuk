@@ -1186,6 +1186,8 @@ impl PositionedLogWriter {
         }
         let storage = self.storage.clone_with_independent_mutation_counters();
         let shard = prepared.transaction_digest[0] % SOURCE_SHARD_COUNT;
+        // Append callers must not invoke this method from the positioned I/O
+        // pool: this guard remains held while the immutable upload wave runs.
         let mut pinned = self.heads[usize::from(shard)]
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -1298,13 +1300,15 @@ impl PositionedLogWriter {
                     .map(|(path, (bytes, object_checksum))| (path, bytes, object_checksum))
                     .collect::<Vec<_>>();
                 immutable.push((&envelope_path, &envelope_bytes, &envelope_checksum));
-                immutable
-                    .par_iter()
-                    .try_for_each(|(path, bytes, object_checksum)| {
-                        storage
-                            .create_bytes_verified(path, bytes, object_checksum)
-                            .map(|_| ())
-                    })?;
+                crate::parallel::install_io(|| {
+                    immutable
+                        .par_iter()
+                        .try_for_each(|(path, bytes, object_checksum)| {
+                            storage
+                                .create_bytes_verified(path, bytes, object_checksum)
+                                .map(|_| ())
+                        })
+                })?;
                 payloads_written = true;
                 uploaded_envelope_checksum = Some(envelope_checksum.clone());
             } else if uploaded_envelope_checksum.as_deref() != Some(&envelope_checksum) {
@@ -1629,19 +1633,21 @@ impl PositionedLogReader {
                     .map(move |reference| (head.shard, reference))
             })
             .collect::<Vec<_>>();
-        let mut transactions = visible
-            .par_iter()
-            .map(|(shard, reference)| {
-                load_envelope(
-                    &self.storage,
-                    self.source_epoch,
-                    *shard,
-                    &self.schema_fingerprint,
-                    reference,
-                )
-                .map(|envelope| (envelope, reference.envelope_checksum.clone()))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut transactions = crate::parallel::install_io(|| {
+            visible
+                .par_iter()
+                .map(|(shard, reference)| {
+                    load_envelope(
+                        &self.storage,
+                        self.source_epoch,
+                        *shard,
+                        &self.schema_fingerprint,
+                        reference,
+                    )
+                    .map(|envelope| (envelope, reference.envelope_checksum.clone()))
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
         transactions.sort_unstable_by_key(|(envelope, _)| envelope.position);
         let (transactions, envelope_checksums) = transactions.into_iter().unzip();
         Ok(Some(PositionedLogSnapshot {
@@ -1894,41 +1900,43 @@ fn load_all_heads(
     source_epoch: u64,
     expected_schema_fingerprint: Option<&str>,
 ) -> Result<Vec<(PositionedShardHead, UpdateVersion, String)>> {
-    (0..SOURCE_SHARD_COUNT)
-        .into_par_iter()
-        .map(|shard| {
-            let path = shard_head_path(shard);
-            let stored = storage.read_coordination_object(&path)?.ok_or_else(|| {
-                BorsukError::InvalidStorage(format!(
-                    "required positioned shard head `{path}` is missing"
-                ))
-            })?;
-            let head = shard_head_from_bytes(&stored.bytes, source_epoch, shard)?;
-            if expected_schema_fingerprint
-                .is_some_and(|schema_fingerprint| head.schema_fingerprint != schema_fingerprint)
-            {
-                return invalid(
-                    "positioned shard head schema fingerprint differs from its collection",
-                );
-            }
-            Ok((head, stored.version, checksum(&stored.bytes)))
-        })
-        .collect::<Result<Vec<_>>>()
-        .and_then(|loaded| {
-            let schema_fingerprint = loaded
-                .first()
-                .expect("fixed positioned shard count is nonzero")
-                .0
-                .schema_fingerprint
-                .as_str();
-            if loaded
-                .iter()
-                .any(|(head, _, _)| head.schema_fingerprint != schema_fingerprint)
-            {
-                return invalid("positioned shard heads disagree on their schema fingerprint");
-            }
-            Ok(loaded)
-        })
+    crate::parallel::install_io(|| {
+        (0..SOURCE_SHARD_COUNT)
+            .into_par_iter()
+            .map(|shard| {
+                let path = shard_head_path(shard);
+                let stored = storage.read_coordination_object(&path)?.ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "required positioned shard head `{path}` is missing"
+                    ))
+                })?;
+                let head = shard_head_from_bytes(&stored.bytes, source_epoch, shard)?;
+                if expected_schema_fingerprint
+                    .is_some_and(|schema_fingerprint| head.schema_fingerprint != schema_fingerprint)
+                {
+                    return invalid(
+                        "positioned shard head schema fingerprint differs from its collection",
+                    );
+                }
+                Ok((head, stored.version, checksum(&stored.bytes)))
+            })
+            .collect::<Result<Vec<_>>>()
+    })
+    .and_then(|loaded| {
+        let schema_fingerprint = loaded
+            .first()
+            .expect("fixed positioned shard count is nonzero")
+            .0
+            .schema_fingerprint
+            .as_str();
+        if loaded
+            .iter()
+            .any(|(head, _, _)| head.schema_fingerprint != schema_fingerprint)
+        {
+            return invalid("positioned shard heads disagree on their schema fingerprint");
+        }
+        Ok(loaded)
+    })
 }
 
 fn refresh_pinned_head(

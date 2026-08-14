@@ -60,6 +60,7 @@ pub struct OperationLogEntry {
     pub path: String,
     pub put_mode: Option<LoggedPutMode>,
     pub payload_bytes: Option<u64>,
+    pub thread_name: Option<String>,
 }
 
 impl OperationLog {
@@ -99,6 +100,7 @@ impl OperationLog {
                 path: location.to_string(),
                 put_mode: None,
                 payload_bytes: None,
+                thread_name: std::thread::current().name().map(str::to_owned),
             });
     }
 
@@ -116,6 +118,7 @@ impl OperationLog {
                 path: location.to_string(),
                 put_mode: Some(put_mode),
                 payload_bytes: Some(payload_bytes as u64),
+                thread_name: std::thread::current().name().map(str::to_owned),
             });
     }
 }

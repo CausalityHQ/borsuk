@@ -8067,7 +8067,7 @@ mod tests {
         .unwrap();
         let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes)).unwrap();
 
-        assert!(POSITIONED_WAL_ROW_GROUP_ROWS > SEGMENT_ROW_GROUP_ROWS);
+        const { assert!(POSITIONED_WAL_ROW_GROUP_ROWS > SEGMENT_ROW_GROUP_ROWS) };
         assert_eq!(reader.metadata().num_row_groups(), 2);
         assert_eq!(reader.metadata().row_group(0).num_rows(), 4_096);
     }
