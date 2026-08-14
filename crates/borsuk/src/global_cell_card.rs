@@ -3564,4 +3564,41 @@ mod tests {
             vec![0, 1, 2, 3]
         );
     }
+
+    #[test]
+    fn head_request_cap_does_not_cap_coalesced_logical_cards() {
+        let inputs = (0..32_u32)
+            .map(|cell_index| GlobalLeafPageInput {
+                cell_index,
+                leaf_ordinal: 0,
+                centroid_code: vec![cell_index as u8, 0],
+                rows: rows(3, 4),
+            })
+            .collect::<Vec<_>>();
+        let encoded = encode_cell_card_group(&inputs, 4, VectorElementType::Int8).unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/coalesced")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &[group], &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let candidates = (0..root.card_count()).collect::<Vec<_>>();
+        let ranked = super::rank_cell_card_head_indexes(
+            &root,
+            &candidates,
+            &vec![0.0; candidates.len()],
+            candidates.len(),
+        )
+        .unwrap();
+        let (plan, limited) =
+            super::plan_ranked_cell_card_head_wave(&root, &ranked, 2 * 1024 * 1024, 1).unwrap();
+        assert!(!limited);
+        assert_eq!(plan.cards(), 32);
+        assert_eq!(plan.requests(), 1);
+    }
 }

@@ -17139,13 +17139,23 @@ impl BorsukIndex {
             root,
             &card_indexes,
             &centroid_distances,
-            GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
+            head_card_budget,
         )?;
+        // Head codes only choose the lossless blocks. They may not consume the
+        // caller's whole byte cap before the exact wave has fetched one block.
+        let head_byte_ceiling = global_leaf_code_byte_ceiling(
+            max_bytes,
+            0,
+            crate::global_leaf::GLOBAL_LEAF_MAX_ENCODED_BYTES,
+        );
+        if head_byte_ceiling == 0 {
+            return Ok(None);
+        }
         let (head_plan, head_limited) = match plan_ranked_cell_card_head_wave(
             root,
             &ranked_card_indexes,
-            max_bytes,
-            head_card_budget,
+            head_byte_ceiling,
+            GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
         ) {
             Ok(plan) => plan,
             Err(BorsukError::RecallGuaranteeViolated { .. }) => return Ok(None),
@@ -17366,10 +17376,10 @@ impl BorsukIndex {
         let termination_reason = resident_global_termination_reason(
             options,
             started,
-            head_limited || exact_limited,
+            false,
             hits.len(),
             options.k,
-            false,
+            head_limited || exact_limited,
         );
         let segments_total = usize::try_from(global_ref.source_segments()).unwrap_or(usize::MAX);
         Ok(Some(SearchExecution {
@@ -36344,7 +36354,7 @@ mod tests {
             named_vectors: Default::default(),
         })
         .unwrap();
-        let rows = 2048_usize;
+        let rows = 16_384_usize;
         index
             .add(
                 (0..rows)
@@ -36361,7 +36371,7 @@ mod tests {
                 &[0.0; 8],
                 SearchOptions::approx(10, LeafMode::SrhtPqScan)
                     .with_max_segments(4)
-                    .with_max_candidates_per_segment(rows),
+                    .with_max_candidates_per_segment(2_048),
             )
             .unwrap();
 
@@ -36370,6 +36380,19 @@ mod tests {
             report.records_scored
                 > GLOBAL_LEAF_QUERY_WAVE_PAGES * crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS,
             "the V14 rerank silently stopped at its I/O concurrency width: {report:?}"
+        );
+
+        let wide = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(32)
+                    .with_max_candidates_per_segment(2_048),
+            )
+            .unwrap();
+        assert!(
+            wide.global_leaf_code_pages_read > GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
+            "the logical head breadth was silently capped at the physical request width: {wide:?}"
         );
 
         let bounded = reader
