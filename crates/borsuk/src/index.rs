@@ -27305,20 +27305,36 @@ where
     F: Fn(&T) -> U + Sync,
 {
     let width = width.max(1);
-    let mut output = Vec::with_capacity(values.len());
-    for chunk in values.chunks(width) {
-        let mapped = crate::parallel::install_io(|| {
-            chunk
-                .par_iter()
-                .map(|value| {
-                    let _permit = gate.map(AdmissionGate::acquire);
-                    work(value)
-                })
-                .collect::<Vec<_>>()
-        });
-        output.extend(mapped);
+    if values.is_empty() {
+        return Vec::new();
     }
+    let next = AtomicUsize::new(0);
+    let output = (0..values.len())
+        .map(|_| std::sync::Mutex::new(None))
+        .collect::<Vec<_>>();
+    crate::parallel::install_io(|| {
+        (0..width.min(values.len())).into_par_iter().for_each(|_| {
+            loop {
+                let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(value) = values.get(index) else {
+                    break;
+                };
+                let _permit = gate.map(AdmissionGate::acquire);
+                let result = work(value);
+                *output[index]
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(result);
+            }
+        });
+    });
     output
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .expect("every bounded I/O input is mapped once")
+        })
+        .collect()
 }
 
 /// Execute bounded I/O waves while a query still owns latency budget.
@@ -37028,6 +37044,39 @@ mod tests {
                 "blocking I/O must not be serialized by the CPU compute cap"
             );
         }
+    }
+
+    #[test]
+    fn bounded_io_map_refills_a_free_slot_without_a_chunk_barrier() {
+        let released =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let values = [0_u8, 1, 2];
+        let mapped = bounded_io_map_with_gate(&values, 2, None, {
+            let released = std::sync::Arc::clone(&released);
+            move |value| match value {
+                0 => {
+                    let (lock, ready) = &*released;
+                    let started = lock.lock().unwrap();
+                    let (started, _) = ready
+                        .wait_timeout_while(
+                            started,
+                            std::time::Duration::from_millis(250),
+                            |started| !*started,
+                        )
+                        .unwrap();
+                    *started
+                }
+                1 => true,
+                2 => {
+                    let (lock, ready) = &*released;
+                    *lock.lock().unwrap() = true;
+                    ready.notify_all();
+                    true
+                }
+                _ => unreachable!(),
+            }
+        });
+        assert_eq!(mapped, vec![true, true, true]);
     }
 
     #[test]
