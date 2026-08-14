@@ -212,6 +212,9 @@ const DEFAULT_BM25_STATS_PAGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 /// multiply the flush working set.
 const MAX_PARALLEL_SEGMENT_WRITES: usize = 32;
 const PARALLEL_SEGMENT_WRITE_RECORD_BUDGET: usize = 16_384;
+/// Keep latency-sensitive online writes scalar; amortize the Rayon wave only
+/// once catalog routing has enough independent vectors to pay for scheduling.
+const PARALLEL_WRITE_ROUTING_MIN_ROWS: usize = 256;
 /// Default decoded late-interaction Arrow-batch retention window. It is fixed,
 /// byte-bounded, and shared across callers; the full corpus is never resident.
 pub const DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES: u64 = 64 * 1024 * 1024;
@@ -11041,6 +11044,20 @@ impl BorsukIndex {
             .map(|(cell, _)| cell)
     }
 
+    fn route_primary_records(&self, records: &[VectorRecord]) -> Result<Vec<LogicalCellId>> {
+        if records.len() >= PARALLEL_WRITE_ROUTING_MIN_ROWS {
+            records
+                .par_iter()
+                .map(|record| self.route_vector_to_logical_cell(&record.vector))
+                .collect()
+        } else {
+            records
+                .iter()
+                .map(|record| self.route_vector_to_logical_cell(&record.vector))
+                .collect()
+        }
+    }
+
     fn route_vector_to_logical_cell_with_path(
         &self,
         vector: &[f32],
@@ -11578,10 +11595,15 @@ impl BorsukIndex {
             .first()
             .copied()
             .unwrap_or_else(|| LogicalCellId::new(self.manifest.routing_epoch, 0));
+        let routed_owners = if primary_modality {
+            self.route_primary_records(&records)?
+        } else {
+            Vec::new()
+        };
         let mut bundled_records = Vec::with_capacity(records.len());
         let mut bundled_directory = Vec::<CellWalIdDirectoryEntry>::with_capacity(records.len());
         let mut replaced_ids = HashSet::new();
-        for record in records {
+        for (record_ordinal, record) in records.into_iter().enumerate() {
             replaced_ids.insert(record.id.as_bytes().to_vec());
             let stamp = record.mutation_stamp().ok_or_else(|| {
                 BorsukError::InvalidStorage(format!(
@@ -11590,7 +11612,7 @@ impl BorsukIndex {
                 ))
             })?;
             if primary_modality {
-                let owner = self.route_vector_to_logical_cell(&record.vector)?;
+                let owner = routed_owners[record_ordinal];
                 bundled_directory.push(CellWalIdDirectoryEntry {
                     id: record.id.as_bytes().to_vec(),
                     owner,
@@ -30064,6 +30086,43 @@ mod tests {
         );
         let second = { Arc::clone(index.manifest.logical_cell_router.as_ref().unwrap()) };
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn bulk_primary_routing_preserves_indexed_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let cell_count = COARSE_QUANTIZER_MIN_CELLS.max(128);
+        install_test_logical_cell_catalog(
+            &mut index,
+            (0..cell_count)
+                .map(|ordinal| vec![ordinal as f32 * 10.0, 0.0])
+                .collect(),
+        );
+        let records = (0..PARALLEL_WRITE_ROUTING_MIN_ROWS)
+            .map(|ordinal| {
+                VectorRecord::new(
+                    format!("route-{ordinal}"),
+                    vec![(ordinal % cell_count) as f32 * 10.0, 0.0],
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = records
+            .iter()
+            .map(|record| index.route_vector_to_logical_cell(&record.vector))
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(index.route_primary_records(&records).unwrap(), expected);
     }
 
     #[test]
