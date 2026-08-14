@@ -865,13 +865,13 @@ code256 probe curve reaches 0.999 at 64 probes, making the cost of the last
 empirical recall points visible rather than hiding it behind a universal
 high-recall preset.
 
-Lossless V15 cell-card rows merge only adjacent or nearby ranges: one gap is at
-most 64 KiB, and the total speculative gap bytes in a wave cannot exceed the
-selected exact bytes. Every physical range remains capped at 4 MiB and up to 32
-ranges can be fetched concurrently. This keeps the default 16-block shortlist
-within one S3 request wave while bounding exact-range read amplification to 2x.
-The former 1 MiB gap reduced GET count but was rejected after cold S3 evidence
-showed that it transferred megabytes of unselected data per query.
+Lossless V15 cell-card rows merge adjacent or nearby ranges by spending a
+global byte budget on the cheapest gaps first. One gap is at most 64 KiB, total
+speculative gap bytes in a wave cannot exceed the selected bytes, and every
+physical range remains capped at 4 MiB. Up to 32 ranges can be fetched
+concurrently. This keeps the default shortlist within one S3 request wave,
+bounds read amplification to 2x, and avoids both the former multi-megabyte
+over-read and avoidable tiny GETs.
 
 The PQ head plane follows the same cold-read discipline. A cold miss promotes a
 complete stable code plane only when that plane is at most twice the already

@@ -792,13 +792,10 @@ fn fixed_32(bytes: &[u8], field: &str) -> Result<[u8; 32]> {
         .map_err(|_| BorsukError::InvalidStorage(format!("cell-card {field} width is invalid")))
 }
 
-fn decode_cell_card_head_inner(
+pub(crate) fn validate_cell_card_code_range(
     reference: &CellCardHeadRef,
     stored: &[u8],
-    group_encoded_bytes: u64,
-    dimensions: usize,
-    element_type: VectorElementType,
-) -> Result<VerifiedCellCardHead> {
+) -> Result<()> {
     if reference.rows == 0
         || reference.code_width == 0
         || reference.code_bytes
@@ -821,6 +818,17 @@ fn decode_cell_card_head_inner(
             "cell-card code range checksum or bounds mismatch".to_string(),
         ));
     }
+    Ok(())
+}
+
+fn decode_cell_card_head_inner(
+    reference: &CellCardHeadRef,
+    stored: &[u8],
+    group_encoded_bytes: u64,
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<VerifiedCellCardHead> {
+    validate_cell_card_code_range(reference, stored)?;
     let code_end = reference
         .code_offset
         .checked_add(u64::from(reference.code_bytes))
@@ -1226,25 +1234,6 @@ fn plan_cell_card_head_indexes(
                     "cell-card head ranges overlap".to_string(),
                 ));
             }
-            if cell_card_ranges_should_coalesce(
-                prior.start,
-                prior.end,
-                card.reference.code_offset,
-                card_end,
-                CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES,
-            ) {
-                prior.end = card_end;
-                prior.selected_bytes = prior
-                    .selected_bytes
-                    .checked_add(u64::from(card.reference.code_bytes))
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "cell-card selected head bytes overflow".to_string(),
-                        )
-                    })?;
-                prior.cards.push(card);
-                continue;
-            }
         }
         reads.push(CellCardHeadRead {
             start: card.reference.code_offset,
@@ -1253,6 +1242,54 @@ fn plan_cell_card_head_indexes(
             cards: vec![card],
             group,
         });
+    }
+    let selected_total = reads.iter().try_fold(0_u64, |total, read| {
+        total.checked_add(read.selected_bytes).ok_or_else(|| {
+            BorsukError::InvalidStorage("cell-card selected head bytes overflow".to_string())
+        })
+    })?;
+    if selected_total > max_physical_bytes {
+        return Err(BorsukError::RecallGuaranteeViolated {
+            reason: crate::record::SearchTerminationReason::MaxBytes,
+        });
+    }
+    let mut speculative_gap_budget = (max_physical_bytes - selected_total).min(selected_total);
+    loop {
+        let cheapest = reads
+            .windows(2)
+            .enumerate()
+            .filter_map(|(index, pair)| {
+                let prior = &pair[0];
+                let next = &pair[1];
+                if prior.group.path != next.group.path || next.start < prior.end {
+                    return None;
+                }
+                let gap = next.start - prior.end;
+                (gap <= speculative_gap_budget
+                    && cell_card_ranges_should_coalesce(
+                        prior.start,
+                        prior.end,
+                        next.start,
+                        next.end,
+                        CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES,
+                    ))
+                .then_some((gap, index))
+            })
+            .min();
+        let Some((gap, index)) = cheapest else {
+            break;
+        };
+        let right = reads.remove(index + 1);
+        let left = &mut reads[index];
+        left.end = right.end;
+        left.selected_bytes = left
+            .selected_bytes
+            .checked_add(right.selected_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card selected head bytes overflow".to_string())
+            })?;
+        left.cards.extend(right.cards);
+        speculative_gap_budget -= gap;
     }
     let physical_bytes = reads.iter().try_fold(0_u64, |total, read| {
         total.checked_add(read.end - read.start).ok_or_else(|| {
@@ -1344,6 +1381,12 @@ where
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("cell-card head wave byte count overflows".to_string())
             })?;
+        let selected_bytes = group_reads
+            .iter()
+            .try_fold(0_u64, |total, read| total.checked_add(read.selected_bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card selected head bytes overflow".to_string())
+            })?;
         // The caller must retain a strong reference to every cache entry for
         // which this returns true until all reads in the returned plan finish.
         // A transient cache probe is not sufficient: eviction between plan
@@ -1354,8 +1397,7 @@ where
         // sparse head shortlist. Keep uncached promotion within the same 2x
         // physical/selected bound as the exact wave. An already pinned plane
         // remains free to reuse in full.
-        let bounded_uncached_promotion =
-            group.code_plane_bytes <= selected_physical.saturating_mul(2);
+        let bounded_uncached_promotion = group.code_plane_bytes <= selected_bytes.saturating_mul(2);
         let plane_backing_requests = if cached {
             0
         } else {
@@ -1385,14 +1427,6 @@ where
                 .checked_add(group.code_plane_bytes)
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage("cell-card code plane overflows".to_string())
-                })?;
-            let selected_bytes = group_reads
-                .iter()
-                .try_fold(0_u64, |total, read| total.checked_add(read.selected_bytes))
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "cell-card selected head bytes overflow".to_string(),
-                    )
                 })?;
             let cards = group_reads
                 .iter()
@@ -1749,7 +1783,6 @@ pub(crate) fn plan_cell_card_exact_wave(
             reason: crate::record::SearchTerminationReason::MaxBytes,
         });
     }
-    let mut speculative_gap_budget = (max_physical_bytes - selected_total).min(selected_total);
     let mut blocks = ranked.to_vec();
     blocks.sort_by(|left, right| {
         left.group
@@ -1766,35 +1799,11 @@ pub(crate) fn plan_cell_card_exact_wave(
             .ok_or_else(|| BorsukError::InvalidStorage("cell-card exact range overflows".into()))?;
         if let Some(prior) = reads.last_mut()
             && prior.group.path == block.group.path
+            && block.reference.offset < prior.end
         {
-            if block.reference.offset < prior.end {
-                return Err(BorsukError::InvalidStorage(
-                    "cell-card exact ranges overlap".to_string(),
-                ));
-            }
-            let gap = block.reference.offset - prior.end;
-            if gap <= speculative_gap_budget
-                && cell_card_ranges_should_coalesce(
-                    prior.start,
-                    prior.end,
-                    block.reference.offset,
-                    end,
-                    CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES,
-                )
-            {
-                prior.end = end;
-                speculative_gap_budget -= gap;
-                prior.selected_bytes = prior
-                    .selected_bytes
-                    .checked_add(u64::from(block.reference.bytes))
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "cell-card selected exact bytes overflow".to_string(),
-                        )
-                    })?;
-                prior.blocks.push(block);
-                continue;
-            }
+            return Err(BorsukError::InvalidStorage(
+                "cell-card exact ranges overlap".to_string(),
+            ));
         }
         reads.push(CellCardExactRead {
             group: Arc::clone(&block.group),
@@ -1803,6 +1812,44 @@ pub(crate) fn plan_cell_card_exact_wave(
             selected_bytes: u64::from(block.reference.bytes),
             blocks: vec![block],
         });
+    }
+    let mut speculative_gap_budget = (max_physical_bytes - selected_total).min(selected_total);
+    loop {
+        let cheapest = reads
+            .windows(2)
+            .enumerate()
+            .filter_map(|(index, pair)| {
+                let prior = &pair[0];
+                let next = &pair[1];
+                if prior.group.path != next.group.path || next.start < prior.end {
+                    return None;
+                }
+                let gap = next.start - prior.end;
+                (gap <= speculative_gap_budget
+                    && cell_card_ranges_should_coalesce(
+                        prior.start,
+                        prior.end,
+                        next.start,
+                        next.end,
+                        CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES,
+                    ))
+                .then_some((gap, index))
+            })
+            .min();
+        let Some((gap, index)) = cheapest else {
+            break;
+        };
+        let right = reads.remove(index + 1);
+        let left = &mut reads[index];
+        left.end = right.end;
+        left.selected_bytes = left
+            .selected_bytes
+            .checked_add(right.selected_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card selected exact bytes overflow".to_string())
+            })?;
+        left.blocks.extend(right.blocks);
+        speculative_gap_budget -= gap;
     }
     let physical_bytes = reads.iter().try_fold(0_u64, |total, read| {
         total.checked_add(read.end - read.start).ok_or_else(|| {
@@ -3818,7 +3865,7 @@ mod tests {
     }
 
     #[test]
-    fn wave_one_reads_sparse_cards_from_one_compact_shared_code_plane() {
+    fn wave_one_bounds_sparse_card_speculation_without_full_plane_promotion() {
         let inputs = (0..256_u32)
             .map(|cell_index| {
                 let mut page_rows = rows(32, 4);
@@ -3850,12 +3897,17 @@ mod tests {
         )
         .unwrap();
         let selected_cells = (0..256_u32).step_by(16).collect::<Vec<_>>();
-        let plan =
-            super::plan_cell_card_head_wave(&root, &selected_cells, 2 * 1024 * 1024, 4).unwrap();
+        let plan = super::plan_cell_card_head_wave(
+            &root,
+            &selected_cells,
+            2 * 1024 * 1024,
+            selected_cells.len(),
+        )
+        .unwrap();
 
         assert_eq!(plan.cards(), selected_cells.len());
-        assert_eq!(plan.requests(), 1);
-        assert!(plan.physical_bytes() <= 512 * 1024);
+        assert!(plan.requests() < selected_cells.len());
+        assert!(plan.speculative_bytes() <= plan.selected_bytes());
     }
 
     #[test]
@@ -3954,7 +4006,47 @@ mod tests {
     }
 
     #[test]
-    fn object_store_exact_ranges_coalesce_only_across_a_small_gap() {
+    fn cold_plane_promotion_bounds_against_selected_not_coalesced_span() {
+        let selected_bytes = 64 * 1024;
+        let physical_bytes = selected_bytes * 2;
+        let plane_bytes = selected_bytes * 3;
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "group.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: plane_bytes,
+            code_plane_offset: 0,
+            code_plane_bytes: plane_bytes,
+            code_plane_checksum: [2; 32],
+        });
+        let selected = super::CellCardHeadWavePlan {
+            reads: vec![super::CellCardHeadRead {
+                group,
+                start: 0,
+                end: physical_bytes,
+                selected_bytes,
+                cards: Vec::new(),
+            }],
+            physical_bytes,
+            selected_bytes,
+            cached_selected_bytes: 0,
+            backing_requests: 1,
+            cards: 0,
+        };
+
+        let plan = super::promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(
+            selected,
+            u64::MAX,
+            8 * 1024 * 1024,
+            usize::MAX,
+            |_| false,
+        )
+        .unwrap();
+        assert_eq!(plan.physical_bytes(), physical_bytes);
+        assert_eq!(plan.reads()[0].end, physical_bytes);
+    }
+
+    #[test]
+    fn range_merge_helper_enforces_per_gap_and_span_caps() {
         assert!(super::cell_card_ranges_should_coalesce(
             0,
             16 * 1024,
@@ -4005,6 +4097,77 @@ mod tests {
         assert_eq!(plan.selected_bytes(), 48 * 1024);
         assert!(plan.speculative_bytes() <= plan.selected_bytes());
         assert_eq!(plan.requests(), 2);
+    }
+
+    #[test]
+    fn exact_wave_spends_its_gap_budget_on_the_cheapest_merges() {
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "group.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: 256 * 1024,
+            code_plane_offset: 0,
+            code_plane_bytes: 1,
+            code_plane_checksum: [2; 32],
+        });
+        let offsets = [0_u64, 66 * 1024, 102 * 1024, 138 * 1024];
+        let ranked = offsets
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, offset)| super::RankedCellCardExactBlock {
+                head_index: 0,
+                group: Arc::clone(&group),
+                cell_index: 0,
+                card_ordinal: 0,
+                reference: super::CellCardExactBlockRef {
+                    block_ordinal: ordinal as u32,
+                    offset,
+                    metadata_bytes: 1024,
+                    body_bytes: 15 * 1024,
+                    bytes: 16 * 1024,
+                    rows: 32,
+                    checksum: [ordinal as u8; 32],
+                },
+                distance: ordinal as f32,
+            })
+            .collect::<Vec<_>>();
+
+        let plan = super::plan_cell_card_exact_wave(&ranked, 128 * 1024, 2).unwrap();
+        assert_eq!(plan.selected_bytes(), 64 * 1024);
+        assert_eq!(plan.requests(), 2);
+        assert!(plan.speculative_bytes() <= plan.selected_bytes());
+    }
+
+    #[test]
+    fn head_wave_spends_its_gap_budget_on_the_cheapest_merges() {
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "group.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: 256 * 1024,
+            code_plane_offset: 0,
+            code_plane_bytes: 256 * 1024,
+            code_plane_checksum: [2; 32],
+        });
+        let root = super::ResidentCellCardRoot {
+            groups: vec![group],
+            group_indexes: vec![0; 4].into_boxed_slice(),
+            cell_indexes: vec![0, 1, 2, 3].into_boxed_slice(),
+            card_ordinals: vec![0; 4].into_boxed_slice(),
+            leaf_ordinals: vec![0; 4].into_boxed_slice(),
+            code_offsets: vec![0, 66 * 1024, 102 * 1024, 138 * 1024].into_boxed_slice(),
+            code_bytes: vec![16 * 1024; 4].into_boxed_slice(),
+            rows: vec![32; 4].into_boxed_slice(),
+            code_widths: vec![512; 4].into_boxed_slice(),
+            code_checksums: vec![[3; 32]; 4].into_boxed_slice(),
+            exact_blocks: vec![Vec::new().into_boxed_slice(); 4].into_boxed_slice(),
+            centroid_offsets: vec![0, 1, 2, 3, 4].into_boxed_slice(),
+            centroid_codes: vec![0, 1, 2, 3].into_boxed_slice(),
+            resident_bytes: 0,
+        };
+
+        let plan = super::plan_cell_card_head_wave(&root, &[0, 1, 2, 3], 128 * 1024, 2).unwrap();
+        assert_eq!(plan.selected_bytes(), 64 * 1024);
+        assert_eq!(plan.requests(), 2);
+        assert!(plan.speculative_bytes() <= plan.selected_bytes());
     }
 
     #[test]
