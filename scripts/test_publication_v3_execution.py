@@ -233,10 +233,12 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             attempt_id="runtime-0002",
             terminal_prefix="s3://bucket/results/cell/runtime/attempts/0002",
             runtime_profile="concurrency",
+            arm_index=1,
             max_concurrent_searches=4,
             ram_budget_bytes=2 * 1024 * 1024 * 1024,
         )
         self.assertIn("--runtime-profile concurrency", script)
+        self.assertIn("--arm-index 1", script)
         self.assertIn("bench_concurrency.csv", script)
         self.assertIn("bench_concurrency_samples.csv", script)
         self.assertIn('test "$actual_runtime_profile" = concurrency', script)

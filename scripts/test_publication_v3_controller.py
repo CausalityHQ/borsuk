@@ -225,13 +225,16 @@ class PublicationV3ControllerTests(unittest.TestCase):
             aws=RuntimePlanAws(),
             attempt=3,
             build_attempt=1,
+            arm_index=1,
         )
         concurrency_user_data = base64.b64decode(concurrency.request["UserData"]).decode()
         self.assertLess(len(concurrency.request["UserData"].encode()), 16 * 1024)
         concurrency_payload = concurrency_user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
         concurrency_worker = gzip.decompress(base64.b64decode(concurrency_payload)).decode()
         self.assertIn("--runtime-profile concurrency", concurrency_worker)
+        self.assertIn("--arm-index 1", concurrency_worker)
         self.assertEqual(concurrency.expected["runtime_profile"], "concurrency")
+        self.assertEqual(concurrency.expected["arm_index"], 1)
         self.assertEqual(concurrency.expected["max_concurrent_searches"], 4)
         self.assertIn("/runtime-concurrency/attempts/0003", concurrency.job.terminal_prefix)
         self.assertTrue(concurrency.job.cell_tag.startswith("runtime-concurrency-"))

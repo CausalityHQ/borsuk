@@ -134,6 +134,7 @@ if [[ "$mode" == "--read-recall-sift" ]]; then
     --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
     --attempt "${BORSUK_PUBLICATION_V3_RUNTIME_ATTEMPT:-1}" \
     --build-attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-1}" \
+    --arm-index "${BORSUK_PUBLICATION_V3_ARM_INDEX:-0}" \
     --purchase-option "${BORSUK_PUBLICATION_V3_PURCHASE_OPTION:-spot}"
   exit 0
 fi
@@ -150,6 +151,7 @@ if [[ "$mode" == "--read-concurrency-sift" ]]; then
     --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
     --attempt "${BORSUK_PUBLICATION_V3_CONCURRENCY_ATTEMPT:-1}" \
     --build-attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-1}" \
+    --arm-index "${BORSUK_PUBLICATION_V3_ARM_INDEX:-0}" \
     --purchase-option "${BORSUK_PUBLICATION_V3_PURCHASE_OPTION:-spot}"
   exit 0
 fi

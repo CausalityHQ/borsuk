@@ -592,14 +592,17 @@ def prepare_qualification_execution(
     attempt: int = 1,
     build_attempt: int = 1,
     purchase_option: str = "spot",
+    arm_index: int = 0,
 ) -> PreparedExecution:
     """Prepare one immutable SIFT qualification execution."""
 
     normalized = validate_manifest(manifest)
     if operation not in {"build-sift", "read-recall-sift", "read-concurrency-sift"}:
         raise ValueError("unsupported qualification execution")
-    if attempt <= 0 or build_attempt <= 0:
+    if attempt <= 0 or build_attempt <= 0 or arm_index < 0:
         raise ValueError("qualification attempts must be positive")
+    if operation == "build-sift" and arm_index != 0:
+        raise ValueError("build execution must use the canonical first arm")
     if purchase_option not in {"spot", "on-demand"}:
         raise ValueError("purchase option must be spot or on-demand")
     if operation == "build-sift" and purchase_option != "spot":
@@ -668,6 +671,7 @@ def prepare_qualification_execution(
             terminal_prefix=job.terminal_prefix,
             purchase_option=purchase_option,
             runtime_profile=runtime_profile,
+            arm_index=arm_index,
             max_concurrent_searches=max_concurrent_searches,
             ram_budget_bytes=ram_budget_bytes,
         )
@@ -675,6 +679,7 @@ def prepare_qualification_execution(
         role = "runtime"
         expected["binary_sha256"] = authority["binary_sha256"]
         expected["runtime_profile"] = runtime_profile
+        expected["arm_index"] = arm_index
         expected["max_concurrent_searches"] = max_concurrent_searches
         expected["ram_budget_bytes"] = ram_budget_bytes
     request = build_launch_request(
@@ -729,6 +734,7 @@ def main() -> int:
     runtime.add_argument("--instance-profile-arn", required=True)
     runtime.add_argument("--attempt", type=int, default=1)
     runtime.add_argument("--build-attempt", type=int, default=1)
+    runtime.add_argument("--arm-index", type=int, default=0)
     runtime.add_argument(
         "--purchase-option", choices=("spot", "on-demand"), default="spot"
     )
@@ -742,6 +748,7 @@ def main() -> int:
     concurrency.add_argument("--instance-profile-arn", required=True)
     concurrency.add_argument("--attempt", type=int, default=1)
     concurrency.add_argument("--build-attempt", type=int, default=1)
+    concurrency.add_argument("--arm-index", type=int, default=0)
     concurrency.add_argument(
         "--purchase-option", choices=("spot", "on-demand"), default="spot"
     )
@@ -821,6 +828,7 @@ def main() -> int:
             attempt=getattr(args, "attempt", 1),
             build_attempt=getattr(args, "build_attempt", 1),
             purchase_option=getattr(args, "purchase_option", "spot"),
+            arm_index=getattr(args, "arm_index", 0),
         )
         receipt = run_execution_job(
             prepared.job,
