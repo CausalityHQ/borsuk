@@ -189,6 +189,11 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("stage=verify-index", script)
         self.assertIn("stage=execute-runtime", script)
         self.assertIn('detail_log="$work/cell/runtime/step-00.log"', script)
+        self.assertIn('mkdir -p "$(dirname "$detail_log")"', script)
+        self.assertLess(
+            script.index('mkdir -p "$(dirname "$detail_log")"'),
+            script.index("systemd-run --quiet"),
+        )
         self.assertIn("stage=publish-receipts", script)
         self.assertLess(len(script.encode("utf-8")), 16 * 1024)
         self.assertEqual(
