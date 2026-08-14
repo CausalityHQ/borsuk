@@ -436,15 +436,22 @@ struct PendingGlobalLeafDirectoryShard {
 
 const GLOBAL_LEAF_DIRECTORY_READ_WIDTH: usize = 8;
 // Query data reads are network-bound and share a process-wide 64-read gate.
-// A qualified page-32 search therefore issues its selected code ranges and
-// exact pages in one bounded network wave instead of paying four sequential
-// object-store round trips. Directory loading stays narrower because it may
-// retain decoded metadata, while these payload reads are charged to transient
-// admission and decoded/scored under the fixed CPU pool.
+// Each query uses at most 32 concurrent reads so one request does not monopolize
+// the process: a page-64 head plan may take two bounded waves while other
+// searches and application traffic retain half the gate. Directory loading
+// stays narrower because it may retain decoded metadata; payload reads are
+// charged to transient admission and decoded/scored under the fixed CPU pool.
 const GLOBAL_LEAF_CODE_READ_WIDTH: usize = 32;
 const GLOBAL_LEAF_QUERY_WAVE_PAGES: usize = 32;
-const GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS: usize = 16;
+const GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS: usize = 16;
 const GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+fn global_cell_card_head_request_budget(page_budget: usize) -> usize {
+    page_budget.clamp(
+        GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS,
+        DEFAULT_GLOBAL_PQ_RERANK_READS,
+    )
+}
 const _: () = assert!(GLOBAL_LEAF_QUERY_WAVE_PAGES <= DEFAULT_GLOBAL_PQ_RERANK_READS);
 const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 4;
 
@@ -17155,7 +17162,7 @@ impl BorsukIndex {
             root,
             &ranked_card_indexes,
             head_byte_ceiling,
-            GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
+            global_cell_card_head_request_budget(context.page_budget),
         ) {
             Ok(plan) => plan,
             Err(BorsukError::RecallGuaranteeViolated { .. }) => return Ok(None),
@@ -34977,12 +34984,13 @@ mod tests {
         assert_eq!(recommended_segment_max_vectors(96), 43_690);
         assert_eq!(deep_100m_segments, 2_289);
         assert_eq!(deep_100m_probes, 256);
-        assert_eq!(GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS, 16);
+        assert_eq!(GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS, 16);
         assert_eq!(
-            GLOBAL_LEAF_QUERY_WAVE_PAGES * GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER,
-            128,
-            "the resident centroid wave narrows 256 logical probes to at most 128 card heads while the shared I/O gate bounds concurrency"
+            64 * GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER,
+            256,
+            "the widest qualified arm ranks 256 card heads before bounded physical planning"
         );
+        assert_eq!(global_cell_card_head_request_budget(64), 64);
         assert!(
             deep_100m_probes * 64 <= deep_100m_coarse_cells,
             "100M Deep-Image probes no more than 1/64 of the coarse routing space by default"
@@ -36341,6 +36349,15 @@ mod tests {
     }
 
     #[test]
+    fn resident_global_v14_head_request_budget_tracks_qualified_logical_breadth() {
+        assert_eq!(global_cell_card_head_request_budget(4), 16);
+        assert_eq!(global_cell_card_head_request_budget(16), 16);
+        assert_eq!(global_cell_card_head_request_budget(32), 32);
+        assert_eq!(global_cell_card_head_request_budget(64), 64);
+        assert_eq!(global_cell_card_head_request_budget(128), 64);
+    }
+
+    #[test]
     fn resident_global_v14_honors_the_whole_index_exact_candidate_budget() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
@@ -36386,12 +36403,12 @@ mod tests {
             .search_with_report(
                 &[0.0; 8],
                 SearchOptions::approx(10, LeafMode::SrhtPqScan)
-                    .with_max_segments(32)
+                    .with_max_segments(64)
                     .with_max_candidates_per_segment(2_048),
             )
             .unwrap();
         assert!(
-            wide.global_leaf_code_pages_read > GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
+            wide.global_leaf_code_pages_read > GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS,
             "the logical head breadth was silently capped at the physical request width: {wide:?}"
         );
 

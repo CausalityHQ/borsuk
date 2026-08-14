@@ -3523,7 +3523,7 @@ mod tests {
     fn wave_one_keeps_the_largest_ranked_prefix_within_the_request_cap() {
         let mut groups = Vec::new();
         let mut cards = Vec::new();
-        for cell_index in 0..17_u32 {
+        for cell_index in 0..65_u32 {
             let encoded = encode_cell_card_group(
                 &[GlobalLeafPageInput {
                     cell_index,
@@ -3549,7 +3549,7 @@ mod tests {
             "codebook-checksum",
         )
         .unwrap();
-        let ranked = (0..17).collect::<Vec<_>>();
+        let ranked = (0..65).collect::<Vec<_>>();
 
         let (plan, limited) =
             super::plan_ranked_cell_card_head_wave(&root, &ranked, 2 * 1024 * 1024, 4).unwrap();
@@ -3563,6 +3563,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 1, 2, 3]
         );
+
+        let (wide, wide_limited) =
+            super::plan_ranked_cell_card_head_wave(&root, &ranked, 8 * 1024 * 1024, 64).unwrap();
+        assert!(wide_limited);
+        assert_eq!(wide.cards(), 64);
+        assert_eq!(wide.requests(), 64);
     }
 
     #[test]
