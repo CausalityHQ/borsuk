@@ -12,7 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use borsuk::{BorsukIndex, LeafMode, OpenOptions, SearchOptions};
+use borsuk::{BorsukError, BorsukIndex, LeafMode, OpenOptions, ProcessLimits, SearchOptions};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -98,6 +98,9 @@ struct MetricsResponse {
     search_accepted: u64,
     search_rejected: u64,
     search_in_flight: u64,
+    borsuk_search_waiting: usize,
+    borsuk_leaf_reads_in_flight: usize,
+    borsuk_search_rejected: u64,
 }
 
 fn router(state: AppState) -> Router {
@@ -127,11 +130,15 @@ async fn item(State(state): State<AppState>, Path(id): Path<String>) -> Json<ser
 
 async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
     use std::sync::atomic::Ordering::Relaxed;
+    let flow = state.index.flow_control_stats();
     Json(MetricsResponse {
         cheap_requests: state.metrics.cheap_requests.load(Relaxed),
         search_accepted: state.metrics.search_accepted.load(Relaxed),
         search_rejected: state.metrics.search_rejected.load(Relaxed),
         search_in_flight: state.metrics.search_in_flight.load(Relaxed),
+        borsuk_search_waiting: flow.searches.waiting,
+        borsuk_leaf_reads_in_flight: flow.leaf_reads.active,
+        borsuk_search_rejected: flow.searches.rejected,
     })
 }
 
@@ -191,6 +198,14 @@ async fn search(State(state): State<AppState>, Json(request): Json<SearchRequest
             elapsed_ms: report.elapsed_ms,
         })
         .into_response(),
+        Ok(Err(error @ BorsukError::Overloaded { .. })) => {
+            state.metrics.search_rejected.fetch_add(1, Relaxed);
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({"error": error.to_string()})),
+            )
+                .into_response()
+        }
         Ok(Err(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": error.to_string()})),
@@ -214,6 +229,15 @@ fn env_usize(name: &str, default: usize) -> Result<usize, String> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let process_defaults = ProcessLimits::default();
+    borsuk::configure_process(ProcessLimits {
+        cpu_threads: env_usize("BORSUK_REST_CPU_THREADS", process_defaults.cpu_threads)?,
+        io_threads: env_usize("BORSUK_REST_IO_THREADS", process_defaults.io_threads)?,
+        s3_get_concurrency: env_usize(
+            "BORSUK_REST_S3_GET_CONCURRENCY",
+            process_defaults.s3_get_concurrency,
+        )?,
+    })?;
     let uri = env::var("BORSUK_REST_INDEX_URI")?;
     let cache_dir = PathBuf::from(env::var("BORSUK_REST_CACHE_DIR")?);
     let listen = env::var("BORSUK_REST_LISTEN")
@@ -221,13 +245,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse::<SocketAddr>()?;
     let page_budget = validate_page_budget(env_usize("BORSUK_REST_PAGE_BUDGET", 32)?)?;
     let search_limit = env_usize("BORSUK_REST_SEARCH_ADMISSION", 2)?;
+    let leaf_read_width = env_usize("BORSUK_REST_LEAF_READ_WIDTH", 32)?;
+    let max_inflight_leaf_reads = env_usize("BORSUK_REST_MAX_INFLIGHT_LEAF_READS", 48)?;
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
             cache_dir: Some(cache_dir),
             cache_max_bytes: Some(1024 * 1024 * 1024),
             ram_budget_bytes: Some(2 * 1024 * 1024 * 1024),
-            max_concurrent_searches: Some(search_limit),
+            max_active_searches: search_limit,
+            max_waiting_searches: 0,
+            leaf_read_width,
+            max_inflight_leaf_reads,
             ..OpenOptions::default()
         },
     )?;

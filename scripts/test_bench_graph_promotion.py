@@ -293,8 +293,8 @@ class GraphPromotionRunnerTest(unittest.TestCase):
                     {
                         "command": ["production_bench"],
                         "environment": {
-                            "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES": "4",
-                            "BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES": "24",
+                            "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": "4",
+                            "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS": "24",
                             "BORSUK_BENCH_RAM_BUDGET_BYTES": str(8 * 1024**3),
                         },
                     }

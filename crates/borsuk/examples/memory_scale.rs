@@ -6,7 +6,7 @@
 //! resident memory stays roughly flat as the number of concurrent readers grows,
 //! so ~1000 parallel users do not cost ~1000× RAM. For each dataset size and each
 //! reader count it runs a concurrent query storm twice — once uncapped and once
-//! with `max_concurrent_searches` set — sampling peak process RSS, and reports RSS
+//! with `max_active_searches` set — sampling peak process RSS, and reports RSS
 //! delta, per-reader bytes, QPS, and tail latency as CSV.
 //!
 //! Defaults are tractable (100k vectors × 64/256/1024 readers). Override with
@@ -66,7 +66,7 @@ rss_peak_delta_bytes,per_reader_bytes,resident_metadata_bytes,qps,p50_ms,p95_ms\
             // decode, so RSS stays flat regardless of reader count.
             for cap in [0_usize, concurrency_cap] {
                 let options = OpenOptions {
-                    max_concurrent_searches: (cap > 0).then_some(cap),
+                    max_active_searches: if cap > 0 { cap } else { usize::MAX },
                     ..OpenOptions::default()
                 };
                 let index = Arc::new(BorsukIndex::open_with_options(&uri, options)?);

@@ -295,7 +295,7 @@ The bounded grid is:
 - candidates: 16, 32, 64, 128;
 - dataset-specific `nprobe` frontiers recorded in `coverage.csv`;
 - dimension-aware default cell rows;
-- query cap 4 and global decode cap 24;
+- the frozen research profile: 4 active searches and 24 in-flight leaf reads;
 - startup, uncached, disk-cached, and memory-preloaded states; and
 - CPU/RAM/disk/cache resource samples for each executed method.
 
@@ -315,8 +315,10 @@ BORSUK_BENCH_NPROBES=1,2,4,8,16,32,64 \
 BORSUK_BENCH_CANDIDATES=16,32,64,128 \
 BORSUK_BENCH_RAM_BUDGET_BYTES=536870912 \
 BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES=0 \
-BORSUK_BENCH_MAX_CONCURRENT_SEARCHES=4 \
-BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES=24 \
+BORSUK_BENCH_MAX_ACTIVE_SEARCHES=4 \
+BORSUK_BENCH_MAX_WAITING_SEARCHES=16 \
+BORSUK_BENCH_LEAF_READ_WIDTH=32 \
+BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS=48 \
   cargo run --locked --release -p borsuk --example production_bench
 ```
 
@@ -485,8 +487,10 @@ BORSUK_BENCH_RECALL_LEAF_MODE=graph \
 BORSUK_BENCH_RECALL_ONLY=1 \
 BORSUK_BENCH_SKIP_EXACT_RECALL=1 \
 BORSUK_BENCH_READ_ONLY=1 \
-BORSUK_BENCH_MAX_CONCURRENT_SEARCHES=4 \
-BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES=24 \
+BORSUK_BENCH_MAX_ACTIVE_SEARCHES=4 \
+BORSUK_BENCH_MAX_WAITING_SEARCHES=16 \
+BORSUK_BENCH_LEAF_READ_WIDTH=32 \
+BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS=48 \
   python3 scripts/benchmark_with_resources.py \
     --output /tmp/borsuk-graph-curve/resources.csv \
     --cache-dir /tmp/borsuk-graph-cache \

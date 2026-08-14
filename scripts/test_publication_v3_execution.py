@@ -172,7 +172,13 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             attempt_id="runtime-0001",
             terminal_prefix="s3://bucket/results/cell/runtime/attempts/0001",
             purchase_option="on-demand",
-            max_concurrent_searches=4,
+            max_active_searches=4,
+            max_waiting_searches=16,
+            leaf_read_width=32,
+            max_inflight_leaf_reads=48,
+            cpu_threads=3,
+            io_threads=88,
+            s3_get_concurrency=64,
             ram_budget_bytes=2 * 1024 * 1024 * 1024,
         )
         self.assertNotIn("cargo ", script)
@@ -234,7 +240,13 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             terminal_prefix="s3://bucket/results/cell/runtime/attempts/0002",
             runtime_profile="concurrency",
             arm_index=1,
-            max_concurrent_searches=4,
+            max_active_searches=4,
+            max_waiting_searches=16,
+            leaf_read_width=32,
+            max_inflight_leaf_reads=48,
+            cpu_threads=3,
+            io_threads=88,
+            s3_get_concurrency=64,
             ram_budget_bytes=2 * 1024 * 1024 * 1024,
         )
         self.assertIn("--runtime-profile concurrency", script)
@@ -244,7 +256,13 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn('test "$actual_runtime_profile" = concurrency', script)
         self.assertIn('"concurrency_summary_sha256"', script)
         self.assertIn('"concurrency_samples_sha256"', script)
-        self.assertIn('test "$actual_max_concurrent" = 4', script)
+        self.assertIn('test "$actual_max_active" = 4', script)
+        self.assertIn('test "$actual_max_waiting" = 16', script)
+        self.assertIn('test "$actual_leaf_width" = 32', script)
+        self.assertIn('test "$actual_max_leaf_reads" = 48', script)
+        self.assertIn('test "$actual_cpu_threads" = 3', script)
+        self.assertIn('test "$actual_io_threads" = 88', script)
+        self.assertIn('test "$actual_s3_gets" = 64', script)
         self.assertIn('test "$actual_ram_budget" = 2147483648', script)
         self.assertIn("RUNTIME_EXECUTION_CONTRACT.json", script)
         self.assertEqual(

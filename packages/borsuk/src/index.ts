@@ -704,6 +704,10 @@ export interface OpenOptions {
   ramBudget?: ByteSize;
   residentRouting?: boolean;
   preload?: boolean;
+  maxActiveSearches?: number;
+  maxWaitingSearches?: number;
+  leafReadWidth?: number;
+  maxInflightLeafReads?: number;
 }
 
 interface NativeOpenOptions {
@@ -716,6 +720,14 @@ interface NativeOpenOptions {
   residentRouting?: boolean;
   resident_routing?: boolean;
   preload?: boolean;
+  maxActiveSearches?: number;
+  max_active_searches?: number;
+  maxWaitingSearches?: number;
+  max_waiting_searches?: number;
+  leafReadWidth?: number;
+  leaf_read_width?: number;
+  maxInflightLeafReads?: number;
+  max_inflight_leaf_reads?: number;
 }
 
 interface NativeSearchOptions {
@@ -1648,6 +1660,17 @@ function validateOptionalIntegerOption(
   return value;
 }
 
+function validateOptionalPositiveIntegerOption(
+  value: number | undefined,
+  field: string,
+): number | undefined {
+  const validated = validateOptionalIntegerOption(value, field);
+  if (validated !== undefined && validated <= 0) {
+    throw new BorsukError(`${field} must be greater than zero when set`);
+  }
+  return validated;
+}
+
 function validateOptionalNonNegativeNumberOption(
   value: number | undefined,
   field: string,
@@ -1773,6 +1796,25 @@ export async function open(uri: string, options: OpenOptions = {}): Promise<Inde
   const ramBudget = nativeByteSizeOption(options.ramBudget, "ram_budget");
   const cacheMaxBytes = nativeByteSizeOption(options.cacheMaxBytes, "cache_max_bytes");
   const preload = validateOptionalBooleanOption(options.preload, "preload");
+  const maxActiveSearches = validateOptionalPositiveIntegerOption(
+    options.maxActiveSearches,
+    "max_active_searches",
+  );
+  const maxWaitingSearches = validateOptionalIntegerOption(
+    options.maxWaitingSearches,
+    "max_waiting_searches",
+  );
+  if (maxWaitingSearches !== undefined && maxWaitingSearches < 0) {
+    throw new BorsukError("max_waiting_searches must be non-negative when set");
+  }
+  const leafReadWidth = validateOptionalPositiveIntegerOption(
+    options.leafReadWidth,
+    "leaf_read_width",
+  );
+  const maxInflightLeafReads = validateOptionalPositiveIntegerOption(
+    options.maxInflightLeafReads,
+    "max_inflight_leaf_reads",
+  );
   const inner = await wrapNativeError(() =>
     native.open(uri, {
       cacheDir: options.cacheDir,
@@ -1784,6 +1826,14 @@ export async function open(uri: string, options: OpenOptions = {}): Promise<Inde
       residentRouting: residentRouting,
       resident_routing: residentRouting,
       preload,
+      maxActiveSearches,
+      max_active_searches: maxActiveSearches,
+      maxWaitingSearches,
+      max_waiting_searches: maxWaitingSearches,
+      leafReadWidth,
+      leaf_read_width: leafReadWidth,
+      maxInflightLeafReads,
+      max_inflight_leaf_reads: maxInflightLeafReads,
     }),
   );
   return new Index(uri, inner);

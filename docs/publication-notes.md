@@ -189,7 +189,7 @@ uncached/disk-cached p95 was 88.7/11.9 ms, median four-worker throughput was
 310.7 QPS, and worst serving RSS was 193.2 MiB. This is a 27.1× query-byte
 reduction and roughly an
 order-of-magnitude peak-RSS reduction from the legacy recall-matched failure.
-The final engine additionally caps active cell decodes globally at 24 and
+That frozen v6 engine additionally capped active cell decodes globally at 24 and
 single-flights overlapping reads of the same immutable checksum.
 
 The layout ablation must accompany this result: 1024 rows used 7.01 MB/query
@@ -253,9 +253,9 @@ results were 0.970/0.973 and are the only publication-safe values.
   not “cold” or “warm”.
 - Startup/open plus serving-metadata preparation is measured separately and is
   excluded from query latency.
-- Production uses bounded per-query width, the default four-query admission
-  cap, and the default 24-cell global decode cap. Uncapped fan-out and multi-user
-  runs are labelled “research ceiling”.
+- Current production uses separate bounded active/waiting search admission,
+  per-query leaf width, handle-wide physical reads, and process-wide backing
+  GETs. Uncapped fan-out and multi-user runs are labelled “research ceiling”.
 - Vendor-reported numbers and directly measured numbers appear in separate
   columns. Dataset, corpus size, dimensions, metric, recall definition, cache
   state, consistency mode, client location, and concurrency must accompany any

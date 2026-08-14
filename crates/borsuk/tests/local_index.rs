@@ -10629,7 +10629,7 @@ fn admission_gate_serializes_concurrent_searches_correctly() {
         BorsukIndex::open_with_options(
             &uri,
             OpenOptions {
-                max_concurrent_searches: Some(1),
+                max_active_searches: 1,
                 ..OpenOptions::default()
             },
         )

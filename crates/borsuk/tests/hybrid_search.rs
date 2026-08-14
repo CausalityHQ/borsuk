@@ -152,7 +152,8 @@ fn collection_shared_single_search_permit_does_not_deadlock_hybrid_legs() {
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
-            max_concurrent_searches: Some(1),
+            max_active_searches: 1,
+            max_waiting_searches: 0,
             ..OpenOptions::default()
         },
     )

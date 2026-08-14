@@ -60,10 +60,11 @@ unit-normalized copies while keeping the stored exact vectors unchanged.
 
 Production admission is bounded twice: a shared rerank-read gate limits active
 sidecar range reads across all callers, and
-`OpenOptions::max_concurrent_searches` (default four) limits admitted whole
-queries. This prevents `users × candidates` from becoming the memory or S3
-request limit. Uncapped concurrency is a research-ceiling profile, never the
-default.
+`OpenOptions::max_active_searches` limits whole queries, while
+`max_waiting_searches` bounds the FIFO queue. `leaf_read_width` controls one
+query wave and `max_inflight_leaf_reads` caps physical reads across the handle.
+This prevents `users × candidates` from becoming the memory or S3 request
+limit; excess work fails explicitly with `overloaded`.
 
 Queries that need metadata filtering, include metadata, request exact search, or
 force routing-tree behavior use the cell-routed path. An unflushed WAL tail does
@@ -114,15 +115,13 @@ There are three separate knobs:
 - `routing_page_overfetch` controls how many cheap routing metadata candidates
   a query keeps before applying the expensive segment payload budget.
 
-Serving has four independent concurrency controls. `prefetch_depth` bounds
-cell reads within one query, `max_concurrent_searches` bounds admitted queries,
-and `max_concurrent_cell_decodes` bounds active cell decodes across every query
-on the handle. A four-worker process-wide CPU pool bounds scoring/decoding,
-while a separate process-wide pool of twenty-four 256 KiB-stack I/O waiters
-overlaps blocking object-store reads. The defaults are four searches and
-twenty-four cell reads/decodes. The
-global cell gate prevents `users × prefetch_depth` from becoming the memory
-limit. Reads of an identical immutable checksum are single-flight while they
+Serving separates admission, per-query wave width, handle-wide physical leaf
+reads, process-wide S3 GETs, and CPU execution. Defaults admit eight active and
+sixteen waiting searches, issue leaf waves of at most 32, and allow at most 48
+in-flight leaf reads per handle. The process CPU pool reserves one core on
+small machines and caps itself at four workers; blocking I/O and S3 GETs have
+separate configurable ceilings. Reads of an identical immutable checksum are
+single-flight while they
 overlap, so concurrent users share one decode without retaining it as a
 resident cache afterward. An explicitly byte-budgeted decoded-segment cache is
 still available for a genuinely hot cell set. On graph-enabled indexes, a
@@ -235,8 +234,9 @@ The current implementation keeps these invariants:
   the normal-segment table;
 - a pq-scan-only production segment has an empty graph reference; an explicitly
   graph-enabled segment references a graph Parquet block under `graphs/L*/`;
-- search pipelines selected cells with bounded per-query width and a handle-wide
-  24-decode gate, updating a top-k heap as results arrive;
+- search pipelines selected cells with bounded per-query width, a handle-wide
+  physical-read gate, and a process-wide backing-GET gate, updating a top-k heap
+  as results arrive;
 - exact mode can stop early when a segment lower bound cannot improve the kth
   result.
 - approximate mode can stop on segment, byte, latency, epsilon, or

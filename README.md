@@ -64,8 +64,9 @@ flowchart LR
 > IVF/SPFresh/SPANN systems lineage rather than claiming a new ANN primitive.
 > Its niche is a **bounded working set over durable object storage**. Query data
 > remains in the bucket; production keeps serving metadata resident and bounds
-> per-query cell-read width, global search admission, and active cell decodes
-> across users. Overlapping reads of one immutable cell are single-flight. A
+> each query's leaf-read width, handle-wide physical reads, process-wide S3
+> GETs, and global search admission across users. Overlapping reads of one
+> immutable cell are single-flight. A
 > local NVMe cache removes backing-store GETs on a repeated working set. The
 > complete standard-dataset evidence, method matrix, resource graphs, external
 > comparisons, and publication analysis are isolated in the

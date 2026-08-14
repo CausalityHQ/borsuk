@@ -57,6 +57,10 @@ test("metric name catalogs expose canonical names", () => {
     cacheDir: "/tmp/borsuk-cache",
     ramBudget: 1_000_000_000,
     residentRouting: false,
+    maxActiveSearches: 8,
+    maxWaitingSearches: 16,
+    leafReadWidth: 32,
+    maxInflightLeafReads: 48,
   };
   const readonlyVector = [1, 0] as const;
   const readonlyIds = ["doc-a", "doc-b"] as const;
@@ -68,6 +72,8 @@ test("metric name catalogs expose canonical names", () => {
   assert.equal(typedMinkowskiMetric, "minkowski:3");
   assert.equal(typedOpenOptions.ramBudget, 1_000_000_000);
   assert.equal(typedOpenOptions.residentRouting, false);
+  assert.equal(typedOpenOptions.maxActiveSearches, 8);
+  assert.equal(typedOpenOptions.maxInflightLeafReads, 48);
   assert.equal(
     Math.abs(vectorDistance(typedMinkowskiMetric, [0, 0], [1, 2]) - Math.cbrt(9)) < 1e-6,
     true,
@@ -103,6 +109,25 @@ test("metric name catalogs expose canonical names", () => {
     "vamana-pq",
     "hybrid",
   ]);
+});
+
+test("open rejects invalid flow-control caps before native I/O", async () => {
+  await assert.rejects(
+    async () => open("unused", { maxActiveSearches: 0 }),
+    /max_active_searches must be greater than zero/,
+  );
+  await assert.rejects(
+    async () => open("unused", { maxWaitingSearches: -1 }),
+    /max_waiting_searches must be non-negative/,
+  );
+  await assert.rejects(
+    async () => open("unused", { leafReadWidth: 0 }),
+    /leaf_read_width must be greater than zero/,
+  );
+  await assert.rejects(
+    async () => open("unused", { maxInflightLeafReads: 0 }),
+    /max_inflight_leaf_reads must be greater than zero/,
+  );
 });
 
 test("vectorDistance exposes dense metric catalog", () => {

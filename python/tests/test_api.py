@@ -1408,6 +1408,32 @@ class PythonApiTests(unittest.TestCase):
             ):
                 borsuk.open(uri, resident_routing=1)  # type: ignore[arg-type]
 
+    def test_open_rejects_invalid_flow_control_caps(self) -> None:
+        for field in (
+            "max_active_searches",
+            "leaf_read_width",
+            "max_inflight_leaf_reads",
+        ):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, f"{field} must be greater than zero"):
+                    borsuk.open("unused", **{field: 0})  # type: ignore[arg-type]
+        with self.assertRaisesRegex(
+            ValueError, "max_waiting_searches must be non-negative"
+        ):
+            borsuk.open("unused", max_waiting_searches=-1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            uri = local_uri(tmp)
+            borsuk.create(uri=uri, metric="euclidean", dimensions=2)
+            reopened = borsuk.open(
+                uri,
+                max_active_searches=1,
+                max_waiting_searches=0,
+                leaf_read_width=1,
+                max_inflight_leaf_reads=1,
+            )
+            self.assertEqual(reopened.stats().dimensions, 2)
+
     def test_open_can_use_paged_routing_without_resident_segment_summaries(
         self,
     ) -> None:

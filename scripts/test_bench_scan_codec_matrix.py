@@ -129,8 +129,8 @@ class ScanCodecMatrixRunnerTest(unittest.TestCase):
         source = SCRIPT.read_text()
         self.assertIn("BORSUK_BENCH_LEAF_CAPABILITY=pq-scan-only", source)
         self.assertIn("BORSUK_BENCH_CACHE_EXECUTION=scan", source)
-        self.assertIn("BORSUK_BENCH_MAX_CONCURRENT_SEARCHES=4", source)
-        self.assertIn("BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES=24", source)
+        self.assertIn("BORSUK_BENCH_MAX_ACTIVE_SEARCHES=4", source)
+        self.assertIn("BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS=24", source)
         self.assertIn("BORSUK_BENCH_QUERIES=${BORSUK_SCAN_QUERIES:-100}", source)
         self.assertIn(
             "BORSUK_BENCH_SKIP_EXACT_RECALL=${BORSUK_SCAN_SKIP_EXACT_RECALL:-1}", source

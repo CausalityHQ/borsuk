@@ -19,11 +19,12 @@ temporary build working set.
 | `BuildConfig::global_pq_layout` | yes | routing selectivity, resident centroids, code-object fan-out | `Adaptive`; explicit flat/product/hierarchy variants require fresh curves |
 | `nprobe` | yes | global coarse-PQ cells, code-chunk GETs, bytes, scan work | persisted coarse-cell rule; tune to recall target |
 | global candidates | yes | exact-rerank rows, sidecar ranges, CPU | persisted dimension/corpus rule; tune after `nprobe` |
-| prefetch width | no if all probes finish | latency waves, burst I/O, transient state | 16 per query, under the shared cap of 24 |
-| query admission cap | no | queueing and total concurrent query state | 4 |
-| `BORSUK_CPU_THREADS` | no | build/query scoring CPU saturation vs latency | 4 process-wide compute workers; research sweeps 1/2/4/8 |
-| `BORSUK_IO_THREADS` | no | object-store wait overlap, thread stacks, tail latency | 32 process-wide 1 MiB-stack waiters; research sweeps 4/8/16/24/32 |
-| global decode cap | no | active Parquet/Arrow/code decode state | 24 |
+| leaf-read width | no if all probes finish | latency waves, burst I/O, transient state | 32 per query |
+| active/waiting search caps | no | queueing and total concurrent query state | 8 active / 16 waiting |
+| `BORSUK_CPU_THREADS` | no | build/query scoring CPU saturation vs latency | adaptive `clamp(cpus - 1, 1, 4)`; research sweeps 1/2/3/4/8 |
+| `BORSUK_IO_THREADS` | no | object-store wait overlap, thread stacks, tail latency | 88 process-wide 1 MiB-stack waiters; sweep with the GET cap |
+| `BORSUK_BACKING_GET_CONCURRENCY` | no | process-wide S3 overlap, request pressure, transient buffers | 64; research sweeps 32/64/128 |
+| handle in-flight leaf reads | no | active Parquet/Arrow/code read state across queries | 48 |
 | resident RAM budget | no | resident routing/codebook/chunk metadata | hard 512 MiB library default |
 | exact-sidecar metadata cache | no | range-index hits vs RAM | global 128 MiB LRU |
 | global-PQ code wave | no | transient code bytes vs request waves | at most 32 chunks **and 32 MiB/query**; four production queries retain at most 128 MiB of code payload |
@@ -517,7 +518,8 @@ It characterizes saturation and is not a production default. Source:
 | Deep-Image | 1–8 | 34.6 at 1 | 342 ms | 984 MiB |
 
 Past saturation, more callers mostly multiply queueing, RSS, and tail latency.
-This is the empirical basis for bounded query and decode gates.
+This is historical evidence for bounded query work. Current qualification uses
+separate active/waiting search, leaf-wave, handle read, and process GET caps.
 
 ## Resource evidence
 

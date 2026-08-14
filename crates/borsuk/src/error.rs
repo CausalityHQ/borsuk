@@ -33,6 +33,19 @@ pub enum BorsukError {
     #[error("invalid search options: {0}")]
     InvalidSearchOptions(String),
 
+    /// Index-open runtime and flow-control options were invalid.
+    #[error("invalid open options: {0}")]
+    InvalidOpenOptions(String),
+
+    /// The bounded search admission queue is full.
+    #[error("search overloaded: {active} active and {waiting} waiting")]
+    Overloaded {
+        /// Searches currently holding an active permit.
+        active: usize,
+        /// Searches already waiting for a permit.
+        waiting: usize,
+    },
+
     /// A search requested a leaf mode the index was not built for.
     ///
     /// A `PqScanOnly` index skips per-segment graph construction, so a search
@@ -191,6 +204,8 @@ impl BorsukError {
             Self::InvalidRecordInput(_) => "invalid_record_input",
             Self::InvalidCompactionInput(_) => "invalid_compaction_input",
             Self::InvalidSearchOptions(_) => "invalid_search_options",
+            Self::InvalidOpenOptions(_) => "invalid_open_options",
+            Self::Overloaded { .. } => "overloaded",
             Self::LeafModeNotConfigured { .. } => "leaf_mode_not_configured",
             Self::RamBudgetExceeded { .. } => "ram_budget_exceeded",
             Self::IngestBackpressure { .. } => "ingest_backpressure",

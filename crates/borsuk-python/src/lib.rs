@@ -904,7 +904,20 @@ impl PyIndex {
 impl PyIndex {
     #[new]
     fn new(py: Python<'_>, uri: String) -> PyResult<Self> {
-        py.detach(move || open(uri, None, None, true, None, false))
+        py.detach(move || {
+            open(PythonOpenOptions {
+                uri,
+                cache_dir: None,
+                ram_budget: None,
+                resident_routing: true,
+                cache_max_bytes: None,
+                preload: false,
+                max_active_searches: borsuk::DEFAULT_MAX_ACTIVE_SEARCHES,
+                max_waiting_searches: borsuk::DEFAULT_MAX_WAITING_SEARCHES,
+                leaf_read_width: borsuk::DEFAULT_LEAF_READ_WIDTH,
+                max_inflight_leaf_reads: borsuk::DEFAULT_MAX_INFLIGHT_LEAF_READS,
+            })
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2462,8 +2475,9 @@ fn create(
 }
 
 #[pyfunction]
-#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None, preload = false))]
+#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None, preload = false, max_active_searches = 8, max_waiting_searches = 16, leaf_read_width = 32, max_inflight_leaf_reads = 48))]
 #[pyo3(name = "open")]
+#[allow(clippy::too_many_arguments)] // These are explicit Python keyword controls.
 fn open_py(
     py: Python<'_>,
     uri: String,
@@ -2472,16 +2486,24 @@ fn open_py(
     resident_routing: bool,
     cache_max_bytes: Option<String>,
     preload: bool,
+    max_active_searches: usize,
+    max_waiting_searches: usize,
+    leaf_read_width: usize,
+    max_inflight_leaf_reads: usize,
 ) -> PyResult<PyIndex> {
     py.detach(move || {
-        open(
+        open(PythonOpenOptions {
             uri,
             cache_dir,
             ram_budget,
             resident_routing,
             cache_max_bytes,
             preload,
-        )
+            max_active_searches,
+            max_waiting_searches,
+            leaf_read_width,
+            max_inflight_leaf_reads,
+        })
     })
 }
 
@@ -2511,33 +2533,45 @@ fn _borsuk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn open(
+struct PythonOpenOptions {
     uri: String,
     cache_dir: Option<String>,
     ram_budget: Option<String>,
     resident_routing: bool,
     cache_max_bytes: Option<String>,
     preload: bool,
-) -> PyResult<PyIndex> {
-    let ram_budget_bytes = ram_budget
+    max_active_searches: usize,
+    max_waiting_searches: usize,
+    leaf_read_width: usize,
+    max_inflight_leaf_reads: usize,
+}
+
+fn open(options: PythonOpenOptions) -> PyResult<PyIndex> {
+    let ram_budget_bytes = options
+        .ram_budget
         .as_deref()
         .map(borsuk::parse_ram_budget)
         .transpose()
         .map_err(to_py_value_error)?
         .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES));
-    let cache_max_bytes = cache_max_bytes
+    let cache_max_bytes = options
+        .cache_max_bytes
         .as_deref()
         .map(|value| borsuk::parse_byte_size(value, "cache_max_bytes"))
         .transpose()
         .map_err(to_py_value_error)?;
     let index = BorsukIndex::open_with_options(
-        &uri,
+        &options.uri,
         OpenOptions {
-            cache_dir: cache_dir.map(PathBuf::from),
+            cache_dir: options.cache_dir.map(PathBuf::from),
             cache_max_bytes,
             ram_budget_bytes,
-            resident_routing,
-            preload,
+            resident_routing: options.resident_routing,
+            preload: options.preload,
+            max_active_searches: options.max_active_searches,
+            max_waiting_searches: options.max_waiting_searches,
+            leaf_read_width: options.leaf_read_width,
+            max_inflight_leaf_reads: options.max_inflight_leaf_reads,
             ..OpenOptions::default()
         },
     )

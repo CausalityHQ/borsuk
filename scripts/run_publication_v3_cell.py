@@ -396,7 +396,13 @@ def build_execution_plan(
             "uncached" if arm.get("cache_state", "cold") == "cold" else "disk_cached"
         ),
         "BORSUK_BENCH_RAM_BUDGET_BYTES": str(resident_limit_mib * 1024 * 1024),
-        "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES": str(runtime_vcpus),
+        "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": str(runtime_vcpus),
+        "BORSUK_BENCH_MAX_WAITING_SEARCHES": "16",
+        "BORSUK_BENCH_LEAF_READ_WIDTH": "32",
+        "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS": "48",
+        "BORSUK_CPU_THREADS": str(max(1, min(runtime_vcpus - 1, 4))),
+        "BORSUK_IO_THREADS": "88",
+        "BORSUK_BACKING_GET_CONCURRENCY": "64",
         "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": str(
             disk_cache_limit_mib * 1024 * 1024
         ),
@@ -1537,7 +1543,9 @@ def _read_canonical_value(path: Path, maximum_bytes: int) -> object:
 
 
 def runtime_execution_contract(
-    plan: dict[str, object], runtime_profile: str
+    plan: dict[str, object],
+    runtime_profile: str,
+    effective_flow_control: dict[str, object],
 ) -> dict[str, object]:
     if runtime_profile not in {"recall", "concurrency"}:
         raise ValueError("runtime execution contract profile is invalid")
@@ -1559,15 +1567,39 @@ def runtime_execution_contract(
             raise ValueError(f"runtime execution contract {name} is invalid")
         return parsed
 
-    return {
-        "schema_version": 1,
-        "runtime_profile": runtime_profile,
+    requested = {
         "ram_budget_bytes": positive_environment_integer(
             "BORSUK_BENCH_RAM_BUDGET_BYTES"
         ),
-        "max_concurrent_searches": positive_environment_integer(
-            "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES"
+        "max_active_searches": positive_environment_integer(
+            "BORSUK_BENCH_MAX_ACTIVE_SEARCHES"
         ),
+        "max_waiting_searches": positive_environment_integer(
+            "BORSUK_BENCH_MAX_WAITING_SEARCHES"
+        ),
+        "leaf_read_width": positive_environment_integer(
+            "BORSUK_BENCH_LEAF_READ_WIDTH"
+        ),
+        "max_inflight_leaf_reads": positive_environment_integer(
+            "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"
+        ),
+        "cpu_threads": positive_environment_integer("BORSUK_CPU_THREADS"),
+        "io_threads": positive_environment_integer("BORSUK_IO_THREADS"),
+        "s3_get_concurrency": positive_environment_integer(
+            "BORSUK_BACKING_GET_CONCURRENCY"
+        ),
+    }
+    if (
+        not isinstance(effective_flow_control, dict)
+        or frozenset(effective_flow_control) != {"schema_version", *requested}
+        or effective_flow_control.get("schema_version") != 1
+        or any(effective_flow_control.get(key) != value for key, value in requested.items())
+    ):
+        raise ValueError("effective runtime flow control differs from its frozen request")
+    return {
+        "schema_version": 2,
+        "runtime_profile": runtime_profile,
+        **requested,
     }
 
 
@@ -1762,12 +1794,6 @@ def main() -> int:
         else:
             raise ValueError("publication runtime workload is not implemented")
         authorized_plan = {**plan, "runtime": authorized_runtime}
-        execution_contract = runtime_execution_contract(
-            authorized_plan, args.runtime_profile
-        )
-        (args.workspace / "RUNTIME_EXECUTION_CONTRACT.json").write_bytes(
-            canonical_json_bytes(execution_contract) + b"\n"
-        )
         source_root = Path(__file__).resolve().parent.parent
         preflight = validate_runtime_attestation(
             collect_runtime_attestation(
@@ -1784,6 +1810,17 @@ def main() -> int:
             raise ValueError("runtime EC2 identity differs from its scheduled instance")
         output, resources, elapsed_ns = execute_publication_phase(
             authorized_plan, "runtime"
+        )
+        effective_flow_control = _read_canonical_value(
+            output / "bench_runtime_flow_control.json", 64 * 1024
+        )
+        if not isinstance(effective_flow_control, dict):
+            raise ValueError("benchmark emitted no effective runtime flow control")
+        execution_contract = runtime_execution_contract(
+            authorized_plan, args.runtime_profile, effective_flow_control
+        )
+        (args.workspace / "RUNTIME_EXECUTION_CONTRACT.json").write_bytes(
+            canonical_json_bytes(execution_contract) + b"\n"
         )
         runtime_attestation = validate_runtime_attestation(
             collect_runtime_attestation(

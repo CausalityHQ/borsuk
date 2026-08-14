@@ -104,10 +104,12 @@ pub use group_commit::{
     GroupCommitConfig, GroupCommitReceipt, GroupCommitTicket, GroupCommitWriter,
 };
 pub use index::{
-    BorsukIndex, CanonicalMutationBatch, DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
-    DEFAULT_MAX_CONCURRENT_CELL_DECODES, DEFAULT_MAX_CONCURRENT_SEARCHES, DEFAULT_RAM_BUDGET_BYTES,
-    DEFAULT_ROUTING_PAGE_CACHE_BYTES, DEFAULT_TARGET_SEGMENT_VECTOR_BYTES,
-    DEFAULT_WAL_TAIL_CACHE_BYTES, DEFAULT_WAL_TAIL_DECODE_BYTES, IndexConfig,
+    AdmissionStats, BorsukIndex, CanonicalMutationBatch,
+    DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES, DEFAULT_LEAF_READ_WIDTH,
+    DEFAULT_MAX_ACTIVE_SEARCHES, DEFAULT_MAX_INFLIGHT_LEAF_READS, DEFAULT_MAX_WAITING_SEARCHES,
+    DEFAULT_RAM_BUDGET_BYTES, DEFAULT_ROUTING_PAGE_CACHE_BYTES,
+    DEFAULT_TARGET_SEGMENT_VECTOR_BYTES, DEFAULT_WAL_TAIL_CACHE_BYTES,
+    DEFAULT_WAL_TAIL_DECODE_BYTES, FlowControlStats, IndexConfig,
     MAX_RECOMMENDED_SEGMENT_MAX_VECTORS, MIN_RECOMMENDED_SEGMENT_MAX_VECTORS, OpenOptions,
     WarmReport, parse_byte_size, parse_ram_budget, recommended_segment_max_vectors,
 };
@@ -115,54 +117,139 @@ pub use lane_log::GROUP_COMMIT_STRIPE_COUNT;
 #[doc(hidden)]
 pub use logical_cell_catalog::train_logical_cell_centroids;
 
-/// Maximum CPU worker threads used by default index-build phases. Query
-/// concurrency has separate admission controls; this cap prevents an offline
-/// build from monopolizing a large production host.
+/// Maximum CPU worker threads selected by the automatic small-runtime policy.
 pub const DEFAULT_BUILD_THREADS: usize = 4;
 /// Process-wide build/query CPU worker override. Values must be in `1..=64`;
-/// missing or invalid values use [`DEFAULT_BUILD_THREADS`].
+/// missing or invalid values use the automatic policy: one fewer than the
+/// available CPUs, clamped to `1..=DEFAULT_BUILD_THREADS`.
 pub const CPU_THREADS_ENV: &str = "BORSUK_CPU_THREADS";
 /// Default shared blocking-I/O waiter count. These are parked network waiters,
 /// separate from CPU workers, and cover one qualified page-32 object-store
 /// wave without adding a hidden second round trip.
-pub const DEFAULT_IO_THREADS: usize = 32;
-/// Process-wide blocking-I/O waiter override. Values must be in `1..=128`.
+pub const DEFAULT_IO_THREADS: usize = 88;
+/// Process-wide blocking-I/O waiter override. Values must be in `1..=256` and
+/// at least the configured physical GET concurrency.
 pub const IO_THREADS_ENV: &str = "BORSUK_IO_THREADS";
 /// Default process-wide concurrency limit for physical backing-store GETs.
-pub const DEFAULT_BACKING_GET_CONCURRENCY: usize = 128;
+pub const DEFAULT_BACKING_GET_CONCURRENCY: usize = 64;
 /// Process-wide physical backing-store GET concurrency override.
 pub const BACKING_GET_CONCURRENCY_ENV: &str = "BORSUK_BACKING_GET_CONCURRENCY";
+
+/// Process-wide physical-resource limits shared by every BORSUK handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessLimits {
+    /// Workers shared by verification, decode, SIMD ranking, and builds.
+    pub cpu_threads: usize,
+    /// Blocking I/O waiters. This must be at least the backing GET cap so the
+    /// network semaphore, rather than the waiter pool, is the truthful limit.
+    pub io_threads: usize,
+    /// Physical backing-store GETs in flight across the process.
+    pub s3_get_concurrency: usize,
+}
+
+impl Default for ProcessLimits {
+    fn default() -> Self {
+        let cpus = std::thread::available_parallelism().map_or(1, usize::from);
+        Self {
+            cpu_threads: automatic_cpu_threads(cpus),
+            io_threads: DEFAULT_IO_THREADS,
+            s3_get_concurrency: DEFAULT_BACKING_GET_CONCURRENCY,
+        }
+    }
+}
+
+static PROCESS_LIMITS: std::sync::OnceLock<ProcessLimits> = std::sync::OnceLock::new();
+
+/// Configure process-wide pools before their first use. Repeating the same
+/// configuration is idempotent; a conflicting late configuration fails.
+pub fn configure_process(limits: ProcessLimits) -> Result<()> {
+    validate_process_limits(&limits)?;
+    if let Some(installed) = PROCESS_LIMITS.get() {
+        return if installed == &limits {
+            Ok(())
+        } else {
+            Err(BorsukError::InvalidOpenOptions(
+                "process limits are already configured differently".to_string(),
+            ))
+        };
+    }
+    PROCESS_LIMITS.set(limits).map_err(|_| {
+        BorsukError::InvalidOpenOptions(
+            "process limits were configured concurrently with different values".to_string(),
+        )
+    })
+}
+
+fn automatic_cpu_threads(cpus: usize) -> usize {
+    cpus.saturating_sub(1).clamp(1, DEFAULT_BUILD_THREADS)
+}
+
+fn validate_process_limits(limits: &ProcessLimits) -> Result<()> {
+    if !(1..=64).contains(&limits.cpu_threads) {
+        return Err(BorsukError::InvalidOpenOptions(
+            "process cpu_threads must be in 1..=64".to_string(),
+        ));
+    }
+    if !(1..=128).contains(&limits.s3_get_concurrency) {
+        return Err(BorsukError::InvalidOpenOptions(
+            "process s3_get_concurrency must be in 1..=128".to_string(),
+        ));
+    }
+    if !(limits.s3_get_concurrency..=256).contains(&limits.io_threads) {
+        return Err(BorsukError::InvalidOpenOptions(format!(
+            "process io_threads must be in {}..=256",
+            limits.s3_get_concurrency
+        )));
+    }
+    Ok(())
+}
+
+fn configured_process_limits() -> &'static ProcessLimits {
+    PROCESS_LIMITS.get_or_init(|| {
+        let defaults = ProcessLimits::default();
+        let cpu_threads = std::env::var(CPU_THREADS_ENV)
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|threads| (1..=64).contains(threads))
+            .unwrap_or(defaults.cpu_threads);
+        let s3_get_concurrency = parse_backing_get_concurrency(
+            std::env::var(BACKING_GET_CONCURRENCY_ENV).ok().as_deref(),
+        );
+        let io_threads = std::env::var(IO_THREADS_ENV)
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|threads| (s3_get_concurrency..=256).contains(threads))
+            .unwrap_or_else(|| DEFAULT_IO_THREADS.max(s3_get_concurrency));
+        ProcessLimits {
+            cpu_threads,
+            io_threads,
+            s3_get_concurrency,
+        }
+    })
+}
 
 /// Return the process-wide CPU worker budget used by build and query pools.
 #[must_use]
 pub fn configured_cpu_threads() -> usize {
-    std::env::var(CPU_THREADS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|threads| (1..=64).contains(threads))
-        .unwrap_or(DEFAULT_BUILD_THREADS)
+    configured_process_limits().cpu_threads
 }
 
 /// Return the process-wide blocking-I/O waiter budget.
 #[must_use]
 pub fn configured_io_threads() -> usize {
-    std::env::var(IO_THREADS_ENV)
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|threads| (1..=128).contains(threads))
-        .unwrap_or(DEFAULT_IO_THREADS)
+    configured_process_limits().io_threads
 }
 
 /// Return the validated process-wide physical backing-store GET concurrency limit.
 #[must_use]
 pub fn configured_backing_get_concurrency() -> usize {
-    parse_backing_get_concurrency(std::env::var(BACKING_GET_CONCURRENCY_ENV).ok().as_deref())
+    configured_process_limits().s3_get_concurrency
 }
 
 fn parse_backing_get_concurrency(value: Option<&str>) -> usize {
     value
         .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| (1..=1024).contains(value))
+        .filter(|value| (1..=128).contains(value))
         .unwrap_or(DEFAULT_BACKING_GET_CONCURRENCY)
 }
 
@@ -227,17 +314,32 @@ pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_freq
 #[cfg(test)]
 mod configuration_tests {
     #[test]
-    fn default_io_waiters_cover_one_page_32_query_wave() {
-        assert_eq!(super::DEFAULT_IO_THREADS, 32);
+    fn automatic_cpu_budget_reserves_capacity_for_the_embedding_app() {
+        assert_eq!(super::automatic_cpu_threads(1), 1);
+        assert_eq!(super::automatic_cpu_threads(2), 1);
+        assert_eq!(super::automatic_cpu_threads(4), 3);
+        assert_eq!(super::automatic_cpu_threads(64), 4);
+    }
+
+    #[test]
+    fn default_io_waiters_make_the_physical_get_cap_truthful() {
+        let limits = super::ProcessLimits::default();
+        assert!(limits.io_threads >= limits.s3_get_concurrency);
+        super::validate_process_limits(&limits).unwrap();
+        let invalid = super::ProcessLimits {
+            io_threads: limits.s3_get_concurrency - 1,
+            ..limits
+        };
+        assert!(super::validate_process_limits(&invalid).is_err());
     }
 
     #[test]
     fn physical_get_admission_configuration_is_fail_closed() {
-        assert_eq!(super::parse_backing_get_concurrency(None), 128);
+        assert_eq!(super::parse_backing_get_concurrency(None), 64);
         assert_eq!(super::parse_backing_get_concurrency(Some("1")), 1);
-        assert_eq!(super::parse_backing_get_concurrency(Some("1024")), 1024);
-        for invalid in ["", "0", "1025", "many"] {
-            assert_eq!(super::parse_backing_get_concurrency(Some(invalid)), 128);
+        assert_eq!(super::parse_backing_get_concurrency(Some("128")), 128);
+        for invalid in ["", "0", "129", "1024", "many"] {
+            assert_eq!(super::parse_backing_get_concurrency(Some(invalid)), 64);
         }
     }
 }

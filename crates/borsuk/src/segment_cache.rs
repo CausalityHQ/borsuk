@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Condvar, Mutex};
+use std::time::Instant;
 
 use crate::Result;
 use crate::segment::{GraphEdge, Segment, SegmentGraph};
@@ -664,8 +665,26 @@ pub(crate) struct AdmissionGate {
 #[derive(Debug)]
 struct AdmissionState {
     permits: u64,
+    max_waiters: Option<u64>,
     next_ticket: u64,
     released: u64,
+    admitted: u64,
+    rejected: u64,
+    wait_nanos: u64,
+    wait_count: u64,
+    peak_active: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct AdmissionSnapshot {
+    pub(crate) capacity: usize,
+    pub(crate) active: usize,
+    pub(crate) waiting: usize,
+    pub(crate) admitted: u64,
+    pub(crate) rejected: u64,
+    pub(crate) wait_micros: u64,
+    pub(crate) wait_count: u64,
+    pub(crate) peak_active: usize,
 }
 
 impl AdmissionGate {
@@ -673,8 +692,31 @@ impl AdmissionGate {
         Self {
             state: Mutex::new(AdmissionState {
                 permits: permits.max(1) as u64,
+                max_waiters: None,
                 next_ticket: 0,
                 released: 0,
+                admitted: 0,
+                rejected: 0,
+                wait_nanos: 0,
+                wait_count: 0,
+                peak_active: 0,
+            }),
+            ready: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn new_bounded(permits: usize, max_waiters: usize) -> Self {
+        Self {
+            state: Mutex::new(AdmissionState {
+                permits: permits.max(1) as u64,
+                max_waiters: Some(max_waiters as u64),
+                next_ticket: 0,
+                released: 0,
+                admitted: 0,
+                rejected: 0,
+                wait_nanos: 0,
+                wait_count: 0,
+                peak_active: 0,
             }),
             ready: Condvar::new(),
         }
@@ -684,16 +726,66 @@ impl AdmissionGate {
     /// it on drop. Tickets make admission FIFO: an active caller cannot release
     /// and immediately reacquire ahead of callers that are already waiting.
     pub(crate) fn acquire(&self) -> AdmissionPermit<'_> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        self.acquire_locked(state);
+        AdmissionPermit { gate: self }
+    }
+
+    /// Join the bounded FIFO queue, or reject immediately when every active
+    /// and waiting slot is already occupied.
+    pub(crate) fn acquire_bounded(&self) -> Option<AdmissionPermit<'_>> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let outstanding = state.next_ticket.saturating_sub(state.released);
+        if state
+            .max_waiters
+            .is_some_and(|max_waiters| outstanding >= state.permits.saturating_add(max_waiters))
+        {
+            state.rejected = state.rejected.saturating_add(1);
+            return None;
+        }
+        self.acquire_locked(state);
+        Some(AdmissionPermit { gate: self })
+    }
+
+    fn acquire_locked<'a>(&'a self, mut state: std::sync::MutexGuard<'a, AdmissionState>) {
+        let started = Instant::now();
+        let mut waited = false;
         let ticket = state.next_ticket;
         state.next_ticket = state
             .next_ticket
             .checked_add(1)
             .expect("admission ticket counter exhausted");
+        state.admitted = state.admitted.saturating_add(1);
         while ticket >= state.released.saturating_add(state.permits) {
+            waited = true;
             state = self.ready.wait(state).unwrap_or_else(|e| e.into_inner());
         }
-        AdmissionPermit { gate: self }
+        if waited {
+            let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            state.wait_nanos = state.wait_nanos.saturating_add(nanos);
+            state.wait_count = state.wait_count.saturating_add(1);
+        }
+        let active = state
+            .next_ticket
+            .saturating_sub(state.released)
+            .min(state.permits);
+        state.peak_active = state.peak_active.max(active);
+    }
+
+    pub(crate) fn snapshot(&self) -> AdmissionSnapshot {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let outstanding = state.next_ticket.saturating_sub(state.released);
+        let active = outstanding.min(state.permits);
+        AdmissionSnapshot {
+            capacity: state.permits as usize,
+            active: active as usize,
+            waiting: outstanding.saturating_sub(active) as usize,
+            admitted: state.admitted,
+            rejected: state.rejected,
+            wait_micros: state.wait_nanos / 1_000,
+            wait_count: state.wait_count,
+            peak_active: state.peak_active as usize,
+        }
     }
 
     fn release(&self) {
@@ -1267,6 +1359,38 @@ mod tests {
             *admitted.lock().unwrap_or_else(|e| e.into_inner()),
             (0..8).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn admission_gate_rejects_work_beyond_its_bounded_queue() {
+        let gate = Arc::new(AdmissionGate::new_bounded(1, 1));
+        let held = gate.acquire_bounded().unwrap();
+        let waiter_gate = Arc::clone(&gate);
+        let waiter = thread::spawn(move || {
+            let _permit = waiter_gate.acquire_bounded().unwrap();
+        });
+
+        loop {
+            let queued = gate
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_ticket;
+            if queued == 2 {
+                break;
+            }
+            thread::yield_now();
+        }
+
+        assert!(gate.acquire_bounded().is_none());
+        assert_eq!(gate.snapshot().rejected, 1);
+        assert_eq!(gate.snapshot().waiting, 1);
+        drop(held);
+        waiter.join().unwrap();
+        let snapshot = gate.snapshot();
+        assert_eq!(snapshot.active, 0);
+        assert_eq!(snapshot.waiting, 0);
+        assert_eq!(snapshot.admitted, 2);
     }
 
     #[test]

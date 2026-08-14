@@ -33,7 +33,7 @@ fi
 
 mkdir -p "$OUT"
 COVERAGE="$OUT/coverage.csv"
-printf '%s\n' 'dataset,profile,profile_class,status,scan_codec,cache_execution,leaf_capability,global_cell_graph_degree,global_cell_graph_construction_ef,global_graph_cache_max_bytes,ram_budget_bytes,max_concurrent_searches,max_concurrent_cell_decodes,concurrency,prefetch_depth,uncached_expected_engine,disk_cached_expected_engine,index_uri,nprobes,candidates,segment_max_vectors,resource_path,cache_coverage_path' > "$COVERAGE"
+printf '%s\n' 'dataset,profile,profile_class,status,scan_codec,cache_execution,leaf_capability,global_cell_graph_degree,global_cell_graph_construction_ef,global_graph_cache_max_bytes,ram_budget_bytes,max_active_searches,max_inflight_leaf_reads,concurrency,prefetch_depth,uncached_expected_engine,disk_cached_expected_engine,index_uri,nprobes,candidates,segment_max_vectors,resource_path,cache_coverage_path' > "$COVERAGE"
 
 probes_for() {
   case "$1" in
@@ -79,8 +79,8 @@ profile_config() {
   graph_construction_ef='0'
   graph_cache_max_bytes='0'
   ram_budget_bytes='536870912'
-  max_concurrent_searches='4'
-  max_concurrent_cell_decodes='24'
+  max_active_searches='4'
+  max_inflight_leaf_reads='24'
   concurrency="${BORSUK_CACHE_PRODUCTION_CONCURRENCY:-1,4,16}"
   prefetch_depth='16'
   disk_cached_expected_engine="$2"
@@ -94,8 +94,8 @@ profile_config() {
       profile_class='research-ceiling'
       graph_cache_max_bytes='536870912'
       ram_budget_bytes='0'
-      max_concurrent_searches='0'
-      max_concurrent_cell_decodes='0'
+      max_active_searches='1024'
+      max_inflight_leaf_reads='1024'
       concurrency="${BORSUK_CACHE_RESEARCH_CONCURRENCY:-1,4,16,32}"
       prefetch_depth='64'
       ;;
@@ -180,8 +180,8 @@ for dataset in $DATASET_NAMES; do
           BORSUK_BENCH_QUERIES="${BORSUK_CACHE_QUERIES:-100}" \
           BORSUK_BENCH_UNCACHED_QUERIES="${BORSUK_CACHE_UNCACHED_QUERIES:-100}" \
           BORSUK_BENCH_CONCURRENCY="$concurrency" \
-          BORSUK_BENCH_MAX_CONCURRENT_SEARCHES="$max_concurrent_searches" \
-          BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES="$max_concurrent_cell_decodes" \
+          BORSUK_BENCH_MAX_ACTIVE_SEARCHES="$max_active_searches" \
+          BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS="$max_inflight_leaf_reads" \
           BORSUK_BENCH_RAM_BUDGET_BYTES="$ram_budget_bytes" \
           BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES=0 \
           "${graph_env[@]}" \
@@ -198,7 +198,7 @@ for dataset in $DATASET_NAMES; do
         status='measured'
       fi
 
-      printf '%s\n' "$dataset,$profile,$profile_class,$status,$scan_codec,$cache_execution,$leaf_capability,$graph_degree,$graph_construction_ef,$graph_cache_max_bytes,$ram_budget_bytes,$max_concurrent_searches,$max_concurrent_cell_decodes,$concurrency_field,$prefetch_depth,$scan_codec,$disk_cached_expected_engine,$index_uri,$probes_semicolon,$CANDIDATES_SEMICOLON,$segment_rows,$resource_path,$cache_coverage_path" >> "$COVERAGE"
+      printf '%s\n' "$dataset,$profile,$profile_class,$status,$scan_codec,$cache_execution,$leaf_capability,$graph_degree,$graph_construction_ef,$graph_cache_max_bytes,$ram_budget_bytes,$max_active_searches,$max_inflight_leaf_reads,$concurrency_field,$prefetch_depth,$scan_codec,$disk_cached_expected_engine,$index_uri,$probes_semicolon,$CANDIDATES_SEMICOLON,$segment_rows,$resource_path,$cache_coverage_path" >> "$COVERAGE"
     done
   done
 done

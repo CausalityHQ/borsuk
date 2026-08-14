@@ -468,7 +468,7 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
         Ok(value) if !value.trim().is_empty() => value.trim().parse::<u64>().ok(),
         _ => None,
     };
-    let max_concurrent_searches = match env::var("BORSUK_LARGE_SCALE_MAX_CONCURRENT_SEARCHES") {
+    let max_active_searches = match env::var("BORSUK_LARGE_SCALE_MAX_ACTIVE_SEARCHES") {
         Ok(value) if !value.trim().is_empty() => value.trim().parse::<usize>().ok(),
         _ => None,
     };
@@ -479,7 +479,7 @@ fn parallel_search_headroom_reports_rss_peak_against_budget() {
                 resident_routing: false,
                 ram_budget_bytes: Some(resident_budget),
                 segment_cache_max_bytes,
-                max_concurrent_searches,
+                max_active_searches: max_active_searches.unwrap_or(usize::MAX),
                 ..OpenOptions::default()
             },
         )

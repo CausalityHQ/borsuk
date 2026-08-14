@@ -340,8 +340,8 @@ def dense_ann_command(
         "BORSUK_BENCH_CONCURRENCY": concurrency,
         "BORSUK_BENCH_GLOBAL_SCAN_CODEC": "srht-pq-scan",
         "BORSUK_BENCH_CACHE_EXECUTION": "scan",
-        "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES": "4",
-        "BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES": "24",
+        "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": "4",
+        "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS": "24",
         "BORSUK_BENCH_RAM_BUDGET_BYTES": str(512 * 1024 * 1024),
         "BORSUK_BENCH_CACHE_PROFILE": (
             "uncached" if row["cache_profile"] == "lifecycle" else row["cache_profile"]
@@ -401,8 +401,8 @@ def hybrid_command(
                 "BORSUK_HYBRID_MODES": hybrid_mode(row["workload"]),
                 "BORSUK_HYBRID_REPETITIONS": "1",
                 "BORSUK_HYBRID_CLIENT_CONCURRENCY": str(concurrency),
-                "BORSUK_HYBRID_MAX_CONCURRENT_SEARCHES": "4",
-                "BORSUK_HYBRID_MAX_CONCURRENT_CELL_DECODES": "24",
+                "BORSUK_HYBRID_MAX_ACTIVE_SEARCHES": "4",
+                "BORSUK_HYBRID_MAX_INFLIGHT_LEAF_READS": "24",
                 "BORSUK_HYBRID_CACHE_DIR": str(cache),
                 "BORSUK_HYBRID_CACHE_PROFILE": row["cache_profile"],
                 "BORSUK_HYBRID_TARGET_HOT_FRACTION": f"{coverage / 100:.2f}",
@@ -458,8 +458,8 @@ def specialized_command(
         "BORSUK_MARKET_CACHE_PROFILE": row["cache_profile"],
         "BORSUK_MARKET_CACHE_COVERAGE_PERCENT": str(coverage),
         "BORSUK_MARKET_CLIENT_CONCURRENCY": str(concurrency),
-        "BORSUK_MARKET_MAX_CONCURRENT_SEARCHES": "4",
-        "BORSUK_MARKET_MAX_CONCURRENT_CELL_DECODES": "24",
+        "BORSUK_MARKET_MAX_ACTIVE_SEARCHES": "4",
+        "BORSUK_MARKET_MAX_INFLIGHT_LEAF_READS": "24",
         "BORSUK_MARKET_RAM_BUDGET_BYTES": str(512 * 1024 * 1024),
     }
     command = [

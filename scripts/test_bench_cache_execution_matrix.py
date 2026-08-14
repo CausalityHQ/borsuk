@@ -66,8 +66,8 @@ PROFILES = {
         "auto",
         "graph-enabled",
         str(512 * 1024 * 1024),
-        "0",
-        "0",
+        "1024",
+        "1024",
         "0",
     ),
 }
@@ -119,8 +119,8 @@ class CacheExecutionMatrixRunnerTest(unittest.TestCase):
                 policy,
                 capability,
                 graph_cache,
-                search_cap,
-                decode_cap,
+                active_search_cap,
+                inflight_leaf_cap,
                 ram_budget,
             ) = PROFILES[row["profile"]]
             self.assertEqual(
@@ -129,8 +129,8 @@ class CacheExecutionMatrixRunnerTest(unittest.TestCase):
                     row["cache_execution"],
                     row["leaf_capability"],
                     row["global_graph_cache_max_bytes"],
-                    row["max_concurrent_searches"],
-                    row["max_concurrent_cell_decodes"],
+                    row["max_active_searches"],
+                    row["max_inflight_leaf_reads"],
                     row["ram_budget_bytes"],
                 ),
                 (
@@ -138,8 +138,8 @@ class CacheExecutionMatrixRunnerTest(unittest.TestCase):
                     policy,
                     capability,
                     graph_cache,
-                    search_cap,
-                    decode_cap,
+                    active_search_cap,
+                    inflight_leaf_cap,
                     ram_budget,
                 ),
             )
@@ -180,10 +180,10 @@ class CacheExecutionMatrixRunnerTest(unittest.TestCase):
 
     def test_runner_uses_bounded_global_admission_and_resource_sampling(self):
         source = SCRIPT.read_text()
-        self.assertIn("max_concurrent_searches='4'", source)
-        self.assertIn("max_concurrent_cell_decodes='24'", source)
-        self.assertIn("max_concurrent_searches='0'", source)
-        self.assertIn("max_concurrent_cell_decodes='0'", source)
+        self.assertIn("max_active_searches='4'", source)
+        self.assertIn("max_inflight_leaf_reads='24'", source)
+        self.assertIn("max_active_searches='1024'", source)
+        self.assertIn("max_inflight_leaf_reads='1024'", source)
         self.assertIn("BORSUK_BENCH_GLOBAL_CELL_GRAPH_CACHE_MAX_BYTES", source)
         self.assertIn("BORSUK_BENCH_GLOBAL_CELL_GRAPH_DEGREE", source)
         self.assertIn("python3 scripts/benchmark_with_resources.py", source)

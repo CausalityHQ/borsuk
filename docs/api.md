@@ -49,8 +49,13 @@ choose a new URI and reingest the source data when recreating it.
 | Read cache | `create_with_cache` / `open_with_cache` | `cache_dir` | `cacheDir` | none | Runtime only. Does not change the index format. |
 | Read cache size bound | `OpenOptions::cache_max_bytes` | `cache_max_bytes` | `cacheMaxBytes` | none/unbounded | Runtime only. Enforces an LRU bound on local cached immutable objects. |
 | Preload to RAM | `OpenOptions::preload` + `warm()` | `preload` | `preload` | `false` | Runtime only. Attempts to decode every active segment into the byte-bounded in-process cache; graph-enabled indexes also decode and validate their graphs. Inspect `WarmReport.coverage_complete`: zero segment/graph reads are guaranteed only when the complete snapshot fits. |
-| Global search admission cap | `OpenOptions::max_concurrent_searches` | — | — | `4` | Runtime only. Caps decode/score searches across the whole handle; callers above the cap queue instead of multiplying per-query fan-out and memory. Set `None` only for an explicitly measured research ceiling. |
-| Global cell-decode cap | `OpenOptions::max_concurrent_cell_decodes` | — | — | `24` | Runtime only. Bounds active cell payload decodes across all admitted users. Per-query prefetch width remains a latency knob, but cannot multiply past this process-wide limit. Set `None` only for a labelled research ceiling. |
+| Active-search cap | `OpenOptions::max_active_searches` | `max_active_searches` | `maxActiveSearches` | `8` | Runtime only. Bounds whole searches executing on one handle. Work beyond the active plus waiting limits fails with `overloaded` instead of occupying an unbounded blocking queue. |
+| Waiting-search cap | `OpenOptions::max_waiting_searches` | `max_waiting_searches` | `maxWaitingSearches` | `16` | Runtime only. Bounds queued searches. Set `0` for immediate load shedding in a REST service that already owns its own queue. |
+| Leaf read wave | `OpenOptions::leaf_read_width` | `leaf_read_width` | `leafReadWidth` | `32` | Maximum leaf objects launched by one query wave. Lower values reduce burstiness; higher values can hide object-store latency. |
+| In-flight leaf-read cap | `OpenOptions::max_inflight_leaf_reads` | `max_inflight_leaf_reads` | `maxInflightLeafReads` | `48` | Per-handle physical leaf-read admission shared by all searches and named modalities. This prevents callers × wave width from becoming the S3/RAM limit. |
+| Process CPU workers | `configure_process(ProcessLimits::cpu_threads)` / `BORSUK_CPU_THREADS` | environment | environment | `clamp(cpus - 1, 1, 4)` | Shared across all handles. Reserves one core on small application hosts while bounding decode and SIMD ranking CPU. Configure before the first BORSUK operation. |
+| Process blocking-I/O workers | `configure_process(ProcessLimits::io_threads)` / `BORSUK_IO_THREADS` | environment | environment | `88` | Shared waiters for blocking storage operations. Must be at least the physical GET cap so it does not silently become the real network limit. |
+| Process physical GET cap | `configure_process(ProcessLimits::s3_get_concurrency)` / `BORSUK_BACKING_GET_CONCURRENCY` | environment | environment | `64` | Shared across every handle and backing store. Bounds actual object reads independently of per-query waves and per-handle fairness. |
 | Decoded tombstone-page reuse | `OpenOptions::tombstone_page_cache_max_bytes` | — | — | `32 MiB` | Runtime only. Shares recently decoded hash-routed MVCC tombstone pages across callers. The persisted deleted-ID set may grow with the corpus while process RAM remains fixed; `0` disables retention. |
 | Decoded BM25 stats-delta reuse | `OpenOptions::bm25_stats_page_cache_max_bytes` | — | — | `16 MiB` | Runtime only. Shares immutable term-statistics correction pages across callers; overlapping reads are single-flight and the live frontier is prepared during open/refresh. |
 | Decoded lexical-run reuse | `OpenOptions::lexical_run_cache_max_bytes` | — | — | `32 MiB` | Runtime only. Shares recently decoded immutable sparse/BM25 postings row groups across staggered callers. The fixed byte bound is independent of corpus size; `0` disables retention while preserving single-flight overlap sharing. |
@@ -67,14 +72,16 @@ bytes, disk/backing traffic, and object requests. Python and TypeScript
 currently expose the exact entry point; the report/options binding is a
 remaining API parity gate before late-interaction is benchmark-promoted.
 
-The process also has two independent worker budgets. `BORSUK_CPU_THREADS`
-defaults to 4 and caps compute-heavy build, PQ scan, and exact-scoring work.
-`BORSUK_IO_THREADS` defaults to 32 and supplies process-wide 1 MiB-stack
-waiters for blocking object-store reads. I/O waiters do not increase the CPU
-scoring budget, create per-query pools, or bypass the shared search/read gates;
-they prevent a four-core compute pool from serializing network waits. Valid
-overrides are 1–64 CPU workers and 1–128 I/O waiters. Set them before the first
-index operation because each process-wide pool is initialized once.
+The process has independent CPU, blocking-I/O, and physical-GET budgets.
+`BORSUK_CPU_THREADS` defaults to one fewer than the available CPUs, clamped to
+1–4, and caps compute-heavy build, decode, PQ scan, and exact-scoring work.
+`BORSUK_IO_THREADS` defaults to 88 process-wide 1 MiB-stack waiters for blocking
+object-store reads. `BORSUK_BACKING_GET_CONCURRENCY` defaults to 64 and is the
+actual process-wide backing-read ceiling; the I/O pool must be at least that
+large. I/O waiters do not increase the CPU scoring budget, create per-query
+pools, or bypass the shared search/read gates. Valid overrides are 1–64 CPU
+workers, 1–128 physical GETs, and `GET cap..=256` I/O waiters. Set them before
+the first index operation because each process-wide pool is initialized once.
 
 The cache is read-through and local to the process host. `CURRENT` is fetched
 from backing storage on every open. Cached active manifest, routing, and pivot
@@ -153,7 +160,9 @@ peak RSS, GETs/query, bytes/query, cache footprint, and build time. The measured
 layout and concurrency ablations are kept out of this API guide; see
 [research/configuration-ablation.md](research/configuration-ablation.md).
 
-Across users, the default cell-decode gate caps active payload decodes at 24.
+Across users, search admission defaults to eight active and sixteen waiting
+queries. Each query reads at most 32 leaves in one wave, each handle permits at
+most 48 physical leaf reads, and the process permits at most 64 backing GETs.
 Overlapping reads of the same immutable cell or graph are also single-flight:
 one caller fetches, decodes, and validates it; concurrent followers traverse the
 same read-only allocation; and it is released when those callers finish. Only
@@ -939,12 +948,13 @@ state and concurrency expected in production.
 | Lever | Effect | Tradeoff |
 |---|---|---|
 | Column-projected pq-scan / sq-scan (automatic when the candidate budget is below the segment length and the selected decoded working set is not already resident) | Decodes only the chosen candidates' vectors, so per-query decode memory tracks the candidate budget, not the segment size (about 3.3x lower peak RSS at 4096-vector segments). | **Less memory, more wall-time:** a second column-projected read fetches the candidate vectors, costing about 15% more per query. Results are identical to a full decode. Disable per process with `BORSUK_DISABLE_PROJECTED_SCORING=1`. |
-| `OpenOptions::max_concurrent_searches` (Rust) | Caps how many searches decode/score at once, so peak working memory tracks the permit count rather than the caller thread count. Admission is FIFO, preventing active callers from repeatedly reacquiring ahead of existing waiters. | **Less memory, more orderly queueing under load:** searches beyond the permit count still wait, but overload latency is bounded by queue position instead of scheduler starvation. |
+| `OpenOptions::{max_active_searches,max_waiting_searches}` | Bounds active and queued searches, so peak working memory tracks active permits and excess load fails explicitly. Admission is FIFO within the bounded queue. | **Less memory and bounded overload latency:** callers above both limits receive `overloaded`; applications can map that to HTTP 429. |
+| `OpenOptions::{leaf_read_width,max_inflight_leaf_reads}` | Separates one query's S3 fan-out from the handle-wide physical read ceiling. | **Controlled S3 overlap:** enough parallelism to hide latency without multiplying downloads and decode buffers by caller count. |
 | `OpenOptions::segment_cache_max_bytes` (Rust) | Shares one decoded `Arc<Segment>` across concurrent queries that touch the same hot segment. | **More memory, less wall-time for a genuinely resident hot set:** merely configuring an empty cache no longer disables projected pq/sq reads; an explicitly warmed complete working set uses decoded RAM. |
 | `max_segments`, `max_candidates_per_segment`, `routing_page_overfetch` | Smaller budgets read and decode fewer segments and candidates. | **Less memory and less I/O, potentially lower recall:** the result may become `degraded`. Compare against exact-oracle recall before tightening. |
 
 For a memory-constrained server holding many concurrent readers, start with a
-bounded `max_concurrent_searches` and size `max_segments` /
+bounded `max_active_searches` / `max_waiting_searches` and size `max_segments` /
 `max_candidates_per_segment` to the recall you need. PQ/SQ remains projected
 until the complete selected decoded working set is resident. For a
 latency-sensitive server with spare memory, explicitly warm a byte-budgeted hot
@@ -991,14 +1001,16 @@ grow. That is achieved with a stack of specific mechanisms, not one trick.
 
 - **Concurrency is globally bounded.** Peak working memory is a function of
   how many searches decode at once, not how many callers are connected.
-  `max_concurrent_searches` caps concurrent decode/score with a counting
-  semaphore. A second handle-wide gate caps active cell decodes at 24, so
-  admitted queries cannot multiply their requested widths without bound.
-  Uncapped admission and decode are research-only overload profiles.
+  `max_active_searches` caps concurrent query work and
+  `max_waiting_searches` bounds the FIFO queue. A second handle-wide gate caps
+  physical leaf reads, while `leaf_read_width` bounds each query wave, so
+  admitted queries cannot multiply S3 reads and retained buffers without bound.
 
-- **CPU work and I/O waiting are separate.** The four-worker CPU pool bounds
-  build, PQ scan, decode, and exact scoring. A single 24-worker small-stack I/O
-  pool overlaps blocking object-store reads across all indexes and callers.
+- **CPU work and I/O waiting are separate.** The adaptive CPU pool reserves one
+  core on small hosts (and caps BORSUK CPU workers at four) for the embedding
+  application. A separate bounded I/O pool overlaps blocking object-store reads
+  across all indexes and callers; the process-wide S3 GET cap is independently
+  configurable and cannot exceed the I/O capacity.
   The I/O pool only schedules work already admitted by the global gates, so it
   removes accidental network serialization without turning 24 waiters into 24
   scoring cores or 24 simultaneously retained cell buffers.
@@ -1625,7 +1637,7 @@ Lexical decode parallelism is automatic and property-based. Ingest persists
 each segment's maximum decoded BM25 and named-sparse Parquet block bytes. Open
 reserves half the effective `ram_budget` for non-lexical work and exposes the
 other half through one shared weighted byte gate. The per-query/per-leg wave
-size is derived from that capacity, `max_concurrent_searches`, and the maximum
+size is derived from that capacity, `max_active_searches`, and the maximum
 two simultaneous lexical legs. Sparse and BM25 runs decode into compact typed
 arrays; waves include conservative transient headroom and an unknown estimate
 runs alone. Exact block-max bounds stop low-scoring waves without changing

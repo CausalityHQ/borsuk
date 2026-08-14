@@ -122,7 +122,7 @@ use crate::{
         vector_bounds, vector_locality_key, vector_signature,
     },
     segment_cache::{
-        AdmissionGate, ByteAdmissionGate, DecodedObjectCache, DecodedSegmentCache,
+        AdmissionGate, AdmissionPermit, ByteAdmissionGate, DecodedObjectCache, DecodedSegmentCache,
         InFlightGraphReads, InFlightReads, InFlightSegmentReads, OwnedByteAdmissionPermit,
         RetainedBytePermit, RetainedBytePool, decoded_graph_bytes, decoded_segment_bytes,
     },
@@ -504,17 +504,14 @@ struct PendingGlobalLeafDirectoryShard {
 }
 
 const GLOBAL_LEAF_DIRECTORY_READ_WIDTH: usize = 8;
-// Query data reads are network-bound and share a process-wide 64-read gate.
-// Each query uses at most 32 concurrent reads so one request does not monopolize
-// the process: a page-64 head plan may take two bounded waves while other
-// searches and application traffic retain half the gate. Directory loading
-// stays narrower because it may retain decoded metadata; payload reads are
-// charged to transient admission and decoded/scored under the fixed CPU pool.
-const GLOBAL_LEAF_CODE_READ_WIDTH: usize = 32;
+// Query data reads are network-bound. Their per-query wave width and shared
+// per-handle in-flight cap are configured through OpenOptions; directory
+// loading stays narrower because it may retain decoded metadata.
 const GLOBAL_LEAF_QUERY_WAVE_PAGES: usize = 32;
 const GLOBAL_CELL_CARD_EXACT_BLOCK_MAX: usize = 16;
 const CELL_CARD_CACHEABLE_PLANE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS: usize = 16;
+const GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS: usize = 64;
 const GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 fn admitted_cell_card_code_plane_bytes(
@@ -546,7 +543,7 @@ fn cell_card_plane_promotion_ceiling(cache_enabled: bool) -> u64 {
 fn global_cell_card_head_request_budget(page_budget: usize) -> usize {
     page_budget.clamp(
         GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS,
-        DEFAULT_GLOBAL_PQ_RERANK_READS,
+        GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
     )
 }
 
@@ -619,7 +616,7 @@ fn global_cell_card_wave_admission_bytes(
         .saturating_add(exact_decoded)
         .max(1)
 }
-const _: () = assert!(GLOBAL_LEAF_QUERY_WAVE_PAGES <= DEFAULT_GLOBAL_PQ_RERANK_READS);
+const _: () = assert!(GLOBAL_LEAF_QUERY_WAVE_PAGES <= DEFAULT_MAX_INFLIGHT_LEAF_READS);
 const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 4;
 
 fn global_leaf_code_byte_ceiling(
@@ -768,21 +765,19 @@ pub fn recommended_segment_max_vectors(dimensions: usize) -> usize {
     )
 }
 
-/// Default process-local admission cap for concurrent searches.
+/// Default per-handle admission cap for active searches.
 ///
 /// Each admitted search may itself issue up to
 /// [`crate::DEFAULT_SEARCH_PREFETCH_DEPTH`] concurrent immutable-cell reads.
 /// Keeping the outer search count bounded prevents multiple callers from
-/// multiplying transient decode memory without limit. Research workloads can
-/// opt out explicitly with [`OpenOptions::max_concurrent_searches`] set to
-/// `None`.
-pub const DEFAULT_MAX_CONCURRENT_SEARCHES: usize = 4;
-/// Default process-local cap on cell payloads being decoded concurrently.
-///
-/// This is independent of whole-query admission and per-query prefetch width:
-/// multiple admitted queries share these permits instead of multiplying their
-/// individual cell fan-out into unbounded transient Arrow/Parquet memory.
-pub const DEFAULT_MAX_CONCURRENT_CELL_DECODES: usize = 24;
+/// multiplying transient decode memory without limit.
+pub const DEFAULT_MAX_ACTIVE_SEARCHES: usize = 8;
+/// Default bounded FIFO queue depth behind active searches.
+pub const DEFAULT_MAX_WAITING_SEARCHES: usize = 16;
+/// Default per-query immutable ANN range-read wave width.
+pub const DEFAULT_LEAF_READ_WIDTH: usize = 32;
+/// Default per-handle cap on immutable ANN range reads across all searches.
+pub const DEFAULT_MAX_INFLIGHT_LEAF_READS: usize = 48;
 /// Leave half the process RAM envelope available for routing, dense search,
 /// caches, result assembly, allocator slack, and the application embedding the
 /// library. Lexical transient decodes share the other half through a weighted
@@ -803,7 +798,6 @@ pub const DEFAULT_RAM_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 /// work split the remaining 384 MiB. The immutable partition also avoids
 /// racing capacity shrink against permits held by cloned readers.
 const COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR: u64 = 4;
-const DEFAULT_GLOBAL_PQ_RERANK_READS: usize = 64;
 const GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES: usize = 96 * 1024;
 const DEFAULT_SIDECAR_INDEX_CACHE_BYTES: u64 = 128 * 1024 * 1024;
 const DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES: u64 = 64 * 1024 * 1024;
@@ -905,17 +899,20 @@ pub struct OpenOptions {
     /// `false`.
     #[doc(hidden)]
     pub flat_logical_cell_routing: bool,
-    /// Optional cap on how many searches run their decode/score phase at once.
-    /// With `Some(n)`, additional concurrent searches wait for a permit, so
-    /// peak working memory scales with `n` rather than the caller thread count.
-    /// `None` leaves search concurrency unbounded.
-    pub max_concurrent_searches: Option<usize>,
-    /// Optional process-local cap on active cell payload decodes.
-    ///
-    /// Per-query prefetch width remains a latency knob, while this shared gate
-    /// bounds the decode working set across all admitted queries. `None` is for
-    /// an explicitly measured research ceiling only.
-    pub max_concurrent_cell_decodes: Option<usize>,
+    /// Maximum searches actively executing on this handle and all named
+    /// modality children. CPU work remains bounded separately by the process
+    /// query pool; this cap bounds per-query state and S3 fan-out.
+    pub max_active_searches: usize,
+    /// Maximum searches allowed to wait in the per-handle FIFO admission
+    /// queue. Further callers fail with [`BorsukError::Overloaded`] instead of
+    /// pinning an unbounded number of application worker threads.
+    pub max_waiting_searches: usize,
+    /// Maximum immutable ANN range reads launched in one query wave.
+    pub leaf_read_width: usize,
+    /// Maximum immutable ANN range reads in flight across this handle and all
+    /// named modality children. The lower of this and the process-wide backing
+    /// GET cap provides per-index fairness.
+    pub max_inflight_leaf_reads: usize,
 }
 
 impl Default for OpenOptions {
@@ -936,8 +933,10 @@ impl Default for OpenOptions {
             wal_tail_decode_max_bytes: DEFAULT_WAL_TAIL_DECODE_BYTES,
             preload: false,
             flat_logical_cell_routing: false,
-            max_concurrent_searches: Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
-            max_concurrent_cell_decodes: Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
+            max_active_searches: DEFAULT_MAX_ACTIVE_SEARCHES,
+            max_waiting_searches: DEFAULT_MAX_WAITING_SEARCHES,
+            leaf_read_width: DEFAULT_LEAF_READ_WIDTH,
+            max_inflight_leaf_reads: DEFAULT_MAX_INFLIGHT_LEAF_READS,
         }
     }
 }
@@ -957,6 +956,39 @@ pub struct WarmReport {
     pub coverage_complete: bool,
     /// Actual byte-accounted decoded segment and graph data still resident.
     pub bytes_resident: u64,
+}
+
+/// Point-in-time counters for one bounded flow-control gate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AdmissionStats {
+    /// Maximum simultaneously active work units.
+    pub capacity: usize,
+    /// Work units currently holding permits.
+    pub active: usize,
+    /// Work units currently queued for permits.
+    pub waiting: usize,
+    /// Work units admitted since this handle runtime was created.
+    pub admitted: u64,
+    /// Work units rejected because the bounded queue was full.
+    pub rejected: u64,
+    /// Aggregate time spent waiting for permits, in microseconds.
+    pub wait_micros: u64,
+    /// Number of admitted work units that had to wait.
+    pub wait_count: u64,
+    /// Highest simultaneously active count observed.
+    pub peak_active: usize,
+}
+
+/// Process-independent flow-control state shared by one collection handle and
+/// all of its named modality children.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FlowControlStats {
+    /// Whole-search admission counters.
+    pub searches: AdmissionStats,
+    /// Immutable ANN range-read admission counters.
+    pub leaf_reads: AdmissionStats,
+    /// Maximum immutable ANN reads launched in one query wave.
+    pub leaf_read_width: usize,
 }
 
 /// A BORSUK index handle.
@@ -1048,10 +1080,10 @@ pub struct BorsukIndex {
     resident_global_ann_pins: Option<ResidentGlobalAnnPins>,
     /// Compact term-range roots loaded before serving; postings remain paged.
     resident_lexical_roots: ResidentLexicalRoots,
-    admission: Option<Arc<AdmissionGate>>,
-    decode_admission: Option<Arc<AdmissionGate>>,
-    /// Global cap for exact sidecar range reads issued by resident global-PQ
-    /// reranks. Concurrent callers share this cap.
+    admission: Arc<AdmissionGate>,
+    leaf_read_width: usize,
+    /// Per-handle cap for immutable ANN range reads. Concurrent callers and
+    /// named modality children share this cap.
     global_pq_rerank_admission: Arc<AdmissionGate>,
     /// Same-cell reads shared only while they overlap. Unlike `segment_cache`,
     /// this never retains decoded cells after the active callers release them.
@@ -1251,8 +1283,8 @@ struct CollectionReadRuntime {
     transient_admission: Option<Arc<ByteAdmissionGate>>,
     lexical_admission: Option<Arc<ByteAdmissionGate>>,
     segment_cache: Arc<OnceLock<Arc<DecodedSegmentCache>>>,
-    admission: Option<Arc<AdmissionGate>>,
-    decode_admission: Option<Arc<AdmissionGate>>,
+    admission: Arc<AdmissionGate>,
+    leaf_read_width: usize,
     global_pq_rerank_admission: Arc<AdmissionGate>,
     cell_card_code_planes: Arc<DecodedObjectCache<Vec<u8>>>,
     prepared_cell_card_code_planes: Mutex<Option<PreparedCellCardCodePlanes>>,
@@ -3141,16 +3173,13 @@ impl CollectionReadRuntime {
             transient_admission,
             lexical_admission,
             segment_cache: segment_cache_cell,
-            admission: options
-                .max_concurrent_searches
-                .filter(|permits| *permits > 0)
-                .map(|permits| Arc::new(AdmissionGate::new(permits))),
-            decode_admission: options
-                .max_concurrent_cell_decodes
-                .filter(|permits| *permits > 0)
-                .map(|permits| Arc::new(AdmissionGate::new(permits))),
+            admission: Arc::new(AdmissionGate::new_bounded(
+                options.max_active_searches,
+                options.max_waiting_searches,
+            )),
+            leaf_read_width: options.leaf_read_width,
             global_pq_rerank_admission: Arc::new(AdmissionGate::new(
-                DEFAULT_GLOBAL_PQ_RERANK_READS,
+                options.max_inflight_leaf_reads,
             )),
             cell_card_code_planes: decoded_cache_with_pool(
                 retained_pool
@@ -3242,6 +3271,28 @@ fn first_duplicate_record_id<'a>(
 }
 
 impl BorsukIndex {
+    /// Return flow-control counters without reading storage or index payloads.
+    #[must_use]
+    pub fn flow_control_stats(&self) -> FlowControlStats {
+        fn public(snapshot: crate::segment_cache::AdmissionSnapshot) -> AdmissionStats {
+            AdmissionStats {
+                capacity: snapshot.capacity,
+                active: snapshot.active,
+                waiting: snapshot.waiting,
+                admitted: snapshot.admitted,
+                rejected: snapshot.rejected,
+                wait_micros: snapshot.wait_micros,
+                wait_count: snapshot.wait_count,
+                peak_active: snapshot.peak_active,
+            }
+        }
+        FlowControlStats {
+            searches: public(self.admission.snapshot()),
+            leaf_reads: public(self.global_pq_rerank_admission.snapshot()),
+            leaf_read_width: self.leaf_read_width,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn manifest_for_format_tests(&self) -> &Manifest {
         &self.manifest
@@ -3359,8 +3410,8 @@ impl BorsukIndex {
         self.read_runtime = Arc::clone(&runtime);
         self.lexical_admission = runtime.lexical_admission.clone();
         self.segment_cache = Arc::clone(&runtime.segment_cache);
-        self.admission = runtime.admission.clone();
-        self.decode_admission = runtime.decode_admission.clone();
+        self.admission = Arc::clone(&runtime.admission);
+        self.leaf_read_width = runtime.leaf_read_width;
         self.global_pq_rerank_admission = Arc::clone(&runtime.global_pq_rerank_admission);
         self.inflight_segment_reads = Arc::clone(&runtime.inflight_segment_reads);
         self.inflight_graph_reads = Arc::clone(&runtime.inflight_graph_reads);
@@ -4125,8 +4176,8 @@ impl BorsukIndex {
             )),
             resident_global_ann_pins: None,
             resident_lexical_roots: Arc::new(Mutex::new(None)),
-            admission: read_runtime.admission.clone(),
-            decode_admission: read_runtime.decode_admission.clone(),
+            admission: Arc::clone(&read_runtime.admission),
+            leaf_read_width: read_runtime.leaf_read_width,
             global_pq_rerank_admission: Arc::clone(&read_runtime.global_pq_rerank_admission),
             inflight_segment_reads: Arc::clone(&read_runtime.inflight_segment_reads),
             inflight_graph_reads: Arc::clone(&read_runtime.inflight_graph_reads),
@@ -4242,14 +4293,17 @@ impl BorsukIndex {
                 wal_tail_decode_max_bytes: DEFAULT_WAL_TAIL_DECODE_BYTES,
                 preload: false,
                 flat_logical_cell_routing: false,
-                max_concurrent_searches: Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
-                max_concurrent_cell_decodes: Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
+                max_active_searches: DEFAULT_MAX_ACTIVE_SEARCHES,
+                max_waiting_searches: DEFAULT_MAX_WAITING_SEARCHES,
+                leaf_read_width: DEFAULT_LEAF_READ_WIDTH,
+                max_inflight_leaf_reads: DEFAULT_MAX_INFLIGHT_LEAF_READS,
             },
         )
     }
 
     /// Open an existing index with cache and runtime budget options.
     pub fn open_with_options(uri: &str, options: OpenOptions) -> Result<Self> {
+        validate_open_options(&options)?;
         let storage = if let Some(cache_dir) = &options.cache_dir {
             Storage::from_uri_with_cache_and_max(
                 uri,
@@ -4274,6 +4328,7 @@ impl BorsukIndex {
         uri: &str,
         options: OpenOptions,
     ) -> Result<Self> {
+        validate_open_options(&options)?;
         // Test seam: qualification can explicitly disable retained caches while
         // sharing an instrumented ObjectStore.
         let storage = Storage::from_object_store(uri.to_string(), store)?;
@@ -4465,8 +4520,8 @@ impl BorsukIndex {
             )),
             resident_global_ann_pins: None,
             resident_lexical_roots: Arc::new(Mutex::new(None)),
-            admission: read_runtime.admission.clone(),
-            decode_admission: read_runtime.decode_admission.clone(),
+            admission: Arc::clone(&read_runtime.admission),
+            leaf_read_width: read_runtime.leaf_read_width,
             global_pq_rerank_admission: Arc::clone(&read_runtime.global_pq_rerank_admission),
             inflight_segment_reads: Arc::clone(&read_runtime.inflight_segment_reads),
             inflight_graph_reads: Arc::clone(&read_runtime.inflight_graph_reads),
@@ -10939,7 +10994,7 @@ impl BorsukIndex {
         k: usize,
     ) -> Result<Vec<SearchHit>> {
         Ok(self
-            .search_sparse_named_with_report(name, indices, values, k)?
+            .search_sparse_named_with_report(name, indices, values, k, true)?
             .hits)
     }
 
@@ -10949,12 +11004,15 @@ impl BorsukIndex {
         indices: Vec<u32>,
         values: Vec<f32>,
         k: usize,
+        acquire_admission: bool,
     ) -> Result<SearchReport> {
         // Sparse named retrieval is a complete search leg, including inside a
         // hybrid query. Share the same whole-search cap as dense and text:
         // weighted byte admission bounds live buffers, while this count also
         // prevents many caller threads from retaining allocator arenas.
-        let _admission = self.admission.as_ref().map(|gate| gate.acquire());
+        let _admission = acquire_admission
+            .then(|| acquire_search_admission(&self.admission))
+            .transpose()?;
         let started = Instant::now();
         let spec = self
             .manifest
@@ -16934,6 +16992,7 @@ impl BorsukIndex {
             latency_limited = for_each_bounded_io_wave_until(
                 &pending,
                 GLOBAL_LEAF_DIRECTORY_READ_WIDTH,
+                None,
                 || resident_global_latency_expired(options, started),
                 |request| {
                     let run = resident_runs.get(request.run_ordinal).ok_or_else(|| {
@@ -17115,7 +17174,7 @@ impl BorsukIndex {
         let dimensions = self.manifest.config.dimensions;
         let reads = bounded_io_map_with_gate(
             &groups,
-            groups.len(),
+            global_leaf_exact_read_width(groups.len(), self.leaf_read_width),
             Some(&self.global_pq_rerank_admission),
             |group| {
                 let stored = self
@@ -17262,7 +17321,8 @@ impl BorsukIndex {
         let mut pages_read = 0_usize;
         let latency_limited = for_each_bounded_io_wave_until(
             groups,
-            GLOBAL_LEAF_CODE_READ_WIDTH,
+            self.leaf_read_width,
+            Some(&self.global_pq_rerank_admission),
             || resident_global_latency_expired(options, started),
             |group| {
                 let stored = self
@@ -17867,7 +17927,7 @@ impl BorsukIndex {
         let code_requests_before = self.storage.request_counts();
         let head_reads = bounded_io_map_with_gate(
             head_plan.reads(),
-            GLOBAL_LEAF_CODE_READ_WIDTH,
+            self.leaf_read_width,
             Some(&self.global_pq_rerank_admission),
             |read| {
                 self.fetch_cell_card_head_read(
@@ -18041,7 +18101,7 @@ impl BorsukIndex {
         let exact_requests_before = self.storage.request_counts();
         let exact_reads = bounded_io_map_with_gate(
             exact_plan.reads(),
-            GLOBAL_LEAF_CODE_READ_WIDTH,
+            self.leaf_read_width,
             Some(&self.global_pq_rerank_admission),
             |read| {
                 self.storage
@@ -20840,6 +20900,7 @@ impl BorsukIndex {
                         options.clone(),
                         false,
                         Some(&mut routing_page_cache),
+                        true,
                     )
                     .map(|execution| {
                         let mut report = execution.report;
@@ -20958,6 +21019,10 @@ impl BorsukIndex {
                 "hybrid query must set at least one vector or text query".to_string(),
             ));
         }
+        // One hybrid request owns one whole-search permit. Its parallel legs
+        // share that admission instead of competing with one another and
+        // self-rejecting when the external waiting queue is disabled.
+        let _admission = acquire_search_admission(&self.admission)?;
 
         let candidate_depth = options.candidate_depth.max(options.k);
         enum HybridLeg<'a> {
@@ -20997,6 +21062,7 @@ impl BorsukIndex {
                                 .with_vector_name(*name),
                             false,
                             None,
+                            false,
                         )?
                         .report,
                     )),
@@ -21007,11 +21073,12 @@ impl BorsukIndex {
                             indices.to_vec(),
                             values.to_vec(),
                             candidate_depth,
+                            false,
                         )?,
                     )),
                     HybridLeg::Text(text) => Ok((
                         HYBRID_TEXT_MODALITY.to_string(),
-                        self.search_text_scoped(text, candidate_depth)?,
+                        self.search_text_scoped(text, candidate_depth, false)?,
                     )),
                 })
                 .collect::<Result<Vec<_>>>()
@@ -21212,7 +21279,7 @@ impl BorsukIndex {
     /// Search text by BM25 over hierarchical Parquet posting blocks.
     pub fn search_text(&self, text: &str, k: usize) -> Result<SearchReport> {
         let scoped = self.isolated_search_handle();
-        let mut report = scoped.search_text_scoped(text, k)?;
+        let mut report = scoped.search_text_scoped(text, k, true)?;
         let cache = scoped.storage.cache_read_counts();
         report.disk_cache_bytes_read = cache.disk_bytes;
         report.backing_bytes_read = cache.backing_bytes;
@@ -21223,7 +21290,12 @@ impl BorsukIndex {
         Ok(report)
     }
 
-    fn search_text_scoped(&self, text: &str, k: usize) -> Result<SearchReport> {
+    fn search_text_scoped(
+        &self,
+        text: &str,
+        k: usize,
+        acquire_admission: bool,
+    ) -> Result<SearchReport> {
         if k == 0 {
             return Err(BorsukError::InvalidSearchOptions(
                 "k must be greater than zero".to_string(),
@@ -21236,7 +21308,9 @@ impl BorsukIndex {
             ));
         }
 
-        let _admission = self.admission.as_ref().map(|gate| gate.acquire());
+        let _admission = acquire_admission
+            .then(|| acquire_search_admission(&self.admission))
+            .transpose()?;
         let started = Instant::now();
         let query_terms = term_frequencies(self.tokenizer.as_ref(), text)
             .keys()
@@ -21636,8 +21710,13 @@ impl BorsukIndex {
         include_vectors: bool,
     ) -> Result<SearchExecution> {
         let scoped = self.isolated_search_handle();
-        let mut execution =
-            scoped.search_execution_with_routing_cache(query, options, include_vectors, None)?;
+        let mut execution = scoped.search_execution_with_routing_cache(
+            query,
+            options,
+            include_vectors,
+            None,
+            true,
+        )?;
         let cache = scoped.storage.cache_read_counts();
         execution.report.disk_cache_bytes_read = cache.disk_bytes;
         execution.report.backing_bytes_read = cache.backing_bytes;
@@ -21669,6 +21748,7 @@ impl BorsukIndex {
         mut options: SearchOptions,
         include_vectors: bool,
         routing_page_cache: Option<&mut RoutingPageReadCache>,
+        acquire_admission: bool,
     ) -> Result<SearchExecution> {
         if !options.vector_name.is_empty() {
             let name = std::mem::take(&mut options.vector_name);
@@ -21682,6 +21762,7 @@ impl BorsukIndex {
                 options,
                 include_vectors,
                 routing_page_cache,
+                acquire_admission,
             );
         }
         let span = observability::search_span(query.len(), &options, self.manifest.version);
@@ -21696,7 +21777,9 @@ impl BorsukIndex {
         validate_search_options(&options)?;
         self.resolve_cache_execution(&mut options)?;
         self.validate_leaf_capability(options.mode.leaf_mode())?;
-        let _admission = self.admission.as_ref().map(|gate| gate.acquire());
+        let _admission = acquire_admission
+            .then(|| acquire_search_admission(&self.admission))
+            .transpose()?;
 
         let requests_before = self.storage.request_counts();
         let started = Instant::now();
@@ -22150,7 +22233,7 @@ impl BorsukIndex {
         let mut parallel_projected_reads = bounded_io_map_with_gate(
             &candidates[..parallel_projected_budget],
             options.prefetch_depth,
-            self.decode_admission.as_deref(),
+            None,
             |(summary, _, _, _)| {
                 self.read_projected_segment(summary, query, &candidate_mode, options.k, false)
             },
@@ -22173,7 +22256,7 @@ impl BorsukIndex {
         let mut parallel_full_reads = bounded_io_map_with_gate(
             &candidates[..parallel_full_budget],
             options.prefetch_depth,
-            self.decode_admission.as_deref(),
+            None,
             |(summary, _, _, _)| self.read_segment(summary),
         )
         .into_iter();
@@ -25646,6 +25729,10 @@ impl BorsukIndex {
     }
 }
 
+fn global_leaf_exact_read_width(group_count: usize, configured_width: usize) -> usize {
+    group_count.min(configured_width.max(1))
+}
+
 /// Split locality-ordered records into output segments. Without a radius cap this
 /// is a plain count chunker. With a radius cap it is spread-aware: it closes a
 /// segment as soon as the next record would sit farther than `max_radius` from the
@@ -27623,6 +27710,41 @@ fn validate_compaction_options(options: &CompactionOptions) -> Result<()> {
     Ok(())
 }
 
+fn acquire_search_admission(gate: &AdmissionGate) -> Result<AdmissionPermit<'_>> {
+    gate.acquire_bounded().ok_or_else(|| {
+        let snapshot = gate.snapshot();
+        BorsukError::Overloaded {
+            active: snapshot.active,
+            waiting: snapshot.waiting,
+        }
+    })
+}
+
+fn validate_open_options(options: &OpenOptions) -> Result<()> {
+    for (field, value) in [
+        ("max_active_searches", options.max_active_searches),
+        ("leaf_read_width", options.leaf_read_width),
+        ("max_inflight_leaf_reads", options.max_inflight_leaf_reads),
+    ] {
+        if value == 0 {
+            return Err(BorsukError::InvalidOpenOptions(format!(
+                "{field} must be greater than zero"
+            )));
+        }
+    }
+    if options.leaf_read_width > 1_024 {
+        return Err(BorsukError::InvalidOpenOptions(
+            "leaf_read_width must be at most 1024".to_string(),
+        ));
+    }
+    if options.max_inflight_leaf_reads > 1_024 {
+        return Err(BorsukError::InvalidOpenOptions(
+            "max_inflight_leaf_reads must be at most 1024".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_search_options(options: &SearchOptions) -> Result<()> {
     if options.k == 0 {
         return Err(BorsukError::InvalidSearchOptions(
@@ -28186,6 +28308,7 @@ where
 fn for_each_bounded_io_wave_until<T, U, E, Expired, Map, Consume>(
     values: &[T],
     width: usize,
+    gate: Option<&AdmissionGate>,
     mut expired: Expired,
     map: Map,
     mut consume: Consume,
@@ -28202,7 +28325,7 @@ where
         if expired() {
             return Ok(true);
         }
-        let mapped = crate::parallel::install_io(|| wave.par_iter().map(&map).collect::<Vec<_>>());
+        let mapped = bounded_io_map_with_gate(wave, width, gate, &map);
         for (input, result) in wave.iter().zip(mapped) {
             consume(input, result?)?;
         }
@@ -31456,14 +31579,15 @@ mod tests {
             &index.late_interaction_sidecar_indexes,
             &child.late_interaction_sidecar_indexes
         ));
+        assert!(Arc::ptr_eq(&index.admission, &child.admission));
         assert!(Arc::ptr_eq(
-            index.admission.as_ref().unwrap(),
-            child.admission.as_ref().unwrap()
+            &index.global_pq_rerank_admission,
+            &child.global_pq_rerank_admission
         ));
-        assert!(Arc::ptr_eq(
-            index.decode_admission.as_ref().unwrap(),
-            child.decode_admission.as_ref().unwrap()
-        ));
+        let flow = index.flow_control_stats();
+        assert_eq!(flow.searches.capacity, DEFAULT_MAX_ACTIVE_SEARCHES);
+        assert_eq!(flow.leaf_reads.capacity, DEFAULT_MAX_INFLIGHT_LEAF_READS);
+        assert_eq!(flow.leaf_read_width, DEFAULT_LEAF_READ_WIDTH);
         index
             .add(vec![
                 VectorRecord::new("a", vec![0.0, 0.0])
@@ -35665,10 +35789,21 @@ mod tests {
             Some(512 * 1024 * 1024)
         );
         assert_eq!(
-            OpenOptions::default().max_concurrent_searches,
-            Some(DEFAULT_MAX_CONCURRENT_SEARCHES)
+            OpenOptions::default().max_active_searches,
+            DEFAULT_MAX_ACTIVE_SEARCHES
         );
-        assert_eq!(OpenOptions::default().max_concurrent_cell_decodes, Some(24));
+        assert_eq!(
+            OpenOptions::default().max_waiting_searches,
+            DEFAULT_MAX_WAITING_SEARCHES
+        );
+        assert_eq!(
+            OpenOptions::default().leaf_read_width,
+            DEFAULT_LEAF_READ_WIDTH
+        );
+        assert_eq!(
+            OpenOptions::default().max_inflight_leaf_reads,
+            DEFAULT_MAX_INFLIGHT_LEAF_READS
+        );
         assert_eq!(
             SearchOptions::default().prefetch_depth,
             16,
@@ -35681,6 +35816,56 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn open_options_reject_zero_concurrency_caps() {
+        for (field, options) in [
+            (
+                "max_active_searches",
+                OpenOptions {
+                    max_active_searches: 0,
+                    ..OpenOptions::default()
+                },
+            ),
+            (
+                "leaf_read_width",
+                OpenOptions {
+                    leaf_read_width: 0,
+                    ..OpenOptions::default()
+                },
+            ),
+            (
+                "max_inflight_leaf_reads",
+                OpenOptions {
+                    max_inflight_leaf_reads: 0,
+                    ..OpenOptions::default()
+                },
+            ),
+        ] {
+            let error = validate_open_options(&options).unwrap_err();
+            assert!(matches!(error, BorsukError::InvalidOpenOptions(_)));
+            assert!(error.to_string().contains(field));
+        }
+        validate_open_options(&OpenOptions::default()).unwrap();
+    }
+
+    #[test]
+    fn bounded_search_admission_returns_typed_overload() {
+        let gate = AdmissionGate::new_bounded(1, 0);
+        let _held = acquire_search_admission(&gate).unwrap();
+        let error = match acquire_search_admission(&gate) {
+            Ok(_) => panic!("full bounded admission must reject"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            BorsukError::Overloaded {
+                active: 1,
+                waiting: 0
+            }
+        ));
+        assert_eq!(error.code(), "overloaded");
     }
 
     #[test]
@@ -38478,7 +38663,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_parallel_map_preserves_order_and_uses_multiple_workers() {
+    fn bounded_parallel_map_preserves_order_and_respects_cpu_workers() {
         let active = std::sync::atomic::AtomicUsize::new(0);
         let peak = std::sync::atomic::AtomicUsize::new(0);
         let values = (0..8).collect::<Vec<_>>();
@@ -38492,8 +38677,12 @@ mod tests {
         });
 
         assert_eq!(mapped, vec![0, 2, 4, 6, 8, 10, 12, 14]);
-        assert!(peak.load(std::sync::atomic::Ordering::SeqCst) > 1);
-        assert!(peak.load(std::sync::atomic::Ordering::SeqCst) <= 4);
+        let peak = peak.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(peak >= 1);
+        assert!(peak <= 4.min(crate::configured_cpu_threads()));
+        if crate::configured_cpu_threads() > 1 {
+            assert!(peak > 1);
+        }
     }
 
     #[test]
@@ -38577,6 +38766,7 @@ mod tests {
         let deadline_hit = for_each_bounded_io_wave_until(
             &values,
             1,
+            None,
             || started.elapsed() >= Duration::from_millis(15),
             |value| {
                 calls.fetch_add(1, Ordering::SeqCst);
@@ -38598,7 +38788,14 @@ mod tests {
     #[test]
     fn global_leaf_page_32_recall_budget_has_one_bounded_network_wave() {
         assert_eq!(GLOBAL_LEAF_QUERY_WAVE_PAGES, 32);
-        assert_eq!(GLOBAL_LEAF_CODE_READ_WIDTH, 32);
+        assert_eq!(OpenOptions::default().leaf_read_width, 32);
+    }
+
+    #[test]
+    fn global_exact_block_groups_obey_the_configured_leaf_read_width() {
+        assert_eq!(global_leaf_exact_read_width(7, 1), 1);
+        assert_eq!(global_leaf_exact_read_width(7, 4), 4);
+        assert_eq!(global_leaf_exact_read_width(3, 8), 3);
     }
 
     #[test]
@@ -38657,7 +38854,7 @@ mod tests {
     }
 
     #[test]
-    fn global_decode_gate_bounds_parallel_maps_across_queries() {
+    fn admission_gate_bounds_parallel_maps_across_queries() {
         let gate = Arc::new(AdmissionGate::new(3));
         let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -38687,7 +38884,10 @@ mod tests {
         for handle in handles {
             assert_eq!(handle.join().unwrap(), vec![0, 2, 4, 6, 8, 10, 12, 14]);
         }
-        assert_eq!(peak.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(
+            peak.load(std::sync::atomic::Ordering::SeqCst),
+            3.min(crate::configured_cpu_threads())
+        );
     }
 
     #[test]

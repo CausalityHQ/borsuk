@@ -525,13 +525,15 @@ console.log(
                   </div>
                   <pre data-code-panel="rust"><code data-ladder="production:rust">// Open for serving. Paged routing avoids retaining every leaf summary. A
 // shared decoded-segment cache trades a fixed RAM budget for fewer reads of
-// an explicitly hot set; handle-wide query/decode caps bound working memory.
+// an explicitly hot set; query and leaf-read caps bound working memory.
 let index = BorsukIndex::open_with_options(
     &amp;uri,
     OpenOptions {
         segment_cache_max_bytes: Some(256 * 1024 * 1024),
-        max_concurrent_searches: Some(4),
-        max_concurrent_cell_decodes: Some(24),
+        max_active_searches: 4,
+        max_waiting_searches: 16,
+        leaf_read_width: 32,
+        max_inflight_leaf_reads: 48,
         ..OpenOptions::default()
     },
 )?;
@@ -860,7 +862,7 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
         </article>
         <article>
           <h2>Runtime Parameters</h2>
-          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, <code>k</code>, search mode, and leaf mode define how a reader behaves. <code>BORSUK_CPU_THREADS</code> optionally overrides the process-wide four-worker build/query/storage budget; the object-store runtime does not silently expand to every host CPU. The v8 pq-scan path keeps only its global and coarse codebooks plus chunk metadata resident, pages product-code chunks for selected global coarse cells, and exact-reranks from lossless row sidecars. Approximate tuning is the coarse-cell budget plus the global rerank budget. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Per-query cache hit/miss counters make that behavior measurable. Compaction is bounded by default; <code>target_segment_max_vectors</code> / <code>targetSegmentMaxVectors</code> controls compacted leaf size, while <code>rebuild</code> is reserved for explicit full source-level rewrites.</p>
+          <p><code>cache_dir</code>, open-time <code>ram_budget</code>, <code>k</code>, search mode, and leaf mode define how a reader behaves. CPU workers default to one fewer than the available CPUs, clamped to 1&ndash;4; <code>BORSUK_CPU_THREADS</code> overrides that process-wide compute budget. Blocking I/O waiters default to 88, while <code>BORSUK_BACKING_GET_CONCURRENCY=64</code> is the separate process-wide physical-read ceiling. The object-store runtime therefore overlaps network waits without allowing decode and SIMD work to consume every host CPU. The v8 pq-scan path keeps only its global and coarse codebooks plus chunk metadata resident, pages product-code chunks for selected global coarse cells, and exact-reranks from lossless row sidecars. Approximate tuning is the coarse-cell budget plus the global rerank budget. Cache opens read fresh <code>CURRENT</code>, refetch stale active metadata cache files by checksum, and repair corrupt cached segment, graph, or routing page payloads from backing storage. Per-query cache hit/miss counters make that behavior measurable. Compaction is bounded by default; <code>target_segment_max_vectors</code> / <code>targetSegmentMaxVectors</code> controls compacted leaf size, while <code>rebuild</code> is reserved for explicit full source-level rewrites.</p>
         </article>
         <article>
           <h2>RAM Budget</h2>
@@ -868,7 +870,7 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
         </article>
         <article>
           <h2>Memory-Latency Levers</h2>
-          <p>Open-time controls shape memory and latency under load. <code>max_concurrent_searches</code> admits at most <strong>4</strong> searches, <code>prefetch_depth</code> requests at most <strong>16</strong> reads per query, and <code>max_concurrent_cell_decodes</code> permits at most <strong>24</strong> active cell reads/decodes across users. Product-code chunks are consumed in waves of at most <strong>32</strong>; fixed-width global exact pages need no row index, while the physical sidecar indexes used for late top-k IDs share a <strong>128&nbsp;MiB</strong> LRU. Disabling admission caps is an explicitly labelled research-ceiling profile, never the production default.</p>
+          <p>Open-time controls shape memory and latency under load. <code>max_active_searches</code> and <code>max_waiting_searches</code> bound work and queueing; <code>leaf_read_width</code> limits one query wave, while <code>max_inflight_leaf_reads</code> caps physical reads across the handle. Defaults are <strong>8</strong>, <strong>16</strong>, <strong>32</strong>, and <strong>48</strong>. Excess work returns an explicit overload error instead of occupying an unbounded blocking queue.</p>
         </article>
       </section>
 
@@ -883,10 +885,10 @@ await ns.query({ rankBy: ["vector", "ANN", emb], topK: 10,
           <li><strong>Fixed product-code waves.</strong> At most 32 selected chunks are retained for one scan wave. Its top candidates are merged into a bounded global heap and all chunk payloads are released before the next wave. This produces the same PQ top-k as retaining every selected chunk.</li>
           <li><strong>Index-free global exact pages.</strong> Cell-aligned lossless vectors are fixed-width, so row ranges are computed arithmetically with no offset table, dictionary, or decompression state. The 128&nbsp;MiB LRU is reserved for physical record-sidecar indexes used by late top-k ID reads and fallback paths.</li>
           <li><strong>Bloom fast-paths avoid fetches.</strong> Resident id, vector-signature, and tombstone blooms answer &ldquo;not present / not deleted&rdquo; with zero object-store I/O, so the common case pays nothing.</li>
-          <li><strong>Concurrency doesn't multiply memory.</strong> <code>max_concurrent_searches</code> caps admitted queries and <code>max_concurrent_cell_decodes</code> independently caps active cells across those queries, so users &times; prefetch width cannot become the memory limit.</li>
+          <li><strong>Concurrency doesn't multiply memory.</strong> Active and waiting query caps bound admission; leaf-wave and in-flight read caps separately bound S3 fan-out and retained buffers.</li>
           <li><strong>Overlapping cell reads are single-flight.</strong> Concurrent users selecting the same immutable checksum share one active fetch/decode. The allocation is released afterward, so this does not silently create an unbounded memory cache.</li>
           <li><strong>Shared decoded-segment cache, on demand.</strong> <code>segment_cache_max_bytes</code> lets concurrent queries share one decoded <code>Arc&lt;Segment&gt;</code>, so peak memory tracks a fixed byte budget rather than the reader count.</li>
-          <li><strong>Bounded prefetch &amp; content-addressed reuse.</strong> <code>prefetch_depth</code> defaults to 16 and caps one query's in-flight reads under the shared 24-read gate, while compaction reuses unchanged routing pages by checksum to bound write amplification and transient memory.</li>
+          <li><strong>Bounded prefetch &amp; content-addressed reuse.</strong> Query waves default to 32 leaf reads under a shared 48-read handle gate, while compaction reuses unchanged routing pages by checksum to bound write amplification and transient memory.</li>
           <li><strong>Disk-backed global partitioning.</strong> Finalization externally partitions PQ-code/location/lossless-vector rows under <code>BORSUK_BUILD_SCRATCH_DIR</code> (default <code>.borsuk-scratch</code> in the working directory). Scratch may scale with the corpus, while build RAM remains bounded by training, one segment, a 32&nbsp;MiB code chunk, and a 16&nbsp;MiB exact page.</li>
         </ul>
         <p>These mechanisms are observable: <code>SearchReport</code> exposes <code>bytes_read</code>, routing <code>resident_bytes_estimate</code>, cache hits/misses, records considered vs scored, and the <code>requests</code> breakdown. Benchmark resource traces separately record total process RSS, CPU, disk/cache use, and S3 I/O because routing metadata alone is not a complete memory measurement.</p>

@@ -47,6 +47,10 @@ pub struct OpenOptionsJs {
     pub resident_routing: Option<bool>,
     pub cache_max_bytes: Option<String>,
     pub preload: Option<bool>,
+    pub max_active_searches: Option<u32>,
+    pub max_waiting_searches: Option<u32>,
+    pub leaf_read_width: Option<u32>,
+    pub max_inflight_leaf_reads: Option<u32>,
 }
 
 #[napi(object)]
@@ -397,7 +401,13 @@ pub struct JsIndex {
 impl JsIndex {
     #[napi(constructor)]
     pub fn new(uri: String) -> Result<Self> {
-        open(uri, None, None, true, None, false)
+        open(
+            uri,
+            OpenOptionsJs {
+                resident_routing: Some(true),
+                ..OpenOptionsJs::default()
+            },
+        )
     }
 
     #[napi]
@@ -1559,32 +1569,19 @@ fn named_vector_specs(
 
 #[napi(js_name = "open")]
 pub async fn open_index(uri: String, options: Option<OpenOptionsJs>) -> Result<JsIndex> {
-    let options = options.unwrap_or_default();
-    open(
-        uri,
-        options.cache_dir,
-        options.ram_budget,
-        options.resident_routing.unwrap_or(false),
-        options.cache_max_bytes,
-        options.preload.unwrap_or(false),
-    )
+    open(uri, options.unwrap_or_default())
 }
 
-fn open(
-    uri: String,
-    cache_dir: Option<String>,
-    ram_budget: Option<String>,
-    resident_routing: bool,
-    cache_max_bytes: Option<String>,
-    preload: bool,
-) -> Result<JsIndex> {
-    let ram_budget_bytes = ram_budget
+fn open(uri: String, options: OpenOptionsJs) -> Result<JsIndex> {
+    let ram_budget_bytes = options
+        .ram_budget
         .as_deref()
         .map(borsuk::parse_ram_budget)
         .transpose()
         .map_err(to_js_error)?
         .or(Some(borsuk::DEFAULT_RAM_BUDGET_BYTES));
-    let cache_max_bytes = cache_max_bytes
+    let cache_max_bytes = options
+        .cache_max_bytes
         .as_deref()
         .map(|value| borsuk::parse_byte_size(value, "cache_max_bytes"))
         .transpose()
@@ -1592,11 +1589,25 @@ fn open(
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
-            cache_dir: cache_dir.map(PathBuf::from),
+            cache_dir: options.cache_dir.map(PathBuf::from),
             cache_max_bytes,
             ram_budget_bytes,
-            resident_routing,
-            preload,
+            resident_routing: options.resident_routing.unwrap_or(false),
+            preload: options.preload.unwrap_or(false),
+            max_active_searches: options
+                .max_active_searches
+                .map_or(borsuk::DEFAULT_MAX_ACTIVE_SEARCHES, |value| value as usize),
+            max_waiting_searches: options
+                .max_waiting_searches
+                .map_or(borsuk::DEFAULT_MAX_WAITING_SEARCHES, |value| value as usize),
+            leaf_read_width: options
+                .leaf_read_width
+                .map_or(borsuk::DEFAULT_LEAF_READ_WIDTH, |value| value as usize),
+            max_inflight_leaf_reads: options
+                .max_inflight_leaf_reads
+                .map_or(borsuk::DEFAULT_MAX_INFLIGHT_LEAF_READS, |value| {
+                    value as usize
+                }),
             ..OpenOptions::default()
         },
     )

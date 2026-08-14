@@ -531,14 +531,16 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
             )?,
             preload: false,
             flat_logical_cell_routing: false,
-            max_concurrent_searches: Some(env_usize(
-                "BORSUK_HYBRID_MAX_CONCURRENT_SEARCHES",
-                borsuk::DEFAULT_MAX_CONCURRENT_SEARCHES,
-            )?),
-            max_concurrent_cell_decodes: Some(env_usize(
-                "BORSUK_HYBRID_MAX_CONCURRENT_CELL_DECODES",
-                borsuk::DEFAULT_MAX_CONCURRENT_CELL_DECODES,
-            )?),
+            max_active_searches: env_usize(
+                "BORSUK_HYBRID_MAX_ACTIVE_SEARCHES",
+                borsuk::DEFAULT_MAX_ACTIVE_SEARCHES,
+            )?,
+            max_waiting_searches: borsuk::DEFAULT_MAX_WAITING_SEARCHES,
+            leaf_read_width: borsuk::DEFAULT_LEAF_READ_WIDTH,
+            max_inflight_leaf_reads: env_usize(
+                "BORSUK_HYBRID_MAX_INFLIGHT_LEAF_READS",
+                borsuk::DEFAULT_MAX_INFLIGHT_LEAF_READS,
+            )?,
         },
     )?;
     let open_ms = elapsed_ms(open_started);

@@ -93,8 +93,8 @@ struct RuntimeConfig {
     cache_coverage_percent: usize,
     query_seed: u64,
     client_concurrency: usize,
-    max_concurrent_searches: usize,
-    max_concurrent_cell_decodes: usize,
+    max_active_searches: usize,
+    max_inflight_leaf_reads: usize,
     ram_budget_bytes: u64,
 }
 
@@ -259,9 +259,8 @@ fn runtime_config() -> BenchResult<RuntimeConfig> {
             .unwrap_or_else(|_| "0".to_string())
             .parse()?,
         client_concurrency: required("BORSUK_MARKET_CLIENT_CONCURRENCY")?.parse()?,
-        max_concurrent_searches: required("BORSUK_MARKET_MAX_CONCURRENT_SEARCHES")?.parse()?,
-        max_concurrent_cell_decodes: required("BORSUK_MARKET_MAX_CONCURRENT_CELL_DECODES")?
-            .parse()?,
+        max_active_searches: required("BORSUK_MARKET_MAX_ACTIVE_SEARCHES")?.parse()?,
+        max_inflight_leaf_reads: required("BORSUK_MARKET_MAX_INFLIGHT_LEAF_READS")?.parse()?,
         ram_budget_bytes: required("BORSUK_MARKET_RAM_BUDGET_BYTES")?.parse()?,
     })
 }
@@ -436,8 +435,8 @@ fn filter_query(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> Benc
         OpenOptions {
             cache_dir: Some(runtime.cache_dir.clone()),
             ram_budget_bytes: Some(runtime.ram_budget_bytes),
-            max_concurrent_searches: Some(runtime.max_concurrent_searches),
-            max_concurrent_cell_decodes: Some(runtime.max_concurrent_cell_decodes),
+            max_active_searches: runtime.max_active_searches,
+            max_inflight_leaf_reads: runtime.max_inflight_leaf_reads,
             ..OpenOptions::default()
         },
     )?);
@@ -840,8 +839,8 @@ fn open_namespace_indexes(
                             .join(format!("namespace-{namespace:04}")),
                     ),
                     ram_budget_bytes: Some(runtime.ram_budget_bytes),
-                    max_concurrent_searches: Some(runtime.max_concurrent_searches),
-                    max_concurrent_cell_decodes: Some(runtime.max_concurrent_cell_decodes),
+                    max_active_searches: runtime.max_active_searches,
+                    max_inflight_leaf_reads: runtime.max_inflight_leaf_reads,
                     ..OpenOptions::default()
                 },
             )
@@ -1226,8 +1225,8 @@ fn late_query(runtime: &RuntimeConfig, descriptor: &DatasetDescriptor) -> BenchR
             OpenOptions {
                 cache_dir: Some(runtime.cache_dir.join(format!("frontier-{frontier:06}"))),
                 ram_budget_bytes: Some(runtime.ram_budget_bytes),
-                max_concurrent_searches: Some(runtime.max_concurrent_searches),
-                max_concurrent_cell_decodes: Some(runtime.max_concurrent_cell_decodes),
+                max_active_searches: runtime.max_active_searches,
+                max_inflight_leaf_reads: runtime.max_inflight_leaf_reads,
                 segment_cache_max_bytes: memory_preloaded.then_some(runtime.ram_budget_bytes),
                 preload: memory_preloaded,
                 ..OpenOptions::default()

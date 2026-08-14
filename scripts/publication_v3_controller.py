@@ -483,7 +483,7 @@ def run_execution_job(
             if "complete" in markers:
                 value = aws.read_receipt(job)
                 required = {
-                    "schema_version": 1,
+                    "schema_version": 2 if job.role == "runtime" else 1,
                     "status": "complete",
                     "role": job.role,
                     "attempt": job.attempt,
@@ -617,7 +617,13 @@ def prepare_qualification_execution(
         "concurrency" if operation == "read-concurrency-sift" else "recall"
     )
     runtime_client = normalized["environment_contract"]["runtime_clients"]["borsuk"]
-    max_concurrent_searches = int(runtime_client["vcpus"])
+    max_active_searches = int(runtime_client["vcpus"])
+    max_waiting_searches = 16
+    leaf_read_width = 32
+    max_inflight_leaf_reads = 48
+    cpu_threads = max(1, min(max_active_searches - 1, 4))
+    io_threads = 88
+    s3_get_concurrency = 64
     ram_budget_bytes = int(runtime_client["resident_limit_mib"]) * 1024 * 1024
     job = (
         ExecutionJob.build(cell, attempt=attempt)
@@ -672,7 +678,13 @@ def prepare_qualification_execution(
             purchase_option=purchase_option,
             runtime_profile=runtime_profile,
             arm_index=arm_index,
-            max_concurrent_searches=max_concurrent_searches,
+            max_active_searches=max_active_searches,
+            max_waiting_searches=max_waiting_searches,
+            leaf_read_width=leaf_read_width,
+            max_inflight_leaf_reads=max_inflight_leaf_reads,
+            cpu_threads=cpu_threads,
+            io_threads=io_threads,
+            s3_get_concurrency=s3_get_concurrency,
             ram_budget_bytes=ram_budget_bytes,
         )
         maximum = int(normalized["budget_contract"]["max_cell_seconds"])
@@ -680,7 +692,13 @@ def prepare_qualification_execution(
         expected["binary_sha256"] = authority["binary_sha256"]
         expected["runtime_profile"] = runtime_profile
         expected["arm_index"] = arm_index
-        expected["max_concurrent_searches"] = max_concurrent_searches
+        expected["max_active_searches"] = max_active_searches
+        expected["max_waiting_searches"] = max_waiting_searches
+        expected["leaf_read_width"] = leaf_read_width
+        expected["max_inflight_leaf_reads"] = max_inflight_leaf_reads
+        expected["cpu_threads"] = cpu_threads
+        expected["io_threads"] = io_threads
+        expected["s3_get_concurrency"] = s3_get_concurrency
         expected["ram_budget_bytes"] = ram_budget_bytes
     request = build_launch_request(
         normalized,

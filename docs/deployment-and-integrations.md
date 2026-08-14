@@ -11,8 +11,9 @@ reads, and exact reranking.
 ```text
 application process (Rust, Python, or TypeScript)
   ├─ resident serving metadata prepared during open
-  ├─ bounded searches: 4 admitted queries, 24 active cell decodes
-  ├─ bounded workers: 4 CPU workers + 24 small-stack I/O waiters
+  ├─ bounded searches: 8 active + 16 waiting, explicit overload
+  ├─ bounded reads: width 32, 48/handle, 64 physical GETs/process
+  ├─ bounded workers: adaptive 1–4 CPU + 88 blocking-I/O waiters
   ├─ graph-free SRHT-rotated product-PQ scan + exact rerank
   ├─ optional read-through cache on local NVMe
   └─ durable index at file://... or s3://bucket/prefix
@@ -195,17 +196,19 @@ global-PQ code chunks are consumed in fixed 32-chunk waves, and only bounded
 top candidates survive into exact rerank. Tune layout only with full-corpus
 recall and the same cache/concurrency state used in production.
 
-`prefetch_depth` defaults to a per-query requested width of 16. The handle-wide decode gate
-still caps all queries at 24 active cell decodes, and the search-admission gate
-admits four queries by default. Keep both caps. The uncapped multi-user profile
-exists only to measure the research ceiling and must not be copied into a
-production deployment.
+`leaf_read_width` defaults to 32 reads per query. The handle-wide
+`max_inflight_leaf_reads=48` gate bounds physical reads across queries, while
+the process-wide backing GET cap defaults to 64 across every handle. Search
+admission defaults to eight active and sixteen waiting queries; excess load
+fails explicitly. Keep these caps. An uncapped research profile must not be
+copied into a production deployment.
 
-Keep CPU and I/O concurrency separate. `BORSUK_CPU_THREADS=4` is the default
-compute ceiling. `BORSUK_IO_THREADS=32` provides one shared set of 1 MiB-stack
-waiters for S3 reads; it does not permit extra scoring work or bypass the
-24-read/decode gate. Raise either only from a matched-recall concurrency run
-that includes peak CPU, RSS/VMS, and tail latency.
+Keep CPU, I/O-wait, and physical-GET concurrency separate. CPU workers default
+to one fewer than the available CPUs, clamped to 1–4. `BORSUK_IO_THREADS=88`
+provides shared 1 MiB-stack waiters for S3 reads, while
+`BORSUK_BACKING_GET_CONCURRENCY=64` is the actual process-wide GET ceiling.
+Raise any limit only from a matched-recall concurrency run that includes peak
+CPU, RSS/VMS, backing bytes/GETs, and tail latency.
 
 Measured defaults, recall/latency curves, CPU/RAM/disk graphs, cost formulas,
 and uncapped scaling live in [`research/`](research/README.md). The concise

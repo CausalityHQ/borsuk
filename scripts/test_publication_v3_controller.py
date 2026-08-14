@@ -235,7 +235,13 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertIn("--arm-index 1", concurrency_worker)
         self.assertEqual(concurrency.expected["runtime_profile"], "concurrency")
         self.assertEqual(concurrency.expected["arm_index"], 1)
-        self.assertEqual(concurrency.expected["max_concurrent_searches"], 4)
+        self.assertEqual(concurrency.expected["max_active_searches"], 4)
+        self.assertEqual(concurrency.expected["max_waiting_searches"], 16)
+        self.assertEqual(concurrency.expected["leaf_read_width"], 32)
+        self.assertEqual(concurrency.expected["max_inflight_leaf_reads"], 48)
+        self.assertEqual(concurrency.expected["cpu_threads"], 3)
+        self.assertEqual(concurrency.expected["io_threads"], 88)
+        self.assertEqual(concurrency.expected["s3_get_concurrency"], 64)
         self.assertIn("/runtime-concurrency/attempts/0003", concurrency.job.terminal_prefix)
         self.assertTrue(concurrency.job.cell_tag.startswith("runtime-concurrency-"))
 
@@ -491,6 +497,74 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 purchase_option="on-demand",
             )
         self.assertEqual(aws.purchase_option, "on-demand")
+
+    def test_runtime_schema_two_receipt_matches_flow_control_authority(self) -> None:
+        manifest = unstaged_sift_manifest()
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        job = ExecutionJob.runtime(
+            qualification_cell(
+                manifest, dataset_id="sift-128", workload_kind="read-recall"
+            ),
+            attempt=1,
+        )
+        expected = {
+            "attempt_id": "runtime-0001",
+            "source_archive_sha256": "2" * 64,
+            "manifest_sha256": "6" * 64,
+            "protocol_sha256": "7" * 64,
+            "binary_sha256": "8" * 64,
+            "purchase_option": "spot",
+            "runtime_profile": "recall",
+            "arm_index": 0,
+            "max_active_searches": 4,
+            "max_waiting_searches": 16,
+            "leaf_read_width": 32,
+            "max_inflight_leaf_reads": 48,
+            "cpu_threads": 3,
+            "io_threads": 88,
+            "s3_get_concurrency": 64,
+            "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
+        }
+
+        class RuntimeReceiptAws:
+            def find_execution_instance(
+                self, _job: object, *, purchase_option: str
+            ):
+                return None
+
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 2,
+                    "status": "complete",
+                    "role": "runtime",
+                    "attempt": 1,
+                    **expected,
+                    "execution_contract_sha256": "9" * 64,
+                }
+
+            def terminate(self, _instance: str):
+                raise AssertionError("completed observation has no active instance")
+
+        receipt = run_execution_job(
+            job,
+            request={},
+            expected=expected,
+            aws=RuntimeReceiptAws(),
+            timeout_seconds=60,
+            poll_seconds=0.01,
+            purchase_option="spot",
+        )
+        self.assertEqual(receipt["schema_version"], 2)
 
     def test_execution_instance_identity_is_role_cell_and_attempt_bound(self) -> None:
         manifest = unstaged_sift_manifest()

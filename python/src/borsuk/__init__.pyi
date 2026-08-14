@@ -763,6 +763,11 @@ def open(
     ram_budget: int | str | None = None,
     resident_routing: bool = False,
     cache_max_bytes: int | str | None = None,
+    preload: bool = False,
+    max_active_searches: int = 8,
+    max_waiting_searches: int = 16,
+    leaf_read_width: int = 32,
+    max_inflight_leaf_reads: int = 48,
 ) -> Index: ...
 def leaf_mode_names() -> list[CanonicalLeafMode]: ...
 def minkowski_metric(p: float) -> MinkowskiMetric: ...

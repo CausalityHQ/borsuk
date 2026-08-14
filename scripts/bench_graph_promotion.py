@@ -270,8 +270,8 @@ def public_environment(
         "BORSUK_BENCH_QUERIES": str(PUBLIC_QUERY_COUNT),
         "BORSUK_BENCH_UNCACHED_QUERIES": str(PUBLIC_QUERY_COUNT),
         "BORSUK_BENCH_CONCURRENCY": PRODUCTION_CONCURRENCY,
-        "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES": str(PRODUCTION_QUERY_CAP),
-        "BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES": str(PRODUCTION_DECODE_CAP),
+        "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": str(PRODUCTION_QUERY_CAP),
+        "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS": str(PRODUCTION_DECODE_CAP),
         "BORSUK_BENCH_RAM_BUDGET_BYTES": str(PRODUCTION_RAM_BUDGET_BYTES),
         "BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES": str(PRODUCTION_SEGMENT_CACHE_BYTES),
         "BORSUK_BENCH_READ_ONLY": "1",
@@ -411,8 +411,8 @@ def run_public_row(
             if profile == "memory-preloaded":
                 env["BORSUK_BENCH_PRELOAD_SERVING"] = "1"
             if profile == "research-uncapped":
-                env["BORSUK_BENCH_MAX_CONCURRENT_SEARCHES"] = "0"
-                env["BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES"] = "0"
+                env["BORSUK_BENCH_MAX_ACTIVE_SEARCHES"] = "1024"
+                env["BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"] = "1024"
             sampled_benchmark(env, run_dir)
 
 
@@ -482,8 +482,8 @@ PUBLIC_RESULT_COLUMNS = (
     "peak_cpu_percent",
     "peak_rss_bytes",
     "ram_budget_bytes",
-    "max_concurrent_searches",
-    "max_concurrent_cell_decodes",
+    "max_active_searches",
+    "max_inflight_leaf_reads",
     "network_gets",
     "network_bytes",
     "logical_bytes_read",
@@ -591,11 +591,11 @@ def consolidate_public_results(
                             "ram_budget_bytes": environment[
                                 "BORSUK_BENCH_RAM_BUDGET_BYTES"
                             ],
-                            "max_concurrent_searches": environment[
-                                "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES"
+                            "max_active_searches": environment[
+                                "BORSUK_BENCH_MAX_ACTIVE_SEARCHES"
                             ],
-                            "max_concurrent_cell_decodes": environment[
-                                "BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES"
+                            "max_inflight_leaf_reads": environment[
+                                "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"
                             ],
                             "network_gets": f"{avg_network_gets:.3f}",
                             "network_bytes": f"{avg_network_bytes:.3f}",

@@ -25,8 +25,8 @@ def passing_rows(dataset="fashion-mnist-784"):
                 "qps": 40.0,
                 "peak_rss_bytes": 400_000_000,
                 "ram_budget_bytes": 1_000_000_000,
-                "max_concurrent_searches": 4,
-                "max_concurrent_cell_decodes": 24,
+                "max_active_searches": 4,
+                "max_inflight_leaf_reads": 24,
                 "network_gets": 0,
                 "network_bytes": 0,
                 "source_sha": "abc123",
@@ -51,8 +51,8 @@ def passing_rows(dataset="fashion-mnist-784"):
                 "qps": 50.0,
                 "peak_rss_bytes": 450_000_000,
                 "ram_budget_bytes": 1_000_000_000,
-                "max_concurrent_searches": 4,
-                "max_concurrent_cell_decodes": 24,
+                "max_active_searches": 4,
+                "max_inflight_leaf_reads": 24,
                 "network_gets": 0,
                 "network_bytes": 0,
                 "source_sha": "abc123",
@@ -131,7 +131,7 @@ class GraphPromotionEvaluationTest(unittest.TestCase):
     def test_rejects_uncapped_or_multi_second_production_row(self):
         rows = passing_rows()
         graph = next(row for row in rows if row["method"] == "graph")
-        graph["max_concurrent_cell_decodes"] = 0
+        graph["max_inflight_leaf_reads"] = 0
         graph["max_ms"] = 2_001.0
 
         decision = evaluate_dataset(rows)

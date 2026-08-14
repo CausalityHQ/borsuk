@@ -658,7 +658,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(build_env["BORSUK_BENCH_NPROBES"], "4")
         self.assertEqual(build_env["BORSUK_BENCH_CANDIDATES"], "512")
         self.assertNotIn("BORSUK_BENCH_READ_ONLY", build_env)
-        self.assertNotIn("BORSUK_CPU_THREADS", runtime_env)
+        self.assertEqual(runtime_env["BORSUK_CPU_THREADS"], "3")
+        self.assertEqual(runtime_env["BORSUK_IO_THREADS"], "88")
+        self.assertEqual(runtime_env["BORSUK_BACKING_GET_CONCURRENCY"], "64")
         self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_BUILD_INDEX"], "0")
@@ -705,7 +707,13 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             str(plan_arms(cell)[0]["leaf_page_budget"]),
         )
         self.assertEqual(runtime_env["BORSUK_BENCH_SERVING_CANDIDATES"], "512")
-        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_CONCURRENT_SEARCHES"], "4")
+        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_ACTIVE_SEARCHES"], "4")
+        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_WAITING_SEARCHES"], "16")
+        self.assertEqual(runtime_env["BORSUK_BENCH_LEAF_READ_WIDTH"], "32")
+        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"], "48")
+        self.assertEqual(runtime_env["BORSUK_CPU_THREADS"], "3")
+        self.assertEqual(runtime_env["BORSUK_IO_THREADS"], "88")
+        self.assertEqual(runtime_env["BORSUK_BACKING_GET_CONCURRENCY"], "64")
         self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_BUILD_INDEX"], "0")
 
@@ -713,21 +721,48 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(concurrency_result_arm(arm), arm)
         self.assertNotIn("arm_id", concurrency_result_arm(arm))
 
-        contract = runtime_execution_contract(plan, "concurrency")
+        effective = {
+            "schema_version": 1,
+            "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
+            "max_active_searches": 4,
+            "max_waiting_searches": 16,
+            "leaf_read_width": 32,
+            "max_inflight_leaf_reads": 48,
+            "cpu_threads": 3,
+            "io_threads": 88,
+            "s3_get_concurrency": 64,
+        }
+        contract = runtime_execution_contract(plan, "concurrency", effective)
         self.assertEqual(
             contract,
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "runtime_profile": "concurrency",
                 "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
-                "max_concurrent_searches": 4,
+                "max_active_searches": 4,
+                "max_waiting_searches": 16,
+                "leaf_read_width": 32,
+                "max_inflight_leaf_reads": 48,
+                "cpu_threads": 3,
+                "io_threads": 88,
+                "s3_get_concurrency": 64,
             },
         )
         runtime_env["BORSUK_BENCH_RAM_BUDGET_BYTES"] = "1073741824"
         self.assertEqual(
-            runtime_execution_contract(plan, "concurrency")["ram_budget_bytes"],
+            runtime_execution_contract(
+                plan,
+                "concurrency",
+                {**effective, "ram_budget_bytes": 1024 * 1024 * 1024},
+            )["ram_budget_bytes"],
             1024 * 1024 * 1024,
         )
+        with self.assertRaisesRegex(ValueError, "effective runtime flow control"):
+            runtime_execution_contract(
+                plan,
+                "concurrency",
+                {**effective, "max_active_searches": 3},
+            )
 
     def test_concurrency_artifacts_require_complete_workers_queries_and_recall(self) -> None:
         summaries = [

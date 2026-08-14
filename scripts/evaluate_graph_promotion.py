@@ -101,9 +101,9 @@ def evaluate_dataset(rows: Iterable[dict[str, Any]]) -> PromotionDecision:
             reasons.append(
                 f"repetition {repetition}: graph RSS exceeds 1.20x pq-scan RSS"
             )
-        if _as_int(graph, "max_concurrent_searches") != 4:
+        if _as_int(graph, "max_active_searches") != 4:
             reasons.append(f"repetition {repetition}: production query cap is not 4")
-        if _as_int(graph, "max_concurrent_cell_decodes") != 24:
+        if _as_int(graph, "max_inflight_leaf_reads") != 24:
             reasons.append(f"repetition {repetition}: production decode cap is not 24")
         if (
             _as_float(graph, "network_gets") != 0

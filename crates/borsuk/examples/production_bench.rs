@@ -18,14 +18,16 @@ use arrow_array::{
     UInt32Array, UInt64Array,
 };
 use borsuk::{
-    BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
-    DEFAULT_MAX_CONCURRENT_CELL_DECODES, DEFAULT_MAX_CONCURRENT_SEARCHES, GlobalPqLayout,
-    GlobalScanCodec, IndexConfig, LeafCapability, LeafMode, OpenOptions, RequestCounts,
-    SearchOptions, SearchReport, VectorElementType, VectorMetric, VectorRecord, WalConfig,
-    WarmReport, recall_at_k, recommended_segment_max_vectors,
+    BACKING_GET_CONCURRENCY_ENV, BorsukIndex, BuildConfig, CPU_THREADS_ENV, CacheExecutionPolicy,
+    CompactionOptions, DEFAULT_LEAF_READ_WIDTH, DEFAULT_MAX_ACTIVE_SEARCHES,
+    DEFAULT_MAX_INFLIGHT_LEAF_READS, DEFAULT_MAX_WAITING_SEARCHES, GlobalPqLayout, GlobalScanCodec,
+    IO_THREADS_ENV, IndexConfig, LeafCapability, LeafMode, OpenOptions, ProcessLimits,
+    RequestCounts, SearchOptions, SearchReport, VectorElementType, VectorMetric, VectorRecord,
+    WalConfig, WarmReport, configure_process, configured_backing_get_concurrency,
+    configured_cpu_threads, configured_io_threads, recall_at_k, recommended_segment_max_vectors,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const DEFAULT_QUERIES: usize = 1_000;
 const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
@@ -134,8 +136,10 @@ struct ResolvedConfig {
     serving_nprobe: usize,
     serving_candidates: usize,
     serving_prefetch_depth: usize,
-    max_concurrent_searches: Option<usize>,
-    max_concurrent_cell_decodes: Option<usize>,
+    max_active_searches: usize,
+    max_waiting_searches: usize,
+    leaf_read_width: usize,
+    max_inflight_leaf_reads: usize,
     uncached_queries: usize,
     cache_profile: BenchmarkCacheProfile,
     cache_coverage_percent: usize,
@@ -150,6 +154,19 @@ struct ResolvedConfig {
     preload_serving: bool,
     _uri_temp: Option<tempfile::TempDir>,
     _cache_temp: Option<tempfile::TempDir>,
+}
+
+#[derive(Serialize)]
+struct EffectiveRuntimeFlowControl {
+    schema_version: u8,
+    ram_budget_bytes: Option<u64>,
+    max_active_searches: usize,
+    max_waiting_searches: usize,
+    leaf_read_width: usize,
+    max_inflight_leaf_reads: usize,
+    cpu_threads: usize,
+    io_threads: usize,
+    s3_get_concurrency: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -533,10 +550,12 @@ fn main() {
 }
 
 fn run() -> BenchResult<()> {
+    configure_benchmark_process()?;
     let config = resolve_config()?;
     print_config(&config);
     let dataset = load_dataset(&config)?;
     fs::create_dir_all(&config.output_dir)?;
+    write_effective_runtime_flow_control(&config)?;
 
     if config.build_index {
         let index_config = IndexConfig {
@@ -768,6 +787,38 @@ fn run() -> BenchResult<()> {
     Ok(())
 }
 
+fn configure_benchmark_process() -> BenchResult<()> {
+    let defaults = ProcessLimits::default();
+    configure_process(ProcessLimits {
+        cpu_threads: env_usize(CPU_THREADS_ENV, defaults.cpu_threads)?,
+        io_threads: env_usize(IO_THREADS_ENV, defaults.io_threads)?,
+        s3_get_concurrency: env_usize(BACKING_GET_CONCURRENCY_ENV, defaults.s3_get_concurrency)?,
+    })?;
+    Ok(())
+}
+
+fn write_effective_runtime_flow_control(config: &ResolvedConfig) -> BenchResult<()> {
+    let path = config.output_dir.join("bench_runtime_flow_control.json");
+    let mut output = BufWriter::new(File::create(path)?);
+    serde_json::to_writer(
+        &mut output,
+        &EffectiveRuntimeFlowControl {
+            schema_version: 1,
+            ram_budget_bytes: config.ram_budget_bytes,
+            max_active_searches: config.max_active_searches,
+            max_waiting_searches: config.max_waiting_searches,
+            leaf_read_width: config.leaf_read_width,
+            max_inflight_leaf_reads: config.max_inflight_leaf_reads,
+            cpu_threads: configured_cpu_threads(),
+            io_threads: configured_io_threads(),
+            s3_get_concurrency: configured_backing_get_concurrency(),
+        },
+    )?;
+    output.write_all(b"\n")?;
+    output.flush()?;
+    Ok(())
+}
+
 fn recall_preloads_local_snapshot(preload: bool) -> bool {
     preload
 }
@@ -813,8 +864,10 @@ fn open_serving_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
             // Load/build them during open so neither cache-state measurement
             // charges one-time library initialization to the first query.
             resident_routing: true,
-            max_concurrent_searches: config.max_concurrent_searches,
-            max_concurrent_cell_decodes: config.max_concurrent_cell_decodes,
+            max_active_searches: config.max_active_searches,
+            max_waiting_searches: config.max_waiting_searches,
+            leaf_read_width: config.leaf_read_width,
+            max_inflight_leaf_reads: config.max_inflight_leaf_reads,
             ..OpenOptions::default()
         },
     )?;
@@ -1022,13 +1075,18 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
             invalid_input("BORSUK_BENCH_SERVING_PREFETCH_DEPTH must be greater than zero").into(),
         );
     }
-    let max_concurrent_searches = env_optional_cap(
-        "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES",
-        Some(DEFAULT_MAX_CONCURRENT_SEARCHES),
+    let max_active_searches = env_usize(
+        "BORSUK_BENCH_MAX_ACTIVE_SEARCHES",
+        DEFAULT_MAX_ACTIVE_SEARCHES,
     )?;
-    let max_concurrent_cell_decodes = env_optional_cap(
-        "BORSUK_BENCH_MAX_CONCURRENT_CELL_DECODES",
-        Some(DEFAULT_MAX_CONCURRENT_CELL_DECODES),
+    let max_waiting_searches = env_usize(
+        "BORSUK_BENCH_MAX_WAITING_SEARCHES",
+        DEFAULT_MAX_WAITING_SEARCHES,
+    )?;
+    let leaf_read_width = env_usize("BORSUK_BENCH_LEAF_READ_WIDTH", DEFAULT_LEAF_READ_WIDTH)?;
+    let max_inflight_leaf_reads = env_usize(
+        "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS",
+        DEFAULT_MAX_INFLIGHT_LEAF_READS,
     )?;
     let uncached_queries = env_usize("BORSUK_BENCH_UNCACHED_QUERIES", queries.min(100))?;
     if uncached_queries == 0 {
@@ -1098,8 +1156,10 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         serving_nprobe,
         serving_candidates,
         serving_prefetch_depth,
-        max_concurrent_searches,
-        max_concurrent_cell_decodes,
+        max_active_searches,
+        max_waiting_searches,
+        leaf_read_width,
+        max_inflight_leaf_reads,
         uncached_queries: uncached_queries.min(queries),
         cache_profile,
         cache_coverage_percent,
@@ -1127,7 +1187,7 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_concurrent_searches={} max_concurrent_cell_decodes={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
@@ -1167,12 +1227,10 @@ fn print_config(config: &ResolvedConfig) {
         config.serving_nprobe,
         config.serving_candidates,
         config.serving_prefetch_depth,
-        config
-            .max_concurrent_searches
-            .map_or_else(|| "uncapped".to_string(), |value| value.to_string()),
-        config
-            .max_concurrent_cell_decodes
-            .map_or_else(|| "uncapped".to_string(), |value| value.to_string()),
+        config.max_active_searches,
+        config.max_waiting_searches,
+        config.leaf_read_width,
+        config.max_inflight_leaf_reads,
         config.cache_profile,
         config.cache_coverage_percent,
         config.build_index,

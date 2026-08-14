@@ -77,7 +77,9 @@ def _user_data(
     if role == "rest-server":
         properties = (
             "-p MemoryMax=6G -p MemorySwapMax=0 -p AllowedCPUs=0-3 "
-            "--setenv=BORSUK_CPU_THREADS=3 "
+            "--setenv=BORSUK_REST_CPU_THREADS=3 "
+            "--setenv=BORSUK_REST_IO_THREADS=88 "
+            "--setenv=BORSUK_REST_S3_GET_CONCURRENCY=64 "
             "--setenv=BORSUK_RESIDENT_RAM_BUDGET_BYTES=2147483648 "
             "--setenv=BORSUK_DISK_CACHE_BYTES=1073741824"
         )

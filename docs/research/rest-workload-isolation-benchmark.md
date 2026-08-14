@@ -29,10 +29,11 @@ flowchart LR
 The server and BORSUK run in the same process. The async HTTP runtime never
 executes vector search directly: accepted search requests enter a bounded
 blocking path, while overload is returned as HTTP 429 instead of creating an
-unbounded queue. `BORSUK_CPU_THREADS=3` reserves scheduling capacity on the
+unbounded queue. `BORSUK_REST_CPU_THREADS=3` reserves scheduling capacity on the
 four-vCPU server for HTTP, metrics, and kernel work. BORSUK's own
-`OpenOptions::max_concurrent_searches` remains enabled as a second, library-side
-memory and decode admission bound.
+`OpenOptions::max_active_searches` remains enabled as a second, library-side
+work bound, with `max_waiting_searches=0` because the REST layer already owns
+the queue. Leaf-wave and in-flight leaf-read caps separately bound S3 fan-out.
 
 The load generator runs on a separate instance and schedules requests against
 absolute monotonic deadlines. A late request is still emitted and its queueing

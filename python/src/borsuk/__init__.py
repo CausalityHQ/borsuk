@@ -849,7 +849,29 @@ def open(
     resident_routing: bool = False,
     cache_max_bytes: int | str | None = None,
     preload: bool = False,
+    max_active_searches: int = 8,
+    max_waiting_searches: int = 16,
+    leaf_read_width: int = 32,
+    max_inflight_leaf_reads: int = 48,
 ) -> Index:
+    max_active_searches = _validate_required_int(
+        max_active_searches, "max_active_searches"
+    )
+    max_waiting_searches = _validate_required_int(
+        max_waiting_searches, "max_waiting_searches"
+    )
+    leaf_read_width = _validate_required_int(leaf_read_width, "leaf_read_width")
+    max_inflight_leaf_reads = _validate_required_int(
+        max_inflight_leaf_reads, "max_inflight_leaf_reads"
+    )
+    if max_active_searches <= 0:
+        raise ValueError("max_active_searches must be greater than zero")
+    if max_waiting_searches < 0:
+        raise ValueError("max_waiting_searches must be non-negative")
+    if leaf_read_width <= 0:
+        raise ValueError("leaf_read_width must be greater than zero")
+    if max_inflight_leaf_reads <= 0:
+        raise ValueError("max_inflight_leaf_reads must be greater than zero")
     return _open(
         uri,
         cache_dir=cache_dir,
@@ -857,6 +879,10 @@ def open(
         resident_routing=_validate_bool(resident_routing, "resident_routing"),
         cache_max_bytes=_validate_optional_cache_max_bytes(cache_max_bytes),
         preload=_validate_bool(preload, "preload"),
+        max_active_searches=max_active_searches,
+        max_waiting_searches=max_waiting_searches,
+        leaf_read_width=leaf_read_width,
+        max_inflight_leaf_reads=max_inflight_leaf_reads,
     )
 
 

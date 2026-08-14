@@ -279,8 +279,10 @@ fn rung_production() -> borsuk::Result<()> {
         &uri,
         OpenOptions {
             segment_cache_max_bytes: Some(256 * 1024 * 1024),
-            max_concurrent_searches: Some(4),
-            max_concurrent_cell_decodes: Some(24),
+            max_active_searches: 4,
+            max_waiting_searches: 16,
+            leaf_read_width: 32,
+            max_inflight_leaf_reads: 48,
             ..OpenOptions::default()
         },
     )?;
