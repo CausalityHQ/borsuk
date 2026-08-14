@@ -1180,12 +1180,39 @@ struct ActiveCollectionTransaction {
     schema_fingerprint: String,
     positioned: Arc<Mutex<Vec<StagedPositionedRun>>>,
     positioned_metadata: Arc<Mutex<BTreeMap<String, StagedPositionedMetadata>>>,
+    positioned_route_source: Arc<Mutex<Option<StagedPositionedRouteSource>>>,
 }
 
 #[derive(Debug, Clone)]
 struct StagedPositionedRun {
     modality: String,
     input: CellWalRunInput,
+}
+
+#[derive(Debug)]
+struct StagedPositionedRouteSource {
+    primary_records: Vec<PositionedWalRecord>,
+    id_directory: Vec<CellWalIdDirectoryEntry>,
+}
+
+impl StagedPositionedRouteSource {
+    fn summary_stamp(&self) -> Result<MutationStamp> {
+        self.id_directory
+            .iter()
+            .map(|entry| entry.state.stamp())
+            .reduce(|current, candidate| {
+                if candidate.version() < current.version() {
+                    candidate
+                } else {
+                    current
+                }
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "positioned route source contains no mutation stamps".to_string(),
+                )
+            })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1205,6 +1232,7 @@ pub struct CanonicalMutationBatch {
     schema_fingerprint: String,
     runs: Vec<StagedPositionedRun>,
     metadata: BTreeMap<String, StagedPositionedMetadata>,
+    route_source: Option<StagedPositionedRouteSource>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -5311,6 +5339,7 @@ impl BorsukIndex {
             schema_fingerprint,
             positioned: Arc::new(Mutex::new(Vec::new())),
             positioned_metadata: Arc::new(Mutex::new(BTreeMap::new())),
+            positioned_route_source: Arc::new(Mutex::new(None)),
         };
         self.active_collection_transaction = Some(transaction.clone());
         for child in self.named.values_mut() {
@@ -5798,10 +5827,9 @@ impl BorsukIndex {
     fn positioned_route_plan_for_batch(
         &self,
         batch: &CanonicalMutationBatch,
-        summary_stamp: MutationStamp,
-    ) -> Result<Vec<PositionedRoutePlanRow>> {
-        let (primary_records, id_directory) = crate::build_timing::timed(
-            crate::build_timing::Phase::PositionedRouteSourceDecode,
+    ) -> Result<(MutationStamp, Vec<PositionedRoutePlanRow>)> {
+        let route_source = crate::build_timing::timed(
+            crate::build_timing::Phase::PositionedRouteFacts,
             || {
                 let record_runs = batch
                     .runs
@@ -5817,16 +5845,6 @@ impl BorsukIndex {
                             .to_string(),
                     ));
                 }
-                let primary_records = record_runs
-                    .first()
-                    .map(|run| {
-                        positioned_wal_records_from_table(
-                            run.input.bytes.clone(),
-                            "positioned-primary.parquet",
-                        )
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
                 let directory_runs = batch
                     .runs
                     .iter()
@@ -5841,28 +5859,49 @@ impl BorsukIndex {
                             .to_string(),
                     ));
                 }
-                let id_directory = cell_wal_id_directory_from_slice(
-                    &directory_runs[0].input.bytes,
-                    "positioned ID-directory payload",
-                )?;
-                Ok::<_, BorsukError>((primary_records, id_directory))
+                let route_source = batch.route_source.as_ref().ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "positioned transaction is missing its staged route source".to_string(),
+                    )
+                })?;
+                if record_runs
+                    .first()
+                    .map(|run| run.input.record_count)
+                    .unwrap_or(0)
+                    != route_source.primary_records.len()
+                    || directory_runs[0].input.record_count != route_source.id_directory.len()
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned staged route facts disagree with payload cardinality"
+                            .to_string(),
+                    ));
+                }
+                Ok::<_, BorsukError>(route_source)
             },
         )?;
+        let summary_stamp =
+            crate::build_timing::timed(crate::build_timing::Phase::PositionedStampReduce, || {
+                route_source.summary_stamp()
+            })?;
         let named_manifests = self
             .named
             .iter()
             .map(|(name, child)| (name.clone(), child.manifest.clone()))
             .collect::<BTreeMap<_, _>>();
-        crate::build_timing::timed(crate::build_timing::Phase::PositionedRoutePlanBuild, || {
-            self.expected_positioned_route_plan(
-                &self.manifest,
-                &named_manifests,
-                &primary_records,
-                &id_directory,
-                summary_stamp,
-                None,
-            )
-        })
+        let rows = crate::build_timing::timed(
+            crate::build_timing::Phase::PositionedRoutePlanBuild,
+            || {
+                self.expected_positioned_route_plan(
+                    &self.manifest,
+                    &named_manifests,
+                    &route_source.primary_records,
+                    &route_source.id_directory,
+                    summary_stamp,
+                    None,
+                )
+            },
+        )?;
+        Ok((summary_stamp, rows))
     }
 
     fn validate_positioned_route_plan_rows(
@@ -7205,36 +7244,7 @@ impl BorsukIndex {
                 rows,
             });
         }
-        let stamp = crate::build_timing::timed(
-            crate::build_timing::Phase::PositionedPayloadStampScan,
-            || {
-                let mut stamp = None::<MutationStamp>;
-                for payload in &payloads {
-                    let metadata =
-                        positioned_payload_metadata(&payload.bytes, payload.format, payload.rows)?;
-                    let candidate = MutationStamp::new(
-                        MutationVersion::from_parts(
-                            metadata.min_stamp.hlc,
-                            metadata.min_stamp.writer,
-                        ),
-                        metadata.min_stamp.digest,
-                    );
-                    stamp = Some(stamp.map_or(candidate, |current| {
-                        if candidate.version() < current.version() {
-                            candidate
-                        } else {
-                            current
-                        }
-                    }));
-                }
-                stamp.ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "positioned mutation has no typed mutation rows".to_string(),
-                    )
-                })
-            },
-        )?;
-        let route_rows = self.positioned_route_plan_for_batch(&batch, stamp)?;
+        let (stamp, route_rows) = self.positioned_route_plan_for_batch(&batch)?;
         let route_bytes = crate::build_timing::timed(
             crate::build_timing::Phase::PositionedRoutePlanEncode,
             || positioned_route_plan_to_parquet(&route_rows),
@@ -7595,16 +7605,18 @@ impl BorsukIndex {
             .as_ref()
             .expect("collection transaction remains active through positioned publication")
             .clone();
-        let runs = transaction
-            .positioned
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
-        let mut metadata = transaction
-            .positioned_metadata
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
+        let runs = std::mem::take(
+            &mut *transaction
+                .positioned
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+        let mut metadata = std::mem::take(
+            &mut *transaction
+                .positioned_metadata
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
         if runs.is_empty() {
             self.clear_collection_transaction(true);
             return Ok((value, AddReport::default()));
@@ -7619,6 +7631,11 @@ impl BorsukIndex {
             schema_fingerprint: transaction.schema_fingerprint,
             runs,
             metadata,
+            route_source: transaction
+                .positioned_route_source
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take(),
         };
         match self.append_positioned_mutation(batch) {
             Ok(report) => {
@@ -11776,6 +11793,21 @@ impl BorsukIndex {
             .active_collection_transaction
             .as_ref()
             .expect("positioned mutation staging checked the active transaction above");
+        if primary_modality {
+            let mut staged = active
+                .positioned_route_source
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if staged.is_some() {
+                return Err(BorsukError::InvalidStorage(
+                    "positioned transaction contains multiple primary route sources".to_string(),
+                ));
+            }
+            *staged = Some(StagedPositionedRouteSource {
+                primary_records: bundled_records,
+                id_directory: bundled_directory,
+            });
+        }
         active
             .positioned
             .lock()
@@ -30888,6 +30920,212 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    fn encoded_staged_source_min(runs: &[StagedPositionedRun]) -> MutationStamp {
+        runs.iter()
+            .filter(|run| run.modality == PRIMARY_MODALITY)
+            .map(|run| {
+                let metadata = positioned_payload_metadata(
+                    &run.input.bytes,
+                    PositionedPayloadFormat::Parquet,
+                    run.input.record_count as u64,
+                )
+                .unwrap();
+                MutationStamp::new(
+                    MutationVersion::from_parts(metadata.min_stamp.hlc, metadata.min_stamp.writer),
+                    metadata.min_stamp.digest,
+                )
+            })
+            .reduce(|current, candidate| {
+                if candidate.version() < current.version() {
+                    candidate
+                } else {
+                    current
+                }
+            })
+            .expect("a staged primary source is nonempty")
+    }
+
+    #[test]
+    fn positioned_route_plan_reuses_staged_facts_without_decoding_wal_payloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index.begin_collection_transaction().unwrap();
+        index
+            .add_collection_records(vec![VectorRecord::new("staged", vec![1.0, 2.0])])
+            .unwrap();
+        let duplicate_source = index
+            .add_collection_records(vec![VectorRecord::new("second", vec![2.0, 3.0])])
+            .unwrap_err();
+        assert!(
+            duplicate_source
+                .to_string()
+                .contains("multiple primary route sources"),
+            "{duplicate_source}"
+        );
+
+        let transaction = index
+            .active_collection_transaction
+            .as_ref()
+            .unwrap()
+            .clone();
+        let route_source = transaction
+            .positioned_route_source
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .expect("primary staging retains route facts");
+        let expected_stamp = route_source.summary_stamp().unwrap();
+        assert_eq!(route_source.primary_records.len(), 1);
+        assert_eq!(route_source.id_directory.len(), 1);
+        let runs = transaction
+            .positioned
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        assert_eq!(expected_stamp, encoded_staged_source_min(&runs));
+        let mut batch = CanonicalMutationBatch {
+            transaction_id: transaction.id,
+            schema_fingerprint: transaction.schema_fingerprint,
+            runs,
+            metadata: transaction
+                .positioned_metadata
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone(),
+            route_source: Some(route_source),
+        };
+
+        let (stamp, rows) = index.positioned_route_plan_for_batch(&batch).unwrap();
+        assert_eq!(stamp, expected_stamp);
+        assert_eq!(rows.len(), 2, "one primary summary plus one routed row");
+        let route_source = batch.route_source.take().unwrap();
+        let missing = index.positioned_route_plan_for_batch(&batch).unwrap_err();
+        assert!(
+            missing
+                .to_string()
+                .contains("missing its staged route source")
+        );
+        batch.route_source = Some(route_source);
+        let directory_run = batch
+            .runs
+            .iter_mut()
+            .find(|run| run.input.kind == CellWalRunKind::IdDirectory)
+            .unwrap();
+        directory_run.input.record_count += 1;
+        let mismatch = index.positioned_route_plan_for_batch(&batch).unwrap_err();
+        assert!(mismatch.to_string().contains("payload cardinality"));
+        batch
+            .runs
+            .iter_mut()
+            .find(|run| run.input.kind == CellWalRunKind::IdDirectory)
+            .unwrap()
+            .input
+            .record_count -= 1;
+        let duplicate_record_run = batch
+            .runs
+            .iter()
+            .find(|run| run.input.kind == CellWalRunKind::Records)
+            .unwrap()
+            .clone();
+        batch.runs.push(duplicate_record_run);
+        let duplicate = index.positioned_route_plan_for_batch(&batch).unwrap_err();
+        assert!(
+            duplicate
+                .to_string()
+                .contains("multiple primary record payloads")
+        );
+        batch.runs.pop();
+        for run in &mut batch.runs {
+            if matches!(
+                run.input.kind,
+                CellWalRunKind::Records | CellWalRunKind::IdDirectory
+            ) {
+                run.input.bytes = b"deliberately-not-parquet".to_vec();
+            }
+        }
+        let requests_before = index.storage.request_counts();
+        let error = index.append_positioned_mutation(batch).unwrap_err();
+        assert!(error.to_string().contains("Parquet"), "{error}");
+        assert_eq!(
+            index
+                .storage
+                .request_counts()
+                .delta(&requests_before)
+                .total(),
+            0,
+            "byte-level validation must still reject corruption before upload"
+        );
+        index.clear_collection_transaction(false);
+    }
+
+    #[test]
+    fn positioned_delete_route_facts_match_every_encoded_source_stamp() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(vec![VectorRecord::new("victim", vec![1.0, 2.0])])
+            .unwrap();
+        index.begin_collection_transaction().unwrap();
+        index
+            .delete_collection_records(vec![RecordId::from("victim")])
+            .unwrap();
+
+        let transaction = index
+            .active_collection_transaction
+            .as_ref()
+            .unwrap()
+            .clone();
+        let route_source = transaction
+            .positioned_route_source
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .expect("delete staging retains route facts");
+        assert!(route_source.primary_records.is_empty());
+        assert_eq!(route_source.id_directory.len(), 1);
+        let runs = transaction
+            .positioned
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let expected_stamp = encoded_staged_source_min(&runs);
+        assert_eq!(route_source.summary_stamp().unwrap(), expected_stamp);
+        let batch = CanonicalMutationBatch {
+            transaction_id: transaction.id,
+            schema_fingerprint: transaction.schema_fingerprint,
+            runs,
+            metadata: transaction
+                .positioned_metadata
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone(),
+            route_source: Some(route_source),
+        };
+
+        let (stamp, rows) = index.positioned_route_plan_for_batch(&batch).unwrap();
+        assert_eq!(stamp, expected_stamp);
+        assert_eq!(rows.len(), 1, "delete-only emits the primary summary");
+        index.clear_collection_transaction(false);
     }
 
     #[test]
