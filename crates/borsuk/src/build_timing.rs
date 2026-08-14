@@ -27,6 +27,15 @@ pub(crate) enum Phase {
     PositionedRoutePlanEncode,
     PositionedTransactionMetadata,
     PositionedAppendPrepare,
+    RecordPreparation,
+    IdValidation,
+    IdClaimCoordination,
+    ClaimAuthorization,
+    PositionedImmutableCommit,
+    PositionedInstall,
+    AutoFlush,
+    FlushWalMaterialization,
+    QuantizerRefresh,
     SegmentCentroidRadius,
     SegmentRoutingCodes,
     SegmentPqBounds,
@@ -41,7 +50,7 @@ pub(crate) enum Phase {
     LocalitySort,
 }
 
-const PHASE_COUNT: usize = 22;
+const PHASE_COUNT: usize = 31;
 
 const PHASE_NAMES: [&str; PHASE_COUNT] = [
     "logical_cell_routing",
@@ -54,6 +63,15 @@ const PHASE_NAMES: [&str; PHASE_COUNT] = [
     "positioned_route_plan_encode",
     "positioned_transaction_metadata",
     "positioned_append_prepare",
+    "record_preparation",
+    "id_validation",
+    "id_claim_coordination",
+    "claim_authorization",
+    "positioned_immutable_commit",
+    "positioned_install",
+    "auto_flush",
+    "flush_wal_materialization",
+    "quantizer_refresh",
     "segment_centroid_radius",
     "segment_routing_codes",
     "segment_pq_bounds",
@@ -105,6 +123,34 @@ pub(crate) fn timed<T>(phase: Phase, f: impl FnOnce() -> T) -> T {
     table.nanos[idx].fetch_add(elapsed, Ordering::Relaxed);
     table.calls[idx].fetch_add(1, Ordering::Relaxed);
     out
+}
+
+/// Scope timer for phases whose control flow cannot be expressed as one
+/// closure. When timing is disabled this carries no timestamp and records
+/// nothing.
+pub(crate) struct PhaseSpan {
+    phase: Phase,
+    started: Option<Instant>,
+}
+
+pub(crate) fn span(phase: Phase) -> PhaseSpan {
+    PhaseSpan {
+        phase,
+        started: enabled().then(Instant::now),
+    }
+}
+
+impl Drop for PhaseSpan {
+    fn drop(&mut self) {
+        let Some(started) = self.started else {
+            return;
+        };
+        let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        let index = self.phase as usize;
+        let table = table();
+        table.nanos[index].fetch_add(elapsed, Ordering::Relaxed);
+        table.calls[index].fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn write_phase_csv(path: &Path, label: &str, values: &[(u64, u64); PHASE_COUNT]) -> io::Result<()> {
@@ -186,6 +232,23 @@ mod tests {
     }
 
     #[test]
+    fn phase_catalog_covers_high_level_ingest_and_maintenance() {
+        for phase in [
+            "record_preparation",
+            "id_validation",
+            "id_claim_coordination",
+            "claim_authorization",
+            "positioned_immutable_commit",
+            "positioned_install",
+            "auto_flush",
+            "flush_wal_materialization",
+            "quantizer_refresh",
+        ] {
+            assert!(PHASE_NAMES.contains(&phase), "missing phase {phase}");
+        }
+    }
+
+    #[test]
     fn phase_csv_is_canonical_and_appends_complete_groups() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("bench_build_phases.csv");
@@ -212,7 +275,7 @@ mod tests {
         assert_eq!(lines[1], "1,ingest,logical_cell_routing,1,2");
         assert_eq!(
             lines.last().copied(),
-            Some("1,compaction,locality_sort,122,123")
+            Some("1,compaction,locality_sort,131,132")
         );
     }
 }

@@ -5327,7 +5327,9 @@ impl BorsukIndex {
         // logical mutation. Maintenance can still fail here without creating
         // the ambiguous result of reporting failure after the new positioned
         // transaction has durably committed.
+        let flush_span = crate::build_timing::span(crate::build_timing::Phase::AutoFlush);
         self.maybe_flush_wal()?;
+        drop(flush_span);
         let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
         if self.collection_snapshot.is_none() {
             return Err(BorsukError::InvalidStorage(
@@ -7317,6 +7319,8 @@ impl BorsukIndex {
                     .prepare_append(&batch.transaction_id, &batch.schema_fingerprint, payloads)
             },
         )?;
+        let commit_span =
+            crate::build_timing::span(crate::build_timing::Phase::PositionedImmutableCommit);
         let committed = match self
             .positioned_log
             .as_ref()
@@ -7365,7 +7369,10 @@ impl BorsukIndex {
             }
             Err(error) => return Err(error),
         };
+        drop(commit_span);
+        let install_span = crate::build_timing::span(crate::build_timing::Phase::PositionedInstall);
         self.install_committed_positioned_batch(&batch, &committed, tombstone_projections);
+        drop(install_span);
         let mut report = add_report_from_parts(
             0,
             0,
@@ -7646,12 +7653,15 @@ impl BorsukIndex {
                         "non-empty positioned append returned no source position".to_string(),
                     )
                 })?;
+                let authorization_span =
+                    crate::build_timing::span(crate::build_timing::Phase::ClaimAuthorization);
                 let cleanup = self.authorize_collection_claims(
                     committed.source_epoch,
                     committed.shard,
                     committed.sequence,
                     &report.positioned_envelope_checksum,
                 );
+                drop(authorization_span);
                 self.clear_collection_transaction(true);
                 if let Err(error) = cleanup {
                     return Err(BorsukError::PositionedCommitCleanupFailed {
@@ -10903,17 +10913,23 @@ impl BorsukIndex {
             return Ok(report);
         }
 
+        let preparation_span =
+            crate::build_timing::span(crate::build_timing::Phase::RecordPreparation);
         self.prepare_primary_records(&mut records)?;
         self.stamp_put_records(&mut records)?;
+        drop(preparation_span);
         let coordinated_write = true;
+        let validation_span = crate::build_timing::span(crate::build_timing::Phase::IdValidation);
         self.validate_record_ids_allowing_existing(
             &records,
             scan_existing_ids && !coordinated_write,
             tombstone_update.is_some(),
         )?;
+        drop(validation_span);
         let transaction_id = self
             .active_collection_transaction_id()
             .map_or_else(|| Uuid::new_v4().simple().to_string(), str::to_string);
+        let claim_span = crate::build_timing::span(crate::build_timing::Phase::IdClaimCoordination);
         let mut write_claims = if coordinated_write && coordinate_ids {
             let claims = self.cell_wal_store()?.claim_ids(
                 &transaction_id,
@@ -10950,6 +10966,7 @@ impl BorsukIndex {
         } else {
             None
         };
+        drop(claim_span);
 
         // Mutation-log fast path: encode immutable typed payloads and stage one
         // positioned transaction without swapping the collection manifest. The
@@ -10982,7 +10999,9 @@ impl BorsukIndex {
                 }
             }
             if self.active_collection_transaction.is_none() {
+                let flush_span = crate::build_timing::span(crate::build_timing::Phase::AutoFlush);
                 self.maybe_flush_wal()?;
+                drop(flush_span);
             }
             report.requests = self.storage.request_counts().delta(&requests_before);
             observability::record_add_report(&span, &report, self.manifest.version);
@@ -12229,6 +12248,8 @@ impl BorsukIndex {
         &mut self,
         selected_transaction_ids: &BTreeSet<String>,
     ) -> Result<()> {
+        let _materialization_span =
+            crate::build_timing::span(crate::build_timing::Phase::FlushWalMaterialization);
         let selected_transactions = self
             .cell_wal_snapshot
             .iter()
@@ -17986,6 +18007,8 @@ impl BorsukIndex {
     /// segment-changing operation funnels through it, so a cold/paged query never
     /// routes on a stale or missing reference for an index big enough to want one.
     fn refresh_persisted_quantizer(&mut self) -> Result<()> {
+        let _quantizer_span =
+            crate::build_timing::span(crate::build_timing::Phase::QuantizerRefresh);
         if !self.manifest.build_config.persist_coarse_quantizer {
             // Disabled: ensure no stale reference lingers.
             if self.manifest.quantizer_ref.is_some() {

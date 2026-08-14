@@ -338,6 +338,15 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "positioned_route_plan_encode",
                 "positioned_transaction_metadata",
                 "positioned_append_prepare",
+                "record_preparation",
+                "id_validation",
+                "id_claim_coordination",
+                "claim_authorization",
+                "positioned_immutable_commit",
+                "positioned_install",
+                "auto_flush",
+                "flush_wal_materialization",
+                "quantizer_refresh",
                 "segment_centroid_radius",
                 "segment_routing_codes",
                 "segment_pq_bounds",
@@ -375,7 +384,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(metrics["storage_puts"], 11)
         self.assertEqual(metrics["storage_bytes_read"], 654321)
         self.assertEqual(metrics["storage_bytes_written"], 123456)
-        self.assertEqual(artifact["phase_timings"]["rows"], 44)
+        self.assertEqual(artifact["phase_timings"]["rows"], 62)
         self.assertEqual(len(artifact["phase_timings"]["sha256"]), 64)
         resource = build_receipt_metrics(
             {
