@@ -26,15 +26,13 @@ use parquet::{
 use crate::{
     BorsukError, Result,
     global_leaf::{
-        DecodedGlobalLeafRow, GlobalLeafPageInput, GlobalLeafRowInput, global_leaf_batch_ranges,
-        global_leaf_exact_rows, global_leaf_row_integrity,
+        DecodedGlobalLeafRow, GlobalLeafPageInput, GlobalLeafRowInput, global_leaf_row_integrity,
     },
     global_pq_sidecar::ResidentGlobalCodebook,
-    mutation::{MutationStamp, MutationVersion},
-    record::{RecordId, VectorElementType},
+    record::VectorElementType,
 };
 
-pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v14";
+pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v15";
 pub(crate) const CELL_CARD_GROUP_MAX_BYTES: u64 = 48 * 1024 * 1024;
 const CELL_CARD_VECTOR_PAYLOAD_BYTES: usize = 96 * 1024;
 const CELL_CARD_MAX_BLOCK_ROWS: usize = 32;
@@ -78,14 +76,13 @@ pub(crate) struct CellCardHeadRef {
     pub(crate) cell_index: u32,
     pub(crate) card_ordinal: u32,
     pub(crate) leaf_ordinal: u32,
-    pub(crate) offset: u64,
-    pub(crate) metadata_bytes: u32,
-    pub(crate) body_bytes: u32,
-    pub(crate) bytes: u32,
+    pub(crate) code_offset: u64,
+    pub(crate) code_bytes: u32,
     pub(crate) rows: u32,
     pub(crate) code_width: u32,
-    pub(crate) checksum: [u8; 32],
+    pub(crate) code_checksum: [u8; 32],
     pub(crate) centroid_code: Box<[u8]>,
+    pub(crate) exact_blocks: Box<[CellCardExactBlockRef]>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +95,9 @@ pub(crate) struct EncodedCellCardGroup {
     pub(crate) bytes: Vec<u8>,
     pub(crate) cards: Vec<EncodedCellCard>,
     checksum: [u8; 32],
+    code_plane_offset: u64,
+    code_plane_bytes: u64,
+    code_plane_checksum: [u8; 32],
 }
 
 #[derive(Debug)]
@@ -235,6 +235,9 @@ pub(crate) struct CellCardGroupRef {
     pub(crate) path: String,
     pub(crate) checksum: [u8; 32],
     pub(crate) encoded_bytes: u64,
+    pub(crate) code_plane_offset: u64,
+    pub(crate) code_plane_bytes: u64,
+    pub(crate) code_plane_checksum: [u8; 32],
 }
 
 #[derive(Debug, Clone)]
@@ -279,6 +282,9 @@ impl EncodedCellCardGroup {
             path: path.to_string(),
             checksum: self.checksum,
             encoded_bytes: self.bytes.len() as u64,
+            code_plane_offset: self.code_plane_offset,
+            code_plane_bytes: self.code_plane_bytes,
+            code_plane_checksum: self.code_plane_checksum,
         });
         let cards = self
             .cards
@@ -293,19 +299,11 @@ impl EncodedCellCardGroup {
 }
 
 #[derive(Debug, Clone)]
-struct VerifiedCellCardRow {
-    id: RecordId,
-    stamp: MutationStamp,
-    code: Vec<u8>,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct VerifiedCellCardHead {
     pub(crate) cell_index: u32,
     pub(crate) card_ordinal: u32,
     pub(crate) leaf_ordinal: u32,
     pub(crate) codes: Vec<Vec<u8>>,
-    rows: Vec<VerifiedCellCardRow>,
     pub(crate) exact_blocks: Vec<CellCardExactBlockRef>,
 }
 
@@ -622,6 +620,25 @@ fn block_checksum(
     *hash.finalize().as_bytes()
 }
 
+fn code_checksum(
+    cell_index: u32,
+    card_ordinal: u32,
+    rows: u32,
+    code_width: u32,
+    bytes: &[u8],
+) -> [u8; 32] {
+    let mut hash = blake3::Hasher::new();
+    hash.update(CELL_CARD_LAYOUT.as_bytes());
+    hash.update(b"\0code-range\0");
+    hash.update(&cell_index.to_le_bytes());
+    hash.update(&card_ordinal.to_le_bytes());
+    hash.update(&rows.to_le_bytes());
+    hash.update(&code_width.to_le_bytes());
+    hash.update(&(bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+    *hash.finalize().as_bytes()
+}
+
 fn head_checksum(reference: &CellCardHeadRef, bytes: &[u8]) -> [u8; 32] {
     let mut hash = blake3::Hasher::new();
     hash.update(CELL_CARD_LAYOUT.as_bytes());
@@ -654,134 +671,85 @@ pub(crate) fn encode_cell_card_group(
             ));
         }
     }
-    let code_width = pages[0].rows[0].code.as_slice().len();
-    if code_width == 0
-        || pages
-            .iter()
-            .flat_map(|page| &page.rows)
-            .any(|row| row.code.as_slice().len() != code_width)
-    {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card rows disagree on positive code width".to_string(),
-        ));
-    }
     let block_rows = cell_card_block_rows(dimensions, element_type)?;
-    let schema = cell_card_schema(dimensions, element_type, code_width)?;
-    let mut pending = Vec::new();
-    let mut provisional = Vec::with_capacity(pages.len());
-    for (card_index, page) in pages.iter().enumerate() {
-        let mut refs = Vec::new();
-        for (block_ordinal, rows) in page.rows.chunks(block_rows).enumerate() {
-            refs.push(CellCardExactBlockRef {
-                block_ordinal: block_ordinal as u32,
-                offset: 0,
-                metadata_bytes: 0,
-                body_bytes: 0,
-                bytes: 0,
-                rows: rows.len() as u32,
-                checksum: [0; 32],
-            });
-            pending.push(PendingExactBlock {
-                card_index,
-                block_ordinal: block_ordinal as u32,
-                rows: rows.to_vec(),
-            });
-        }
-        provisional.push(refs);
-    }
-    let first = write_group(
+    let encoded = crate::global_leaf::encode_global_leaf_bundle_with_block_rows(
         pages,
-        &provisional,
-        &pending,
-        &schema,
         dimensions,
         element_type,
+        block_rows,
     )?;
-    let first_ranges = global_leaf_batch_ranges(&first, pages.len() + pending.len())?;
-    let mut exact_refs = vec![Vec::new(); pages.len()];
-    for (pending_block, range) in pending.iter().zip(first_ranges.iter().skip(pages.len())) {
-        let bytes = range
-            .metadata_bytes
-            .checked_add(range.body_bytes)
-            .ok_or_else(|| BorsukError::InvalidStorage("cell-card block size overflows".into()))?;
-        let end = range
-            .offset
-            .checked_add(u64::from(bytes))
-            .ok_or_else(|| BorsukError::InvalidStorage("cell-card block range overflows".into()))?;
-        let stored = &first[range.offset as usize..end as usize];
-        exact_refs[pending_block.card_index].push(CellCardExactBlockRef {
-            block_ordinal: pending_block.block_ordinal,
-            offset: range.offset,
-            metadata_bytes: range.metadata_bytes,
-            body_bytes: range.body_bytes,
-            bytes,
-            rows: pending_block.rows.len() as u32,
-            checksum: block_checksum(
-                pages[pending_block.card_index].cell_index,
-                pages[pending_block.card_index].leaf_ordinal,
-                pending_block.block_ordinal,
-                pending_block.rows.len() as u32,
-                stored,
-            ),
-        });
-    }
-    let bytes = write_group(
-        pages,
-        &exact_refs,
-        &pending,
-        &schema,
-        dimensions,
-        element_type,
-    )?;
-    if bytes.len() as u64 > CELL_CARD_GROUP_MAX_BYTES {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card group exceeds its complete object cap".to_string(),
-        ));
-    }
-    let ranges = global_leaf_batch_ranges(&bytes, pages.len() + pending.len())?;
-    for (left, right) in first_ranges.iter().zip(&ranges) {
-        if left.offset != right.offset
-            || left.metadata_bytes != right.metadata_bytes
-            || left.body_bytes != right.body_bytes
-        {
-            return Err(BorsukError::InvalidStorage(
-                "cell-card deterministic second pass changed Arrow ranges".to_string(),
-            ));
-        }
-    }
-    let cards = pages
-        .iter()
-        .zip(ranges.iter())
-        .map(|(page, range)| {
-            let batch_bytes = range
-                .metadata_bytes
-                .checked_add(range.body_bytes)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("cell-card head byte size overflows".into())
-                })?;
-            let stored =
-                &bytes[range.offset as usize..range.offset as usize + batch_bytes as usize];
-            let mut head = CellCardHeadRef {
-                cell_index: page.cell_index,
-                card_ordinal: page.leaf_ordinal,
-                leaf_ordinal: page.leaf_ordinal,
-                offset: range.offset,
-                metadata_bytes: range.metadata_bytes,
-                body_bytes: range.body_bytes,
-                bytes: batch_bytes,
-                rows: page.rows.len() as u32,
-                code_width: code_width as u32,
-                checksum: [0; 32],
-                centroid_code: page.centroid_code.clone().into_boxed_slice(),
-            };
-            head.checksum = head_checksum(&head, stored);
-            Ok(EncodedCellCard { head })
+    let bytes = encoded.bytes;
+    let cards = encoded
+        .pages
+        .into_iter()
+        .map(|page| {
+            let code_width = page.code_bytes as usize / page.rows;
+            let exact_blocks = page
+                .exact_blocks
+                .into_iter()
+                .enumerate()
+                .map(|(block_ordinal, block)| {
+                    let start = block.batch_offset as usize;
+                    let end = start + block.batch_bytes as usize;
+                    Ok(CellCardExactBlockRef {
+                        block_ordinal: block_ordinal as u32,
+                        offset: block.batch_offset,
+                        metadata_bytes: block.metadata_bytes,
+                        body_bytes: block.body_bytes,
+                        bytes: block.batch_bytes,
+                        rows: block.rows,
+                        checksum: block_checksum(
+                            page.cell_index,
+                            page.leaf_ordinal,
+                            block_ordinal as u32,
+                            block.rows,
+                            bytes.get(start..end).ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "cell-card exact block exceeds encoded group".into(),
+                                )
+                            })?,
+                        ),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(EncodedCellCard {
+                head: CellCardHeadRef {
+                    cell_index: page.cell_index,
+                    card_ordinal: page.leaf_ordinal,
+                    leaf_ordinal: page.leaf_ordinal,
+                    code_offset: page.code_offset,
+                    code_bytes: page.code_bytes,
+                    rows: page.rows as u32,
+                    code_width: code_width as u32,
+                    code_checksum: code_checksum(
+                        page.cell_index,
+                        page.leaf_ordinal,
+                        page.rows as u32,
+                        code_width as u32,
+                        bytes
+                            .get(
+                                page.code_offset as usize
+                                    ..page.code_offset as usize + page.code_bytes as usize,
+                            )
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "cell-card code range exceeds encoded group".into(),
+                                )
+                            })?,
+                    ),
+                    centroid_code: page.centroid_code.into_boxed_slice(),
+                    exact_blocks: exact_blocks.into_boxed_slice(),
+                },
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(EncodedCellCardGroup {
         checksum: *blake3::hash(&bytes).as_bytes(),
         bytes,
         cards,
+        code_plane_offset: encoded.code_plane_offset,
+        code_plane_bytes: encoded.code_plane_bytes,
+        code_plane_checksum: encoded.code_plane_checksum,
     })
 }
 
@@ -827,186 +795,36 @@ fn decode_cell_card_head_inner(
     dimensions: usize,
     element_type: VectorElementType,
 ) -> Result<VerifiedCellCardHead> {
-    if reference.bytes
-        != reference
-            .metadata_bytes
-            .checked_add(reference.body_bytes)
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("cell-card head byte size overflows".to_string())
-            })?
-        || stored.len() != reference.bytes as usize
-        || head_checksum(reference, stored) != reference.checksum
-    {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card head checksum or bounds mismatch".to_string(),
-        ));
-    }
-    let schema = cell_card_schema(dimensions, element_type, reference.code_width as usize)?;
-    let batch = decode_batch(
-        stored,
-        reference.metadata_bytes,
-        reference.body_bytes,
-        schema,
-    )?;
-    let payload = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<UnionArray>()
-        .ok_or_else(|| BorsukError::InvalidStorage("cell-card head is not a union".into()))?;
-    if payload.type_ids().iter().any(|id| *id != 0) {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card head contains non-head rows".to_string(),
-        ));
-    }
-    if payload.offsets().is_none_or(|offsets| {
-        offsets
-            .iter()
-            .enumerate()
-            .any(|(row, offset)| *offset as usize != row)
-    }) {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card head union offsets are not canonical".to_string(),
-        ));
-    }
-    let head = payload
-        .child(0)
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .ok_or_else(|| BorsukError::InvalidStorage("cell-card head child is invalid".into()))?;
-    if head.len() != reference.rows as usize {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card head row count mismatch".to_string(),
-        ));
-    }
-    if head.columns().iter().any(|column| column.null_count() != 0) {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card head contains null authority values".to_string(),
-        ));
-    }
-    let u32s = |column: usize| -> Result<&UInt32Array> {
-        head.column(column)
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .ok_or_else(|| BorsukError::InvalidStorage("cell-card UInt32 column invalid".into()))
-    };
-    let cell = u32s(0)?;
-    let card = u32s(1)?;
-    let leaf = u32s(2)?;
-    let ordinal = u32s(3)?;
-    if (0..head.len()).any(|row| {
-        cell.value(row) != reference.cell_index
-            || card.value(row) != reference.card_ordinal
-            || leaf.value(row) != reference.leaf_ordinal
-            || ordinal.value(row) as usize != row
-    }) {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card head embedded identity mismatch".to_string(),
-        ));
-    }
-    let ids = head
-        .column(4)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .unwrap();
-    let hlcs = head
-        .column(5)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .unwrap();
-    let writers = head
-        .column(6)
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .unwrap();
-    let digests = head
-        .column(7)
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .unwrap();
-    let codes = head
-        .column(8)
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .unwrap();
-    let lists = (9..15)
-        .map(|column| {
-            head.column(column)
-                .as_any()
-                .downcast_ref::<ListArray>()
+    if reference.rows == 0
+        || reference.code_width == 0
+        || reference.code_bytes
+            != reference
+                .rows
+                .checked_mul(reference.code_width)
                 .ok_or_else(|| {
-                    BorsukError::InvalidStorage("cell-card block list is invalid".to_string())
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if head.len() == 0
-        || lists.iter().any(|list| {
-            list.values().null_count() != 0
-                || (1..head.len()).any(|row| list.value_length(row) != 0)
-        })
+                    BorsukError::InvalidStorage("cell-card code byte count overflows".into())
+                })?
+        || stored.len() != reference.code_bytes as usize
+        || code_checksum(
+            reference.cell_index,
+            reference.card_ordinal,
+            reference.rows,
+            reference.code_width,
+            stored,
+        ) != reference.code_checksum
     {
         return Err(BorsukError::InvalidStorage(
-            "cell-card block lists are not stored once in the head".to_string(),
+            "cell-card code range checksum or bounds mismatch".to_string(),
         ));
     }
-    let offsets = lists[0].value(0);
-    let offsets = offsets.as_any().downcast_ref::<UInt64Array>().unwrap();
-    let metadata = lists[1].value(0);
-    let metadata = metadata.as_any().downcast_ref::<UInt32Array>().unwrap();
-    let bodies = lists[2].value(0);
-    let bodies = bodies.as_any().downcast_ref::<UInt32Array>().unwrap();
-    let block_bytes = lists[3].value(0);
-    let block_bytes = block_bytes.as_any().downcast_ref::<UInt32Array>().unwrap();
-    let block_rows = lists[4].value(0);
-    let block_rows = block_rows.as_any().downcast_ref::<UInt32Array>().unwrap();
-    let checksums = lists[5].value(0);
-    let checksums = checksums.as_any().downcast_ref::<BinaryArray>().unwrap();
-    let mut rows = Vec::with_capacity(head.len());
-    for row in 0..head.len() {
-        rows.push(VerifiedCellCardRow {
-            id: RecordId::from_bytes(ids.value(row).to_vec()),
-            stamp: MutationStamp::new(
-                MutationVersion::from_parts(
-                    hlcs.value(row),
-                    fixed_16(writers.value(row), "mutation writer")?,
-                ),
-                fixed_32(digests.value(row), "mutation digest")?,
-            ),
-            code: codes.value(row).to_vec(),
-        });
-    }
-    let lengths = [
-        offsets.len(),
-        metadata.len(),
-        bodies.len(),
-        block_bytes.len(),
-        block_rows.len(),
-        checksums.len(),
-    ];
-    if lengths.iter().any(|length| *length != lengths[0]) {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card block list lengths disagree".to_string(),
-        ));
-    }
-    let exact_blocks = (0..lengths[0])
-        .map(|block| {
-            Ok(CellCardExactBlockRef {
-                block_ordinal: block as u32,
-                offset: offsets.value(block),
-                metadata_bytes: metadata.value(block),
-                body_bytes: bodies.value(block),
-                bytes: block_bytes.value(block),
-                rows: block_rows.value(block),
-                checksum: fixed_32(checksums.value(block), "block checksum")?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let code_end = reference
+        .code_offset
+        .checked_add(u64::from(reference.code_bytes))
+        .ok_or_else(|| BorsukError::InvalidStorage("cell-card code range overflows".into()))?;
     validate_exact_block_refs(
-        &exact_blocks,
+        &reference.exact_blocks,
         reference.rows,
-        reference
-            .offset
-            .checked_add(u64::from(reference.bytes))
-            .ok_or_else(|| BorsukError::InvalidStorage("cell-card head range overflows".into()))?,
+        code_end,
         group_encoded_bytes,
         dimensions,
         element_type,
@@ -1015,9 +833,11 @@ fn decode_cell_card_head_inner(
         cell_index: reference.cell_index,
         card_ordinal: reference.card_ordinal,
         leaf_ordinal: reference.leaf_ordinal,
-        codes: rows.iter().map(|row| row.code.clone()).collect(),
-        rows,
-        exact_blocks,
+        codes: stored
+            .chunks_exact(reference.code_width as usize)
+            .map(<[u8]>::to_vec)
+            .collect(),
+        exact_blocks: reference.exact_blocks.to_vec(),
     })
 }
 
@@ -1150,100 +970,24 @@ impl VerifiedCellCardHead {
                 "cell-card exact block checksum or bounds mismatch".to_string(),
             ));
         }
-        let code_width = self.rows.first().map_or(0, |row| row.code.len());
-        let schema = cell_card_schema(dimensions, element_type, code_width)?;
-        let batch = decode_batch(
+        let code_width = self.codes.first().map_or(0, Vec::len);
+        let batch = crate::global_leaf::decode_global_leaf_exact_block(
+            &crate::global_leaf::GlobalLeafExactBlockRef {
+                first_row: block_ordinal
+                    .saturating_mul(cell_card_block_rows(dimensions, element_type)? as u32),
+                rows: reference.rows,
+                batch_offset: reference.offset,
+                metadata_bytes: reference.metadata_bytes,
+                body_bytes: reference.body_bytes,
+                batch_bytes: reference.bytes,
+                checksum: *blake3::hash(stored).as_bytes(),
+            },
             stored,
-            reference.metadata_bytes,
-            reference.body_bytes,
-            schema,
+            code_width,
+            dimensions,
+            element_type,
         )?;
-        let payload = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<UnionArray>()
-            .unwrap();
-        if payload.type_ids().iter().any(|id| *id != 1) {
-            return Err(BorsukError::InvalidStorage(
-                "cell-card exact block contains non-vector rows".to_string(),
-            ));
-        }
-        if payload.offsets().is_none_or(|offsets| {
-            offsets
-                .iter()
-                .enumerate()
-                .any(|(row, offset)| *offset as usize != row)
-        }) {
-            return Err(BorsukError::InvalidStorage(
-                "cell-card exact block union offsets are not canonical".to_string(),
-            ));
-        }
-        let exact = payload
-            .child(1)
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap();
-        if exact.len() != reference.rows as usize {
-            return Err(BorsukError::InvalidStorage(
-                "cell-card exact block row count mismatch".to_string(),
-            ));
-        }
-        if exact
-            .columns()
-            .iter()
-            .any(|column| column.null_count() != 0)
-        {
-            return Err(BorsukError::InvalidStorage(
-                "cell-card exact block contains null values".to_string(),
-            ));
-        }
-        let u32s = |column: usize| {
-            exact
-                .column(column)
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .unwrap()
-        };
-        for row in 0..exact.len() {
-            if u32s(0).value(row) != self.cell_index
-                || u32s(1).value(row) != self.card_ordinal
-                || u32s(2).value(row) != self.leaf_ordinal
-                || u32s(3).value(row) != block_ordinal
-                || u32s(4).value(row) as usize != row
-            {
-                return Err(BorsukError::InvalidStorage(
-                    "cell-card exact block embedded identity mismatch".to_string(),
-                ));
-            }
-        }
-        let integrity = exact
-            .column(5)
-            .as_any()
-            .downcast_ref::<FixedSizeBinaryArray>()
-            .unwrap();
-        let vectors = global_leaf_exact_rows(exact.column(6).as_ref(), dimensions, element_type)?;
-        let start = block_ordinal as usize * cell_card_block_rows(dimensions, element_type)?;
-        vectors
-            .into_iter()
-            .enumerate()
-            .map(|(row, vector)| {
-                let authority = self.rows.get(start + row).ok_or_else(|| {
-                    BorsukError::InvalidStorage("cell-card block exceeds head rows".into())
-                })?;
-                if integrity.value(row)
-                    != global_leaf_row_integrity(authority.id.as_bytes(), authority.stamp, &vector)
-                {
-                    return Err(BorsukError::InvalidStorage(
-                        "cell-card exact row integrity mismatch".to_string(),
-                    ));
-                }
-                Ok(DecodedGlobalLeafRow {
-                    id: authority.id.clone(),
-                    stamp: authority.stamp,
-                    vector: element_type.decode_fixed_width(&vector, dimensions)?,
-                })
-            })
-            .collect()
+        crate::global_leaf::decode_global_leaf_rows(&batch, dimensions, element_type)
     }
 }
 
@@ -1254,12 +998,12 @@ pub(crate) struct ResidentCellCardRoot {
     cell_indexes: Box<[u32]>,
     card_ordinals: Box<[u32]>,
     leaf_ordinals: Box<[u32]>,
-    head_offsets: Box<[u64]>,
-    head_metadata_bytes: Box<[u32]>,
-    head_body_bytes: Box<[u32]>,
+    code_offsets: Box<[u64]>,
+    code_bytes: Box<[u32]>,
     rows: Box<[u32]>,
     code_widths: Box<[u32]>,
-    head_checksums: Box<[[u8; 32]]>,
+    code_checksums: Box<[[u8; 32]]>,
+    exact_blocks: Box<[Box<[CellCardExactBlockRef]>]>,
     centroid_offsets: Box<[u32]>,
     centroid_codes: Box<[u8]>,
     resident_bytes: usize,
@@ -1441,23 +1185,29 @@ fn plan_cell_card_head_indexes(
         ));
     }
     cards.sort_by(|left, right| {
-        left.0
-            .path
-            .cmp(&right.0.path)
-            .then_with(|| left.1.reference.offset.cmp(&right.1.reference.offset))
+        left.0.path.cmp(&right.0.path).then_with(|| {
+            left.1
+                .reference
+                .code_offset
+                .cmp(&right.1.reference.code_offset)
+        })
     });
     let card_count = cards.len();
     let mut reads = Vec::<CellCardHeadRead>::new();
     for (group, card) in cards {
         let card_end = card
             .reference
-            .offset
-            .checked_add(u64::from(card.reference.bytes))
-            .ok_or_else(|| BorsukError::InvalidStorage("cell-card head range overflows".into()))?;
+            .code_offset
+            .checked_add(u64::from(card.reference.code_bytes))
+            .ok_or_else(|| BorsukError::InvalidStorage("cell-card code range overflows".into()))?;
         if let Some(prior) = reads.last_mut()
             && prior.group.path == group.path
         {
-            if card.reference.offset < prior.end {
+            if card.reference.code_offset == prior.start && card_end == prior.end {
+                prior.cards.push(card);
+                continue;
+            }
+            if card.reference.code_offset < prior.end {
                 return Err(BorsukError::InvalidStorage(
                     "cell-card head ranges overlap".to_string(),
                 ));
@@ -1465,13 +1215,13 @@ fn plan_cell_card_head_indexes(
             if cell_card_ranges_should_coalesce(
                 prior.start,
                 prior.end,
-                card.reference.offset,
+                card.reference.code_offset,
                 card_end,
             ) {
                 prior.end = card_end;
                 prior.selected_bytes = prior
                     .selected_bytes
-                    .checked_add(u64::from(card.reference.bytes))
+                    .checked_add(u64::from(card.reference.code_bytes))
                     .ok_or_else(|| {
                         BorsukError::InvalidStorage(
                             "cell-card selected head bytes overflow".to_string(),
@@ -1483,9 +1233,9 @@ fn plan_cell_card_head_indexes(
         }
         reads.push(CellCardHeadRead {
             group,
-            start: card.reference.offset,
+            start: card.reference.code_offset,
             end: card_end,
-            selected_bytes: u64::from(card.reference.bytes),
+            selected_bytes: u64::from(card.reference.code_bytes),
             cards: vec![card],
         });
     }
@@ -1544,13 +1294,13 @@ pub(crate) fn decode_cell_card_head_wave(
         for card in &read.cards {
             let start = card
                 .reference
-                .offset
+                .code_offset
                 .checked_sub(read.start)
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage("cell-card head starts before its read".to_string())
                 })?;
             let end = start
-                .checked_add(u64::from(card.reference.bytes))
+                .checked_add(u64::from(card.reference.code_bytes))
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "cell-card head response range overflows".to_string(),
@@ -1997,7 +1747,7 @@ impl GlobalCellCardAnnRef {
         purge_epoch: u64,
     ) -> Result<Self> {
         let reference = Self {
-            layout_version: 14,
+            layout_version: 15,
             codebook,
             root_path,
             root,
@@ -2018,10 +1768,10 @@ impl GlobalCellCardAnnRef {
         let checksum = blake3::Hash::from_bytes(self.root.checksum)
             .to_hex()
             .to_string();
-        if self.layout_version != 14
+        if self.layout_version != 15
             || self.root_path
                 != format!(
-                    "global-cell-cards/v14/roots/{}/root-{checksum}.parquet",
+                    "global-cell-cards/v15/roots/{}/root-{checksum}.parquet",
                     &checksum[..2]
                 )
             || self.root.encoded_bytes == 0
@@ -2035,7 +1785,7 @@ impl GlobalCellCardAnnRef {
             || self.purge_epoch > self.leaf_epoch
         {
             return Err(BorsukError::InvalidStorage(
-                "V14 global cell-card reference is invalid".to_string(),
+                "V15 global cell-card reference is invalid".to_string(),
             ));
         }
         Ok(())
@@ -2150,8 +1900,6 @@ impl ResidentCellCardRoot {
         let group_index = *self.group_indexes.get(index).ok_or_else(|| {
             BorsukError::InvalidStorage("cell-card root index is out of range".to_string())
         })? as usize;
-        let metadata_bytes = self.head_metadata_bytes[index];
-        let body_bytes = self.head_body_bytes[index];
         let centroid_start = self.centroid_offsets[index] as usize;
         let centroid_end = self.centroid_offsets[index + 1] as usize;
         Ok((
@@ -2162,18 +1910,15 @@ impl ResidentCellCardRoot {
                 cell_index: self.cell_indexes[index],
                 card_ordinal: self.card_ordinals[index],
                 leaf_ordinal: self.leaf_ordinals[index],
-                offset: self.head_offsets[index],
-                metadata_bytes,
-                body_bytes,
-                bytes: metadata_bytes.checked_add(body_bytes).ok_or_else(|| {
-                    BorsukError::InvalidStorage("cell-card head byte size overflows".to_string())
-                })?,
+                code_offset: self.code_offsets[index],
+                code_bytes: self.code_bytes[index],
                 rows: self.rows[index],
                 code_width: self.code_widths[index],
-                checksum: self.head_checksums[index],
+                code_checksum: self.code_checksums[index],
                 centroid_code: self.centroid_codes[centroid_start..centroid_end]
                     .to_vec()
                     .into_boxed_slice(),
+                exact_blocks: self.exact_blocks[index].clone(),
             },
         ))
     }
@@ -2186,17 +1931,52 @@ fn root_schema() -> Arc<Schema> {
         Field::new("group_path", DataType::Utf8, false),
         Field::new("group_checksum", DataType::FixedSizeBinary(32), false),
         Field::new("group_bytes", DataType::UInt64, false),
+        Field::new("group_code_plane_offset", DataType::UInt64, false),
+        Field::new("group_code_plane_bytes", DataType::UInt64, false),
+        Field::new(
+            "group_code_plane_checksum",
+            DataType::FixedSizeBinary(32),
+            false,
+        ),
         Field::new("cell_index", DataType::UInt32, false),
         Field::new("card_ordinal", DataType::UInt32, false),
         Field::new("leaf_ordinal", DataType::UInt32, false),
-        Field::new("head_offset", DataType::UInt64, false),
-        Field::new("head_metadata_bytes", DataType::UInt32, false),
-        Field::new("head_body_bytes", DataType::UInt32, false),
-        Field::new("head_bytes", DataType::UInt32, false),
+        Field::new("code_offset", DataType::UInt64, false),
+        Field::new("code_bytes", DataType::UInt32, false),
         Field::new("rows", DataType::UInt32, false),
         Field::new("code_width", DataType::UInt32, false),
-        Field::new("head_checksum", DataType::FixedSizeBinary(32), false),
+        Field::new("code_checksum", DataType::FixedSizeBinary(32), false),
         Field::new("centroid_code", DataType::Binary, false),
+        Field::new(
+            "block_offsets",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, true))),
+            false,
+        ),
+        Field::new(
+            "block_metadata_bytes",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
+            false,
+        ),
+        Field::new(
+            "block_body_bytes",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
+            false,
+        ),
+        Field::new(
+            "block_bytes",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
+            false,
+        ),
+        Field::new(
+            "block_rows",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
+            false,
+        ),
+        Field::new(
+            "block_checksums",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Binary, true))),
+            false,
+        ),
     ]))
 }
 
@@ -2209,6 +1989,11 @@ fn validate_group_ref(group: &CellCardGroupRef) -> Result<()> {
         || !group.path.ends_with(&expected_suffix)
         || group.encoded_bytes == 0
         || group.encoded_bytes > CELL_CARD_GROUP_MAX_BYTES
+        || group.code_plane_bytes == 0
+        || group
+            .code_plane_offset
+            .checked_add(group.code_plane_bytes)
+            .is_none_or(|end| end > group.encoded_bytes)
     {
         return Err(BorsukError::InvalidStorage(
             "cell-card group reference is invalid".to_string(),
@@ -2221,23 +2006,26 @@ fn validate_card_ref(card: &CellCardRef) -> Result<()> {
     validate_group_ref(&card.group)?;
     let end = card
         .head
-        .offset
-        .checked_add(u64::from(card.head.bytes))
-        .ok_or_else(|| BorsukError::InvalidStorage("cell-card head range overflows".into()))?;
+        .code_offset
+        .checked_add(u64::from(card.head.code_bytes))
+        .ok_or_else(|| BorsukError::InvalidStorage("cell-card code range overflows".into()))?;
     if card.head.card_ordinal != card.head.leaf_ordinal
         || card.head.rows == 0
         || card.head.code_width == 0
         || card.head.centroid_code.len() != card.head.code_width as usize
-        || card.head.metadata_bytes > CELL_CARD_MAX_METADATA_BYTES
-        || card.head.bytes
-            != card
-                .head
-                .metadata_bytes
-                .checked_add(card.head.body_bytes)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("cell-card head byte size overflows".into())
-                })?
-        || end > card.group.encoded_bytes
+        || card.head.code_bytes != card.head.rows.saturating_mul(card.head.code_width)
+        || card.head.code_offset < card.group.code_plane_offset
+        || end > card.group.code_plane_offset + card.group.code_plane_bytes
+        || card.head.exact_blocks.is_empty()
+        || card.head.exact_blocks.iter().any(|block| {
+            block.rows == 0
+                || block.bytes != block.metadata_bytes.saturating_add(block.body_bytes)
+                || block.offset < card.group.code_plane_offset + card.group.code_plane_bytes
+                || block
+                    .offset
+                    .checked_add(u64::from(block.bytes))
+                    .is_none_or(|end| end > card.group.encoded_bytes)
+        })
     {
         return Err(BorsukError::InvalidStorage(
             "cell-card head reference is invalid".to_string(),
@@ -2256,10 +2044,9 @@ pub(crate) fn encode_cell_card_run_root(
             "cell-card root requires codebook, groups, and cards".to_string(),
         ));
     }
-    if groups.len() > cards.len()
-        || groups
-            .iter()
-            .any(|group| validate_group_ref(group).is_err())
+    if groups
+        .iter()
+        .any(|group| validate_group_ref(group).is_err())
         || cards.iter().any(|card| validate_card_ref(card).is_err())
         || cards.windows(2).any(|pair| {
             (pair[0].head.cell_index, pair[0].head.card_ordinal)
@@ -2270,23 +2057,50 @@ pub(crate) fn encode_cell_card_run_root(
             "cell-card root references are invalid or unordered".to_string(),
         ));
     }
-    let group_paths = groups
-        .iter()
-        .map(|group| group.path.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    if group_paths.len() != groups.len()
-        || groups
-            .iter()
-            .any(|group| !cards.iter().any(|card| card.group.path == group.path))
+    let mut groups_by_path = BTreeMap::<&str, &CellCardGroupRef>::new();
+    for group in groups {
+        if let Some(prior) = groups_by_path.insert(group.path.as_str(), group)
+            && prior != group.as_ref()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card group references conflict".into(),
+            ));
+        }
+    }
+    if groups_by_path
+        .values()
+        .any(|group| !cards.iter().any(|card| card.group.path == group.path))
         || cards
             .iter()
-            .any(|card| !group_paths.contains(card.group.path.as_str()))
+            .any(|card| !groups_by_path.contains_key(card.group.path.as_str()))
     {
         return Err(BorsukError::InvalidStorage(
             "cell-card root has a foreign group".into(),
         ));
     }
     let schema = root_schema();
+    let mut block_offsets = ListBuilder::new(UInt64Builder::new());
+    let mut block_metadata = ListBuilder::new(UInt32Builder::new());
+    let mut block_bodies = ListBuilder::new(UInt32Builder::new());
+    let mut block_bytes = ListBuilder::new(UInt32Builder::new());
+    let mut block_rows = ListBuilder::new(UInt32Builder::new());
+    let mut block_checksums = ListBuilder::new(BinaryBuilder::new());
+    for card in cards {
+        for block in &card.head.exact_blocks {
+            block_offsets.values().append_value(block.offset);
+            block_metadata.values().append_value(block.metadata_bytes);
+            block_bodies.values().append_value(block.body_bytes);
+            block_bytes.values().append_value(block.bytes);
+            block_rows.values().append_value(block.rows);
+            block_checksums.values().append_value(block.checksum);
+        }
+        block_offsets.append(true);
+        block_metadata.append(true);
+        block_bodies.append(true);
+        block_bytes.append(true);
+        block_rows.append(true);
+        block_checksums.append(true);
+    }
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
@@ -2305,6 +2119,17 @@ pub(crate) fn encode_cell_card_run_root(
             Arc::new(UInt64Array::from_iter_values(
                 cards.iter().map(|card| card.group.encoded_bytes),
             )),
+            Arc::new(UInt64Array::from_iter_values(
+                cards.iter().map(|card| card.group.code_plane_offset),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                cards.iter().map(|card| card.group.code_plane_bytes),
+            )),
+            Arc::new(FixedSizeBinaryArray::try_from_iter(
+                cards
+                    .iter()
+                    .map(|card| card.group.code_plane_checksum.as_slice()),
+            )?),
             Arc::new(UInt32Array::from_iter_values(
                 cards.iter().map(|card| card.head.cell_index),
             )),
@@ -2315,16 +2140,10 @@ pub(crate) fn encode_cell_card_run_root(
                 cards.iter().map(|card| card.head.leaf_ordinal),
             )),
             Arc::new(UInt64Array::from_iter_values(
-                cards.iter().map(|card| card.head.offset),
+                cards.iter().map(|card| card.head.code_offset),
             )),
             Arc::new(UInt32Array::from_iter_values(
-                cards.iter().map(|card| card.head.metadata_bytes),
-            )),
-            Arc::new(UInt32Array::from_iter_values(
-                cards.iter().map(|card| card.head.body_bytes),
-            )),
-            Arc::new(UInt32Array::from_iter_values(
-                cards.iter().map(|card| card.head.bytes),
+                cards.iter().map(|card| card.head.code_bytes),
             )),
             Arc::new(UInt32Array::from_iter_values(
                 cards.iter().map(|card| card.head.rows),
@@ -2333,11 +2152,17 @@ pub(crate) fn encode_cell_card_run_root(
                 cards.iter().map(|card| card.head.code_width),
             )),
             Arc::new(FixedSizeBinaryArray::try_from_iter(
-                cards.iter().map(|card| card.head.checksum.as_slice()),
+                cards.iter().map(|card| card.head.code_checksum.as_slice()),
             )?),
             Arc::new(BinaryArray::from_iter_values(
                 cards.iter().map(|card| card.head.centroid_code.as_ref()),
             )),
+            Arc::new(block_offsets.finish()),
+            Arc::new(block_metadata.finish()),
+            Arc::new(block_bodies.finish()),
+            Arc::new(block_bytes.finish()),
+            Arc::new(block_rows.finish()),
+            Arc::new(block_checksums.finish()),
         ],
     )?;
     let mut bytes = Vec::new();
@@ -2389,12 +2214,12 @@ pub(crate) fn decode_cell_card_run_root(
         let mut cell_indexes = Vec::with_capacity(total_rows);
         let mut card_ordinals = Vec::with_capacity(total_rows);
         let mut leaf_ordinals = Vec::with_capacity(total_rows);
-        let mut head_offsets = Vec::with_capacity(total_rows);
-        let mut head_metadata_bytes = Vec::with_capacity(total_rows);
-        let mut head_body_bytes = Vec::with_capacity(total_rows);
+        let mut code_offsets = Vec::with_capacity(total_rows);
+        let mut code_bytes = Vec::with_capacity(total_rows);
         let mut rows = Vec::with_capacity(total_rows);
         let mut code_widths = Vec::with_capacity(total_rows);
-        let mut head_checksums = Vec::with_capacity(total_rows);
+        let mut code_checksums = Vec::with_capacity(total_rows);
+        let mut exact_blocks = Vec::with_capacity(total_rows);
         let mut centroid_offsets = Vec::with_capacity(total_rows + 1);
         let mut centroid_codes = Vec::new();
         let mut prior_key = None;
@@ -2440,10 +2265,23 @@ pub(crate) fn decode_cell_card_run_root(
                     .unwrap()
             };
             let centroids = batch
-                .column(15)
+                .column(16)
                 .as_any()
                 .downcast_ref::<BinaryArray>()
                 .unwrap();
+            let lists = (17..23)
+                .map(|column| {
+                    batch
+                        .column(column)
+                        .as_any()
+                        .downcast_ref::<ListArray>()
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "cell-card root block list is invalid".to_string(),
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
             for row in 0..batch.num_rows() {
                 if strings(0).value(row) != CELL_CARD_LAYOUT
                     || strings(1).value(row) != expected_codebook_checksum
@@ -2457,6 +2295,12 @@ pub(crate) fn decode_cell_card_run_root(
                     path: path.to_string(),
                     checksum: fixed_32(binaries(3).value(row), "group checksum")?,
                     encoded_bytes: u64s(4).value(row),
+                    code_plane_offset: u64s(5).value(row),
+                    code_plane_bytes: u64s(6).value(row),
+                    code_plane_checksum: fixed_32(
+                        binaries(7).value(row),
+                        "group code-plane checksum",
+                    )?,
                 };
                 validate_group_ref(&candidate_group)?;
                 let group_index = if let Some(index) = groups_by_path.get(path).copied() {
@@ -2474,9 +2318,9 @@ pub(crate) fn decode_cell_card_run_root(
                     groups_by_path.insert(path.to_string(), index);
                     index
                 };
-                let cell_index = u32s(5).value(row);
-                let card_ordinal = u32s(6).value(row);
-                let leaf_ordinal = u32s(7).value(row);
+                let cell_index = u32s(8).value(row);
+                let card_ordinal = u32s(9).value(row);
+                let leaf_ordinal = u32s(10).value(row);
                 let key = (cell_index, card_ordinal);
                 if card_ordinal != leaf_ordinal || prior_key.is_some_and(|prior| prior >= key) {
                     return Err(BorsukError::InvalidStorage(
@@ -2484,43 +2328,115 @@ pub(crate) fn decode_cell_card_run_root(
                     ));
                 }
                 prior_key = Some(key);
-                let offset = u64s(8).value(row);
-                let metadata_bytes = u32s(9).value(row);
-                let body_bytes = u32s(10).value(row);
-                let declared_bytes = u32s(11).value(row);
-                let row_count = u32s(12).value(row);
-                let code_width = u32s(13).value(row);
+                let offset = u64s(11).value(row);
+                let declared_bytes = u32s(12).value(row);
+                let row_count = u32s(13).value(row);
+                let code_width = u32s(14).value(row);
                 let end = offset
                     .checked_add(u64::from(declared_bytes))
                     .ok_or_else(|| {
-                        BorsukError::InvalidStorage("cell-card head range overflows".to_string())
+                        BorsukError::InvalidStorage("cell-card code range overflows".to_string())
                     })?;
                 if row_count == 0
                     || code_width == 0
                     || centroids.value(row).len() != code_width as usize
-                    || metadata_bytes > CELL_CARD_MAX_METADATA_BYTES
-                    || declared_bytes
-                        != metadata_bytes.checked_add(body_bytes).ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "cell-card head byte size overflows".to_string(),
-                            )
-                        })?
-                    || end > groups[group_index as usize].encoded_bytes
+                    || declared_bytes != row_count.saturating_mul(code_width)
+                    || offset < groups[group_index as usize].code_plane_offset
+                    || end
+                        > groups[group_index as usize].code_plane_offset
+                            + groups[group_index as usize].code_plane_bytes
                 {
                     return Err(BorsukError::InvalidStorage(
-                        "cell-card head reference is invalid".to_string(),
+                        "cell-card code reference is invalid".to_string(),
+                    ));
+                }
+                let values = lists.iter().map(|list| list.value(row)).collect::<Vec<_>>();
+                let offsets = values[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+                let metadata = values[1].as_any().downcast_ref::<UInt32Array>().unwrap();
+                let bodies = values[2].as_any().downcast_ref::<UInt32Array>().unwrap();
+                let bytes = values[3].as_any().downcast_ref::<UInt32Array>().unwrap();
+                let block_rows = values[4].as_any().downcast_ref::<UInt32Array>().unwrap();
+                let checksums = values[5].as_any().downcast_ref::<BinaryArray>().unwrap();
+                let lengths = [
+                    offsets.len(),
+                    metadata.len(),
+                    bodies.len(),
+                    bytes.len(),
+                    block_rows.len(),
+                    checksums.len(),
+                ];
+                if lengths[0] == 0 || lengths.iter().any(|length| *length != lengths[0]) {
+                    return Err(BorsukError::InvalidStorage(
+                        "cell-card root block lists disagree".to_string(),
+                    ));
+                }
+                let card_blocks = (0..lengths[0])
+                    .map(|block| {
+                        Ok(CellCardExactBlockRef {
+                            block_ordinal: block as u32,
+                            offset: offsets.value(block),
+                            metadata_bytes: metadata.value(block),
+                            body_bytes: bodies.value(block),
+                            bytes: bytes.value(block),
+                            rows: block_rows.value(block),
+                            checksum: fixed_32(checksums.value(block), "block checksum")?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let mut prior_end = end;
+                let mut covered_rows = 0_u64;
+                for (ordinal, block) in card_blocks.iter().enumerate() {
+                    let block_end = block
+                        .offset
+                        .checked_add(u64::from(block.bytes))
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "cell-card root block range overflows".to_string(),
+                            )
+                        })?;
+                    if block.block_ordinal as usize != ordinal
+                        || block.rows == 0
+                        || block.bytes
+                            != block
+                                .metadata_bytes
+                                .checked_add(block.body_bytes)
+                                .ok_or_else(|| {
+                                    BorsukError::InvalidStorage(
+                                        "cell-card root block bytes overflow".to_string(),
+                                    )
+                                })?
+                        || block.offset < prior_end
+                        || block_end > groups[group_index as usize].encoded_bytes
+                    {
+                        return Err(BorsukError::InvalidStorage(
+                            "cell-card root block reference is invalid".to_string(),
+                        ));
+                    }
+                    covered_rows =
+                        covered_rows
+                            .checked_add(u64::from(block.rows))
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "cell-card root block rows overflow".to_string(),
+                                )
+                            })?;
+                    prior_end = block_end;
+                }
+                if covered_rows != u64::from(row_count) {
+                    return Err(BorsukError::InvalidStorage(
+                        "cell-card root blocks do not cover card rows".to_string(),
                     ));
                 }
                 group_indexes.push(group_index);
                 cell_indexes.push(cell_index);
                 card_ordinals.push(card_ordinal);
                 leaf_ordinals.push(leaf_ordinal);
-                head_offsets.push(offset);
-                head_metadata_bytes.push(metadata_bytes);
-                head_body_bytes.push(body_bytes);
+                code_offsets.push(offset);
+                code_bytes.push(declared_bytes);
                 rows.push(row_count);
                 code_widths.push(code_width);
-                head_checksums.push(fixed_32(binaries(14).value(row), "head checksum")?);
+                code_checksums.push(fixed_32(binaries(15).value(row), "code checksum")?);
+                exact_blocks.push(card_blocks.into_boxed_slice());
                 centroid_codes.extend_from_slice(centroids.value(row));
                 centroid_offsets.push(u32::try_from(centroid_codes.len()).map_err(|_| {
                     BorsukError::InvalidStorage(
@@ -2538,12 +2454,12 @@ pub(crate) fn decode_cell_card_run_root(
         let cell_indexes = cell_indexes.into_boxed_slice();
         let card_ordinals = card_ordinals.into_boxed_slice();
         let leaf_ordinals = leaf_ordinals.into_boxed_slice();
-        let head_offsets = head_offsets.into_boxed_slice();
-        let head_metadata_bytes = head_metadata_bytes.into_boxed_slice();
-        let head_body_bytes = head_body_bytes.into_boxed_slice();
+        let code_offsets = code_offsets.into_boxed_slice();
+        let code_bytes = code_bytes.into_boxed_slice();
         let rows = rows.into_boxed_slice();
         let code_widths = code_widths.into_boxed_slice();
-        let head_checksums = head_checksums.into_boxed_slice();
+        let code_checksums = code_checksums.into_boxed_slice();
+        let exact_blocks = exact_blocks.into_boxed_slice();
         let centroid_offsets = centroid_offsets.into_boxed_slice();
         let centroid_codes = centroid_codes.into_boxed_slice();
         let resident_bytes = std::mem::size_of::<ResidentCellCardRoot>()
@@ -2553,12 +2469,15 @@ pub(crate) fn decode_cell_card_run_root(
             + cell_indexes.len() * std::mem::size_of::<u32>()
             + card_ordinals.len() * std::mem::size_of::<u32>()
             + leaf_ordinals.len() * std::mem::size_of::<u32>()
-            + head_offsets.len() * std::mem::size_of::<u64>()
-            + head_metadata_bytes.len() * std::mem::size_of::<u32>()
-            + head_body_bytes.len() * std::mem::size_of::<u32>()
+            + code_offsets.len() * std::mem::size_of::<u64>()
+            + code_bytes.len() * std::mem::size_of::<u32>()
             + rows.len() * std::mem::size_of::<u32>()
             + code_widths.len() * std::mem::size_of::<u32>()
-            + head_checksums.len() * std::mem::size_of::<[u8; 32]>()
+            + code_checksums.len() * std::mem::size_of::<[u8; 32]>()
+            + exact_blocks
+                .iter()
+                .map(|blocks| blocks.len() * std::mem::size_of::<CellCardExactBlockRef>())
+                .sum::<usize>()
             + centroid_offsets.len() * std::mem::size_of::<u32>()
             + centroid_codes.len();
         Ok(ResidentCellCardRoot {
@@ -2567,12 +2486,12 @@ pub(crate) fn decode_cell_card_run_root(
             cell_indexes,
             card_ordinals,
             leaf_ordinals,
-            head_offsets,
-            head_metadata_bytes,
-            head_body_bytes,
+            code_offsets,
+            code_bytes,
             rows,
             code_widths,
-            head_checksums,
+            code_checksums,
+            exact_blocks,
             centroid_offsets,
             centroid_codes,
             resident_bytes,
@@ -2639,11 +2558,11 @@ mod tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(batches.len(), 3, "one head plus two exact blocks");
+        assert_eq!(batches.len(), 3, "one code plane plus two exact blocks");
 
         let card = &encoded.cards[0];
-        let head_start = card.head.offset as usize;
-        let head_end = head_start + card.head.bytes as usize;
+        let head_start = card.head.code_offset as usize;
+        let head_end = head_start + card.head.code_bytes as usize;
         let head = decode_cell_card_head(
             &card.head,
             &encoded.bytes[head_start..head_end],
@@ -2696,8 +2615,8 @@ mod tests {
         )
         .unwrap();
         let card = &encoded.cards[0];
-        let head_start = card.head.offset as usize;
-        let head_end = head_start + card.head.bytes as usize;
+        let head_start = card.head.code_offset as usize;
+        let head_end = head_start + card.head.code_bytes as usize;
         let mut corrupt_head = encoded.bytes[head_start..head_end].to_vec();
         let corrupt_head_middle = corrupt_head.len() / 2;
         corrupt_head[corrupt_head_middle] ^= 1;
@@ -2738,7 +2657,7 @@ mod tests {
 
         let mut substituted = card.head.clone();
         substituted.cell_index += 1;
-        substituted.checksum = *blake3::hash(&encoded.bytes[head_start..head_end]).as_bytes();
+        substituted.code_checksum = *blake3::hash(&encoded.bytes[head_start..head_end]).as_bytes();
         assert!(
             decode_cell_card_head(
                 &substituted,
@@ -2753,7 +2672,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_block_substitution_fails_even_after_content_checksum_recomputation() {
+    fn exact_block_substitution_fails_without_republishing_authenticated_authority() {
         let dimensions = 4;
         let encoded = encode_cell_card_group(
             &[
@@ -2767,7 +2686,14 @@ mod tests {
                     cell_index: 6,
                     leaf_ordinal: 0,
                     centroid_code: vec![2, 3],
-                    rows: rows(4, dimensions),
+                    rows: rows(4, dimensions)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(row, mut value)| {
+                            value.id = RecordId::from(format!("foreign-{row}"));
+                            value
+                        })
+                        .collect(),
                 },
             ],
             dimensions,
@@ -2778,7 +2704,8 @@ mod tests {
         let second = &encoded.cards[1].head;
         let first_head = decode_cell_card_head(
             first,
-            &encoded.bytes[first.offset as usize..(first.offset + first.bytes as u64) as usize],
+            &encoded.bytes[first.code_offset as usize
+                ..(first.code_offset + first.code_bytes as u64) as usize],
             encoded.bytes.len() as u64,
             dimensions,
             VectorElementType::Int8,
@@ -2786,7 +2713,8 @@ mod tests {
         .unwrap();
         let second_head = decode_cell_card_head(
             second,
-            &encoded.bytes[second.offset as usize..(second.offset + second.bytes as u64) as usize],
+            &encoded.bytes[second.code_offset as usize
+                ..(second.code_offset + second.code_bytes as u64) as usize],
             encoded.bytes.len() as u64,
             dimensions,
             VectorElementType::Int8,
@@ -2800,24 +2728,17 @@ mod tests {
         forged.exact_blocks[0].metadata_bytes = foreign.metadata_bytes;
         forged.exact_blocks[0].body_bytes = foreign.body_bytes;
         forged.exact_blocks[0].rows = foreign.rows;
-        forged.exact_blocks[0].checksum = super::block_checksum(
-            forged.cell_index,
-            forged.card_ordinal,
-            0,
-            foreign.rows,
-            foreign_bytes,
-        );
 
         assert!(
             forged
                 .verify_block(0, foreign_bytes, dimensions, VectorElementType::Int8,)
                 .is_err(),
-            "embedded cell/card identity must reject a rechecksummed foreign block"
+            "the authenticated block authority must reject foreign bytes"
         );
     }
 
     #[test]
-    fn full_exact_blocks_have_constant_stride_independent_of_record_id_width() {
+    fn variable_record_ids_do_not_inflate_the_shared_code_plane() {
         let dimensions = 768;
         let block_rows = cell_card_block_rows(dimensions, VectorElementType::Float32).unwrap();
         let mut input_rows = rows(block_rows * 2 + 1, dimensions * 4);
@@ -2836,7 +2757,8 @@ mod tests {
         let card = &encoded.cards[0].head;
         let head = decode_cell_card_head(
             card,
-            &encoded.bytes[card.offset as usize..(card.offset + card.bytes as u64) as usize],
+            &encoded.bytes
+                [card.code_offset as usize..(card.code_offset + card.code_bytes as u64) as usize],
             encoded.bytes.len() as u64,
             dimensions,
             VectorElementType::Float32,
@@ -2845,11 +2767,8 @@ mod tests {
         assert_eq!(head.exact_blocks.len(), 3);
         assert_eq!(head.exact_blocks[0].rows as usize, block_rows);
         assert_eq!(head.exact_blocks[1].rows as usize, block_rows);
-        assert_eq!(head.exact_blocks[0].bytes, head.exact_blocks[1].bytes);
-        assert_eq!(
-            head.exact_blocks[1].offset - head.exact_blocks[0].offset,
-            u64::from(head.exact_blocks[0].bytes)
-        );
+        assert_eq!(card.code_bytes as usize, (block_rows * 2 + 1) * 2);
+        assert!(head.exact_blocks[0].bytes > head.exact_blocks[1].bytes);
         assert_eq!(head.exact_blocks[2].rows, 1);
     }
 
@@ -2953,9 +2872,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            encoded.cards[0].head.bytes <= 12 * 1024,
-            "one realistic card head is {} bytes",
-            encoded.cards[0].head.bytes
+            encoded.cards[0].head.code_bytes == 32 * 16,
+            "one realistic card code range is {} bytes",
+            encoded.cards[0].head.code_bytes
         );
     }
 
@@ -3007,7 +2926,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_parquet_root_round_trips_groups_and_cards_without_exact_block_table() {
+    fn compact_parquet_root_round_trips_groups_cards_and_exact_authority() {
         let dimensions = 4;
         let encoded = encode_cell_card_group(
             &[
@@ -3104,7 +3023,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_root_struct_of_arrays_projects_below_300_mib_at_100m_x768() {
+    fn resident_root_struct_of_arrays_projects_below_512_mib_at_100m_x768() {
         let group = Arc::new(CellCardGroupRef {
             path: format!(
                 "global-cell-cards/run-0/{}.arrow",
@@ -3112,6 +3031,9 @@ mod tests {
             ),
             checksum: [7; 32],
             encoded_bytes: CELL_CARD_GROUP_MAX_BYTES,
+            code_plane_offset: 0,
+            code_plane_bytes: 2 * 1024 * 1024,
+            code_plane_checksum: [8; 32],
         });
         let cards = (0..2_049_u32)
             .map(|cell_index| CellCardRef {
@@ -3120,14 +3042,22 @@ mod tests {
                     cell_index,
                     card_ordinal: 0,
                     leaf_ordinal: 0,
-                    offset: u64::from(cell_index) * 1024,
-                    metadata_bytes: 512,
-                    body_bytes: 512,
-                    bytes: 1024,
+                    code_offset: u64::from(cell_index) * 512,
+                    code_bytes: 512,
                     rows: 32,
                     code_width: 16,
-                    checksum: [cell_index as u8; 32],
+                    code_checksum: [cell_index as u8; 32],
                     centroid_code: vec![cell_index as u8; 16].into_boxed_slice(),
+                    exact_blocks: vec![super::CellCardExactBlockRef {
+                        block_ordinal: 0,
+                        offset: 4 * 1024 * 1024 + u64::from(cell_index) * 1024,
+                        metadata_bytes: 64,
+                        body_bytes: 128,
+                        bytes: 192,
+                        rows: 32,
+                        checksum: [cell_index as u8; 32],
+                    }]
+                    .into_boxed_slice(),
                 },
             })
             .collect::<Vec<_>>();
@@ -3155,7 +3085,7 @@ mod tests {
             .resident_bytes()
             .saturating_add(bytes_per_card.saturating_mul(cards_at_100m - 1));
         assert!(
-            projected <= 300 * 1024 * 1024,
+            projected <= 512 * 1024 * 1024,
             "projected resident root is {projected} bytes ({bytes_per_card}/card)"
         );
     }
@@ -3606,5 +3536,46 @@ mod tests {
         assert!(!limited);
         assert_eq!(plan.cards(), 32);
         assert_eq!(plan.requests(), 1);
+    }
+
+    #[test]
+    fn wave_one_reads_sparse_cards_from_one_compact_shared_code_plane() {
+        let inputs = (0..256_u32)
+            .map(|cell_index| {
+                let mut page_rows = rows(32, 4);
+                for (ordinal, row) in page_rows.iter_mut().enumerate() {
+                    row.code = GlobalLeafCodeInput::from(vec![
+                        cell_index.wrapping_add(ordinal as u32)
+                            as u8;
+                        64
+                    ]);
+                }
+                GlobalLeafPageInput {
+                    cell_index,
+                    leaf_ordinal: 0,
+                    centroid_code: vec![cell_index as u8; 64],
+                    rows: page_rows,
+                }
+            })
+            .collect::<Vec<_>>();
+        let encoded = encode_cell_card_group(&inputs, 4, VectorElementType::Int8).unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/compact-code-plane")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &[group], &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let selected_cells = (0..256_u32).step_by(16).collect::<Vec<_>>();
+        let plan =
+            super::plan_cell_card_head_wave(&root, &selected_cells, 2 * 1024 * 1024, 4).unwrap();
+
+        assert_eq!(plan.cards(), selected_cells.len());
+        assert_eq!(plan.requests(), 1);
+        assert!(plan.physical_bytes() <= 512 * 1024);
     }
 }

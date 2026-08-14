@@ -326,13 +326,19 @@ impl HierarchicalCoarseQuantizer {
                 .map(|parent_cell| {
                     let indices = &groups[parent_cell];
                     if indices.is_empty() {
-                        return vec![fit_vectors[parent_cell % fit_vectors.len()].clone()];
+                        return fit_vectors[parent_cell % fit_vectors.len()].clone();
                     }
-                    fit_local_centroids(
-                        fit_vectors,
-                        indices,
-                        children_per_parent.min(indices.len()),
-                        iterations,
+                    crate::rotated_product_quantizer::reorder_flat_centroids_by_locality(
+                        fit_local_centroids(
+                            fit_vectors,
+                            indices,
+                            children_per_parent.min(indices.len()),
+                            iterations,
+                        )
+                        .into_iter()
+                        .flatten()
+                        .collect(),
+                        dimensions,
                     )
                 })
                 .collect::<Vec<_>>()
@@ -341,9 +347,7 @@ impl HierarchicalCoarseQuantizer {
         let mut child_centroids = Vec::new();
         child_offsets.push(0);
         for group in children {
-            for centroid in group {
-                child_centroids.extend_from_slice(&centroid);
-            }
+            child_centroids.extend(group);
             let count = child_centroids.len() / dimensions;
             child_offsets.push(u16::try_from(count).map_err(|_| {
                 BorsukError::InvalidStorage(
@@ -1805,11 +1809,11 @@ impl ResidentGlobalCodebook {
             .into_iter()
             .map(|code| {
                 if code.len() != self.code_width {
-                    return invalid("V14 cell-card code width does not match its codebook");
+                    return invalid("V15 cell-card code width does not match its codebook");
                 }
                 let distance = self.quantizer.distance(&prepared, code)?;
                 if !distance.is_finite() {
-                    return invalid("V14 cell-card code distance is non-finite");
+                    return invalid("V15 cell-card code distance is non-finite");
                 }
                 Ok(distance)
             })
@@ -3070,7 +3074,45 @@ mod tests {
             &fit,
         )
         .unwrap();
-        let coarse = HierarchicalCoarseQuantizer::fit(parent, &fit, 4, 4).unwrap();
+        let parent_for_raw_fit = parent.clone();
+        let coarse = HierarchicalCoarseQuantizer::fit(parent.clone(), &fit, 4, 4).unwrap();
+        let repeated = HierarchicalCoarseQuantizer::fit(parent, &fit, 4, 4).unwrap();
+        assert_eq!(repeated.state(), coarse.state());
+
+        let mut raw_groups = vec![Vec::new(); coarse.primary_count()];
+        for (index, vector) in fit.iter().enumerate() {
+            let parent_cell = usize::from(parent_for_raw_fit.encode(vector).unwrap()[0]);
+            raw_groups[parent_cell].push(index);
+        }
+
+        for (parent, raw_group) in raw_groups.iter().enumerate() {
+            let start = usize::from(coarse.child_offsets[parent]) * coarse.dimensions;
+            let end = usize::from(coarse.child_offsets[parent + 1]) * coarse.dimensions;
+            let children = coarse.child_centroids[start..end].to_vec();
+            assert_eq!(
+                children,
+                crate::rotated_product_quantizer::reorder_flat_centroids_by_locality(
+                    children.clone(),
+                    coarse.dimensions,
+                ),
+                "hierarchical child IDs must preserve geometric locality within parent {parent}"
+            );
+            let mut raw = fit_local_centroids(&fit, raw_group, 4.min(raw_group.len()), 4);
+            let mut ordered = children
+                .chunks_exact(coarse.dimensions)
+                .map(<[f32]>::to_vec)
+                .collect::<Vec<_>>();
+            let compare = |left: &Vec<f32>, right: &Vec<f32>| {
+                left.iter()
+                    .zip(right)
+                    .map(|(left, right)| left.total_cmp(right))
+                    .find(|ordering| !ordering.is_eq())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            };
+            raw.sort_unstable_by(compare);
+            ordered.sort_unstable_by(compare);
+            assert_eq!(ordered, raw, "locality ordering must remain a permutation");
+        }
 
         assert!(coarse.cell_count() > 4);
         assert_eq!(

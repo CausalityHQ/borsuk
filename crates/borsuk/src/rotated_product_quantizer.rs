@@ -307,7 +307,7 @@ pub(crate) fn product_code_locality_key(code: &[u8]) -> Vec<u8> {
     key
 }
 
-fn reorder_flat_centroids_by_locality(codebook: Vec<f32>, width: usize) -> Vec<f32> {
+pub(crate) fn reorder_flat_centroids_by_locality(codebook: Vec<f32>, width: usize) -> Vec<f32> {
     if width == 0 || codebook.len() <= width {
         return codebook;
     }

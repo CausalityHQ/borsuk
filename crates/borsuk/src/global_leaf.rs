@@ -542,6 +542,22 @@ pub(crate) fn encode_global_leaf_bundle(
         pages,
         dimensions,
         element_type,
+        GLOBAL_LEAF_EXACT_BLOCK_ROWS,
+        GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES,
+    )
+}
+
+pub(crate) fn encode_global_leaf_bundle_with_block_rows(
+    pages: &[GlobalLeafPageInput],
+    dimensions: usize,
+    element_type: VectorElementType,
+    exact_block_rows: usize,
+) -> Result<EncodedGlobalLeafBundle> {
+    encode_global_leaf_bundle_with_max_bytes(
+        pages,
+        dimensions,
+        element_type,
+        exact_block_rows,
         GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES,
     )
 }
@@ -550,9 +566,11 @@ fn encode_global_leaf_bundle_with_max_bytes(
     pages: &[GlobalLeafPageInput],
     dimensions: usize,
     element_type: VectorElementType,
+    exact_block_rows: usize,
     max_bytes: u64,
 ) -> Result<EncodedGlobalLeafBundle> {
-    if pages.is_empty() {
+    if pages.is_empty() || exact_block_rows == 0 || exact_block_rows > GLOBAL_LEAF_EXACT_BLOCK_ROWS
+    {
         return Err(BorsukError::InvalidStorage(
             "global leaf bundle must contain at least one page".to_string(),
         ));
@@ -592,7 +610,7 @@ fn encode_global_leaf_bundle_with_max_bytes(
             element_type,
         )?)?;
         for page in pages {
-            for rows in page.rows.chunks(GLOBAL_LEAF_EXACT_BLOCK_ROWS) {
+            for rows in page.rows.chunks(exact_block_rows) {
                 writer.write(&global_leaf_record_batch(
                     rows,
                     Arc::clone(&schema),
@@ -611,7 +629,7 @@ fn encode_global_leaf_bundle_with_max_bytes(
     let exact_block_count = pages
         .iter()
         .try_fold(0_usize, |total, page| {
-            total.checked_add(page.rows.len().div_ceil(GLOBAL_LEAF_EXACT_BLOCK_ROWS))
+            total.checked_add(page.rows.len().div_ceil(exact_block_rows))
         })
         .ok_or_else(|| {
             BorsukError::InvalidStorage("global leaf exact block count overflows".to_string())
@@ -642,11 +660,11 @@ fn encode_global_leaf_bundle_with_max_bytes(
         .iter()
         .map(|page| {
             let mut exact_blocks = Vec::with_capacity(
-                page.rows.len().div_ceil(GLOBAL_LEAF_EXACT_BLOCK_ROWS),
+                page.rows.len().div_ceil(exact_block_rows),
             );
             for (block_ordinal, rows) in page
                 .rows
-                .chunks(GLOBAL_LEAF_EXACT_BLOCK_ROWS)
+                .chunks(exact_block_rows)
                 .enumerate()
             {
                 let block = batch_ranges.next().ok_or_else(|| {
@@ -691,7 +709,7 @@ fn encode_global_leaf_bundle_with_max_bytes(
                 })?;
                 exact_blocks.push(GlobalLeafExactBlockRef {
                     first_row: u32::try_from(
-                        block_ordinal.saturating_mul(GLOBAL_LEAF_EXACT_BLOCK_ROWS),
+                        block_ordinal.saturating_mul(exact_block_rows),
                     )
                     .map_err(|_| {
                         BorsukError::InvalidStorage(
@@ -4050,6 +4068,7 @@ mod tests {
             }],
             1,
             VectorElementType::Float32,
+            32,
             1,
         )
         .unwrap_err();

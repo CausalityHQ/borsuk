@@ -3778,9 +3778,9 @@ fn validate_v12_leaf_mode(
 }
 
 fn validate_bounded_v14_execution(summary: &QuerySummary) -> io::Result<()> {
-    if summary.execution_engine() != "bounded-cell-card-v14" {
+    if summary.execution_engine() != "bounded-cell-card-v15" {
         return Err(invalid_input(&format!(
-            "production recall expected bounded-cell-card-v14 but observed {}",
+            "production recall expected bounded-cell-card-v15 but observed {}",
             summary.execution_engine()
         )));
     }
@@ -4339,7 +4339,7 @@ mod tests {
         let error = validate_bounded_v14_execution(&fallback)
             .expect_err("legacy segment execution was accepted as a V14 measurement");
         assert!(
-            error.to_string().contains("bounded-cell-card-v14")
+            error.to_string().contains("bounded-cell-card-v15")
                 && error.to_string().contains("srht-pq-scan"),
             "{error}"
         );
@@ -4347,7 +4347,7 @@ mod tests {
         let mut bounded = QuerySummary::default();
         bounded
             .execution_engines
-            .insert("bounded-cell-card-v14".to_owned());
+            .insert("bounded-cell-card-v15".to_owned());
         validate_bounded_v14_execution(&bounded).unwrap();
     }
 
