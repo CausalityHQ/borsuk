@@ -50,12 +50,14 @@ use crate::{
     },
     global_cell_card::{
         CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES, CELL_CARD_RANGE_READ_MAX_BYTES,
-        CellCardExactBlockRef, CellCardGroupWriter, CellCardHeadRead, CellCardHeadWavePlan,
-        CellCardPush, GlobalCellCardAnnRef, LoadedCellCardHead, decode_cell_card_exact_wave,
-        decode_cell_card_run_root, decode_verified_cell_card_head_wave, encode_cell_card_run_root,
+        CellCardExactBlockRef, CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead,
+        CellCardHeadWavePlan, CellCardPush, GlobalCellCardAnnRef, LoadedCellCardHead,
+        decode_cell_card_exact_wave, decode_cell_card_run_root,
+        decode_verified_cell_card_head_wave, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave, plan_ranked_cell_card_head_wave,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
         rank_cell_card_exact_blocks, rank_cell_card_head_indexes, score_loaded_cell_card_heads,
+        validate_cell_card_code_range,
     },
     global_leaf_run::{
         CarriedPrimaryDenseRun, GlobalAnnRef, GlobalCodebookRef, GlobalLeafArtifactRole,
@@ -404,6 +406,24 @@ fn cell_card_code_plane_cache_key(path: &str, checksum: [u8; 32]) -> String {
     format!("{}\0{}", path, blake3::Hash::from_bytes(checksum).to_hex())
 }
 
+fn cell_card_code_slice_cache_key(
+    group: &CellCardGroupRef,
+    offset: u64,
+    bytes: u32,
+    checksum: [u8; 32],
+) -> String {
+    format!(
+        "{}\0{}\0{offset}\0{bytes}\0{}",
+        group.path,
+        blake3::Hash::from_bytes(group.code_plane_checksum).to_hex(),
+        blake3::Hash::from_bytes(checksum).to_hex()
+    )
+}
+
+fn cell_card_head_read_identity(read: &CellCardHeadRead) -> (String, u64, u64) {
+    (read.group.path.clone(), read.start, read.end)
+}
+
 fn bounded_cell_card_plane_ranges(start: u64, end: u64) -> Result<Vec<Range<u64>>> {
     if start >= end {
         return Err(BorsukError::InvalidStorage(
@@ -497,6 +517,24 @@ const CELL_CARD_CACHEABLE_PLANE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS: usize = 16;
 const GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
+fn admitted_cell_card_code_plane_bytes(
+    plane_bytes: impl IntoIterator<Item = u64>,
+    available_retained_bytes: u64,
+) -> Option<u64> {
+    let mut planes = 0_usize;
+    let total = plane_bytes.into_iter().try_fold(0_u64, |total, bytes| {
+        if bytes == 0 || bytes > CELL_CARD_CACHEABLE_PLANE_MAX_BYTES {
+            return None;
+        }
+        planes = planes.checked_add(1)?;
+        total.checked_add(bytes)
+    })?;
+    (planes > 0
+        && total <= DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES
+        && total <= available_retained_bytes)
+        .then_some(total)
+}
+
 fn cell_card_plane_promotion_ceiling(cache_enabled: bool) -> u64 {
     if cache_enabled {
         CELL_CARD_CACHEABLE_PLANE_MAX_BYTES
@@ -510,6 +548,12 @@ fn global_cell_card_head_request_budget(page_budget: usize) -> usize {
         GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS,
         DEFAULT_GLOBAL_PQ_RERANK_READS,
     )
+}
+
+fn cell_card_exact_io_budget(max_bytes: u64, planned_head_bytes: u64) -> Option<u64> {
+    max_bytes
+        .checked_sub(planned_head_bytes)
+        .filter(|remaining| *remaining > 0)
 }
 
 /// Conservative peak allocation for one V15 code-head plus exact-rerank wave.
@@ -1211,6 +1255,7 @@ struct CollectionReadRuntime {
     decode_admission: Option<Arc<AdmissionGate>>,
     global_pq_rerank_admission: Arc<AdmissionGate>,
     cell_card_code_planes: Arc<DecodedObjectCache<Vec<u8>>>,
+    prepared_cell_card_code_planes: Mutex<Option<PreparedCellCardCodePlanes>>,
     inflight_cell_card_code_planes: Arc<InFlightReads<Vec<u8>>>,
     inflight_segment_reads: Arc<InFlightSegmentReads>,
     projected_segment_cache: Arc<DecodedObjectCache<Segment>>,
@@ -1233,6 +1278,13 @@ struct CollectionReadRuntime {
     inflight_late_interaction_batches: Arc<InFlightReads<LateInteractionBatch>>,
     decoded_late_interaction_batches: Arc<DecodedObjectCache<LateInteractionBatch>>,
     wal_tail_runtime: Arc<WalTailRuntime>,
+}
+
+#[derive(Debug)]
+struct PreparedCellCardCodePlanes {
+    owner_modality: String,
+    entries: HashMap<String, Arc<Vec<u8>>>,
+    _retained: RetainedBytePermit,
 }
 
 fn decoded_cache_with_pool<T>(
@@ -3098,6 +3150,7 @@ impl CollectionReadRuntime {
                     .map_or(0, |_| DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES),
                 &retained_pool,
             ),
+            prepared_cell_card_code_planes: Mutex::new(None),
             inflight_cell_card_code_planes: Arc::new(InFlightReads::default()),
             inflight_segment_reads: Arc::new(InFlightSegmentReads::default()),
             projected_segment_cache: decoded_cache_with_pool(
@@ -4465,8 +4518,8 @@ impl BorsukIndex {
         // load its compact codes and exact-sidecar metadata here, never on the
         // first measured request.
         let manifest = index.manifest.clone();
-        index.resident_global_ann_pins =
-            index.preload_resident_global_ann_for_manifest(&manifest)?;
+        let pins = index.preload_resident_global_ann_for_manifest(&manifest)?;
+        index.install_resident_global_ann_pins(pins);
         let _ = index.load_resident_lexical_roots()?;
         index.prepare_manifest_mutation_frontier(&index.manifest)?;
         if options.preload {
@@ -4703,9 +4756,10 @@ impl BorsukIndex {
     /// loading segment payloads or dense vectors.
     ///
     /// This makes routing summaries, the IVF centroid graph, and the global PQ
-    /// descriptor/codebook resident. Per-cell code payloads and exact-sidecar
-    /// indexes remain paged and enter bounded caches on demand, so preparing a
-    /// 100M-vector index does not allocate memory proportional to its rows.
+    /// descriptor/codebook resident. A complete immutable cell-card code plane
+    /// is also prepared when every group and their aggregate fit the explicit
+    /// retained-memory budget; larger indexes keep their code payloads paged.
+    /// Exact vectors always remain paged.
     ///
     /// Returns the number of active routing cells prepared.
     pub fn prepare_serving_metadata(&self) -> Result<usize> {
@@ -4721,10 +4775,104 @@ impl BorsukIndex {
             summaries
         };
         let _ = self.coarse_quantizer()?;
-        let _ = self.preload_resident_global_ann_for_manifest(&self.manifest)?;
+        let global_ann = self.preload_resident_global_ann_for_manifest(&self.manifest)?;
+        if let Some(pins) = global_ann.as_ref() {
+            self.prepare_fitting_cell_card_code_planes(pins)?;
+        }
         let _ = self.load_resident_lexical_roots()?;
         self.prepare_mutation_frontier(&self.manifest)?;
         Ok(summaries.len())
+    }
+
+    fn prepare_fitting_cell_card_code_planes(&self, pins: &ResidentGlobalAnnPins) -> Result<()> {
+        let Some(root) = pins.cell_card_root.as_ref() else {
+            return Ok(());
+        };
+        let Some(pool) = self.read_runtime.retained_pool.as_ref() else {
+            return Ok(());
+        };
+        let groups = root.groups();
+        let expected_keys = groups
+            .iter()
+            .map(|group| cell_card_code_plane_cache_key(&group.path, group.code_plane_checksum))
+            .collect::<BTreeSet<_>>();
+        let mut prepared = self
+            .read_runtime
+            .prepared_cell_card_code_planes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if prepared.as_ref().is_some_and(|current| {
+            current.owner_modality == self.manifest_reference.modality
+                && current.entries.len() == expected_keys.len()
+                && current
+                    .entries
+                    .keys()
+                    .all(|key| expected_keys.contains(key))
+        }) {
+            return Ok(());
+        }
+
+        // A refreshed generation must not compete with stale prepared planes
+        // for the same bounded pool. Exact identity keys prevent stale bytes
+        // from being reused while this replacement is prepared.
+        *prepared = None;
+        let available = pool.capacity_bytes().saturating_sub(pool.used_bytes());
+        let Some(total_bytes) = admitted_cell_card_code_plane_bytes(
+            groups.iter().map(|group| group.code_plane_bytes),
+            available,
+        ) else {
+            return Ok(());
+        };
+        let Some(retained) = pool.try_reserve(total_bytes) else {
+            return Ok(());
+        };
+        let mut entries = HashMap::with_capacity(groups.len());
+        for group in groups {
+            let bytes = self.read_complete_cell_card_code_plane(group)?;
+            let key = cell_card_code_plane_cache_key(&group.path, group.code_plane_checksum);
+            if entries.insert(key, bytes).is_some() {
+                return Err(BorsukError::InvalidStorage(
+                    "cell-card root repeats a prepared code-plane identity".to_string(),
+                ));
+            }
+        }
+        *prepared = Some(PreparedCellCardCodePlanes {
+            owner_modality: self.manifest_reference.modality.clone(),
+            entries,
+            _retained: retained,
+        });
+        Ok(())
+    }
+
+    fn install_resident_global_ann_pins(&mut self, next: Option<ResidentGlobalAnnPins>) {
+        let mut prepared = self
+            .read_runtime
+            .prepared_cell_card_code_planes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let keys_for = |pins: Option<&ResidentGlobalAnnPins>| {
+            pins.and_then(|pins| pins.cell_card_root.as_ref())
+                .map(|root| {
+                    root.groups()
+                        .iter()
+                        .map(|group| {
+                            cell_card_code_plane_cache_key(&group.path, group.code_plane_checksum)
+                        })
+                        .collect::<BTreeSet<_>>()
+                })
+        };
+        let prepared_keys = prepared
+            .as_ref()
+            .map(|prepared| prepared.entries.keys().cloned().collect::<BTreeSet<_>>());
+        if prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.owner_modality == self.manifest_reference.modality)
+            && keys_for(next.as_ref()).as_ref() != prepared_keys.as_ref()
+        {
+            *prepared = None;
+        }
+        drop(prepared);
+        self.resident_global_ann_pins = next;
     }
 
     /// Load the bounded live mutation frontier before the handle begins
@@ -5079,12 +5227,12 @@ impl BorsukIndex {
                     &prepared_positioned,
                 )?;
             }
-            self.resident_global_ann_pins = latest_global_ann_pins;
+            self.install_resident_global_ann_pins(latest_global_ann_pins);
             for (name, (_, _, _, global_pq_pins)) in prepared_named {
                 self.named
                     .get_mut(&name)
                     .expect("prepared named modality belongs to the current schema")
-                    .resident_global_ann_pins = global_pq_pins;
+                    .install_resident_global_ann_pins(global_pq_pins);
             }
             if let Some(derived) = derived {
                 self.install_prepared_positioned_snapshot(prepared_positioned, derived);
@@ -5105,7 +5253,7 @@ impl BorsukIndex {
         self.admit_prepared_positioned_snapshot(&latest, &named_manifests, &prepared_positioned)?;
 
         self.manifest = latest;
-        self.resident_global_ann_pins = latest_global_ann_pins;
+        self.install_resident_global_ann_pins(latest_global_ann_pins);
         self.manifest_reference = own_reference;
         if let Some(latest_lane_log_snapshot) = latest_lane_log_snapshot {
             self.lane_log_snapshot = latest_lane_log_snapshot.record_blocks;
@@ -5120,7 +5268,7 @@ impl BorsukIndex {
                 .get_mut(&name)
                 .expect("prepared named modality belongs to the current schema");
             child.manifest = manifest;
-            child.resident_global_ann_pins = global_pq_pins;
+            child.install_resident_global_ann_pins(global_pq_pins);
             child.manifest_reference = reference;
             child
                 .cell_wal_snapshot_retries
@@ -8596,7 +8744,7 @@ impl BorsukIndex {
         // a concurrent or delayed reader may already have observed.
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        self.resident_global_ann_pins = prepared_global_ann_pins;
+        self.install_resident_global_ann_pins(prepared_global_ann_pins);
         // Purge rebuilt the cell layout; refresh the persisted cold quantizer.
         self.refresh_persisted_quantizer()?;
 
@@ -9054,7 +9202,7 @@ impl BorsukIndex {
             ) {
                 Ok((published, _report)) => {
                     self.manifest = published;
-                    self.resident_global_ann_pins = prepared_global_ann_pins;
+                    self.install_resident_global_ann_pins(prepared_global_ann_pins);
                     return Ok(true);
                 }
                 Err(BorsukError::ConcurrentModification { .. }) => continue,
@@ -11236,7 +11384,7 @@ impl BorsukIndex {
                 Some(&previous),
             )?;
         self.manifest = published;
-        self.resident_global_ann_pins = None;
+        self.install_resident_global_ann_pins(None);
         let mut report = add_report_from_parts(
             segments_written,
             graph_payloads_written,
@@ -12571,7 +12719,7 @@ impl BorsukIndex {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
         };
         self.manifest = published;
-        self.resident_global_ann_pins = None;
+        self.install_resident_global_ann_pins(None);
         if !self.uses_positioned_mutation_authority() {
             self.prune_consumed_cell_wal()?;
         }
@@ -13442,7 +13590,7 @@ impl BorsukIndex {
                 &mut storage_report,
             )?;
             self.manifest = published;
-            self.resident_global_ann_pins = None;
+            self.install_resident_global_ann_pins(None);
             return Ok(add_report_from_parts(
                 segments_written,
                 graph_payloads_written,
@@ -13474,7 +13622,7 @@ impl BorsukIndex {
             &mut storage_report,
         )?;
         self.manifest = published;
-        self.resident_global_ann_pins = None;
+        self.install_resident_global_ann_pins(None);
         Ok(add_report_from_parts(
             segments_written,
             graph_payloads_written,
@@ -14375,7 +14523,7 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
-        self.resident_global_ann_pins = prepared_global_ann_pins;
+        self.install_resident_global_ann_pins(prepared_global_ann_pins);
         // Frontier just changed (tail folded in and cleared). Immutable decoded
         // runs can remain in the bounded collection cache and age out by LRU.
         if clear_frontier {
@@ -14774,7 +14922,7 @@ impl BorsukIndex {
         // quantizer from the full active summary set so a cold/paged query routes
         // through the IVF probe list instead of the degraded routing tree.
         self.refresh_persisted_quantizer()?;
-        self.resident_global_ann_pins = prepared_global_ann_pins;
+        self.install_resident_global_ann_pins(prepared_global_ann_pins);
 
         Ok(CompactionReport {
             compacted: true,
@@ -17208,7 +17356,7 @@ impl BorsukIndex {
     fn load_cell_card_head_read(
         &self,
         read: &CellCardHeadRead,
-        pinned_plane: Option<&Arc<Vec<u8>>>,
+        pinned_read: Option<&Arc<Vec<u8>>>,
     ) -> Result<(Arc<Vec<u8>>, u64, bool)> {
         let plane_end = read
             .group
@@ -17217,15 +17365,16 @@ impl BorsukIndex {
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("cell-card code plane overflows".to_string())
             })?;
+        if let Some(bytes) = pinned_read {
+            return Ok((Arc::clone(bytes), 0, true));
+        }
         if read.start != read.group.code_plane_offset || read.end != plane_end {
             let bytes = self
                 .storage
                 .read_range(&read.group.path, read.start..read.end)?;
             let physical_bytes = bytes.len() as u64;
+            self.cache_cell_card_head_read_slices(read, &bytes)?;
             return Ok((Arc::new(bytes), physical_bytes, false));
-        }
-        if let Some(bytes) = pinned_plane {
-            return Ok((Arc::clone(bytes), 0, true));
         }
         let key = cell_card_code_plane_cache_key(&read.group.path, read.group.code_plane_checksum);
         if let Some(bytes) = self.read_runtime.cell_card_code_planes.get(&key) {
@@ -17259,6 +17408,150 @@ impl BorsukIndex {
             .cell_card_code_planes
             .insert(key, Arc::clone(&bytes), bytes.len() as u64);
         Ok((bytes, physical_bytes, false))
+    }
+
+    fn cached_cell_card_head_read(&self, read: &CellCardHeadRead) -> Result<Option<Arc<Vec<u8>>>> {
+        if self.read_runtime.retained_pool.is_none() {
+            return Ok(None);
+        }
+        let plane_end = read
+            .group
+            .code_plane_offset
+            .checked_add(read.group.code_plane_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card code plane overflows".to_string())
+            })?;
+        if read.start == read.group.code_plane_offset && read.end == plane_end {
+            let plane_key =
+                cell_card_code_plane_cache_key(&read.group.path, read.group.code_plane_checksum);
+            let prepared = self
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .and_then(|planes| planes.entries.get(&plane_key).cloned());
+            return Ok(prepared.or_else(|| self.read_runtime.cell_card_code_planes.get(&plane_key)));
+        }
+
+        let read_len = usize::try_from(read.end.saturating_sub(read.start)).map_err(|_| {
+            BorsukError::InvalidStorage(
+                "cell-card head read exceeds addressable memory".to_string(),
+            )
+        })?;
+        let mut assembled = vec![0_u8; read_len];
+        for card in &read.cards {
+            let key = cell_card_code_slice_cache_key(
+                &read.group,
+                card.reference.code_offset,
+                card.reference.code_bytes,
+                card.reference.code_checksum,
+            );
+            let Some(bytes) = self.read_runtime.cell_card_code_planes.get(&key) else {
+                return Ok(None);
+            };
+            let start = card
+                .reference
+                .code_offset
+                .checked_sub(read.start)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cached cell-card code slice starts before its read".to_string(),
+                    )
+                })?;
+            let end = start.checked_add(bytes.len()).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cached cell-card code slice range overflows".to_string(),
+                )
+            })?;
+            let output = assembled.get_mut(start..end).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cached cell-card code slice exceeds its read".to_string(),
+                )
+            })?;
+            output.copy_from_slice(&bytes);
+        }
+        Ok(Some(Arc::new(assembled)))
+    }
+
+    fn cache_cell_card_head_read_slices(
+        &self,
+        read: &CellCardHeadRead,
+        bytes: &[u8],
+    ) -> Result<()> {
+        if bytes.len() as u64 != read.end.saturating_sub(read.start) {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card head response length mismatch".to_string(),
+            ));
+        }
+        if self.read_runtime.retained_pool.is_none() {
+            return Ok(());
+        }
+        for card in &read.cards {
+            let start = card
+                .reference
+                .code_offset
+                .checked_sub(read.start)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card code slice starts before its read".to_string(),
+                    )
+                })?;
+            let card_bytes = usize::try_from(card.reference.code_bytes).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "cell-card code slice exceeds addressable memory".to_string(),
+                )
+            })?;
+            let end = start.checked_add(card_bytes).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card code slice range overflows".to_string())
+            })?;
+            let stored = bytes.get(start..end).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cell-card response does not contain its code slice".to_string(),
+                )
+            })?;
+            validate_cell_card_code_range(&card.reference, stored)?;
+            let key = cell_card_code_slice_cache_key(
+                &read.group,
+                card.reference.code_offset,
+                card.reference.code_bytes,
+                card.reference.code_checksum,
+            );
+            self.read_runtime.cell_card_code_planes.insert(
+                key,
+                Arc::new(stored.to_vec()),
+                u64::from(card.reference.code_bytes),
+            );
+        }
+        Ok(())
+    }
+
+    fn read_complete_cell_card_code_plane(&self, group: &CellCardGroupRef) -> Result<Arc<Vec<u8>>> {
+        let end = group
+            .code_plane_offset
+            .checked_add(group.code_plane_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card code plane overflows".to_string())
+            })?;
+        let capacity = usize::try_from(group.code_plane_bytes).map_err(|_| {
+            BorsukError::InvalidStorage(
+                "cell-card code plane exceeds addressable memory".to_string(),
+            )
+        })?;
+        let mut bytes = Vec::with_capacity(capacity);
+        for range in bounded_cell_card_plane_ranges(group.code_plane_offset, end)? {
+            bytes.extend_from_slice(&self.storage.read_range(&group.path, range)?);
+        }
+        if bytes.len() as u64 != group.code_plane_bytes
+            || blake3::hash(&bytes).as_bytes() != &group.code_plane_checksum
+        {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card code-plane checksum or bounds mismatch".to_string(),
+            ));
+        }
+        Ok(Arc::new(bytes))
     }
 
     fn search_resident_global_cell_cards(
@@ -17411,6 +17704,18 @@ impl BorsukIndex {
             .saturating_mul(selected_exact_block_ceiling)
             .min(max_bytes);
         let head_fetch_ceiling = max_bytes.saturating_sub(exact_reserve);
+        // Compute the cold promoted plan independently from cache state. It is
+        // the strict I/O charge for both warm and cold queries: stable-plane
+        // reuse may reduce actual backing I/O, but must never increase rerank
+        // breadth or let an uncached promotion exceed the caller byte cap.
+        let planned_head_bytes = promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(
+            selected_head_plan.clone(),
+            head_fetch_ceiling.max(head_byte_ceiling),
+            cell_card_plane_promotion_ceiling(self.read_runtime.retained_pool.is_some()),
+            global_cell_card_head_request_budget(context.page_budget),
+            |_| false,
+        )?
+        .physical_bytes();
         let mut pinned_code_planes = HashMap::<String, Arc<Vec<u8>>>::new();
         let head_plan = promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(
             selected_head_plan,
@@ -17419,7 +17724,16 @@ impl BorsukIndex {
             global_cell_card_head_request_budget(context.page_budget),
             |group| {
                 let key = cell_card_code_plane_cache_key(&group.path, group.code_plane_checksum);
-                if let Some(bytes) = self.read_runtime.cell_card_code_planes.get(&key) {
+                let prepared = self
+                    .read_runtime
+                    .prepared_cell_card_code_planes
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .as_ref()
+                    .and_then(|planes| planes.entries.get(&key).cloned());
+                if let Some(bytes) =
+                    prepared.or_else(|| self.read_runtime.cell_card_code_planes.get(&key))
+                {
                     pinned_code_planes.insert(key, bytes);
                     true
                 } else {
@@ -17445,17 +17759,32 @@ impl BorsukIndex {
             .transient_admission
             .as_ref()
             .map(|gate| gate.acquire_owned(wave_admission_bytes));
+        // Cached slices are assembled into one physical-range buffer per read.
+        // Acquire the transient permit before allocating those buffers so warm
+        // concurrent queries obey the same peak-memory bound as cold reads.
+        let mut pinned_head_reads = HashMap::<(String, u64, u64), Arc<Vec<u8>>>::new();
+        for read in head_plan.reads() {
+            let plane_key =
+                cell_card_code_plane_cache_key(&read.group.path, read.group.code_plane_checksum);
+            let cached = if let Some(bytes) = pinned_code_planes.get(&plane_key).cloned() {
+                Some(bytes)
+            } else {
+                self.cached_cell_card_head_read(read)?
+            };
+            if let Some(bytes) = cached {
+                pinned_head_reads.insert(cell_card_head_read_identity(read), bytes);
+            }
+        }
         let code_requests_before = self.storage.request_counts();
         let head_reads = bounded_io_map_with_gate(
             head_plan.reads(),
             GLOBAL_LEAF_CODE_READ_WIDTH,
             Some(&self.global_pq_rerank_admission),
             |read| {
-                let key = cell_card_code_plane_cache_key(
-                    &read.group.path,
-                    read.group.code_plane_checksum,
-                );
-                self.load_cell_card_head_read(read, pinned_code_planes.get(&key))
+                self.load_cell_card_head_read(
+                    read,
+                    pinned_head_reads.get(&cell_card_head_read_identity(read)),
+                )
             },
         );
         let mut fetched_heads = Vec::with_capacity(head_reads.len());
@@ -17573,10 +17902,10 @@ impl BorsukIndex {
                 vectors: Vec::new(),
             }
         };
-        let Some(exact_budget) = max_bytes
-            .checked_sub(code_plane_storage_bytes)
-            .filter(|remaining| *remaining > 0)
-        else {
+        // The caller's algorithmic byte budget is independent of cache state:
+        // warm and cold queries select and rerank the same exact blocks. Actual
+        // storage telemetry below still reports only bytes fetched remotely.
+        let Some(exact_budget) = cell_card_exact_io_budget(max_bytes, planned_head_bytes) else {
             return Ok(Some(declined_execution(SearchTerminationReason::MaxBytes)));
         };
         if resident_global_latency_expired(options, started) {
@@ -20234,7 +20563,7 @@ impl BorsukIndex {
             self.manifest = self
                 .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         }
-        self.resident_global_ann_pins = prepared_global_ann_pins;
+        self.install_resident_global_ann_pins(prepared_global_ann_pins);
         Ok(())
     }
 
@@ -35978,6 +36307,268 @@ mod tests {
             "stable resident code planes did not remove their backing GET: first={first:?} second={second:?}"
         );
         assert_eq!(second.hits, first.hits);
+    }
+
+    #[test]
+    fn prepare_serving_metadata_preloads_fitting_cell_card_code_planes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut builder = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Angular,
+            dimensions: 8,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..64)
+            .map(|row| {
+                (0..8)
+                    .map(|dimension| {
+                        (((row + 3) * (dimension + 7) * 23) % 127) as f32 / 126.0 + 0.01
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        builder
+            .add(
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| {
+                        VectorRecord::new(format!("prepared-plane-{row}"), vector.clone())
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        builder.finish_bulk_load().unwrap();
+        drop(builder);
+
+        let index = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                cache_dir: Some(cache.path().to_path_buf()),
+                cache_max_bytes: Some(64 * 1024 * 1024),
+                ram_budget_bytes: Some(64 * 1024 * 1024),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+        index.prepare_serving_metadata().unwrap();
+        std::fs::remove_dir_all(cache.path()).unwrap();
+        std::fs::create_dir_all(cache.path()).unwrap();
+
+        let report = index
+            .search_with_report(
+                &vectors[37],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(64)
+                    .with_max_candidates_per_segment(128),
+            )
+            .unwrap();
+
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v15", "{report:?}");
+        assert_eq!(report.global_leaf_code_bytes, 0, "{report:?}");
+        assert_eq!(report.global_leaf_code_requests, 0, "{report:?}");
+        assert!(report.decoded_cache_hits > 0, "{report:?}");
+        assert!(report.global_leaf_page_bytes > 0, "{report:?}");
+    }
+
+    #[test]
+    fn refresh_releases_prepared_cell_card_planes_from_the_previous_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut builder = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        builder
+            .add(
+                (0..64)
+                    .map(|row| {
+                        VectorRecord::new(format!("refresh-plane-{row}"), vec![row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        builder.finish_bulk_load().unwrap();
+        drop(builder);
+
+        let mut reader = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                ram_budget_bytes: Some(64 * 1024 * 1024),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+        reader.prepare_serving_metadata().unwrap();
+        assert!(
+            reader
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap()
+                .is_some()
+        );
+
+        // A mutation may invalidate the handle-local pins before the next
+        // generation is installed. Prepared ownership must survive that gap so
+        // refresh can still release the old generation's retained permit.
+        reader.resident_global_ann_pins = None;
+
+        let mut writer = BorsukIndex::open(&uri).unwrap();
+        writer
+            .upsert(vec![VectorRecord::new("refresh-plane-0", vec![0.5; 8])])
+            .unwrap();
+        writer.flush().unwrap();
+
+        assert!(reader.refresh().unwrap());
+        assert!(
+            reader
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap()
+                .is_none(),
+            "refresh must release prepared bytes pinned to the previous global root"
+        );
+    }
+
+    #[test]
+    fn serving_metadata_code_plane_preload_is_all_or_nothing_and_budget_bounded() {
+        assert_eq!(
+            admitted_cell_card_code_plane_bytes(
+                [8 * 1024 * 1024, 8 * 1024 * 1024],
+                16 * 1024 * 1024,
+            ),
+            Some(16 * 1024 * 1024)
+        );
+        assert_eq!(
+            admitted_cell_card_code_plane_bytes(
+                [8 * 1024 * 1024, 8 * 1024 * 1024],
+                16 * 1024 * 1024 - 1,
+            ),
+            None
+        );
+        assert_eq!(
+            admitted_cell_card_code_plane_bytes(
+                [CELL_CARD_CACHEABLE_PLANE_MAX_BYTES + 1],
+                u64::MAX,
+            ),
+            None
+        );
+        assert_eq!(
+            admitted_cell_card_code_plane_bytes(
+                [CELL_CARD_CACHEABLE_PLANE_MAX_BYTES; 33],
+                u64::MAX,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cell_card_exact_io_budget_is_independent_of_cache_warmth() {
+        assert_eq!(
+            cell_card_exact_io_budget(32 * 1024 * 1024, 3 * 1024 * 1024),
+            Some(29 * 1024 * 1024)
+        );
+        assert_eq!(cell_card_exact_io_budget(1024, 1024), None);
+    }
+
+    #[test]
+    fn resident_global_v15_reuses_card_code_slices_without_full_plane_promotion() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut builder = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 4096,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let rows = 16_384_usize;
+        builder
+            .add(
+                (0..rows)
+                    .map(|row| {
+                        VectorRecord::new(
+                            format!("card-cache-{row}"),
+                            (0..8)
+                                .map(|dimension| ((row * 17 + dimension * 29) % 4093) as f32)
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        builder.finish_bulk_load().unwrap();
+        drop(builder);
+
+        let index = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                cache_dir: Some(cache.path().to_path_buf()),
+                cache_max_bytes: Some(64 * 1024 * 1024),
+                ram_budget_bytes: Some(64 * 1024 * 1024),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+        let options = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+            .with_max_segments(4)
+            .with_max_candidates_per_segment(128);
+        let query = (0..8)
+            .map(|dimension| ((7_777 * 17 + dimension * 29) % 4093) as f32)
+            .collect::<Vec<_>>();
+        let first = index.search_with_report(&query, options.clone()).unwrap();
+        assert!(first.global_leaf_code_bytes > 0, "{first:?}");
+        let root = index
+            .resident_global_ann_pins
+            .as_ref()
+            .and_then(|pins| pins.cell_card_root.as_ref())
+            .unwrap();
+        assert!(
+            root.groups().iter().all(|group| index
+                .read_runtime
+                .cell_card_code_planes
+                .get(&cell_card_code_plane_cache_key(
+                    &group.path,
+                    group.code_plane_checksum
+                ))
+                .is_none()),
+            "the first query must exercise card-slice caching, not full-plane promotion"
+        );
+
+        std::fs::remove_dir_all(cache.path()).unwrap();
+        std::fs::create_dir_all(cache.path()).unwrap();
+        let second = index.search_with_report(&query, options).unwrap();
+
+        assert_eq!(second.hits, first.hits);
+        assert_eq!(
+            second.global_leaf_code_pages_read,
+            first.global_leaf_code_pages_read
+        );
+        assert_eq!(
+            second.global_leaf_exact_scores,
+            first.global_leaf_exact_scores
+        );
+        assert_eq!(second.global_leaf_code_bytes, 0, "{second:?}");
+        assert_eq!(second.global_leaf_code_requests, 0, "{second:?}");
+        assert!(second.decoded_cache_hits > 0, "{second:?}");
     }
 
     #[test]

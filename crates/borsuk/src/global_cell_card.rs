@@ -792,13 +792,10 @@ fn fixed_32(bytes: &[u8], field: &str) -> Result<[u8; 32]> {
         .map_err(|_| BorsukError::InvalidStorage(format!("cell-card {field} width is invalid")))
 }
 
-fn decode_cell_card_head_inner(
+pub(crate) fn validate_cell_card_code_range(
     reference: &CellCardHeadRef,
     stored: &[u8],
-    group_encoded_bytes: u64,
-    dimensions: usize,
-    element_type: VectorElementType,
-) -> Result<VerifiedCellCardHead> {
+) -> Result<()> {
     if reference.rows == 0
         || reference.code_width == 0
         || reference.code_bytes
@@ -821,6 +818,17 @@ fn decode_cell_card_head_inner(
             "cell-card code range checksum or bounds mismatch".to_string(),
         ));
     }
+    Ok(())
+}
+
+fn decode_cell_card_head_inner(
+    reference: &CellCardHeadRef,
+    stored: &[u8],
+    group_encoded_bytes: u64,
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<VerifiedCellCardHead> {
+    validate_cell_card_code_range(reference, stored)?;
     let code_end = reference
         .code_offset
         .checked_add(u64::from(reference.code_bytes))
