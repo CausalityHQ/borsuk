@@ -1297,7 +1297,7 @@ enum ClaimAcquireAttempt {
 fn try_acquire_claim_page(
     storage: &Storage,
     source_epoch: u64,
-    owner_revisions: &mut BTreeMap<String, Option<String>>,
+    owner_revisions: &std::sync::Mutex<BTreeMap<String, Option<String>>>,
     transaction_id: &str,
     page_index: u8,
     path: &str,
@@ -1322,6 +1322,9 @@ fn try_acquire_claim_page(
             Some(CellWalClaimLock::Owned {
                 transaction_id: owner,
             }) => {
+                let mut owner_revisions = owner_revisions
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
                 let revision = if let Some(revision) = owner_revisions.get(owner) {
                     revision.clone()
                 } else {
@@ -1523,6 +1526,20 @@ fn claim_retry_delay(transaction_id: &str, attempt: usize) -> std::time::Duratio
     std::time::Duration::from_millis(1 + u64::from(digest.as_bytes()[0] % 10))
 }
 
+fn run_claim_page_wave<T: Send>(
+    pages: &BTreeMap<u8, Vec<u16>>,
+    operation: impl Fn(u8, &[u16]) -> T + Sync,
+) -> Vec<(u8, T)> {
+    let mut outcomes = crate::parallel::install_io(|| {
+        pages
+            .par_iter()
+            .map(|(&page, shards)| (page, operation(page, shards)))
+            .collect::<Vec<_>>()
+    });
+    outcomes.sort_by_key(|(page, _)| *page);
+    outcomes
+}
+
 fn acquire_claim_shards(
     storage: &Storage,
     source_epoch: u64,
@@ -1545,35 +1562,42 @@ fn acquire_claim_shards(
         .unwrap_or_else(|| "id-directory/claim-pages".to_string());
     for attempt in 0..MAX_ATTEMPTS {
         let mut acquired = Vec::with_capacity(pages.len());
-        let mut contended = false;
-        let mut owner_revisions = BTreeMap::new();
-        for (&page, shards) in &pages {
+        let owner_revisions = std::sync::Mutex::new(BTreeMap::new());
+        let attempts = run_claim_page_wave(&pages, |page, shards| {
             let path = claim_page_path(page);
-            match try_acquire_claim_page(
+            let result = try_acquire_claim_page(
                 storage,
                 source_epoch,
-                &mut owner_revisions,
+                &owner_revisions,
                 transaction_id,
                 page,
                 &path,
                 shards,
-            ) {
+            );
+            (path, result)
+        });
+        let mut first_contended_path = None;
+        let mut first_error = None;
+        for (_, (path, result)) in attempts {
+            match result {
                 Ok(ClaimAcquireAttempt::Acquired(claim)) => acquired.push(claim),
-                Ok(ClaimAcquireAttempt::Contended) => {
-                    last_contended_path = path;
-                    contended = true;
-                    break;
+                Ok(ClaimAcquireAttempt::Contended) if first_contended_path.is_none() => {
+                    first_contended_path = Some(path);
                 }
-                Err(error) => {
-                    let _ = restore_claims(storage, transaction_id, acquired);
-                    return Err(error);
+                Err(error) if first_error.is_none() => {
+                    first_error = Some(error);
                 }
+                Ok(ClaimAcquireAttempt::Contended) | Err(_) => {}
             }
         }
-        if !contended {
+        if first_error.is_none() && first_contended_path.is_none() {
             return Ok(acquired);
         }
         let _ = restore_claims(storage, transaction_id, acquired);
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        last_contended_path = first_contended_path.expect("claim wave has an issue");
         std::thread::sleep(claim_retry_delay(transaction_id, attempt));
     }
     Err(BorsukError::ConcurrentModification {
@@ -2130,6 +2154,87 @@ mod tests {
     use object_store::memory::InMemory;
     use std::sync::Arc;
 
+    #[test]
+    fn independent_claim_pages_execute_as_one_bounded_io_wave() {
+        let pages = BTreeMap::from([(0_u8, vec![0_u16]), (1_u8, vec![CELL_WAL_CLAIM_PAGE_SLOTS])]);
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let thread_names = run_claim_page_wave(&pages, {
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            move |_, _| {
+                let current = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                peak.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::current().name().map(str::to_owned)
+            }
+        });
+
+        assert!(
+            peak.load(std::sync::atomic::Ordering::SeqCst)
+                >= crate::configured_io_threads().min(pages.len())
+        );
+        assert_eq!(thread_names.len(), 2);
+        assert!(thread_names.into_iter().all(|(_, name)| {
+            name.as_deref()
+                .is_some_and(|name| name.starts_with("borsuk-io-"))
+        }));
+    }
+
+    fn id_on_claim_page(page: u8) -> Vec<u8> {
+        (0_u64..)
+            .map(|ordinal| format!("claim-page-{page}-{ordinal}").into_bytes())
+            .find(|id| {
+                u8::try_from(id_claim_shard(id) / CELL_WAL_CLAIM_PAGE_SLOTS).unwrap() == page
+            })
+            .expect("one bounded digest page has a preimage")
+    }
+
+    #[test]
+    fn public_claim_path_acquires_and_releases_multiple_pages_atomically() {
+        let storage = Storage::from_object_store(
+            "memory:///multi-page-claim".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let store = CellWalStore::from_storage(
+            storage.clone(),
+            CellWalConfig::default(),
+            INITIAL_POSITIONED_SOURCE_EPOCH,
+        )
+        .unwrap();
+        let ids = [id_on_claim_page(0), id_on_claim_page(1)];
+        let mut guard = store
+            .claim_ids("multi-page", ids.iter().map(Vec::as_slice))
+            .unwrap();
+
+        assert_eq!(guard.locks.len(), 2);
+        assert_eq!(
+            guard
+                .locks
+                .iter()
+                .map(|claim| claim.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![claim_page_path(0), claim_page_path(1)]
+        );
+        let checkpoint = guard.finish();
+        assert_eq!(checkpoint.len(), 2);
+        for (page, id) in ids.iter().enumerate() {
+            let page = u8::try_from(page).unwrap();
+            let path = claim_page_path(page);
+            let stored = storage.read_coordination_object(&path).unwrap().unwrap();
+            let shard = id_claim_shard(id);
+            assert!(matches!(
+                claim_page_from_slice(&stored.bytes, &path, page)
+                    .unwrap()
+                    .slots
+                    .get(&shard),
+                Some(CellWalClaimLock::Available { revision }) if revision == "multi-page"
+            ));
+        }
+    }
+
     fn run() -> PreparedCellWalRun {
         PreparedCellWalRun {
             transaction_id: "transaction-1".to_string(),
@@ -2220,7 +2325,7 @@ mod tests {
         let first = match try_acquire_claim_page(
             &storage,
             INITIAL_POSITIONED_SOURCE_EPOCH,
-            &mut BTreeMap::new(),
+            &std::sync::Mutex::new(BTreeMap::new()),
             "first-attempt",
             page,
             &path,
@@ -2259,7 +2364,7 @@ mod tests {
         let second = match try_acquire_claim_page(
             &storage,
             INITIAL_POSITIONED_SOURCE_EPOCH,
-            &mut BTreeMap::new(),
+            &std::sync::Mutex::new(BTreeMap::new()),
             "second-attempt",
             page,
             &path,
