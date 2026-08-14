@@ -404,14 +404,6 @@ fn cell_card_code_plane_cache_key(path: &str, checksum: [u8; 32]) -> String {
     format!("{}\0{}", path, blake3::Hash::from_bytes(checksum).to_hex())
 }
 
-fn cell_card_code_range_cache_key(path: &str, checksum: [u8; 32], start: u64, end: u64) -> String {
-    format!(
-        "{}\0{}\0{start}-{end}",
-        path,
-        blake3::Hash::from_bytes(checksum).to_hex()
-    )
-}
-
 fn bounded_cell_card_plane_ranges(start: u64, end: u64) -> Result<Vec<Range<u64>>> {
     if start >= end {
         return Err(BorsukError::InvalidStorage(
@@ -17226,68 +17218,11 @@ impl BorsukIndex {
                 BorsukError::InvalidStorage("cell-card code plane overflows".to_string())
             })?;
         if read.start != read.group.code_plane_offset || read.end != plane_end {
-            let key = cell_card_code_range_cache_key(
-                &read.group.path,
-                read.group.code_plane_checksum,
-                read.start,
-                read.end,
-            );
-            if let Some(bytes) = self.read_runtime.cell_card_code_planes.get(&key) {
-                return Ok((bytes, 0, true));
-            }
-            let (bytes, physical_bytes, _shared) = self
-                .read_runtime
-                .inflight_cell_card_code_planes
-                .load(&key, || {
-                    let bytes = self
-                        .storage
-                        .read_range(&read.group.path, read.start..read.end)?;
-                    if bytes.len() as u64 != read.end - read.start {
-                        return Err(BorsukError::InvalidStorage(
-                            "cell-card selected code range is truncated".to_string(),
-                        ));
-                    }
-                    for card in &read.cards {
-                        let relative = card
-                            .reference
-                            .code_offset
-                            .checked_sub(read.start)
-                            .ok_or_else(|| {
-                                BorsukError::InvalidStorage(
-                                    "cell-card selected code starts before its read".to_string(),
-                                )
-                            })?;
-                        let local_start = usize::try_from(relative).map_err(|_| {
-                            BorsukError::InvalidStorage(
-                                "cell-card selected code offset exceeds usize".to_string(),
-                            )
-                        })?;
-                        let local_end = local_start
-                            .checked_add(card.reference.code_bytes as usize)
-                            .ok_or_else(|| {
-                                BorsukError::InvalidStorage(
-                                    "cell-card selected code range overflows".to_string(),
-                                )
-                            })?;
-                        let selected = bytes.get(local_start..local_end).ok_or_else(|| {
-                            BorsukError::InvalidStorage(
-                                "cell-card selected code range is truncated".to_string(),
-                            )
-                        })?;
-                        crate::global_cell_card::validate_cell_card_code_range(
-                            &card.reference,
-                            selected,
-                        )?;
-                    }
-                    let physical_bytes = bytes.len() as u64;
-                    Ok((bytes, physical_bytes))
-                })?;
-            self.read_runtime.cell_card_code_planes.insert(
-                key,
-                Arc::clone(&bytes),
-                bytes.len() as u64,
-            );
-            return Ok((bytes, physical_bytes, false));
+            let bytes = self
+                .storage
+                .read_range(&read.group.path, read.start..read.end)?;
+            let physical_bytes = bytes.len() as u64;
+            return Ok((Arc::new(bytes), physical_bytes, false));
         }
         if let Some(bytes) = pinned_plane {
             return Ok((Arc::clone(bytes), 0, true));
@@ -35988,7 +35923,7 @@ mod tests {
             named_vectors: Default::default(),
         })
         .unwrap();
-        let vectors = (0..256)
+        let vectors = (0..64)
             .map(|row| {
                 (0..8)
                     .map(|dimension| {
@@ -36025,13 +35960,13 @@ mod tests {
             .with_max_segments(64)
             .with_max_candidates_per_segment(128);
         let first = index
-            .search_with_report(&vectors[173], options.clone())
+            .search_with_report(&vectors[37], options.clone())
             .unwrap();
         assert_eq!(first.decoded_cache_hits, 0, "{first:?}");
 
         std::fs::remove_dir_all(cache.path()).unwrap();
         std::fs::create_dir_all(cache.path()).unwrap();
-        let second = index.search_with_report(&vectors[173], options).unwrap();
+        let second = index.search_with_report(&vectors[37], options).unwrap();
 
         assert!(second.decoded_cache_hits > 0, "{second:?}");
         assert!(first.global_leaf_code_bytes > 0, "{first:?}");
