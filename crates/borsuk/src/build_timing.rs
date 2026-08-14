@@ -17,6 +17,7 @@ use std::time::Instant;
 /// is a flat array of atomics (no locking on the hot path).
 #[derive(Clone, Copy)]
 pub(crate) enum Phase {
+    LogicalCellRouting,
     SegmentCentroidRadius,
     SegmentRoutingCodes,
     SegmentPqBounds,
@@ -31,9 +32,10 @@ pub(crate) enum Phase {
     LocalitySort,
 }
 
-const PHASE_COUNT: usize = 12;
+const PHASE_COUNT: usize = 13;
 
 const PHASE_NAMES: [&str; PHASE_COUNT] = [
+    "logical_cell_routing",
     "segment_centroid_radius",
     "segment_routing_codes",
     "segment_pq_bounds",
@@ -145,7 +147,12 @@ pub(crate) fn report_and_reset(label: &str) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PHASE_COUNT, write_phase_csv};
+    use super::{PHASE_COUNT, PHASE_NAMES, write_phase_csv};
+
+    #[test]
+    fn phase_catalog_includes_logical_cell_routing() {
+        assert!(PHASE_NAMES.contains(&"logical_cell_routing"));
+    }
 
     #[test]
     fn phase_csv_is_canonical_and_appends_complete_groups() {
@@ -171,10 +178,10 @@ mod tests {
         let lines = text.lines().collect::<Vec<_>>();
         assert_eq!(lines[0], "schema_version,group,phase,nanos,calls");
         assert_eq!(lines.len(), 1 + 2 * PHASE_COUNT);
-        assert_eq!(lines[1], "1,ingest,segment_centroid_radius,1,2");
+        assert_eq!(lines[1], "1,ingest,logical_cell_routing,1,2");
         assert_eq!(
             lines.last().copied(),
-            Some("1,compaction,locality_sort,112,113")
+            Some("1,compaction,locality_sort,113,114")
         );
     }
 }

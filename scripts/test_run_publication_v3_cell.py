@@ -324,6 +324,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "phase timing"):
                 read_build_artifact(output, cell=cell)
             phase_names = (
+                "logical_cell_routing",
                 "segment_centroid_radius",
                 "segment_routing_codes",
                 "segment_pq_bounds",
@@ -352,7 +353,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(metrics["storage_puts"], 11)
         self.assertEqual(metrics["storage_bytes_read"], 654321)
         self.assertEqual(metrics["storage_bytes_written"], 123456)
-        self.assertEqual(artifact["phase_timings"]["rows"], 24)
+        self.assertEqual(artifact["phase_timings"]["rows"], 26)
         self.assertEqual(len(artifact["phase_timings"]["sha256"]), 64)
         resource = build_receipt_metrics(
             {

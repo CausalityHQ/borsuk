@@ -74,6 +74,7 @@ PRODUCTION_BUILD_FIELDS = tuple(
 )
 BUILD_PHASE_FIELDS = ("schema_version", "group", "phase", "nanos", "calls")
 BUILD_PHASE_NAMES = (
+    "logical_cell_routing",
     "segment_centroid_radius",
     "segment_routing_codes",
     "segment_pq_bounds",

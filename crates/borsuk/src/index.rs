@@ -11598,7 +11598,9 @@ impl BorsukIndex {
             .copied()
             .unwrap_or_else(|| LogicalCellId::new(self.manifest.routing_epoch, 0));
         let routed_owners = if primary_modality {
-            self.route_primary_records(&records)?
+            crate::build_timing::timed(crate::build_timing::Phase::LogicalCellRouting, || {
+                self.route_primary_records(&records)
+            })?
         } else {
             Vec::new()
         };
