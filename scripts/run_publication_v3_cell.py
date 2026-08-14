@@ -379,6 +379,7 @@ def build_execution_plan(
             "BORSUK_BENCH_OUTPUT_DIR": str(build_output_dir),
             "BORSUK_BENCH_BUILD_INDEX": "1",
             "BORSUK_BENCH_BUILD_ONLY": "1",
+            "BORSUK_BUILD_TIMING": "1",
         }
         for field in (
             "BORSUK_BENCH_READ_ONLY",
