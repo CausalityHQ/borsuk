@@ -11046,10 +11046,12 @@ impl BorsukIndex {
 
     fn route_primary_records(&self, records: &[VectorRecord]) -> Result<Vec<LogicalCellId>> {
         if records.len() >= PARALLEL_WRITE_ROUTING_MIN_ROWS {
-            records
-                .par_iter()
-                .map(|record| self.route_vector_to_logical_cell(&record.vector))
-                .collect()
+            crate::parallel::install(|| {
+                records
+                    .par_iter()
+                    .map(|record| self.route_vector_to_logical_cell(&record.vector))
+                    .collect()
+            })
         } else {
             records
                 .iter()
@@ -23018,10 +23020,12 @@ impl BorsukIndex {
     }
 
     fn write_segment_batch(&self, segments: &mut Vec<Segment>) -> Result<Vec<SegmentSummary>> {
-        std::mem::take(segments)
-            .into_par_iter()
-            .map(|segment| self.write_segment(segment))
-            .collect()
+        crate::parallel::install(|| {
+            std::mem::take(segments)
+                .into_par_iter()
+                .map(|segment| self.write_segment(segment))
+                .collect()
+        })
     }
 
     fn persist_lexical_segment_build(

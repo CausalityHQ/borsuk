@@ -380,6 +380,7 @@ def build_execution_plan(
             "BORSUK_BENCH_BUILD_INDEX": "1",
             "BORSUK_BENCH_BUILD_ONLY": "1",
             "BORSUK_BUILD_TIMING": "1",
+            "BORSUK_CPU_THREADS": "32",
         }
         for field in (
             "BORSUK_BENCH_READ_ONLY",
