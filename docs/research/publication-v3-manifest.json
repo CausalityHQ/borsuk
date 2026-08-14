@@ -271,21 +271,21 @@
       "kind": "read-recall",
       "dataset_ids": ["deep-image-96", "fashion-mnist-784", "gist-960", "glove-100", "nytimes-256", "sift-128"],
       "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
-      "factors": {"k": [10], "leaf_page_budgets": [32], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
+      "factors": {"k": [10], "leaf_page_budgets": [64], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
     },
     {
       "id": "realistic-dense-read",
       "kind": "read-recall",
       "dataset_ids": ["cohere-medium-1m-768", "cohere-large-10m-768", "laion-100m-768"],
       "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
-      "factors": {"k": [10], "leaf_page_budgets": [32], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
+      "factors": {"k": [10], "leaf_page_budgets": [64], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
     },
     {
       "id": "synthetic-dense-read",
       "kind": "read-recall",
       "dataset_ids": ["synthetic-clustered-1m-384", "synthetic-clustered-1m-768", "synthetic-clustered-1m-1536", "synthetic-uniform-10m-384", "synthetic-uniform-10m-768", "synthetic-uniform-10m-1536", "synthetic-duplicate-1m-768", "synthetic-adversarial-1m-768", "synthetic-clustered-100m-768", "synthetic-uniform-100m-768"],
       "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
-      "factors": {"k": [10], "leaf_page_budgets": [32], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
+      "factors": {"k": [10], "leaf_page_budgets": [64], "cache_states": ["cold", "warm"], "minimum_recall_ppm": 950000}
     },
     {
       "id": "durable-lifecycle",

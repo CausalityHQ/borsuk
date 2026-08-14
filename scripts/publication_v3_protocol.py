@@ -223,8 +223,8 @@ def _quality_ppm(value: object, role: str) -> int:
 
 def _leaf_page_budgets(value: object) -> list[int]:
     result = _positive_int_list(value, "leaf page budgets")
-    if any(item not in {4, 8, 16, 32} for item in result):
-        raise ValueError("leaf page budget must be 4, 8, 16, or 32")
+    if any(item not in {4, 8, 16, 32, 64} for item in result):
+        raise ValueError("leaf page budget must be 4, 8, 16, 32, or 64")
     return result
 
 

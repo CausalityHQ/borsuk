@@ -17050,7 +17050,7 @@ impl BorsukIndex {
         }
         let page_budget = match options.mode {
             SearchMode::Approx { max_segments, .. } => match max_segments.unwrap_or(16) {
-                budget @ (4 | 8 | 16 | 32) => budget,
+                budget @ (4 | 8 | 16 | 32 | 64) => budget,
                 _ => return Ok(None),
             },
             SearchMode::Exact => return Ok(None),
@@ -36303,7 +36303,7 @@ mod tests {
         drop(index);
         let reader = BorsukIndex::open(&uri).unwrap();
 
-        for budget in [4, 8, 16, 32] {
+        for budget in [4, 8, 16, 32, 64] {
             let report = reader
                 .search_with_report(
                     &[0.0; 8],

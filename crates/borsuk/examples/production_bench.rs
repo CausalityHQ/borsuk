@@ -3745,9 +3745,9 @@ fn approximate_options(
 
 fn validate_v12_leaf_page_budgets(budgets: &[usize]) -> io::Result<()> {
     for &budget in budgets {
-        if !matches!(budget, 4 | 8 | 16 | 32) {
+        if !matches!(budget, 4 | 8 | 16 | 32 | 64) {
             return Err(invalid_input(&format!(
-                "V12 leaf-page budget must be 4, 8, 16, or 32; received {budget}"
+                "V12 leaf-page budget must be 4, 8, 16, 32, or 64; received {budget}"
             )));
         }
     }
@@ -4282,12 +4282,13 @@ mod tests {
     fn production_v12_page_budget_sweep_is_bounded_and_rejects_legacy_nprobe_values() {
         assert_eq!(DEFAULT_NPROBE_SWEEP, [4, 8, 16, 32]);
         validate_v12_leaf_page_budgets(DEFAULT_NPROBE_SWEEP).unwrap();
+        validate_v12_leaf_page_budgets(&[64]).unwrap();
 
         let error = validate_v12_leaf_page_budgets(&[128])
             .expect_err("legacy nprobe value silently selected the segment path");
         assert!(
             error.to_string().contains("V12 leaf-page budget")
-                && error.to_string().contains("4, 8, 16, or 32"),
+                && error.to_string().contains("4, 8, 16, 32, or 64"),
             "{error}"
         );
     }
