@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import shlex
 import textwrap
+from copy import deepcopy
 from dataclasses import dataclass
 
 try:
@@ -70,7 +71,11 @@ class ExecutionJob:
 
 
 def qualification_cell(
-    manifest: dict[str, object], *, dataset_id: str, workload_kind: str
+    manifest: dict[str, object],
+    *,
+    dataset_id: str,
+    workload_kind: str,
+    build_attempt: int | None = None,
 ) -> dict[str, object]:
     """Select the canonical first BORSUK cell from a partially staged manifest."""
 
@@ -85,7 +90,17 @@ def qualification_cell(
     ]
     if len(matches) != 1:
         raise ValueError("qualification cell is not uniquely scheduled")
-    return matches[0]
+    result = matches[0]
+    if build_attempt is None:
+        return result
+    if not 0 < build_attempt <= 9_999:
+        raise ValueError("qualification build attempt is invalid")
+    result = deepcopy(result)
+    index_root, index_name = str(result["index_prefix"]).rsplit("/", 1)
+    result["index_prefix"] = (
+        f"{index_root}/build-attempts/{build_attempt:04d}/{index_name}"
+    )
+    return result
 
 
 def _q(value: object) -> str:

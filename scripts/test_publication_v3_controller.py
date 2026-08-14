@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -13,6 +14,8 @@ from scripts.publication_v3_aws import build_staging_receipt, staging_jobs
 from scripts.publication_v3_controller import (
     AwsCli,
     LaunchEnvironment,
+    completed_build_authority,
+    prepare_qualification_execution,
     run_execution_job,
     stage_dataset,
 )
@@ -129,6 +132,171 @@ class FakeAws:
 
 
 class PublicationV3ControllerTests(unittest.TestCase):
+    def test_runtime_plan_uses_small_host_exact_build_and_distinct_retry_attempt(self) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        cell = qualification_cell(
+            manifest,
+            dataset_id="sift-128",
+            workload_kind="read-recall",
+            build_attempt=1,
+        )
+        build_job = ExecutionJob.build(cell, attempt=1)
+
+        class RuntimePlanAws:
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "role": "build",
+                    "attempt": 1,
+                    "attempt_id": f"{build_job.cell_tag}-a0001",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": "6" * 64,
+                    "protocol_sha256": "7" * 64,
+                    "index_uri": build_job.index_uri,
+                    "binary_sha256": "8" * 64,
+                }
+
+        prepared = prepare_qualification_execution(
+            manifest,
+            operation="read-recall-sift",
+            source_uri="s3://bucket/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocol.json",
+            protocol_sha256="7" * 64,
+            launch=LaunchEnvironment(
+                "ami-x", "subnet-x", "sg-x", "arn:aws:iam::453182569524:instance-profile/x", "aarch64", "eu-central-1"
+            ),
+            aws=RuntimePlanAws(),
+            attempt=2,
+            build_attempt=1,
+        )
+        self.assertEqual(prepared.job.role, "runtime")
+        self.assertEqual(prepared.job.attempt, 2)
+        self.assertTrue(prepared.job.terminal_prefix.endswith("/runtime/attempts/0002"))
+        self.assertEqual(prepared.request["InstanceType"], "c7g.xlarge")
+        self.assertEqual(len(prepared.request["BlockDeviceMappings"]), 2)
+        tags = {
+            item["Key"]: item["Value"]
+            for item in prepared.request["TagSpecifications"][0]["Tags"]
+        }
+        self.assertEqual(tags["Role"], "runtime")
+        self.assertEqual(tags["Cell"], prepared.job.cell_tag)
+        user_data = base64.b64decode(prepared.request["UserData"]).decode()
+        worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        worker = base64.b64decode(worker_payload).decode()
+        self.assertIn(build_job.terminal_prefix, worker)
+        self.assertIn("8" * 64, worker)
+        self.assertEqual(prepared.timeout_seconds, 7200)
+        self.assertEqual(prepared.expected["binary_sha256"], "8" * 64)
+
+    def test_runtime_requires_exact_completed_build_authority(self) -> None:
+        manifest = unstaged_sift_manifest()
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        cell = qualification_cell(
+            manifest, dataset_id="sift-128", workload_kind="read-recall"
+        )
+        job = ExecutionJob.build(cell, attempt=1)
+
+        class BuildAuthorityAws:
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "role": "build",
+                    "attempt": 1,
+                    "attempt_id": f"{job.cell_tag}-a0001",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": "6" * 64,
+                    "protocol_sha256": "7" * 64,
+                    "index_uri": job.index_uri,
+                    "binary_sha256": "8" * 64,
+                }
+
+        authority = completed_build_authority(
+            job,
+            aws=BuildAuthorityAws(),
+            expected={
+                "source_archive_sha256": "2" * 64,
+                "manifest_sha256": "6" * 64,
+                "protocol_sha256": "7" * 64,
+            },
+        )
+        self.assertEqual(authority["binary_sha256"], "8" * 64)
+        self.assertEqual(authority["build_prefix"], job.terminal_prefix)
+
+        for markers, message in (
+            ((), "not complete"),
+            (("complete", "failed"), "conflict"),
+            (("unknown",), "differ"),
+        ):
+            aws = BuildAuthorityAws()
+            aws.execution_markers = lambda _job, value=markers: value
+            with self.subTest(markers=markers), self.assertRaisesRegex(ValueError, message):
+                completed_build_authority(
+                    job,
+                    aws=aws,
+                    expected={
+                        "source_archive_sha256": "2" * 64,
+                        "manifest_sha256": "6" * 64,
+                        "protocol_sha256": "7" * 64,
+                    },
+                )
+
+        aws = BuildAuthorityAws()
+        original_receipt = aws.read_receipt(job)
+        for field, value, message in (
+            ("status", "failed", "differs from frozen"),
+            ("attempt_id", "wrong", "differs from frozen"),
+            ("index_uri", "s3://wrong/index", "differs from frozen"),
+            ("source_archive_sha256", "9" * 64, "differs from frozen"),
+            ("manifest_sha256", "9" * 64, "differs from frozen"),
+            ("protocol_sha256", "9" * 64, "differs from frozen"),
+            ("binary_sha256", "short", "canonical binary"),
+            ("binary_sha256", "A" * 64, "canonical binary"),
+        ):
+            candidate = {**original_receipt, field: value}
+            aws.read_receipt = lambda _job, receipt=candidate: receipt
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, message):
+                completed_build_authority(
+                    job,
+                    aws=aws,
+                    expected={
+                        "source_archive_sha256": "2" * 64,
+                        "manifest_sha256": "6" * 64,
+                        "protocol_sha256": "7" * 64,
+                    },
+                )
+        with self.assertRaisesRegex(ValueError, "requires a build job"):
+            completed_build_authority(
+                ExecutionJob.runtime(cell, attempt=1),
+                aws=BuildAuthorityAws(),
+                expected={},
+            )
+
     def test_execution_job_launches_once_accepts_bound_terminal_and_terminates(
         self,
     ) -> None:
@@ -283,7 +451,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             },
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("{stage,build-sift}", completed.stdout)
+        self.assertIn("{stage,build-sift,read-recall-sift}", completed.stdout)
 
     def test_stale_completed_receipt_advances_to_fresh_spot_attempt(self) -> None:
         manifest = unstaged_sift_manifest()

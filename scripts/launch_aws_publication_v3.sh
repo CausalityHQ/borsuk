@@ -2,7 +2,7 @@
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
-if [[ "$#" -ne 1 || ( "$1" != "--dry-run" && "$1" != "--stage-sift" && "$1" != "--build-sift" ) ]]; then
+if [[ "$#" -ne 1 || ( "$1" != "--dry-run" && "$1" != "--stage-sift" && "$1" != "--build-sift" && "$1" != "--read-recall-sift" ) ]]; then
   printf 'Publication V3 paid launch is unavailable until the AWS execution plan is implemented and reviewed\n' >&2
   exit 2
 fi
@@ -16,13 +16,20 @@ if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --
 fi
 
 git fetch --quiet origin main
-if ! git merge-base --is-ancestor origin/main HEAD; then
-  printf 'origin/main must be an ancestor of the frozen source commit\n' >&2
-  exit 2
-fi
-if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
-  printf 'Publication V3 source commit must already be delivered to origin/main\n' >&2
-  exit 2
+if [[ "$mode" == "--build-sift" || "$mode" == "--read-recall-sift" ]]; then
+  if ! git merge-base --is-ancestor HEAD origin/main; then
+    printf 'Publication V3 frozen source commit must be contained in origin/main\n' >&2
+    exit 2
+  fi
+else
+  if ! git merge-base --is-ancestor origin/main HEAD; then
+    printf 'origin/main must be an ancestor of the frozen source commit\n' >&2
+    exit 2
+  fi
+  if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+    printf 'Publication V3 source commit must already be delivered to origin/main\n' >&2
+    exit 2
+  fi
 fi
 
 temporary="$(mktemp -d)"
@@ -110,7 +117,23 @@ if [[ "$mode" == "--build-sift" ]]; then
     --image-id "${BORSUK_PUBLICATION_V3_AMI_ID:-ami-07bcecd13a160173f}" \
     --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
     --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
-    --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}"
+    --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
+    --attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-1}"
+  exit 0
+fi
+
+if [[ "$mode" == "--read-recall-sift" ]]; then
+  controller="${BORSUK_PUBLICATION_V3_CONTROLLER:-scripts/publication_v3_controller.py}"
+  python3 "$controller" read-recall-sift \
+    --manifest "$manifest" \
+    --source-archive "$archive" \
+    --profile "${AWS_PROFILE:-causality}" \
+    --image-id "${BORSUK_PUBLICATION_V3_AMI_ID:-ami-07bcecd13a160173f}" \
+    --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
+    --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
+    --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
+    --attempt "${BORSUK_PUBLICATION_V3_RUNTIME_ATTEMPT:-1}" \
+    --build-attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-1}"
   exit 0
 fi
 

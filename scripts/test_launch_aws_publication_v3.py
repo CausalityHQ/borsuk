@@ -195,6 +195,7 @@ archive_path = pathlib.Path(sys.argv[sys.argv.index('--source-archive') + 1])
 manifest = json.loads(manifest_path.read_text())
 assert manifest['source']['state'] == 'frozen'
 assert manifest['source']['archive_sha256'] == hashlib.sha256(archive_path.read_bytes()).hexdigest()
+assert sys.argv[sys.argv.index('--attempt') + 1] == '2'
 print(json.dumps({'role':'build','attempt':1}, sort_keys=True))
 """,
                 encoding="utf-8",
@@ -206,12 +207,93 @@ print(json.dumps({'role':'build','attempt':1}, sort_keys=True))
                 env={
                     **os.environ,
                     "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                    "BORSUK_PUBLICATION_V3_BUILD_ATTEMPT": "2",
                 },
                 capture_output=True,
                 text=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(json.loads(completed.stdout)["role"], "build")
+
+    def test_read_recall_sift_passes_frozen_archive_and_manifest_to_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            repository = temp / "repository"
+            repository.mkdir()
+            make_clean_repository(repository)
+            fake = temp / "controller.py"
+            fake.write_text(
+                """#!/usr/bin/env python3
+import hashlib, json, pathlib, sys
+assert sys.argv[1:3] == ['read-recall-sift', '--manifest']
+manifest_path = pathlib.Path(sys.argv[3])
+archive_path = pathlib.Path(sys.argv[sys.argv.index('--source-archive') + 1])
+manifest = json.loads(manifest_path.read_text())
+assert manifest['source']['state'] == 'frozen'
+assert manifest['source']['archive_sha256'] == hashlib.sha256(archive_path.read_bytes()).hexdigest()
+for name in ('--image-id', '--subnet-id', '--security-group-id', '--instance-profile-arn', '--attempt', '--build-attempt'):
+    assert name in sys.argv
+print(json.dumps({'role':'runtime','attempt':1}, sort_keys=True))
+""",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            completed = subprocess.run(
+                ["bash", "scripts/launch_aws_publication_v3.sh", "--read-recall-sift"],
+                cwd=repository,
+                env={
+                    **os.environ,
+                    "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                },
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(json.loads(completed.stdout)["role"], "runtime")
+
+    def test_build_and_read_can_replay_frozen_ancestor_but_not_unpushed_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            repository = temp / "repository"
+            repository.mkdir()
+            make_clean_repository(repository)
+            frozen = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+            (repository / "Cargo.toml").write_text("# later main\n")
+            run(["git", "add", "Cargo.toml"], repository)
+            run(["git", "commit", "-m", "later main"], repository)
+            run(["git", "push", "origin", "main"], repository)
+            run(["git", "checkout", "--detach", frozen], repository)
+            fake = temp / "controller.py"
+            fake.write_text("#!/usr/bin/env python3\nprint('{}')\n", encoding="utf-8")
+            fake.chmod(0o755)
+            environment = {
+                **os.environ,
+                "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+            }
+            for mode in ("--build-sift", "--read-recall-sift"):
+                replay = subprocess.run(
+                    ["bash", "scripts/launch_aws_publication_v3.sh", mode],
+                    cwd=repository,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(replay.returncode, 0, replay.stderr)
+
+            (repository / "Cargo.toml").write_text("# unpushed\n")
+            run(["git", "add", "Cargo.toml"], repository)
+            run(["git", "commit", "-m", "unpushed"], repository)
+            rejected = subprocess.run(
+                ["bash", "scripts/launch_aws_publication_v3.sh", "--read-recall-sift"],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("contained in origin/main", rejected.stderr)
 
 
 if __name__ == "__main__":

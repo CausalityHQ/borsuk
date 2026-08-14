@@ -11,6 +11,7 @@ from scripts.publication_v3_execution import (
     qualification_cell,
     runtime_worker_script,
 )
+from scripts.publication_v3_protocol import validate_schedule_cell
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,14 +32,29 @@ def frozen_manifest() -> dict[str, object]:
 
 
 class PublicationV3ExecutionTests(unittest.TestCase):
-    def test_build_job_preserves_scheduled_index_authority(self) -> None:
-        cell = qualification_cell(
-            frozen_manifest(), dataset_id="sift-128", workload_kind="read-recall"
+    def test_build_attempts_use_distinct_index_authority_and_runtime_pins_one(self) -> None:
+        manifest = frozen_manifest()
+        first_cell = qualification_cell(
+            manifest,
+            dataset_id="sift-128",
+            workload_kind="read-recall",
+            build_attempt=1,
         )
-        first = ExecutionJob.build(cell, attempt=1)
-        second = ExecutionJob.build(cell, attempt=2)
-        self.assertEqual(first.index_uri, cell["index_prefix"])
-        self.assertEqual(second.index_uri, cell["index_prefix"])
+        second_cell = qualification_cell(
+            manifest,
+            dataset_id="sift-128",
+            workload_kind="read-recall",
+            build_attempt=2,
+        )
+        first = ExecutionJob.build(first_cell, attempt=1)
+        second = ExecutionJob.build(second_cell, attempt=2)
+        runtime = ExecutionJob.runtime(second_cell, attempt=3)
+        self.assertIn("/build-attempts/0001/index-", first.index_uri)
+        self.assertIn("/build-attempts/0002/index-", second.index_uri)
+        self.assertEqual(runtime.index_uri, second.index_uri)
+        self.assertNotEqual(first.index_uri, second.index_uri)
+        self.assertEqual(validate_schedule_cell(first_cell), first_cell)
+        self.assertEqual(validate_schedule_cell(second_cell), second_cell)
         self.assertTrue(first.complete_uri.endswith("/BUILD_TERMINAL_COMPLETE.json"))
         self.assertTrue(first.failed_uri.endswith("/BUILD_TERMINAL_FAILED.json"))
 

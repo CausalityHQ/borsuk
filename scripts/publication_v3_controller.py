@@ -27,6 +27,7 @@ if __package__:
         ExecutionJob,
         build_worker_script,
         qualification_cell,
+        runtime_worker_script,
     )
     from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
 else:
@@ -40,6 +41,7 @@ else:
         ExecutionJob,
         build_worker_script,
         qualification_cell,
+        runtime_worker_script,
     )
     from publication_v3_protocol import canonical_json_bytes, validate_manifest
 
@@ -52,6 +54,14 @@ class LaunchEnvironment:
     instance_profile_arn: str
     image_architecture: str
     subnet_region: str
+
+
+@dataclasses.dataclass(frozen=True)
+class PreparedExecution:
+    job: ExecutionJob
+    request: dict[str, object]
+    expected: dict[str, str]
+    timeout_seconds: int
 
 
 def _s3_location(uri: str) -> tuple[str, str]:
@@ -491,6 +501,146 @@ def run_execution_job(
             aws.terminate(instance[0])
 
 
+def completed_build_authority(
+    job: ExecutionJob,
+    *,
+    aws: Any,
+    expected: dict[str, str],
+) -> dict[str, str]:
+    """Load the exact immutable build required by a runtime cell."""
+
+    if job.role != "build":
+        raise ValueError("runtime authority requires a build job")
+    markers = tuple(aws.execution_markers(job))
+    if set(markers) - {"complete", "failed"}:
+        raise ValueError("build terminal markers differ")
+    if len(markers) > 1:
+        raise ValueError("build terminal markers conflict")
+    if markers != ("complete",):
+        raise ValueError("required build is not complete")
+    value = aws.read_receipt(job)
+    required: dict[str, object] = {
+        "schema_version": 1,
+        "status": "complete",
+        "role": "build",
+        "attempt": job.attempt,
+        "attempt_id": f"{job.cell_tag}-a{job.attempt:04d}",
+        "index_uri": job.index_uri,
+        **expected,
+    }
+    if any(value.get(key) != expected_value for key, expected_value in required.items()):
+        raise ValueError("completed build differs from frozen runtime authority")
+    binary_sha256 = value.get("binary_sha256")
+    if not isinstance(binary_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", binary_sha256
+    ):
+        raise ValueError("completed build has no canonical binary checksum")
+    return {
+        "binary_sha256": binary_sha256,
+        "build_prefix": job.terminal_prefix,
+    }
+
+
+def prepare_qualification_execution(
+    manifest: dict[str, object],
+    *,
+    operation: str,
+    source_uri: str,
+    source_sha256: str,
+    manifest_uri: str,
+    manifest_sha256: str,
+    protocol_uri: str,
+    protocol_sha256: str,
+    launch: LaunchEnvironment,
+    aws: Any,
+    attempt: int = 1,
+    build_attempt: int = 1,
+) -> PreparedExecution:
+    """Prepare one immutable SIFT qualification execution."""
+
+    normalized = validate_manifest(manifest)
+    if operation not in {"build-sift", "read-recall-sift"}:
+        raise ValueError("unsupported qualification execution")
+    if attempt <= 0 or build_attempt <= 0:
+        raise ValueError("qualification attempts must be positive")
+    cell = qualification_cell(
+        normalized,
+        dataset_id="sift-128",
+        workload_kind="read-recall",
+        build_attempt=attempt if operation == "build-sift" else build_attempt,
+    )
+    job = (
+        ExecutionJob.build(cell, attempt=attempt)
+        if operation == "build-sift"
+        else ExecutionJob.runtime(cell, attempt=attempt)
+    )
+    attempt_id = f"{job.cell_tag}-a{job.attempt:04d}"
+    expected = {
+        "attempt_id": attempt_id,
+        "source_archive_sha256": source_sha256,
+        "manifest_sha256": manifest_sha256,
+        "protocol_sha256": protocol_sha256,
+    }
+    if job.role == "build":
+        worker = build_worker_script(
+            job=job,
+            source_uri=source_uri,
+            source_sha256=source_sha256,
+            manifest_uri=manifest_uri,
+            manifest_sha256=manifest_sha256,
+            protocol_uri=protocol_uri,
+            protocol_sha256=protocol_sha256,
+            attempt_id=attempt_id,
+            terminal_prefix=job.terminal_prefix,
+        )
+        maximum = int(normalized["budget_contract"]["max_index_build_seconds"])
+        role = "build"
+    else:
+        build_job = ExecutionJob.build(cell, attempt=build_attempt)
+        authority = completed_build_authority(
+            build_job,
+            aws=aws,
+            expected={
+                "source_archive_sha256": source_sha256,
+                "manifest_sha256": manifest_sha256,
+                "protocol_sha256": protocol_sha256,
+            },
+        )
+        worker = runtime_worker_script(
+            job=job,
+            source_uri=source_uri,
+            source_sha256=source_sha256,
+            manifest_uri=manifest_uri,
+            manifest_sha256=manifest_sha256,
+            protocol_uri=protocol_uri,
+            protocol_sha256=protocol_sha256,
+            build_prefix=authority["build_prefix"],
+            binary_sha256=authority["binary_sha256"],
+            attempt_id=attempt_id,
+            terminal_prefix=job.terminal_prefix,
+        )
+        maximum = int(normalized["budget_contract"]["max_cell_seconds"])
+        role = "runtime"
+        expected["binary_sha256"] = authority["binary_sha256"]
+    request = build_spot_launch_request(
+        normalized,
+        role=role,
+        system="borsuk",
+        image_id=launch.image_id,
+        subnet_id=launch.subnet_id,
+        security_group_id=launch.security_group_id,
+        instance_profile_arn=launch.instance_profile_arn,
+        image_architecture=launch.image_architecture,
+        subnet_region=launch.subnet_region,
+        campaign_id=str(normalized["campaign_id"]),
+        cell_id=job.cell_tag,
+        attempt=job.attempt,
+        worker_script=worker,
+        max_seconds=maximum,
+    )
+    return PreparedExecution(job, request, expected, maximum)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
@@ -512,6 +662,17 @@ def main() -> int:
     build.add_argument("--subnet-id", required=True)
     build.add_argument("--security-group-id", required=True)
     build.add_argument("--instance-profile-arn", required=True)
+    build.add_argument("--attempt", type=int, default=1)
+    runtime = subparsers.add_parser("read-recall-sift")
+    runtime.add_argument("--manifest", type=Path, required=True)
+    runtime.add_argument("--source-archive", type=Path, required=True)
+    runtime.add_argument("--profile", default="causality")
+    runtime.add_argument("--image-id", required=True)
+    runtime.add_argument("--subnet-id", required=True)
+    runtime.add_argument("--security-group-id", required=True)
+    runtime.add_argument("--instance-profile-arn", required=True)
+    runtime.add_argument("--attempt", type=int, default=1)
+    runtime.add_argument("--build-attempt", type=int, default=1)
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -556,10 +717,15 @@ def main() -> int:
             max_attempts=args.max_attempts,
         )
     else:
-        cell = qualification_cell(
-            normalized, dataset_id="sift-128", workload_kind="read-recall"
+        build_attempt = (
+            args.attempt if args.operation == "build-sift" else args.build_attempt
         )
-        job = ExecutionJob.build(cell, attempt=1)
+        cell = qualification_cell(
+            normalized,
+            dataset_id="sift-128",
+            workload_kind="read-recall",
+            build_attempt=build_attempt,
+        )
         protocol_bytes = canonical_json_bytes(cell) + b"\n"
         protocol_sha = hashlib.sha256(protocol_bytes).hexdigest()
         protocol_uri = f"{campaign_root}/protocols/{protocol_sha}.json"
@@ -569,46 +735,26 @@ def main() -> int:
             protocol_path = Path(directory) / "protocol.json"
             protocol_path.write_bytes(protocol_bytes)
             aws.upload_immutable(protocol_path, protocol_uri, protocol_sha)
-        attempt_id = f"{job.cell_tag}-a{job.attempt:04d}"
-        worker = build_worker_script(
-            job=job,
+        prepared = prepare_qualification_execution(
+            normalized,
+            operation=args.operation,
             source_uri=source_uri,
             source_sha256=source_sha,
             manifest_uri=manifest_uri,
             manifest_sha256=manifest_sha,
             protocol_uri=protocol_uri,
             protocol_sha256=protocol_sha,
-            attempt_id=attempt_id,
-            terminal_prefix=job.terminal_prefix,
-        )
-        maximum = int(normalized["budget_contract"]["max_index_build_seconds"])
-        request = build_spot_launch_request(
-            normalized,
-            role="build",
-            system="borsuk",
-            image_id=launch.image_id,
-            subnet_id=launch.subnet_id,
-            security_group_id=launch.security_group_id,
-            instance_profile_arn=launch.instance_profile_arn,
-            image_architecture=launch.image_architecture,
-            subnet_region=launch.subnet_region,
-            campaign_id=str(normalized["campaign_id"]),
-            cell_id=job.cell_tag,
-            attempt=job.attempt,
-            worker_script=worker,
-            max_seconds=maximum,
+            launch=launch,
+            aws=aws,
+            attempt=getattr(args, "attempt", 1),
+            build_attempt=getattr(args, "build_attempt", 1),
         )
         receipt = run_execution_job(
-            job,
-            request=request,
-            expected={
-                "attempt_id": attempt_id,
-                "source_archive_sha256": source_sha,
-                "manifest_sha256": manifest_sha,
-                "protocol_sha256": protocol_sha,
-            },
+            prepared.job,
+            request=prepared.request,
+            expected=prepared.expected,
             aws=aws,
-            timeout_seconds=maximum,
+            timeout_seconds=prepared.timeout_seconds,
         )
     print(canonical_json_bytes(receipt).decode("utf-8"))
     return 0
