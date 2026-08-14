@@ -1221,8 +1221,15 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
             read_ground_truth(&neighbors_path, query_count, meta.k, meta.n_train)?,
         )
     } else {
-        let train_files =
-            parquet_train_files_for_phase(&config.dataset_dir, meta.n_train, config.recall_only)?;
+        let train_files = parquet_train_files_for_phase(
+            &config.dataset_dir,
+            meta.n_train,
+            allow_missing_corpus_for_phase(
+                config.build_index,
+                config.insert_only,
+                config.recall_only || config.read_only,
+            ),
+        )?;
         let test_path = config.dataset_dir.join("test.parquet");
         let neighbors_path = config.dataset_dir.join("neighbors.parquet");
         let queries = read_parquet_vectors(&test_path, query_count, meta.dim, "emb")?;
@@ -1429,6 +1436,10 @@ fn parquet_train_files_for_phase(
     };
     validate_parquet_row_count(&train_files, expected_rows, "training")?;
     Ok(Some(train_files))
+}
+
+fn allow_missing_corpus_for_phase(build_index: bool, insert_only: bool, query_only: bool) -> bool {
+    !build_index && !insert_only && query_only
 }
 
 fn validate_parquet_row_count(
@@ -4128,15 +4139,15 @@ mod tests {
         GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER, LeafCapability, LeafMode,
         MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample,
         QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES, ServingMode, VectorMetric,
-        WRITE_COST_HEADER, WRITE_SAMPLE_HEADER, approximate_options, benchmark_row_ids,
-        cache_coverage_cohort_size, cache_coverage_enabled, dataset_metric,
-        default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
-        deterministic_mutation_vector, dollars_per_million_queries, ingest_batch_size,
-        ingest_generated_batch, is_hot_workload_position, mixed_concurrency_query_indices,
-        neighbor_row, normalized_cache_access_fractions, parquet_train_files_for_phase,
-        parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
-        parse_optional_byte_cap, parse_positive_list, parse_serving_mode,
-        percentage_operation_count, permuted_positions, preload_query_count,
+        WRITE_COST_HEADER, WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase,
+        approximate_options, benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
+        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
+        default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
+        ingest_batch_size, ingest_generated_batch, is_hot_workload_position,
+        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
+        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
+        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
+        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
         read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
         rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
         uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
@@ -4934,6 +4945,28 @@ mod tests {
             None
         );
         assert!(parquet_train_files_for_phase(directory.path(), 100_000_000, false).is_err());
+    }
+
+    #[test]
+    fn read_only_runtime_dataset_does_not_require_local_corpus_shards() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            parquet_train_files_for_phase(
+                directory.path(),
+                100_000_000,
+                allow_missing_corpus_for_phase(false, false, true),
+            )
+            .unwrap(),
+            None
+        );
+        assert!(
+            parquet_train_files_for_phase(
+                directory.path(),
+                100_000_000,
+                allow_missing_corpus_for_phase(true, false, true),
+            )
+            .is_err()
+        );
     }
 
     #[test]
