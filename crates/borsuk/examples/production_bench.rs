@@ -1820,14 +1820,30 @@ fn ingest_generated_batch(
     // Ground-truth files address corpus rows by their numeric ordinal. Generated
     // library IDs are intentionally opaque, so the benchmark supplies the exact
     // stable row IDs instead of depending on an implementation detail.
-    let requested_ids = benchmark_row_ids(start, vectors.len());
-    let ids = index.add_vectors_with_ids(vectors, requested_ids)?;
-    validate_generated_id_range(start, end, &ids)
+    let records = benchmark_records(start, vectors);
+    let ids = records
+        .iter()
+        .map(|record| record.id.to_string())
+        .collect::<Vec<_>>();
+    validate_generated_id_range(start, end, &ids)?;
+    // A frozen corpus has already validated unique ordinal IDs. The
+    // low-amplification LWW path avoids acquiring every packed claim page for
+    // each batch while retaining one atomic positioned transaction.
+    index.put(records)?;
+    Ok(())
 }
 
 fn benchmark_row_ids(start: usize, count: usize) -> Vec<String> {
     (start..start.saturating_add(count))
         .map(|row| row.to_string())
+        .collect()
+}
+
+fn benchmark_records(start: usize, vectors: Vec<Vec<f32>>) -> Vec<VectorRecord> {
+    benchmark_row_ids(start, vectors.len())
+        .into_iter()
+        .zip(vectors)
+        .map(|(id, vector)| VectorRecord::new(id, vector))
         .collect()
 }
 
@@ -4121,16 +4137,17 @@ mod tests {
         LIFECYCLE_HEADER, LeafCapability, LeafMode, MUTATION_QUERY_HEADER,
         MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary,
         RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
-        approximate_options, benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
-        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
-        default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
-        ingest_batch_size, is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
-        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
-        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
-        parse_positive_list, parse_serving_mode, percentage_operation_count, permuted_positions,
-        preload_query_count, read_logical_cell_catalog, recall_preloads_local_snapshot,
-        recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
-        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        approximate_options, benchmark_records, benchmark_row_ids, cache_coverage_cohort_size,
+        cache_coverage_enabled, dataset_metric, default_build_leaf_capability,
+        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
+        dollars_per_million_queries, ingest_batch_size, is_hot_workload_position,
+        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
+        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
+        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
+        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
+        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
+        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
+        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_bounded_v13_execution, validate_build_only, validate_disk_cached_network,
         validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
         validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
@@ -4173,6 +4190,13 @@ mod tests {
     #[test]
     fn benchmark_ingest_ids_are_explicit_deterministic_row_ids() {
         assert_eq!(benchmark_row_ids(5, 3), ["5", "6", "7"]);
+        assert_eq!(
+            benchmark_records(5, vec![vec![1.0], vec![2.0], vec![3.0]])
+                .into_iter()
+                .map(|record| record.id.to_string())
+                .collect::<Vec<_>>(),
+            ["5", "6", "7"]
+        );
     }
 
     #[test]
