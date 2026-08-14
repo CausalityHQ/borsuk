@@ -17110,6 +17110,18 @@ impl BorsukIndex {
             SearchMode::Approx { max_bytes, .. } => max_bytes,
             SearchMode::Exact => unreachable!("V14 eligibility requires approximate search"),
         };
+        let exact_candidate_rows = match options.mode {
+            SearchMode::Approx {
+                max_candidates_per_segment,
+                ..
+            } => max_candidates_per_segment
+                .unwrap_or_else(|| usize::try_from(codebook.candidates()).unwrap_or(usize::MAX)),
+            SearchMode::Exact => unreachable!("V14 eligibility requires approximate search"),
+        }
+        .max(options.k.saturating_mul(4));
+        let requested_exact_block_budget = context
+            .page_budget
+            .max(exact_candidate_rows.div_ceil(crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS));
         let max_bytes = caller_max_bytes.unwrap_or(GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES);
         let card_indexes = root.card_indexes_for_cells(&selected_cells)?;
         let centroid_distances = codebook.score_cell_card_codes(
@@ -17127,13 +17139,13 @@ impl BorsukIndex {
             root,
             &card_indexes,
             &centroid_distances,
-            head_card_budget,
+            GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
         )?;
         let (head_plan, head_limited) = match plan_ranked_cell_card_head_wave(
             root,
             &ranked_card_indexes,
             max_bytes,
-            GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
+            head_card_budget,
         ) {
             Ok(plan) => plan,
             Err(BorsukError::RecallGuaranteeViolated { .. }) => return Ok(None),
@@ -17166,15 +17178,20 @@ impl BorsukIndex {
             self.manifest.config.dimensions,
             self.manifest.build_config.vector_element_type,
         )?;
+        let available_exact_blocks = heads.iter().try_fold(0_usize, |total, head| {
+            total
+                .checked_add(head.head.exact_blocks.len())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V14 available exact block count overflows".to_string(),
+                    )
+                })
+        })?;
+        let exact_block_budget = requested_exact_block_budget.min(available_exact_blocks);
         let approximate_started = Instant::now();
         let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
-        let ranked = rank_cell_card_exact_blocks(
-            &heads,
-            &distances,
-            global_leaf_exact_block_budget(context.page_budget, options.k)
-                .min(GLOBAL_LEAF_QUERY_WAVE_PAGES),
-            options.k,
-        )?;
+        let ranked =
+            rank_cell_card_exact_blocks(&heads, &distances, exact_block_budget, options.k)?;
         let global_approximate_us =
             u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let declined_execution = |reason| {
@@ -34954,7 +34971,7 @@ mod tests {
         assert_eq!(
             GLOBAL_LEAF_QUERY_WAVE_PAGES * GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER,
             128,
-            "the resident centroid wave narrows 256 logical probes to at most 128 card heads before the 16-GET planner cap"
+            "the resident centroid wave narrows 256 logical probes to at most 128 card heads while the shared I/O gate bounds concurrency"
         );
         assert!(
             deep_100m_probes * 64 <= deep_100m_coarse_cells,
@@ -36311,6 +36328,59 @@ mod tests {
                 "fallback exceeded caller maximum {budget}: {report:?}"
             );
         }
+    }
+
+    #[test]
+    fn resident_global_v14_honors_the_whole_index_exact_candidate_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 4096,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let rows = 2048_usize;
+        index
+            .add(
+                (0..rows)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![1.0; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        drop(index);
+
+        let reader = BorsukIndex::open(&uri).unwrap();
+        let report = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(rows),
+            )
+            .unwrap();
+
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v14");
+        assert!(
+            report.records_scored
+                > GLOBAL_LEAF_QUERY_WAVE_PAGES * crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS,
+            "the V14 rerank silently stopped at its I/O concurrency width: {report:?}"
+        );
+
+        let bounded = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(usize::MAX),
+            )
+            .unwrap();
+        assert!(bounded.records_scored <= rows);
     }
 
     #[test]

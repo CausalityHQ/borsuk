@@ -40,17 +40,17 @@ const DEFAULT_WRITE_BATCH_SIZE: usize = 1_024;
 // values aligned with the bounded V12 dispatcher so a benchmark can never
 // silently measure the legacy segment path.
 const DEFAULT_NPROBE_SWEEP: &[usize] = &[4, 8, 16, 32];
-// V12 currently exact-scores every row in the admitted leaf-page prefix, so the
-// legacy per-segment candidate knob is a fixed compatibility label rather than
-// a tuning dimension. Fail closed if a publication config tries to sweep it.
+// V14 treats the public candidate knob as its whole-index exact-rerank row
+// budget. Publication pins the qualified depth instead of silently falling
+// back to the persisted, corpus-size-aware serving default.
 const DEFAULT_RECALL_CANDIDATES: &[usize] = &[4096];
 // Explicit pq-scan defaults for cache-state and concurrency measurements. Recall
 // is recorded against the shipped ground truth in every selected serving row.
 // Zero delegates to the persisted corpus-size-aware production default.
 const SERVING_NPROBE: usize = 0;
-// Zero leaves the global artifact's persisted candidate default in force.
-// Set BORSUK_BENCH_SERVING_CANDIDATES to sweep an explicit exact-rerank budget.
-const SERVING_CANDIDATES: usize = 0;
+// Serving and recall must measure the same qualified exact-rerank depth. An
+// explicit environment override remains available for non-publication sweeps.
+const SERVING_CANDIDATES: usize = 4096;
 const SERVING_PREFETCH_DEPTH: usize = 16;
 const RECALL_K: usize = 10;
 const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
@@ -3757,7 +3757,7 @@ fn validate_v12_leaf_page_budgets(budgets: &[usize]) -> io::Result<()> {
 fn validate_v12_candidate_budgets(budgets: &[usize]) -> io::Result<()> {
     if budgets != DEFAULT_RECALL_CANDIDATES {
         return Err(invalid_input(
-            "BORSUK_BENCH_CANDIDATES does not tune V12; keep the fixed compatibility value 4096",
+            "BORSUK_BENCH_CANDIDATES must keep the qualified V14 exact-rerank budget 4096",
         ));
     }
     Ok(())
@@ -4121,18 +4121,19 @@ mod tests {
         DEFAULT_NPROBE_SWEEP, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
         GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER, LeafCapability, LeafMode,
         MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample,
-        QuerySummary, RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER,
-        WRITE_SAMPLE_HEADER, approximate_options, benchmark_row_ids, cache_coverage_cohort_size,
-        cache_coverage_enabled, dataset_metric, default_build_leaf_capability,
-        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
-        dollars_per_million_queries, ingest_batch_size, ingest_generated_batch,
-        is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
-        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
-        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
-        parse_positive_list, parse_serving_mode, percentage_operation_count, permuted_positions,
-        preload_query_count, read_logical_cell_catalog, recall_preloads_local_snapshot,
-        recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
-        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES, ServingMode, VectorMetric,
+        WRITE_COST_HEADER, WRITE_SAMPLE_HEADER, approximate_options, benchmark_row_ids,
+        cache_coverage_cohort_size, cache_coverage_enabled, dataset_metric,
+        default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
+        deterministic_mutation_vector, dollars_per_million_queries, ingest_batch_size,
+        ingest_generated_batch, is_hot_workload_position, mixed_concurrency_query_indices,
+        neighbor_row, normalized_cache_access_fractions, parquet_train_files_for_phase,
+        parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
+        parse_optional_byte_cap, parse_positive_list, parse_serving_mode,
+        percentage_operation_count, permuted_positions, preload_query_count,
+        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
+        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
+        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_bounded_v14_execution, validate_build_only, validate_disk_cached_network,
         validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
         validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
@@ -4316,13 +4317,16 @@ mod tests {
     }
 
     #[test]
-    fn production_v12_rejects_an_inert_candidate_sweep() {
+    fn production_v14_pins_the_qualified_exact_rerank_budget() {
         validate_v12_candidate_budgets(DEFAULT_RECALL_CANDIDATES).unwrap();
+        assert_eq!(SERVING_CANDIDATES, DEFAULT_RECALL_CANDIDATES[0]);
         let error = validate_v12_candidate_budgets(&[128, 4_096])
-            .expect_err("an inert V12 candidate sweep was accepted");
+            .expect_err("an unqualified V14 exact-rerank sweep was accepted");
         assert!(
             error.to_string().contains("BORSUK_BENCH_CANDIDATES")
-                && error.to_string().contains("does not tune V12"),
+                && error
+                    .to_string()
+                    .contains("qualified V14 exact-rerank budget"),
             "{error}"
         );
     }
