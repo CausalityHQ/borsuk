@@ -70,6 +70,7 @@ except ModuleNotFoundError:
 
 
 SUPPORTED_LOCAL_KINDS = frozenset({"read-recall", "write-update-delete-compact"})
+V12_COMPATIBILITY_CANDIDATES = 4096
 PRODUCTION_BUILD_FIELDS = tuple(
     "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
 )
@@ -210,17 +211,14 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
     if k_values != [10]:
         unsupported = next((value for value in k_values or [] if value != 10), "missing")
         raise ValueError(f"k={unsupported} is not executable by the current benchmark")
-    candidates = factors.get("candidate_budgets")
+    leaf_page_budgets = factors.get("leaf_page_budgets")
     cache_states = factors.get("cache_states")
-    leaf_page_budget = factors.get("leaf_page_budget")
     if (
-        not isinstance(candidates, list)
-        or not candidates
+        not isinstance(leaf_page_budgets, list)
+        or not leaf_page_budgets
         or not isinstance(cache_states, list)
         or not cache_states
-        or isinstance(leaf_page_budget, bool)
-        or not isinstance(leaf_page_budget, int)
-        or leaf_page_budget not in {4, 8, 16, 32}
+        or any(budget not in {4, 8, 16, 32} for budget in leaf_page_budgets)
     ):
         raise ValueError("read-recall arm factors are incomplete")
     if any(state not in {"cold", "warm"} for state in cache_states):
@@ -228,11 +226,10 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
     return [
         {
             "k": 10,
-            "candidate_budget": candidate,
             "leaf_page_budget": leaf_page_budget,
             "cache_state": state,
         }
-        for candidate in candidates
+        for leaf_page_budget in leaf_page_budgets
         for state in cache_states
     ]
 
@@ -363,10 +360,8 @@ def build_execution_plan(
     workload_kind = workload.get("kind")
     if workload_kind == "read-recall":
         routing_budget = arm["leaf_page_budget"]
-        candidate_budget = arm["candidate_budget"]
     else:
         routing_budget = 32
-        candidate_budget = 4096
     benchmark_env = {
         "AWS_REGION": region,
         "AWS_DEFAULT_REGION": region,
@@ -378,7 +373,7 @@ def build_execution_plan(
         "BORSUK_BENCH_QUERY_SEED": str(cell.get("query_seed")),
         "BORSUK_BENCH_REPETITION_ID": str(cell.get("repetition_id")),
         "BORSUK_BENCH_NPROBES": str(routing_budget),
-        "BORSUK_BENCH_CANDIDATES": str(candidate_budget),
+        "BORSUK_BENCH_CANDIDATES": str(V12_COMPATIBILITY_CANDIDATES),
         "BORSUK_BENCH_READ_ONLY": "1",
         "BORSUK_BENCH_CONCURRENCY": "1",
         "BORSUK_BENCH_SKIP_EXACT_RECALL": "1",
@@ -723,7 +718,8 @@ def summarize_query_samples(
             row.get("phase") != expected_phase
             or row.get("mode") != "srht-pq-scan"
             or int(row.get("nprobe", "-1")) != arm["leaf_page_budget"]
-            or int(row.get("max_candidates", "-1")) != arm["candidate_budget"]
+            or int(row.get("max_candidates", "-1"))
+            != V12_COMPATIBILITY_CANDIDATES
         ):
             raise ValueError("query sample belongs to a different factor arm")
         sample_index = int(row["sample_index"])

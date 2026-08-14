@@ -86,8 +86,7 @@ WORKLOAD_FACTOR_FIELDS = {
     "read-recall": frozenset(
         {
             "k",
-            "candidate_budgets",
-            "leaf_page_budget",
+            "leaf_page_budgets",
             "cache_states",
             "minimum_recall_ppm",
         }
@@ -222,9 +221,9 @@ def _quality_ppm(value: object, role: str) -> int:
     return result
 
 
-def _leaf_page_budget(value: object) -> int:
-    result = _positive_int(value, "leaf page budget")
-    if result not in {4, 8, 16, 32}:
+def _leaf_page_budgets(value: object) -> list[int]:
+    result = _positive_int_list(value, "leaf page budgets")
+    if any(item not in {4, 8, 16, 32} for item in result):
         raise ValueError("leaf page budget must be 4, 8, 16, or 32")
     return result
 
@@ -238,10 +237,7 @@ def _validate_workload_factors(kind: str, value: object) -> dict[str, object]:
     if kind == "read-recall":
         return {
             "k": _positive_int_list(factors["k"], "read k"),
-            "candidate_budgets": _positive_int_list(
-                factors["candidate_budgets"], "candidate budgets"
-            ),
-            "leaf_page_budget": _leaf_page_budget(factors["leaf_page_budget"]),
+            "leaf_page_budgets": _leaf_page_budgets(factors["leaf_page_budgets"]),
             "cache_states": _unique_strings(
                 factors["cache_states"], "cache states"
             ),

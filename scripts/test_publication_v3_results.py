@@ -50,8 +50,7 @@ def first_read_arm(cell: dict[str, object]) -> dict[str, object]:
     factors = cell["workload"]["factors"]
     return {
         "k": factors["k"][0],
-        "candidate_budget": factors["candidate_budgets"][0],
-        "leaf_page_budget": factors["leaf_page_budget"],
+        "leaf_page_budget": factors["leaf_page_budgets"][0],
         "cache_state": factors["cache_states"][0],
     }
 

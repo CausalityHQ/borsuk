@@ -156,8 +156,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                 "systems": ["borsuk", "amazon-s3-vectors", "faiss"],
                 "factors": {
                     "k": [10],
-                    "candidate_budgets": [128, 320],
-                    "leaf_page_budget": 32,
+                    "leaf_page_budgets": [4, 32],
                     "cache_states": ["cold", "warm"],
                     "minimum_recall_ppm": 950000,
                 },
@@ -223,7 +222,7 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         workload = next(
             item for item in manifest["workloads"] if item["kind"] == "read-recall"
         )
-        workload["factors"]["leaf_page_budget"] = 128
+        workload["factors"]["leaf_page_budgets"] = [128]
         with self.assertRaisesRegex(ValueError, "leaf page budget"):
             validate_manifest(manifest)
 

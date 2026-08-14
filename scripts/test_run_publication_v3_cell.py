@@ -488,7 +488,6 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             cell=cell,
             arm={
                 "k": 10,
-                "candidate_budget": 128,
                 "leaf_page_budget": 32,
                 "cache_state": "cold",
             },
@@ -519,7 +518,6 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             runtime_attestation=attestation,
         )
         self.assertTrue(report["publishable"])
-        self.assertEqual(report["result"]["arm"]["candidate_budget"], 128)
         self.assertEqual(report["result"]["metrics"]["storage_gets"], 10)
         self.assertEqual(report["result"]["metrics"]["storage_bytes_read"], 4096)
         admitted = validate_cell_result(
@@ -590,7 +588,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(benchmark_env["BORSUK_BENCH_QUERY_SEED"], str(cell["query_seed"]))
         self.assertEqual(benchmark_env["BORSUK_BENCH_QUERIES"], "10")
         self.assertEqual(benchmark_env["BORSUK_BENCH_NPROBES"], str(arm["leaf_page_budget"]))
-        self.assertEqual(benchmark_env["BORSUK_BENCH_CANDIDATES"], str(arm["candidate_budget"]))
+        self.assertEqual(benchmark_env["BORSUK_BENCH_CANDIDATES"], "4096")
         self.assertEqual(benchmark_env["BORSUK_BENCH_SKIP_EXACT_RECALL"], "1")
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELLS"], "128")
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS"], "4096")
@@ -661,7 +659,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime_env["BORSUK_BENCH_CANDIDATES"],
-            str(arm["candidate_budget"]),
+            "4096",
         )
         self.assertEqual(runtime_env["BORSUK_BENCH_URI"], cell["index_prefix"])
         self.assertNotEqual(runtime_env["BORSUK_BENCH_DATASET"], build_env["BORSUK_BENCH_DATASET"])
@@ -721,7 +719,6 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             )
         arm = {
             "k": 10,
-            "candidate_budget": 128,
             "leaf_page_budget": 32,
             "cache_state": "cold",
         }
@@ -731,7 +728,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "phase": "uncached",
                     "mode": "srht-pq-scan",
                     "nprobe": "32",
-                    "max_candidates": "128",
+                    "max_candidates": "4096",
                 }
             )
         summary = summarize_query_samples(rows, cell=cell, arm=arm, expected_queries=3)
@@ -762,18 +759,17 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         cell = scheduled_cell()
         cell["workload"]["factors"] = {
             "k": [10],
-            "candidate_budgets": [64, 256],
-            "leaf_page_budget": 32,
+            "leaf_page_budgets": [4, 32],
             "cache_states": ["cold", "warm"],
             "minimum_recall_ppm": 950000,
         }
         self.assertEqual(
             plan_arms(cell),
             [
-                {"k": 10, "candidate_budget": 64, "leaf_page_budget": 32, "cache_state": "cold"},
-                {"k": 10, "candidate_budget": 64, "leaf_page_budget": 32, "cache_state": "warm"},
-                {"k": 10, "candidate_budget": 256, "leaf_page_budget": 32, "cache_state": "cold"},
-                {"k": 10, "candidate_budget": 256, "leaf_page_budget": 32, "cache_state": "warm"},
+                {"k": 10, "leaf_page_budget": 4, "cache_state": "cold"},
+                {"k": 10, "leaf_page_budget": 4, "cache_state": "warm"},
+                {"k": 10, "leaf_page_budget": 32, "cache_state": "cold"},
+                {"k": 10, "leaf_page_budget": 32, "cache_state": "warm"},
             ],
         )
 
@@ -801,7 +797,6 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         cell = scheduled_cell()
         arm = {
             "k": 10,
-            "candidate_budget": 128,
             "leaf_page_budget": 32,
             "cache_state": "cold",
         }
