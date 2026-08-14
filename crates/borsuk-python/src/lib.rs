@@ -1,6 +1,6 @@
 //! Native Python bindings for BORSUK.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, sync::RwLock, time::Duration};
 
 use borsuk::{
     AddReport, BorsukIndex, CompactionOptions, CompactionReport, DEFAULT_COMPACTION_MAX_SEGMENTS,
@@ -867,10 +867,24 @@ impl PyRebuildReport {
 
 #[pyclass(name = "Index")]
 struct PyIndex {
-    inner: Mutex<BorsukIndex>,
+    inner: RwLock<BorsukIndex>,
 }
 
 impl PyIndex {
+    fn detached_read<T, F>(&self, py: Python<'_>, operation: F) -> PyResult<T>
+    where
+        T: Send,
+        F: FnOnce(&BorsukIndex) -> PyResult<T> + Send,
+    {
+        py.detach(|| {
+            let index = self
+                .inner
+                .read()
+                .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
+            operation(&index)
+        })
+    }
+
     fn detached<T, F>(&self, py: Python<'_>, operation: F) -> PyResult<T>
     where
         T: Send,
@@ -879,7 +893,7 @@ impl PyIndex {
         py.detach(|| {
             let mut index = self
                 .inner
-                .lock()
+                .write()
                 .map_err(|_| PyRuntimeError::new_err("index lock poisoned"))?;
             operation(&mut index)
         })
@@ -1079,7 +1093,7 @@ impl PyIndex {
     }
 
     fn stats(&self, py: Python<'_>) -> PyResult<PyIndexStats> {
-        self.detached(py, |index| {
+        self.detached_read(py, |index| {
             index.try_stats().map(Into::into).map_err(to_py_error)
         })
     }
@@ -1093,7 +1107,7 @@ impl PyIndex {
     }
 
     fn warm(&self, py: Python<'_>) -> PyResult<PyWarmReport> {
-        self.detached(py, |index| {
+        self.detached_read(py, |index| {
             index.warm().map(Into::into).map_err(to_py_error)
         })
     }
@@ -1133,7 +1147,7 @@ impl PyIndex {
         )?;
 
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             index
                 .search_ids(
                     &query,
@@ -1186,7 +1200,7 @@ impl PyIndex {
         )?;
 
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             index
                 .search_id_bytes(
                     &query,
@@ -1240,7 +1254,7 @@ impl PyIndex {
         )?;
 
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             index
                 .search_vectors(
                     &query,
@@ -1262,20 +1276,21 @@ impl PyIndex {
     }
 
     fn get_vector_by_id(&self, py: Python<'_>, id: Vec<u8>) -> PyResult<Option<Vec<f32>>> {
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             index.get_vector_by_id(id).map_err(to_py_error)
         })
     }
 
     fn get_vector(&self, py: Python<'_>, id: &str) -> PyResult<Option<Vec<f32>>> {
         let id = id.to_owned();
-        self.detached(py, move |index| index.get_vector(&id).map_err(to_py_error))
+        self.detached_read(py, move |index| index.get_vector(&id).map_err(to_py_error))
     }
 
     /// Load a stored vector and its metadata dict by id, or `None`.
     fn get_record(&self, py: Python<'_>, id: &str) -> PyResult<Option<(Vec<f32>, Py<PyAny>)>> {
         let id = id.to_owned();
-        let record = self.detached(py, move |index| index.get_record(&id).map_err(to_py_error))?;
+        let record =
+            self.detached_read(py, move |index| index.get_record(&id).map_err(to_py_error))?;
         match record {
             Some((vector, metadata)) => Ok(Some((vector, metadata_to_py(py, &metadata)?))),
             None => Ok(None),
@@ -1292,7 +1307,7 @@ impl PyIndex {
         offset: usize,
         limit: usize,
     ) -> PyResult<Vec<PyRecordEntry>> {
-        let records = self.detached(py, |index| {
+        let records = self.detached_read(py, |index| {
             index.list_records(offset, limit).map_err(to_py_error)
         })?;
         records
@@ -1335,7 +1350,7 @@ impl PyIndex {
         )?;
         let flat = query.to_vec(py)?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let dimensions = index.manifest().config.dimensions;
             let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
             index
@@ -1390,7 +1405,7 @@ impl PyIndex {
         )?;
         let flat = query.to_vec(py)?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let dimensions = index.manifest().config.dimensions;
             let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
             index
@@ -1445,7 +1460,7 @@ impl PyIndex {
         )?;
         let flat = query.to_vec(py)?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let dimensions = index.manifest().config.dimensions;
             let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
             index
@@ -1500,7 +1515,7 @@ impl PyIndex {
         )?;
         let flat = query.to_vec(py)?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let dimensions = index.manifest().config.dimensions;
             let query = query_from_flat_vector(&flat, dimensions, "query buffer")?;
             let report = index
@@ -1556,7 +1571,7 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             index
                 .search_ids_batch(
                     &queries,
@@ -1608,7 +1623,7 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             index
                 .search_id_bytes_batch(
                     &queries,
@@ -1660,7 +1675,7 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             index
                 .search_vectors_batch(
                     &queries,
@@ -1713,7 +1728,7 @@ impl PyIndex {
         )?;
         let flat = queries.to_vec(py)?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let dimensions = index.manifest().config.dimensions;
             let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
             index
@@ -1768,7 +1783,7 @@ impl PyIndex {
         )?;
         let flat = queries.to_vec(py)?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let dimensions = index.manifest().config.dimensions;
             let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
             index
@@ -1823,7 +1838,7 @@ impl PyIndex {
         )?;
         let flat = queries.to_vec(py)?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let dimensions = index.manifest().config.dimensions;
             let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
             index
@@ -1877,7 +1892,7 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let reports = index
                 .search_batch_with_report(
                     &queries,
@@ -1935,7 +1950,7 @@ impl PyIndex {
         )?;
         let flat = queries.to_vec(py)?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let dimensions = index.manifest().config.dimensions;
             let queries = vectors_from_flat_rows(&flat, dimensions, "query buffer")?;
             let reports = index
@@ -1998,7 +2013,7 @@ impl PyIndex {
             max_candidates_per_segment,
         )?;
         let cache_execution = parse_cache_execution(cache_execution)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let report = index
                 .search_with_report(
                     &query,
@@ -2040,7 +2055,7 @@ impl PyIndex {
     ) -> PyResult<Py<PyDict>> {
         let filter = filter.as_ref().map(py_to_filter).transpose()?;
         let mode = parse_mode(mode, leaf_mode, None, None, None, None, None, None)?;
-        let report = self.detached(py, move |index| {
+        let report = self.detached_read(py, move |index| {
             index
                 .explain(
                     &query,
@@ -2100,7 +2115,7 @@ impl PyIndex {
         k: usize,
     ) -> PyResult<Vec<String>> {
         let name = name.to_owned();
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let hits = index
                 .search_sparse_named(&name, indices, values, k)
                 .map_err(to_py_error)?;
@@ -2118,7 +2133,7 @@ impl PyIndex {
         k: usize,
     ) -> PyResult<Vec<String>> {
         let name = name.to_owned();
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let hits = index
                 .search_late_interaction(&name, query_tokens, k)
                 .map_err(to_py_error)?;
@@ -2129,7 +2144,7 @@ impl PyIndex {
     #[pyo3(signature = (text, k = 10))]
     fn search_text(&self, py: Python<'_>, text: &str, k: usize) -> PyResult<Vec<String>> {
         let text = text.to_owned();
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let report = index.search_text(&text, k).map_err(to_py_error)?;
             search_report_ids(report)
         })
@@ -2144,7 +2159,7 @@ impl PyIndex {
         include_metadata: bool,
     ) -> PyResult<PySearchReport> {
         let text = text.to_owned();
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let report = index.search_text(&text, k).map_err(to_py_error)?;
             search_report_with_optional_metadata(index, report, include_metadata)
         })
@@ -2163,7 +2178,7 @@ impl PyIndex {
         weights: Option<Vec<(String, f32)>>,
     ) -> PyResult<Vec<String>> {
         let options = hybrid_options(k, fusion, rrf_k, weights)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let query = hybrid_query(
                 vectors,
                 text,
@@ -2190,7 +2205,7 @@ impl PyIndex {
         include_metadata: bool,
     ) -> PyResult<PySearchReport> {
         let options = hybrid_options(k, fusion, rrf_k, weights)?;
-        self.detached(py, move |index| {
+        self.detached_read(py, move |index| {
             let query = hybrid_query(
                 vectors,
                 text,
@@ -2442,7 +2457,7 @@ fn create(
     })?;
 
     Ok(PyIndex {
-        inner: Mutex::new(index),
+        inner: RwLock::new(index),
     })
 }
 
@@ -2528,7 +2543,7 @@ fn open(
     )
     .map_err(to_py_error)?;
     Ok(PyIndex {
-        inner: Mutex::new(index),
+        inner: RwLock::new(index),
     })
 }
 

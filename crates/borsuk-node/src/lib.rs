@@ -1,7 +1,7 @@
 //! Native Node/TypeScript bindings for BORSUK.
 #![allow(missing_docs)]
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Mutex, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, sync::RwLock, time::Duration};
 
 use borsuk::{
     BorsukIndex, CompactionOptions, DEFAULT_COMPACTION_MAX_SEGMENTS, Fusion,
@@ -390,7 +390,7 @@ pub struct IncrementalOptionsJs {
 
 #[napi(js_name = "Index")]
 pub struct JsIndex {
-    inner: Mutex<BorsukIndex>,
+    inner: RwLock<BorsukIndex>,
 }
 
 #[napi]
@@ -412,7 +412,7 @@ impl JsIndex {
     ) -> Result<Vec<String>> {
         let mut index = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let vectors = vectors
@@ -502,7 +502,7 @@ impl JsIndex {
     ) -> Result<Vec<String>> {
         let mut index = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let vectors = vectors
@@ -550,7 +550,7 @@ impl JsIndex {
     pub async fn get_record(&self, id: String) -> Result<Option<GetRecordJs>> {
         let record = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .get_record(&id)
             .map_err(to_js_error)?;
@@ -564,7 +564,7 @@ impl JsIndex {
     pub async fn list_records(&self, offset: u32, limit: u32) -> Result<Vec<ListedRecordJs>> {
         let records = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .list_records(offset as usize, limit as usize)
             .map_err(to_js_error)?;
@@ -586,7 +586,7 @@ impl JsIndex {
     ) -> Result<AddWithReportResultJs> {
         let mut index = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let vectors = vectors
             .into_iter()
@@ -607,7 +607,7 @@ impl JsIndex {
     ) -> Result<Vec<Uint8Array>> {
         let mut index = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let ids = id_bytes_for_vectors(ids, vectors.len())?;
         let vectors = vectors
@@ -633,7 +633,7 @@ impl JsIndex {
     ) -> Result<Vec<String>> {
         let mut index = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let row_count = flat_vector_row_count(vectors.as_ref(), dimensions)?;
@@ -667,7 +667,7 @@ impl JsIndex {
     ) -> Result<Vec<Uint8Array>> {
         let mut index = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let row_count = flat_vector_row_count(vectors.as_ref(), dimensions)?;
@@ -683,7 +683,7 @@ impl JsIndex {
     pub async fn stats(&self) -> Result<IndexStatsJs> {
         let stats = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .try_stats()
             .map_err(to_js_error)?;
@@ -696,7 +696,7 @@ impl JsIndex {
     #[napi]
     pub async fn refresh(&self) -> Result<bool> {
         self.inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .refresh()
             .map_err(to_js_error)
@@ -708,7 +708,7 @@ impl JsIndex {
     #[napi]
     pub async fn flush(&self) -> Result<()> {
         self.inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .flush()
             .map_err(to_js_error)
@@ -718,7 +718,7 @@ impl JsIndex {
     pub async fn warm(&self) -> Result<WarmReportJs> {
         let report = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .warm()
             .map_err(to_js_error)?;
@@ -743,7 +743,7 @@ impl JsIndex {
         let mode = parse_mode(&options)?;
         let query = query.into_iter().map(f64_to_f32).collect::<Vec<_>>();
         self.inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_ids(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)
@@ -763,7 +763,7 @@ impl JsIndex {
         let query = query.into_iter().map(f64_to_f32).collect::<Vec<_>>();
         let report = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .explain(
                 &query,
@@ -800,7 +800,7 @@ impl JsIndex {
         let values = values.into_iter().map(f64_to_f32).collect::<Vec<_>>();
         let hits = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_sparse_named(&name, indices, values, k.unwrap_or(10) as usize)
             .map_err(to_js_error)?;
@@ -818,7 +818,7 @@ impl JsIndex {
         let query = query.into_iter().map(f64_to_f32).collect::<Vec<_>>();
         let ids = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_id_bytes(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
@@ -836,7 +836,7 @@ impl JsIndex {
         let query = query.into_iter().map(f64_to_f32).collect::<Vec<_>>();
         let vectors = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_vectors(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
@@ -849,7 +849,7 @@ impl JsIndex {
     #[napi(js_name = "getVector")]
     pub async fn get_vector(&self, id: String) -> Result<Option<Vec<f64>>> {
         self.inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .get_vector(&id)
             .map(|vector| vector.map(|values| values.into_iter().map(f64::from).collect()))
@@ -859,7 +859,7 @@ impl JsIndex {
     #[napi(js_name = "getVectorById")]
     pub async fn get_vector_by_id(&self, id: Uint8Array) -> Result<Option<Vec<f64>>> {
         self.inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .get_vector_by_id(id.as_ref())
             .map(|vector| vector.map(|values| values.into_iter().map(f64::from).collect()))
@@ -876,7 +876,7 @@ impl JsIndex {
         let mode = parse_mode(&options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
@@ -895,7 +895,7 @@ impl JsIndex {
         let mode = parse_mode(&options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
@@ -915,7 +915,7 @@ impl JsIndex {
         let mode = parse_mode(&options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
@@ -938,7 +938,7 @@ impl JsIndex {
         let mode = parse_mode(&options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let query = query_from_flat_vector(query.as_ref(), dimensions, "query buffer")?;
@@ -962,7 +962,7 @@ impl JsIndex {
             .map(|query| query.into_iter().map(f64_to_f32).collect::<Vec<_>>())
             .collect::<Vec<_>>();
         self.inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_ids_batch(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)
@@ -982,7 +982,7 @@ impl JsIndex {
             .collect::<Vec<_>>();
         let ids = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_id_bytes_batch(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
@@ -1003,7 +1003,7 @@ impl JsIndex {
             .collect::<Vec<_>>();
         let vectors = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_vectors_batch(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
@@ -1027,7 +1027,7 @@ impl JsIndex {
         let mode = parse_mode(&options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
@@ -1046,7 +1046,7 @@ impl JsIndex {
         let mode = parse_mode(&options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
@@ -1066,7 +1066,7 @@ impl JsIndex {
         let mode = parse_mode(&options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
@@ -1094,7 +1094,7 @@ impl JsIndex {
         let query = query.into_iter().map(f64_to_f32).collect::<Vec<_>>();
         let report = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_with_report(&query, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
@@ -1110,7 +1110,7 @@ impl JsIndex {
         options: Option<KSearchOptionsJs>,
     ) -> Result<Vec<Hit>> {
         self.inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_late_interaction(
                 &name,
@@ -1134,7 +1134,7 @@ impl JsIndex {
     ) -> Result<Vec<String>> {
         let report = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_text(&text, k_from_js(options))
             .map_err(to_js_error)?;
@@ -1150,7 +1150,7 @@ impl JsIndex {
     ) -> Result<SearchReportJs> {
         let report = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_text(&text, k_from_js(options))
             .map_err(to_js_error)?;
@@ -1167,7 +1167,7 @@ impl JsIndex {
         let options = hybrid_options_from_js(options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let query = hybrid_query_from_js(
             query,
@@ -1188,7 +1188,7 @@ impl JsIndex {
         let options = hybrid_options_from_js(options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let query = hybrid_query_from_js(
             query,
@@ -1214,7 +1214,7 @@ impl JsIndex {
             .collect::<Vec<_>>();
         let reports = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .search_batch_with_report(&queries, search_options_from_js(&options, mode)?)
             .map_err(to_js_error)?;
@@ -1232,7 +1232,7 @@ impl JsIndex {
         let mode = parse_mode(&options)?;
         let index = self
             .inner
-            .lock()
+            .read()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?;
         let dimensions = index.manifest().config.dimensions;
         let queries = vectors_from_flat_rows(queries.as_ref(), dimensions, "query buffer")?;
@@ -1270,7 +1270,7 @@ impl JsIndex {
         };
         let report = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .compact(CompactionOptions {
                 source_level: option_u32_to_u8(options.source_level, 0, "sourceLevel")?,
@@ -1293,7 +1293,7 @@ impl JsIndex {
     pub async fn delete(&self, ids: Vec<String>) -> Result<DeleteReportJs> {
         let report = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .delete(ids)
             .map_err(to_js_error)?;
@@ -1304,7 +1304,7 @@ impl JsIndex {
     pub async fn purge(&self) -> Result<PurgeReportJs> {
         let report = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .purge_with_report()
             .map_err(to_js_error)?;
@@ -1320,7 +1320,7 @@ impl JsIndex {
         let defaults = borsuk::IncrementalMaintenanceOptions::default();
         let report = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .run_incremental_maintenance(borsuk::IncrementalMaintenanceOptions {
                 max_segment_vectors: options
@@ -1343,7 +1343,7 @@ impl JsIndex {
         let options = options.unwrap_or_default();
         let report = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .rebuild(RebuildOptions {
                 source_level: option_u32_to_u8(options.source_level, 0, "sourceLevel")?,
@@ -1370,7 +1370,7 @@ impl JsIndex {
         let options = options.unwrap_or_default();
         let report = self
             .inner
-            .lock()
+            .write()
             .map_err(|_| Error::new(Status::GenericFailure, "index lock poisoned"))?
             .gc_obsolete_segments(GarbageCollectionOptions {
                 dry_run: options.dry_run.unwrap_or(true),
@@ -1515,7 +1515,7 @@ pub async fn create(options: CreateOptions) -> Result<JsIndex> {
         .map_err(to_js_error)?;
 
     Ok(JsIndex {
-        inner: Mutex::new(index),
+        inner: RwLock::new(index),
     })
 }
 
@@ -1602,7 +1602,7 @@ fn open(
     )
     .map_err(to_js_error)?;
     Ok(JsIndex {
-        inner: Mutex::new(index),
+        inner: RwLock::new(index),
     })
 }
 

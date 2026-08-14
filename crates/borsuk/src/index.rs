@@ -1257,6 +1257,7 @@ struct CollectionReadRuntime {
     cell_card_code_planes: Arc<DecodedObjectCache<Vec<u8>>>,
     prepared_cell_card_code_planes: Mutex<Option<PreparedCellCardCodePlanes>>,
     inflight_cell_card_code_planes: Arc<InFlightReads<Vec<u8>>>,
+    inflight_verified_cell_card_code_planes: Arc<InFlightReads<Arc<Vec<u8>>>>,
     inflight_segment_reads: Arc<InFlightSegmentReads>,
     projected_segment_cache: Arc<DecodedObjectCache<Segment>>,
     inflight_graph_reads: Arc<InFlightGraphReads>,
@@ -1285,6 +1286,13 @@ struct PreparedCellCardCodePlanes {
     owner_modality: String,
     entries: HashMap<String, Arc<Vec<u8>>>,
     _retained: RetainedBytePermit,
+}
+
+struct FetchedCellCardHeadRead {
+    bytes: Arc<Vec<u8>>,
+    physical_bytes: u64,
+    cache_hit: bool,
+    trusted: bool,
 }
 
 fn decoded_cache_with_pool<T>(
@@ -3152,6 +3160,7 @@ impl CollectionReadRuntime {
             ),
             prepared_cell_card_code_planes: Mutex::new(None),
             inflight_cell_card_code_planes: Arc::new(InFlightReads::default()),
+            inflight_verified_cell_card_code_planes: Arc::new(InFlightReads::default()),
             inflight_segment_reads: Arc::new(InFlightSegmentReads::default()),
             projected_segment_cache: decoded_cache_with_pool(
                 DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES,
@@ -10477,6 +10486,29 @@ impl BorsukIndex {
         query_tokens: Vec<Vec<f32>>,
         options: LateInteractionSearchOptions,
     ) -> Result<LateInteractionSearchReport> {
+        let scoped = self.isolated_search_handle();
+        let mut report =
+            scoped.search_late_interaction_with_report_scoped(name, query_tokens, options)?;
+        report.collection_resident_bytes = self.collection_resident_bytes_estimate();
+        if let Some(pool) = &self.read_runtime.retained_pool {
+            report.retained_bytes = pool.used_bytes();
+            report.retained_capacity_bytes = pool.capacity_bytes();
+            report.retained_peak_bytes = pool.peak_bytes();
+        }
+        if let Some(gate) = &self.read_runtime.transient_admission {
+            report.transient_bytes = gate.used_bytes();
+            report.transient_capacity_bytes = gate.capacity_bytes();
+            report.transient_peak_bytes = gate.peak_bytes();
+        }
+        Ok(report)
+    }
+
+    fn search_late_interaction_with_report_scoped(
+        &self,
+        name: &str,
+        query_tokens: Vec<Vec<f32>>,
+        options: LateInteractionSearchOptions,
+    ) -> Result<LateInteractionSearchReport> {
         if options.k == 0 {
             return Err(BorsukError::InvalidSearchOptions(
                 "late-interaction k must be greater than zero".to_string(),
@@ -17353,11 +17385,11 @@ impl BorsukIndex {
         }))
     }
 
-    fn load_cell_card_head_read(
+    fn fetch_cell_card_head_read(
         &self,
         read: &CellCardHeadRead,
         pinned_read: Option<&Arc<Vec<u8>>>,
-    ) -> Result<(Arc<Vec<u8>>, u64, bool)> {
+    ) -> Result<FetchedCellCardHeadRead> {
         let plane_end = read
             .group
             .code_plane_offset
@@ -17366,19 +17398,33 @@ impl BorsukIndex {
                 BorsukError::InvalidStorage("cell-card code plane overflows".to_string())
             })?;
         if let Some(bytes) = pinned_read {
-            return Ok((Arc::clone(bytes), 0, true));
+            return Ok(FetchedCellCardHeadRead {
+                bytes: Arc::clone(bytes),
+                physical_bytes: 0,
+                cache_hit: true,
+                trusted: true,
+            });
         }
         if read.start != read.group.code_plane_offset || read.end != plane_end {
             let bytes = self
                 .storage
                 .read_range(&read.group.path, read.start..read.end)?;
             let physical_bytes = bytes.len() as u64;
-            self.cache_cell_card_head_read_slices(read, &bytes)?;
-            return Ok((Arc::new(bytes), physical_bytes, false));
+            return Ok(FetchedCellCardHeadRead {
+                bytes: Arc::new(bytes),
+                physical_bytes,
+                cache_hit: false,
+                trusted: false,
+            });
         }
         let key = cell_card_code_plane_cache_key(&read.group.path, read.group.code_plane_checksum);
         if let Some(bytes) = self.read_runtime.cell_card_code_planes.get(&key) {
-            return Ok((bytes, 0, true));
+            return Ok(FetchedCellCardHeadRead {
+                bytes,
+                physical_bytes: 0,
+                cache_hit: true,
+                trusted: true,
+            });
         }
         let (bytes, physical_bytes, _shared) = self
             .read_runtime
@@ -17394,20 +17440,63 @@ impl BorsukIndex {
                 for range in bounded_cell_card_plane_ranges(read.start, read.end)? {
                     bytes.extend_from_slice(&self.storage.read_range(&read.group.path, range)?);
                 }
-                if bytes.len() as u64 != read.group.code_plane_bytes
-                    || blake3::hash(&bytes).as_bytes() != &read.group.code_plane_checksum
-                {
-                    return Err(BorsukError::InvalidStorage(
-                        "cell-card code-plane checksum or bounds mismatch".to_string(),
-                    ));
-                }
                 let physical_bytes = bytes.len() as u64;
                 Ok((bytes, physical_bytes))
             })?;
-        self.read_runtime
-            .cell_card_code_planes
-            .insert(key, Arc::clone(&bytes), bytes.len() as u64);
-        Ok((bytes, physical_bytes, false))
+        Ok(FetchedCellCardHeadRead {
+            bytes,
+            physical_bytes,
+            cache_hit: false,
+            trusted: false,
+        })
+    }
+
+    fn finish_cell_card_head_read(
+        &self,
+        read: &CellCardHeadRead,
+        fetched: FetchedCellCardHeadRead,
+    ) -> Result<(Arc<Vec<u8>>, u64, bool)> {
+        if fetched.trusted {
+            return Ok((fetched.bytes, fetched.physical_bytes, fetched.cache_hit));
+        }
+        let plane_end = read
+            .group
+            .code_plane_offset
+            .checked_add(read.group.code_plane_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card code plane overflows".to_string())
+            })?;
+        if read.start == read.group.code_plane_offset && read.end == plane_end {
+            let key =
+                cell_card_code_plane_cache_key(&read.group.path, read.group.code_plane_checksum);
+            let raw = Arc::clone(&fetched.bytes);
+            let expected_bytes = read.group.code_plane_bytes;
+            let expected_checksum = read.group.code_plane_checksum;
+            let cache = Arc::clone(&self.read_runtime.cell_card_code_planes);
+            let cache_key = key.clone();
+            let (verified, _, _) = self
+                .read_runtime
+                .inflight_verified_cell_card_code_planes
+                .load(&key, || {
+                    if raw.len() as u64 != expected_bytes
+                        || blake3::hash(raw.as_slice()).as_bytes() != &expected_checksum
+                    {
+                        return Err(BorsukError::InvalidStorage(
+                            "cell-card code-plane checksum or bounds mismatch".to_string(),
+                        ));
+                    }
+                    cache.insert(cache_key, Arc::clone(&raw), raw.len() as u64);
+                    Ok((raw, 0))
+                })?;
+            return Ok((
+                Arc::clone(verified.as_ref()),
+                fetched.physical_bytes,
+                fetched.cache_hit,
+            ));
+        } else {
+            self.cache_cell_card_head_read_slices(read, fetched.bytes.as_slice())?;
+        }
+        Ok((fetched.bytes, fetched.physical_bytes, fetched.cache_hit))
     }
 
     fn cached_cell_card_head_read(&self, read: &CellCardHeadRead) -> Result<Option<Arc<Vec<u8>>>> {
@@ -17781,25 +17870,12 @@ impl BorsukIndex {
             GLOBAL_LEAF_CODE_READ_WIDTH,
             Some(&self.global_pq_rerank_admission),
             |read| {
-                self.load_cell_card_head_read(
+                self.fetch_cell_card_head_read(
                     read,
                     pinned_head_reads.get(&cell_card_head_read_identity(read)),
                 )
             },
         );
-        let mut fetched_heads = Vec::with_capacity(head_reads.len());
-        let mut code_plane_cache_hits = 0_usize;
-        let mut code_plane_cache_bytes = 0_u64;
-        let mut code_plane_storage_bytes = 0_u64;
-        for read in head_reads {
-            let (bytes, storage_bytes, cache_hit) = read?;
-            code_plane_storage_bytes = code_plane_storage_bytes.saturating_add(storage_bytes);
-            if cache_hit {
-                code_plane_cache_hits = code_plane_cache_hits.saturating_add(1);
-                code_plane_cache_bytes = code_plane_cache_bytes.saturating_add(bytes.len() as u64);
-            }
-            fetched_heads.push(bytes);
-        }
         let code_request_counts = self.storage.request_counts().delta(&code_requests_before);
         let code_storage_requests = usize::try_from(
             code_request_counts
@@ -17807,32 +17883,69 @@ impl BorsukIndex {
                 .saturating_add(code_request_counts.heads),
         )
         .unwrap_or(usize::MAX);
-        let fetched_head_slices = fetched_heads
-            .iter()
-            .map(|bytes| bytes.as_slice())
-            .collect::<Vec<_>>();
-        let heads = decode_verified_cell_card_head_wave(
-            &head_plan,
-            &fetched_head_slices,
-            self.manifest.config.dimensions,
-            self.manifest.build_config.vector_element_type,
-        )?;
-        let available_exact_blocks = heads.iter().try_fold(0_usize, |total, head| {
-            total
-                .checked_add(head.head.exact_blocks.len())
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "V15 available exact block count overflows".to_string(),
-                    )
-                })
+        let (
+            heads,
+            ranked,
+            code_plane_cache_hits,
+            code_plane_cache_bytes,
+            code_plane_storage_bytes,
+            global_approximate_us,
+        ) = run_cell_card_post_io(|| {
+            let finished_heads = head_plan
+                .reads()
+                .par_iter()
+                .zip(head_reads.into_par_iter())
+                .map(|(planned, fetched)| self.finish_cell_card_head_read(planned, fetched?))
+                .collect::<Vec<_>>();
+            let mut fetched_heads = Vec::with_capacity(finished_heads.len());
+            let mut code_plane_cache_hits = 0_usize;
+            let mut code_plane_cache_bytes = 0_u64;
+            let mut code_plane_storage_bytes = 0_u64;
+            for finished in finished_heads {
+                let (bytes, storage_bytes, cache_hit) = finished?;
+                code_plane_storage_bytes = code_plane_storage_bytes.saturating_add(storage_bytes);
+                if cache_hit {
+                    code_plane_cache_hits = code_plane_cache_hits.saturating_add(1);
+                    code_plane_cache_bytes =
+                        code_plane_cache_bytes.saturating_add(bytes.len() as u64);
+                }
+                fetched_heads.push(bytes);
+            }
+            let fetched_head_slices = fetched_heads
+                .iter()
+                .map(|bytes| bytes.as_slice())
+                .collect::<Vec<_>>();
+            let heads = decode_verified_cell_card_head_wave(
+                &head_plan,
+                &fetched_head_slices,
+                self.manifest.config.dimensions,
+                self.manifest.build_config.vector_element_type,
+            )?;
+            let available_exact_blocks = heads.iter().try_fold(0_usize, |total, head| {
+                total
+                    .checked_add(head.head.exact_blocks.len())
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V15 available exact block count overflows".to_string(),
+                        )
+                    })
+            })?;
+            let exact_block_budget = requested_exact_block_budget.min(available_exact_blocks);
+            let approximate_started = Instant::now();
+            let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
+            let ranked =
+                rank_cell_card_exact_blocks(&heads, &distances, exact_block_budget, options.k)?;
+            let global_approximate_us =
+                u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            Ok::<_, BorsukError>((
+                heads,
+                ranked,
+                code_plane_cache_hits,
+                code_plane_cache_bytes,
+                code_plane_storage_bytes,
+                global_approximate_us,
+            ))
         })?;
-        let exact_block_budget = requested_exact_block_budget.min(available_exact_blocks);
-        let approximate_started = Instant::now();
-        let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
-        let ranked =
-            rank_cell_card_exact_blocks(&heads, &distances, exact_block_budget, options.k)?;
-        let global_approximate_us =
-            u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let declined_execution = |reason| {
             let segments_total =
                 usize::try_from(global_ref.source_segments()).unwrap_or(usize::MAX);
@@ -17935,10 +18048,6 @@ impl BorsukIndex {
                     .read_range(&read.group.path, read.start..read.end)
             },
         );
-        let mut fetched_exact = Vec::with_capacity(exact_reads.len());
-        for read in exact_reads {
-            fetched_exact.push(read?);
-        }
         let exact_request_counts = self.storage.request_counts().delta(&exact_requests_before);
         let exact_storage_requests = usize::try_from(
             exact_request_counts
@@ -17946,62 +18055,76 @@ impl BorsukIndex {
                 .saturating_add(exact_request_counts.heads),
         )
         .unwrap_or(usize::MAX);
-        let exact_blocks = decode_cell_card_exact_wave(
-            &exact_plan,
-            &heads,
-            &fetched_exact,
-            self.manifest.config.dimensions,
-            self.manifest.build_config.vector_element_type,
-        )?;
-        let identity_rows = heads
-            .iter()
-            .try_fold(0_usize, |total, head| {
-                total.checked_add(head.head.codes.len())
-            })
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("V15 identity row count overflows".to_string())
-            })?;
-        let rows = exact_blocks
-            .into_iter()
-            .flat_map(|block| block.rows)
-            .map(|row| RoutedDecodedGlobalLeafRow { row })
-            .collect::<Vec<_>>();
-        let records_considered = rows.len();
-        let mut winners = BTreeMap::new();
-        self.merge_global_leaf_rows(&mut winners, rows, context.mutation_states)?;
-        let mut scored = winners
-            .into_values()
-            .map(|candidate| {
-                Ok((
-                    self.manifest
-                        .config
-                        .metric
-                        .distance_unchecked(query, &candidate.row.vector)?,
-                    candidate.row.id,
-                    candidate.row.vector,
+        let (identity_rows, records_considered, records_scored, hits, vectors) =
+            run_cell_card_post_io(|| {
+                let mut fetched_exact = Vec::with_capacity(exact_reads.len());
+                for read in exact_reads {
+                    fetched_exact.push(read?);
+                }
+                let exact_blocks = decode_cell_card_exact_wave(
+                    &exact_plan,
+                    &heads,
+                    &fetched_exact,
+                    self.manifest.config.dimensions,
+                    self.manifest.build_config.vector_element_type,
+                )?;
+                let identity_rows = heads
+                    .iter()
+                    .try_fold(0_usize, |total, head| {
+                        total.checked_add(head.head.codes.len())
+                    })
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage("V15 identity row count overflows".to_string())
+                    })?;
+                let rows = exact_blocks
+                    .into_iter()
+                    .flat_map(|block| block.rows)
+                    .map(|row| RoutedDecodedGlobalLeafRow { row })
+                    .collect::<Vec<_>>();
+                let records_considered = rows.len();
+                let mut winners = BTreeMap::new();
+                self.merge_global_leaf_rows(&mut winners, rows, context.mutation_states)?;
+                let mut scored = winners
+                    .into_values()
+                    .map(|candidate| {
+                        Ok((
+                            self.manifest
+                                .config
+                                .metric
+                                .distance_unchecked(query, &candidate.row.vector)?,
+                            candidate.row.id,
+                            candidate.row.vector,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                scored.sort_by(|left, right| {
+                    left.0
+                        .total_cmp(&right.0)
+                        .then_with(|| left.1.cmp(&right.1))
+                });
+                let records_scored = scored.len();
+                scored.truncate(options.k);
+                let hits = scored
+                    .iter()
+                    .map(|(distance, id, _)| SearchHit {
+                        id: id.clone(),
+                        distance: *distance,
+                        metadata: None,
+                    })
+                    .collect::<Vec<_>>();
+                let vectors = if include_vectors {
+                    scored.into_iter().map(|(_, _, vector)| vector).collect()
+                } else {
+                    Vec::new()
+                };
+                Ok::<_, BorsukError>((
+                    identity_rows,
+                    records_considered,
+                    records_scored,
+                    hits,
+                    vectors,
                 ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        scored.sort_by(|left, right| {
-            left.0
-                .total_cmp(&right.0)
-                .then_with(|| left.1.cmp(&right.1))
-        });
-        let records_scored = scored.len();
-        scored.truncate(options.k);
-        let hits = scored
-            .iter()
-            .map(|(distance, id, _)| SearchHit {
-                id: id.clone(),
-                distance: *distance,
-                metadata: None,
-            })
-            .collect::<Vec<_>>();
-        let vectors = if include_vectors {
-            scored.into_iter().map(|(_, _, vector)| vector).collect()
-        } else {
-            Vec::new()
-        };
+            })?;
         let bytes_read = code_plane_storage_bytes
             .checked_add(exact_plan.physical_bytes())
             .ok_or_else(|| BorsukError::InvalidStorage("V15 query bytes overflow".to_string()))?;
@@ -20706,21 +20829,23 @@ impl BorsukIndex {
         queries: &[Vec<f32>],
         options: SearchOptions,
     ) -> Result<Vec<SearchReport>> {
+        let scoped = self.isolated_search_handle();
         let mut routing_page_cache = RoutingPageReadCache::default();
         queries
             .iter()
             .map(|query| {
-                self.search_execution_with_routing_cache(
-                    query,
-                    options.clone(),
-                    false,
-                    Some(&mut routing_page_cache),
-                )
-                .map(|execution| {
-                    let mut report = execution.report;
-                    self.apply_collection_memory_telemetry(&mut report);
-                    report
-                })
+                scoped
+                    .search_execution_with_routing_cache(
+                        query,
+                        options.clone(),
+                        false,
+                        Some(&mut routing_page_cache),
+                    )
+                    .map(|execution| {
+                        let mut report = execution.report;
+                        self.apply_collection_memory_telemetry(&mut report);
+                        report
+                    })
             })
             .collect()
     }
@@ -28041,6 +28166,19 @@ where
         .collect()
 }
 
+/// Run checksum, decode, and ranking work on the bounded process-wide CPU pool.
+///
+/// Object-store workers must remain blocking-I/O waiters: executing V15 CPU
+/// work on that wider pool would let concurrent searches oversubscribe the
+/// host and steal cores from the embedding application.
+fn run_cell_card_post_io<R, F>(work: F) -> R
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    crate::parallel::install(work)
+}
+
 /// Execute bounded I/O waves while a query still owns latency budget.
 ///
 /// The deadline is checked before every wave, so a slow completed wave cannot
@@ -30238,11 +30376,56 @@ mod tests {
             cards: Vec::new(),
         };
 
+        let fetched = index
+            .fetch_cell_card_head_read(&read, Some(&bytes))
+            .unwrap();
         let (loaded, physical_bytes, cache_hit) =
-            index.load_cell_card_head_read(&read, Some(&bytes)).unwrap();
+            index.finish_cell_card_head_read(&read, fetched).unwrap();
         assert!(Arc::ptr_eq(&loaded, &bytes));
         assert_eq!(physical_bytes, 0);
         assert!(cache_hit);
+    }
+
+    #[test]
+    fn cell_card_fetch_defers_checksum_work_until_the_cpu_stage() {
+        let directory = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let bytes = vec![1_u8, 2, 3, 4];
+        index
+            .storage
+            .write_bytes("cell-card/code-plane.arrow", &bytes)
+            .unwrap();
+        let read = CellCardHeadRead {
+            group: Arc::new(crate::global_cell_card::CellCardGroupRef {
+                path: "cell-card/code-plane.arrow".to_string(),
+                checksum: [9; 32],
+                encoded_bytes: bytes.len() as u64,
+                code_plane_offset: 0,
+                code_plane_bytes: bytes.len() as u64,
+                code_plane_checksum: [9; 32],
+            }),
+            start: 0,
+            end: bytes.len() as u64,
+            selected_bytes: bytes.len() as u64,
+            cards: Vec::new(),
+        };
+
+        let fetched = index
+            .fetch_cell_card_head_read(&read, None)
+            .expect("the I/O stage must only fetch bytes");
+        let error =
+            run_cell_card_post_io(|| index.finish_cell_card_head_read(&read, fetched)).unwrap_err();
+
+        assert!(error.to_string().contains("checksum or bounds mismatch"));
     }
 
     #[test]
@@ -38334,6 +38517,21 @@ mod tests {
                 "blocking I/O must not be serialized by the CPU compute cap"
             );
         }
+    }
+
+    #[test]
+    fn cell_card_post_io_work_runs_on_the_bounded_query_pool() {
+        let worker_name = run_cell_card_post_io(|| {
+            std::thread::current()
+                .name()
+                .unwrap_or("unnamed")
+                .to_string()
+        });
+
+        assert!(
+            worker_name.starts_with("borsuk-query-"),
+            "cell-card checksum/decode/ranking ran on {worker_name} instead of the CPU pool"
+        );
     }
 
     #[test]
