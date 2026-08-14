@@ -29,11 +29,11 @@ use serde::Deserialize;
 
 const DEFAULT_QUERIES: usize = 1_000;
 const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
-// A positioned dense put expands into record, ID-directory, tombstone/fence,
-// and route-plan rows plus transaction metadata. Keep both its logical dense
-// bytes and vector count within the immutable 64 MiB / 65,536-row bounds.
+// A positioned dense insert expands into record, ID-directory, and route-plan
+// rows plus transaction metadata. Keep both its logical dense bytes and vector
+// count comfortably below the immutable 64 MiB / 65,536-row append bounds.
 const INGEST_DENSE_BATCH_BYTES: usize = 16 * 1024 * 1024;
-const INGEST_BATCH_MAX_VECTORS: usize = 16_383;
+const INGEST_BATCH_MAX_VECTORS: usize = 16_384;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1_024;
 // V12 persists the coarse-cell probe count in the authenticated codebook. The
 // query-time sweep controls how many ranked leaf pages may be fetched. Keep the
@@ -630,7 +630,7 @@ fn run() -> BenchResult<()> {
         let ingest_started = Instant::now();
         ingest_train(&mut index, &config.dataset_dir, &dataset)?;
         let ingest_ms = elapsed_ms(ingest_started);
-        borsuk::report_build_timing("ingest");
+        borsuk::report_build_timing("ingest")?;
 
         // Compare the low-memory ingest layout against an explicitly reclustered
         // layout. Both produce the same global product-PQ shortlist and recall;
@@ -647,7 +647,7 @@ fn run() -> BenchResult<()> {
             ("ingest-preserving", 0, 0)
         };
         let compaction_ms = elapsed_ms(compaction_started);
-        borsuk::report_build_timing("compaction");
+        borsuk::report_build_timing("compaction")?;
         eprintln!(
             "build dataset={} records={} ingest_ms={ingest_ms:.3} compaction_ms={compaction_ms:.3} compaction_bytes_read={} compaction_bytes_written={}",
             dataset.meta.name, dataset.train_count, compaction_bytes_read, compaction_bytes_written
@@ -1820,30 +1820,15 @@ fn ingest_generated_batch(
     // Ground-truth files address corpus rows by their numeric ordinal. Generated
     // library IDs are intentionally opaque, so the benchmark supplies the exact
     // stable row IDs instead of depending on an implementation detail.
-    let records = benchmark_records(start, vectors);
-    let ids = records
-        .iter()
-        .map(|record| record.id.to_string())
-        .collect::<Vec<_>>();
-    validate_generated_id_range(start, end, &ids)?;
-    // A frozen corpus has already validated unique ordinal IDs. The
-    // low-amplification LWW path avoids acquiring every packed claim page for
-    // each batch while retaining one atomic positioned transaction.
-    index.put(records)?;
+    let ids = benchmark_row_ids(start, vectors.len());
+    let inserted_ids = index.add_vectors_with_ids(vectors, ids)?;
+    validate_generated_id_range(start, end, &inserted_ids)?;
     Ok(())
 }
 
 fn benchmark_row_ids(start: usize, count: usize) -> Vec<String> {
     (start..start.saturating_add(count))
         .map(|row| row.to_string())
-        .collect()
-}
-
-fn benchmark_records(start: usize, vectors: Vec<Vec<f32>>) -> Vec<VectorRecord> {
-    benchmark_row_ids(start, vectors.len())
-        .into_iter()
-        .zip(vectors)
-        .map(|(id, vector)| VectorRecord::new(id, vector))
         .collect()
 }
 
@@ -4131,23 +4116,23 @@ fn permuted_positions(count: usize, seed: u64) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUILD_HEADER, BenchmarkCacheProfile, CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER,
-        CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy, DEFAULT_NPROBE_SWEEP,
-        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES, GlobalScanCodec,
-        LIFECYCLE_HEADER, LeafCapability, LeafMode, MUTATION_QUERY_HEADER,
-        MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary,
-        RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
-        approximate_options, benchmark_records, benchmark_row_ids, cache_coverage_cohort_size,
+        BUILD_HEADER, BenchmarkCacheProfile, BorsukIndex, CACHE_COVERAGE_HEADER,
+        CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
+        DEFAULT_NPROBE_SWEEP, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
+        GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER, LeafCapability, LeafMode,
+        MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample,
+        QuerySummary, RECALL_LATENCY_HEADER, ServingMode, VectorMetric, WRITE_COST_HEADER,
+        WRITE_SAMPLE_HEADER, approximate_options, benchmark_row_ids, cache_coverage_cohort_size,
         cache_coverage_enabled, dataset_metric, default_build_leaf_capability,
         default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
-        dollars_per_million_queries, ingest_batch_size, is_hot_workload_position,
-        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
-        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
-        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
-        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
-        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
-        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        dollars_per_million_queries, ingest_batch_size, ingest_generated_batch,
+        is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
+        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
+        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
+        parse_positive_list, parse_serving_mode, percentage_operation_count, permuted_positions,
+        preload_query_count, read_logical_cell_catalog, recall_preloads_local_snapshot,
+        recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
+        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_bounded_v13_execution, validate_build_only, validate_disk_cached_network,
         validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
         validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
@@ -4190,13 +4175,29 @@ mod tests {
     #[test]
     fn benchmark_ingest_ids_are_explicit_deterministic_row_ids() {
         assert_eq!(benchmark_row_ids(5, 3), ["5", "6", "7"]);
-        assert_eq!(
-            benchmark_records(5, vec![vec![1.0], vec![2.0], vec![3.0]])
-                .into_iter()
-                .map(|record| record.id.to_string())
-                .collect::<Vec<_>>(),
-            ["5", "6", "7"]
-        );
+    }
+
+    #[test]
+    fn frozen_corpus_ingest_does_not_create_mutation_tombstones() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+
+        ingest_generated_batch(&mut index, 0, vec![vec![1.0, 0.0], vec![0.0, 1.0]]).unwrap();
+        index.flush().unwrap();
+
+        assert_eq!(index.manifest().tombstone_delta_run_count(), 0);
+        assert_eq!(index.manifest().tombstone_page_count(), 0);
+        assert_eq!(index.get_vector("0").unwrap(), Some(vec![1.0, 0.0]));
+        assert_eq!(index.get_vector("1").unwrap(), Some(vec![0.0, 1.0]));
     }
 
     #[test]
@@ -5007,12 +5008,12 @@ mod tests {
 
     #[test]
     fn bulk_ingest_batch_is_dimension_aware_and_positioned_append_bounded() {
-        assert_eq!(ingest_batch_size(64), 16_383);
-        assert_eq!(ingest_batch_size(100), 16_383);
-        assert_eq!(ingest_batch_size(128), 16_383);
+        assert_eq!(ingest_batch_size(64), 16_384);
+        assert_eq!(ingest_batch_size(100), 16_384);
+        assert_eq!(ingest_batch_size(128), 16_384);
         assert_eq!(ingest_batch_size(960), 4_369);
         assert_eq!(ingest_batch_size(usize::MAX), 1);
-        assert!(4 * ingest_batch_size(128) + 2 <= 65_536);
+        assert!(3 * ingest_batch_size(128) + 2 <= 65_536);
     }
 
     #[test]

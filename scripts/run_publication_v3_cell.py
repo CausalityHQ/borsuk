@@ -72,6 +72,21 @@ SUPPORTED_LOCAL_KINDS = frozenset({"read-recall", "write-update-delete-compact"}
 PRODUCTION_BUILD_FIELDS = tuple(
     "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
 )
+BUILD_PHASE_FIELDS = ("schema_version", "group", "phase", "nanos", "calls")
+BUILD_PHASE_NAMES = (
+    "segment_centroid_radius",
+    "segment_routing_codes",
+    "segment_pq_bounds",
+    "segment_pq_encode",
+    "graph_build",
+    "vector_sidecar",
+    "filter_index",
+    "segment_table",
+    "object_puts",
+    "voronoi_chunks",
+    "compaction_source_read",
+    "locality_sort",
+)
 WRITE_COST_FIELDS = tuple(
     "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written".split(",")
 )
@@ -380,6 +395,9 @@ def build_execution_plan(
             "BORSUK_BENCH_BUILD_INDEX": "1",
             "BORSUK_BENCH_BUILD_ONLY": "1",
             "BORSUK_BUILD_TIMING": "1",
+            "BORSUK_BUILD_TIMING_OUTPUT": str(
+                build_output_dir / "bench_build_phases.csv"
+            ),
             "BORSUK_CPU_THREADS": "32",
         }
         for field in (
@@ -953,9 +971,60 @@ def summarize_lifecycle_artifacts(
     }
 
 
+def _read_build_phase_artifact(output_dir: Path) -> dict[str, object]:
+    path = output_dir / "bench_build_phases.csv"
+    if not path.is_file():
+        raise ValueError("publication build phase timing artifact is missing")
+    payload = path.read_bytes()
+    if not payload or len(payload) > 64 * 1024:
+        raise ValueError("publication build phase timing artifact exceeds its bound")
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("publication build phase timing artifact is not UTF-8") from error
+    reader = csv.DictReader(text.splitlines())
+    if tuple(reader.fieldnames or ()) != BUILD_PHASE_FIELDS:
+        raise ValueError("publication build phase timing header differs")
+    rows = list(reader)
+    expected = {
+        (group, phase)
+        for group in ("ingest", "compaction")
+        for phase in BUILD_PHASE_NAMES
+    }
+    observed: dict[tuple[str, str], dict[str, int | str]] = {}
+    for row in rows:
+        if row.get("schema_version") != "1":
+            raise ValueError("publication build phase timing schema differs")
+        key = (str(row.get("group", "")), str(row.get("phase", "")))
+        if key in observed:
+            raise ValueError("publication build phase timing rows are duplicated")
+        try:
+            nanos = int(row["nanos"])
+            calls = int(row["calls"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("publication build phase timing value is invalid") from error
+        if nanos < 0 or calls < 0:
+            raise ValueError("publication build phase timing value is negative")
+        observed[key] = {
+            "group": key[0],
+            "phase": key[1],
+            "nanos": nanos,
+            "calls": calls,
+        }
+    if set(observed) != expected:
+        raise ValueError("publication build phase timing coverage differs")
+    return {
+        "path": path.name,
+        "bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "rows": len(rows),
+        "timings": [observed[key] for key in sorted(observed)],
+    }
+
+
 def read_build_artifact(
     output_dir: Path, *, cell: dict[str, object]
-) -> dict[str, dict[str, int | str]]:
+) -> dict[str, object]:
     path = output_dir / "bench_build.csv"
     if not path.is_file():
         raise ValueError("publication build storage artifact is missing")
@@ -1011,6 +1080,7 @@ def read_build_artifact(
             for field in integer_fields
             if field.startswith("storage_")
         },
+        "phase_timings": _read_build_phase_artifact(output_dir),
     }
 
 

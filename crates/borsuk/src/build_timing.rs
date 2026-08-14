@@ -6,6 +6,9 @@
 //! every call here is a couple of cheap atomic loads that return immediately, so
 //! the instrumentation never affects the hot path.
 
+use std::fs::OpenOptions;
+use std::io::{self, Write};
+use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -84,20 +87,48 @@ pub(crate) fn timed<T>(phase: Phase, f: impl FnOnce() -> T) -> T {
     out
 }
 
+fn write_phase_csv(path: &Path, label: &str, values: &[(u64, u64); PHASE_COUNT]) -> io::Result<()> {
+    if label.is_empty()
+        || label.len() > 64
+        || !label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "build timing group is not a bounded CSV identity",
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut output = OpenOptions::new().create(true).append(true).open(path)?;
+    if output.metadata()?.len() == 0 {
+        writeln!(output, "schema_version,group,phase,nanos,calls")?;
+    }
+    for (phase, &(nanos, calls)) in PHASE_NAMES.iter().zip(values) {
+        writeln!(output, "1,{label},{phase},{nanos},{calls}")?;
+    }
+    output.flush()
+}
+
 /// Print the accumulated per-phase breakdown (if enabled) with a caller-supplied
-/// label, then reset the counters so the next phase group starts clean.
-pub(crate) fn report_and_reset(label: &str) {
+/// label, persist the same fixed-schema rows when an output path is configured,
+/// then reset the counters so the next phase group starts clean.
+pub(crate) fn report_and_reset(label: &str) -> io::Result<()> {
     if !enabled() {
-        return;
+        return Ok(());
     }
     let table = table();
     eprintln!("BORSUK_BUILD_TIMING [{label}] per-phase totals:");
     let mut total_ms = 0.0_f64;
-    for (name, (nanos_slot, calls_slot)) in
-        PHASE_NAMES.iter().zip(table.nanos.iter().zip(&table.calls))
-    {
-        let nanos = nanos_slot.swap(0, Ordering::Relaxed);
-        let calls = calls_slot.swap(0, Ordering::Relaxed);
+    let values = std::array::from_fn(|index| {
+        (
+            table.nanos[index].swap(0, Ordering::Relaxed),
+            table.calls[index].swap(0, Ordering::Relaxed),
+        )
+    });
+    for (name, &(nanos, calls)) in PHASE_NAMES.iter().zip(&values) {
         if calls == 0 {
             continue;
         }
@@ -106,4 +137,44 @@ pub(crate) fn report_and_reset(label: &str) {
         eprintln!("  {name:<24} {ms:>10.3} ms   ({calls} calls)");
     }
     eprintln!("  {:<24} {:>10.3} ms", "TOTAL(instrumented)", total_ms);
+    if let Some(path) = std::env::var_os("BORSUK_BUILD_TIMING_OUTPUT") {
+        write_phase_csv(Path::new(&path), label, &values)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PHASE_COUNT, write_phase_csv};
+
+    #[test]
+    fn phase_csv_is_canonical_and_appends_complete_groups() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bench_build_phases.csv");
+        let ingest = std::array::from_fn::<_, PHASE_COUNT, _>(|index| {
+            (
+                u64::try_from(index + 1).unwrap(),
+                u64::try_from(index + 2).unwrap(),
+            )
+        });
+        let compaction = std::array::from_fn::<_, PHASE_COUNT, _>(|index| {
+            (
+                u64::try_from(index + 101).unwrap(),
+                u64::try_from(index + 102).unwrap(),
+            )
+        });
+
+        write_phase_csv(&path, "ingest", &ingest).unwrap();
+        write_phase_csv(&path, "compaction", &compaction).unwrap();
+
+        let text = std::fs::read_to_string(path).unwrap();
+        let lines = text.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], "schema_version,group,phase,nanos,calls");
+        assert_eq!(lines.len(), 1 + 2 * PHASE_COUNT);
+        assert_eq!(lines[1], "1,ingest,segment_centroid_radius,1,2");
+        assert_eq!(
+            lines.last().copied(),
+            Some("1,compaction,locality_sort,112,113")
+        );
+    }
 }

@@ -78,9 +78,11 @@ pub mod text;
 mod turboquant;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
-/// breakdown accumulated since the last call. A no-op when timing is disabled.
-pub fn report_build_timing(label: &str) {
-    build_timing::report_and_reset(label);
+/// breakdown accumulated since the last call. When
+/// `BORSUK_BUILD_TIMING_OUTPUT` is set, the same fixed-schema rows are appended
+/// to that CSV. A no-op when timing is disabled.
+pub fn report_build_timing(label: &str) -> std::io::Result<()> {
+    build_timing::report_and_reset(label)
 }
 
 /// Public API policy checks.

@@ -51,7 +51,7 @@ fn build(
     let mut index = BorsukIndex::create_with_leaf_capability(config, capability)?;
     index.add(records.to_vec())?;
     index.flush()?;
-    borsuk::report_build_timing(label);
+    borsuk::report_build_timing(label)?;
     Ok(())
 }
 

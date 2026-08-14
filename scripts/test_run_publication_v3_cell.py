@@ -321,12 +321,39 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
                 encoding="utf-8",
             )
+            with self.assertRaisesRegex(ValueError, "phase timing"):
+                read_build_artifact(output, cell=cell)
+            phase_names = (
+                "segment_centroid_radius",
+                "segment_routing_codes",
+                "segment_pq_bounds",
+                "segment_pq_encode",
+                "graph_build",
+                "vector_sidecar",
+                "filter_index",
+                "segment_table",
+                "object_puts",
+                "voronoi_chunks",
+                "compaction_source_read",
+                "locality_sort",
+            )
+            (output / "bench_build_phases.csv").write_text(
+                "schema_version,group,phase,nanos,calls\n"
+                + "".join(
+                    f"1,{group},{phase},{index + 1},{index + 2}\n"
+                    for group in ("ingest", "compaction")
+                    for index, phase in enumerate(phase_names)
+                ),
+                encoding="utf-8",
+            )
             artifact = read_build_artifact(output, cell=cell)
         metrics = artifact["storage_metrics"]
         self.assertEqual(artifact["index_stats"]["records"], cell["dataset"]["scale"]["rows"])
         self.assertEqual(metrics["storage_puts"], 11)
         self.assertEqual(metrics["storage_bytes_read"], 654321)
         self.assertEqual(metrics["storage_bytes_written"], 123456)
+        self.assertEqual(artifact["phase_timings"]["rows"], 24)
+        self.assertEqual(len(artifact["phase_timings"]["sha256"]), 64)
         resource = build_receipt_metrics(
             {
                 "cpu_ns": 10,
@@ -576,6 +603,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(build_env["BORSUK_BENCH_BUILD_INDEX"], "1")
         self.assertEqual(build_env["BORSUK_BENCH_BUILD_ONLY"], "1")
         self.assertEqual(build_env["BORSUK_BUILD_TIMING"], "1")
+        self.assertEqual(
+            build_env["BORSUK_BUILD_TIMING_OUTPUT"],
+            str(Path(publication["build"]["output_dir"]) / "bench_build_phases.csv"),
+        )
         self.assertEqual(build_env["BORSUK_CPU_THREADS"], "32")
         self.assertEqual(build_env["BORSUK_BENCH_NPROBES"], "4")
         self.assertEqual(build_env["BORSUK_BENCH_CANDIDATES"], "4096")

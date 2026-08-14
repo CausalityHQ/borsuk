@@ -104,7 +104,7 @@ fn build(
     })?;
     let compaction_ms = start.elapsed().as_secs_f64() * 1000.0;
     let sidecar = sidecar_bytes(dir.path());
-    borsuk::report_build_timing(label);
+    borsuk::report_build_timing(label)?;
     eprintln!(
         "  {label}: compaction {compaction_ms:.1} ms, dense-vector-sidecar {sidecar} bytes ({:.2} MiB)\n",
         sidecar as f64 / (1024.0 * 1024.0)
