@@ -715,6 +715,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "recall_at_10": str(recall),
                     "network_gets": str(index + 1),
                     "bytes_read": str((index + 1) * 100),
+                    "global_leaf_code_pages_read": str(100 + index),
+                    "global_leaf_pages_read": str(30 + index),
+                    "global_leaf_exact_scores": str(960 + index * 32),
                 }
             )
         arm = {
@@ -745,7 +748,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         for row in bad:
             row["recall_at_10"] = "0.94"
         with self.assertRaisesRegex(
-            ValueError, "observed 940000 ppm is below required 950000 ppm"
+            ValueError,
+            "observed 940000 ppm is below required 950000 ppm; "
+            "exact_scores=960..1024 code_pages=100..102 exact_blocks=30..32 "
+            "gets=6 bytes=600",
         ):
             summarize_query_samples(bad, cell=cell, arm=arm, expected_queries=3)
         smoke = summarize_query_samples(

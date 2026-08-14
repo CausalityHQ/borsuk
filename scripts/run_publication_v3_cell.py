@@ -710,6 +710,11 @@ def summarize_query_samples(
     sample_indices: set[int] = set()
     storage_gets = 0
     storage_bytes_read = 0
+    diagnostic_values: dict[str, list[int]] = {
+        "global_leaf_exact_scores": [],
+        "global_leaf_code_pages_read": [],
+        "global_leaf_pages_read": [],
+    }
     for row in rows:
         if row.get("schema_version") != "borsuk-production-bench-v11":
             raise ValueError("query sample schema differs")
@@ -738,14 +743,34 @@ def summarize_query_samples(
             raise ValueError("query sample storage telemetry is invalid")
         storage_gets += network_gets
         storage_bytes_read += bytes_read
+        for field, values in diagnostic_values.items():
+            value = row.get(field)
+            if value is None:
+                continue
+            parsed = int(value)
+            if parsed < 0:
+                raise ValueError("query sample planner telemetry is invalid")
+            values.append(parsed)
     correctness_ppm = round(sum(recalls_ppm) / len(recalls_ppm))
     factors = cell.get("workload", {}).get("factors", {})
     floor = factors.get("minimum_recall_ppm")
     if not isinstance(floor, int):
         raise ValueError("query sample quality floor is invalid")
     if enforce_quality and correctness_ppm < floor:
+        diagnostic = ""
+        if all(len(values) == len(rows) for values in diagnostic_values.values()):
+            exact_scores = diagnostic_values["global_leaf_exact_scores"]
+            code_pages = diagnostic_values["global_leaf_code_pages_read"]
+            exact_blocks = diagnostic_values["global_leaf_pages_read"]
+            diagnostic = (
+                f"; exact_scores={min(exact_scores)}..{max(exact_scores)}"
+                f" code_pages={min(code_pages)}..{max(code_pages)}"
+                f" exact_blocks={min(exact_blocks)}..{max(exact_blocks)}"
+                f" gets={storage_gets} bytes={storage_bytes_read}"
+            )
         raise ValueError(
             f"query sample recall observed {correctness_ppm} ppm is below required {floor} ppm"
+            f"{diagnostic}"
         )
     return {
         "queries": len(rows),
