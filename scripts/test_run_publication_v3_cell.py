@@ -744,7 +744,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         bad = json.loads(json.dumps(rows))
         for row in bad:
             row["recall_at_10"] = "0.94"
-        with self.assertRaisesRegex(ValueError, "quality floor"):
+        with self.assertRaisesRegex(
+            ValueError, "observed 940000 ppm is below required 950000 ppm"
+        ):
             summarize_query_samples(bad, cell=cell, arm=arm, expected_queries=3)
         smoke = summarize_query_samples(
             bad,

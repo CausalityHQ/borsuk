@@ -741,8 +741,12 @@ def summarize_query_samples(
     correctness_ppm = round(sum(recalls_ppm) / len(recalls_ppm))
     factors = cell.get("workload", {}).get("factors", {})
     floor = factors.get("minimum_recall_ppm")
-    if not isinstance(floor, int) or (enforce_quality and correctness_ppm < floor):
-        raise ValueError("query sample quality floor is not met")
+    if not isinstance(floor, int):
+        raise ValueError("query sample quality floor is invalid")
+    if enforce_quality and correctness_ppm < floor:
+        raise ValueError(
+            f"query sample recall observed {correctness_ppm} ppm is below required {floor} ppm"
+        )
     return {
         "queries": len(rows),
         "correctness_ppm": correctness_ppm,
