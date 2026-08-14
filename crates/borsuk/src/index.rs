@@ -5402,6 +5402,29 @@ impl BorsukIndex {
         }
     }
 
+    /// Materialize only the already-committed positioned tail while preserving
+    /// the caller's not-yet-published collection transaction. Immutable
+    /// payloads for the active transaction may already exist, but without a
+    /// positioned-head commit they are not part of `cell_wal_snapshot` and
+    /// therefore cannot be consumed by this flush.
+    fn flush_committed_tail_during_collection_transaction(&mut self) -> Result<()> {
+        let transaction = self.active_collection_transaction.take().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "positioned backpressure recovery requires an active collection transaction"
+                    .to_string(),
+            )
+        })?;
+        for child in self.named.values_mut() {
+            child.active_collection_transaction = None;
+        }
+        let result = self.flush();
+        self.active_collection_transaction = Some(transaction.clone());
+        for child in self.named.values_mut() {
+            child.active_collection_transaction = Some(transaction.clone());
+        }
+        result
+    }
+
     fn positioned_modality_for_run(&self, run: &StagedPositionedRun) -> PositionedMutationModality {
         match run.input.kind {
             CellWalRunKind::Tombstones => PositionedMutationModality::Tombstone,
@@ -7271,10 +7294,26 @@ impl BorsukIndex {
                 if !candidates.is_empty() {
                     self.publish_positioned_materialization_watermarks(&candidates)?;
                 }
-                self.positioned_log
+                let repaired_retry = self
+                    .positioned_log
                     .as_ref()
                     .expect("positioned writer was validated above")
-                    .append_prepared(&prepared)?
+                    .append_prepared(&prepared);
+                match repaired_retry {
+                    Ok(committed) => committed,
+                    Err(BorsukError::IngestBackpressure { .. }) => {
+                        // The head is genuinely full rather than merely stale.
+                        // Materialize its already-committed prefix without
+                        // exposing the active transaction, then retry the exact
+                        // same content-addressed append once.
+                        self.flush_committed_tail_during_collection_transaction()?;
+                        self.positioned_log
+                            .as_ref()
+                            .expect("positioned writer was validated above")
+                            .append_prepared(&prepared)?
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             Err(error) => return Err(error),
         };
@@ -33164,6 +33203,98 @@ mod tests {
         assert_eq!(
             index.get_vector("after-repair").unwrap(),
             Some(vec![65.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn backpressured_append_materializes_a_genuinely_full_head_and_retries() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 128,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::from([(
+                    "image".to_string(),
+                    VectorSpec {
+                        dimensions: 2,
+                        metric: VectorMetric::Euclidean,
+                        kind: VectorKind::Dense,
+                        element_type: crate::VectorElementType::Float32,
+                    },
+                )]),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+        let transaction_ids = (0_u64..)
+            .map(|ordinal| format!("materialize-on-append-{ordinal}"))
+            .filter(|transaction_id| {
+                blake3::hash(transaction_id.as_bytes()).as_bytes()[0]
+                    .is_multiple_of(crate::positioned_log::SOURCE_SHARD_COUNT)
+            })
+            .take(crate::positioned_log::MAX_PENDING_ENVELOPES_PER_SHARD + 1)
+            .collect::<Vec<_>>();
+
+        for (ordinal, transaction_id) in transaction_ids.iter().take(64).enumerate() {
+            index.begin_collection_transaction().unwrap();
+            index
+                .active_collection_transaction
+                .as_mut()
+                .unwrap()
+                .id
+                .clone_from(transaction_id);
+            let result = index.add_collection_records(vec![
+                VectorRecord::new(
+                    format!("materialized-row-{ordinal}"),
+                    vec![ordinal as f32, 0.0],
+                )
+                .with_named_vector("image", vec![0.0, ordinal as f32]),
+            ]);
+            index.finish_collection_transaction(result).unwrap();
+        }
+
+        index.begin_collection_transaction().unwrap();
+        index
+            .active_collection_transaction
+            .as_mut()
+            .unwrap()
+            .id
+            .clone_from(transaction_ids.last().unwrap());
+        let result = index.add_collection_records(vec![
+            VectorRecord::new("after-full-head", vec![65.0, 0.0])
+                .with_named_vector("image", vec![0.0, 65.0]),
+        ]);
+        index.finish_collection_transaction(result).unwrap();
+        drop(index);
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(
+            reopened.get_vector("materialized-row-0").unwrap(),
+            Some(vec![0.0, 0.0])
+        );
+        assert_eq!(
+            reopened.get_vector("after-full-head").unwrap(),
+            Some(vec![65.0, 0.0])
+        );
+        assert_eq!(
+            reopened
+                .search_ids(
+                    &[0.0, 65.0],
+                    SearchOptions::exact(1).with_vector_name("image"),
+                )
+                .unwrap(),
+            ["after-full-head"]
         );
     }
 

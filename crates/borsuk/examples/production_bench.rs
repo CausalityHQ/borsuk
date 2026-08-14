@@ -554,11 +554,14 @@ fn run() -> BenchResult<()> {
             global_turboquant_shards: config.global_turboquant_shards,
             ..BuildConfig::default()
         };
-        // The production lifecycle is WAL-first: each batch is durable and
-        // visible after one immutable WAL publish, while threshold-driven
-        // flushes materialize bounded indexed deltas. The final bulk-load
-        // boundary flushes any tail before building the immutable base.
-        let wal = WalConfig::default();
+        // Each batch remains one durable and immediately visible positioned
+        // transaction. A bulk build deliberately materializes at the bounded
+        // receipt window instead of the online record/byte thresholds:
+        // the normal 16,384-row batch equals the online record threshold and
+        // would otherwise force one synchronous half-size segment per batch.
+        // A shard that reaches its row/byte cap earlier self-materializes its
+        // committed prefix before the unchanged append is retried.
+        let wal = WalConfig::bulk_load();
         let mut index = match (&config.logical_cell_catalog, config.logical_cells) {
             (Some(path), Some(expected_cells)) => {
                 let centroids = read_logical_cell_catalog(path, expected_cells, dataset.meta.dim)?;

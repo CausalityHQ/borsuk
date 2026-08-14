@@ -100,12 +100,49 @@ impl WalConfig {
         Self::default()
     }
 
+    /// WAL policy for a fresh offline bulk build.
+    ///
+    /// Every caller batch remains one independently durable positioned
+    /// transaction. Routine materialization is deferred until the complete
+    /// pending-receipt window is reached, which avoids a flush-per-batch
+    /// resonance. If a source shard reaches its independent row or byte bound
+    /// first, append backpressure materializes the committed prefix and retries
+    /// the unchanged transaction.
+    pub fn bulk_load() -> Self {
+        Self {
+            enabled: true,
+            flush_threshold_runs: crate::positioned_log::MAX_PENDING_ENVELOPES_PER_SHARD,
+            flush_threshold_records: 0,
+            flush_threshold_bytes: 0,
+            collection_flush_threshold_bytes: 0,
+        }
+    }
+
     /// A disabled WAL: the classic synchronous segment-per-`add` write path.
     pub fn disabled() -> Self {
         Self {
             enabled: false,
             ..Self::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod wal_config_tests {
+    use super::*;
+
+    #[test]
+    fn bulk_load_wal_uses_the_positioned_receipt_window() {
+        let wal = WalConfig::bulk_load();
+
+        assert!(wal.enabled);
+        assert_eq!(
+            wal.flush_threshold_runs,
+            crate::positioned_log::MAX_PENDING_ENVELOPES_PER_SHARD
+        );
+        assert_eq!(wal.flush_threshold_records, 0);
+        assert_eq!(wal.flush_threshold_bytes, 0);
+        assert_eq!(wal.collection_flush_threshold_bytes, 0);
     }
 }
 
