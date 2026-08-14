@@ -745,7 +745,7 @@ fn run() -> BenchResult<()> {
         0.0
     };
     write_startup_csv(&config, open_ms, preload_ms, warm_report.as_ref())?;
-    if config.cache_profile != BenchmarkCacheProfile::MixedCoverage {
+    if cache_state_summary_enabled(config.skip_recall, config.cache_profile) {
         write_cold_warm_csv(
             &config,
             &dataset,
@@ -2504,6 +2504,10 @@ fn validate_disk_cached_network(summary: &QuerySummary) -> BenchResult<()> {
     Ok(())
 }
 
+fn cache_state_summary_enabled(skip_recall: bool, cache_profile: BenchmarkCacheProfile) -> bool {
+    !skip_recall && cache_profile != BenchmarkCacheProfile::MixedCoverage
+}
+
 fn write_cache_state_row(
     writer: &mut impl Write,
     config: &ResolvedConfig,
@@ -4141,16 +4145,16 @@ mod tests {
         QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES, ServingMode, VectorMetric,
         WRITE_COST_HEADER, WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase,
         approximate_options, benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
-        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
-        default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
-        ingest_batch_size, ingest_generated_batch, is_hot_workload_position,
-        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
-        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
-        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
-        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
-        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
-        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
+        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
+        dollars_per_million_queries, ingest_batch_size, ingest_generated_batch,
+        is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
+        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
+        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
+        parse_positive_list, parse_serving_mode, percentage_operation_count, permuted_positions,
+        preload_query_count, read_logical_cell_catalog, recall_preloads_local_snapshot,
+        recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
+        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_bounded_v14_execution, validate_build_only, validate_disk_cached_network,
         validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
         validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
@@ -4967,6 +4971,22 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn concurrency_only_runtime_skips_the_serial_cache_state_summary() {
+        assert!(!cache_state_summary_enabled(
+            true,
+            BenchmarkCacheProfile::DiskCached
+        ));
+        assert!(cache_state_summary_enabled(
+            false,
+            BenchmarkCacheProfile::DiskCached
+        ));
+        assert!(!cache_state_summary_enabled(
+            false,
+            BenchmarkCacheProfile::MixedCoverage
+        ));
     }
 
     #[test]
