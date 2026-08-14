@@ -2804,7 +2804,7 @@ pub(crate) fn positioned_wal_records_to_table(
     let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
     match format {
         crate::PhysicalFormat::Parquet => {
-            write_batch_with_row_groups(batch, Some(SEGMENT_ROW_GROUP_ROWS))
+            write_batch_with_row_groups(batch, Some(POSITIONED_WAL_ROW_GROUP_ROWS))
         }
         other => Err(BorsukError::InvalidStorage(format!(
             "positioned WAL records cannot use physical format `{other}`"
@@ -7164,6 +7164,12 @@ fn write_batches_as_row_groups(schema: Arc<Schema>, batches: &[RecordBatch]) -> 
 /// a slightly larger footer.
 pub(crate) const SEGMENT_ROW_GROUP_ROWS: usize = 32;
 
+/// Positioned WAL payloads are validated and replayed as complete transaction
+/// objects; they are not the row-selective immutable segment page format. Keep
+/// their Parquet footer and encode/decode cost bounded instead of inheriting
+/// the 32-row rerank groups used by segments.
+const POSITIONED_WAL_ROW_GROUP_ROWS: usize = 4_096;
+
 /// Parquet hard-caps a file at 32767 row groups. A bulk-load L0 segment can hold
 /// the whole corpus (millions of rows) before compaction splits it into cells;
 /// at [`SEGMENT_ROW_GROUP_ROWS`] that overflows the cap (e.g. 1.18M rows / 32 =
@@ -8039,6 +8045,31 @@ mod tests {
             clone_count, 0,
             "positioned WAL encoding must borrow staged record payloads"
         );
+    }
+
+    #[test]
+    fn positioned_wal_uses_dedicated_coarse_row_groups() {
+        let template = valid_segment().records.remove(0);
+        let records = (0..4_097)
+            .map(|ordinal| {
+                let mut record = template.clone();
+                record.id = format!("record-{ordinal}").into();
+                (record, 1, 0)
+            })
+            .collect::<Vec<_>>();
+
+        let bytes = positioned_wal_records_to_table(
+            &records,
+            2,
+            VectorElementType::Float32,
+            crate::PhysicalFormat::Parquet,
+        )
+        .unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes)).unwrap();
+
+        assert!(POSITIONED_WAL_ROW_GROUP_ROWS > SEGMENT_ROW_GROUP_ROWS);
+        assert_eq!(reader.metadata().num_row_groups(), 2);
+        assert_eq!(reader.metadata().row_group(0).num_rows(), 4_096);
     }
 
     const VALID_SEGMENT_CHECKSUM: &str =
