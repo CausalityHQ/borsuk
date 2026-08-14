@@ -1350,6 +1350,12 @@ where
         // and execution would turn a zero-byte charge into an unbudgeted GET.
         let plane_eligible = group.code_plane_bytes <= max_plane_bytes;
         let cached = plane_eligible && is_pinned_cached(&group);
+        // A cold query must not fetch a multi-megabyte stable plane for a
+        // sparse head shortlist. Keep uncached promotion within the same 2x
+        // physical/selected bound as the exact wave. An already pinned plane
+        // remains free to reuse in full.
+        let bounded_uncached_promotion =
+            group.code_plane_bytes <= selected_physical.saturating_mul(2);
         let plane_backing_requests = if cached {
             0
         } else {
@@ -1370,6 +1376,7 @@ where
                 BorsukError::InvalidStorage("cell-card head wave byte count overflows".to_string())
             })?;
         if plane_eligible
+            && (cached || bounded_uncached_promotion)
             && (cached || candidate_physical <= max_physical_bytes)
             && candidate_backing_requests <= max_backing_requests
         {
@@ -3852,7 +3859,7 @@ mod tests {
     }
 
     #[test]
-    fn wave_one_reads_each_touched_complete_code_plane_once() {
+    fn cold_head_reads_bound_speculation_while_pinned_planes_reuse_full_objects() {
         let mut groups = Vec::new();
         let mut cards = Vec::new();
         for group_ordinal in 0..2_u32 {
@@ -3908,6 +3915,8 @@ mod tests {
 
         let selected =
             super::plan_cell_card_head_wave(&root, &selected_cells, 4 * 1024 * 1024, 64).unwrap();
+        let selected_requests = selected.requests();
+        let selected_physical_bytes = selected.physical_bytes();
         let plan = super::promote_cell_card_head_wave_to_stable_planes(
             selected,
             4 * 1024 * 1024,
@@ -3916,22 +3925,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(plan.cards(), selected_cells.len());
-        assert_eq!(plan.requests(), groups.len());
-        assert_eq!(
-            plan.physical_bytes(),
-            groups
-                .iter()
-                .map(|group| group.code_plane_bytes)
-                .sum::<u64>()
-        );
-        for read in plan.reads() {
-            assert_eq!(read.start, read.group.code_plane_offset);
-            assert_eq!(
-                read.end,
-                read.group.code_plane_offset + read.group.code_plane_bytes
-            );
-            assert!(read.selected_bytes <= read.group.code_plane_bytes);
-        }
+        assert_eq!(plan.requests(), selected_requests);
+        assert!(plan.physical_bytes() <= selected_physical_bytes.saturating_mul(2));
 
         let cached_selected =
             super::plan_cell_card_head_wave(&root, &selected_cells, 4 * 1024 * 1024, 64).unwrap();
@@ -4015,6 +4010,7 @@ mod tests {
     #[test]
     fn stable_plane_promotion_charges_each_bounded_backing_get() {
         let plane_bytes = 5 * 1024 * 1024;
+        let selected_bytes = 3 * 1024 * 1024;
         let group = Arc::new(super::CellCardGroupRef {
             path: "group.arrow".to_string(),
             checksum: [1; 32],
@@ -4027,12 +4023,12 @@ mod tests {
             reads: vec![super::CellCardHeadRead {
                 group,
                 start: 0,
-                end: 100,
-                selected_bytes: 100,
+                end: selected_bytes,
+                selected_bytes,
                 cards: Vec::new(),
             }],
-            physical_bytes: 100,
-            selected_bytes: 100,
+            physical_bytes: selected_bytes,
+            selected_bytes,
             cached_selected_bytes: 0,
             backing_requests: 1,
             cards: 0,
@@ -4046,7 +4042,7 @@ mod tests {
             |_| false,
         )
         .unwrap();
-        assert_eq!(refused.physical_bytes(), 100);
+        assert_eq!(refused.physical_bytes(), selected_bytes);
         assert_eq!(refused.backing_requests(), 1);
 
         let promoted = super::promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(

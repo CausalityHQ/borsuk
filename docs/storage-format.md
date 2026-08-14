@@ -873,6 +873,13 @@ within one S3 request wave while bounding exact-range read amplification to 2x.
 The former 1 MiB gap reduced GET count but was rejected after cold S3 evidence
 showed that it transferred megabytes of unselected data per query.
 
+The PQ head plane follows the same cold-read discipline. A cold miss promotes a
+complete stable code plane only when that plane is at most twice the already
+planned selected-range bytes. Larger planes stay as bounded selected ranges;
+an already authenticated, pinned plane is still reused in full at zero backing
+I/O cost. This prevents a sparse shortlist from turning into multi-megabyte
+prefetch while preserving warm-cache reuse.
+
 ### Persisted coarse quantizer for paged indexes
 
 A resident-routing index builds the IVF coarse quantizer — an HNSW over the cell
