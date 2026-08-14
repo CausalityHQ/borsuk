@@ -218,7 +218,7 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
         or not leaf_page_budgets
         or not isinstance(cache_states, list)
         or not cache_states
-        or any(budget not in {4, 8, 16, 32} for budget in leaf_page_budgets)
+        or any(budget not in {4, 8, 16, 32, 64} for budget in leaf_page_budgets)
     ):
         raise ValueError("read-recall arm factors are incomplete")
     if any(state not in {"cold", "warm"} for state in cache_states):

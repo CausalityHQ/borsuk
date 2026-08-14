@@ -767,7 +767,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         cell = scheduled_cell()
         cell["workload"]["factors"] = {
             "k": [10],
-            "leaf_page_budgets": [4, 32],
+            "leaf_page_budgets": [4, 32, 64],
             "cache_states": ["cold", "warm"],
             "minimum_recall_ppm": 950000,
         }
@@ -778,6 +778,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 {"k": 10, "leaf_page_budget": 4, "cache_state": "warm"},
                 {"k": 10, "leaf_page_budget": 32, "cache_state": "cold"},
                 {"k": 10, "leaf_page_budget": 32, "cache_state": "warm"},
+                {"k": 10, "leaf_page_budget": 64, "cache_state": "cold"},
+                {"k": 10, "leaf_page_budget": 64, "cache_state": "warm"},
             ],
         )
 
