@@ -208,6 +208,31 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(prepared.expected["binary_sha256"], "8" * 64)
         self.assertEqual(prepared.expected["purchase_option"], "on-demand")
 
+        concurrency = prepare_qualification_execution(
+            manifest,
+            operation="read-concurrency-sift",
+            source_uri="s3://bucket/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocol.json",
+            protocol_sha256="7" * 64,
+            launch=LaunchEnvironment(
+                "ami-x", "subnet-x", "sg-x", "arn:aws:iam::453182569524:instance-profile/x", "aarch64", "eu-central-1"
+            ),
+            aws=RuntimePlanAws(),
+            attempt=3,
+            build_attempt=1,
+        )
+        concurrency_user_data = base64.b64decode(concurrency.request["UserData"]).decode()
+        concurrency_payload = concurrency_user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        concurrency_worker = base64.b64decode(concurrency_payload).decode()
+        self.assertIn("--runtime-profile concurrency", concurrency_worker)
+        self.assertEqual(concurrency.expected["runtime_profile"], "concurrency")
+        self.assertEqual(concurrency.expected["max_concurrent_searches"], 4)
+        self.assertIn("/runtime-concurrency/attempts/0003", concurrency.job.terminal_prefix)
+        self.assertTrue(concurrency.job.cell_tag.startswith("runtime-concurrency-"))
+
     def test_runtime_requires_exact_completed_build_authority(self) -> None:
         manifest = unstaged_sift_manifest()
         manifest["source"] = {
@@ -574,7 +599,10 @@ class PublicationV3ControllerTests(unittest.TestCase):
             },
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("{stage,build-sift,read-recall-sift}", completed.stdout)
+        self.assertIn(
+            "{stage,build-sift,read-recall-sift,read-concurrency-sift}",
+            completed.stdout,
+        )
 
     def test_stale_completed_receipt_advances_to_fresh_spot_attempt(self) -> None:
         manifest = unstaged_sift_manifest()

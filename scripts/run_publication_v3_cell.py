@@ -242,9 +242,14 @@ def build_execution_plan(
     generator: Path,
     borsuk_bench: Path,
     mode: str,
+    runtime_profile: str = "recall",
 ) -> dict[str, object]:
     if mode not in {"publication", "smoke"}:
         raise ValueError("execution mode must be publication or smoke")
+    if runtime_profile not in {"recall", "concurrency"}:
+        raise ValueError("runtime profile must be recall or concurrency")
+    if mode != "publication" and runtime_profile != "recall":
+        raise ValueError("concurrency runtime profile requires publication mode")
     if cell.get("system") != "borsuk":
         raise ValueError(f"system {cell.get('system')!r} is not available in local execution")
     workload = cell.get("workload")
@@ -271,6 +276,7 @@ def build_execution_plan(
         raise ValueError("cell has no BORSUK runtime-client contract")
     resident_limit_mib = runtime_client.get("resident_limit_mib")
     disk_cache_limit_mib = runtime_client.get("disk_cache_limit_mib")
+    runtime_vcpus = runtime_client.get("vcpus")
     if (
         isinstance(resident_limit_mib, bool)
         or not isinstance(resident_limit_mib, int)
@@ -278,6 +284,9 @@ def build_execution_plan(
         or isinstance(disk_cache_limit_mib, bool)
         or not isinstance(disk_cache_limit_mib, int)
         or disk_cache_limit_mib <= 0
+        or isinstance(runtime_vcpus, bool)
+        or not isinstance(runtime_vcpus, int)
+        or runtime_vcpus <= 0
     ):
         raise ValueError("BORSUK runtime-client limits are invalid")
     build_workers = environment.get("build_workers")
@@ -381,6 +390,7 @@ def build_execution_plan(
             "uncached" if arm.get("cache_state", "cold") == "cold" else "disk_cached"
         ),
         "BORSUK_BENCH_RAM_BUDGET_BYTES": str(resident_limit_mib * 1024 * 1024),
+        "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES": str(runtime_vcpus),
         "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": str(
             disk_cache_limit_mib * 1024 * 1024
         ),
@@ -460,6 +470,18 @@ def build_execution_plan(
             "BORSUK_BENCH_BUILD_INDEX": "0",
             "BORSUK_STORAGE_TRACE": str(runtime_output_dir / "storage-access.csv"),
         }
+        if runtime_profile == "concurrency":
+            runtime_env.update(
+                {
+                    "BORSUK_BENCH_RECALL_ONLY": "0",
+                    "BORSUK_BENCH_SKIP_RECALL": "1",
+                    "BORSUK_BENCH_CONCURRENCY": "1,2,4",
+                    "BORSUK_BENCH_SERVING_NPROBE": str(routing_budget),
+                    "BORSUK_BENCH_SERVING_CANDIDATES": str(
+                        V12_COMPATIBILITY_CANDIDATES
+                    ),
+                }
+            )
         if workload_kind == "write-update-delete-compact":
             runtime_env.update(
                 {
@@ -790,6 +812,80 @@ def summarize_query_samples(
         ),
         "query_elapsed_ns": sum(latencies_us) * 1_000,
     }
+
+
+def summarize_concurrency_artifacts(
+    summaries: list[dict[str, str]],
+    samples: list[dict[str, str]],
+    *,
+    expected_workers: tuple[int, ...],
+    expected_queries: int,
+    minimum_recall_ppm: int,
+) -> list[dict[str, int]]:
+    if expected_queries <= 0 or not expected_workers:
+        raise ValueError("concurrency authority is empty")
+    expected = set(expected_workers)
+    if len(expected) != len(expected_workers) or any(worker <= 0 for worker in expected):
+        raise ValueError("concurrency worker authority is invalid")
+    by_worker: dict[int, dict[str, str]] = {}
+    for row in summaries:
+        worker = int(row.get("workers", "-1"))
+        if (
+            row.get("schema_version") != "borsuk-production-bench-v12"
+            or worker not in expected
+            or worker in by_worker
+            or int(row.get("total_queries", "-1")) != expected_queries
+        ):
+            raise ValueError("concurrency summary differs from its authority")
+        for field in ("qps", "mean_ms", "p50_ms", "p95_ms", "p99_ms", "max_ms"):
+            value = float(row.get(field, "nan"))
+            if not math.isfinite(value) or value < 0 or (field == "qps" and value == 0):
+                raise ValueError("concurrency summary metric is invalid")
+        by_worker[worker] = row
+    if set(by_worker) != expected:
+        raise ValueError("concurrency summary is incomplete")
+
+    sample_indices = {worker: set() for worker in expected_workers}
+    recalls = {worker: [] for worker in expected_workers}
+    for row in samples:
+        worker = int(row.get("workers", "-1"))
+        if row.get("schema_version") != "borsuk-production-bench-v12" or worker not in expected:
+            raise ValueError("concurrency sample differs from its authority")
+        sample_index = int(row.get("sample_index", "-1"))
+        if sample_index < 0 or sample_index in sample_indices[worker]:
+            raise ValueError("concurrency sample index is invalid")
+        latency_ms = float(row.get("latency_ms", "nan"))
+        recall = float(row.get("recall_at_10", "nan"))
+        if (
+            not math.isfinite(latency_ms)
+            or latency_ms < 0
+            or not math.isfinite(recall)
+            or not 0 <= recall <= 1
+        ):
+            raise ValueError("concurrency sample latency or recall is invalid")
+        sample_indices[worker].add(sample_index)
+        recalls[worker].append(round(recall * 1_000_000))
+
+    result = []
+    for worker in expected_workers:
+        if len(sample_indices[worker]) != expected_queries:
+            raise ValueError("concurrency samples are incomplete")
+        recall_ppm = round(sum(recalls[worker]) / expected_queries)
+        if recall_ppm < minimum_recall_ppm:
+            raise ValueError("concurrency recall is below its frozen floor")
+        row = by_worker[worker]
+        result.append(
+            {
+                "workers": worker,
+                "queries": expected_queries,
+                "qps_milli": round(float(row["qps"]) * 1_000),
+                "p50_us": round(float(row["p50_ms"]) * 1_000),
+                "p95_us": round(float(row["p95_ms"]) * 1_000),
+                "p99_us": round(float(row["p99_ms"]) * 1_000),
+                "recall_ppm": recall_ppm,
+            }
+        )
+    return result
 
 
 def summarize_runtime_write_trace(path: Path) -> dict[str, int]:
@@ -1250,7 +1346,10 @@ def build_publication_report(
     runtime_write_metrics: dict[str, int],
     index_receipt: dict[str, object],
     runtime_attestation: dict[str, object],
+    runtime_profile: str = "recall",
 ) -> dict[str, object]:
+    if runtime_profile not in {"recall", "concurrency"}:
+        raise ValueError("publication runtime profile is invalid")
     if isinstance(elapsed_ns, bool) or not isinstance(elapsed_ns, int) or elapsed_ns <= 0:
         raise ValueError("publication elapsed time must be a positive integer")
     queries = query_metrics.get("queries")
@@ -1331,7 +1430,11 @@ def build_publication_report(
         index_receipt=index_receipt,
         runtime_attestation=runtime_attestation,
     )
-    return {"publishable": True, "result": validated}
+    return {
+        "publishable": True,
+        "runtime_profile": runtime_profile,
+        "result": validated,
+    }
 
 
 def build_lifecycle_publication_report(
@@ -1427,6 +1530,41 @@ def _read_canonical_value(path: Path, maximum_bytes: int) -> object:
     return value
 
 
+def runtime_execution_contract(
+    plan: dict[str, object], runtime_profile: str
+) -> dict[str, object]:
+    if runtime_profile not in {"recall", "concurrency"}:
+        raise ValueError("runtime execution contract profile is invalid")
+    runtime = plan.get("runtime")
+    steps = runtime.get("steps") if isinstance(runtime, dict) else None
+    if not isinstance(steps, list) or len(steps) != 1:
+        raise ValueError("runtime execution contract requires one benchmark step")
+    step = steps[0]
+    environment = step.get("env") if isinstance(step, dict) else None
+    if not isinstance(environment, dict):
+        raise ValueError("runtime execution contract has no benchmark environment")
+
+    def positive_environment_integer(name: str) -> int:
+        value = environment.get(name)
+        if not isinstance(value, str) or not value.isascii() or not value.isdigit():
+            raise ValueError(f"runtime execution contract {name} is invalid")
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError(f"runtime execution contract {name} is invalid")
+        return parsed
+
+    return {
+        "schema_version": 1,
+        "runtime_profile": runtime_profile,
+        "ram_budget_bytes": positive_environment_integer(
+            "BORSUK_BENCH_RAM_BUDGET_BYTES"
+        ),
+        "max_concurrent_searches": positive_environment_integer(
+            "BORSUK_BENCH_MAX_CONCURRENT_SEARCHES"
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("protocol", type=Path)
@@ -1436,6 +1574,9 @@ def main() -> int:
     parser.add_argument("--arm-index", type=int, default=0)
     parser.add_argument(
         "--mode", choices=("smoke", "build", "seal", "runtime"), default="smoke"
+    )
+    parser.add_argument(
+        "--runtime-profile", choices=("recall", "concurrency"), default="recall"
     )
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--source-archive-sha256")
@@ -1533,6 +1674,7 @@ def main() -> int:
         generator=args.generator or Path("/bin/false"),
         borsuk_bench=args.borsuk_bench,
         mode="publication" if publication else "smoke",
+        runtime_profile=args.runtime_profile,
     )
     if args.mode == "build":
         output, resources, elapsed_ns = execute_publication_phase(plan, "build")
@@ -1614,6 +1756,12 @@ def main() -> int:
         else:
             raise ValueError("publication runtime workload is not implemented")
         authorized_plan = {**plan, "runtime": authorized_runtime}
+        execution_contract = runtime_execution_contract(
+            authorized_plan, args.runtime_profile
+        )
+        (args.workspace / "RUNTIME_EXECUTION_CONTRACT.json").write_bytes(
+            canonical_json_bytes(execution_contract) + b"\n"
+        )
         source_root = Path(__file__).resolve().parent.parent
         preflight = validate_runtime_attestation(
             collect_runtime_attestation(
@@ -1645,7 +1793,49 @@ def main() -> int:
         (args.workspace / "RUNTIME_ATTESTATION.json").write_bytes(
             canonical_json_bytes(runtime_attestation) + b"\n"
         )
-        if workload_kind == "read-recall":
+        if workload_kind == "read-recall" and args.runtime_profile == "concurrency":
+            summary_path = output / "bench_concurrency.csv"
+            samples_path = output / "bench_concurrency_samples.csv"
+            if not summary_path.is_file() or not samples_path.is_file():
+                raise ValueError("concurrency runtime emitted no concurrency artifacts")
+            with summary_path.open(newline="") as source:
+                summary_rows = list(csv.DictReader(source))
+            with samples_path.open(newline="") as source:
+                sample_rows = list(csv.DictReader(source))
+            runtime_step = authorized_runtime["steps"][0]
+            runtime_environment = runtime_step["env"]
+            workers = tuple(
+                int(value)
+                for value in runtime_environment["BORSUK_BENCH_CONCURRENCY"].split(",")
+            )
+            factors = cell["workload"]["factors"]
+            concurrency_metrics = summarize_concurrency_artifacts(
+                summary_rows,
+                sample_rows,
+                expected_workers=workers,
+                expected_queries=int(plan["effective_queries"]),
+                minimum_recall_ppm=int(factors["minimum_recall_ppm"]),
+            )
+            runtime_writes = summarize_runtime_write_trace(output / "storage-access.csv")
+            report = {
+                "publishable": True,
+                "runtime_profile": "concurrency",
+                "result": {
+                    "schema_version": 1,
+                    "cell_id": cell["cell_id"],
+                    "arm_id": arm["arm_id"],
+                    "attempt_id": args.attempt_id,
+                    "instance_identity": args.instance_identity,
+                    "source_archive_sha256": args.source_archive_sha256,
+                    "dataset_materialization_sha256": args.dataset_materialization_sha256,
+                    "elapsed_ns": elapsed_ns,
+                    "metrics": concurrency_metrics,
+                    "resources": resources,
+                    "runtime_writes": runtime_writes,
+                    "runtime_attestation": runtime_attestation,
+                },
+            }
+        elif workload_kind == "read-recall":
             samples = output / "bench_query_samples.csv"
             if not samples.is_file() or samples.stat().st_size == 0:
                 raise ValueError("publication runtime emitted no query samples")
@@ -1672,6 +1862,7 @@ def main() -> int:
                 runtime_write_metrics=runtime_writes,
                 index_receipt=receipt,
                 runtime_attestation=runtime_attestation,
+                runtime_profile=args.runtime_profile,
             )
         else:
             lifecycle = summarize_lifecycle_artifacts(

@@ -28,6 +28,8 @@ from scripts.run_publication_v3_cell import (
     execute_publication_phase,
     plan_arms,
     read_build_artifact,
+    runtime_execution_contract,
+    summarize_concurrency_artifacts,
     summarize_lifecycle_artifacts,
     summarize_query_samples,
     summarize_runtime_write_trace,
@@ -518,8 +520,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             runtime_write_metrics={"storage_puts": 0, "storage_bytes_written": 0},
             index_receipt=receipt,
             runtime_attestation=attestation,
+            runtime_profile="concurrency",
         )
         self.assertTrue(report["publishable"])
+        self.assertEqual(report["runtime_profile"], "concurrency")
         self.assertEqual(report["result"]["metrics"]["storage_gets"], 10)
         self.assertEqual(report["result"]["metrics"]["storage_bytes_read"], 4096)
         self.assertEqual(report["result"]["metrics"]["global_leaf_code_requests"], 4)
@@ -671,6 +675,98 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             build_env["BORSUK_BENCH_LOGICAL_CELLS"],
             str(cell["index_profile"]["logical_cells"]),
         )
+
+    def test_publication_concurrency_profile_reuses_frozen_index_without_recall_warmup(self) -> None:
+        cell = next(
+            cell
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))["cells"]
+            if cell["system"] == "borsuk"
+            and cell["workload"]["kind"] == "read-recall"
+            and cell["dataset"]["source"].get("generator") == "synthetic-clustered-v1"
+        )
+        cell["source"] = {"state": "frozen"}
+        with tempfile.TemporaryDirectory() as root:
+            plan = build_execution_plan(
+                cell,
+                arm=plan_arms(cell)[0],
+                workspace=Path(root),
+                generator=Path("/bin/true"),
+                borsuk_bench=Path("/bin/true"),
+                mode="publication",
+                runtime_profile="concurrency",
+            )
+        runtime_env = plan["runtime"]["steps"][-1]["env"]
+        self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "0")
+        self.assertEqual(runtime_env["BORSUK_BENCH_SKIP_RECALL"], "1")
+        self.assertEqual(runtime_env["BORSUK_BENCH_CONCURRENCY"], "1,2,4")
+        self.assertEqual(
+            runtime_env["BORSUK_BENCH_SERVING_NPROBE"],
+            str(plan_arms(cell)[0]["leaf_page_budget"]),
+        )
+        self.assertEqual(runtime_env["BORSUK_BENCH_SERVING_CANDIDATES"], "512")
+        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_CONCURRENT_SEARCHES"], "4")
+        self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
+        self.assertEqual(runtime_env["BORSUK_BENCH_BUILD_INDEX"], "0")
+
+        contract = runtime_execution_contract(plan, "concurrency")
+        self.assertEqual(
+            contract,
+            {
+                "schema_version": 1,
+                "runtime_profile": "concurrency",
+                "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
+                "max_concurrent_searches": 4,
+            },
+        )
+        runtime_env["BORSUK_BENCH_RAM_BUDGET_BYTES"] = "1073741824"
+        self.assertEqual(
+            runtime_execution_contract(plan, "concurrency")["ram_budget_bytes"],
+            1024 * 1024 * 1024,
+        )
+
+    def test_concurrency_artifacts_require_complete_workers_queries_and_recall(self) -> None:
+        summaries = [
+            {
+                "schema_version": "borsuk-production-bench-v12",
+                "workers": str(workers),
+                "total_queries": "2",
+                "qps": str(10 * workers),
+                "mean_ms": "5",
+                "p50_ms": "4",
+                "p95_ms": "7",
+                "p99_ms": "8",
+                "max_ms": "9",
+            }
+            for workers in (1, 2, 4)
+        ]
+        samples = [
+            {
+                "schema_version": "borsuk-production-bench-v12",
+                "workers": str(workers),
+                "sample_index": str(sample),
+                "latency_ms": "5",
+                "recall_at_10": "0.99",
+            }
+            for workers in (1, 2, 4)
+            for sample in range(2)
+        ]
+        metrics = summarize_concurrency_artifacts(
+            summaries,
+            samples,
+            expected_workers=(1, 2, 4),
+            expected_queries=2,
+            minimum_recall_ppm=980_000,
+        )
+        self.assertEqual([row["workers"] for row in metrics], [1, 2, 4])
+        self.assertEqual(metrics[-1]["qps_milli"], 40_000)
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            summarize_concurrency_artifacts(
+                summaries,
+                samples[:-1],
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+            )
 
     def test_unavailable_local_system_is_rejected_not_simulated(self) -> None:
         cell = scheduled_cell(system="amazon-s3-vectors")

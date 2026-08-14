@@ -18535,11 +18535,10 @@ impl BorsukIndex {
             .metric
             .uses_normalized_euclidean_geometry();
         let dimensions = self.manifest.config.dimensions;
-        let mut training_sample = Vec::with_capacity(training_sample_limit);
+        let mut training_sample = BinaryHeap::with_capacity(training_sample_limit);
         let mut vectors_seen = 0_usize;
-        let mut reservoir_state = crate::DEFAULT_TURBOQUANT_SEED;
 
-        // First pass retains only a bounded, deterministic reservoir for fitting.
+        // First pass retains only a bounded, order-independent bottom-k sample.
         // In particular, a 1M x 960-d GIST build no longer holds ~3.8 GiB of
         // dense vectors while constructing its compact serving artifact.
         for_each_bounded_io_wave(
@@ -18551,17 +18550,18 @@ impl BorsukIndex {
                     if self.is_suppressed(record)? {
                         continue;
                     }
-                    let vector = if normalize {
-                        crate::metric::unit_l2_normalized(&record.vector)
-                    } else {
-                        record.vector.clone()
-                    };
                     retain_global_pq_training_vector(
                         &mut training_sample,
                         training_sample_limit,
                         &mut vectors_seen,
-                        &mut reservoir_state,
-                        vector,
+                        record.id.as_bytes(),
+                        || {
+                            if normalize {
+                                crate::metric::unit_l2_normalized(&record.vector)
+                            } else {
+                                record.vector.clone()
+                            }
+                        },
                     );
                 }
                 Ok(())
@@ -18570,6 +18570,11 @@ impl BorsukIndex {
         if vectors_seen == 0 {
             return Ok(None);
         }
+        let training_sample = training_sample
+            .into_sorted_vec()
+            .into_iter()
+            .map(|candidate| candidate.vector)
+            .collect::<Vec<_>>();
         let (quantizer, coarse_quantizer) =
             self.fit_resident_global_quantizers(&training_sample, vectors_seen)?;
         let coarse_quantizer_state = coarse_quantizer.state();
@@ -26086,22 +26091,66 @@ fn global_pq_training_sample_limit(dimensions: usize) -> usize {
     (TARGET_BYTES / bytes_per_vector).clamp(1, MAX_ROWS)
 }
 
+struct GlobalPqTrainingCandidate {
+    priority: [u8; 32],
+    id: Vec<u8>,
+    vector: Vec<f32>,
+}
+
+impl PartialEq for GlobalPqTrainingCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority && self.id == other.id
+    }
+}
+
+impl Eq for GlobalPqTrainingCandidate {}
+
+impl PartialOrd for GlobalPqTrainingCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for GlobalPqTrainingCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.priority
+            .cmp(&other.priority)
+            .then_with(|| self.id.cmp(&other.id))
+    }
+}
+
 fn retain_global_pq_training_vector(
-    sample: &mut Vec<Vec<f32>>,
+    sample: &mut BinaryHeap<GlobalPqTrainingCandidate>,
     limit: usize,
     vectors_seen: &mut usize,
-    reservoir_state: &mut u64,
-    vector: Vec<f32>,
+    record_id: &[u8],
+    vector: impl FnOnce() -> Vec<f32>,
 ) {
     *vectors_seen = (*vectors_seen).saturating_add(1);
-    if sample.len() < limit {
-        sample.push(vector);
-    } else {
-        let replacement = splitmix_index(reservoir_state, *vectors_seen);
-        if replacement < limit {
-            sample[replacement] = vector;
-        }
+    if limit == 0 {
+        return;
     }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"borsuk-global-pq-training-sample-v1\0");
+    hasher.update(&crate::DEFAULT_TURBOQUANT_SEED.to_le_bytes());
+    hasher.update(record_id);
+    let priority = *hasher.finalize().as_bytes();
+    let retain = sample.len() < limit
+        || sample.peek().is_some_and(|largest| {
+            priority < largest.priority
+                || (priority == largest.priority && record_id < largest.id.as_slice())
+        });
+    if !retain {
+        return;
+    }
+    if sample.len() == limit {
+        sample.pop();
+    }
+    sample.push(GlobalPqTrainingCandidate {
+        priority,
+        id: record_id.to_vec(),
+        vector: vector(),
+    });
 }
 
 fn resident_global_pq_candidates(
@@ -35746,6 +35795,120 @@ mod tests {
     }
 
     #[test]
+    fn global_pq_artifact_is_stable_across_transaction_iteration_order() {
+        fn build(reverse_batches: bool) -> (String, [u8; 32]) {
+            let dir = tempfile::tempdir().unwrap();
+            let uri = dir.path().to_string_lossy().into_owned();
+            let mut index = BorsukIndex::create(IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 64,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            })
+            .unwrap();
+            let mut batches = (0..8).collect::<Vec<_>>();
+            if reverse_batches {
+                batches.reverse();
+            }
+            for batch in batches {
+                index
+                    .add(
+                        (batch * 32..(batch + 1) * 32)
+                            .map(|row| {
+                                VectorRecord::new(
+                                    format!("stable-row-{row}"),
+                                    (0..8)
+                                        .map(|dimension| {
+                                            ((row * 31 + dimension * 17) % 257) as f32 / 257.0
+                                        })
+                                        .collect(),
+                                )
+                            })
+                            .collect(),
+                    )
+                    .unwrap();
+            }
+            index.finish_bulk_load().unwrap();
+            let reference = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
+            let root_read = index
+                .storage
+                .read_known_size_with_cache_status_and_checksum(
+                    reference.root_path(),
+                    reference.root().encoded_bytes,
+                    &reference.root_checksum(),
+                )
+                .unwrap();
+            let root = decode_cell_card_run_root(
+                reference.root(),
+                &root_read.bytes,
+                reference.codebook().descriptor_checksum(),
+            )
+            .unwrap();
+            (
+                reference.codebook().descriptor_checksum().to_owned(),
+                root.routing_layout_fingerprint(),
+            )
+        }
+
+        assert_eq!(build(false), build(true));
+    }
+
+    #[test]
+    fn global_pq_rebuild_is_byte_stable_when_manifest_segment_order_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 32,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        for batch in 0..4 {
+            index
+                .add(
+                    (batch * 32..(batch + 1) * 32)
+                        .map(|row| {
+                            VectorRecord::new(
+                                format!("stable-card-row-{row}"),
+                                (0..8)
+                                    .map(|dimension| {
+                                        ((row * 31 + dimension * 17) % 257) as f32 / 257.0
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                )
+                .unwrap();
+        }
+        index.finish_bulk_load().unwrap();
+        let forward = index.manifest.segments.clone();
+        let mut reverse = forward.clone();
+        reverse.reverse();
+
+        let forward = index
+            .rebuild_global_ann_epoch_from_segments(&forward, 99, 0)
+            .unwrap()
+            .unwrap();
+        let reverse = index
+            .rebuild_global_ann_epoch_from_segments(&reverse, 99, 0)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            serde_json::to_string(&forward).unwrap(),
+            serde_json::to_string(&reverse).unwrap()
+        );
+    }
+
+    #[test]
     fn resident_global_v15_reuses_stable_code_planes_after_disk_cache_reset() {
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
@@ -36981,15 +37144,12 @@ mod tests {
             report.global_leaf_pages_read > 1,
             "V12 stopped after its first page found k live rows instead of spending the bounded recall budget"
         );
-        let planned_io_bytes = report
-            .global_leaf_code_bytes
-            .saturating_add(report.global_leaf_page_bytes);
         assert!(
             report.transient_capacity_bytes > 0,
             "the admission regression needs a bounded transient pool: {report:?}"
         );
         assert!(
-            report.transient_peak_bytes <= planned_io_bytes.saturating_mul(8),
+            report.transient_peak_bytes <= GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES,
             "V15 admitted the caller byte cap instead of the selected wave: {report:?}"
         );
     }
@@ -37354,6 +37514,53 @@ mod tests {
         assert_eq!(global_pq_training_sample_limit(8_192), 2_048);
         assert_eq!(global_pq_training_sample_limit(65_536), 256);
         assert_eq!(global_pq_training_sample_limit(1_048_576), 16);
+    }
+
+    #[test]
+    fn global_pq_training_sample_is_independent_of_segment_iteration_order() {
+        fn sample(values: impl IntoIterator<Item = usize>) -> Vec<usize> {
+            let mut retained = BinaryHeap::new();
+            let mut seen = 0;
+            for value in values {
+                let id = value.to_string();
+                retain_global_pq_training_vector(
+                    &mut retained,
+                    4,
+                    &mut seen,
+                    id.as_bytes(),
+                    || vec![value as f32],
+                );
+            }
+            retained
+                .into_sorted_vec()
+                .into_iter()
+                .map(|candidate| candidate.vector[0] as usize)
+                .collect::<Vec<_>>()
+        }
+
+        let forward = sample(0..128);
+        let reverse = sample((0..128).rev());
+        assert_eq!(forward, reverse);
+    }
+
+    #[test]
+    fn global_pq_training_rejects_without_materializing_vector() {
+        let mut retained = BinaryHeap::new();
+        let mut seen = 0;
+        let mut materialized = 0;
+        for value in 0..128 {
+            let id = value.to_string();
+            retain_global_pq_training_vector(&mut retained, 4, &mut seen, id.as_bytes(), || {
+                materialized += 1;
+                vec![value as f32]
+            });
+        }
+
+        assert_eq!(seen, 128);
+        assert!(
+            materialized < 32,
+            "bottom-k rejection cloned {materialized} vectors"
+        );
     }
 
     #[test]

@@ -2072,6 +2072,61 @@ impl ResidentCellCardRoot {
         self.resident_bytes
     }
 
+    #[cfg(test)]
+    pub(crate) fn routing_layout_fingerprint(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"borsuk-cell-card-routing-layout-v1\0");
+        for values in [
+            self.group_indexes.as_ref(),
+            self.cell_indexes.as_ref(),
+            self.card_ordinals.as_ref(),
+            self.leaf_ordinals.as_ref(),
+            self.code_bytes.as_ref(),
+            self.rows.as_ref(),
+            self.code_widths.as_ref(),
+            self.centroid_offsets.as_ref(),
+        ] {
+            hasher.update(&(values.len() as u64).to_le_bytes());
+            for value in values {
+                hasher.update(&value.to_le_bytes());
+            }
+        }
+        hasher.update(&(self.groups.len() as u64).to_le_bytes());
+        for group in &self.groups {
+            // Independent ingests assign different mutation stamps, so the full
+            // group and exact-block checksums legitimately differ. The code plane
+            // and all query range geometry must nevertheless be identical. A
+            // separate same-ingest rebuild test asserts complete byte identity.
+            hasher.update(&group.encoded_bytes.to_le_bytes());
+            hasher.update(&group.code_plane_offset.to_le_bytes());
+            hasher.update(&group.code_plane_bytes.to_le_bytes());
+            hasher.update(&group.code_plane_checksum);
+        }
+        hasher.update(&(self.code_offsets.len() as u64).to_le_bytes());
+        for value in &self.code_offsets {
+            hasher.update(&value.to_le_bytes());
+        }
+        hasher.update(&(self.code_checksums.len() as u64).to_le_bytes());
+        for checksum in &self.code_checksums {
+            hasher.update(checksum);
+        }
+        hasher.update(&(self.exact_blocks.len() as u64).to_le_bytes());
+        for blocks in &self.exact_blocks {
+            hasher.update(&(blocks.len() as u64).to_le_bytes());
+            for block in blocks {
+                hasher.update(&block.block_ordinal.to_le_bytes());
+                hasher.update(&block.offset.to_le_bytes());
+                hasher.update(&block.metadata_bytes.to_le_bytes());
+                hasher.update(&block.body_bytes.to_le_bytes());
+                hasher.update(&block.bytes.to_le_bytes());
+                hasher.update(&block.rows.to_le_bytes());
+            }
+        }
+        hasher.update(&(self.centroid_codes.len() as u64).to_le_bytes());
+        hasher.update(&self.centroid_codes);
+        *hasher.finalize().as_bytes()
+    }
+
     pub(crate) fn card_range_for_cell(&self, cell_index: u32) -> std::ops::Range<usize> {
         let start = self.cell_indexes.partition_point(|cell| *cell < cell_index);
         let end = self.cell_indexes[start..].partition_point(|cell| *cell == cell_index) + start;

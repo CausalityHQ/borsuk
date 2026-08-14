@@ -60,7 +60,7 @@ class LaunchEnvironment:
 class PreparedExecution:
     job: ExecutionJob
     request: dict[str, object]
-    expected: dict[str, str]
+    expected: dict[str, object]
     timeout_seconds: int
 
 
@@ -463,7 +463,7 @@ def run_execution_job(
     job: Any,
     *,
     request: dict[str, object],
-    expected: dict[str, str],
+    expected: dict[str, object],
     aws: Any,
     timeout_seconds: int,
     poll_seconds: float = 15.0,
@@ -494,6 +494,21 @@ def run_execution_job(
                     for key, expected_value in required.items()
                 ):
                     raise ValueError("execution receipt differs from frozen authority")
+                if expected.get("runtime_profile") is not None:
+                    digest_fields = ["execution_contract_sha256"]
+                    if expected["runtime_profile"] == "concurrency":
+                        digest_fields.extend(
+                            (
+                                "concurrency_summary_sha256",
+                                "concurrency_samples_sha256",
+                            )
+                        )
+                    if any(
+                        not isinstance(value.get(field), str)
+                        or re.fullmatch(r"[0-9a-f]{64}", value[field]) is None
+                        for field in digest_fields
+                    ):
+                        raise ValueError("execution receipt artifact digest is invalid")
                 if job.role == "build" and value.get("index_uri") != job.index_uri:
                     raise ValueError("build receipt differs from scheduled index")
                 return value
@@ -581,7 +596,7 @@ def prepare_qualification_execution(
     """Prepare one immutable SIFT qualification execution."""
 
     normalized = validate_manifest(manifest)
-    if operation not in {"build-sift", "read-recall-sift"}:
+    if operation not in {"build-sift", "read-recall-sift", "read-concurrency-sift"}:
         raise ValueError("unsupported qualification execution")
     if attempt <= 0 or build_attempt <= 0:
         raise ValueError("qualification attempts must be positive")
@@ -595,10 +610,16 @@ def prepare_qualification_execution(
         workload_kind="read-recall",
         build_attempt=attempt if operation == "build-sift" else build_attempt,
     )
+    runtime_profile = (
+        "concurrency" if operation == "read-concurrency-sift" else "recall"
+    )
+    runtime_client = normalized["environment_contract"]["runtime_clients"]["borsuk"]
+    max_concurrent_searches = int(runtime_client["vcpus"])
+    ram_budget_bytes = int(runtime_client["resident_limit_mib"]) * 1024 * 1024
     job = (
         ExecutionJob.build(cell, attempt=attempt)
         if operation == "build-sift"
-        else ExecutionJob.runtime(cell, attempt=attempt)
+        else ExecutionJob.runtime(cell, attempt=attempt, profile=runtime_profile)
     )
     attempt_id = f"{job.cell_tag}-a{job.attempt:04d}"
     expected = {
@@ -646,10 +667,16 @@ def prepare_qualification_execution(
             attempt_id=attempt_id,
             terminal_prefix=job.terminal_prefix,
             purchase_option=purchase_option,
+            runtime_profile=runtime_profile,
+            max_concurrent_searches=max_concurrent_searches,
+            ram_budget_bytes=ram_budget_bytes,
         )
         maximum = int(normalized["budget_contract"]["max_cell_seconds"])
         role = "runtime"
         expected["binary_sha256"] = authority["binary_sha256"]
+        expected["runtime_profile"] = runtime_profile
+        expected["max_concurrent_searches"] = max_concurrent_searches
+        expected["ram_budget_bytes"] = ram_budget_bytes
     request = build_launch_request(
         normalized,
         role=role,
@@ -703,6 +730,19 @@ def main() -> int:
     runtime.add_argument("--attempt", type=int, default=1)
     runtime.add_argument("--build-attempt", type=int, default=1)
     runtime.add_argument(
+        "--purchase-option", choices=("spot", "on-demand"), default="spot"
+    )
+    concurrency = subparsers.add_parser("read-concurrency-sift")
+    concurrency.add_argument("--manifest", type=Path, required=True)
+    concurrency.add_argument("--source-archive", type=Path, required=True)
+    concurrency.add_argument("--profile", default="causality")
+    concurrency.add_argument("--image-id", required=True)
+    concurrency.add_argument("--subnet-id", required=True)
+    concurrency.add_argument("--security-group-id", required=True)
+    concurrency.add_argument("--instance-profile-arn", required=True)
+    concurrency.add_argument("--attempt", type=int, default=1)
+    concurrency.add_argument("--build-attempt", type=int, default=1)
+    concurrency.add_argument(
         "--purchase-option", choices=("spot", "on-demand"), default="spot"
     )
     args = parser.parse_args()

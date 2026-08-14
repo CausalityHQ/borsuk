@@ -253,6 +253,37 @@ print(json.dumps({'role':'runtime','attempt':1}, sort_keys=True))
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(json.loads(completed.stdout)["role"], "runtime")
 
+    def test_concurrency_sift_uses_its_own_attempt_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            repository = temp / "repository"
+            repository.mkdir()
+            make_clean_repository(repository)
+            fake = temp / "controller.py"
+            fake.write_text(
+                """#!/usr/bin/env python3
+import json, sys
+assert sys.argv[1] == 'read-concurrency-sift'
+assert sys.argv[sys.argv.index('--attempt') + 1] == '17'
+print(json.dumps({'role':'runtime','attempt':17}, sort_keys=True))
+""",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            completed = subprocess.run(
+                ["bash", "scripts/launch_aws_publication_v3.sh", "--read-concurrency-sift"],
+                cwd=repository,
+                env={
+                    **os.environ,
+                    "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                    "BORSUK_PUBLICATION_V3_CONCURRENCY_ATTEMPT": "17",
+                },
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(json.loads(completed.stdout)["attempt"], 17)
+
     def test_build_and_read_can_replay_frozen_ancestor_but_not_unpushed_commit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
@@ -274,7 +305,7 @@ print(json.dumps({'role':'runtime','attempt':1}, sort_keys=True))
                 **os.environ,
                 "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
             }
-            for mode in ("--build-sift", "--read-recall-sift"):
+            for mode in ("--build-sift", "--read-recall-sift", "--read-concurrency-sift"):
                 replay = subprocess.run(
                     ["bash", "scripts/launch_aws_publication_v3.sh", mode],
                     cwd=repository,

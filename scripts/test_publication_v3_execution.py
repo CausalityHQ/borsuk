@@ -172,6 +172,8 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             attempt_id="runtime-0001",
             terminal_prefix="s3://bucket/results/cell/runtime/attempts/0001",
             purchase_option="on-demand",
+            max_concurrent_searches=4,
+            ram_budget_bytes=2 * 1024 * 1024 * 1024,
         )
         self.assertNotIn("cargo ", script)
         self.assertNotIn("rustup", script)
@@ -205,6 +207,44 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         )
         self.assertIn("stage=publish-receipts", script)
         self.assertLess(len(script.encode("utf-8")), 16 * 1024)
+        self.assertEqual(
+            subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
+        )
+
+    def test_concurrency_runtime_worker_publishes_checked_sidecars(self) -> None:
+        script = runtime_worker_script(
+            job=ExecutionJob.runtime(
+                qualification_cell(
+                    frozen_manifest(),
+                    dataset_id="sift-128",
+                    workload_kind="read-recall",
+                ),
+                attempt=2,
+                profile="concurrency",
+            ),
+            source_uri="s3://bucket/source/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifests/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocols/cell.json",
+            protocol_sha256="7" * 64,
+            build_prefix="s3://bucket/results/cell/build/attempts/0001",
+            binary_sha256="8" * 64,
+            attempt_id="runtime-0002",
+            terminal_prefix="s3://bucket/results/cell/runtime/attempts/0002",
+            runtime_profile="concurrency",
+            max_concurrent_searches=4,
+            ram_budget_bytes=2 * 1024 * 1024 * 1024,
+        )
+        self.assertIn("--runtime-profile concurrency", script)
+        self.assertIn("bench_concurrency.csv", script)
+        self.assertIn("bench_concurrency_samples.csv", script)
+        self.assertIn('test "$actual_runtime_profile" = concurrency', script)
+        self.assertIn('"concurrency_summary_sha256"', script)
+        self.assertIn('"concurrency_samples_sha256"', script)
+        self.assertIn('test "$actual_max_concurrent" = 4', script)
+        self.assertIn('test "$actual_ram_budget" = 2147483648', script)
+        self.assertIn("RUNTIME_EXECUTION_CONTRACT.json", script)
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )

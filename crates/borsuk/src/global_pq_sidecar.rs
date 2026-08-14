@@ -36,6 +36,11 @@ use crate::{
 };
 
 #[cfg(test)]
+thread_local! {
+    static CANONICAL_SPOOL_KEY_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 use crate::rotated_product_quantizer::ProductQuantizerConfig;
 
 pub(crate) const DEFAULT_GLOBAL_PQ_CHUNK_BYTES: usize = 32 * 1024 * 1024;
@@ -815,6 +820,7 @@ struct SpoolRow {
     fixed: Vec<u8>,
     stamp: MutationStamp,
     id: Vec<u8>,
+    canonical_key: Option<Vec<u8>>,
 }
 
 fn read_spool_row(
@@ -853,7 +859,62 @@ fn read_spool_row(
             digest,
         ),
         id,
+        canonical_key: None,
     }))
+}
+
+fn read_cached_spool_key(reader: &mut BufReader<File>, path: &Path) -> Result<Option<Vec<u8>>> {
+    let mut encoded_len = [0_u8; 4];
+    match reader.read(&mut encoded_len[..1]) {
+        Ok(0) => return Ok(None),
+        Ok(1) => {}
+        Ok(_) => unreachable!("one-byte read"),
+        Err(source) => return Err(io_error(path, source)),
+    }
+    reader
+        .read_exact(&mut encoded_len[1..])
+        .map_err(|source| io_error(path, source))?;
+    let len = u32::from_le_bytes(encoded_len) as usize;
+    if len > DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES.saturating_add(64 * 1024) {
+        return invalid("cached cell-spool key exceeds its bound");
+    }
+    let mut key = vec![0_u8; len];
+    reader
+        .read_exact(&mut key)
+        .map_err(|source| io_error(path, source))?;
+    Ok(Some(key))
+}
+
+fn write_cached_spool_key(writer: &mut BufWriter<File>, path: &Path, key: &[u8]) -> Result<()> {
+    let len = u32::try_from(key.len())
+        .map_err(|_| BorsukError::InvalidStorage("cell-spool key exceeds u32 bytes".into()))?;
+    writer
+        .write_all(&len.to_le_bytes())
+        .and_then(|()| writer.write_all(key))
+        .map_err(|source| io_error(path, source))
+}
+
+fn read_keyed_spool_row(
+    reader: &mut BufReader<File>,
+    path: &Path,
+    fixed_width: usize,
+) -> Result<Option<SpoolRow>> {
+    let Some(key) = read_cached_spool_key(reader, path)? else {
+        return Ok(None);
+    };
+    let mut row = read_spool_row(reader, path, fixed_width)?.ok_or_else(|| {
+        BorsukError::InvalidStorage("keyed cell-spool row is truncated".to_string())
+    })?;
+    row.canonical_key = Some(key);
+    Ok(Some(row))
+}
+
+fn write_keyed_spool_row(writer: &mut BufWriter<File>, path: &Path, row: &SpoolRow) -> Result<()> {
+    let key = row.canonical_key.as_deref().ok_or_else(|| {
+        BorsukError::InvalidStorage("keyed cell-spool row has no key".to_string())
+    })?;
+    write_cached_spool_key(writer, path, key)?;
+    write_spool_row(writer, path, row)
 }
 
 fn write_spool_row(writer: &mut BufWriter<File>, path: &Path, row: &SpoolRow) -> Result<()> {
@@ -1086,81 +1147,44 @@ impl GlobalPqCellSpool {
         let max_code_rows = self.max_chunk_bytes / code_row_width;
         let max_exact_rows = self.max_exact_chunk_bytes / exact_row_width.max(1);
         let max_rows = max_code_rows.min(max_exact_rows).max(1);
-        let mut reader = BufReader::new(File::open(path).map_err(|source| io_error(path, source))?);
-        let mut pending_row = None;
+        let fixed_width = code_row_width + exact_row_width;
+        let mut chunk_rows = Vec::with_capacity(max_rows);
+        let mut identity_bytes = 0_usize;
         let mut emitted = false;
-        loop {
-            let mut chunk_rows = Vec::with_capacity(max_rows);
-            let mut identity_bytes = 0_usize;
-            while chunk_rows.len() < max_rows {
-                let row = if let Some(row) = pending_row.take() {
-                    row
-                } else if let Some(row) =
-                    read_spool_row(&mut reader, path, code_row_width + exact_row_width)?
-                {
-                    row
-                } else {
-                    break;
-                };
+        self.for_each_canonical_spool_row(
+            path,
+            fixed_width,
+            code_width,
+            max_rows,
+            0,
+            false,
+            &mut |row| {
                 let next_identity_bytes = identity_bytes
                     .saturating_add(row.id.len())
                     .saturating_add(60);
                 if !chunk_rows.is_empty()
-                    && next_identity_bytes > DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES
+                    && (chunk_rows.len() == max_rows
+                        || next_identity_bytes > DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES)
                 {
-                    pending_row = Some(row);
-                    break;
+                    emit_spool_chunk(
+                        cell,
+                        code_row_width,
+                        exact_row_width,
+                        std::mem::take(&mut chunk_rows),
+                        emit,
+                    )?;
+                    emitted = true;
+                    identity_bytes = 0;
                 }
-                identity_bytes = next_identity_bytes;
+                identity_bytes = identity_bytes
+                    .saturating_add(row.id.len())
+                    .saturating_add(60);
                 chunk_rows.push(row);
-            }
-            if chunk_rows.is_empty() {
-                break;
-            }
-            let rows = chunk_rows.len();
-            let mut order = (0..rows)
-                .map(|row| {
-                    (
-                        product_code_locality_key(&chunk_rows[row].fixed[..code_width]),
-                        row,
-                    )
-                })
-                .collect::<Vec<_>>();
-            order.sort_unstable_by(|left, right| {
-                left.0
-                    .cmp(&right.0)
-                    .then_with(|| {
-                        chunk_rows[left.1].fixed[..code_width]
-                            .cmp(&chunk_rows[right.1].fixed[..code_width])
-                    })
-                    .then_with(|| left.1.cmp(&right.1))
-            });
-            let mut bytes = Vec::with_capacity(rows * code_row_width);
-            for &(_, row) in &order {
-                bytes.extend_from_slice(&chunk_rows[row].fixed[..code_row_width]);
-            }
-            let mut exact_bytes = Vec::with_capacity(rows * exact_row_width);
-            for &(_, row) in &order {
-                exact_bytes.extend_from_slice(&chunk_rows[row].fixed[code_row_width..]);
-            }
-            let identities = order
-                .iter()
-                .map(|&(_, row)| {
-                    (
-                        crate::RecordId::from_bytes(chunk_rows[row].id.clone()),
-                        chunk_rows[row].stamp,
-                    )
-                })
-                .collect();
-            emit(GlobalPqCellSpoolEvent::Chunk {
-                cell,
-                chunk: GlobalPqChunkBytes {
-                    bytes,
-                    exact_bytes,
-                    identities,
-                    rows,
-                },
-            })?;
+                Ok(())
+            },
+        )?;
+        if !chunk_rows.is_empty() {
+            emit_spool_chunk(cell, code_row_width, exact_row_width, chunk_rows, emit)?;
             emitted = true;
         }
         if emitted {
@@ -1168,6 +1192,246 @@ impl GlobalPqCellSpool {
         }
         Ok(())
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn for_each_canonical_spool_row(
+        &self,
+        path: &Path,
+        fixed_width: usize,
+        code_width: usize,
+        max_rows: usize,
+        nibble_depth: usize,
+        keyed_input: bool,
+        visit: &mut impl FnMut(SpoolRow) -> Result<()>,
+    ) -> Result<()> {
+        let mut reader = BufReader::new(File::open(path).map_err(|source| io_error(path, source))?);
+        let mut rows = Vec::with_capacity(max_rows.min(16_384));
+        let mut identity_bytes = 0_usize;
+        let mut bounded = true;
+        while let Some(row) = if keyed_input {
+            read_keyed_spool_row(&mut reader, path, fixed_width)?
+        } else {
+            read_spool_row(&mut reader, path, fixed_width)?
+        } {
+            identity_bytes = identity_bytes
+                .saturating_add(row.id.len())
+                .saturating_add(60);
+            rows.push(row);
+            if rows.len() > max_rows || identity_bytes > DEFAULT_GLOBAL_IDENTITY_CHUNK_BYTES {
+                bounded = false;
+                break;
+            }
+        }
+        if bounded {
+            let mut keyed = rows
+                .into_iter()
+                .map(|mut row| {
+                    let key = row
+                        .canonical_key
+                        .take()
+                        .unwrap_or_else(|| canonical_spool_row_key(&row, code_width));
+                    (key, row)
+                })
+                .collect::<Vec<_>>();
+            keyed.sort_unstable_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+            for (_, row) in keyed {
+                visit(row)?;
+            }
+            return Ok(());
+        }
+        drop(rows);
+
+        let mut first_key = None::<Vec<u8>>;
+        let mut common_nibbles = usize::MAX;
+        let key_cache_path = self.directory.path().join(format!(
+            "keys-{}.bin",
+            blake3::hash(path.to_string_lossy().as_bytes()).to_hex()
+        ));
+        let mut key_cache_writer = (!keyed_input)
+            .then(|| File::create(&key_cache_path))
+            .transpose()
+            .map_err(|source| io_error(&key_cache_path, source))?
+            .map(BufWriter::new);
+        let mut prefix_reader =
+            BufReader::new(File::open(path).map_err(|source| io_error(path, source))?);
+        while let Some(row) = if keyed_input {
+            read_keyed_spool_row(&mut prefix_reader, path, fixed_width)?
+        } else {
+            read_spool_row(&mut prefix_reader, path, fixed_width)?
+        } {
+            let key = row
+                .canonical_key
+                .clone()
+                .unwrap_or_else(|| canonical_spool_row_key(&row, code_width));
+            if let Some(writer) = &mut key_cache_writer {
+                write_cached_spool_key(writer, &key_cache_path, &key)?;
+            }
+            if let Some(first) = &first_key {
+                common_nibbles = common_nibbles.min(common_nibble_prefix(first, &key));
+            } else {
+                common_nibbles = key.len() * 2;
+                first_key = Some(key);
+            }
+        }
+        if let Some(writer) = &mut key_cache_writer {
+            writer
+                .flush()
+                .map_err(|source| io_error(&key_cache_path, source))?;
+        }
+        let partition_depth = nibble_depth.max(common_nibbles);
+        if first_key
+            .as_ref()
+            .is_none_or(|key| partition_depth >= key.len() * 2)
+        {
+            return invalid("duplicate canonical cell-spool key exceeds one bounded chunk");
+        }
+
+        let parent_hash = blake3::hash(path.to_string_lossy().as_bytes())
+            .to_hex()
+            .to_string();
+        let mut child_paths = (0..17)
+            .map(|bucket| {
+                self.directory.path().join(format!(
+                    "sort-{}-{partition_depth:04}-{bucket:02}.bin",
+                    parent_hash
+                ))
+            })
+            .collect::<Vec<_>>();
+        let mut writers = (0..17).map(|_| None::<BufWriter<File>>).collect::<Vec<_>>();
+        let mut nonempty = BTreeSet::new();
+        let mut partition_reader =
+            BufReader::new(File::open(path).map_err(|source| io_error(path, source))?);
+        let mut key_cache_reader = (!keyed_input)
+            .then(|| File::open(&key_cache_path))
+            .transpose()
+            .map_err(|source| io_error(&key_cache_path, source))?
+            .map(BufReader::new);
+        while let Some(mut row) = if keyed_input {
+            read_keyed_spool_row(&mut partition_reader, path, fixed_width)?
+        } else {
+            read_spool_row(&mut partition_reader, path, fixed_width)?
+        } {
+            let key = if let Some(key) = row.canonical_key.take() {
+                key
+            } else {
+                read_cached_spool_key(
+                    key_cache_reader
+                        .as_mut()
+                        .expect("raw spool partition has a key cache"),
+                    &key_cache_path,
+                )?
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-spool key cache is shorter than its row stream".to_string(),
+                    )
+                })?
+            };
+            let bucket = canonical_spool_key_bucket(&key, partition_depth);
+            row.canonical_key = Some(key);
+            let child_path = &child_paths[bucket];
+            if writers[bucket].is_none() {
+                writers[bucket] = Some(BufWriter::new(
+                    File::create(child_path).map_err(|source| io_error(child_path, source))?,
+                ));
+            }
+            write_keyed_spool_row(
+                writers[bucket]
+                    .as_mut()
+                    .expect("spool bucket writer exists"),
+                child_path,
+                &row,
+            )?;
+            nonempty.insert(bucket);
+        }
+        if let Some(reader) = &mut key_cache_reader
+            && read_cached_spool_key(reader, &key_cache_path)?.is_some()
+        {
+            return invalid("cell-spool key cache is longer than its row stream");
+        }
+        drop(key_cache_reader);
+        if !keyed_input {
+            std::fs::remove_file(&key_cache_path)
+                .map_err(|source| io_error(&key_cache_path, source))?;
+        }
+        for bucket in &nonempty {
+            let child_path = &child_paths[*bucket];
+            writers[*bucket]
+                .take()
+                .expect("nonempty spool bucket has a writer")
+                .flush()
+                .map_err(|source| io_error(child_path, source))?;
+        }
+        for bucket in nonempty {
+            let child_path = std::mem::take(&mut child_paths[bucket]);
+            self.for_each_canonical_spool_row(
+                &child_path,
+                fixed_width,
+                code_width,
+                max_rows,
+                partition_depth.saturating_add(1),
+                true,
+                visit,
+            )?;
+            std::fs::remove_file(&child_path).map_err(|source| io_error(&child_path, source))?;
+        }
+        Ok(())
+    }
+}
+
+fn canonical_spool_row_key(row: &SpoolRow, code_width: usize) -> Vec<u8> {
+    #[cfg(test)]
+    CANONICAL_SPOOL_KEY_COMPUTATIONS.set(CANONICAL_SPOOL_KEY_COMPUTATIONS.get().saturating_add(1));
+    let mut key = product_code_locality_key(&row.fixed[..code_width]);
+    key.extend_from_slice(blake3::hash(&row.id).as_bytes());
+    key.extend_from_slice(&row.id);
+    key
+}
+
+fn common_nibble_prefix(left: &[u8], right: &[u8]) -> usize {
+    for (index, (left, right)) in left.iter().zip(right).enumerate() {
+        if left != right {
+            return index * 2 + usize::from((left >> 4) == (right >> 4));
+        }
+    }
+    left.len().min(right.len()) * 2
+}
+
+fn canonical_spool_key_bucket(key: &[u8], nibble_depth: usize) -> usize {
+    let Some(byte) = key.get(nibble_depth / 2).copied() else {
+        return 0;
+    };
+    usize::from(if nibble_depth.is_multiple_of(2) {
+        byte >> 4
+    } else {
+        byte & 0x0f
+    }) + 1
+}
+
+fn emit_spool_chunk(
+    cell: u32,
+    code_width: usize,
+    exact_row_width: usize,
+    rows: Vec<SpoolRow>,
+    emit: &mut impl FnMut(GlobalPqCellSpoolEvent) -> Result<()>,
+) -> Result<()> {
+    let row_count = rows.len();
+    let mut bytes = Vec::with_capacity(row_count * code_width);
+    let mut exact_bytes = Vec::with_capacity(row_count * exact_row_width);
+    let mut identities = Vec::with_capacity(row_count);
+    for row in rows {
+        bytes.extend_from_slice(&row.fixed[..code_width]);
+        exact_bytes.extend_from_slice(&row.fixed[code_width..]);
+        identities.push((crate::RecordId::from_bytes(row.id), row.stamp));
+    }
+    emit(GlobalPqCellSpoolEvent::Chunk {
+        cell,
+        chunk: GlobalPqChunkBytes {
+            bytes,
+            exact_bytes,
+            identities,
+            rows: row_count,
+        },
+    })
 }
 
 const V12_CODEBOOK_LAYOUT: &str = "bounded-arrow-leaf-v13";
@@ -3039,6 +3303,69 @@ mod tests {
             sample_limit: 256,
             iterations: 2,
         }
+    }
+
+    #[test]
+    fn cell_spool_chunk_membership_is_independent_of_arrival_order() {
+        fn emitted_ids(reverse: bool) -> Vec<Vec<String>> {
+            let fit = vectors(32, 64);
+            let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+            let mut coarse = config();
+            coarse.subspaces = 1;
+            coarse.centroids = 1;
+            let coarse = RotatedProductQuantizer::fit(coarse, &fit).unwrap();
+            let code_width = quantizer.code_bytes_per_vector();
+            let mut spool = GlobalPqCellSpool::new(
+                quantizer,
+                coarse,
+                code_width * 2,
+                64,
+                VectorElementType::Float32,
+            )
+            .unwrap();
+            let mut order = (0..8).collect::<Vec<_>>();
+            if reverse {
+                order.reverse();
+            }
+            for row in order {
+                let vector = &fit[row];
+                let (cell, code) = spool
+                    .encode_vector_with_scratch(vector, &mut Vec::new(), &mut Vec::new())
+                    .unwrap();
+                spool
+                    .push_encoded(
+                        cell,
+                        &code,
+                        vector,
+                        format!("row-{row:02}").as_bytes(),
+                        MutationStamp::new(
+                            MutationVersion::from_parts(row as u64 + 1, [1; 16]),
+                            [row as u8; 32],
+                        ),
+                    )
+                    .unwrap();
+            }
+            CANONICAL_SPOOL_KEY_COMPUTATIONS.set(0);
+            let mut chunks = Vec::new();
+            spool
+                .finish(|event| {
+                    if let GlobalPqCellSpoolEvent::Chunk { chunk, .. } = event {
+                        chunks.push(
+                            chunk
+                                .identities
+                                .into_iter()
+                                .map(|(id, _)| id.to_utf8_string().unwrap())
+                                .collect(),
+                        );
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(CANONICAL_SPOOL_KEY_COMPUTATIONS.get(), 8);
+            chunks
+        }
+
+        assert_eq!(emitted_ids(false), emitted_ids(true));
     }
 
     fn coarse_state(fit_vectors: &[Vec<f32>]) -> ProductQuantizerState {
