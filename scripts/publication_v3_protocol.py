@@ -87,7 +87,7 @@ WORKLOAD_FACTOR_FIELDS = {
         {
             "k",
             "candidate_budgets",
-            "routing_cell_budget",
+            "leaf_page_budget",
             "cache_states",
             "minimum_recall_ppm",
         }
@@ -222,6 +222,13 @@ def _quality_ppm(value: object, role: str) -> int:
     return result
 
 
+def _leaf_page_budget(value: object) -> int:
+    result = _positive_int(value, "leaf page budget")
+    if result not in {4, 8, 16, 32}:
+        raise ValueError("leaf page budget must be 4, 8, 16, or 32")
+    return result
+
+
 def _validate_workload_factors(kind: str, value: object) -> dict[str, object]:
     factors = _dict(value, f"{kind} factors")
     expected = WORKLOAD_FACTOR_FIELDS.get(kind)
@@ -234,9 +241,7 @@ def _validate_workload_factors(kind: str, value: object) -> dict[str, object]:
             "candidate_budgets": _positive_int_list(
                 factors["candidate_budgets"], "candidate budgets"
             ),
-            "routing_cell_budget": _positive_int(
-                factors["routing_cell_budget"], "routing cell budget"
-            ),
+            "leaf_page_budget": _leaf_page_budget(factors["leaf_page_budget"]),
             "cache_states": _unique_strings(
                 factors["cache_states"], "cache states"
             ),

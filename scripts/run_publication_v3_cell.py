@@ -212,15 +212,15 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
         raise ValueError(f"k={unsupported} is not executable by the current benchmark")
     candidates = factors.get("candidate_budgets")
     cache_states = factors.get("cache_states")
-    routing_budget = factors.get("routing_cell_budget")
+    leaf_page_budget = factors.get("leaf_page_budget")
     if (
         not isinstance(candidates, list)
         or not candidates
         or not isinstance(cache_states, list)
         or not cache_states
-        or isinstance(routing_budget, bool)
-        or not isinstance(routing_budget, int)
-        or routing_budget <= 0
+        or isinstance(leaf_page_budget, bool)
+        or not isinstance(leaf_page_budget, int)
+        or leaf_page_budget not in {4, 8, 16, 32}
     ):
         raise ValueError("read-recall arm factors are incomplete")
     if any(state not in {"cold", "warm"} for state in cache_states):
@@ -229,7 +229,7 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
         {
             "k": 10,
             "candidate_budget": candidate,
-            "routing_cell_budget": routing_budget,
+            "leaf_page_budget": leaf_page_budget,
             "cache_state": state,
         }
         for candidate in candidates
@@ -362,7 +362,7 @@ def build_execution_plan(
 
     workload_kind = workload.get("kind")
     if workload_kind == "read-recall":
-        routing_budget = arm["routing_cell_budget"]
+        routing_budget = arm["leaf_page_budget"]
         candidate_budget = arm["candidate_budget"]
     else:
         routing_budget = 32
@@ -722,7 +722,7 @@ def summarize_query_samples(
         if (
             row.get("phase") != expected_phase
             or row.get("mode") != "srht-pq-scan"
-            or int(row.get("nprobe", "-1")) != arm["routing_cell_budget"]
+            or int(row.get("nprobe", "-1")) != arm["leaf_page_budget"]
             or int(row.get("max_candidates", "-1")) != arm["candidate_budget"]
         ):
             raise ValueError("query sample belongs to a different factor arm")

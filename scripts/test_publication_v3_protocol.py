@@ -157,7 +157,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                 "factors": {
                     "k": [10],
                     "candidate_budgets": [128, 320],
-                    "routing_cell_budget": 32,
+                    "leaf_page_budget": 32,
                     "cache_states": ["cold", "warm"],
                     "minimum_recall_ppm": 950000,
                 },
@@ -211,13 +211,22 @@ def paid_v3_manifest() -> dict[str, object]:
             dataset["source"] = {
                 "state": "staged",
                 "url": source["expected_source"],
-                "sha256": "6" * 64,
+                "sha256": "d" * 64,
                 "license": source["license"],
             }
     return value
 
 
 class PublicationV3ProtocolTests(unittest.TestCase):
+    def test_read_workload_rejects_non_v12_leaf_page_budget(self) -> None:
+        manifest = valid_v3_manifest()
+        workload = next(
+            item for item in manifest["workloads"] if item["kind"] == "read-recall"
+        )
+        workload["factors"]["leaf_page_budget"] = 128
+        with self.assertRaisesRegex(ValueError, "leaf page budget"):
+            validate_manifest(manifest)
+
     def test_index_identity_is_reusable_but_s3_authority_is_mandatory(self) -> None:
         manifest = validate_manifest(valid_v3_manifest())
         cells = build_schedule_document(manifest)["cells"]

@@ -150,17 +150,17 @@ def _validate_result_arm(value: object, cell: dict[str, object]) -> dict[str, ob
         raise ValueError("cell result arm kind is not implemented")
     if kind == "read-recall":
         expected = frozenset(
-            {"k", "candidate_budget", "routing_cell_budget", "cache_state"}
+            {"k", "candidate_budget", "leaf_page_budget", "cache_state"}
         )
         if frozenset(arm) != expected:
             raise ValueError("cell result arm fields differ")
-        for field in ("k", "candidate_budget", "routing_cell_budget"):
+        for field in ("k", "candidate_budget", "leaf_page_budget"):
             _positive_integer(arm[field], f"cell result arm {field}")
         _bounded_identity(arm["cache_state"], "cell result arm cache state")
         if (
             arm["k"] not in factors.get("k", [])
             or arm["candidate_budget"] not in factors.get("candidate_budgets", [])
-            or arm["routing_cell_budget"] != factors.get("routing_cell_budget")
+            or arm["leaf_page_budget"] != factors.get("leaf_page_budget")
             or arm["cache_state"] not in factors.get("cache_states", [])
         ):
             raise ValueError("cell result arm is not scheduled")

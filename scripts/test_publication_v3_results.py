@@ -51,7 +51,7 @@ def first_read_arm(cell: dict[str, object]) -> dict[str, object]:
     return {
         "k": factors["k"][0],
         "candidate_budget": factors["candidate_budgets"][0],
-        "routing_cell_budget": factors["routing_cell_budget"],
+        "leaf_page_budget": factors["leaf_page_budget"],
         "cache_state": factors["cache_states"][0],
     }
 
@@ -203,6 +203,7 @@ class PublicationV3ResultTests(unittest.TestCase):
             cell
             for cell in build_schedule_document(manifest)["cells"]
             if cell["system"] == "borsuk"
+            and cell["workload"]["kind"] == "read-recall"
         )
         protocol = canonical_json_bytes(cell) + b"\n"
         receipt = receipt_for(cell)
@@ -285,6 +286,7 @@ class PublicationV3ResultTests(unittest.TestCase):
             cell
             for cell in build_schedule_document(manifest)["cells"]
             if cell["system"] == "borsuk"
+            and cell["workload"]["kind"] == "read-recall"
         )
         protocol = canonical_json_bytes(cell) + b"\n"
         receipt = receipt_for(cell)
