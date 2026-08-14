@@ -307,6 +307,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "logical_cells": str(cell["index_profile"]["logical_cells"]),
                     "records": str(cell["dataset"]["scale"]["rows"]),
                     "total_active_index_bytes": str(123 * 1024 * 1024),
+                    "ingest_ms": "1234.500",
+                    "compaction_ms": "67.250",
+                    "compaction_bytes_read": "7654321",
+                    "compaction_bytes_written": "2345678",
                     "storage_gets": "7",
                     "storage_puts": "11",
                     "storage_deletes": "0",
@@ -359,6 +363,15 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             artifact = read_build_artifact(output, cell=cell)
         metrics = artifact["storage_metrics"]
         self.assertEqual(artifact["index_stats"]["records"], cell["dataset"]["scale"]["rows"])
+        self.assertEqual(
+            artifact["build_timings"],
+            {
+                "ingest_ns": 1_234_500_000,
+                "compaction_ns": 67_250_000,
+                "compaction_bytes_read": 7_654_321,
+                "compaction_bytes_written": 2_345_678,
+            },
+        )
         self.assertEqual(metrics["storage_puts"], 11)
         self.assertEqual(metrics["storage_bytes_read"], 654321)
         self.assertEqual(metrics["storage_bytes_written"], 123456)

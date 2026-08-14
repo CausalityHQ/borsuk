@@ -12,6 +12,7 @@ import math
 import os
 import subprocess
 import time
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 try:
@@ -1050,6 +1051,8 @@ def read_build_artifact(
         "logical_cells",
         "records",
         "total_active_index_bytes",
+        "compaction_bytes_read",
+        "compaction_bytes_written",
         "storage_gets",
         "storage_puts",
         "storage_deletes",
@@ -1078,6 +1081,21 @@ def read_build_artifact(
         raise ValueError("publication build catalog checksum is invalid")
     if parsed["total_active_index_bytes"] <= 0:
         raise ValueError("publication build active index bytes must be positive")
+    build_timings: dict[str, int] = {}
+    for field in ("ingest_ms", "compaction_ms"):
+        try:
+            nanos = Decimal(row[field]) * 1_000_000
+        except (KeyError, InvalidOperation) as error:
+            raise ValueError(f"publication build timing field {field} is invalid") from error
+        if nanos < 0 or nanos != nanos.to_integral_value():
+            raise ValueError(f"publication build timing field {field} is invalid")
+        build_timings[field.removesuffix("_ms") + "_ns"] = int(nanos)
+    build_timings.update(
+        {
+            "compaction_bytes_read": parsed["compaction_bytes_read"],
+            "compaction_bytes_written": parsed["compaction_bytes_written"],
+        }
+    )
     return {
         "index_stats": {
             "logical_cells": parsed["logical_cells"],
@@ -1090,6 +1108,7 @@ def read_build_artifact(
             for field in integer_fields
             if field.startswith("storage_")
         },
+        "build_timings": build_timings,
         "phase_timings": _read_build_phase_artifact(output_dir),
     }
 
