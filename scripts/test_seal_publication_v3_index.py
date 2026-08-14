@@ -62,6 +62,14 @@ class PublicationV3IndexSealTests(unittest.TestCase):
         cases = {
             "segments/L0/segment.parquet": ("data-bundle", "parquet"),
             "vectors/aa/vector.arrow": ("query-page", "arrow-ipc"),
+            "global-cell-cards/v14/groups/card.arrow": (
+                "query-page",
+                "arrow-ipc",
+            ),
+            "global-cell-cards/v14/roots/aa/root-card.parquet": (
+                "query-page",
+                "parquet",
+            ),
             "fidx/aa/filter.fidx": ("query-page", "packed"),
             "id-directory/runs/run.parquet": ("directory", "parquet"),
             "collection/CURRENT": ("control", "json"),

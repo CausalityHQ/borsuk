@@ -51,12 +51,18 @@ def classify_index_object(path: str) -> tuple[str, str]:
     if path.startswith("fidx/") and path.endswith(".fidx"):
         return "query-page", "packed"
     if path.endswith(".arrow") and path.startswith(
-        ("global-leaf/", "vectors/", "late-interaction/")
+        (
+            "global-cell-cards/v14/groups/",
+            "global-leaf/",
+            "vectors/",
+            "late-interaction/",
+        )
     ):
         return "query-page", "arrow-ipc"
     if path.endswith(".parquet") and path.startswith(
         (
             "global-leaf/",
+            "global-cell-cards/v14/roots/",
             "logical-cell-catalogs/",
             "manifests/",
             "positioned-log/",
