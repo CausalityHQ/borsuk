@@ -1,3 +1,4 @@
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -5,6 +6,7 @@ from unittest import mock
 
 from scripts.publication_v3_attestation import (
     _current_cgroup_root,
+    _effective_cpu_count,
     _measured_source_revision,
     collect_runtime_attestation,
     validate_runtime_attestation,
@@ -14,6 +16,21 @@ from scripts.test_publication_v3_protocol import paid_v3_manifest
 
 
 class PublicationV3AttestationTests(unittest.TestCase):
+    def test_effective_cpu_count_rejects_affinity_outside_inherited_cpuset(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            mount = Path(root) / "cgroup"
+            leaf = mount / "system.slice" / "run-u12.service"
+            leaf.mkdir(parents=True)
+            (mount / "cpuset.cpus.effective").write_text("0-3", encoding="utf-8")
+            with (
+                mock.patch(
+                    "scripts.publication_v3_attestation.os.sched_getaffinity",
+                    return_value={0, 1},
+                ),
+                self.assertRaisesRegex(ValueError, "affinity differs"),
+            ):
+                _effective_cpu_count(cgroup_root=leaf, cgroup_mount=mount)
+
     def test_frozen_archive_revision_marker_is_runtime_authority(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory)
@@ -45,9 +62,10 @@ class PublicationV3AttestationTests(unittest.TestCase):
             if cell["system"] == "borsuk" and cell["workload"]["kind"] == "read-recall"
         )
         with tempfile.TemporaryDirectory() as root:
-            cgroup = Path(root) / "cgroup"
+            cgroup_mount = Path(root) / "cgroup"
+            cgroup = cgroup_mount / "runtime.slice" / "run-u12.service"
             cache = Path(root) / "cache"
-            cgroup.mkdir()
+            cgroup.mkdir(parents=True)
             cache.mkdir()
             (cgroup / "memory.max").write_text(str(8 * 1024**3), encoding="utf-8")
             (cgroup / "memory.peak").write_text(str(2 * 1024**3), encoding="utf-8")
@@ -57,10 +75,22 @@ class PublicationV3AttestationTests(unittest.TestCase):
                 "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
                 encoding="utf-8",
             )
-            (cgroup / "cpuset.cpus.effective").write_text("0-1,4-5", encoding="utf-8")
+            (cgroup_mount / "cpuset.cpus.effective").write_text(
+                "0-1,4-5", encoding="utf-8"
+            )
             proc_cgroup = Path(root) / "self.cgroup"
-            proc_cgroup.write_text("0::/\n", encoding="utf-8")
+            proc_cgroup.write_text(
+                "0::/runtime.slice/run-u12.service\n", encoding="utf-8"
+            )
             runtime = {"steps": [{"env": {"BORSUK_BENCH_CACHE": str(cache)}}]}
+
+            def identity_after_transient_unit_cleanup() -> dict[str, object]:
+                shutil.rmtree(cgroup)
+                return {
+                    "instanceId": "i-runtime-01",
+                    "instanceType": "c7g.xlarge",
+                }
+
             with (
                 mock.patch(
                     "scripts.publication_v3_attestation._filesystem_magic",
@@ -68,10 +98,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
                 ),
                 mock.patch(
                     "scripts.publication_v3_attestation._instance_identity_document",
-                    return_value={
-                        "instanceId": "i-runtime-01",
-                        "instanceType": "c7g.xlarge",
-                    },
+                    side_effect=identity_after_transient_unit_cleanup,
                 ),
                 mock.patch(
                     "scripts.publication_v3_attestation._measured_source_revision",
@@ -81,6 +108,10 @@ class PublicationV3AttestationTests(unittest.TestCase):
                     "scripts.publication_v3_attestation.platform.machine",
                     return_value="aarch64",
                 ),
+                mock.patch(
+                    "scripts.publication_v3_attestation.os.sched_getaffinity",
+                    return_value={0, 1, 4, 5},
+                ),
             ):
                 observed = collect_runtime_attestation(
                     cell=cell,
@@ -88,7 +119,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
                     runtime=runtime,
                     source_root=Path(root),
                     proc_self_cgroup=proc_cgroup,
-                    cgroup_mount=cgroup,
+                    cgroup_mount=cgroup_mount,
                 )
         self.assertEqual(observed["vcpus"], 4)
         self.assertEqual(observed["memory_max_bytes"], 8 * 1024**3)
@@ -137,6 +168,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
             {**value, "cell_id": "foreign-cell"},
             {**value, "attempt_id": "replayed-attempt"},
             {**value, "instance_type": "r7g.8xlarge"},
+            {**value, "vcpus": value["vcpus"] + 1},
             {**value, "memory_max_bytes": value["memory_max_bytes"] + 1},
             {**value, "memory_max_bytes": value["memory_max_bytes"] - 1},
             {**value, "swap_max_bytes": 1024},

@@ -72,7 +72,7 @@ def _read_swap_peak(root: Path, *, maximum: int, current: int) -> int:
     raise ValueError("runtime cgroup memory.swap.peak is unavailable")
 
 
-def _cpuset_count(value: str) -> int:
+def _cpuset_members(value: str) -> set[int]:
     members: set[int] = set()
     for component in value.strip().split(","):
         bounds = component.split("-", 1)
@@ -85,7 +85,33 @@ def _cpuset_count(value: str) -> int:
         members.update(range(start, end + 1))
     if not members:
         raise ValueError("runtime effective CPU set is empty")
-    return len(members)
+    return members
+
+
+def _effective_cpu_count(*, cgroup_root: Path, cgroup_mount: Path) -> int:
+    try:
+        affinity = set(os.sched_getaffinity(0))
+    except OSError as error:
+        raise ValueError("runtime process CPU affinity is unavailable") from error
+    if not affinity:
+        raise ValueError("runtime process CPU affinity is empty")
+    mount = cgroup_mount.resolve()
+    current = cgroup_root
+    while True:
+        path = current / "cpuset.cpus.effective"
+        try:
+            inherited = _cpuset_members(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise ValueError("runtime effective CPU set is unavailable") from error
+        else:
+            if affinity != inherited:
+                raise ValueError("runtime CPU affinity differs from its cgroup CPU set")
+            return len(affinity)
+        if current == mount:
+            raise ValueError("runtime effective CPU set is unavailable")
+        current = current.parent
 
 
 def _read_memory_events(root: Path) -> tuple[int, int]:
@@ -228,14 +254,22 @@ def collect_runtime_attestation(
     cgroup_root = _current_cgroup_root(
         proc_self_cgroup=proc_self_cgroup, cgroup_mount=cgroup_mount
     )
+    vcpus = _effective_cpu_count(
+        cgroup_root=cgroup_root, cgroup_mount=cgroup_mount
+    )
+    memory_max_bytes = _read_cgroup_integer(cgroup_root, "memory.max")
+    memory_peak_bytes = _read_cgroup_integer(cgroup_root, "memory.peak")
+    oom_events, oom_kill_events = _read_memory_events(cgroup_root)
+    swap_max_bytes = _read_cgroup_integer(cgroup_root, "memory.swap.max")
+    swap_current_bytes = _read_cgroup_integer(cgroup_root, "memory.swap.current")
+    swap_peak_bytes = _read_swap_peak(
+        cgroup_root, maximum=swap_max_bytes, current=swap_current_bytes
+    )
     cache_path = _runtime_cache_path(runtime)
     identity = _instance_identity_document()
     filesystem = os.statvfs(cache_path)
     device = os.stat(cache_path).st_dev
     root_device = os.stat("/").st_dev
-    oom_events, oom_kill_events = _read_memory_events(cgroup_root)
-    swap_max_bytes = _read_cgroup_integer(cgroup_root, "memory.swap.max")
-    swap_current_bytes = _read_cgroup_integer(cgroup_root, "memory.swap.current")
     return {
         "schema_version": 1,
         "cell_id": cell.get("cell_id"),
@@ -243,16 +277,12 @@ def collect_runtime_attestation(
         "instance_id": identity.get("instanceId"),
         "instance_type": identity.get("instanceType"),
         "architecture": platform.machine(),
-        "vcpus": _cpuset_count(
-            (cgroup_root / "cpuset.cpus.effective").read_text(encoding="utf-8")
-        ),
-        "memory_max_bytes": _read_cgroup_integer(cgroup_root, "memory.max"),
-        "memory_peak_bytes": _read_cgroup_integer(cgroup_root, "memory.peak"),
+        "vcpus": vcpus,
+        "memory_max_bytes": memory_max_bytes,
+        "memory_peak_bytes": memory_peak_bytes,
         "swap_max_bytes": swap_max_bytes,
         "swap_current_bytes": swap_current_bytes,
-        "swap_peak_bytes": _read_swap_peak(
-            cgroup_root, maximum=swap_max_bytes, current=swap_current_bytes
-        ),
+        "swap_peak_bytes": swap_peak_bytes,
         "oom_events": oom_events,
         "oom_kill_events": oom_kill_events,
         "cache_limit_bytes": client.get("disk_cache_limit_mib") * 1024 * 1024,
