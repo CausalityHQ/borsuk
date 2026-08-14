@@ -133,7 +133,8 @@ if [[ "$mode" == "--read-recall-sift" ]]; then
     --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
     --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
     --attempt "${BORSUK_PUBLICATION_V3_RUNTIME_ATTEMPT:-1}" \
-    --build-attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-1}"
+    --build-attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-1}" \
+    --purchase-option "${BORSUK_PUBLICATION_V3_PURCHASE_OPTION:-spot}"
   exit 0
 fi
 

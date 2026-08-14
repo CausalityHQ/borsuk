@@ -191,9 +191,12 @@ def build_worker_script(
     protocol_sha256: str,
     attempt_id: str,
     terminal_prefix: str,
+    purchase_option: str = "spot",
 ) -> str:
     if job.role != "build":
         raise ValueError("build worker requires a build job")
+    if purchase_option != "spot":
+        raise ValueError("build worker must use Spot")
     cell = {**job.cell, "index_prefix": job.index_uri}
     dataset = cell["dataset"]
     source = dataset["source"]
@@ -216,6 +219,11 @@ def build_worker_script(
         dataset_step = f'aws s3 cp {_q(source["url"] + "/")} "$work/cell/dataset/" --recursive --only-show-errors'
     return prelude + textwrap.dedent(
         f"""\
+        stage=attest-purchase
+        token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
+        instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+        instance_purchase_option=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-life-cycle)
+        test "$instance_purchase_option" = {_q(purchase_option)}
         stage=provision
         dnf install -y gcc gcc-c++ git make cmake openssl-devel python3.12 python3.12-pip xz
         python3.12 -m venv "$work/venv"
@@ -238,8 +246,6 @@ def build_worker_script(
           echo 'refusing nonempty scheduled index prefix' >&2
           exit 2
         fi
-        token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
-        instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
         stage=publish-binary
         binary="$work/source/target/release/examples/production_bench"
         binary_sha=$(sha256sum "$binary" | awk '{{print $1}}')
@@ -269,7 +275,7 @@ def build_worker_script(
           path="$work/$name"; [[ -f "$path" ]] || path="$work/cell/$name"
           put_immutable "$path" {_q(terminal_prefix)}/$name
         done
-        printf '{{"schema_version":1,"status":"complete","role":"build","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"index_uri":{_j(job.index_uri)},"binary_sha256":"%s"}}\n' "$instance_id" "$binary_sha" >"$work/complete.json"
+        printf '{{"schema_version":1,"status":"complete","role":"build","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"index_uri":{_j(job.index_uri)},"binary_sha256":"%s","purchase_option":"%s"}}\n' "$instance_id" "$binary_sha" "$instance_purchase_option" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/BUILD_TERMINAL_COMPLETE.json")}
         complete=1
         """
@@ -289,9 +295,12 @@ def runtime_worker_script(
     binary_sha256: str,
     attempt_id: str,
     terminal_prefix: str,
+    purchase_option: str = "spot",
 ) -> str:
     if job.role != "runtime":
         raise ValueError("runtime worker requires a runtime job")
+    if purchase_option not in {"spot", "on-demand"}:
+        raise ValueError("runtime purchase option must be spot or on-demand")
     cell = job.cell
     source = cell["dataset"]["source"]
     if source.get("state") != "staged":
@@ -310,6 +319,11 @@ def runtime_worker_script(
     )
     return prelude + textwrap.dedent(
         f"""\
+        stage=attest-purchase
+        token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
+        instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+        instance_purchase_option=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-life-cycle)
+        test "$instance_purchase_option" = {_q(purchase_option)}
         stage=provision
         dnf install -y git python3.12 python3.12-pip util-linux xfsprogs
         python3.12 -m venv "$work/venv"
@@ -342,8 +356,6 @@ def runtime_worker_script(
         for name in meta.json test.parquet neighbors.parquet; do
           aws s3 cp {_q(source["url"])}/$name "$work/cell/runtime-dataset/$name" --only-show-errors
         done
-        token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token)
-        instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
         stage=execute-runtime
         detail_log="$work/cell/runtime/step-00.log"
         mkdir -p "$(dirname "$detail_log")"
@@ -353,13 +365,14 @@ def runtime_worker_script(
           /usr/bin/python3.12 "$work/source/scripts/run_publication_v3_cell.py" "$work/protocol.json" "$work/cell" \
           --mode runtime --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
           --dataset-materialization-sha256 {_q(source["sha256"])} --attempt-id {_q(attempt_id)} \
-          --instance-identity "$instance_id" --borsuk-bench "$work/production_bench" \
+          --instance-identity "$instance_id" --purchase-option "$instance_purchase_option" \
+          --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
           --index-inventory "$work/INDEX_INVENTORY.json"
         stage=publish-receipts
         put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
         put_immutable "$work/cell/RUNTIME_ATTESTATION.json" {_q(terminal_prefix + "/RUNTIME_ATTESTATION.json")}
-        printf '{{"schema_version":1,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)}}}\n' "$instance_id" >"$work/complete.json"
+        printf '{{"schema_version":1,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s"}}\n' "$instance_id" "$instance_purchase_option" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/RUNTIME_TERMINAL_COMPLETE.json")}
         complete=1
         """

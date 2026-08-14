@@ -166,6 +166,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "protocol_sha256": "7" * 64,
                     "index_uri": build_job.index_uri,
                     "binary_sha256": "8" * 64,
+                    "purchase_option": "spot",
                 }
 
         prepared = prepare_qualification_execution(
@@ -183,6 +184,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             aws=RuntimePlanAws(),
             attempt=2,
             build_attempt=1,
+            purchase_option="on-demand",
         )
         self.assertEqual(prepared.job.role, "runtime")
         self.assertEqual(prepared.job.attempt, 2)
@@ -194,6 +196,8 @@ class PublicationV3ControllerTests(unittest.TestCase):
             for item in prepared.request["TagSpecifications"][0]["Tags"]
         }
         self.assertEqual(tags["Role"], "runtime")
+        self.assertEqual(tags["PurchaseOption"], "on-demand")
+        self.assertNotIn("InstanceMarketOptions", prepared.request)
         self.assertEqual(tags["Cell"], prepared.job.cell_tag)
         user_data = base64.b64decode(prepared.request["UserData"]).decode()
         worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
@@ -202,6 +206,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertIn("8" * 64, worker)
         self.assertEqual(prepared.timeout_seconds, 7200)
         self.assertEqual(prepared.expected["binary_sha256"], "8" * 64)
+        self.assertEqual(prepared.expected["purchase_option"], "on-demand")
 
     def test_runtime_requires_exact_completed_build_authority(self) -> None:
         manifest = unstaged_sift_manifest()
@@ -234,6 +239,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "protocol_sha256": "7" * 64,
                     "index_uri": job.index_uri,
                     "binary_sha256": "8" * 64,
+                    "purchase_option": "spot",
                 }
 
         authority = completed_build_authority(
@@ -275,6 +281,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             ("source_archive_sha256", "9" * 64, "differs from frozen"),
             ("manifest_sha256", "9" * 64, "differs from frozen"),
             ("protocol_sha256", "9" * 64, "differs from frozen"),
+            ("purchase_option", "on-demand", "differs from frozen"),
             ("binary_sha256", "short", "canonical binary"),
             ("binary_sha256", "A" * 64, "canonical binary"),
         ):
@@ -320,7 +327,10 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 self.terminated: list[str] = []
                 self.observations = 0
 
-            def find_execution_instance(self, _job: object):
+            def find_execution_instance(
+                self, _job: object, *, purchase_option: str
+            ):
+                self.assert_purchase_option = purchase_option
                 return None
 
             def execution_markers(self, _job: object):
@@ -340,6 +350,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "protocol_sha256": "7" * 64,
                     "index_uri": job.index_uri,
                     "binary_sha256": "8" * 64,
+                    "purchase_option": "spot",
                 }
 
             def launch(self, _job: object, _request: object):
@@ -356,6 +367,16 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 pass
 
         aws = FakeExecutionAws()
+        with self.assertRaisesRegex(ValueError, "purchase option"):
+            run_execution_job(
+                job,
+                request={"InstanceType": "r7g.8xlarge"},
+                expected={"purchase_option": "on-demand"},
+                aws=aws,
+                timeout_seconds=60,
+                poll_seconds=0.01,
+                purchase_option="spot",
+            )
         receipt = run_execution_job(
             job,
             request={"InstanceType": "r7g.8xlarge"},
@@ -364,14 +385,81 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 "source_archive_sha256": "2" * 64,
                 "manifest_sha256": "6" * 64,
                 "protocol_sha256": "7" * 64,
+                "purchase_option": "spot",
             },
             aws=aws,
             timeout_seconds=60,
             poll_seconds=0.01,
+            purchase_option="spot",
         )
         self.assertEqual(receipt["binary_sha256"], "8" * 64)
         self.assertEqual(aws.launched, 1)
         self.assertEqual(aws.terminated, ["i-0123456789abcdef0"])
+        self.assertEqual(aws.assert_purchase_option, "spot")
+
+    def test_runtime_receipt_must_match_imds_observed_purchase_option(self) -> None:
+        manifest = unstaged_sift_manifest()
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        job = ExecutionJob.runtime(
+            qualification_cell(
+                manifest, dataset_id="sift-128", workload_kind="read-recall"
+            ),
+            attempt=1,
+        )
+
+        class RuntimeReceiptAws:
+            def find_execution_instance(
+                self, _job: object, *, purchase_option: str
+            ):
+                self.purchase_option = purchase_option
+                return None
+
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "role": "runtime",
+                    "attempt": 1,
+                    "attempt_id": "runtime-0001",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": "6" * 64,
+                    "protocol_sha256": "7" * 64,
+                    "binary_sha256": "8" * 64,
+                    "purchase_option": "spot",
+                }
+
+            def terminate(self, _instance: str):
+                raise AssertionError("completed observation has no active instance")
+
+        aws = RuntimeReceiptAws()
+        with self.assertRaisesRegex(ValueError, "frozen authority"):
+            run_execution_job(
+                job,
+                request={},
+                expected={
+                    "attempt_id": "runtime-0001",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": "6" * 64,
+                    "protocol_sha256": "7" * 64,
+                    "binary_sha256": "8" * 64,
+                    "purchase_option": "on-demand",
+                },
+                aws=aws,
+                timeout_seconds=60,
+                poll_seconds=0.01,
+                purchase_option="on-demand",
+            )
+        self.assertEqual(aws.purchase_option, "on-demand")
 
     def test_execution_instance_identity_is_role_cell_and_attempt_bound(self) -> None:
         manifest = unstaged_sift_manifest()
@@ -417,6 +505,10 @@ class PublicationV3ControllerTests(unittest.TestCase):
                                             {"Key": "Cell", "Value": job.cell_tag},
                                             {"Key": "Attempt", "Value": "1"},
                                             {"Key": "Role", "Value": "build"},
+                                            {
+                                                "Key": "PurchaseOption",
+                                                "Value": "spot",
+                                            },
                                             {"Key": "AutoTerminate", "Value": "true"},
                                         ],
                                     }
@@ -430,12 +522,43 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
         client = AwsCli(manifest, profile="causality", run=run)
         self.assertEqual(
-            client.find_execution_instance(job),
+            client.find_execution_instance(job, purchase_option="spot"),
             ("i-0123456789abcdef0", "running"),
         )
         joined = " ".join(commands[0])
         self.assertIn(f"Name=tag:Cell,Values={job.cell_tag}", joined)
         self.assertIn("Name=tag:Role,Values=build", joined)
+
+        on_demand_instance = {
+            "InstanceId": "i-0123456789abcdef0",
+            "State": {"Name": "running"},
+            "Tags": [
+                {"Key": "Project", "Value": "BorsukBenchmark"},
+                {"Key": "Campaign", "Value": manifest["campaign_id"]},
+                {"Key": "Cell", "Value": ExecutionJob.runtime(cell, attempt=1).cell_tag},
+                {"Key": "Attempt", "Value": "1"},
+                {"Key": "Role", "Value": "runtime"},
+                {"Key": "AutoTerminate", "Value": "true"},
+                {"Key": "PurchaseOption", "Value": "on-demand"},
+            ],
+        }
+        runtime_job = ExecutionJob.runtime(cell, attempt=1)
+        client._run = lambda command: subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps({"Reservations": [{"Instances": [on_demand_instance]}]}),
+            "",
+        )
+        self.assertEqual(
+            client.find_execution_instance(
+                runtime_job, purchase_option="on-demand"
+            ),
+            ("i-0123456789abcdef0", "running"),
+        )
+        with self.assertRaisesRegex(ValueError, "identity"):
+            client.find_execution_instance(runtime_job, purchase_option="spot")
+        with self.assertRaisesRegex(ValueError, "only for runtime"):
+            client.find_execution_instance(job, purchase_option="on-demand")
 
     def test_direct_controller_entrypoint_reaches_argparse(self) -> None:
         completed = subprocess.run(

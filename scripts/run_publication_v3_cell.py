@@ -1432,6 +1432,7 @@ def main() -> int:
     parser.add_argument("--dataset-materialization-sha256")
     parser.add_argument("--attempt-id")
     parser.add_argument("--instance-identity")
+    parser.add_argument("--purchase-option", choices=("spot", "on-demand"))
     parser.add_argument("--object-roster", type=Path)
     parser.add_argument("--index-receipt", type=Path)
     parser.add_argument("--index-inventory", type=Path)
@@ -1543,6 +1544,8 @@ def main() -> int:
         print(json.dumps(completion, sort_keys=True))
         return 0
     if args.mode == "runtime":
+        if args.purchase_option is None:
+            raise ValueError("publication runtime requires its purchase option")
         if (
             args.index_receipt is None
             or args.object_roster is None
@@ -1608,6 +1611,7 @@ def main() -> int:
                 attempt_id=str(args.attempt_id),
                 runtime=authorized_runtime,
                 source_root=source_root,
+                purchase_option=args.purchase_option,
             ),
             cell=cell,
             attempt_id=str(args.attempt_id),
@@ -1623,6 +1627,7 @@ def main() -> int:
                 attempt_id=str(args.attempt_id),
                 runtime=authorized_runtime,
                 source_root=source_root,
+                purchase_option=args.purchase_option,
             ),
             cell=cell,
             attempt_id=str(args.attempt_id),

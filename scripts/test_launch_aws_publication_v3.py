@@ -233,6 +233,7 @@ assert manifest['source']['state'] == 'frozen'
 assert manifest['source']['archive_sha256'] == hashlib.sha256(archive_path.read_bytes()).hexdigest()
 for name in ('--image-id', '--subnet-id', '--security-group-id', '--instance-profile-arn', '--attempt', '--build-attempt'):
     assert name in sys.argv
+assert sys.argv[sys.argv.index('--purchase-option') + 1] == 'on-demand'
 print(json.dumps({'role':'runtime','attempt':1}, sort_keys=True))
 """,
                 encoding="utf-8",
@@ -244,6 +245,7 @@ print(json.dumps({'role':'runtime','attempt':1}, sort_keys=True))
                 env={
                     **os.environ,
                     "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                    "BORSUK_PUBLICATION_V3_PURCHASE_OPTION": "on-demand",
                 },
                 capture_output=True,
                 text=True,

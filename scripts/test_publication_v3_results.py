@@ -79,6 +79,7 @@ def runtime_attestation_for(
         "attempt_id": "attempt-01",
         "instance_id": instance_id,
         "instance_type": client["instance_type"],
+        "purchase_option": "spot",
         "architecture": cell["environment_contract"]["architecture"],
         "vcpus": client["vcpus"],
         "memory_max_bytes": client["memory_mib"] * 1024 * 1024,

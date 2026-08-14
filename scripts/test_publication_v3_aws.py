@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import subprocess
 import sys
@@ -7,7 +8,7 @@ from pathlib import Path
 
 from scripts.publication_v3_aws import (
     AttemptObservation,
-    build_spot_launch_request,
+    build_launch_request,
     build_staging_receipt,
     build_staging_worker_script,
     classify_attempt,
@@ -59,7 +60,7 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertTrue(all("/attempts/0002/" in job.output_uri for job in retries))
 
     def test_launch_request_is_one_time_spot_hardened_and_role_sized(self) -> None:
-        request = build_spot_launch_request(
+        request = build_launch_request(
             self.manifest,
             role="runtime",
             system="borsuk",
@@ -119,13 +120,14 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertEqual(tags["Cell"], "read-sift-r01")
         self.assertEqual(tags["Attempt"], "2")
         self.assertEqual(tags["Role"], "runtime")
+        self.assertEqual(tags["PurchaseOption"], "spot")
         self.assertEqual(tags["AutoTerminate"], "true")
         self.assertEqual(
             {item["ResourceType"] for item in request["TagSpecifications"]},
             {"instance", "volume"},
         )
         with self.assertRaisesRegex(ValueError, "architecture"):
-            build_spot_launch_request(
+            build_launch_request(
                 self.manifest,
                 role="runtime",
                 system="borsuk",
@@ -140,6 +142,50 @@ class PublicationV3AwsTests(unittest.TestCase):
                 attempt=2,
                 worker_script="echo run-cell",
                 max_seconds=7200,
+            )
+
+    def test_runtime_on_demand_exception_is_explicit_tagged_and_idempotently_distinct(
+        self,
+    ) -> None:
+        common = {
+            "manifest": self.manifest,
+            "role": "runtime",
+            "system": "borsuk",
+            "image_id": "ami-0123456789abcdef0",
+            "subnet_id": "subnet-0123456789abcdef0",
+            "security_group_id": "sg-0123456789abcdef0",
+            "instance_profile_arn": "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
+            "image_architecture": "aarch64",
+            "subnet_region": "eu-central-1",
+            "campaign_id": "publication-v3-20260812",
+            "cell_id": "read-sift-r01",
+            "attempt": 2,
+            "worker_script": "echo run-cell",
+            "max_seconds": 7200,
+        }
+        spot = build_launch_request(**common, purchase_option="spot")
+        on_demand = build_launch_request(
+            **common, purchase_option="on-demand"
+        )
+        self.assertNotIn("InstanceMarketOptions", on_demand)
+        self.assertEqual(
+            spot["ClientToken"],
+            "borsuk-"
+            + hashlib.sha256(
+                ("publication-v3-20260812\0read-sift-r01\0" + "2").encode()
+            ).hexdigest()[:40],
+        )
+        self.assertNotEqual(spot["ClientToken"], on_demand["ClientToken"])
+        tags = {
+            item["Key"]: item["Value"]
+            for item in on_demand["TagSpecifications"][0]["Tags"]
+        }
+        self.assertEqual(tags["PurchaseOption"], "on-demand")
+        with self.assertRaisesRegex(ValueError, "purchase option"):
+            build_launch_request(**common, purchase_option="reserved")
+        with self.assertRaisesRegex(ValueError, "runtime"):
+            build_launch_request(
+                **{**common, "role": "build"}, purchase_option="on-demand"
             )
 
     def test_attempt_classification_uses_only_terminal_markers_and_instance_state(

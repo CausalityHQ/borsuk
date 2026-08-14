@@ -118,6 +118,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
                     attempt_id="attempt-01",
                     runtime=runtime,
                     source_root=Path(root),
+                    purchase_option="on-demand",
                     proc_self_cgroup=proc_cgroup,
                     cgroup_mount=cgroup_mount,
                 )
@@ -125,6 +126,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
         self.assertEqual(observed["memory_max_bytes"], 8 * 1024**3)
         self.assertEqual(observed["swap_max_bytes"], 0)
         self.assertEqual(observed["swap_peak_bytes"], 0)
+        self.assertEqual(observed["purchase_option"], "on-demand")
         self.assertEqual(observed["cache_limit_bytes"], 1024**3)
         self.assertRegex(observed["cache_device"], r"^[0-9]+:[0-9]+$")
         self.assertRegex(observed["root_device"], r"^[0-9]+:[0-9]+$")
@@ -144,6 +146,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
             "attempt_id": "attempt-01",
             "instance_id": "i-runtime-01",
             "instance_type": client["instance_type"],
+            "purchase_option": "spot",
             "architecture": "aarch64",
             "vcpus": client["vcpus"],
             "memory_max_bytes": client["memory_mib"] * 1024 * 1024,
@@ -168,6 +171,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
             {**value, "cell_id": "foreign-cell"},
             {**value, "attempt_id": "replayed-attempt"},
             {**value, "instance_type": "r7g.8xlarge"},
+            {**value, "purchase_option": "reserved"},
             {**value, "vcpus": value["vcpus"] + 1},
             {**value, "memory_max_bytes": value["memory_max_bytes"] + 1},
             {**value, "memory_max_bytes": value["memory_max_bytes"] - 1},

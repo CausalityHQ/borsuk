@@ -235,7 +235,11 @@ def _resource_contract(
 
 
 def _tags(
-    campaign_id: str, cell_id: str, attempt: int, role: str
+    campaign_id: str,
+    cell_id: str,
+    attempt: int,
+    role: str,
+    purchase_option: str,
 ) -> list[dict[str, str]]:
     if attempt <= 0:
         raise ValueError("attempt must be positive")
@@ -248,12 +252,13 @@ def _tags(
         "Cell": cell_id,
         "Attempt": str(attempt),
         "Role": role,
+        "PurchaseOption": purchase_option,
         "AutoTerminate": "true",
     }
     return [{"Key": key, "Value": values[key]} for key in sorted(values)]
 
 
-def build_spot_launch_request(
+def build_launch_request(
     manifest: dict[str, object],
     *,
     role: str,
@@ -269,8 +274,9 @@ def build_spot_launch_request(
     attempt: int,
     worker_script: str,
     max_seconds: int,
+    purchase_option: str = "spot",
 ) -> dict[str, object]:
-    """Build a hardened one-instance Spot request from the frozen contract."""
+    """Build a hardened launch request; Spot is the mandatory default."""
 
     normalized = validate_manifest(manifest)
     if campaign_id != normalized["campaign_id"]:
@@ -278,6 +284,10 @@ def build_spot_launch_request(
     environment = normalized["environment_contract"]
     if environment["spot_default"] is not True:
         raise ValueError("Publication V3 requires Spot by default")
+    if purchase_option not in {"spot", "on-demand"}:
+        raise ValueError("purchase option must be spot or on-demand")
+    if purchase_option != "spot" and role != "runtime":
+        raise ValueError("on-demand exception is allowed only for runtime")
     resources, storage = _resource_contract(normalized, role, system)
     if image_architecture != environment["architecture"]:
         raise ValueError("AMI architecture differs from the manifest architecture")
@@ -338,26 +348,22 @@ timeout --signal=TERM --kill-after=60 {max_seconds} /bin/bash /var/lib/borsuk-pu
     ]
     if role == "runtime":
         block_devices.append({"DeviceName": "/dev/sdf", "Ebs": volume})
-    return {
+    request: dict[str, object] = {
         "ImageId": image_id,
         "InstanceType": resources["instance_type"],
         "MinCount": 1,
         "MaxCount": 1,
         "ClientToken": "borsuk-"
         + hashlib.sha256(
-            f"{campaign_id}\0{cell_id}\0{attempt}".encode("utf-8")
+            (
+                f"{campaign_id}\0{cell_id}\0{attempt}"
+                + ("" if purchase_option == "spot" else "\0on-demand")
+            ).encode("utf-8")
         ).hexdigest()[:40],
         "UserData": encoded_user_data,
         "SecurityGroupIds": [security_group_id],
         "SubnetId": subnet_id,
         "IamInstanceProfile": {"Arn": instance_profile_arn},
-        "InstanceMarketOptions": {
-            "MarketType": "spot",
-            "SpotOptions": {
-                "SpotInstanceType": "one-time",
-                "InstanceInterruptionBehavior": "terminate",
-            },
-        },
         "InstanceInitiatedShutdownBehavior": "terminate",
         "MetadataOptions": {
             "HttpEndpoint": "enabled",
@@ -368,11 +374,22 @@ timeout --signal=TERM --kill-after=60 {max_seconds} /bin/bash /var/lib/borsuk-pu
         "TagSpecifications": [
             {
                 "ResourceType": resource_type,
-                "Tags": _tags(campaign_id, cell_id, attempt, role),
+                "Tags": _tags(
+                    campaign_id, cell_id, attempt, role, purchase_option
+                ),
             }
             for resource_type in ("instance", "volume")
         ],
     }
+    if purchase_option == "spot":
+        request["InstanceMarketOptions"] = {
+            "MarketType": "spot",
+            "SpotOptions": {
+                "SpotInstanceType": "one-time",
+                "InstanceInterruptionBehavior": "terminate",
+            },
+        }
+    return request
 
 
 def classify_attempt(observation: AttemptObservation) -> AttemptDecision:

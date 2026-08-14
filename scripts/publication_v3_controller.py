@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 if __package__:
     from scripts.publication_v3_aws import (
-        build_spot_launch_request,
+        build_launch_request,
         build_staging_worker_script,
         staging_jobs,
         validate_staging_receipt,
@@ -32,7 +32,7 @@ if __package__:
     from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
 else:
     from publication_v3_aws import (
-        build_spot_launch_request,
+        build_launch_request,
         build_staging_worker_script,
         staging_jobs,
         validate_staging_receipt,
@@ -222,7 +222,13 @@ class AwsCli:
             raise ValueError("EC2 instance identity differs from staging attempt")
         return str(instance["InstanceId"]), str(instance["State"]["Name"])
 
-    def find_execution_instance(self, job: Any) -> tuple[str, str] | None:
+    def find_execution_instance(
+        self, job: Any, *, purchase_option: str = "spot"
+    ) -> tuple[str, str] | None:
+        if purchase_option not in {"spot", "on-demand"}:
+            raise ValueError("execution purchase option must be spot or on-demand")
+        if purchase_option != "spot" and job.role != "runtime":
+            raise ValueError("on-demand exception is allowed only for runtime")
         completed = self._run(
             [
                 "ec2",
@@ -259,14 +265,19 @@ class AwsCli:
             "Cell": job.cell_tag,
             "Attempt": str(job.attempt),
             "Role": job.role,
+            "PurchaseOption": purchase_option,
             "AutoTerminate": "true",
         }
+        lifecycle = instance.get("InstanceLifecycle")
+        lifecycle_matches = (
+            lifecycle == "spot" if purchase_option == "spot" else lifecycle is None
+        )
         if (
             any(
                 tags.get(key) != expected_value
                 for key, expected_value in expected.items()
             )
-            or instance.get("InstanceLifecycle") != "spot"
+            or not lifecycle_matches
         ):
             raise ValueError("EC2 instance identity differs from execution attempt")
         return str(instance["InstanceId"]), str(instance["State"]["Name"])
@@ -418,7 +429,7 @@ def stage_dataset(
                         manifest_uri=manifest_uri,
                         manifest_sha256=manifest_sha256,
                     )
-                    request = build_spot_launch_request(
+                    request = build_launch_request(
                         normalized,
                         role="staging",
                         system="borsuk",
@@ -456,10 +467,13 @@ def run_execution_job(
     aws: Any,
     timeout_seconds: int,
     poll_seconds: float = 15.0,
+    purchase_option: str = "spot",
 ) -> dict[str, object]:
     if timeout_seconds <= 0 or poll_seconds <= 0:
         raise ValueError("execution timeout and poll interval must be positive")
-    instance = aws.find_execution_instance(job)
+    if expected.get("purchase_option") != purchase_option:
+        raise ValueError("execution authority differs from purchase option")
+    instance = aws.find_execution_instance(job, purchase_option=purchase_option)
     deadline = time.monotonic() + timeout_seconds + 15 * 60
     try:
         while True:
@@ -518,15 +532,22 @@ def completed_build_authority(
         raise ValueError("build terminal markers conflict")
     if markers != ("complete",):
         raise ValueError("required build is not complete")
+    if set(expected) != {
+        "source_archive_sha256",
+        "manifest_sha256",
+        "protocol_sha256",
+    }:
+        raise ValueError("build authority fields differ")
     value = aws.read_receipt(job)
     required: dict[str, object] = {
+        **expected,
         "schema_version": 1,
         "status": "complete",
         "role": "build",
         "attempt": job.attempt,
         "attempt_id": f"{job.cell_tag}-a{job.attempt:04d}",
         "index_uri": job.index_uri,
-        **expected,
+        "purchase_option": "spot",
     }
     if any(value.get(key) != expected_value for key, expected_value in required.items()):
         raise ValueError("completed build differs from frozen runtime authority")
@@ -555,6 +576,7 @@ def prepare_qualification_execution(
     aws: Any,
     attempt: int = 1,
     build_attempt: int = 1,
+    purchase_option: str = "spot",
 ) -> PreparedExecution:
     """Prepare one immutable SIFT qualification execution."""
 
@@ -563,6 +585,10 @@ def prepare_qualification_execution(
         raise ValueError("unsupported qualification execution")
     if attempt <= 0 or build_attempt <= 0:
         raise ValueError("qualification attempts must be positive")
+    if purchase_option not in {"spot", "on-demand"}:
+        raise ValueError("purchase option must be spot or on-demand")
+    if operation == "build-sift" and purchase_option != "spot":
+        raise ValueError("build execution must use Spot")
     cell = qualification_cell(
         normalized,
         dataset_id="sift-128",
@@ -580,6 +606,7 @@ def prepare_qualification_execution(
         "source_archive_sha256": source_sha256,
         "manifest_sha256": manifest_sha256,
         "protocol_sha256": protocol_sha256,
+        "purchase_option": purchase_option,
     }
     if job.role == "build":
         worker = build_worker_script(
@@ -618,11 +645,12 @@ def prepare_qualification_execution(
             binary_sha256=authority["binary_sha256"],
             attempt_id=attempt_id,
             terminal_prefix=job.terminal_prefix,
+            purchase_option=purchase_option,
         )
         maximum = int(normalized["budget_contract"]["max_cell_seconds"])
         role = "runtime"
         expected["binary_sha256"] = authority["binary_sha256"]
-    request = build_spot_launch_request(
+    request = build_launch_request(
         normalized,
         role=role,
         system="borsuk",
@@ -637,6 +665,7 @@ def prepare_qualification_execution(
         attempt=job.attempt,
         worker_script=worker,
         max_seconds=maximum,
+        purchase_option=purchase_option,
     )
     return PreparedExecution(job, request, expected, maximum)
 
@@ -673,6 +702,9 @@ def main() -> int:
     runtime.add_argument("--instance-profile-arn", required=True)
     runtime.add_argument("--attempt", type=int, default=1)
     runtime.add_argument("--build-attempt", type=int, default=1)
+    runtime.add_argument(
+        "--purchase-option", choices=("spot", "on-demand"), default="spot"
+    )
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -748,6 +780,7 @@ def main() -> int:
             aws=aws,
             attempt=getattr(args, "attempt", 1),
             build_attempt=getattr(args, "build_attempt", 1),
+            purchase_option=getattr(args, "purchase_option", "spot"),
         )
         receipt = run_execution_job(
             prepared.job,
@@ -755,6 +788,7 @@ def main() -> int:
             expected=prepared.expected,
             aws=aws,
             timeout_seconds=prepared.timeout_seconds,
+            purchase_option=getattr(args, "purchase_option", "spot"),
         )
     print(canonical_json_bytes(receipt).decode("utf-8"))
     return 0

@@ -26,6 +26,7 @@ FIELDS = frozenset(
         "attempt_id",
         "instance_id",
         "instance_type",
+        "purchase_option",
         "architecture",
         "vcpus",
         "memory_max_bytes",
@@ -241,9 +242,12 @@ def collect_runtime_attestation(
     attempt_id: str,
     runtime: dict[str, object],
     source_root: Path,
+    purchase_option: str,
     proc_self_cgroup: Path = Path("/proc/self/cgroup"),
     cgroup_mount: Path = Path("/sys/fs/cgroup"),
 ) -> dict[str, object]:
+    if purchase_option not in {"spot", "on-demand"}:
+        raise ValueError("runtime purchase option must be spot or on-demand")
     environment = cell.get("environment_contract")
     clients = (
         environment.get("runtime_clients") if isinstance(environment, dict) else None
@@ -276,6 +280,7 @@ def collect_runtime_attestation(
         "attempt_id": attempt_id,
         "instance_id": identity.get("instanceId"),
         "instance_type": identity.get("instanceType"),
+        "purchase_option": purchase_option,
         "architecture": platform.machine(),
         "vcpus": vcpus,
         "memory_max_bytes": memory_max_bytes,
@@ -322,6 +327,8 @@ def validate_runtime_attestation(
         raise ValueError("runtime attestation has no scheduled host contract")
     if value["instance_type"] != client.get("instance_type"):
         raise ValueError("runtime instance type differs from its contract")
+    if value["purchase_option"] not in {"spot", "on-demand"}:
+        raise ValueError("runtime purchase option is invalid")
     if value["architecture"] != environment.get("architecture"):
         raise ValueError("runtime architecture differs from its contract")
     if _positive(value["vcpus"], "runtime vCPUs") != client.get("vcpus"):

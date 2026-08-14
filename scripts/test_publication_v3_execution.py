@@ -125,6 +125,9 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         )
         self.assertIn("BUILD_TERMINAL_COMPLETE.json", script)
         self.assertIn("BUILD_TERMINAL_FAILED.json", script)
+        self.assertIn("instance-life-cycle", script)
+        self.assertIn('test "$instance_purchase_option" = spot', script)
+        self.assertIn('"purchase_option":"%s"', script)
         self.assertIn('"stage":"%s"', script)
         self.assertIn('exec > >(tee -a "$work/worker.log") 2>&1', script)
         self.assertIn('detail_log="$work/cell/build/step-00.log"', script)
@@ -168,6 +171,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             binary_sha256="8" * 64,
             attempt_id="runtime-0001",
             terminal_prefix="s3://bucket/results/cell/runtime/attempts/0001",
+            purchase_option="on-demand",
         )
         self.assertNotIn("cargo ", script)
         self.assertNotIn("rustup", script)
@@ -185,6 +189,11 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("RESULT_COMPLETE.json", script)
         self.assertIn("RUNTIME_TERMINAL_COMPLETE.json", script)
         self.assertIn("RUNTIME_TERMINAL_FAILED.json", script)
+        self.assertIn("instance-life-cycle", script)
+        self.assertIn('test "$instance_purchase_option" = on-demand', script)
+        self.assertIn('"purchase_option":"%s"', script)
+        self.assertIn('--purchase-option "$instance_purchase_option"', script)
+        self.assertLess(script.index("stage=attest-purchase"), script.index("stage=provision"))
         self.assertIn("stage=mount-cache", script)
         self.assertIn("stage=verify-index", script)
         self.assertIn("stage=execute-runtime", script)
