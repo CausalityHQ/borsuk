@@ -252,7 +252,7 @@ def build_worker_script(
         source /root/.cargo/env
         cd "$work/source"
         stage=compile
-        cargo build --locked --release --example production_bench --example generate_synthetic_dataset
+        cargo build --locked --release --example production_bench --example rest_app_bench --example generate_synthetic_dataset
         stage=stage-dataset
         mkdir -p "$work/cell/dataset"
         {dataset_step}
@@ -272,6 +272,11 @@ def build_worker_script(
         put_immutable "$binary" {_q(terminal_prefix + "/production_bench")}
         printf '{{"schema_version":1,"sha256":"%s","bytes":%s}}\n' "$binary_sha" "$(stat -c %s "$binary")" >"$work/BINARY_COMPLETE.json"
         put_immutable "$work/BINARY_COMPLETE.json" {_q(terminal_prefix + "/BINARY_COMPLETE.json")}
+        rest_binary="$work/source/target/release/examples/rest_app_bench"
+        rest_binary_sha=$(sha256sum "$rest_binary" | awk '{{print $1}}')
+        put_immutable "$rest_binary" {_q(terminal_prefix + "/rest_app_bench")}
+        printf '{{"schema_version":1,"sha256":"%s","bytes":%s}}\n' "$rest_binary_sha" "$(stat -c %s "$rest_binary")" >"$work/REST_BINARY_COMPLETE.json"
+        put_immutable "$work/REST_BINARY_COMPLETE.json" {_q(terminal_prefix + "/REST_BINARY_COMPLETE.json")}
         stage=build-index
         detail_log="$work/cell/build/step-00.log"
         "$work/venv/bin/python" scripts/run_publication_v3_cell.py "$work/protocol.json" "$work/cell" \
@@ -295,7 +300,7 @@ def build_worker_script(
           path="$work/$name"; [[ -f "$path" ]] || path="$work/cell/$name"
           put_immutable "$path" {_q(terminal_prefix)}/$name
         done
-        printf '{{"schema_version":1,"status":"complete","role":"build","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"index_uri":{_j(job.index_uri)},"binary_sha256":"%s","purchase_option":"%s"}}\n' "$instance_id" "$binary_sha" "$instance_purchase_option" >"$work/complete.json"
+        printf '{{"schema_version":1,"status":"complete","role":"build","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"index_uri":{_j(job.index_uri)},"binary_sha256":"%s","rest_binary_sha256":"%s","purchase_option":"%s"}}\n' "$instance_id" "$binary_sha" "$rest_binary_sha" "$instance_purchase_option" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/BUILD_TERMINAL_COMPLETE.json")}
         complete=1
         """

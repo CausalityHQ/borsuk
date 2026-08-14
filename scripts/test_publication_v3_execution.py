@@ -101,6 +101,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn(
             "cargo build --locked --release --example production_bench", script
         )
+        self.assertIn("--example rest_app_bench", script)
         self.assertIn("length(Contents || `[]`)", script)
         self.assertNotIn("length(Contents)'", script)
         self.assertIn("object_count=$(aws s3api list-objects-v2", script)
@@ -119,6 +120,12 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             'binary="$work/source/target/release/examples/production_bench"',
             script,
         )
+        self.assertIn(
+            'rest_binary="$work/source/target/release/examples/rest_app_bench"',
+            script,
+        )
+        self.assertIn("REST_BINARY_COMPLETE.json", script)
+        self.assertIn('"rest_binary_sha256":"%s"', script)
         self.assertIn(
             '--generator "$work/source/target/release/examples/generate_synthetic_dataset"',
             script,
