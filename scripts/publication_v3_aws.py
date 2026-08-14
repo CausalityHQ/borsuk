@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
+import gzip
 import hashlib
 import json
 import re
@@ -306,7 +307,9 @@ def build_launch_request(
         raise ValueError("worker timeout exceeds the manifest budget")
     if not worker_script or "\x00" in worker_script:
         raise ValueError("worker script must be nonempty UTF-8 text")
-    worker_payload = base64.b64encode(worker_script.encode("utf-8")).decode("ascii")
+    worker_payload = base64.b64encode(
+        gzip.compress(worker_script.encode("utf-8"), mtime=0)
+    ).decode("ascii")
     user_data = f"""#!/usr/bin/env bash
 set -euo pipefail
 export HOME=/root
@@ -317,7 +320,7 @@ finish() {{
   exit "$status"
 }}
 trap finish EXIT
-printf '%s' '{worker_payload}' | base64 -d >/var/lib/borsuk-publication-worker.sh
+printf '%s' '{worker_payload}' | base64 -d | gzip -d >/var/lib/borsuk-publication-worker.sh
 chmod 700 /var/lib/borsuk-publication-worker.sh
 timeout --signal=TERM --kill-after=60 {max_seconds} /bin/bash /var/lib/borsuk-publication-worker.sh
 """

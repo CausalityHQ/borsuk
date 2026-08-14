@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import json
 import os
@@ -200,8 +201,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertNotIn("InstanceMarketOptions", prepared.request)
         self.assertEqual(tags["Cell"], prepared.job.cell_tag)
         user_data = base64.b64decode(prepared.request["UserData"]).decode()
+        self.assertLess(len(prepared.request["UserData"].encode()), 16 * 1024)
         worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
-        worker = base64.b64decode(worker_payload).decode()
+        worker = gzip.decompress(base64.b64decode(worker_payload)).decode()
         self.assertIn(build_job.terminal_prefix, worker)
         self.assertIn("8" * 64, worker)
         self.assertEqual(prepared.timeout_seconds, 7200)
@@ -225,8 +227,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
             build_attempt=1,
         )
         concurrency_user_data = base64.b64decode(concurrency.request["UserData"]).decode()
+        self.assertLess(len(concurrency.request["UserData"].encode()), 16 * 1024)
         concurrency_payload = concurrency_user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
-        concurrency_worker = base64.b64decode(concurrency_payload).decode()
+        concurrency_worker = gzip.decompress(base64.b64decode(concurrency_payload)).decode()
         self.assertIn("--runtime-profile concurrency", concurrency_worker)
         self.assertEqual(concurrency.expected["runtime_profile"], "concurrency")
         self.assertEqual(concurrency.expected["max_concurrent_searches"], 4)

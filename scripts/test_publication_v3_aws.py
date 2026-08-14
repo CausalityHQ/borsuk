@@ -1,4 +1,5 @@
 import base64
+import gzip
 import hashlib
 import json
 import subprocess
@@ -94,7 +95,9 @@ class PublicationV3AwsTests(unittest.TestCase):
         user_data = base64.b64decode(request["UserData"]).decode("utf-8")
         self.assertIn("timeout --signal=TERM --kill-after=60 7200", user_data)
         self.assertIn("shutdown -h now", user_data)
-        self.assertIn(base64.b64encode(b"echo run-cell").decode("ascii"), user_data)
+        payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        self.assertEqual(gzip.decompress(base64.b64decode(payload)), b"echo run-cell")
+        self.assertIn("base64 -d | gzip -d", user_data)
         self.assertIn("export HOME=/root", user_data)
         self.assertLess(
             user_data.index("export HOME=/root"),
