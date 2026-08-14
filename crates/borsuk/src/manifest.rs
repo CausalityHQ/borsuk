@@ -80,6 +80,11 @@ pub const DEFAULT_WAL_FLUSH_THRESHOLD_RECORDS: usize = 16_384;
 pub const DEFAULT_WAL_FLUSH_THRESHOLD_BYTES: u64 = 32 * 1024 * 1024;
 /// Default aggregate unflushed WAL ceiling for the complete collection.
 pub const DEFAULT_WAL_COLLECTION_FLUSH_THRESHOLD_BYTES: u64 = 256 * 1024 * 1024;
+/// Prepared dense-vector working-set target for one bulk materialization wave.
+/// This leaves half of the default 128 MiB collection-resident partition for
+/// the immutable catalog/router and fixed snapshot metadata.
+pub const BULK_LOAD_PREPARED_VECTOR_BYTES: usize = 64 * 1024 * 1024;
+const BULK_LOAD_PRIMARY_ROW_OVERHEAD_BYTES: usize = 64;
 
 impl Default for WalConfig {
     fn default() -> Self {
@@ -104,17 +109,25 @@ impl WalConfig {
     ///
     /// Every caller batch remains one independently durable positioned
     /// transaction. Routine materialization is deferred until the complete
-    /// pending-receipt window is reached, which avoids a flush-per-batch
-    /// resonance. If a source shard reaches its independent row or byte bound
-    /// first, append backpressure materializes the committed prefix and retries
-    /// the unchanged transaction.
-    pub fn bulk_load() -> Self {
+    /// pending-receipt window or a dimension-aware 64 MiB prepared-vector wave
+    /// is reached, which avoids flush-per-batch resonance without filling the
+    /// default collection-resident partition. If a source shard reaches its
+    /// independent row or byte bound first, append backpressure materializes
+    /// the committed prefix and retries the unchanged transaction.
+    pub fn bulk_load(dimensions: usize) -> Self {
+        let prepared_bytes_per_row = dimensions
+            .max(1)
+            .saturating_mul(std::mem::size_of::<f32>())
+            .saturating_add(BULK_LOAD_PRIMARY_ROW_OVERHEAD_BYTES);
         Self {
             enabled: true,
             flush_threshold_runs: crate::positioned_log::MAX_PENDING_ENVELOPES_PER_SHARD,
-            flush_threshold_records: 0,
-            flush_threshold_bytes: 0,
-            collection_flush_threshold_bytes: 0,
+            flush_threshold_records: BULK_LOAD_PREPARED_VECTOR_BYTES
+                .checked_div(prepared_bytes_per_row)
+                .unwrap_or(0)
+                .max(1),
+            flush_threshold_bytes: BULK_LOAD_PREPARED_VECTOR_BYTES as u64,
+            collection_flush_threshold_bytes: BULK_LOAD_PREPARED_VECTOR_BYTES as u64,
         }
     }
 
@@ -133,16 +146,19 @@ mod wal_config_tests {
 
     #[test]
     fn bulk_load_wal_uses_the_positioned_receipt_window() {
-        let wal = WalConfig::bulk_load();
+        let wal = WalConfig::bulk_load(128);
+        let wide = WalConfig::bulk_load(768);
 
         assert!(wal.enabled);
         assert_eq!(
             wal.flush_threshold_runs,
             crate::positioned_log::MAX_PENDING_ENVELOPES_PER_SHARD
         );
-        assert_eq!(wal.flush_threshold_records, 0);
-        assert_eq!(wal.flush_threshold_bytes, 0);
-        assert_eq!(wal.collection_flush_threshold_bytes, 0);
+        assert_eq!(wal.flush_threshold_records, 116_508);
+        assert_eq!(wide.flush_threshold_records, 21_399);
+        assert!(wide.flush_threshold_records < wal.flush_threshold_records);
+        assert_eq!(wal.flush_threshold_bytes, 64 * 1024 * 1024);
+        assert_eq!(wal.collection_flush_threshold_bytes, 64 * 1024 * 1024);
     }
 }
 

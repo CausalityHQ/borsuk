@@ -561,7 +561,7 @@ fn run() -> BenchResult<()> {
         // would otherwise force one synchronous half-size segment per batch.
         // A shard that reaches its row/byte cap earlier self-materializes its
         // committed prefix before the unchanged append is retried.
-        let wal = WalConfig::bulk_load();
+        let wal = WalConfig::bulk_load(dataset.meta.dim);
         let mut index = match (&config.logical_cell_catalog, config.logical_cells) {
             (Some(path), Some(expected_cells)) => {
                 let centroids = read_logical_cell_catalog(path, expected_cells, dataset.meta.dim)?;
