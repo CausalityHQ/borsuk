@@ -325,6 +325,15 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 read_build_artifact(output, cell=cell)
             phase_names = (
                 "logical_cell_routing",
+                "positioned_wal_encode",
+                "positioned_id_directory_encode",
+                "positioned_payload_assembly",
+                "positioned_payload_stamp_scan",
+                "positioned_route_source_decode",
+                "positioned_route_plan_build",
+                "positioned_route_plan_encode",
+                "positioned_transaction_metadata",
+                "positioned_append_prepare",
                 "segment_centroid_radius",
                 "segment_routing_codes",
                 "segment_pq_bounds",
@@ -353,7 +362,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(metrics["storage_puts"], 11)
         self.assertEqual(metrics["storage_bytes_read"], 654321)
         self.assertEqual(metrics["storage_bytes_written"], 123456)
-        self.assertEqual(artifact["phase_timings"]["rows"], 26)
+        self.assertEqual(artifact["phase_timings"]["rows"], 44)
         self.assertEqual(len(artifact["phase_timings"]["sha256"]), 64)
         resource = build_receipt_metrics(
             {

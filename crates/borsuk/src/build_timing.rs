@@ -18,6 +18,15 @@ use std::time::Instant;
 #[derive(Clone, Copy)]
 pub(crate) enum Phase {
     LogicalCellRouting,
+    PositionedWalEncode,
+    PositionedIdDirectoryEncode,
+    PositionedPayloadAssembly,
+    PositionedPayloadStampScan,
+    PositionedRouteSourceDecode,
+    PositionedRoutePlanBuild,
+    PositionedRoutePlanEncode,
+    PositionedTransactionMetadata,
+    PositionedAppendPrepare,
     SegmentCentroidRadius,
     SegmentRoutingCodes,
     SegmentPqBounds,
@@ -32,10 +41,19 @@ pub(crate) enum Phase {
     LocalitySort,
 }
 
-const PHASE_COUNT: usize = 13;
+const PHASE_COUNT: usize = 22;
 
 const PHASE_NAMES: [&str; PHASE_COUNT] = [
     "logical_cell_routing",
+    "positioned_wal_encode",
+    "positioned_id_directory_encode",
+    "positioned_payload_assembly",
+    "positioned_payload_stamp_scan",
+    "positioned_route_source_decode",
+    "positioned_route_plan_build",
+    "positioned_route_plan_encode",
+    "positioned_transaction_metadata",
+    "positioned_append_prepare",
     "segment_centroid_radius",
     "segment_routing_codes",
     "segment_pq_bounds",
@@ -150,8 +168,21 @@ mod tests {
     use super::{PHASE_COUNT, PHASE_NAMES, write_phase_csv};
 
     #[test]
-    fn phase_catalog_includes_logical_cell_routing() {
-        assert!(PHASE_NAMES.contains(&"logical_cell_routing"));
+    fn phase_catalog_covers_positioned_append_preparation() {
+        for phase in [
+            "logical_cell_routing",
+            "positioned_wal_encode",
+            "positioned_id_directory_encode",
+            "positioned_payload_assembly",
+            "positioned_payload_stamp_scan",
+            "positioned_route_source_decode",
+            "positioned_route_plan_build",
+            "positioned_route_plan_encode",
+            "positioned_transaction_metadata",
+            "positioned_append_prepare",
+        ] {
+            assert!(PHASE_NAMES.contains(&phase), "missing phase {phase}");
+        }
     }
 
     #[test]
@@ -181,7 +212,7 @@ mod tests {
         assert_eq!(lines[1], "1,ingest,logical_cell_routing,1,2");
         assert_eq!(
             lines.last().copied(),
-            Some("1,compaction,locality_sort,113,114")
+            Some("1,compaction,locality_sort,122,123")
         );
     }
 }

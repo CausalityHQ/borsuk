@@ -5800,58 +5800,69 @@ impl BorsukIndex {
         batch: &CanonicalMutationBatch,
         summary_stamp: MutationStamp,
     ) -> Result<Vec<PositionedRoutePlanRow>> {
-        let record_runs = batch
-            .runs
-            .iter()
-            .filter(|run| {
-                run.modality == PRIMARY_MODALITY && run.input.kind == CellWalRunKind::Records
-            })
-            .collect::<Vec<_>>();
-        if record_runs.len() > 1 {
-            return Err(BorsukError::InvalidStorage(
-                "positioned transaction contains multiple primary record payloads".to_string(),
-            ));
-        }
-        let primary_records = record_runs
-            .first()
-            .map(|run| {
-                positioned_wal_records_from_table(
-                    run.input.bytes.clone(),
-                    "positioned-primary.parquet",
-                )
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let directory_runs = batch
-            .runs
-            .iter()
-            .filter(|run| {
-                run.modality == PRIMARY_MODALITY && run.input.kind == CellWalRunKind::IdDirectory
-            })
-            .collect::<Vec<_>>();
-        if directory_runs.len() != 1 {
-            return Err(BorsukError::InvalidStorage(
-                "positioned transaction must contain exactly one primary ID-directory payload"
-                    .to_string(),
-            ));
-        }
-        let id_directory = cell_wal_id_directory_from_slice(
-            &directory_runs[0].input.bytes,
-            "positioned ID-directory payload",
+        let (primary_records, id_directory) = crate::build_timing::timed(
+            crate::build_timing::Phase::PositionedRouteSourceDecode,
+            || {
+                let record_runs = batch
+                    .runs
+                    .iter()
+                    .filter(|run| {
+                        run.modality == PRIMARY_MODALITY
+                            && run.input.kind == CellWalRunKind::Records
+                    })
+                    .collect::<Vec<_>>();
+                if record_runs.len() > 1 {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned transaction contains multiple primary record payloads"
+                            .to_string(),
+                    ));
+                }
+                let primary_records = record_runs
+                    .first()
+                    .map(|run| {
+                        positioned_wal_records_from_table(
+                            run.input.bytes.clone(),
+                            "positioned-primary.parquet",
+                        )
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let directory_runs = batch
+                    .runs
+                    .iter()
+                    .filter(|run| {
+                        run.modality == PRIMARY_MODALITY
+                            && run.input.kind == CellWalRunKind::IdDirectory
+                    })
+                    .collect::<Vec<_>>();
+                if directory_runs.len() != 1 {
+                    return Err(BorsukError::InvalidStorage(
+                        "positioned transaction must contain exactly one primary ID-directory payload"
+                            .to_string(),
+                    ));
+                }
+                let id_directory = cell_wal_id_directory_from_slice(
+                    &directory_runs[0].input.bytes,
+                    "positioned ID-directory payload",
+                )?;
+                Ok::<_, BorsukError>((primary_records, id_directory))
+            },
         )?;
         let named_manifests = self
             .named
             .iter()
             .map(|(name, child)| (name.clone(), child.manifest.clone()))
             .collect::<BTreeMap<_, _>>();
-        self.expected_positioned_route_plan(
-            &self.manifest,
-            &named_manifests,
-            &primary_records,
-            &id_directory,
-            summary_stamp,
-            None,
-        )
+        crate::build_timing::timed(crate::build_timing::Phase::PositionedRoutePlanBuild, || {
+            self.expected_positioned_route_plan(
+                &self.manifest,
+                &named_manifests,
+                &primary_records,
+                &id_directory,
+                summary_stamp,
+                None,
+            )
+        })
     }
 
     fn validate_positioned_route_plan_rows(
@@ -7095,36 +7106,42 @@ impl BorsukIndex {
             })
             .map(|run| run.input.record_count)
             .sum();
-        let mut payloads = batch
-            .runs
-            .iter()
-            .filter(|run| {
-                run.modality == PRIMARY_MODALITY && run.input.kind != CellWalRunKind::Tombstones
-            })
-            .map(|run| {
-                Ok(PositionedMutationPayloadInput {
-                    modality: self.positioned_modality_for_run(run),
-                    role: Self::positioned_role(run)?,
-                    id_bloom: if run.input.kind == CellWalRunKind::IdDirectory {
-                        validate_positioned_id_directory_bloom(
-                            &run.input.metadata,
-                            run.input.record_count,
-                            "staged positioned ID-directory run",
-                        )?
-                        .to_vec()
-                    } else {
-                        Vec::new()
-                    },
-                    format: PositionedPayloadFormat::Parquet,
-                    bytes: run.input.bytes.clone(),
-                    rows: u64::try_from(run.input.record_count).map_err(|_| {
-                        BorsukError::InvalidStorage(
-                            "positioned mutation row count exceeds u64".to_string(),
-                        )
-                    })?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut payloads = crate::build_timing::timed(
+            crate::build_timing::Phase::PositionedPayloadAssembly,
+            || {
+                batch
+                    .runs
+                    .iter()
+                    .filter(|run| {
+                        run.modality == PRIMARY_MODALITY
+                            && run.input.kind != CellWalRunKind::Tombstones
+                    })
+                    .map(|run| {
+                        Ok(PositionedMutationPayloadInput {
+                            modality: self.positioned_modality_for_run(run),
+                            role: Self::positioned_role(run)?,
+                            id_bloom: if run.input.kind == CellWalRunKind::IdDirectory {
+                                validate_positioned_id_directory_bloom(
+                                    &run.input.metadata,
+                                    run.input.record_count,
+                                    "staged positioned ID-directory run",
+                                )?
+                                .to_vec()
+                            } else {
+                                Vec::new()
+                            },
+                            format: PositionedPayloadFormat::Parquet,
+                            bytes: run.input.bytes.clone(),
+                            rows: u64::try_from(run.input.record_count).map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "positioned mutation row count exceeds u64".to_string(),
+                                )
+                            })?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()
+            },
+        )?;
         let mut positioned_tombstones = Vec::new();
         for run in batch
             .runs
@@ -7188,29 +7205,40 @@ impl BorsukIndex {
                 rows,
             });
         }
-        let mut stamp = None::<MutationStamp>;
-        for payload in &payloads {
-            let metadata =
-                positioned_payload_metadata(&payload.bytes, payload.format, payload.rows)?;
-            let candidate = MutationStamp::new(
-                MutationVersion::from_parts(metadata.min_stamp.hlc, metadata.min_stamp.writer),
-                metadata.min_stamp.digest,
-            );
-            stamp = Some(stamp.map_or(candidate, |current| {
-                if candidate.version() < current.version() {
-                    candidate
-                } else {
-                    current
+        let stamp = crate::build_timing::timed(
+            crate::build_timing::Phase::PositionedPayloadStampScan,
+            || {
+                let mut stamp = None::<MutationStamp>;
+                for payload in &payloads {
+                    let metadata =
+                        positioned_payload_metadata(&payload.bytes, payload.format, payload.rows)?;
+                    let candidate = MutationStamp::new(
+                        MutationVersion::from_parts(
+                            metadata.min_stamp.hlc,
+                            metadata.min_stamp.writer,
+                        ),
+                        metadata.min_stamp.digest,
+                    );
+                    stamp = Some(stamp.map_or(candidate, |current| {
+                        if candidate.version() < current.version() {
+                            candidate
+                        } else {
+                            current
+                        }
+                    }));
                 }
-            }));
-        }
-        let stamp = stamp.ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "positioned mutation has no typed mutation rows".to_string(),
-            )
-        })?;
+                stamp.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "positioned mutation has no typed mutation rows".to_string(),
+                    )
+                })
+            },
+        )?;
         let route_rows = self.positioned_route_plan_for_batch(&batch, stamp)?;
-        let route_bytes = positioned_route_plan_to_parquet(&route_rows)?;
+        let route_bytes = crate::build_timing::timed(
+            crate::build_timing::Phase::PositionedRoutePlanEncode,
+            || positioned_route_plan_to_parquet(&route_rows),
+        )?;
         let route_row_count = u64::try_from(route_rows.len()).map_err(|_| {
             BorsukError::InvalidStorage("positioned route-plan rows exceed u64".to_string())
         })?;
@@ -7253,7 +7281,10 @@ impl BorsukIndex {
             })
             .collect::<Vec<_>>();
         if !metadata_rows.is_empty() {
-            let bytes = positioned_transaction_metadata_to_parquet(&metadata_rows)?;
+            let bytes = crate::build_timing::timed(
+                crate::build_timing::Phase::PositionedTransactionMetadata,
+                || positioned_transaction_metadata_to_parquet(&metadata_rows),
+            )?;
             payloads.push(PositionedMutationPayloadInput {
                 modality: PositionedMutationModality::IdDirectory,
                 role: "transaction_metadata_v2".to_string(),
@@ -7263,15 +7294,19 @@ impl BorsukIndex {
                 bytes,
             });
         }
-        let prepared = self
-            .positioned_log
-            .as_ref()
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "positioned mutation append requires the collection root".to_string(),
-                )
-            })?
-            .prepare_append(&batch.transaction_id, &batch.schema_fingerprint, payloads)?;
+        let prepared = crate::build_timing::timed(
+            crate::build_timing::Phase::PositionedAppendPrepare,
+            || {
+                self.positioned_log
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "positioned mutation append requires the collection root".to_string(),
+                        )
+                    })?
+                    .prepare_append(&batch.transaction_id, &batch.schema_fingerprint, payloads)
+            },
+        )?;
         let committed = match self
             .positioned_log
             .as_ref()
@@ -11633,7 +11668,10 @@ impl BorsukIndex {
                     right.0.id.as_bytes(),
                 ))
             });
-            let (bytes, extension) = self.wal_object_bytes(&bundled_records)?;
+            let (bytes, extension) = crate::build_timing::timed(
+                crate::build_timing::Phase::PositionedWalEncode,
+                || self.wal_object_bytes(&bundled_records),
+            )?;
             inputs.push(CellWalRunInput {
                 cell: bundle_cell,
                 kind: CellWalRunKind::Records,
@@ -11701,7 +11739,10 @@ impl BorsukIndex {
             // consumes one bounded payload reference, never one object per
             // routing partition.
             bundled_directory.sort_by(|left, right| left.id.cmp(&right.id));
-            let bytes = cell_wal_id_directory_bytes(&bundled_directory)?;
+            let bytes = crate::build_timing::timed(
+                crate::build_timing::Phase::PositionedIdDirectoryEncode,
+                || cell_wal_id_directory_bytes(&bundled_directory),
+            )?;
             let metadata = crate::manifest::id_directory_bloom(
                 bundled_directory.iter().map(|entry| entry.id.as_slice()),
                 bundled_directory.len(),

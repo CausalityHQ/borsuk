@@ -75,6 +75,15 @@ PRODUCTION_BUILD_FIELDS = tuple(
 BUILD_PHASE_FIELDS = ("schema_version", "group", "phase", "nanos", "calls")
 BUILD_PHASE_NAMES = (
     "logical_cell_routing",
+    "positioned_wal_encode",
+    "positioned_id_directory_encode",
+    "positioned_payload_assembly",
+    "positioned_payload_stamp_scan",
+    "positioned_route_source_decode",
+    "positioned_route_plan_build",
+    "positioned_route_plan_encode",
+    "positioned_transaction_metadata",
+    "positioned_append_prepare",
     "segment_centroid_radius",
     "segment_routing_codes",
     "segment_pq_bounds",
