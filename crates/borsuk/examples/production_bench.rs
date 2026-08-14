@@ -29,11 +29,11 @@ use serde::Deserialize;
 
 const DEFAULT_QUERIES: usize = 1_000;
 const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
-// A positioned dense insert expands into record, ID-directory, and route-plan
-// rows plus transaction metadata. Keep both its logical dense bytes and vector
-// count comfortably below the immutable 64 MiB / 65,536-row append bounds.
+// A positioned dense put expands into record, ID-directory, tombstone/fence,
+// and route-plan rows plus transaction metadata. Keep both its logical dense
+// bytes and vector count within the immutable 64 MiB / 65,536-row bounds.
 const INGEST_DENSE_BATCH_BYTES: usize = 16 * 1024 * 1024;
-const INGEST_BATCH_MAX_VECTORS: usize = 16_384;
+const INGEST_BATCH_MAX_VECTORS: usize = 16_383;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1_024;
 // V12 persists the coarse-cell probe count in the authenticated codebook. The
 // query-time sweep controls how many ranked leaf pages may be fetched. Keep the
@@ -5007,12 +5007,12 @@ mod tests {
 
     #[test]
     fn bulk_ingest_batch_is_dimension_aware_and_positioned_append_bounded() {
-        assert_eq!(ingest_batch_size(64), 16_384);
-        assert_eq!(ingest_batch_size(100), 16_384);
-        assert_eq!(ingest_batch_size(128), 16_384);
+        assert_eq!(ingest_batch_size(64), 16_383);
+        assert_eq!(ingest_batch_size(100), 16_383);
+        assert_eq!(ingest_batch_size(128), 16_383);
         assert_eq!(ingest_batch_size(960), 4_369);
         assert_eq!(ingest_batch_size(usize::MAX), 1);
-        assert!(3 * ingest_batch_size(128) + 2 <= 65_536);
+        assert!(4 * ingest_batch_size(128) + 2 <= 65_536);
     }
 
     #[test]
