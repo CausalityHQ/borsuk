@@ -177,6 +177,8 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("MemoryMax=8589934592", script)
         self.assertIn("MemorySwapMax=0", script)
         self.assertIn("--service-type=exec", script)
+        self.assertIn('StandardOutput=append:$detail_log', script)
+        self.assertIn('StandardError=append:$detail_log', script)
         self.assertNotIn("--scope", script)
         self.assertIn("--mode runtime", script)
         self.assertIn("observe_publication_v3_index.py", script)

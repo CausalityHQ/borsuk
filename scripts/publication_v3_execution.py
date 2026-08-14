@@ -346,7 +346,9 @@ def runtime_worker_script(
         instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
         stage=execute-runtime
         detail_log="$work/cell/runtime/step-00.log"
-        systemd-run --quiet --wait --collect --service-type=exec -p MemoryMax=8589934592 -p MemorySwapMax=0 \
+        systemd-run --quiet --wait --collect --service-type=exec \
+          -p MemoryMax=8589934592 -p MemorySwapMax=0 \
+          -p StandardOutput=append:$detail_log -p StandardError=append:$detail_log \
           /usr/bin/python3.12 "$work/source/scripts/run_publication_v3_cell.py" "$work/protocol.json" "$work/cell" \
           --mode runtime --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
           --dataset-materialization-sha256 {_q(source["sha256"])} --attempt-id {_q(attempt_id)} \
