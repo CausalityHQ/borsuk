@@ -3031,6 +3031,15 @@ impl CollectionReadRuntime {
     }
 }
 
+fn first_duplicate_record_id<'a>(
+    batch_ids: &HashSet<&[u8]>,
+    existing_ids: impl IntoIterator<Item = &'a RecordId>,
+) -> Option<&'a RecordId> {
+    existing_ids
+        .into_iter()
+        .find(|existing| batch_ids.contains(existing.as_bytes()))
+}
+
 impl BorsukIndex {
     #[cfg(test)]
     pub(crate) fn manifest_for_format_tests(&self) -> &Manifest {
@@ -10100,10 +10109,7 @@ impl BorsukIndex {
             records.len(),
         )?;
         for (ordinal, record) in records.iter_mut().enumerate() {
-            let mutation = CanonicalMutation::put(versions.at(ordinal)?, record.clone())?;
-            *record = mutation
-                .into_record()
-                .expect("canonical put mutation contains a record");
+            CanonicalMutation::stamp_put(versions.at(ordinal)?, record)?;
         }
         Ok(())
     }
@@ -13860,6 +13866,10 @@ impl BorsukIndex {
         &self,
         records: &[VectorRecord],
     ) -> Result<()> {
+        let batch_ids = records
+            .iter()
+            .map(|record| record.id.as_bytes())
+            .collect::<HashSet<_>>();
         // Reject re-adding an id that already lives in the un-flushed WAL tail:
         // `add` is insert-only, and a tail record is not yet in any segment, so
         // the segment scan below would miss it.
@@ -13889,18 +13899,14 @@ impl BorsukIndex {
                 continue;
             }
 
-            let (segment, _, _, _) = self.read_segment(summary)?;
-            for record in records {
-                if segment
-                    .records
-                    .iter()
-                    .any(|existing| existing.id == record.id)
-                {
-                    return Err(BorsukError::InvalidRecordInput(format!(
-                        "duplicate record id `{}` already exists",
-                        record.id
-                    )));
-                }
+            let segment = self.read_segment_for_id_validation(summary)?;
+            if let Some(duplicate) = first_duplicate_record_id(
+                &batch_ids,
+                segment.records.iter().map(|existing| &existing.id),
+            ) {
+                return Err(BorsukError::InvalidRecordInput(format!(
+                    "duplicate record id `{duplicate}` already exists"
+                )));
             }
         }
 
@@ -13908,6 +13914,10 @@ impl BorsukIndex {
     }
 
     fn validate_record_ids_against_routing_pages(&self, records: &[VectorRecord]) -> Result<()> {
+        let batch_ids = records
+            .iter()
+            .map(|record| record.id.as_bytes())
+            .collect::<HashSet<_>>();
         if let Some(summaries) = self.resident_routing_summaries() {
             for summary in summaries.iter() {
                 if !records
@@ -13916,18 +13926,14 @@ impl BorsukIndex {
                 {
                     continue;
                 }
-                let (segment, _, _, _) = self.read_segment(summary)?;
-                for record in records {
-                    if segment
-                        .records
-                        .iter()
-                        .any(|existing| existing.id == record.id)
-                    {
-                        return Err(BorsukError::InvalidRecordInput(format!(
-                            "duplicate record id `{}` already exists",
-                            record.id
-                        )));
-                    }
+                let segment = self.read_segment_for_id_validation(summary)?;
+                if let Some(duplicate) = first_duplicate_record_id(
+                    &batch_ids,
+                    segment.records.iter().map(|existing| &existing.id),
+                ) {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "duplicate record id `{duplicate}` already exists"
+                    )));
                 }
             }
             return Ok(());
@@ -13950,18 +13956,14 @@ impl BorsukIndex {
                     continue;
                 }
 
-                let (segment, _, _, _) = self.read_segment(summary)?;
-                for record in records {
-                    if segment
-                        .records
-                        .iter()
-                        .any(|existing| existing.id == record.id)
-                    {
-                        return Err(BorsukError::InvalidRecordInput(format!(
-                            "duplicate record id `{}` already exists",
-                            record.id
-                        )));
-                    }
+                let segment = self.read_segment_for_id_validation(summary)?;
+                if let Some(duplicate) = first_duplicate_record_id(
+                    &batch_ids,
+                    segment.records.iter().map(|existing| &existing.id),
+                ) {
+                    return Err(BorsukError::InvalidRecordInput(format!(
+                        "duplicate record id `{duplicate}` already exists"
+                    )));
                 }
             }
         }
@@ -23872,6 +23874,44 @@ impl BorsukIndex {
             .storage
             .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
         self.segment_from_read(summary, read)
+    }
+
+    /// Decode only the normal Parquet segment table for exact-ID validation.
+    /// Dense vectors live in a separate Arrow sidecar and are irrelevant to an
+    /// ID membership probe, so reconstructing them here would turn a small
+    /// coordination check into a full-vector corpus scan.
+    fn read_segment_for_id_validation(&self, summary: &SegmentSummary) -> Result<Segment> {
+        let read = self
+            .storage
+            .read_bytes_with_cache_status_and_checksum(&summary.path, &summary.checksum)?;
+        let bytes_read = u64::try_from(read.bytes.len()).map_err(|_| {
+            BorsukError::InvalidStorage("segment byte length exceeds u64".to_string())
+        })?;
+        validate_object_size("segment", &summary.path, summary.size_bytes, bytes_read)?;
+        summary
+            .layout
+            .validate_for(crate::PhysicalObjectRole::NormalSegment)?;
+        if summary.layout.physical_format != crate::PhysicalFormat::Parquet {
+            return Err(BorsukError::InvalidStorage(format!(
+                "normal segment cannot use physical format `{}`",
+                summary.layout.physical_format
+            )));
+        }
+        let decode_started = Instant::now();
+        let segment = segment_from_parquet(&read.bytes)?;
+        self.storage
+            .record_access_event(StorageAccessEvent::decode(
+                &summary.path,
+                physical_format_for_path(&summary.path),
+                summary.size_bytes,
+                "*|-vector",
+                "all",
+                summary.object_count as u64,
+                segment.records.len() as u64,
+                elapsed_ns(decode_started),
+            ))?;
+        validate_segment_metadata(summary, &segment, &self.manifest.config.metric)?;
+        Ok(segment)
     }
 
     /// Full source read for an operation that will rewrite records. Normal
@@ -34393,6 +34433,115 @@ mod tests {
             .add(vec![VectorRecord::new("first", vec![2.0, 0.0])])
             .unwrap_err();
         assert!(error.to_string().contains("duplicate record id `first`"));
+    }
+
+    #[test]
+    fn insert_only_duplicate_probe_scans_each_existing_id_at_most_once() {
+        let batch = [b"new-a".as_slice(), b"duplicate".as_slice()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let existing = [
+            RecordId::from("old-a"),
+            RecordId::from("old-b"),
+            RecordId::from("duplicate"),
+            RecordId::from("old-c"),
+        ];
+        let visited = std::cell::Cell::new(0_usize);
+        let duplicate = first_duplicate_record_id(
+            &batch,
+            existing.iter().inspect(|_| visited.set(visited.get() + 1)),
+        );
+
+        assert_eq!(
+            duplicate.map(RecordId::as_bytes),
+            Some(b"duplicate".as_slice())
+        );
+        assert_eq!(visited.get(), 3, "existing ids must be scanned only once");
+    }
+
+    #[test]
+    fn insert_only_duplicate_validation_decodes_only_the_segment_id_table() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri: uri.clone(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 4,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::new(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+        index
+            .add(vec![VectorRecord::new("persisted", vec![1.0, 0.0])])
+            .unwrap();
+        index.flush().unwrap();
+        drop(index);
+        let index = BorsukIndex::open(&uri).unwrap();
+
+        let summary = index.active_segment_summaries().unwrap().remove(0);
+        let segment = index.read_segment_for_id_validation(&summary).unwrap();
+        assert!(
+            segment
+                .records
+                .iter()
+                .all(|record| record.vector.is_empty()),
+            "ID validation must not reconstruct dense vector sidecars"
+        );
+        let error = index
+            .validate_record_ids_against_existing_segments(&[VectorRecord::new(
+                "persisted",
+                vec![2.0, 0.0],
+            )])
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate record id `persisted`")
+        );
+    }
+
+    #[test]
+    fn stamping_put_records_does_not_clone_vector_payloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let mut records = vec![
+            VectorRecord::new("a", vec![1.0, 0.0]),
+            VectorRecord::new("b", vec![0.0, 1.0]),
+        ];
+
+        let (result, clone_count) =
+            crate::record::count_vector_record_clones(|| index.stamp_put_records(&mut records));
+
+        result.unwrap();
+        assert_eq!(
+            clone_count, 0,
+            "stamping must mutate owned records in place"
+        );
+        assert!(
+            records
+                .iter()
+                .all(|record| record.mutation_stamp().is_some())
+        );
     }
 
     #[test]

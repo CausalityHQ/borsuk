@@ -256,15 +256,23 @@ pub(crate) struct CanonicalMutation {
 
 impl CanonicalMutation {
     pub(crate) fn put(version: MutationVersion, mut record: crate::VectorRecord) -> Result<Self> {
-        let digest = put_digest(&record)?;
-        let stamp = MutationStamp::new(version, digest);
-        record.set_mutation_stamp(stamp);
+        let stamp = Self::stamp_put(version, &mut record)?;
         Ok(Self {
             id: record.id.clone(),
             stamp,
             operation: MutationOperation::Put,
             record: Some(record),
         })
+    }
+
+    pub(crate) fn stamp_put(
+        version: MutationVersion,
+        record: &mut crate::VectorRecord,
+    ) -> Result<MutationStamp> {
+        let digest = put_digest(record)?;
+        let stamp = MutationStamp::new(version, digest);
+        record.set_mutation_stamp(stamp);
+        Ok(stamp)
     }
 
     pub(crate) fn delete(version: MutationVersion, id: crate::RecordId) -> Self {
