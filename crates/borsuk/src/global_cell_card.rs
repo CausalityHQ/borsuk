@@ -40,7 +40,10 @@ const CELL_CARD_MAX_METADATA_BYTES: u32 = 32 * 1024;
 const CELL_CARD_ROOT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CELL_CARD_ROOT_MAX_CARDS: usize = 4_000_000;
 const CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
-pub(crate) const CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES: u64 = 1024 * 1024;
+// Exact blocks are small (~16 KiB for SIFT-128). Coalescing across megabyte
+// holes reduced request count but made cold S3 queries transfer 6.55 MiB each.
+// Keep one-request adjacency without paying for large unselected spans.
+pub(crate) const CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
 
 pub(crate) fn cell_card_block_rows(
     dimensions: usize,
@@ -1739,7 +1742,7 @@ pub(crate) fn plan_cell_card_exact_wave(
             reason: crate::record::SearchTerminationReason::MaxBytes,
         });
     }
-    let mut speculative_gap_budget = max_physical_bytes - selected_total;
+    let mut speculative_gap_budget = (max_physical_bytes - selected_total).min(selected_total);
     let mut blocks = ranked.to_vec();
     blocks.sort_by(|left, right| {
         left.group
@@ -3956,12 +3959,12 @@ mod tests {
     }
 
     #[test]
-    fn object_store_ranges_coalesce_across_a_sub_megabyte_gap() {
+    fn object_store_exact_ranges_coalesce_only_across_a_small_gap() {
         assert!(super::cell_card_ranges_should_coalesce(
             0,
             16 * 1024,
-            512 * 1024,
-            528 * 1024,
+            48 * 1024,
+            64 * 1024,
             super::CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES,
         ));
         assert!(!super::cell_card_ranges_should_coalesce(
@@ -3969,8 +3972,44 @@ mod tests {
             16 * 1024,
             512 * 1024,
             528 * 1024,
-            super::CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES,
+            super::CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES,
         ));
+    }
+
+    #[test]
+    fn exact_wave_speculation_never_exceeds_selected_bytes() {
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "group.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: 256 * 1024,
+            code_plane_offset: 0,
+            code_plane_bytes: 1,
+            code_plane_checksum: [2; 32],
+        });
+        let ranked = [0_u64, 64 * 1024, 128 * 1024]
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, offset)| super::RankedCellCardExactBlock {
+                head_index: 0,
+                group: Arc::clone(&group),
+                cell_index: 0,
+                card_ordinal: 0,
+                reference: super::CellCardExactBlockRef {
+                    block_ordinal: ordinal as u32,
+                    offset,
+                    metadata_bytes: 1024,
+                    body_bytes: 15 * 1024,
+                    bytes: 16 * 1024,
+                    rows: 32,
+                    checksum: [ordinal as u8; 32],
+                },
+                distance: ordinal as f32,
+            })
+            .collect::<Vec<_>>();
+        let plan = super::plan_cell_card_exact_wave(&ranked, 1024 * 1024, 32).unwrap();
+        assert_eq!(plan.selected_bytes(), 48 * 1024);
+        assert!(plan.speculative_bytes() <= plan.selected_bytes());
+        assert_eq!(plan.requests(), 2);
     }
 
     #[test]

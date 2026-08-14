@@ -865,12 +865,13 @@ code256 probe curve reaches 0.999 at 64 probes, making the cost of the last
 empirical recall points visible rather than hiding it behind a universal
 high-recall preset.
 
-Lossless sidecar rows use a qualified three-part policy: merge unselected gaps
-up to 1 MiB, cap every physical range at 4 MiB, and issue at most ten physical
-range reads concurrently. The cap is essential: it prevents the 1 MiB gap from
-turning a scattered shortlist into an almost whole-sidecar transfer, while the
-larger gap avoids the thousands of tiny GETs observed with the original 64 KiB
-policy.
+Lossless V15 cell-card rows merge only adjacent or nearby ranges: one gap is at
+most 64 KiB, and the total speculative gap bytes in a wave cannot exceed the
+selected exact bytes. Every physical range remains capped at 4 MiB and up to 32
+ranges can be fetched concurrently. This keeps the default 16-block shortlist
+within one S3 request wave while bounding exact-range read amplification to 2x.
+The former 1 MiB gap reduced GET count but was rejected after cold S3 evidence
+showed that it transferred megabytes of unselected data per query.
 
 ### Persisted coarse quantizer for paged indexes
 
