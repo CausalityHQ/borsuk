@@ -38,7 +38,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v11",
+                    "borsuk-production-bench-v12",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -92,7 +92,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v11",
+                    "borsuk-production-bench-v12",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -123,7 +123,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     100,
                 ],
                 [
-                    "borsuk-production-bench-v11",
+                    "borsuk-production-bench-v12",
                     "srht-pq-scan",
                     "auto",
                     "uncached",

@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import unittest
@@ -209,7 +210,7 @@ class PublicationV3ResultTests(unittest.TestCase):
         receipt = receipt_for(cell)
         attestation = runtime_attestation_for(cell)
         result = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "complete",
             "cell_id": cell["cell_id"],
             "manifest_sha256": cell["manifest_sha256"],
@@ -233,6 +234,8 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "storage_puts": 0,
                 "storage_bytes_read": 4096,
                 "storage_bytes_written": 0,
+                "global_leaf_code_requests": 4,
+                "global_leaf_exact_requests": 6,
             },
             "index_receipt_sha256": receipt_document_sha256(receipt),
             "clone_receipt_sha256": None,
@@ -248,6 +251,22 @@ class PublicationV3ResultTests(unittest.TestCase):
             runtime_attestation=attestation,
         )
         self.assertEqual(validated, result)
+        legacy = copy.deepcopy(result)
+        legacy["schema_version"] = 1
+        legacy["metrics"].pop("global_leaf_code_requests")
+        legacy["metrics"].pop("global_leaf_exact_requests")
+        self.assertEqual(
+            validate_cell_result(
+                legacy,
+                cell=cell,
+                protocol_bytes=protocol,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+                index_receipt=receipt,
+                runtime_attestation=attestation,
+            ),
+            legacy,
+        )
 
         for mutation in (
             {**result, "protocol_sha256": "b" * 64},
@@ -306,11 +325,13 @@ class PublicationV3ResultTests(unittest.TestCase):
             "storage_puts": 0,
             "storage_bytes_read": 4096,
             "storage_bytes_written": 0,
+            "global_leaf_code_requests": 4,
+            "global_leaf_exact_requests": 6,
         }
         for missing in ("peak_rss_bytes", "storage_gets", "latency_p99_us"):
             metrics = {key: value for key, value in base_metrics.items() if key != missing}
             value = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "status": "complete",
                 "cell_id": cell["cell_id"],
                 "manifest_sha256": cell["manifest_sha256"],

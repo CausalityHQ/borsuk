@@ -145,6 +145,7 @@ impl<T> DecodedObjectCache<T> {
         let tick = shard.tick;
         if let Some(previous) = shard.entries.remove(&checksum) {
             shard.resident_bytes = shard.resident_bytes.saturating_sub(previous.bytes);
+            drop(previous);
         }
         if bytes == 0 || bytes > self.shard_budget {
             return;

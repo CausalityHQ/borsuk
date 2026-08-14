@@ -49,9 +49,10 @@ use crate::{
         tombstone_ids_to_parquet, wal_records_from_table,
     },
     global_cell_card::{
-        CellCardGroupWriter, CellCardPush, GlobalCellCardAnnRef, decode_cell_card_exact_wave,
-        decode_cell_card_head_wave, decode_cell_card_run_root, encode_cell_card_run_root,
-        plan_ranked_cell_card_exact_wave, plan_ranked_cell_card_head_wave,
+        CELL_CARD_RANGE_READ_MAX_BYTES, CellCardGroupWriter, CellCardHeadRead, CellCardPush,
+        GlobalCellCardAnnRef, decode_cell_card_exact_wave, decode_cell_card_head_wave,
+        decode_cell_card_run_root, encode_cell_card_run_root, plan_ranked_cell_card_exact_wave,
+        plan_ranked_cell_card_head_wave, promote_cell_card_head_wave_to_stable_planes,
         rank_cell_card_exact_blocks, rank_cell_card_head_indexes, score_loaded_cell_card_heads,
     },
     global_leaf_run::{
@@ -206,6 +207,10 @@ const DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 /// 100M-row mutation map into unaccounted process memory.
 const GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_BM25_STATS_PAGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
+/// Stable PQ-code planes are routing data, not exact-vector payloads. Retain a
+/// corpus-independent window so loaded application processes reuse immutable
+/// planes while 100M-scale indexes remain bounded.
+const DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 /// Bound concurrent immutable-segment publication by both object count and
 /// records retained by the write wave. Tiny logical cells need enough parallel
 /// PUTs to hide object-store latency, while production-sized segments must not
@@ -1087,6 +1092,8 @@ struct CollectionReadRuntime {
     admission: Option<Arc<AdmissionGate>>,
     decode_admission: Option<Arc<AdmissionGate>>,
     global_pq_rerank_admission: Arc<AdmissionGate>,
+    cell_card_code_planes: Arc<DecodedObjectCache<Vec<u8>>>,
+    inflight_cell_card_code_planes: Arc<InFlightReads<Vec<u8>>>,
     inflight_segment_reads: Arc<InFlightSegmentReads>,
     projected_segment_cache: Arc<DecodedObjectCache<Segment>>,
     inflight_graph_reads: Arc<InFlightGraphReads>,
@@ -2967,6 +2974,13 @@ impl CollectionReadRuntime {
             global_pq_rerank_admission: Arc::new(AdmissionGate::new(
                 DEFAULT_GLOBAL_PQ_RERANK_READS,
             )),
+            cell_card_code_planes: decoded_cache_with_pool(
+                retained_pool
+                    .as_ref()
+                    .map_or(0, |_| DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES),
+                &retained_pool,
+            ),
+            inflight_cell_card_code_planes: Arc::new(InFlightReads::default()),
             inflight_segment_reads: Arc::new(InFlightSegmentReads::default()),
             projected_segment_cache: decoded_cache_with_pool(
                 DEFAULT_PROJECTED_SEGMENT_CACHE_BYTES,
@@ -10856,8 +10870,10 @@ impl BorsukIndex {
             global_leaf_directory_reads: 0,
             global_leaf_directory_bytes: 0,
             global_leaf_code_pages_read: 0,
+            global_leaf_code_requests: 0,
             global_leaf_code_bytes: 0,
             global_leaf_pages_read: 0,
+            global_leaf_exact_requests: 0,
             global_leaf_page_bytes: 0,
             global_leaf_exact_scores: 0,
             global_leaf_continuations: 0,
@@ -17071,6 +17087,54 @@ impl BorsukIndex {
         }))
     }
 
+    fn load_cell_card_head_read(
+        &self,
+        read: &CellCardHeadRead,
+    ) -> Result<(Arc<Vec<u8>>, u64, bool)> {
+        let plane_end = read
+            .group
+            .code_plane_offset
+            .checked_add(read.group.code_plane_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card code plane overflows".to_string())
+            })?;
+        if read.start != read.group.code_plane_offset || read.end != plane_end {
+            let bytes = self
+                .storage
+                .read_range(&read.group.path, read.start..read.end)?;
+            let physical_bytes = bytes.len() as u64;
+            return Ok((Arc::new(bytes), physical_bytes, false));
+        }
+        let checksum = blake3::Hash::from_bytes(read.group.code_plane_checksum)
+            .to_hex()
+            .to_string();
+        let key = format!("{}\0{checksum}", read.group.path);
+        if let Some(bytes) = self.read_runtime.cell_card_code_planes.get(&key) {
+            return Ok((bytes, 0, true));
+        }
+        let (bytes, physical_bytes, _shared) = self
+            .read_runtime
+            .inflight_cell_card_code_planes
+            .load(&key, || {
+                let bytes = self
+                    .storage
+                    .read_range(&read.group.path, read.start..read.end)?;
+                if bytes.len() as u64 != read.group.code_plane_bytes
+                    || blake3::hash(&bytes).as_bytes() != &read.group.code_plane_checksum
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "cell-card code-plane checksum or bounds mismatch".to_string(),
+                    ));
+                }
+                let physical_bytes = bytes.len() as u64;
+                Ok((bytes, physical_bytes))
+            })?;
+        self.read_runtime
+            .cell_card_code_planes
+            .insert(key, Arc::clone(&bytes), bytes.len() as u64);
+        Ok((bytes, physical_bytes, false))
+    }
+
     fn search_resident_global_cell_cards(
         &self,
         query: &[f32],
@@ -17174,7 +17238,7 @@ impl BorsukIndex {
         if head_byte_ceiling == 0 {
             return Ok(None);
         }
-        let (head_plan, head_limited) = match plan_ranked_cell_card_head_wave(
+        let (selected_head_plan, head_limited) = match plan_ranked_cell_card_head_wave(
             root,
             &ranked_card_indexes,
             head_byte_ceiling,
@@ -17184,6 +17248,16 @@ impl BorsukIndex {
             Err(BorsukError::RecallGuaranteeViolated { .. }) => return Ok(None),
             Err(error) => return Err(error),
         };
+        let exact_reserve = u64::try_from(requested_exact_block_budget)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(selected_exact_block_ceiling)
+            .min(max_bytes);
+        let head_fetch_ceiling = max_bytes.saturating_sub(exact_reserve);
+        let head_plan = promote_cell_card_head_wave_to_stable_planes(
+            selected_head_plan,
+            head_fetch_ceiling.max(head_byte_ceiling),
+            CELL_CARD_RANGE_READ_MAX_BYTES,
+        )?;
         // Reserve both dependent waves with one permit. Retaining a head permit
         // and then acquiring another permit from the same weighted gate can
         // self-deadlock when the head wave already fills the configured cap.
@@ -17192,22 +17266,40 @@ impl BorsukIndex {
             .transient_admission
             .as_ref()
             .map(|gate| gate.acquire_owned(max_bytes.saturating_mul(4).max(1)));
+        let code_requests_before = self.storage.request_counts();
         let head_reads = bounded_io_map_with_gate(
             head_plan.reads(),
             GLOBAL_LEAF_CODE_READ_WIDTH,
             Some(&self.global_pq_rerank_admission),
-            |read| {
-                self.storage
-                    .read_range(&read.group.path, read.start..read.end)
-            },
+            |read| self.load_cell_card_head_read(read),
         );
         let mut fetched_heads = Vec::with_capacity(head_reads.len());
+        let mut code_plane_cache_hits = 0_usize;
+        let mut code_plane_cache_bytes = 0_u64;
+        let mut code_plane_storage_bytes = 0_u64;
         for read in head_reads {
-            fetched_heads.push(read?);
+            let (bytes, storage_bytes, cache_hit) = read?;
+            code_plane_storage_bytes = code_plane_storage_bytes.saturating_add(storage_bytes);
+            if cache_hit {
+                code_plane_cache_hits = code_plane_cache_hits.saturating_add(1);
+                code_plane_cache_bytes = code_plane_cache_bytes.saturating_add(bytes.len() as u64);
+            }
+            fetched_heads.push(bytes);
         }
+        let code_request_counts = self.storage.request_counts().delta(&code_requests_before);
+        let code_storage_requests = usize::try_from(
+            code_request_counts
+                .gets
+                .saturating_add(code_request_counts.heads),
+        )
+        .unwrap_or(usize::MAX);
+        let fetched_head_slices = fetched_heads
+            .iter()
+            .map(|bytes| bytes.as_slice())
+            .collect::<Vec<_>>();
         let heads = decode_cell_card_head_wave(
             &head_plan,
-            &fetched_heads,
+            &fetched_head_slices,
             self.manifest.config.dimensions,
             self.manifest.build_config.vector_element_type,
         )?;
@@ -17241,11 +17333,11 @@ impl BorsukIndex {
                     segments_skipped: segments_total,
                     routing_page_indexes_read: 0,
                     routing_pages_read: 0,
-                    bytes_read: head_plan.physical_bytes(),
+                    bytes_read: code_plane_storage_bytes,
                     prefetched_bytes_unused: head_plan.speculative_bytes(),
                     graph_bytes_read: 0,
-                    decoded_cache_hits: 0,
-                    decoded_cache_bytes_read: 0,
+                    decoded_cache_hits: code_plane_cache_hits,
+                    decoded_cache_bytes_read: code_plane_cache_bytes,
                     object_cache_hits: 0,
                     object_cache_misses: 0,
                     disk_cache_bytes_read: 0,
@@ -17263,8 +17355,10 @@ impl BorsukIndex {
                     global_leaf_directory_reads: 0,
                     global_leaf_directory_bytes: 0,
                     global_leaf_code_pages_read: head_plan.cards(),
-                    global_leaf_code_bytes: head_plan.physical_bytes(),
+                    global_leaf_code_requests: code_storage_requests,
+                    global_leaf_code_bytes: code_plane_storage_bytes,
                     global_leaf_pages_read: 0,
+                    global_leaf_exact_requests: 0,
                     global_leaf_page_bytes: 0,
                     global_leaf_exact_scores: 0,
                     global_leaf_continuations: 0,
@@ -17295,7 +17389,7 @@ impl BorsukIndex {
             }
         };
         let Some(exact_budget) = max_bytes
-            .checked_sub(head_plan.physical_bytes())
+            .checked_sub(code_plane_storage_bytes)
             .filter(|remaining| *remaining > 0)
         else {
             return Ok(Some(declined_execution(SearchTerminationReason::MaxBytes)));
@@ -17317,6 +17411,7 @@ impl BorsukIndex {
             Err(error) => return Err(error),
         };
         let exact_started = Instant::now();
+        let exact_requests_before = self.storage.request_counts();
         let exact_reads = bounded_io_map_with_gate(
             exact_plan.reads(),
             GLOBAL_LEAF_CODE_READ_WIDTH,
@@ -17330,6 +17425,13 @@ impl BorsukIndex {
         for read in exact_reads {
             fetched_exact.push(read?);
         }
+        let exact_request_counts = self.storage.request_counts().delta(&exact_requests_before);
+        let exact_storage_requests = usize::try_from(
+            exact_request_counts
+                .gets
+                .saturating_add(exact_request_counts.heads),
+        )
+        .unwrap_or(usize::MAX);
         let exact_blocks = decode_cell_card_exact_wave(
             &exact_plan,
             &heads,
@@ -17386,8 +17488,7 @@ impl BorsukIndex {
         } else {
             Vec::new()
         };
-        let bytes_read = head_plan
-            .physical_bytes()
+        let bytes_read = code_plane_storage_bytes
             .checked_add(exact_plan.physical_bytes())
             .ok_or_else(|| BorsukError::InvalidStorage("V15 query bytes overflow".to_string()))?;
         let speculative_bytes = head_plan
@@ -17419,8 +17520,8 @@ impl BorsukIndex {
                 bytes_read,
                 prefetched_bytes_unused: speculative_bytes,
                 graph_bytes_read: 0,
-                decoded_cache_hits: 0,
-                decoded_cache_bytes_read: 0,
+                decoded_cache_hits: code_plane_cache_hits,
+                decoded_cache_bytes_read: code_plane_cache_bytes,
                 object_cache_hits: 0,
                 object_cache_misses: 0,
                 disk_cache_bytes_read: 0,
@@ -17438,8 +17539,10 @@ impl BorsukIndex {
                 global_leaf_directory_reads: 0,
                 global_leaf_directory_bytes: 0,
                 global_leaf_code_pages_read: head_plan.cards(),
-                global_leaf_code_bytes: head_plan.physical_bytes(),
+                global_leaf_code_requests: code_storage_requests,
+                global_leaf_code_bytes: code_plane_storage_bytes,
                 global_leaf_pages_read: ranked.len(),
+                global_leaf_exact_requests: exact_storage_requests,
                 global_leaf_page_bytes: exact_plan.physical_bytes(),
                 global_leaf_exact_scores: records_scored,
                 global_leaf_continuations: 1,
@@ -17525,8 +17628,10 @@ impl BorsukIndex {
                     global_leaf_directory_reads: 0,
                     global_leaf_directory_bytes: 0,
                     global_leaf_code_pages_read: 0,
+                    global_leaf_code_requests: 0,
                     global_leaf_code_bytes: 0,
                     global_leaf_pages_read: 0,
+                    global_leaf_exact_requests: 0,
                     global_leaf_page_bytes: 0,
                     global_leaf_exact_scores: 0,
                     global_leaf_continuations: 0,
@@ -17976,8 +18081,10 @@ impl BorsukIndex {
                 global_leaf_directory_reads: directory_reads,
                 global_leaf_directory_bytes: directory_bytes,
                 global_leaf_code_pages_read: code_pages_read,
+                global_leaf_code_requests: 0,
                 global_leaf_code_bytes: physical_code_bytes,
                 global_leaf_pages_read: fetched_pages,
+                global_leaf_exact_requests: 0,
                 global_leaf_page_bytes: logical_page_bytes,
                 global_leaf_exact_scores: records_scored,
                 global_leaf_continuations: continuations,
@@ -20372,6 +20479,10 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_leaf_code_pages_read)
                 .sum(),
+            global_leaf_code_requests: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_code_requests)
+                .sum(),
             global_leaf_code_bytes: reports
                 .iter()
                 .map(|(_, report)| report.global_leaf_code_bytes)
@@ -20379,6 +20490,10 @@ impl BorsukIndex {
             global_leaf_pages_read: reports
                 .iter()
                 .map(|(_, report)| report.global_leaf_pages_read)
+                .sum(),
+            global_leaf_exact_requests: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_exact_requests)
                 .sum(),
             global_leaf_page_bytes: reports
                 .iter()
@@ -20550,8 +20665,10 @@ impl BorsukIndex {
                 global_leaf_directory_reads: 0,
                 global_leaf_directory_bytes: 0,
                 global_leaf_code_pages_read: 0,
+                global_leaf_code_requests: 0,
                 global_leaf_code_bytes: 0,
                 global_leaf_pages_read: 0,
+                global_leaf_exact_requests: 0,
                 global_leaf_page_bytes: 0,
                 global_leaf_exact_scores: 0,
                 global_leaf_continuations: 0,
@@ -20768,8 +20885,10 @@ impl BorsukIndex {
             global_leaf_directory_reads: 0,
             global_leaf_directory_bytes: 0,
             global_leaf_code_pages_read: 0,
+            global_leaf_code_requests: 0,
             global_leaf_code_bytes: 0,
             global_leaf_pages_read: 0,
+            global_leaf_exact_requests: 0,
             global_leaf_page_bytes: 0,
             global_leaf_exact_scores: 0,
             global_leaf_continuations: 0,
@@ -21113,8 +21232,10 @@ impl BorsukIndex {
                     global_leaf_directory_reads: 0,
                     global_leaf_directory_bytes: 0,
                     global_leaf_code_pages_read: 0,
+                    global_leaf_code_requests: 0,
                     global_leaf_code_bytes: 0,
                     global_leaf_pages_read: 0,
+                    global_leaf_exact_requests: 0,
                     global_leaf_page_bytes: 0,
                     global_leaf_exact_scores: 0,
                     global_leaf_continuations: 0,
@@ -21876,8 +21997,10 @@ impl BorsukIndex {
                 global_leaf_directory_reads: 0,
                 global_leaf_directory_bytes: 0,
                 global_leaf_code_pages_read: 0,
+                global_leaf_code_requests: 0,
                 global_leaf_code_bytes: 0,
                 global_leaf_pages_read: 0,
+                global_leaf_exact_requests: 0,
                 global_leaf_page_bytes: 0,
                 global_leaf_exact_scores: 0,
                 global_leaf_continuations: 0,
@@ -21986,8 +22109,10 @@ impl BorsukIndex {
                 global_leaf_directory_reads: 0,
                 global_leaf_directory_bytes: 0,
                 global_leaf_code_pages_read: 0,
+                global_leaf_code_requests: 0,
                 global_leaf_code_bytes: 0,
                 global_leaf_pages_read: 0,
+                global_leaf_exact_requests: 0,
                 global_leaf_page_bytes: 0,
                 global_leaf_exact_scores: 0,
                 global_leaf_continuations: 0,
@@ -35396,6 +35521,102 @@ mod tests {
         assert_eq!(report.global_leaf_directory_reads, 0);
         assert_eq!(report.global_leaf_continuations, 1);
         assert_eq!(report.global_leaf_waves, 2);
+    }
+
+    #[test]
+    fn resident_global_v15_reuses_stable_code_planes_after_disk_cache_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut builder = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Angular,
+            dimensions: 8,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..256)
+            .map(|row| {
+                (0..8)
+                    .map(|dimension| {
+                        (((row + 1) * (dimension + 5) * 19) % 113) as f32 / 112.0 + 0.01
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        builder
+            .add(
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| {
+                        VectorRecord::new(format!("stable-plane-{row}"), vector.clone())
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        builder.finish_bulk_load().unwrap();
+        drop(builder);
+
+        let index = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                cache_dir: Some(cache.path().to_path_buf()),
+                cache_max_bytes: Some(64 * 1024 * 1024),
+                ram_budget_bytes: Some(64 * 1024 * 1024),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+        let options = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+            .with_max_segments(64)
+            .with_max_candidates_per_segment(128);
+        let first = index
+            .search_with_report(&vectors[173], options.clone())
+            .unwrap();
+        assert_eq!(first.decoded_cache_hits, 0, "{first:?}");
+
+        std::fs::remove_dir_all(cache.path()).unwrap();
+        std::fs::create_dir_all(cache.path()).unwrap();
+        let second = index.search_with_report(&vectors[173], options).unwrap();
+
+        assert!(second.decoded_cache_hits > 0, "{second:?}");
+        assert!(first.global_leaf_code_bytes > 0, "{first:?}");
+        assert_eq!(second.global_leaf_code_bytes, 0, "{second:?}");
+        assert!(first.global_leaf_code_requests > 0, "{first:?}");
+        assert_eq!(second.global_leaf_code_requests, 0, "{second:?}");
+        assert!(
+            second.requests.gets < first.requests.gets,
+            "stable resident code planes did not remove their backing GET: first={first:?} second={second:?}"
+        );
+        assert_eq!(second.hits, first.hits);
+    }
+
+    #[test]
+    fn decoded_code_plane_cache_respects_shared_pool_and_exact_identity() {
+        let retained = Arc::new(RetainedBytePool::new(3 * 1024));
+        let cache = DecodedObjectCache::new_with_pool(64 * 1024, Arc::clone(&retained));
+        cache.insert(
+            "group-a\0checksum-a".to_string(),
+            Arc::new(vec![1_u8; 2 * 1024]),
+            2 * 1024,
+        );
+        cache.insert(
+            "group-b\0checksum-b".to_string(),
+            Arc::new(vec![2_u8; 2 * 1024]),
+            2 * 1024,
+        );
+
+        assert!(retained.used_bytes() <= retained.capacity_bytes());
+        assert!(cache.resident_bytes() <= retained.capacity_bytes());
+        assert!(cache.get("group-a\0checksum-b").is_none());
+        assert!(
+            cache.get("group-a\0checksum-a").is_some() ^ cache.get("group-b\0checksum-b").is_some(),
+            "the shared pool must retain only one two-KiB plane under a three-KiB cap"
+        );
     }
 
     #[test]

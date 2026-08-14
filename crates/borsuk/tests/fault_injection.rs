@@ -10,7 +10,7 @@ use borsuk::{
 };
 use object_store::{ObjectStore, memory::InMemory, path::Path as ObjectPath};
 
-const LARGE_ID_BYTES: usize = 17 * 1024 * 1024;
+const LARGE_ID_BYTES: usize = 9 * 1024 * 1024;
 
 fn assert_no_legacy_mutation_authority(operations: &common::OperationLog) {
     assert_eq!(
@@ -877,24 +877,24 @@ fn large_segment_payloads_use_multipart_upload() {
     .unwrap();
 
     // Each ID appears in the primary, ID-directory, and route-plan payloads, so
-    // 17 MiB keeps one append near 51 MiB with comfortable room below 64 MiB.
-    // Flush coalesces four incompressible IDs into one >68 MiB segment.
-    for (ordinal, seed) in [
-        0x4d59_5df4_d0f3_3173_u64,
-        0x9e37_79b9_7f4a_7c15_u64,
-        0xd1b5_4a32_d192_ed03_u64,
-        0x94d0_49bb_1331_11eb_u64,
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    // 9 MiB keeps one append near 27 MiB with comfortable room below 64 MiB.
+    // Flush coalesces eight incompressible IDs into one >72 MiB segment. The
+    // smaller transactions also allow two pending appends per positioned shard,
+    // making the bounded shard-selection retry deterministic under parallel tests.
+    for ordinal in 0..8 {
+        let seed = 0x4d59_5df4_d0f3_3173_u64
+            .wrapping_add((ordinal as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
         let id = deterministic_bytes(LARGE_ID_BYTES, seed);
+        let mut added = false;
         for attempt in 0..128 {
             match index.add(vec![VectorRecord::new_bytes(
                 id.clone(),
                 vec![ordinal as f32],
             )]) {
-                Ok(()) => break,
+                Ok(()) => {
+                    added = true;
+                    break;
+                }
                 Err(error) if error.code() == "ingest_backpressure" && attempt < 127 => {
                     // This fixture deliberately disables materialization so four
                     // large transactions can form one multipart segment. A random
@@ -906,6 +906,10 @@ fn large_segment_payloads_use_multipart_upload() {
                 }
             }
         }
+        assert!(
+            added,
+            "bounded positioned append {ordinal} exhausted retries"
+        );
     }
     operations.clear();
     let error = index.flush().unwrap_err();

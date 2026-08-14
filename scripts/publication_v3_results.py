@@ -42,7 +42,7 @@ RESULT_FIELDS = frozenset(
         "runtime_attestation_sha256",
     }
 )
-READ_METRIC_FIELDS = frozenset(
+READ_METRIC_FIELDS_V1 = frozenset(
     {
         "queries",
         "correctness_ppm",
@@ -59,6 +59,9 @@ READ_METRIC_FIELDS = frozenset(
         "storage_bytes_read",
         "storage_bytes_written",
     }
+)
+READ_METRIC_FIELDS = READ_METRIC_FIELDS_V1 | frozenset(
+    {"global_leaf_code_requests", "global_leaf_exact_requests"}
 )
 LIFECYCLE_METRIC_FIELDS = frozenset(
     {
@@ -281,7 +284,7 @@ def validate_cell_result(
 ) -> dict[str, object]:
     if not isinstance(value, dict) or frozenset(value) != RESULT_FIELDS:
         raise ValueError("cell result fields differ")
-    if value["schema_version"] != 1 or value["status"] != "complete":
+    if value["schema_version"] not in (1, 2) or value["status"] != "complete":
         raise ValueError("cell result schema or status is invalid")
     if value["cell_id"] != cell.get("cell_id"):
         raise ValueError("cell result identity differs from its protocol")
@@ -368,11 +371,18 @@ def validate_cell_result(
         raise ValueError("cell result runtime attestation differs from its measured host")
 
     metrics = value["metrics"]
-    expected_metric_fields = (
-        READ_METRIC_FIELDS
-        if workload_kind == "read-recall"
-        else LIFECYCLE_METRIC_FIELDS
-    )
+    result_schema_version = value["schema_version"]
+    if workload_kind == "read-recall":
+        if result_schema_version == 1:
+            expected_metric_fields = READ_METRIC_FIELDS_V1
+        elif result_schema_version == 2:
+            expected_metric_fields = READ_METRIC_FIELDS
+        else:
+            raise ValueError("cell result schema version is unsupported")
+    else:
+        if result_schema_version != 1:
+            raise ValueError("cell result schema version is unsupported")
+        expected_metric_fields = LIFECYCLE_METRIC_FIELDS
     if not isinstance(metrics, dict) or frozenset(metrics) != expected_metric_fields:
         raise ValueError("cell result metric fields differ")
     correctness_field = (
@@ -445,6 +455,9 @@ def validate_cell_result(
         "storage_bytes_written",
     ):
         _nonnegative_integer(metrics[field], field.replace("_", " "))
+    if workload_kind == "read-recall" and result_schema_version == 2:
+        for field in ("global_leaf_code_requests", "global_leaf_exact_requests"):
+            _nonnegative_integer(metrics[field], field.replace("_", " "))
     if workload_kind == "read-recall" and (
         metrics["storage_puts"] != 0 or metrics["storage_bytes_written"] != 0
     ):

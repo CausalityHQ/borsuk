@@ -505,6 +505,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "latency_p99_us": 3_000,
                 "storage_gets": 10,
                 "storage_bytes_read": 4096,
+                "global_leaf_code_requests": 4,
+                "global_leaf_exact_requests": 6,
                 "query_elapsed_ns": 1_000_000_000,
             },
             resource_metrics={
@@ -520,6 +522,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertTrue(report["publishable"])
         self.assertEqual(report["result"]["metrics"]["storage_gets"], 10)
         self.assertEqual(report["result"]["metrics"]["storage_bytes_read"], 4096)
+        self.assertEqual(report["result"]["metrics"]["global_leaf_code_requests"], 4)
+        self.assertEqual(report["result"]["metrics"]["global_leaf_exact_requests"], 6)
         admitted = validate_cell_result(
             report["result"],
             cell=cell,
@@ -709,14 +713,16 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         for index, (latency, recall) in enumerate(((1.0, 0.96), (2.0, 0.95), (4.0, 0.99))):
             rows.append(
                 {
-                    "schema_version": "borsuk-production-bench-v11",
+                    "schema_version": "borsuk-production-bench-v12",
                     "sample_index": str(index),
                     "latency_ms": str(latency),
                     "recall_at_10": str(recall),
                     "network_gets": str(index + 1),
                     "bytes_read": str((index + 1) * 100),
                     "global_leaf_code_pages_read": str(100 + index),
+                    "global_leaf_code_requests": str(index + 2),
                     "global_leaf_pages_read": str(30 + index),
+                    "global_leaf_exact_requests": str(index + 3),
                     "global_leaf_exact_scores": str(960 + index * 32),
                 }
             )
@@ -742,6 +748,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(summary["latency_p99_us"], 4000)
         self.assertEqual(summary["storage_gets"], 6)
         self.assertEqual(summary["storage_bytes_read"], 600)
+        self.assertEqual(summary["global_leaf_code_requests"], 9)
+        self.assertEqual(summary["global_leaf_exact_requests"], 12)
         self.assertEqual(summary["query_elapsed_ns"], 7_000_000)
 
         bad = json.loads(json.dumps(rows))

@@ -1009,7 +1009,7 @@ pub(crate) struct ResidentCellCardRoot {
     resident_bytes: usize,
 }
 
-const CELL_CARD_RANGE_READ_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const CELL_CARD_RANGE_READ_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 fn cell_card_ranges_should_coalesce(
     prior_start: u64,
@@ -1232,11 +1232,11 @@ fn plan_cell_card_head_indexes(
             }
         }
         reads.push(CellCardHeadRead {
-            group,
             start: card.reference.code_offset,
             end: card_end,
             selected_bytes: u64::from(card.reference.code_bytes),
             cards: vec![card],
+            group,
         });
     }
     let physical_bytes = reads.iter().try_fold(0_u64, |total, read| {
@@ -1266,6 +1266,88 @@ fn plan_cell_card_head_indexes(
     })
 }
 
+/// Promote selected code ranges to stable, immutable complete code planes when
+/// doing so stays within both the query's physical byte budget and the bounded
+/// per-object read limit. Groups that do not fit retain their original selected
+/// ranges, preserving recall breadth at large corpus geometries.
+pub(crate) fn promote_cell_card_head_wave_to_stable_planes(
+    plan: CellCardHeadWavePlan,
+    max_physical_bytes: u64,
+    max_plane_bytes: u64,
+) -> Result<CellCardHeadWavePlan> {
+    if max_physical_bytes < plan.physical_bytes || max_plane_bytes == 0 {
+        return Ok(plan);
+    }
+    let mut promoted = Vec::with_capacity(plan.reads.len());
+    let mut physical_bytes = plan.physical_bytes;
+    let mut cursor = 0;
+    while cursor < plan.reads.len() {
+        let path = &plan.reads[cursor].group.path;
+        let mut end = cursor + 1;
+        while end < plan.reads.len() && plan.reads[end].group.path == *path {
+            end += 1;
+        }
+        let group_reads = &plan.reads[cursor..end];
+        let group = Arc::clone(&group_reads[0].group);
+        if group_reads.iter().any(|read| *read.group != *group) {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card code-plane authority conflicts within one path".to_string(),
+            ));
+        }
+        let selected_physical = group_reads
+            .iter()
+            .try_fold(0_u64, |total, read| {
+                total.checked_add(read.end - read.start)
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card head wave byte count overflows".to_string())
+            })?;
+        let candidate_physical = physical_bytes
+            .saturating_sub(selected_physical)
+            .checked_add(group.code_plane_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card head wave byte count overflows".to_string())
+            })?;
+        if group.code_plane_bytes <= max_plane_bytes && candidate_physical <= max_physical_bytes {
+            let plane_end = group
+                .code_plane_offset
+                .checked_add(group.code_plane_bytes)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("cell-card code plane overflows".to_string())
+                })?;
+            let selected_bytes = group_reads
+                .iter()
+                .try_fold(0_u64, |total, read| total.checked_add(read.selected_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card selected head bytes overflow".to_string(),
+                    )
+                })?;
+            let cards = group_reads
+                .iter()
+                .flat_map(|read| read.cards.iter().cloned())
+                .collect();
+            promoted.push(CellCardHeadRead {
+                group,
+                start: group_reads[0].group.code_plane_offset,
+                end: plane_end,
+                selected_bytes,
+                cards,
+            });
+            physical_bytes = candidate_physical;
+        } else {
+            promoted.extend(group_reads.iter().cloned());
+        }
+        cursor = end;
+    }
+    Ok(CellCardHeadWavePlan {
+        reads: promoted,
+        physical_bytes,
+        selected_bytes: plan.selected_bytes,
+        cards: plan.cards,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedCellCardHead {
     pub(crate) root_index: usize,
@@ -1273,9 +1355,9 @@ pub(crate) struct LoadedCellCardHead {
     pub(crate) head: VerifiedCellCardHead,
 }
 
-pub(crate) fn decode_cell_card_head_wave(
+pub(crate) fn decode_cell_card_head_wave<B: AsRef<[u8]>>(
     plan: &CellCardHeadWavePlan,
-    fetched: &[Vec<u8>],
+    fetched: &[B],
     dimensions: usize,
     element_type: VectorElementType,
 ) -> Result<Vec<LoadedCellCardHead>> {
@@ -1286,9 +1368,23 @@ pub(crate) fn decode_cell_card_head_wave(
     }
     let mut loaded = Vec::with_capacity(plan.cards);
     for (read, bytes) in plan.reads.iter().zip(fetched) {
+        let bytes = bytes.as_ref();
         if bytes.len() as u64 != read.end - read.start {
             return Err(BorsukError::InvalidStorage(
                 "cell-card head wave response length mismatch".to_string(),
+            ));
+        }
+        let plane_end = read
+            .group
+            .code_plane_offset
+            .checked_add(read.group.code_plane_bytes)
+            .ok_or_else(|| BorsukError::InvalidStorage("cell-card code plane overflows".into()))?;
+        if read.start == read.group.code_plane_offset
+            && read.end == plane_end
+            && blake3::hash(bytes).as_bytes() != &read.group.code_plane_checksum
+        {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card code-plane checksum or bounds mismatch".to_string(),
             ));
         }
         for card in &read.cards {
@@ -3577,5 +3673,88 @@ mod tests {
         assert_eq!(plan.cards(), selected_cells.len());
         assert_eq!(plan.requests(), 1);
         assert!(plan.physical_bytes() <= 512 * 1024);
+    }
+
+    #[test]
+    fn wave_one_reads_each_touched_complete_code_plane_once() {
+        let mut groups = Vec::new();
+        let mut cards = Vec::new();
+        for group_ordinal in 0..2_u32 {
+            let inputs = (0..128_u32)
+                .map(|ordinal| {
+                    let cell_index = group_ordinal * 128 + ordinal;
+                    let mut page_rows = rows(128, 4);
+                    for (row_ordinal, row) in page_rows.iter_mut().enumerate() {
+                        row.code = GlobalLeafCodeInput::from(vec![
+                            cell_index.wrapping_add(row_ordinal as u32)
+                                as u8;
+                            64
+                        ]);
+                    }
+                    GlobalLeafPageInput {
+                        cell_index,
+                        leaf_ordinal: 0,
+                        centroid_code: vec![cell_index as u8; 64],
+                        rows: page_rows,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let encoded = encode_cell_card_group(&inputs, 4, VectorElementType::Int8).unwrap();
+            let path = encoded
+                .content_addressed_path(&format!(
+                    "global-cell-cards/stable-code-planes/{group_ordinal}"
+                ))
+                .unwrap();
+            let (group, mut group_cards) = encoded.references(&path).unwrap();
+            groups.push(group);
+            cards.append(&mut group_cards);
+        }
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &groups, &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let selected_cells = (0..256_u32).step_by(16).collect::<Vec<_>>();
+
+        let large_plane_fallback =
+            super::plan_cell_card_head_wave(&root, &selected_cells, 4 * 1024 * 1024, 64).unwrap();
+        let selected_requests = large_plane_fallback.requests();
+        let fallback = super::promote_cell_card_head_wave_to_stable_planes(
+            large_plane_fallback,
+            4 * 1024 * 1024,
+            1,
+        )
+        .unwrap();
+        assert_eq!(fallback.cards(), selected_cells.len());
+        assert_eq!(fallback.requests(), selected_requests);
+
+        let selected =
+            super::plan_cell_card_head_wave(&root, &selected_cells, 4 * 1024 * 1024, 64).unwrap();
+        let plan = super::promote_cell_card_head_wave_to_stable_planes(
+            selected,
+            4 * 1024 * 1024,
+            4 * 1024 * 1024,
+        )
+        .unwrap();
+
+        assert_eq!(plan.cards(), selected_cells.len());
+        assert_eq!(plan.requests(), groups.len());
+        assert_eq!(
+            plan.physical_bytes(),
+            groups
+                .iter()
+                .map(|group| group.code_plane_bytes)
+                .sum::<u64>()
+        );
+        for read in plan.reads() {
+            assert_eq!(read.start, read.group.code_plane_offset);
+            assert_eq!(
+                read.end,
+                read.group.code_plane_offset + read.group.code_plane_bytes
+            );
+            assert!(read.selected_bytes <= read.group.code_plane_bytes);
+        }
     }
 }

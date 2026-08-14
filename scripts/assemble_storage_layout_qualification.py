@@ -241,7 +241,7 @@ def _case_metrics(result_root: Path, case_id: str) -> dict[str, Any]:
 
 
 def _validate_segment_path(row: dict[str, str], case_id: str) -> None:
-    if row.get("schema_version") != "borsuk-production-bench-v11":
+    if row.get("schema_version") != "borsuk-production-bench-v12":
         raise ValueError(f"unsupported production benchmark schema for {case_id}")
     try:
         segments_searched = int(row["segments_searched"])

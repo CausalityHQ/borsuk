@@ -1116,6 +1116,9 @@ pub struct SearchReport {
     /// Logical V13 compressed-code page ranges authenticated before exact reranking.
     #[serde(default)]
     pub global_leaf_code_pages_read: usize,
+    /// Backing-store code-plane range requests issued for this query.
+    #[serde(default)]
+    pub global_leaf_code_requests: usize,
     /// Physical compressed-code range bytes read before exact page selection.
     #[serde(default)]
     pub global_leaf_code_bytes: u64,
@@ -1125,6 +1128,9 @@ pub struct SearchReport {
     /// plumbing. Its V13 unit is blocks; cross-format counter comparisons are invalid.
     #[serde(default)]
     pub global_leaf_pages_read: usize,
+    /// Backing-store exact-block range requests issued for this query.
+    #[serde(default)]
+    pub global_leaf_exact_requests: usize,
     /// Encoded V13 Arrow batch bytes read for selected exact-row blocks.
     #[serde(default)]
     pub global_leaf_page_bytes: u64,

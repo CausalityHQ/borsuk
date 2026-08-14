@@ -713,10 +713,12 @@ def summarize_query_samples(
     diagnostic_values: dict[str, list[int]] = {
         "global_leaf_exact_scores": [],
         "global_leaf_code_pages_read": [],
+        "global_leaf_code_requests": [],
         "global_leaf_pages_read": [],
+        "global_leaf_exact_requests": [],
     }
     for row in rows:
-        if row.get("schema_version") != "borsuk-production-bench-v11":
+        if row.get("schema_version") != "borsuk-production-bench-v12":
             raise ValueError("query sample schema differs")
         expected_phase = "uncached" if arm["cache_state"] == "cold" else "disk_cached"
         if (
@@ -746,7 +748,7 @@ def summarize_query_samples(
         for field, values in diagnostic_values.items():
             value = row.get(field)
             if value is None:
-                continue
+                raise ValueError("query sample planner telemetry is missing")
             parsed = int(value)
             if parsed < 0:
                 raise ValueError("query sample planner telemetry is invalid")
@@ -780,6 +782,12 @@ def summarize_query_samples(
         "latency_p99_us": _nearest_rank(latencies_us, 0.99),
         "storage_gets": storage_gets,
         "storage_bytes_read": storage_bytes_read,
+        "global_leaf_code_requests": sum(
+            diagnostic_values["global_leaf_code_requests"]
+        ),
+        "global_leaf_exact_requests": sum(
+            diagnostic_values["global_leaf_exact_requests"]
+        ),
         "query_elapsed_ns": sum(latencies_us) * 1_000,
     }
 
@@ -1257,6 +1265,8 @@ def build_publication_report(
             "latency_p99_us",
             "storage_gets",
             "storage_bytes_read",
+            "global_leaf_code_requests",
+            "global_leaf_exact_requests",
             "query_elapsed_ns",
         }
     )
@@ -1277,7 +1287,7 @@ def build_publication_report(
     ):
         raise ValueError("publication runtime write metric fields differ")
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "complete",
         "cell_id": cell.get("cell_id"),
         "manifest_sha256": cell.get("manifest_sha256"),

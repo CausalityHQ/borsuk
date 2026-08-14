@@ -57,9 +57,9 @@ const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
 const WRITE_FRACTION_DENOMINATOR: usize = 20;
 const CACHE_COVERAGE_COHORT_QUERIES: usize = 40;
 const CACHE_COVERAGE_REPETITIONS: usize = 4;
-const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v11";
+const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v12";
 const RECALL_LATENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,mode,nprobe,max_candidates,recall_at_10,samples,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries";
-const QUERY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
+const QUERY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_leaf_code_requests,global_leaf_exact_requests";
 const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
 const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,cache_profile,target_cache_coverage_percent,execution_engine,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read";
 const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes";
@@ -243,8 +243,10 @@ struct QuerySample {
     global_leaf_directory_reads: usize,
     global_leaf_directory_bytes: u64,
     global_leaf_code_pages_read: usize,
+    global_leaf_code_requests: usize,
     global_leaf_code_bytes: u64,
     global_leaf_pages_read: usize,
+    global_leaf_exact_requests: usize,
     global_leaf_page_bytes: u64,
     global_leaf_waves: usize,
     global_leaf_continuations: usize,
@@ -315,8 +317,10 @@ impl QuerySummary {
             global_leaf_directory_reads: report.global_leaf_directory_reads,
             global_leaf_directory_bytes: report.global_leaf_directory_bytes,
             global_leaf_code_pages_read: report.global_leaf_code_pages_read,
+            global_leaf_code_requests: report.global_leaf_code_requests,
             global_leaf_code_bytes: report.global_leaf_code_bytes,
             global_leaf_pages_read: report.global_leaf_pages_read,
+            global_leaf_exact_requests: report.global_leaf_exact_requests,
             global_leaf_page_bytes: report.global_leaf_page_bytes,
             global_leaf_waves: report.global_leaf_waves,
             global_leaf_continuations: report.global_leaf_continuations,
@@ -2096,7 +2100,7 @@ fn write_query_samples(
         })?;
         writeln!(
             writer,
-            "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{phase},{mode},{nprobe},{max_candidates},{sample_index},{query_source_index},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{phase},{mode},{nprobe},{max_candidates},{sample_index},{query_source_index},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             config.global_scan_codec,
             config.cache_execution,
             sample.latency_ms,
@@ -2132,6 +2136,8 @@ fn write_query_samples(
             sample.transient_bytes,
             sample.transient_capacity_bytes,
             sample.transient_peak_bytes,
+            sample.global_leaf_code_requests,
+            sample.global_leaf_exact_requests,
         )?;
     }
     Ok(())
@@ -4515,7 +4521,11 @@ mod tests {
         assert_eq!(CACHE_STATE_HEADER.split(',').count(), 31);
         assert_eq!(CONCURRENCY_HEADER.split(',').count(), 30);
         assert_eq!(CACHE_COVERAGE_HEADER.split(',').count(), 33);
-        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 39);
+        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 41);
+        assert_eq!(
+            QUERY_SAMPLE_HEADER.split(',').skip(39).collect::<Vec<_>>(),
+            vec!["global_leaf_code_requests", "global_leaf_exact_requests"]
+        );
         assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 37);
         for header in [
             RECALL_LATENCY_HEADER,
@@ -4571,8 +4581,10 @@ mod tests {
             "global_leaf_directory_reads",
             "global_leaf_directory_bytes",
             "global_leaf_code_pages_read",
+            "global_leaf_code_requests",
             "global_leaf_code_bytes",
             "global_leaf_pages_read",
+            "global_leaf_exact_requests",
             "global_leaf_page_bytes",
             "global_leaf_waves",
             "global_leaf_continuations",
@@ -4655,8 +4667,10 @@ mod tests {
                 sample.global_leaf_directory_reads,
                 sample.global_leaf_directory_bytes,
                 sample.global_leaf_code_pages_read,
+                sample.global_leaf_code_requests,
                 sample.global_leaf_code_bytes,
                 sample.global_leaf_pages_read,
+                sample.global_leaf_exact_requests,
                 sample.global_leaf_page_bytes,
                 sample.global_leaf_waves,
                 sample.global_leaf_continuations,
