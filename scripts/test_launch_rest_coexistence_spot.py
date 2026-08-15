@@ -41,6 +41,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "s3_get_concurrency": 64,
                 "search_admission": 4,
                 "page_budget": 32,
+                "exact_candidates": 512,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
                 "ram_budget_bytes": 2 * 1024**3,
@@ -102,6 +103,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertNotIn("--setenv=BORSUK_CPU_THREADS=", user_data)
         self.assertIn("BORSUK_REST_SEARCH_ADMISSION=4", user_data)
         self.assertIn("BORSUK_REST_PAGE_BUDGET=32", user_data)
+        self.assertIn("BORSUK_REST_EXACT_CANDIDATES=512", user_data)
         self.assertIn("BORSUK_REST_LEAF_READ_WIDTH=32", user_data)
         self.assertIn("BORSUK_REST_MAX_INFLIGHT_LEAF_READS=48", user_data)
         self.assertIn("BORSUK_REST_RAM_BUDGET_BYTES=2147483648", user_data)
@@ -306,6 +308,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "s3_get_concurrency": 64,
                 "search_admission": 4,
                 "page_budget": 32,
+                "exact_candidates": 512,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
                 "ram_budget_bytes": 2 * 1024**3,

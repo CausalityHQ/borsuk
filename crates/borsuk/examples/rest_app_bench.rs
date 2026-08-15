@@ -44,6 +44,15 @@ fn validate_page_budget(budget: usize) -> Result<usize, String> {
         })
 }
 
+fn validate_exact_candidates(candidates: usize) -> Result<usize, String> {
+    (10..=2_048)
+        .contains(&candidates)
+        .then_some(candidates)
+        .ok_or_else(|| {
+            format!("V15 REST exact candidate budget must be in 10..=2048; received {candidates}")
+        })
+}
+
 #[derive(Default)]
 struct AppMetrics {
     cheap_requests: std::sync::atomic::AtomicU64,
@@ -57,6 +66,7 @@ struct AppState {
     index: BorsukIndex,
     admission: SearchAdmission,
     page_budget: usize,
+    exact_candidates: usize,
     ram_budget_bytes: u64,
     disk_cache_bytes: u64,
     metrics: Arc<AppMetrics>,
@@ -91,6 +101,14 @@ struct SearchResponse {
     disk_cache_bytes_read: u64,
     disk_cache_reads: u64,
     elapsed_ms: u64,
+    records_scored: usize,
+    global_leaf_code_pages_read: usize,
+    global_leaf_code_requests: usize,
+    global_leaf_exact_requests: usize,
+    global_leaf_exact_scores: usize,
+    global_leaf_waves: usize,
+    global_base_approximate_us: u64,
+    global_base_exact_rerank_us: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +132,7 @@ struct MetricsResponse {
     borsuk_io_threads: usize,
     borsuk_s3_get_concurrency: usize,
     borsuk_page_budget: usize,
+    borsuk_exact_candidates: usize,
     borsuk_ram_budget_bytes: u64,
     borsuk_disk_cache_bytes: u64,
 }
@@ -161,6 +180,7 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         borsuk_io_threads: borsuk::configured_io_threads(),
         borsuk_s3_get_concurrency: borsuk::configured_backing_get_concurrency(),
         borsuk_page_budget: state.page_budget,
+        borsuk_exact_candidates: state.exact_candidates,
         borsuk_ram_budget_bytes: state.ram_budget_bytes,
         borsuk_disk_cache_bytes: state.disk_cache_bytes,
     })
@@ -194,12 +214,15 @@ async fn search(State(state): State<AppState>, Json(request): Json<SearchRequest
     state.metrics.search_in_flight.fetch_add(1, Relaxed);
     let index = state.index.clone();
     let page_budget = state.page_budget;
+    let exact_candidates = state.exact_candidates;
     let metrics = Arc::clone(&state.metrics);
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let result = index.search_with_report(
             &request.vector,
-            SearchOptions::approx(request.k, LeafMode::SrhtPqScan).with_max_segments(page_budget),
+            SearchOptions::approx(request.k, LeafMode::SrhtPqScan)
+                .with_max_segments(page_budget)
+                .with_max_candidates_per_segment(exact_candidates),
         );
         metrics.search_in_flight.fetch_sub(1, Relaxed);
         result
@@ -224,6 +247,14 @@ async fn search(State(state): State<AppState>, Json(request): Json<SearchRequest
             disk_cache_bytes_read: report.disk_cache_bytes_read,
             disk_cache_reads: report.disk_cache_reads,
             elapsed_ms: report.elapsed_ms,
+            records_scored: report.records_scored,
+            global_leaf_code_pages_read: report.global_leaf_code_pages_read,
+            global_leaf_code_requests: report.global_leaf_code_requests,
+            global_leaf_exact_requests: report.global_leaf_exact_requests,
+            global_leaf_exact_scores: report.global_leaf_exact_scores,
+            global_leaf_waves: report.global_leaf_waves,
+            global_base_approximate_us: report.global_base_approximate_us,
+            global_base_exact_rerank_us: report.global_base_exact_rerank_us,
         })
         .into_response(),
         Ok(Err(error @ BorsukError::Overloaded { .. })) => {
@@ -278,6 +309,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "0.0.0.0:8080".to_owned())
         .parse::<SocketAddr>()?;
     let page_budget = validate_page_budget(env_usize("BORSUK_REST_PAGE_BUDGET", 32)?)?;
+    let exact_candidates =
+        validate_exact_candidates(env_usize("BORSUK_REST_EXACT_CANDIDATES", 512)?)?;
     let search_limit = env_usize("BORSUK_REST_SEARCH_ADMISSION", 2)?;
     let leaf_read_width = env_usize("BORSUK_REST_LEAF_READ_WIDTH", 32)?;
     let max_inflight_leaf_reads = env_usize("BORSUK_REST_MAX_INFLIGHT_LEAF_READS", 48)?;
@@ -299,6 +332,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         index,
         admission: SearchAdmission::new(search_limit)?,
         page_budget,
+        exact_candidates,
         ram_budget_bytes: ram_budget_bytes as u64,
         disk_cache_bytes: disk_cache_bytes as u64,
         metrics: Arc::new(AppMetrics::default()),
@@ -328,6 +362,18 @@ mod tests {
             let error = validate_page_budget(budget)
                 .expect_err("unsupported page budget reached the REST search path");
             assert!(error.contains("4, 8, 16, 32, or 64"), "{error}");
+        }
+    }
+
+    #[test]
+    fn rest_search_accepts_only_bounded_exact_candidate_budgets() {
+        for budget in [10, 128, 184, 256, 384, 512, 1_024, 2_048] {
+            assert_eq!(super::validate_exact_candidates(budget).unwrap(), budget);
+        }
+        for budget in [0, 1, 9, 2_049, usize::MAX] {
+            let error = super::validate_exact_candidates(budget)
+                .expect_err("unsupported exact candidate budget reached REST search");
+            assert!(error.contains("10..=2048"), "{error}");
         }
     }
 
@@ -362,6 +408,7 @@ mod tests {
             index,
             admission,
             page_budget: 4,
+            exact_candidates: 512,
             ram_budget_bytes: 1024,
             disk_cache_bytes: 0,
             metrics: std::sync::Arc::new(AppMetrics::default()),
@@ -403,6 +450,7 @@ mod tests {
             index,
             admission: SearchAdmission::new(1).unwrap(),
             page_budget: 4,
+            exact_candidates: 512,
             ram_budget_bytes: 1024,
             disk_cache_bytes: 0,
             metrics: std::sync::Arc::new(AppMetrics::default()),
@@ -418,6 +466,7 @@ mod tests {
         assert_eq!(value["borsuk_leaf_read_width"], 32);
         assert_eq!(value["borsuk_leaf_read_capacity"], 48);
         assert_eq!(value["borsuk_page_budget"], 4);
+        assert_eq!(value["borsuk_exact_candidates"], 512);
         assert_eq!(value["borsuk_ram_budget_bytes"], 1024);
         assert_eq!(value["borsuk_disk_cache_bytes"], 0);
         assert_eq!(

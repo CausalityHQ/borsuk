@@ -24,6 +24,7 @@ RUNTIME_FIELDS = {
     "s3_get_concurrency",
     "search_admission",
     "page_budget",
+    "exact_candidates",
     "leaf_read_width",
     "max_inflight_leaf_reads",
     "ram_budget_bytes",
@@ -73,6 +74,8 @@ def _validated_runtime(value: dict[str, int]) -> dict[str, int]:
         raise ValueError("runtime search_admission must be positive")
     if value["page_budget"] not in (4, 8, 16, 32, 64):
         raise ValueError("runtime page_budget must be 4, 8, 16, 32, or 64")
+    if not 10 <= value["exact_candidates"] <= 2_048:
+        raise ValueError("runtime exact_candidates must be in 10..=2048")
     for field in ("leaf_read_width", "max_inflight_leaf_reads"):
         if not 1 <= value[field] <= 1024:
             raise ValueError(f"runtime {field} must be in 1..=1024")
@@ -97,6 +100,7 @@ def cold_s3_cap_matrix() -> list[dict[str, int | str]]:
                 "s3_get_concurrency": get_cap,
                 "search_admission": search_admission,
                 "page_budget": 32,
+                "exact_candidates": 512,
                 "leaf_read_width": leaf_width,
                 "max_inflight_leaf_reads": inflight,
                 "ram_budget_bytes": 2 * 1024**3,
@@ -328,6 +332,7 @@ def _user_data(
             f"--setenv=BORSUK_REST_S3_GET_CONCURRENCY={runtime['s3_get_concurrency']} "
             f"--setenv=BORSUK_REST_SEARCH_ADMISSION={runtime['search_admission']} "
             f"--setenv=BORSUK_REST_PAGE_BUDGET={runtime['page_budget']} "
+            f"--setenv=BORSUK_REST_EXACT_CANDIDATES={runtime['exact_candidates']} "
             f"--setenv=BORSUK_REST_LEAF_READ_WIDTH={runtime['leaf_read_width']} "
             f"--setenv=BORSUK_REST_MAX_INFLIGHT_LEAF_READS={runtime['max_inflight_leaf_reads']} "
             f"--setenv=BORSUK_REST_RAM_BUDGET_BYTES={runtime['ram_budget_bytes']} "

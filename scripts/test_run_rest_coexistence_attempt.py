@@ -65,6 +65,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "leaf_read_width": 32,
             "max_inflight_leaf_reads": 48,
             "page_budget": 32,
+            "exact_candidates": 512,
             "ram_budget_bytes": 2 * 1024**3,
             "disk_cache_bytes": 0,
         }
@@ -76,6 +77,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "borsuk_leaf_read_width": 32,
             "borsuk_leaf_read_capacity": 48,
             "borsuk_page_budget": 32,
+            "borsuk_exact_candidates": 512,
             "borsuk_ram_budget_bytes": 2 * 1024**3,
             "borsuk_disk_cache_bytes": 0,
         }
