@@ -62,11 +62,11 @@ class PublicationV3IndexSealTests(unittest.TestCase):
         cases = {
             "segments/L0/segment.parquet": ("data-bundle", "parquet"),
             "vectors/aa/vector.arrow": ("query-page", "arrow-ipc"),
-            "global-cell-cards/v15/groups/card.arrow": (
+            "global-cell-cards/v16/groups/card.arrow": (
                 "query-page",
                 "arrow-ipc",
             ),
-            "global-cell-cards/v15/roots/aa/root-card.parquet": (
+            "global-cell-cards/v16/roots/aa/root-card.parquet": (
                 "query-page",
                 "parquet",
             ),
@@ -81,7 +81,13 @@ class PublicationV3IndexSealTests(unittest.TestCase):
         for path, expected in cases.items():
             with self.subTest(path=path):
                 self.assertEqual(classify_index_object(path), expected)
-        for path in ("unknown/blob", "segments/L0/segment.bin", "fidx/x.parquet"):
+        for path in (
+            "unknown/blob",
+            "segments/L0/segment.bin",
+            "fidx/x.parquet",
+            "global-cell-cards/v15/groups/card.arrow",
+            "global-cell-cards/v15/roots/aa/root-card.parquet",
+        ):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 classify_index_object(path)
 
