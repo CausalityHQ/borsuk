@@ -1754,7 +1754,6 @@ pub(crate) fn plan_cell_card_exact_wave(
             reason: crate::record::SearchTerminationReason::MaxBytes,
         });
     }
-    let mut speculative_gap_budget = (max_physical_bytes - selected_total).min(selected_total);
     let mut blocks = ranked.to_vec();
     blocks.sort_by(|left, right| {
         left.group
@@ -1769,37 +1768,13 @@ pub(crate) fn plan_cell_card_exact_wave(
             .offset
             .checked_add(u64::from(block.reference.bytes))
             .ok_or_else(|| BorsukError::InvalidStorage("cell-card exact range overflows".into()))?;
-        if let Some(prior) = reads.last_mut()
+        if let Some(prior) = reads.last()
             && prior.group.path == block.group.path
+            && block.reference.offset < prior.end
         {
-            if block.reference.offset < prior.end {
-                return Err(BorsukError::InvalidStorage(
-                    "cell-card exact ranges overlap".to_string(),
-                ));
-            }
-            let gap = block.reference.offset - prior.end;
-            if gap <= speculative_gap_budget
-                && cell_card_ranges_should_coalesce(
-                    prior.start,
-                    prior.end,
-                    block.reference.offset,
-                    end,
-                    CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES,
-                )
-            {
-                prior.end = end;
-                speculative_gap_budget -= gap;
-                prior.selected_bytes = prior
-                    .selected_bytes
-                    .checked_add(u64::from(block.reference.bytes))
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "cell-card selected exact bytes overflow".to_string(),
-                        )
-                    })?;
-                prior.blocks.push(block);
-                continue;
-            }
+            return Err(BorsukError::InvalidStorage(
+                "cell-card exact ranges overlap".to_string(),
+            ));
         }
         reads.push(CellCardExactRead {
             group: Arc::clone(&block.group),
@@ -1808,6 +1783,44 @@ pub(crate) fn plan_cell_card_exact_wave(
             selected_bytes: u64::from(block.reference.bytes),
             blocks: vec![block],
         });
+    }
+    let mut speculative_gap_budget = (max_physical_bytes - selected_total).min(selected_total);
+    loop {
+        let cheapest = reads
+            .windows(2)
+            .enumerate()
+            .filter_map(|(index, pair)| {
+                let prior = &pair[0];
+                let next = &pair[1];
+                if prior.group.path != next.group.path || next.start < prior.end {
+                    return None;
+                }
+                let gap = next.start - prior.end;
+                (gap <= speculative_gap_budget
+                    && cell_card_ranges_should_coalesce(
+                        prior.start,
+                        prior.end,
+                        next.start,
+                        next.end,
+                        CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES,
+                    ))
+                .then_some((gap, index))
+            })
+            .min();
+        let Some((gap, index)) = cheapest else {
+            break;
+        };
+        let right = reads.remove(index + 1);
+        let left = &mut reads[index];
+        left.end = right.end;
+        left.selected_bytes = left
+            .selected_bytes
+            .checked_add(right.selected_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card selected exact bytes overflow".to_string())
+            })?;
+        left.blocks.extend(right.blocks);
+        speculative_gap_budget -= gap;
     }
     let physical_bytes = reads.iter().try_fold(0_u64, |total, read| {
         total.checked_add(read.end - read.start).ok_or_else(|| {
@@ -4050,6 +4063,56 @@ mod tests {
         assert_eq!(plan.selected_bytes(), 48 * 1024);
         assert!(plan.speculative_bytes() <= plan.selected_bytes());
         assert_eq!(plan.requests(), 2);
+    }
+
+    #[test]
+    fn exact_wave_spends_gap_budget_on_the_cheapest_merges() {
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "group.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: 256 * 1024,
+            code_plane_offset: 0,
+            code_plane_bytes: 1,
+            code_plane_checksum: [2; 32],
+        });
+        let ranked = [0_u64, 66 * 1024, 102 * 1024, 138 * 1024]
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, offset)| super::RankedCellCardExactBlock {
+                head_index: 0,
+                group: Arc::clone(&group),
+                cell_index: 0,
+                card_ordinal: 0,
+                reference: super::CellCardExactBlockRef {
+                    block_ordinal: ordinal as u32,
+                    offset,
+                    metadata_bytes: 1024,
+                    body_bytes: 15 * 1024,
+                    bytes: 16 * 1024,
+                    rows: 32,
+                    checksum: [ordinal as u8; 32],
+                },
+                distance: ordinal as f32,
+            })
+            .collect::<Vec<_>>();
+
+        let plan = super::plan_cell_card_exact_wave(&ranked, 128 * 1024, 32).unwrap();
+
+        assert_eq!(plan.requests(), 2);
+        assert_eq!(plan.selected_bytes(), 64 * 1024);
+        assert_eq!(plan.physical_bytes(), 104 * 1024);
+        assert_eq!(plan.reads()[0].start, 0);
+        assert_eq!(plan.reads()[0].end, 16 * 1024);
+        assert_eq!(plan.reads()[1].start, 66 * 1024);
+        assert_eq!(plan.reads()[1].end, 154 * 1024);
+        assert_eq!(
+            plan.reads()
+                .iter()
+                .flat_map(|read| read.blocks.iter())
+                .map(|block| block.reference.block_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
     }
 
     #[test]

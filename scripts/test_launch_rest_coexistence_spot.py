@@ -411,6 +411,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             {(16, 32, 32), (32, 48, 64), (32, 96, 128)},
         )
         self.assertTrue(all(cell["disk_cache_bytes"] == 0 for cell in cells))
+        self.assertTrue(all(cell["exact_hedge_after_ms"] == 0 for cell in cells))
         self.assertTrue(
             all(cell["io_threads"] >= cell["s3_get_concurrency"] for cell in cells)
         )
