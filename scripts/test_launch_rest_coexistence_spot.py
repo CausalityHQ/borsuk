@@ -344,6 +344,28 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 generator_worker="echo generator",
             )
 
+    def test_runtime_accepts_engine_supported_64_page_recall_ablation(self) -> None:
+        runtime = dict(self.pair["runtime"])
+        runtime["page_budget"] = 64
+        pair = build_launch_pair(
+            campaign_id="page-64",
+            attempt=1,
+            image_id="ami-a",
+            subnet_id="subnet-a",
+            security_group_id="sg-a",
+            instance_profile_arn="arn:a",
+            source_sha256="1" * 64,
+            binary_sha256="2" * 64,
+            index_receipt_sha256="3" * 64,
+            dataset_receipt_sha256="4" * 64,
+            smoke=True,
+            runtime=runtime,
+            output_uri="s3://bucket/page-64/attempts/0001",
+            server_worker="echo server",
+            generator_worker="# borsuk-rest-mode=smoke\necho generator",
+        )
+        self.assertEqual(pair["runtime"]["page_budget"], 64)
+
     def test_workload_receipt_rejects_a_worker_for_the_other_mode(self) -> None:
         with self.assertRaisesRegex(ValueError, "worker mode"):
             build_launch_pair(

@@ -71,8 +71,8 @@ def _validated_runtime(value: dict[str, int]) -> dict[str, int]:
         raise ValueError("runtime io_threads must be at least s3_get_concurrency and at most 256")
     if value["search_admission"] <= 0:
         raise ValueError("runtime search_admission must be positive")
-    if value["page_budget"] not in (4, 8, 16, 32):
-        raise ValueError("runtime page_budget must be 4, 8, 16, or 32")
+    if value["page_budget"] not in (4, 8, 16, 32, 64):
+        raise ValueError("runtime page_budget must be 4, 8, 16, 32, or 64")
     for field in ("leaf_read_width", "max_inflight_leaf_reads"):
         if not 1 <= value[field] <= 1024:
             raise ValueError(f"runtime {field} must be in 1..=1024")
