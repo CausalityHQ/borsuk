@@ -434,6 +434,10 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("psi_full_avg10", server)
         self.assertIn("memory.events.before", server)
         self.assertIn("memory-events.json", server)
+        server_memory_gate = next(
+            line for line in server.splitlines() if "server cgroup memory events changed" in line
+        )
+        compile(shlex.split(server_memory_gate)[2], "server-memory-gate", "exec")
         self.assertIn("generator evidence authority differs", server)
         self.assertIn('touch "$work/stop-sampler"', server)
         self.assertLess(

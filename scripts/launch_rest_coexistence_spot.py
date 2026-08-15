@@ -192,7 +192,7 @@ touch "$work/stop-sampler"
 wait "$sampler"
 kill "$app_pid"; wait "$app_pid" || true
 cp "$cg_root/memory.events" "$work/memory.events.after"
-python3 -c 'import json,sys; parse=lambda p: dict((k,int(v)) for k,v in (line.split() for line in open(p))); before=parse(sys.argv[1]); after=parse(sys.argv[2]); keys=("low","high","max","oom","oom_kill","oom_group_kill"); delta=dict((k,after.get(k,0)-before.get(k,0)) for k in keys); open(sys.argv[3],"w").write(json.dumps(dict(schema_version=1,delta=delta),sort_keys=True,separators=(",",":"))+"\n"); any(delta.values()) and sys.exit("server cgroup memory events changed")' "$work/memory.events.before" "$work/memory.events.after" "$work/memory-events.json"
+python3 -c 'import json,sys; parse=lambda p: dict((k,int(v)) for k,v in (line.split() for line in open(p))); before=parse(sys.argv[1]); after=parse(sys.argv[2]); keys=("low","high","max","oom","oom_kill","oom_group_kill"); delta=dict((k,after.get(k,0)-before.get(k,0)) for k in keys); open(sys.argv[3],"w").write(json.dumps(dict(schema_version=1,delta=delta),sort_keys=True,separators=(",",":"))+"\\n"); any(delta.values()) and sys.exit("server cgroup memory events changed")' "$work/memory.events.before" "$work/memory.events.after" "$work/memory-events.json"
 cat "$work/resource.tmp" >>"$work/resources.csv"
 awk -F, -v cache_limit="${{BORSUK_REST_DISK_CACHE_BYTES}}" 'NR > 1 {{ if ($5 != 0 || $7 > 0.10 || (cache_limit == 0 && $8 > 4096)) exit 1 }}' "$work/resources.csv"
 put "$work/effective.json" effective-limits.json
