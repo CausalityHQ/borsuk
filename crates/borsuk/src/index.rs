@@ -403,19 +403,15 @@ fn global_cell_card_exact_block_budget(
 }
 
 fn use_bounded_cell_card_exact_windows(
-    explicit_candidate_rows: Option<usize>,
-    mutation_overlay_present: bool,
-    target_rows: usize,
+    _explicit_candidate_rows: Option<usize>,
+    _mutation_overlay_present: bool,
+    _target_rows: usize,
 ) -> bool {
-    if mutation_overlay_present {
-        return false;
-    }
-    let window_rows = 4 * crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS;
-    explicit_candidate_rows.is_none_or(|rows| {
-        rows <= GLOBAL_CELL_CARD_EXACT_BLOCK_MAX * crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS
-            && rows.is_multiple_of(window_rows)
-            && target_rows.saturating_mul(4) <= rows
-    })
+    // Contiguous physical windows are not a recall-preserving substitute for
+    // the independently ranked exact blocks. Keep the experimental path
+    // disabled until the writer emits query-locality tiles whose authority is
+    // explicitly represented in the persistent format.
+    false
 }
 
 fn cell_card_code_plane_cache_key(path: &str, checksum: [u8; 32]) -> String {
@@ -38088,12 +38084,8 @@ mod tests {
             .unwrap();
         assert_eq!(bounded_explicit.hits[0].id.as_bytes(), b"row-0");
         assert!(
-            bounded_explicit.global_leaf_exact_requests <= 4,
-            "the frozen explicit 512-row profile bypassed aligned exact windows: {bounded_explicit:?}"
-        );
-        assert!(
             bounded_explicit.records_scored <= 512,
-            "aligned exact windows exceeded the caller's explicit candidate ceiling: {bounded_explicit:?}"
+            "the explicit candidate ceiling was exceeded: {bounded_explicit:?}"
         );
 
         let bounded = reader
@@ -38108,14 +38100,14 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v15_explicit_frozen_profile_uses_aligned_exact_windows() {
+    fn resident_global_v15_never_substitutes_physical_windows_for_ranked_exact_blocks() {
         assert!(!use_bounded_cell_card_exact_windows(Some(416), false, 10));
-        assert!(use_bounded_cell_card_exact_windows(Some(128), false, 10));
-        assert!(use_bounded_cell_card_exact_windows(Some(512), false, 128));
+        assert!(!use_bounded_cell_card_exact_windows(Some(128), false, 10));
+        assert!(!use_bounded_cell_card_exact_windows(Some(512), false, 128));
         assert!(!use_bounded_cell_card_exact_windows(Some(512), false, 129));
         assert!(!use_bounded_cell_card_exact_windows(Some(513), false, 10));
         assert!(!use_bounded_cell_card_exact_windows(Some(2_048), false, 10));
-        assert!(use_bounded_cell_card_exact_windows(None, false, 200));
+        assert!(!use_bounded_cell_card_exact_windows(None, false, 200));
         assert!(!use_bounded_cell_card_exact_windows(Some(512), true, 10));
         assert!(!use_bounded_cell_card_exact_windows(None, true, 10));
     }
