@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import subprocess
 import unittest
 from unittest.mock import patch
@@ -461,6 +462,11 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("dataset receipt identity differs", generator)
         self.assertIn("generator-resources.json", generator)
         self.assertIn("cpu_fraction", generator)
+        self.assertIn(r'+"\n"', generator)
+        resource_gate = next(
+            line for line in generator.splitlines() if "generator resource gate failed" in line
+        )
+        compile(shlex.split(resource_gate)[2], "generator-resource-gate", "exec")
         self.assertGreater(
             generator.index("cpu_before="),
             generator.index("dataset receipt identity differs"),
