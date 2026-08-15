@@ -424,18 +424,19 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             queries_sha256="c" * 64,
             dataset_receipt_uri="s3://bucket/STAGING_COMPLETE.json",
             dataset_receipt_sha256="9" * 64,
+            dataset_id="sift-128",
             runtime={key: int(value) for key, value in self.pair["runtime"].items()},
         )
         self.assertIn('test "$(sha256sum "$runner"', generator)
         self.assertIn('test "$(sha256sum "$load"', generator)
         self.assertIn('test "$(sha256sum "$source"', generator)
         self.assertIn('test "$(sha256sum "$dataset_receipt"', generator)
-        self.assertIn("dataset receipt source archive differs", generator)
+        self.assertIn("dataset receipt identity differs", generator)
         self.assertIn("generator-resources.json", generator)
         self.assertIn("cpu_fraction", generator)
         self.assertGreater(
             generator.index("cpu_before="),
-            generator.index("dataset receipt source archive differs"),
+            generator.index("dataset receipt identity differs"),
         )
         self.assertIn("server evidence authority differs", generator)
         self.assertIn('test "$(sha256sum "$queries"', generator)

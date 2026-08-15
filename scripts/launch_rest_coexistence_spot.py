@@ -210,9 +210,12 @@ def generator_worker_script(
     queries_sha256: str,
     dataset_receipt_uri: str,
     dataset_receipt_sha256: str,
+    dataset_id: str,
     runtime: dict[str, int],
     smoke: bool = True,
 ) -> str:
+    if re.fullmatch(r"[A-Za-z0-9._-]+", dataset_id) is None:
+        raise ValueError("dataset ID must be a canonical identity")
     for label, uri in (
         ("runner", runner_uri),
         ("load", load_uri),
@@ -255,7 +258,7 @@ test "$(sha256sum "$load" | awk '{{print $1}}')" = {load_sha256}
 test "$(sha256sum "$source" | awk '{{print $1}}')" = {source_sha256}
 test "$(sha256sum "$queries" | awk '{{print $1}}')" = {queries_sha256}
 test "$(sha256sum "$dataset_receipt" | awk '{{print $1}}')" = {dataset_receipt_sha256}
-python3 -c 'import json,os,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==1 and v.get("source_archive_sha256")==os.environ["BORSUK_SOURCE_SHA256"]) or sys.exit("dataset receipt source archive differs")' "$dataset_receipt"
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==1 and v.get("dataset_id")==sys.argv[2] and int(v.get("object_count",0))>0 and int(v.get("object_bytes",0))>0) or sys.exit("dataset receipt identity differs")' "$dataset_receipt" '{dataset_id}'
 printf '%s\n' '{expected}' >"$work/runtime.json"
 cpu_before=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 started_ns=$(date +%s%N)
