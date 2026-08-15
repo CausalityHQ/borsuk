@@ -52,17 +52,37 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 "requests": 100,
                 "errors": 0,
                 "rejected_429": 0,
-                "engines": ["bounded-cell-card-v15"],
+                "engines": ["bounded-cell-card-v17"],
             },
         }
         self.assertTrue(
             any("429" in failure for failure in evaluate_phase("mixed-overload", baseline, mixed))
         )
 
+    def test_uncached_gate_accepts_only_the_v17_cell_card_engine(self) -> None:
+        baseline = {"cheap": {"p99_ms": 1.0, "errors": 0, "requests": 100}}
+        search = {
+            "mean_recall_at_10": 1.0,
+            "requests": 100,
+            "successful_requests": 100,
+            "errors": 0,
+            "rejected_429": 0,
+            "schedule_lag_p99_ms": 1.0,
+            "p99_ms": 50.0,
+            "engines": ["bounded-cell-card-v17"],
+            "backing_reads": 1,
+            "disk_cache_reads": 0,
+            "disk_cache_bytes_read": 0,
+        }
+        self.assertEqual(
+            evaluate_phase("staircase-16", baseline, {"search": search}),
+            [],
+        )
+
     def test_summary_accumulates_physical_backing_and_cache_reads(self) -> None:
         samples = [
-            Sample("search", 0, 0, 1, 200, 1.0, "bounded-cell-card-v15", 4, 4096, 0, 0),
-            Sample("search", 1, 1, 2, 200, 1.0, "bounded-cell-card-v15", 3, 3072, 2, 2048),
+            Sample("search", 0, 0, 1, 200, 1.0, "bounded-cell-card-v17", 4, 4096, 0, 0),
+            Sample("search", 1, 1, 2, 200, 1.0, "bounded-cell-card-v17", 3, 3072, 2, 2048),
         ]
         search = summarize("search", 1.0, samples)["search"]
         self.assertEqual(search["backing_reads"], 7)
@@ -79,7 +99,7 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 1,
                 200,
                 1.0,
-                "bounded-cell-card-v15",
+                "bounded-cell-card-v17",
                 records_scored=512,
                 global_leaf_code_pages_read=128,
                 global_leaf_code_requests=4,
@@ -96,7 +116,7 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 2,
                 200,
                 1.0,
-                "bounded-cell-card-v15",
+                "bounded-cell-card-v17",
                 records_scored=500,
                 global_leaf_code_pages_read=120,
                 global_leaf_code_requests=3,
@@ -126,7 +146,7 @@ class RestCoexistenceLoadTest(unittest.TestCase):
             "errors": 1,
             "rejected_429": 1,
             "schedule_lag_p99_ms": 11.0,
-            "engines": ["bounded-cell-card-v15"],
+            "engines": ["bounded-cell-card-v17"],
             "backing_reads": 0,
             "disk_cache_reads": 1,
             "disk_cache_bytes_read": 4096,
@@ -150,7 +170,7 @@ class RestCoexistenceLoadTest(unittest.TestCase):
             "rejected_429": 0,
             "schedule_lag_p99_ms": 1.0,
             "p99_ms": 100.1,
-            "engines": ["bounded-cell-card-v15"],
+            "engines": ["bounded-cell-card-v17"],
             "backing_reads": 1,
             "disk_cache_reads": 0,
             "disk_cache_bytes_read": 0,
@@ -166,11 +186,11 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 "mean_recall_at_10": 1.0,
                 "requests": 2,
                 "errors": 0,
-                "engines": ["bounded-arrow-leaf-v13", "bounded-cell-card-v15"],
+                "engines": ["bounded-arrow-leaf-v13", "bounded-cell-card-v17"],
             },
         }
         failures = evaluate_phase("mixed-normal", baseline, mixed)
-        self.assertTrue(any("bounded-cell-card-v15" in failure for failure in failures))
+        self.assertTrue(any("bounded-cell-card-v17" in failure for failure in failures))
 
 
 if __name__ == "__main__":

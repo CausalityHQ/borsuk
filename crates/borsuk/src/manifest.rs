@@ -261,7 +261,7 @@ pub struct Manifest {
     /// null until an offline bulk-load finish or full compaction publishes a
     /// complete base run.
     pub(crate) global_ann_ref: Option<GlobalAnnRef>,
-    /// V16 full-epoch cell-card serving authority. Mutually exclusive with the
+    /// V17 full-epoch cell-card serving authority. Mutually exclusive with the
     /// V13 global ANN reference; fresh WAL/segment rows remain an MVCC overlay.
     pub(crate) global_cell_card_ann_ref: Option<crate::global_cell_card::GlobalCellCardAnnRef>,
     /// Content-addressed Arrow/Parquet roots for BM25 and named learned-sparse
@@ -410,7 +410,7 @@ mod global_pq_layout_tests {
     }
 
     #[test]
-    fn offline_v14_base_has_one_codebook_root_and_no_v13_authority() {
+    fn offline_v17_base_has_one_codebook_root_and_no_v13_authority() {
         let directory = tempfile::tempdir().unwrap();
         let mut index = BorsukIndex::create(IndexConfig {
             uri: directory.path().to_string_lossy().into_owned(),
@@ -436,7 +436,7 @@ mod global_pq_layout_tests {
             .global_cell_card_ann_ref
             .as_ref()
             .unwrap();
-        assert_eq!(ann.layout_version(), 16);
+        assert_eq!(ann.layout_version(), 17);
         assert!(ann.storage_objects() >= 3);
         assert!(index.manifest_for_format_tests().global_ann_ref.is_none());
         ann.validate().unwrap();
@@ -875,7 +875,7 @@ impl Manifest {
                 .checked_add(global_ann.resident_bytes())
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage(
-                        "manifest V16 resident RAM budget estimate overflow".into(),
+                        "manifest V17 resident RAM budget estimate overflow".into(),
                     )
                 })?;
         }

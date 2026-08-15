@@ -32,10 +32,13 @@ use crate::{
     record::VectorElementType,
 };
 
-pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v16";
+pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v17";
 pub(crate) const CELL_CARD_GROUP_MAX_BYTES: u64 = 48 * 1024 * 1024;
 const CELL_CARD_VECTOR_PAYLOAD_BYTES: usize = 96 * 1024;
-const CELL_CARD_MAX_BLOCK_ROWS: usize = 128;
+// Ranking/authentication granularity is deliberately smaller than the 128-row
+// code-space locality tile. This restores candidate diversity while the range
+// planner may still coalesce adjacent selected microtiles into one S3 GET.
+const CELL_CARD_MAX_BLOCK_ROWS: usize = 32;
 const CELL_CARD_MAX_METADATA_BYTES: u32 = 32 * 1024;
 const CELL_CARD_ROOT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CELL_CARD_ROOT_MAX_CARDS: usize = 4_000_000;
@@ -1928,10 +1931,16 @@ pub(crate) fn plan_cell_card_exact_wave(
 pub(crate) fn plan_ranked_cell_card_exact_wave(
     ranked: &[RankedCellCardExactBlock],
     max_physical_bytes: u64,
+    max_blocks: usize,
     max_requests: usize,
 ) -> Result<(CellCardExactWavePlan, bool)> {
+    if max_blocks == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card exact wave block cap must be nonzero".to_string(),
+        ));
+    }
     let mut last_limit = None;
-    for prefix in (1..=ranked.len()).rev() {
+    for prefix in (1..=ranked.len().min(max_blocks)).rev() {
         match plan_cell_card_exact_wave(&ranked[..prefix], max_physical_bytes, max_requests) {
             Ok(plan) => return Ok((plan, prefix < ranked.len())),
             Err(error @ BorsukError::RecallGuaranteeViolated { .. }) => last_limit = Some(error),
@@ -2066,7 +2075,7 @@ impl GlobalCellCardAnnRef {
         purge_epoch: u64,
     ) -> Result<Self> {
         let reference = Self {
-            layout_version: 16,
+            layout_version: 17,
             codebook,
             root_path,
             root,
@@ -2087,10 +2096,10 @@ impl GlobalCellCardAnnRef {
         let checksum = blake3::Hash::from_bytes(self.root.checksum)
             .to_hex()
             .to_string();
-        if self.layout_version != 16
+        if self.layout_version != 17
             || self.root_path
                 != format!(
-                    "global-cell-cards/v16/roots/{}/root-{checksum}.parquet",
+                    "global-cell-cards/v17/roots/{}/root-{checksum}.parquet",
                     &checksum[..2]
                 )
             || self.root.encoded_bytes == 0
@@ -2104,7 +2113,7 @@ impl GlobalCellCardAnnRef {
             || self.purge_epoch > self.leaf_epoch
         {
             return Err(BorsukError::InvalidStorage(
-                "V16 global cell-card reference is invalid".to_string(),
+                "V17 global cell-card reference is invalid".to_string(),
             ));
         }
         Ok(())
@@ -2978,16 +2987,15 @@ mod tests {
     }
 
     #[test]
-    fn sift_locality_tile_is_one_authenticated_exact_request_unit() {
+    fn sift_code_tile_exposes_four_independent_ranking_microtiles() {
         let dimensions = 128;
-        let tile_rows = cell_card_block_rows(dimensions, VectorElementType::Float32).unwrap();
-        assert_eq!(tile_rows, 128);
+        let code_tile_rows = 128;
         let encoded = encode_cell_card_group(
             &[GlobalLeafPageInput {
                 cell_index: 3,
                 leaf_ordinal: 5,
                 centroid_code: vec![7, 9],
-                rows: rows(tile_rows, dimensions * std::mem::size_of::<f32>()),
+                rows: rows(code_tile_rows, dimensions * std::mem::size_of::<f32>()),
             }],
             dimensions,
             VectorElementType::Float32,
@@ -2996,8 +3004,44 @@ mod tests {
 
         assert_eq!(encoded.cards.len(), 1);
         assert_eq!(encoded.cards[0].head.rows, 128);
-        assert_eq!(encoded.cards[0].head.exact_blocks.len(), 1);
-        assert_eq!(encoded.cards[0].head.exact_blocks[0].rows, 128);
+        assert_eq!(encoded.cards[0].head.exact_blocks.len(), 4);
+        assert!(
+            encoded.cards[0]
+                .head
+                .exact_blocks
+                .iter()
+                .all(|block| block.rows == 32)
+        );
+        let path = encoded
+            .content_addressed_path("global-cell-cards/v17/groups")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let ranked = cards[0]
+            .head
+            .exact_blocks
+            .iter()
+            .cloned()
+            .map(|reference| super::RankedCellCardExactBlock {
+                head_index: 0,
+                group: Arc::clone(&group),
+                cell_index: cards[0].head.cell_index,
+                card_ordinal: cards[0].head.card_ordinal,
+                reference,
+                distance: 0.0,
+                row_distances: Box::new([]),
+            })
+            .collect::<Vec<_>>();
+        let selected_bytes = ranked
+            .iter()
+            .map(|block| u64::from(block.reference.bytes))
+            .sum::<u64>();
+        let plan = super::plan_cell_card_exact_wave(&ranked, selected_bytes * 2, 4).unwrap();
+        assert_eq!(plan.blocks(), 4);
+        assert_eq!(
+            plan.requests(),
+            1,
+            "adjacent microtiles should share one GET"
+        );
     }
 
     #[test]
@@ -3249,7 +3293,7 @@ mod tests {
         );
         assert_eq!(
             cell_card_block_rows(1536, VectorElementType::Int8).unwrap(),
-            64
+            32
         );
     }
 
@@ -3633,7 +3677,7 @@ mod tests {
         distances[128..].fill(0.0);
         let ranked = super::rank_cell_card_exact_blocks(&loaded, &[distances], 1, 1).unwrap();
         assert_eq!(ranked.len(), 1);
-        assert_eq!(ranked[0].reference.block_ordinal, 1);
+        assert_eq!(ranked[0].reference.block_ordinal, 4);
         let exact_plan = super::plan_cell_card_exact_wave(&ranked, 256 * 1024, 64).unwrap();
         assert_eq!(exact_plan.requests(), 1);
         assert!(exact_plan.physical_bytes() <= 256 * 1024);
@@ -3729,13 +3773,17 @@ mod tests {
 
         let full_tile_first = vec![0.0; 129];
         let ranked = super::rank_cell_card_exact_blocks(&loaded, &[full_tile_first], 2, 1).unwrap();
-        assert_eq!(ranked.len(), 1, "two rows fit in the first 128-row tile");
-        assert_eq!(ranked[0].reference.rows, 128);
+        assert_eq!(
+            ranked.len(),
+            1,
+            "two rows fit in the first 32-row microtile"
+        );
+        assert_eq!(ranked[0].reference.rows, 32);
 
         let mut tail_first = vec![10.0; 129];
         tail_first[128] = 0.0;
         let ranked = super::rank_cell_card_exact_blocks(&loaded, &[tail_first], 128, 1).unwrap();
-        assert_eq!(ranked.len(), 2, "the one-row tile cannot satisfy 128 rows");
+        assert_eq!(ranked.len(), 5, "the one-row tail cannot satisfy 128 rows");
         assert_eq!(
             ranked
                 .iter()
@@ -3901,6 +3949,7 @@ mod tests {
         let (prefix, limited) = super::plan_ranked_cell_card_exact_wave(
             &selected,
             u64::from(selected[0].reference.bytes),
+            2,
             2,
         )
         .unwrap();
