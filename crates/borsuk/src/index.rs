@@ -56,8 +56,8 @@ use crate::{
         decode_verified_cell_card_head_wave, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave, plan_ranked_cell_card_head_wave,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
-        rank_cell_card_exact_blocks, rank_cell_card_head_indexes, score_loaded_cell_card_heads,
-        validate_cell_card_code_range,
+        rank_cell_card_exact_blocks, rank_cell_card_exact_windows, rank_cell_card_head_indexes,
+        score_loaded_cell_card_heads, validate_cell_card_code_range,
     },
     global_leaf_run::{
         CarriedPrimaryDenseRun, GlobalAnnRef, GlobalCodebookRef, GlobalLeafArtifactRole,
@@ -17993,8 +17993,17 @@ impl BorsukIndex {
             let exact_block_budget = requested_exact_block_budget.min(available_exact_blocks);
             let approximate_started = Instant::now();
             let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
-            let ranked =
-                rank_cell_card_exact_blocks(&heads, &distances, exact_block_budget, options.k)?;
+            let ranked = if bounded_exact_default {
+                rank_cell_card_exact_windows(
+                    &heads,
+                    &distances,
+                    exact_block_budget.div_ceil(4),
+                    4,
+                    options.k,
+                )?
+            } else {
+                rank_cell_card_exact_blocks(&heads, &distances, exact_block_budget, options.k)?
+            };
             let global_approximate_us =
                 u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
             Ok::<_, BorsukError>((
@@ -38024,6 +38033,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(bounded_default.hits[0].id.as_bytes(), b"row-0");
+        assert!(
+            bounded_default.global_leaf_exact_requests <= 4,
+            "the immutable default rerank exceeded four authenticated exact windows: {bounded_default:?}"
+        );
         assert!(
             bounded_default.records_scored
                 <= GLOBAL_CELL_CARD_EXACT_BLOCK_MAX

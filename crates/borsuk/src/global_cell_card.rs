@@ -1685,6 +1685,149 @@ pub(crate) fn rank_cell_card_exact_blocks(
     Ok(selected)
 }
 
+pub(crate) fn rank_cell_card_exact_windows(
+    heads: &[LoadedCellCardHead],
+    row_distances: &[Vec<f32>],
+    window_budget: usize,
+    blocks_per_window: usize,
+    target_rows: usize,
+) -> Result<Vec<RankedCellCardExactBlock>> {
+    if window_budget == 0 || blocks_per_window == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card exact window bounds must be non-zero".to_string(),
+        ));
+    }
+    if heads.is_empty() || heads.len() != row_distances.len() || target_rows == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card exact window ranking inputs are incomplete".to_string(),
+        ));
+    }
+    let mut windows = Vec::<(usize, usize, usize, f32, Vec<f32>)>::new();
+    for (head_index, (head, distances)) in heads.iter().zip(row_distances).enumerate() {
+        if distances.len() != head.head.codes.len()
+            || distances.iter().any(|distance| !distance.is_finite())
+        {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card exact window distances are incomplete or non-finite".to_string(),
+            ));
+        }
+        let mut covered_rows = 0_usize;
+        for (window_ordinal, references) in
+            head.head.exact_blocks.chunks(blocks_per_window).enumerate()
+        {
+            let window_rows = references.iter().try_fold(0_usize, |rows, reference| {
+                rows.checked_add(reference.rows as usize).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card exact window row count overflows".to_string(),
+                    )
+                })
+            })?;
+            let end_rows = covered_rows.checked_add(window_rows).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cell-card exact window row coverage overflows".to_string(),
+                )
+            })?;
+            let rows = distances.get(covered_rows..end_rows).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cell-card exact window rows exceed their code distances".to_string(),
+                )
+            })?;
+            let distance = rows.iter().copied().min_by(f32::total_cmp).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card exact window has no rows".to_string())
+            })?;
+            let start = window_ordinal * blocks_per_window;
+            windows.push((
+                head_index,
+                start,
+                start + references.len(),
+                distance,
+                rows.to_vec(),
+            ));
+            covered_rows = end_rows;
+        }
+        if covered_rows != distances.len() {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card exact windows do not cover their code distances".to_string(),
+            ));
+        }
+    }
+    let mut candidates = windows
+        .iter()
+        .enumerate()
+        .flat_map(|(window, (_, _, _, _, distances))| {
+            distances
+                .iter()
+                .copied()
+                .map(move |distance| (distance, window))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    let mut votes = vec![0_usize; windows.len()];
+    for (_, window) in candidates.into_iter().take(target_rows.saturating_mul(4)) {
+        votes[window] = votes[window].saturating_add(1);
+    }
+    let identity = |window: &(usize, usize, usize, f32, Vec<f32>)| {
+        let head = &heads[window.0];
+        (
+            head.head.cell_index,
+            head.head.card_ordinal,
+            window.1,
+            head.group.path.as_str(),
+        )
+    };
+    let mut nearest = (0..windows.len()).collect::<Vec<_>>();
+    nearest.sort_by(|left, right| {
+        windows[*left]
+            .3
+            .total_cmp(&windows[*right].3)
+            .then_with(|| identity(&windows[*left]).cmp(&identity(&windows[*right])))
+    });
+    let mut ranked = (0..windows.len()).collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        votes[*right]
+            .cmp(&votes[*left])
+            .then_with(|| windows[*left].3.total_cmp(&windows[*right].3))
+            .then_with(|| identity(&windows[*left]).cmp(&identity(&windows[*right])))
+    });
+    let nearest_quota = window_budget.div_ceil(4).min(target_rows);
+    let mut selected_windows = std::collections::BTreeSet::new();
+    let mut selected = Vec::with_capacity(window_budget.saturating_mul(blocks_per_window));
+    for window_index in nearest
+        .into_iter()
+        .take(nearest_quota)
+        .chain(ranked)
+    {
+        if !selected_windows.insert(window_index) {
+            continue;
+        }
+        let (head_index, window_start, window_end, distance, _) = &windows[window_index];
+        let head = &heads[*head_index];
+        for reference in &head.head.exact_blocks[*window_start..*window_end] {
+            selected.push(RankedCellCardExactBlock {
+                head_index: *head_index,
+                group: Arc::clone(&head.group),
+                cell_index: head.head.cell_index,
+                card_ordinal: head.head.card_ordinal,
+                reference: reference.clone(),
+                distance: *distance,
+            });
+        }
+        if selected_windows.len() == window_budget {
+            break;
+        }
+    }
+    if selected_windows.len() < window_budget.min(windows.len()) || selected.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card exact window ranking produced incomplete coverage".to_string(),
+        ));
+    }
+    Ok(selected)
+}
+
 pub(crate) fn score_loaded_cell_card_heads(
     codebook: &ResidentGlobalCodebook,
     query: &[f32],
@@ -3582,6 +3725,103 @@ mod tests {
             .unwrap();
         assert_eq!(exact.len(), 3);
         assert_eq!(exact[0].id, input.rows[32].id);
+    }
+
+    #[test]
+    fn four_authenticated_windows_bound_default_exact_reads_without_losing_block_checksums() {
+        let dimensions = 128;
+        let inputs = (0_u32..4)
+            .map(|cell_index| {
+                let mut page_rows = rows(128, dimensions);
+                for (ordinal, row) in page_rows.iter_mut().enumerate() {
+                    row.exact = (0..dimensions)
+                        .flat_map(|dimension| {
+                            ((ordinal * dimensions + dimension) as f32).to_le_bytes()
+                        })
+                        .collect();
+                }
+                GlobalLeafPageInput {
+                    cell_index,
+                    leaf_ordinal: 0,
+                    centroid_code: vec![cell_index as u8, 0],
+                    rows: page_rows,
+                }
+            })
+            .collect::<Vec<_>>();
+        let encoded =
+            encode_cell_card_group(&inputs, dimensions, VectorElementType::Float32).unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/run-0")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes =
+            encode_cell_card_run_root("codebook-checksum", std::slice::from_ref(&group), &cards)
+                .unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let selected_cells = (0_u32..4).collect::<Vec<_>>();
+        let head_plan =
+            super::plan_cell_card_head_wave(&root, &selected_cells, 8 * 1024 * 1024, 64).unwrap();
+        let fetched_heads = head_plan
+            .reads()
+            .iter()
+            .map(|read| encoded.bytes[read.start as usize..read.end as usize].to_vec())
+            .collect::<Vec<_>>();
+        let loaded = super::decode_cell_card_head_wave(
+            &head_plan,
+            &fetched_heads,
+            dimensions,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        assert_eq!(loaded.len(), 4);
+        assert!(loaded.iter().all(|head| head.head.exact_blocks.len() == 4));
+
+        let distances = loaded
+            .iter()
+            .map(|head| {
+                let mut values = vec![10.0_f32; head.head.codes.len()];
+                values[..8].fill(0.0);
+                values
+            })
+            .collect::<Vec<_>>();
+        let ranked = super::rank_cell_card_exact_windows(&loaded, &distances, 4, 4, 10).unwrap();
+
+        assert_eq!(ranked.len(), 16);
+        for head_index in 0..4 {
+            assert_eq!(
+                ranked
+                    .iter()
+                    .filter(|block| block.head_index == head_index)
+                    .map(|block| block.reference.block_ordinal)
+                    .collect::<Vec<_>>(),
+                vec![0, 1, 2, 3]
+            );
+        }
+        let selected_bytes = ranked
+            .iter()
+            .map(|block| u64::from(block.reference.bytes))
+            .sum::<u64>();
+        let plan = super::plan_cell_card_exact_wave(&ranked, selected_bytes, 4).unwrap();
+        assert!(plan.requests() <= 4);
+        let fetched_exact = plan
+            .reads()
+            .iter()
+            .map(|read| encoded.bytes[read.start as usize..read.end as usize].to_vec())
+            .collect::<Vec<_>>();
+        let decoded = super::decode_cell_card_exact_wave(
+            &plan,
+            &loaded,
+            &fetched_exact,
+            dimensions,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        assert_eq!(decoded.len(), 16);
     }
 
     #[test]
