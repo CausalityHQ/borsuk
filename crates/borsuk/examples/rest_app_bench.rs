@@ -57,6 +57,8 @@ struct AppState {
     index: BorsukIndex,
     admission: SearchAdmission,
     page_budget: usize,
+    ram_budget_bytes: u64,
+    disk_cache_bytes: u64,
     metrics: Arc<AppMetrics>,
 }
 
@@ -111,6 +113,9 @@ struct MetricsResponse {
     borsuk_cpu_threads: usize,
     borsuk_io_threads: usize,
     borsuk_s3_get_concurrency: usize,
+    borsuk_page_budget: usize,
+    borsuk_ram_budget_bytes: u64,
+    borsuk_disk_cache_bytes: u64,
 }
 
 fn router(state: AppState) -> Router {
@@ -155,6 +160,9 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         borsuk_cpu_threads: borsuk::configured_cpu_threads(),
         borsuk_io_threads: borsuk::configured_io_threads(),
         borsuk_s3_get_concurrency: borsuk::configured_backing_get_concurrency(),
+        borsuk_page_budget: state.page_budget,
+        borsuk_ram_budget_bytes: state.ram_budget_bytes,
+        borsuk_disk_cache_bytes: state.disk_cache_bytes,
     })
 }
 
@@ -291,6 +299,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         index,
         admission: SearchAdmission::new(search_limit)?,
         page_budget,
+        ram_budget_bytes: ram_budget_bytes as u64,
+        disk_cache_bytes: disk_cache_bytes as u64,
         metrics: Arc::new(AppMetrics::default()),
     };
     let listener = tokio::net::TcpListener::bind(listen).await?;
@@ -352,6 +362,8 @@ mod tests {
             index,
             admission,
             page_budget: 4,
+            ram_budget_bytes: 1024,
+            disk_cache_bytes: 0,
             metrics: std::sync::Arc::new(AppMetrics::default()),
         });
 
@@ -391,6 +403,8 @@ mod tests {
             index,
             admission: SearchAdmission::new(1).unwrap(),
             page_budget: 4,
+            ram_budget_bytes: 1024,
+            disk_cache_bytes: 0,
             metrics: std::sync::Arc::new(AppMetrics::default()),
         });
         let response = app
@@ -403,6 +417,9 @@ mod tests {
         assert_eq!(value["borsuk_search_capacity"], 8);
         assert_eq!(value["borsuk_leaf_read_width"], 32);
         assert_eq!(value["borsuk_leaf_read_capacity"], 48);
+        assert_eq!(value["borsuk_page_budget"], 4);
+        assert_eq!(value["borsuk_ram_budget_bytes"], 1024);
+        assert_eq!(value["borsuk_disk_cache_bytes"], 0);
         assert_eq!(
             value["borsuk_cpu_threads"],
             borsuk::configured_cpu_threads()

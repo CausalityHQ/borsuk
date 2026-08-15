@@ -76,6 +76,7 @@ publication datasets then cover realistic dimensions and scale, including the
 All gates apply independently to every completed repetition:
 
 - vector recall@10 is at least `0.95` against the exact frozen oracle;
+- accepted vector-search p99 is at most `100 ms` during staircase and mixed phases;
 - vector execution engine is always `bounded-cell-card-v15`;
 - mixed-normal cheap p99 is at most `max(baseline_p99 * 1.25,
   baseline_p99 + 2 ms)` and cheap error rate is below `0.1%`;
@@ -96,7 +97,9 @@ server.
 ## AWS and evidence contract
 
 - Server: Graviton `c7g.xlarge` (4 vCPU, 8 GiB), Spot by default, no swap,
-  2 GiB BORSUK resident budget, 1 GiB disk cache, three BORSUK CPU workers.
+  2 GiB BORSUK resident budget, disk cache disabled for the uncached S3
+  qualification, and three BORSUK CPU workers. A later cached campaign uses a
+  separately frozen nonzero cache cap and never substitutes for uncached evidence.
 - Generator: separate Spot instance in the same region/AZ; it must remain below
   50% CPU and report its own scheduling-lag histogram.
 - The server uses the frozen S3 index directly; it does not copy the full index

@@ -24,6 +24,10 @@ class Sample:
     status: int
     recall_at_10: float | None
     engine: str | None = None
+    backing_reads: int = 0
+    backing_bytes_read: int = 0
+    disk_cache_reads: int = 0
+    disk_cache_bytes_read: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -36,6 +40,10 @@ class Sample:
             "schedule_lag_ms": (self.started_ns - self.scheduled_ns) / 1_000_000,
             "recall_at_10": self.recall_at_10,
             "engine": self.engine,
+            "backing_reads": self.backing_reads,
+            "backing_bytes_read": self.backing_bytes_read,
+            "disk_cache_reads": self.disk_cache_reads,
+            "disk_cache_bytes_read": self.disk_cache_bytes_read,
         }
 
 
@@ -66,9 +74,10 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
     lags = [(sample.started_ns - sample.scheduled_ns) / 1_000_000 for sample in samples]
     recalls = [sample.recall_at_10 for sample in samples if sample.recall_at_10 is not None]
     engines = sorted({sample.engine for sample in samples if sample.engine is not None})
-    errors = sum(sample.status >= 500 or sample.status == 0 for sample in samples)
+    errors = sum(not 200 <= sample.status < 300 and sample.status != 429 for sample in samples)
     return {
         "requests": len(samples),
+        "successful_requests": sum(200 <= sample.status < 300 for sample in samples),
         "completed_qps": len(samples) / duration_seconds,
         "errors": errors,
         "rejected_429": sum(sample.status == 429 for sample in samples),
@@ -79,6 +88,10 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "schedule_lag_p99_ms": percentile(lags, 0.99),
         "mean_recall_at_10": sum(recalls) / len(recalls) if recalls else None,
         "engines": engines,
+        "backing_reads": sum(sample.backing_reads for sample in samples),
+        "backing_bytes_read": sum(sample.backing_bytes_read for sample in samples),
+        "disk_cache_reads": sum(sample.disk_cache_reads for sample in samples),
+        "disk_cache_bytes_read": sum(sample.disk_cache_bytes_read for sample in samples),
     }
 
 
@@ -117,6 +130,20 @@ def evaluate_phase(
             failures.append("cheap endpoint error rate is not below 0.1%")
     search = summary.get("search")
     if isinstance(search, dict):
+        requests = int(search.get("requests", 0))
+        successes = int(search.get("successful_requests", 0))
+        rejected = int(search.get("rejected_429", 0))
+        errors = int(search.get("errors", 0))
+        if requests == 0 or successes == 0 or errors != 0:
+            failures.append("vector phase must have successful requests and zero errors")
+        if successes + rejected + errors != requests:
+            failures.append("vector statuses are not fully accounted")
+        if float(search.get("schedule_lag_p99_ms", float("inf"))) > 10.0:
+            failures.append("generator schedule lag p99 exceeds 10ms")
+        if float(search.get("p99_ms", float("inf"))) > 100.0:
+            failures.append("vector p99 exceeds the frozen 100ms limit")
+        if phase != "mixed-overload" and rejected != 0:
+            failures.append("non-overload vector phase returned HTTP 429")
         recall = search.get("mean_recall_at_10")
         if recall is None or float(recall) < 0.95:
             failures.append(f"vector recall@10 {recall} is below 0.95")
@@ -126,6 +153,14 @@ def evaluate_phase(
                 "vector engine must be exactly bounded-cell-card-v15; "
                 f"observed {engines}"
             )
+        if phase == "mixed-overload" and rejected == 0:
+            failures.append("mixed overload must return explicit HTTP 429 responses")
+        if successes and int(search.get("backing_reads", 0)) == 0:
+            failures.append("uncached vector phase performed zero backing reads")
+        if int(search.get("disk_cache_reads", 0)) != 0 or int(
+            search.get("disk_cache_bytes_read", 0)
+        ) != 0:
+            failures.append("uncached vector phase used the disk cache")
     return failures
 
 
@@ -146,6 +181,10 @@ def _request(
     started = time.monotonic_ns()
     recall = None
     engine = None
+    backing_reads = 0
+    backing_bytes_read = 0
+    disk_cache_reads = 0
+    disk_cache_bytes_read = 0
     if endpoint == "search":
         if query is None:
             raise ValueError("search request has no query")
@@ -175,7 +214,23 @@ def _request(
         recall = _recall_at_10(actual, [str(item) for item in query["neighbors"]])  # type: ignore[index]
         engine_value = payload.get("engine")
         engine = str(engine_value) if engine_value is not None else None
-    return Sample(endpoint, scheduled_ns, started, completed, status, recall, engine)
+        backing_reads = int(payload.get("backing_reads", 0))
+        backing_bytes_read = int(payload.get("backing_bytes_read", 0))
+        disk_cache_reads = int(payload.get("disk_cache_reads", 0))
+        disk_cache_bytes_read = int(payload.get("disk_cache_bytes_read", 0))
+    return Sample(
+        endpoint,
+        scheduled_ns,
+        started,
+        completed,
+        status,
+        recall,
+        engine,
+        backing_reads,
+        backing_bytes_read,
+        disk_cache_reads,
+        disk_cache_bytes_read,
+    )
 
 
 def run_phase(
