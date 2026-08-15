@@ -47,6 +47,12 @@ def select_sustainable_search_qps(rows: list[dict[str, Any]]) -> float:
     return max(qualified)[1]
 
 
+def overload_search_qps(sustainable: float, rates: list[int]) -> float:
+    if sustainable <= 0 or not rates:
+        raise ValueError("overload rate requires positive sustainable and staircase rates")
+    return max(sustainable * 1.50, float(max(rates)))
+
+
 def staircase_has_only_expected_capacity_failures(rows: list[dict[str, Any]]) -> bool:
     allowed = {
         "non-overload vector phase returned HTTP 429",
@@ -188,7 +194,7 @@ def main() -> int:
         "mixed-overload",
         phase_duration,
         200.0,
-        sustainable * 1.50,
+        overload_search_qps(sustainable, rates),
         queries,
         baseline,
     )

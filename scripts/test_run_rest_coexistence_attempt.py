@@ -4,6 +4,7 @@ import unittest
 
 from scripts.run_rest_coexistence_attempt import (
     accepted_search_qps,
+    overload_search_qps,
     select_sustainable_search_qps,
     staircase_has_only_expected_capacity_failures,
     staircase_rates,
@@ -41,6 +42,10 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             {"offered_qps": 64, "accepted_qps": 40.0, "summary": {"passed": True, "search": {"rejected_429": 3}}},
         ]
         self.assertEqual(select_sustainable_search_qps(rows), 31.5)
+
+    def test_overload_rate_crosses_the_observed_staircase_capacity_boundary(self) -> None:
+        self.assertEqual(overload_search_qps(16.0, [16, 32, 64, 96]), 96.0)
+        self.assertEqual(overload_search_qps(96.0, [16, 32, 64, 96]), 144.0)
 
     def test_staircase_never_masks_server_errors_as_capacity(self) -> None:
         expected_boundary = [
