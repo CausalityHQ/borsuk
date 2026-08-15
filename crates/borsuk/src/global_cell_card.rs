@@ -1021,6 +1021,7 @@ pub(crate) struct ResidentCellCardRoot {
 }
 
 pub(crate) const CELL_CARD_RANGE_READ_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION: u64 = 4;
 
 fn cell_card_ranges_should_coalesce(
     prior_start: u64,
@@ -1860,7 +1861,8 @@ pub(crate) fn plan_cell_card_exact_wave(
             blocks: vec![block],
         });
     }
-    let mut speculative_gap_budget = (max_physical_bytes - selected_total).min(selected_total);
+    let mut speculative_gap_budget = (max_physical_bytes - selected_total)
+        .min(selected_total.saturating_mul(CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION - 1));
     loop {
         let cheapest = reads
             .windows(2)
@@ -4329,7 +4331,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_wave_speculation_never_exceeds_selected_bytes() {
+    fn exact_wave_speculation_never_exceeds_three_selected_bytes() {
         let group = Arc::new(super::CellCardGroupRef {
             path: "group.arrow".to_string(),
             checksum: [1; 32],
@@ -4361,8 +4363,8 @@ mod tests {
             .collect::<Vec<_>>();
         let plan = super::plan_cell_card_exact_wave(&ranked, 1024 * 1024, 32).unwrap();
         assert_eq!(plan.selected_bytes(), 48 * 1024);
-        assert!(plan.speculative_bytes() <= plan.selected_bytes());
-        assert_eq!(plan.requests(), 2);
+        assert!(plan.speculative_bytes() <= plan.selected_bytes() * 3);
+        assert_eq!(plan.requests(), 1);
     }
 
     #[test]
@@ -4413,6 +4415,53 @@ mod tests {
         assert_eq!(plan.speculative_bytes(), large_gap);
         assert!(plan.speculative_bytes() <= plan.selected_bytes());
         assert!(plan.physical_bytes() <= selected_bytes + large_gap);
+    }
+
+    #[test]
+    fn exact_wave_spends_three_selected_bytes_to_reduce_s3_requests() {
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "group.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: 512 * 1024,
+            code_plane_offset: 0,
+            code_plane_bytes: 1,
+            code_plane_checksum: [2; 32],
+        });
+        let block_bytes = 16 * 1024_u64;
+        let gap_bytes = 48 * 1024_u64;
+        let ranked = (0_u64..4)
+            .map(|ordinal| super::RankedCellCardExactBlock {
+                head_index: 0,
+                group: Arc::clone(&group),
+                cell_index: ordinal as u32,
+                card_ordinal: 0,
+                reference: super::CellCardExactBlockRef {
+                    block_ordinal: ordinal as u32,
+                    offset: ordinal * (block_bytes + gap_bytes),
+                    metadata_bytes: 1024,
+                    body_bytes: 15 * 1024,
+                    bytes: block_bytes as u32,
+                    rows: 32,
+                    checksum: [ordinal as u8; 32],
+                },
+                distance: ordinal as f32,
+                row_distances: Box::new([]),
+            })
+            .collect::<Vec<_>>();
+        let selected_bytes = block_bytes * ranked.len() as u64;
+        let maximum_physical_bytes = selected_bytes * 4;
+
+        let plan = super::plan_cell_card_exact_wave(&ranked, maximum_physical_bytes, ranked.len())
+            .unwrap();
+
+        assert_eq!(plan.blocks(), ranked.len());
+        assert_eq!(plan.requests(), 1);
+        assert_eq!(plan.selected_bytes(), selected_bytes);
+        assert_eq!(plan.speculative_bytes(), gap_bytes * 3);
+        assert!(plan.physical_bytes() <= maximum_physical_bytes);
+        assert!(
+            plan.reads()[0].end - plan.reads()[0].start <= super::CELL_CARD_RANGE_READ_MAX_BYTES
+        );
     }
 
     #[test]

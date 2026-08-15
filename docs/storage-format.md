@@ -865,11 +865,11 @@ code256 probe curve reaches 0.999 at 64 probes, making the cost of the last
 empirical recall points visible rather than hiding it behind a universal
 high-recall preset.
 
-Lossless V15 exact rows merge adjacent or nearby ranges with a 64 KiB per-gap
-limit. Total speculative exact bytes in a wave cannot exceed the selected exact
-bytes, every physical range remains capped at 4 MiB, and up to 32 ranges can be
-fetched concurrently. This keeps the default shortlist within one S3 request
-wave while bounding exact-range read amplification to 2x.
+Lossless V15 exact rows merge adjacent or nearby ranges under one global wave
+budget. Total speculative exact bytes in a wave cannot exceed three times the
+selected exact bytes, every physical range remains capped at 4 MiB, and up to
+32 ranges can be fetched concurrently. This keeps the default shortlist within
+one S3 request wave while bounding exact-range read amplification to 4x.
 
 The PQ head plane follows the same cold-read discipline. A cold miss promotes a
 complete stable code plane only when that plane is at most twice the already
