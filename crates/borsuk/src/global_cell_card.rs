@@ -1796,11 +1796,7 @@ pub(crate) fn rank_cell_card_exact_windows(
     let nearest_quota = window_budget.div_ceil(4).min(target_rows);
     let mut selected_windows = std::collections::BTreeSet::new();
     let mut selected = Vec::with_capacity(window_budget.saturating_mul(blocks_per_window));
-    for window_index in nearest
-        .into_iter()
-        .take(nearest_quota)
-        .chain(ranked)
-    {
+    for window_index in nearest.into_iter().take(nearest_quota).chain(ranked) {
         if !selected_windows.insert(window_index) {
             continue;
         }
@@ -1820,10 +1816,20 @@ pub(crate) fn rank_cell_card_exact_windows(
             break;
         }
     }
-    if selected_windows.len() < window_budget.min(windows.len()) || selected.is_empty() {
+    if selected.is_empty() {
         return Err(BorsukError::InvalidStorage(
             "cell-card exact window ranking produced incomplete coverage".to_string(),
         ));
+    }
+    let expected_blocks = window_budget
+        .checked_mul(blocks_per_window)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("cell-card exact window budget overflows".to_string())
+        })?;
+    if selected_windows.len() != window_budget || selected.len() != expected_blocks {
+        return Err(BorsukError::RecallGuaranteeViolated {
+            reason: crate::record::SearchTerminationReason::MaxSegments,
+        });
     }
     Ok(selected)
 }
@@ -3822,6 +3828,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decoded.len(), 16);
+
+        let mut tail_loaded = loaded.clone();
+        tail_loaded[0].head.exact_blocks.truncate(1);
+        tail_loaded[0].head.codes.truncate(32);
+        let mut tail_distances = distances.clone();
+        tail_distances[0].truncate(32);
+        tail_distances[0].fill(0.0);
+        for values in &mut tail_distances[1..] {
+            values.fill(10.0);
+        }
+        assert!(matches!(
+            super::rank_cell_card_exact_windows(&tail_loaded, &tail_distances, 4, 4, 10),
+            Err(crate::BorsukError::RecallGuaranteeViolated { .. })
+        ));
     }
 
     #[test]

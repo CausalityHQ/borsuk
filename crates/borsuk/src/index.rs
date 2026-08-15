@@ -385,12 +385,12 @@ fn global_leaf_exact_block_budget(page_budget: usize, target_rows: usize) -> usi
 fn global_cell_card_exact_block_budget(
     candidate_rows: usize,
     target_rows: usize,
-    bounded_default: bool,
+    bounded_exact_windows: bool,
 ) -> usize {
     let candidate_blocks = candidate_rows
         .max(target_rows)
         .div_ceil(crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS);
-    let candidate_blocks = if bounded_default {
+    let candidate_blocks = if bounded_exact_windows {
         candidate_blocks.min(GLOBAL_CELL_CARD_EXACT_BLOCK_MAX)
     } else {
         candidate_blocks
@@ -400,6 +400,22 @@ fn global_cell_card_exact_block_budget(
             .saturating_mul(4)
             .div_ceil(crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS),
     )
+}
+
+fn use_bounded_cell_card_exact_windows(
+    explicit_candidate_rows: Option<usize>,
+    mutation_overlay_present: bool,
+    target_rows: usize,
+) -> bool {
+    if mutation_overlay_present {
+        return false;
+    }
+    let window_rows = 4 * crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS;
+    explicit_candidate_rows.is_none_or(|rows| {
+        rows <= GLOBAL_CELL_CARD_EXACT_BLOCK_MAX * crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS
+            && rows.is_multiple_of(window_rows)
+            && target_rows.saturating_mul(4) <= rows
+    })
 }
 
 fn cell_card_code_plane_cache_key(path: &str, checksum: [u8; 32]) -> String {
@@ -17749,30 +17765,37 @@ impl BorsukIndex {
             SearchMode::Approx { max_bytes, .. } => max_bytes,
             SearchMode::Exact => unreachable!("V15 eligibility requires approximate search"),
         };
-        let (exact_candidate_rows, bounded_exact_default, default_mvcc_continuation) =
-            match options.mode {
-                SearchMode::Approx {
-                    max_candidates_per_segment,
-                    ..
-                } => match max_candidates_per_segment {
-                    Some(explicit) => (explicit, false, false),
-                    None => {
-                        let mutation_overlay_present = context
-                            .mutation_states
-                            .is_some_and(|states| !states.entries.is_empty());
-                        (
-                            usize::try_from(codebook.candidates()).unwrap_or(usize::MAX),
-                            !mutation_overlay_present,
-                            mutation_overlay_present,
-                        )
-                    }
-                },
-                SearchMode::Exact => unreachable!("V15 eligibility requires approximate search"),
-            };
+        let mutation_overlay_present = context
+            .mutation_states
+            .is_some_and(|states| !states.entries.is_empty());
+        let (exact_candidate_rows, bounded_exact_windows, default_mvcc_continuation) = match options
+            .mode
+        {
+            SearchMode::Approx {
+                max_candidates_per_segment,
+                ..
+            } => match max_candidates_per_segment {
+                Some(explicit) => (
+                    explicit,
+                    use_bounded_cell_card_exact_windows(
+                        Some(explicit),
+                        mutation_overlay_present,
+                        options.k,
+                    ),
+                    false,
+                ),
+                None => (
+                    usize::try_from(codebook.candidates()).unwrap_or(usize::MAX),
+                    use_bounded_cell_card_exact_windows(None, mutation_overlay_present, options.k),
+                    mutation_overlay_present,
+                ),
+            },
+            SearchMode::Exact => unreachable!("V15 eligibility requires approximate search"),
+        };
         let mut requested_exact_block_budget = global_cell_card_exact_block_budget(
             exact_candidate_rows,
             options.k,
-            bounded_exact_default,
+            bounded_exact_windows,
         );
         // Default queries with a mutation overlay need a bounded continuation
         // reserve: the nearest exact block may be entirely suppressed by newer
@@ -17993,14 +18016,25 @@ impl BorsukIndex {
             let exact_block_budget = requested_exact_block_budget.min(available_exact_blocks);
             let approximate_started = Instant::now();
             let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
-            let ranked = if bounded_exact_default {
-                rank_cell_card_exact_windows(
+            let ranked = if bounded_exact_windows {
+                match rank_cell_card_exact_windows(
                     &heads,
                     &distances,
                     exact_block_budget.div_ceil(4),
                     4,
                     options.k,
-                )?
+                ) {
+                    Ok(ranked) => ranked,
+                    Err(BorsukError::RecallGuaranteeViolated { .. }) => {
+                        rank_cell_card_exact_blocks(
+                            &heads,
+                            &distances,
+                            exact_block_budget,
+                            options.k,
+                        )?
+                    }
+                    Err(error) => return Err(error),
+                }
             } else {
                 rank_cell_card_exact_blocks(&heads, &distances, exact_block_budget, options.k)?
             };
@@ -38044,6 +38078,24 @@ mod tests {
             "the immutable default rerank was not bounded: {bounded_default:?}"
         );
 
+        let bounded_explicit = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(64)
+                    .with_max_candidates_per_segment(512),
+            )
+            .unwrap();
+        assert_eq!(bounded_explicit.hits[0].id.as_bytes(), b"row-0");
+        assert!(
+            bounded_explicit.global_leaf_exact_requests <= 4,
+            "the frozen explicit 512-row profile bypassed aligned exact windows: {bounded_explicit:?}"
+        );
+        assert!(
+            bounded_explicit.records_scored <= 512,
+            "aligned exact windows exceeded the caller's explicit candidate ceiling: {bounded_explicit:?}"
+        );
+
         let bounded = reader
             .search_with_report(
                 &[0.0; 8],
@@ -38053,6 +38105,19 @@ mod tests {
             )
             .unwrap();
         assert!(bounded.records_scored <= rows);
+    }
+
+    #[test]
+    fn resident_global_v15_explicit_frozen_profile_uses_aligned_exact_windows() {
+        assert!(!use_bounded_cell_card_exact_windows(Some(416), false, 10));
+        assert!(use_bounded_cell_card_exact_windows(Some(128), false, 10));
+        assert!(use_bounded_cell_card_exact_windows(Some(512), false, 128));
+        assert!(!use_bounded_cell_card_exact_windows(Some(512), false, 129));
+        assert!(!use_bounded_cell_card_exact_windows(Some(513), false, 10));
+        assert!(!use_bounded_cell_card_exact_windows(Some(2_048), false, 10));
+        assert!(use_bounded_cell_card_exact_windows(None, false, 200));
+        assert!(!use_bounded_cell_card_exact_windows(Some(512), true, 10));
+        assert!(!use_bounded_cell_card_exact_windows(None, true, 10));
     }
 
     #[test]
