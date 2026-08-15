@@ -43,10 +43,10 @@ const CELL_CARD_MAX_METADATA_BYTES: u32 = 32 * 1024;
 const CELL_CARD_ROOT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CELL_CARD_ROOT_MAX_CARDS: usize = 4_000_000;
 const CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
-// Exact blocks are small (~16 KiB for SIFT-128). Coalescing across megabyte
-// holes reduced request count but made cold S3 queries transfer 6.55 MiB each.
-// Keep one-request adjacency without paying for large unselected spans.
-pub(crate) const CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
+// Exact blocks are small (~16 KiB for SIFT-128). A bounded 128 KiB gap lets
+// nearby code-space microtiles share a GET, while the planner's independent
+// speculative-byte budget still prevents the old multi-megabyte overfetch.
+pub(crate) const CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES: u64 = 128 * 1024;
 
 pub(crate) fn cell_card_block_rows(
     dimensions: usize,
@@ -3945,6 +3945,14 @@ mod tests {
         let plan = super::plan_cell_card_exact_wave(&selected, selected_bytes, 2).unwrap();
         assert_eq!(plan.requests(), 2);
         assert_eq!(plan.physical_bytes(), selected_bytes);
+
+        let coalesced = super::plan_cell_card_exact_wave(&selected, selected_bytes * 2, 2).unwrap();
+        assert_eq!(
+            coalesced.requests(),
+            1,
+            "a caller-provided byte budget should buy one bounded 96 KiB gap"
+        );
+        assert!(coalesced.physical_bytes() <= selected_bytes * 2);
 
         let (prefix, limited) = super::plan_ranked_cell_card_exact_wave(
             &selected,
