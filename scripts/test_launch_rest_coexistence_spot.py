@@ -463,6 +463,13 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 output_uri="s3://bucket/size-check/attempts/0001",
                 runtime=runtime,
             )
+            if role == "rest-generator":
+                self.assertIn("FAILURE.log", user_data)
+                self.assertIn("diagnostic-output", user_data)
+                self.assertLess(
+                    user_data.index("diagnostic-output"),
+                    user_data.index('ATTEMPT_FAILED.json'),
+                )
             self.assertLessEqual(len(user_data.encode()), 16 * 1024)
 
 

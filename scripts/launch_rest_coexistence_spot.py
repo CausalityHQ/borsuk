@@ -376,6 +376,19 @@ output_prefix=${{output_path#*/}}
 upload_failure() {{
   local status="$1"
   local receipt=/tmp/borsuk-rest-failure.json
+  local journal=/tmp/borsuk-rest-{role}-failure.log
+  journalctl --no-pager -u borsuk-rest-{role}.service >"$journal" 2>&1 || true
+  aws s3api put-object --bucket "$output_bucket" \
+    --key "$output_prefix/FAILURE.log" --body "$journal" \
+    --if-none-match '*' >/dev/null 2>&1 || true
+  if [ -d /var/lib/borsuk-rest-generator/output ]; then
+    while IFS= read -r file; do
+      relative=${{file#/var/lib/borsuk-rest-generator/output/}}
+      aws s3api put-object --bucket "$output_bucket" \
+        --key "$output_prefix/diagnostic-output/$relative" --body "$file" \
+        --if-none-match '*' >/dev/null 2>&1 || true
+    done < <(find /var/lib/borsuk-rest-generator/output -type f | sort)
+  fi
   printf '{{"attempt_authority_sha256":"%s","role":"%s","schema_version":1,"status":%s}}\n' "$BORSUK_ATTEMPT_AUTHORITY_SHA256" '{role}' "$status" >"$receipt"
   aws s3api put-object --bucket "$output_bucket" \
     --key "$output_prefix/{FAILED_MARKER}" --body "$receipt" \
