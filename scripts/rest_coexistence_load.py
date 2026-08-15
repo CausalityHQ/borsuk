@@ -28,6 +28,14 @@ class Sample:
     backing_bytes_read: int = 0
     disk_cache_reads: int = 0
     disk_cache_bytes_read: int = 0
+    records_scored: int = 0
+    global_leaf_code_pages_read: int = 0
+    global_leaf_code_requests: int = 0
+    global_leaf_exact_requests: int = 0
+    global_leaf_exact_scores: int = 0
+    global_leaf_waves: int = 0
+    global_base_approximate_us: int = 0
+    global_base_exact_rerank_us: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -44,6 +52,14 @@ class Sample:
             "backing_bytes_read": self.backing_bytes_read,
             "disk_cache_reads": self.disk_cache_reads,
             "disk_cache_bytes_read": self.disk_cache_bytes_read,
+            "records_scored": self.records_scored,
+            "global_leaf_code_pages_read": self.global_leaf_code_pages_read,
+            "global_leaf_code_requests": self.global_leaf_code_requests,
+            "global_leaf_exact_requests": self.global_leaf_exact_requests,
+            "global_leaf_exact_scores": self.global_leaf_exact_scores,
+            "global_leaf_waves": self.global_leaf_waves,
+            "global_base_approximate_us": self.global_base_approximate_us,
+            "global_base_exact_rerank_us": self.global_base_exact_rerank_us,
         }
 
 
@@ -92,6 +108,26 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "backing_bytes_read": sum(sample.backing_bytes_read for sample in samples),
         "disk_cache_reads": sum(sample.disk_cache_reads for sample in samples),
         "disk_cache_bytes_read": sum(sample.disk_cache_bytes_read for sample in samples),
+        "records_scored": sum(sample.records_scored for sample in samples),
+        "global_leaf_code_pages_read": sum(
+            sample.global_leaf_code_pages_read for sample in samples
+        ),
+        "global_leaf_code_requests": sum(
+            sample.global_leaf_code_requests for sample in samples
+        ),
+        "global_leaf_exact_requests": sum(
+            sample.global_leaf_exact_requests for sample in samples
+        ),
+        "global_leaf_exact_scores": sum(
+            sample.global_leaf_exact_scores for sample in samples
+        ),
+        "global_leaf_waves": sum(sample.global_leaf_waves for sample in samples),
+        "global_base_approximate_us": sum(
+            sample.global_base_approximate_us for sample in samples
+        ),
+        "global_base_exact_rerank_us": sum(
+            sample.global_base_exact_rerank_us for sample in samples
+        ),
     }
 
 
@@ -185,6 +221,14 @@ def _request(
     backing_bytes_read = 0
     disk_cache_reads = 0
     disk_cache_bytes_read = 0
+    records_scored = 0
+    global_leaf_code_pages_read = 0
+    global_leaf_code_requests = 0
+    global_leaf_exact_requests = 0
+    global_leaf_exact_scores = 0
+    global_leaf_waves = 0
+    global_base_approximate_us = 0
+    global_base_exact_rerank_us = 0
     if endpoint == "search":
         if query is None:
             raise ValueError("search request has no query")
@@ -218,6 +262,16 @@ def _request(
         backing_bytes_read = int(payload.get("backing_bytes_read", 0))
         disk_cache_reads = int(payload.get("disk_cache_reads", 0))
         disk_cache_bytes_read = int(payload.get("disk_cache_bytes_read", 0))
+        records_scored = int(payload.get("records_scored", 0))
+        global_leaf_code_pages_read = int(payload.get("global_leaf_code_pages_read", 0))
+        global_leaf_code_requests = int(payload.get("global_leaf_code_requests", 0))
+        global_leaf_exact_requests = int(payload.get("global_leaf_exact_requests", 0))
+        global_leaf_exact_scores = int(payload.get("global_leaf_exact_scores", 0))
+        global_leaf_waves = int(payload.get("global_leaf_waves", 0))
+        global_base_approximate_us = int(payload.get("global_base_approximate_us", 0))
+        global_base_exact_rerank_us = int(
+            payload.get("global_base_exact_rerank_us", 0)
+        )
     return Sample(
         endpoint,
         scheduled_ns,
@@ -230,6 +284,14 @@ def _request(
         backing_bytes_read,
         disk_cache_reads,
         disk_cache_bytes_read,
+        records_scored,
+        global_leaf_code_pages_read,
+        global_leaf_code_requests,
+        global_leaf_exact_requests,
+        global_leaf_exact_scores,
+        global_leaf_waves,
+        global_base_approximate_us,
+        global_base_exact_rerank_us,
     )
 
 

@@ -70,6 +70,53 @@ class RestCoexistenceLoadTest(unittest.TestCase):
         self.assertEqual(search["disk_cache_reads"], 2)
         self.assertEqual(search["disk_cache_bytes_read"], 2048)
 
+    def test_summary_accumulates_exact_candidate_and_phase_telemetry(self) -> None:
+        samples = [
+            Sample(
+                "search",
+                0,
+                0,
+                1,
+                200,
+                1.0,
+                "bounded-cell-card-v15",
+                records_scored=512,
+                global_leaf_code_pages_read=128,
+                global_leaf_code_requests=4,
+                global_leaf_exact_requests=12,
+                global_leaf_exact_scores=512,
+                global_leaf_waves=1,
+                global_base_approximate_us=800,
+                global_base_exact_rerank_us=7_000,
+            ),
+            Sample(
+                "search",
+                1,
+                1,
+                2,
+                200,
+                1.0,
+                "bounded-cell-card-v15",
+                records_scored=500,
+                global_leaf_code_pages_read=120,
+                global_leaf_code_requests=3,
+                global_leaf_exact_requests=11,
+                global_leaf_exact_scores=500,
+                global_leaf_waves=1,
+                global_base_approximate_us=700,
+                global_base_exact_rerank_us=6_000,
+            ),
+        ]
+        search = summarize("search", 1.0, samples)["search"]
+        self.assertEqual(search["records_scored"], 1_012)
+        self.assertEqual(search["global_leaf_code_pages_read"], 248)
+        self.assertEqual(search["global_leaf_code_requests"], 7)
+        self.assertEqual(search["global_leaf_exact_requests"], 23)
+        self.assertEqual(search["global_leaf_exact_scores"], 1_012)
+        self.assertEqual(search["global_leaf_waves"], 2)
+        self.assertEqual(search["global_base_approximate_us"], 1_500)
+        self.assertEqual(search["global_base_exact_rerank_us"], 13_000)
+
     def test_uncached_gate_rejects_generator_lag_errors_cache_and_no_s3(self) -> None:
         baseline = {"cheap": {"p99_ms": 1.0, "errors": 0, "requests": 100}}
         search = {
