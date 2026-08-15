@@ -155,6 +155,10 @@ until curl -fsS http://127.0.0.1:8080/metrics >"$work/effective.json"; do
 done
 bucket=${{BORSUK_OUTPUT_URI#s3://}}; bucket=${{bucket%%/*}}; prefix=${{BORSUK_OUTPUT_URI#s3://$bucket/}}
 put() {{ aws s3api put-object --bucket "$bucket" --key "$prefix/$2" --body "$1" --if-none-match '*' >/dev/null; }}
+imds_token=$(curl --fail --silent --request PUT --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
+private_ip=$(curl --fail --silent --header "X-aws-ec2-metadata-token: $imds_token" http://169.254.169.254/latest/meta-data/local-ipv4)
+printf '{{"attempt_authority_sha256":"%s","endpoint":"http://%s:8080","schema_version":1}}\n' "$BORSUK_ATTEMPT_AUTHORITY_SHA256" "$private_ip" >"$work/endpoint.json"
+put "$work/endpoint.json" APP_ENDPOINT.json
 put "$work/effective.json" APP_READY.json
 printf 'epoch_s,rss_bytes,cpu_ticks,cgroup_memory_bytes,cgroup_swap_bytes,psi_some_avg10,psi_full_avg10,cache_bytes\n' >"$work/resources.csv"
 (
@@ -345,17 +349,17 @@ def _user_data(
     endpoint_property = ""
     if role == "rest-generator":
         readiness = f"""server_endpoint=''
+endpoint_receipt=/tmp/borsuk-rest-endpoint.json
+endpoint_path=${{BORSUK_OUTPUT_URI#s3://}}
+endpoint_bucket=${{endpoint_path%%/*}}
+endpoint_prefix=${{endpoint_path#*/}}
 deadline=$((SECONDS + 900))
 while [ "$SECONDS" -lt "$deadline" ]; do
-  server_ip=$(aws ec2 describe-instances \\
-    --filters 'Name=tag:Campaign,Values={campaign_id}' \\
-      'Name=tag:Attempt,Values={attempt}' \\
-      'Name=tag:Role,Values=rest-server' \\
-      'Name=instance-state-name,Values=pending,running' \\
-    --query 'Reservations[].Instances[].PrivateIpAddress' --output text | awk '{{print $1}}')
-  if [ -n "$server_ip" ] && curl --fail --silent --max-time 2 \
-      "http://${{server_ip}}:8080/health" >/dev/null; then
-    server_endpoint="http://${{server_ip}}:8080"
+  if aws s3 cp "s3://$endpoint_bucket/$endpoint_prefix/APP_ENDPOINT.json" "$endpoint_receipt" --only-show-errors >/dev/null 2>&1; then
+    server_endpoint=$(python3 -c 'import json,os,re,sys; v=json.load(open(sys.argv[1])); endpoint=str(v.get("endpoint","")); ok=v.get("schema_version")==1 and v.get("attempt_authority_sha256")==os.environ["BORSUK_ATTEMPT_AUTHORITY_SHA256"] and re.fullmatch(r"http://(?:[0-9]{{1,3}}\\.){{3}}[0-9]{{1,3}}:8080",endpoint); print(endpoint if ok else "")' "$endpoint_receipt")
+  fi
+  if [ -n "$server_endpoint" ] && curl --fail --silent --max-time 2 \
+      "$server_endpoint/health" >/dev/null; then
     break
   fi
   sleep 2

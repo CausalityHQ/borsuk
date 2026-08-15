@@ -118,7 +118,8 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         generator_data = self.pair["generator"]["UserData"]
         self.assertTrue(generator_data.startswith("#!/usr/bin/env bash\n"))
         self.assertIn("MemoryMax=3G", generator_data)
-        self.assertIn("tag:Role,Values=rest-server", generator_data)
+        self.assertNotIn("describe-instances", generator_data)
+        self.assertIn("APP_ENDPOINT.json", generator_data)
         self.assertIn("/health", generator_data)
         self.assertIn('--setenv=BORSUK_SERVER_ENDPOINT="$server_endpoint"', generator_data)
         self.assertIn("systemctl stop borsuk-rest-rest-generator.service", generator_data)
@@ -399,6 +400,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("index receipt does not authorize the requested index", server)
         self.assertIn("source_archive_sha256", server)
         self.assertIn("/metrics", server)
+        self.assertIn("APP_ENDPOINT.json", server)
         self.assertIn("resources.csv", server)
         self.assertIn("ATTEMPT_COMPLETE.json", server)
         self.assertIn("rest-generator-spot-interruption.json", server)
