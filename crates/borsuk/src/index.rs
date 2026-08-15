@@ -574,7 +574,7 @@ fn global_cell_card_wave_admission_bytes(
         .min(max_bytes);
     let exact_physical = exact_selected
         // Bound the full query-latency tradeoff: selected exact payload plus
-        // at most three selected bytes of skipped gaps.
+        // at most four selected bytes of skipped gaps.
         .saturating_mul(CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION)
         .min(max_bytes);
     let decoded_row_bytes = (dimensions as u64)
