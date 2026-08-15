@@ -37,10 +37,10 @@ impl SearchAdmission {
 }
 
 fn validate_page_budget(budget: usize) -> Result<usize, String> {
-    matches!(budget, 4 | 8 | 16 | 32)
+    matches!(budget, 4 | 8 | 16 | 32 | 64)
         .then_some(budget)
         .ok_or_else(|| {
-            format!("V13 REST leaf-block budget must be 4, 8, 16, or 32; received {budget}")
+            format!("V13 REST leaf-block budget must be 4, 8, 16, 32, or 64; received {budget}")
         })
 }
 
@@ -321,13 +321,13 @@ mod tests {
 
     #[test]
     fn rest_search_accepts_only_bounded_v13_block_budgets() {
-        for budget in [4, 8, 16, 32] {
+        for budget in [4, 8, 16, 32, 64] {
             assert_eq!(validate_page_budget(budget).unwrap(), budget);
         }
         for budget in [0, 1, 3, 5, 17, 33, 128] {
             let error = validate_page_budget(budget)
                 .expect_err("unsupported page budget reached the REST search path");
-            assert!(error.contains("4, 8, 16, or 32"), "{error}");
+            assert!(error.contains("4, 8, 16, 32, or 64"), "{error}");
         }
     }
 
