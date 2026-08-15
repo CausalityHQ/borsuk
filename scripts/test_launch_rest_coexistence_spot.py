@@ -43,7 +43,6 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "search_admission": 4,
                 "page_budget": 32,
                 "exact_candidates": 512,
-                "exact_hedge_after_ms": 50,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
                 "ram_budget_bytes": 2 * 1024**3,
@@ -106,7 +105,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("BORSUK_REST_SEARCH_ADMISSION=4", user_data)
         self.assertIn("BORSUK_REST_PAGE_BUDGET=32", user_data)
         self.assertIn("BORSUK_REST_EXACT_CANDIDATES=512", user_data)
-        self.assertIn("BORSUK_REST_EXACT_HEDGE_AFTER_MS=50", user_data)
+        self.assertNotIn("BORSUK_REST_EXACT_HEDGE_AFTER_MS", user_data)
         self.assertIn("BORSUK_REST_LEAF_READ_WIDTH=32", user_data)
         self.assertIn("BORSUK_REST_MAX_INFLIGHT_LEAF_READS=48", user_data)
         self.assertIn("BORSUK_REST_RAM_BUDGET_BYTES=2147483648", user_data)
@@ -411,7 +410,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             {(16, 32, 32), (32, 48, 64), (32, 96, 128)},
         )
         self.assertTrue(all(cell["disk_cache_bytes"] == 0 for cell in cells))
-        self.assertTrue(all(cell["exact_hedge_after_ms"] == 0 for cell in cells))
+        self.assertTrue(all("exact_hedge_after_ms" not in cell for cell in cells))
         self.assertTrue(
             all(cell["io_threads"] >= cell["s3_get_concurrency"] for cell in cells)
         )

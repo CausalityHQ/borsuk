@@ -3227,37 +3227,6 @@ impl Storage {
         Ok(bytes)
     }
 
-    /// Read one exact range, optionally issuing one duplicate backing GET when
-    /// the primary crosses a caller-selected tail threshold. The process-wide
-    /// physical GET semaphore still admits both attempts, and request/byte
-    /// telemetry charges a loser that reaches the object-store response.
-    pub(crate) fn read_range_with_optional_hedge(
-        &self,
-        relative: &str,
-        range: Range<u64>,
-        hedge_after: Option<Duration>,
-    ) -> Result<Vec<u8>> {
-        let Some(hedge_after) = hedge_after else {
-            return self.read_range(relative, range);
-        };
-        if range.start >= range.end {
-            return Err(BorsukError::InvalidStorage(format!(
-                "range {}..{} is empty or reversed for `{relative}`",
-                range.start, range.end
-            )));
-        }
-        let ranges = [range.clone()];
-        let plan = plan_bounded_ranges(&ranges, 0, range.end - range.start);
-        let mut read =
-            self.read_ranges_with_policy(relative, &ranges, plan, 1, Some(hedge_after))?;
-        read.chunks.pop().ok_or_else(|| {
-            BorsukError::InvalidStorage(format!(
-                "hedged range {}..{} returned no bytes for `{relative}`",
-                range.start, range.end
-            ))
-        })
-    }
-
     pub(crate) fn read_suffix(&self, relative: &str, length: u64) -> Result<ReadBytes> {
         let cacheable = !is_mutable_lane_head(relative);
         if cacheable && let Some(bytes) = self.read_cache_file(relative)? {
@@ -6058,28 +6027,6 @@ mod tests {
         assert_eq!(read.chunks, vec![vec![7_u8; 4], vec![7_u8; 4]]);
         assert_eq!(requests.gets, 1);
         assert_eq!(read.bytes_fetched, 32 * 1024 + 4);
-    }
-
-    #[test]
-    fn optional_hedged_range_read_preserves_exact_bytes_and_attempt_accounting() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = Storage::from_uri(&file_uri(dir.path())).unwrap();
-        storage
-            .write_bytes("vectors/hedged.bin", b"prefix-selected-suffix")
-            .unwrap();
-
-        let before = storage.request_counts();
-        let bytes = storage
-            .read_range_with_optional_hedge(
-                "vectors/hedged.bin",
-                7..15,
-                Some(Duration::from_millis(50)),
-            )
-            .unwrap();
-        let requests = storage.request_counts().delta(&before);
-
-        assert_eq!(bytes, b"selected");
-        assert_eq!(requests.gets, 1, "fast reads must not launch a hedge");
     }
 
     #[test]

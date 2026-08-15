@@ -67,7 +67,6 @@ struct AppState {
     admission: SearchAdmission,
     page_budget: usize,
     exact_candidates: usize,
-    exact_hedge_after_ms: u64,
     ram_budget_bytes: u64,
     disk_cache_bytes: u64,
     metrics: Arc<AppMetrics>,
@@ -134,7 +133,6 @@ struct MetricsResponse {
     borsuk_s3_get_concurrency: usize,
     borsuk_page_budget: usize,
     borsuk_exact_candidates: usize,
-    borsuk_exact_hedge_after_ms: u64,
     borsuk_ram_budget_bytes: u64,
     borsuk_disk_cache_bytes: u64,
 }
@@ -183,7 +181,6 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         borsuk_s3_get_concurrency: borsuk::configured_backing_get_concurrency(),
         borsuk_page_budget: state.page_budget,
         borsuk_exact_candidates: state.exact_candidates,
-        borsuk_exact_hedge_after_ms: state.exact_hedge_after_ms,
         borsuk_ram_budget_bytes: state.ram_budget_bytes,
         borsuk_disk_cache_bytes: state.disk_cache_bytes,
     })
@@ -314,7 +311,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let page_budget = validate_page_budget(env_usize("BORSUK_REST_PAGE_BUDGET", 32)?)?;
     let exact_candidates =
         validate_exact_candidates(env_usize("BORSUK_REST_EXACT_CANDIDATES", 512)?)?;
-    let exact_hedge_after_ms = env_usize("BORSUK_REST_EXACT_HEDGE_AFTER_MS", 0)?;
     let search_limit = env_usize("BORSUK_REST_SEARCH_ADMISSION", 2)?;
     let leaf_read_width = env_usize("BORSUK_REST_LEAF_READ_WIDTH", 32)?;
     let max_inflight_leaf_reads = env_usize("BORSUK_REST_MAX_INFLIGHT_LEAF_READS", 48)?;
@@ -328,8 +324,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_waiting_searches: 0,
             leaf_read_width,
             max_inflight_leaf_reads,
-            cell_card_exact_hedge_after: (exact_hedge_after_ms > 0)
-                .then(|| std::time::Duration::from_millis(exact_hedge_after_ms as u64)),
             ..OpenOptions::default()
         },
     )?;
@@ -339,7 +333,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         admission: SearchAdmission::new(search_limit)?,
         page_budget,
         exact_candidates,
-        exact_hedge_after_ms: exact_hedge_after_ms as u64,
         ram_budget_bytes: ram_budget_bytes as u64,
         disk_cache_bytes: disk_cache_bytes as u64,
         metrics: Arc::new(AppMetrics::default()),
@@ -416,7 +409,6 @@ mod tests {
             admission,
             page_budget: 4,
             exact_candidates: 512,
-            exact_hedge_after_ms: 50,
             ram_budget_bytes: 1024,
             disk_cache_bytes: 0,
             metrics: std::sync::Arc::new(AppMetrics::default()),
@@ -459,7 +451,6 @@ mod tests {
             admission: SearchAdmission::new(1).unwrap(),
             page_budget: 4,
             exact_candidates: 512,
-            exact_hedge_after_ms: 50,
             ram_budget_bytes: 1024,
             disk_cache_bytes: 0,
             metrics: std::sync::Arc::new(AppMetrics::default()),
@@ -476,7 +467,6 @@ mod tests {
         assert_eq!(value["borsuk_leaf_read_capacity"], 48);
         assert_eq!(value["borsuk_page_budget"], 4);
         assert_eq!(value["borsuk_exact_candidates"], 512);
-        assert_eq!(value["borsuk_exact_hedge_after_ms"], 50);
         assert_eq!(value["borsuk_ram_budget_bytes"], 1024);
         assert_eq!(value["borsuk_disk_cache_bytes"], 0);
         assert_eq!(

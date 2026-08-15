@@ -913,10 +913,6 @@ pub struct OpenOptions {
     /// named modality children. The lower of this and the process-wide backing
     /// GET cap provides per-index fairness.
     pub max_inflight_leaf_reads: usize,
-    /// Launch one duplicate V15 exact-vector range GET when the primary has
-    /// not completed by this delay. Both attempts remain subject to the
-    /// process-wide backing GET cap; `None` disables tail hedging.
-    pub cell_card_exact_hedge_after: Option<Duration>,
 }
 
 impl Default for OpenOptions {
@@ -941,7 +937,6 @@ impl Default for OpenOptions {
             max_waiting_searches: DEFAULT_MAX_WAITING_SEARCHES,
             leaf_read_width: DEFAULT_LEAF_READ_WIDTH,
             max_inflight_leaf_reads: DEFAULT_MAX_INFLIGHT_LEAF_READS,
-            cell_card_exact_hedge_after: None,
         }
     }
 }
@@ -1291,7 +1286,6 @@ struct CollectionReadRuntime {
     admission: Arc<AdmissionGate>,
     leaf_read_width: usize,
     global_pq_rerank_admission: Arc<AdmissionGate>,
-    cell_card_exact_hedge_after: Option<Duration>,
     cell_card_code_planes: Arc<DecodedObjectCache<Vec<u8>>>,
     prepared_cell_card_code_planes: Mutex<Option<PreparedCellCardCodePlanes>>,
     inflight_cell_card_code_planes: Arc<InFlightReads<Vec<u8>>>,
@@ -3187,7 +3181,6 @@ impl CollectionReadRuntime {
             global_pq_rerank_admission: Arc::new(AdmissionGate::new(
                 options.max_inflight_leaf_reads,
             )),
-            cell_card_exact_hedge_after: options.cell_card_exact_hedge_after,
             cell_card_code_planes: decoded_cache_with_pool(
                 retained_pool
                     .as_ref()
@@ -4304,7 +4297,6 @@ impl BorsukIndex {
                 max_waiting_searches: DEFAULT_MAX_WAITING_SEARCHES,
                 leaf_read_width: DEFAULT_LEAF_READ_WIDTH,
                 max_inflight_leaf_reads: DEFAULT_MAX_INFLIGHT_LEAF_READS,
-                cell_card_exact_hedge_after: None,
             },
         )
     }
@@ -18112,11 +18104,8 @@ impl BorsukIndex {
             self.leaf_read_width,
             Some(&self.global_pq_rerank_admission),
             |read| {
-                self.storage.read_range_with_optional_hedge(
-                    &read.group.path,
-                    read.start..read.end,
-                    self.read_runtime.cell_card_exact_hedge_after,
-                )
+                self.storage
+                    .read_range(&read.group.path, read.start..read.end)
             },
         );
         let exact_request_counts = self.storage.request_counts().delta(&exact_requests_before);
@@ -27753,14 +27742,6 @@ fn validate_open_options(options: &OpenOptions) -> Result<()> {
             "max_inflight_leaf_reads must be at most 1024".to_string(),
         ));
     }
-    if options
-        .cell_card_exact_hedge_after
-        .is_some_and(|delay| delay < Duration::from_millis(1) || delay > Duration::from_secs(5))
-    {
-        return Err(BorsukError::InvalidOpenOptions(
-            "cell_card_exact_hedge_after must be in 1ms..=5s when set".to_string(),
-        ));
-    }
     Ok(())
 }
 
@@ -35823,7 +35804,6 @@ mod tests {
             OpenOptions::default().max_inflight_leaf_reads,
             DEFAULT_MAX_INFLIGHT_LEAF_READS
         );
-        assert_eq!(OpenOptions::default().cell_card_exact_hedge_after, None);
         assert_eq!(
             SearchOptions::default().prefetch_depth,
             16,
@@ -35868,14 +35848,6 @@ mod tests {
             assert!(error.to_string().contains(field));
         }
         validate_open_options(&OpenOptions::default()).unwrap();
-        for delay in [Duration::from_nanos(1), Duration::from_secs(6)] {
-            let error = validate_open_options(&OpenOptions {
-                cell_card_exact_hedge_after: Some(delay),
-                ..OpenOptions::default()
-            })
-            .unwrap_err();
-            assert!(error.to_string().contains("cell_card_exact_hedge_after"));
-        }
     }
 
     #[test]
