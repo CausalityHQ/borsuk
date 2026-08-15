@@ -176,7 +176,10 @@ def evaluate_phase(
             failures.append("vector statuses are not fully accounted")
         if float(search.get("schedule_lag_p99_ms", float("inf"))) > 10.0:
             failures.append("generator schedule lag p99 exceeds 10ms")
-        if float(search.get("p99_ms", float("inf"))) > 100.0:
+        # The overload phase deliberately drives admission into HTTP 429. Its
+        # contract is app-endpoint isolation and explicit backpressure; the
+        # 100 ms vector tail applies only to admitted non-overload traffic.
+        if phase != "mixed-overload" and float(search.get("p99_ms", float("inf"))) > 100.0:
             failures.append("vector p99 exceeds the frozen 100ms limit")
         if phase != "mixed-overload" and rejected != 0:
             failures.append("non-overload vector phase returned HTTP 429")

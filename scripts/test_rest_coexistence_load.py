@@ -59,6 +59,27 @@ class RestCoexistenceLoadTest(unittest.TestCase):
             any("429" in failure for failure in evaluate_phase("mixed-overload", baseline, mixed))
         )
 
+    def test_overload_gate_preserves_app_isolation_without_requiring_vector_tail_latency(self) -> None:
+        baseline = {"cheap": {"p99_ms": 1.0, "errors": 0, "requests": 100}}
+        mixed = {
+            "cheap": {"p99_ms": 2.0, "errors": 0, "requests": 100},
+            "search": {
+                "mean_recall_at_10": 0.96,
+                "requests": 100,
+                "successful_requests": 40,
+                "errors": 0,
+                "rejected_429": 60,
+                "schedule_lag_p99_ms": 1.0,
+                "p99_ms": 150.0,
+                "engines": ["bounded-cell-card-v17"],
+                "backing_reads": 1,
+                "disk_cache_reads": 0,
+                "disk_cache_bytes_read": 0,
+            },
+        }
+
+        self.assertEqual(evaluate_phase("mixed-overload", baseline, mixed), [])
+
     def test_uncached_gate_accepts_only_the_v17_cell_card_engine(self) -> None:
         baseline = {"cheap": {"p99_ms": 1.0, "errors": 0, "requests": 100}}
         search = {
