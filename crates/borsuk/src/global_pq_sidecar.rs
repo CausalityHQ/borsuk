@@ -2073,11 +2073,11 @@ impl ResidentGlobalCodebook {
             .into_iter()
             .map(|code| {
                 if code.len() != self.code_width {
-                    return invalid("V15 cell-card code width does not match its codebook");
+                    return invalid("V16 cell-card code width does not match its codebook");
                 }
                 let distance = self.quantizer.distance(&prepared, code)?;
                 if !distance.is_finite() {
-                    return invalid("V15 cell-card code distance is non-finite");
+                    return invalid("V16 cell-card code distance is non-finite");
                 }
                 Ok(distance)
             })

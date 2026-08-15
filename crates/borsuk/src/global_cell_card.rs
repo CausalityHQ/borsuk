@@ -32,10 +32,10 @@ use crate::{
     record::VectorElementType,
 };
 
-pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v15";
+pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v16";
 pub(crate) const CELL_CARD_GROUP_MAX_BYTES: u64 = 48 * 1024 * 1024;
 const CELL_CARD_VECTOR_PAYLOAD_BYTES: usize = 96 * 1024;
-const CELL_CARD_MAX_BLOCK_ROWS: usize = 32;
+const CELL_CARD_MAX_BLOCK_ROWS: usize = 128;
 const CELL_CARD_MAX_METADATA_BYTES: u32 = 32 * 1024;
 const CELL_CARD_ROOT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CELL_CARD_ROOT_MAX_CARDS: usize = 4_000_000;
@@ -1068,7 +1068,6 @@ impl CellCardHeadWavePlan {
     pub(crate) fn requests(&self) -> usize {
         self.reads.len()
     }
-
     pub(crate) fn backing_requests(&self) -> usize {
         self.backing_requests
     }
@@ -1134,6 +1133,56 @@ pub(crate) fn rank_cell_card_head_indexes(
     );
     ranked.truncate(max_cards);
     Ok(ranked.into_iter().map(|(index, _)| index).collect())
+}
+
+pub(crate) fn cell_card_exact_admission_bounds(
+    root: &ResidentCellCardRoot,
+    indexes: &[usize],
+) -> Result<(usize, u64, u64)> {
+    if indexes.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card admission indexes are empty".to_string(),
+        ));
+    }
+    let (blocks, max_bytes, max_rows) = indexes.iter().try_fold(
+        (0_usize, 0_u64, 0_u64),
+        |(blocks, max_bytes, max_rows), index| {
+            let (_, head) = root.head_ref(*index)?;
+            if head.exact_blocks.is_empty() {
+                return Err(BorsukError::InvalidStorage(
+                    "cell-card admission head has no exact blocks".to_string(),
+                ));
+            }
+            let blocks = blocks.checked_add(head.exact_blocks.len()).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cell-card admission exact-block count overflows".to_string(),
+                )
+            })?;
+            Ok::<_, BorsukError>((
+                blocks,
+                max_bytes.max(
+                    head.exact_blocks
+                        .iter()
+                        .map(|block| u64::from(block.bytes))
+                        .max()
+                        .unwrap_or(0),
+                ),
+                max_rows.max(
+                    head.exact_blocks
+                        .iter()
+                        .map(|block| u64::from(block.rows))
+                        .max()
+                        .unwrap_or(0),
+                ),
+            ))
+        },
+    )?;
+    if blocks == 0 || max_bytes == 0 || max_rows == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card admission bounds are empty".to_string(),
+        ));
+    }
+    Ok((blocks, max_bytes, max_rows))
 }
 
 pub(crate) fn plan_cell_card_head_wave(
@@ -1552,6 +1601,7 @@ pub(crate) struct RankedCellCardExactBlock {
     pub(crate) card_ordinal: u32,
     pub(crate) reference: CellCardExactBlockRef,
     pub(crate) distance: f32,
+    pub(crate) row_distances: Box<[f32]>,
 }
 
 fn ranked_cell_card_block_identity(block: &RankedCellCardExactBlock) -> (u32, u32, u32, &str, u64) {
@@ -1567,19 +1617,19 @@ fn ranked_cell_card_block_identity(block: &RankedCellCardExactBlock) -> (u32, u3
 pub(crate) fn rank_cell_card_exact_blocks(
     heads: &[LoadedCellCardHead],
     row_distances: &[Vec<f32>],
-    block_budget: usize,
+    candidate_rows: usize,
     target_rows: usize,
 ) -> Result<Vec<RankedCellCardExactBlock>> {
     if heads.is_empty()
         || heads.len() != row_distances.len()
-        || block_budget == 0
+        || candidate_rows == 0
         || target_rows == 0
     {
         return Err(BorsukError::InvalidStorage(
             "cell-card block ranking inputs are incomplete".to_string(),
         ));
     }
-    let mut blocks = Vec::<(RankedCellCardExactBlock, Vec<f32>)>::new();
+    let mut blocks = Vec::<RankedCellCardExactBlock>::new();
     for (head_index, (loaded, distances)) in heads.iter().zip(row_distances).enumerate() {
         if distances.len() != loaded.head.codes.len()
             || distances.iter().any(|distance| !distance.is_finite())
@@ -1603,17 +1653,15 @@ pub(crate) fn rank_cell_card_exact_blocks(
             let distance = rows.iter().copied().min_by(f32::total_cmp).ok_or_else(|| {
                 BorsukError::InvalidStorage("cell-card block has no rows".to_string())
             })?;
-            blocks.push((
-                RankedCellCardExactBlock {
-                    head_index,
-                    group: Arc::clone(&loaded.group),
-                    cell_index: loaded.head.cell_index,
-                    card_ordinal: loaded.head.card_ordinal,
-                    reference: reference.clone(),
-                    distance,
-                },
-                rows.to_vec(),
-            ));
+            blocks.push(RankedCellCardExactBlock {
+                head_index,
+                group: Arc::clone(&loaded.group),
+                cell_index: loaded.head.cell_index,
+                card_ordinal: loaded.head.card_ordinal,
+                reference: reference.clone(),
+                distance,
+                row_distances: rows.into(),
+            });
             covered = end;
         }
         if covered != distances.len() {
@@ -1625,8 +1673,9 @@ pub(crate) fn rank_cell_card_exact_blocks(
     let mut candidates = blocks
         .iter()
         .enumerate()
-        .flat_map(|(block, (_, distances))| {
-            distances
+        .flat_map(|(block, candidate)| {
+            candidate
+                .row_distances
                 .iter()
                 .copied()
                 .map(move |distance| (distance, block))
@@ -1641,10 +1690,7 @@ pub(crate) fn rank_cell_card_exact_blocks(
     for (_, block) in candidates.into_iter().take(target_rows.saturating_mul(4)) {
         votes[block] = votes[block].saturating_add(1);
     }
-    let mut nearest = blocks
-        .iter()
-        .map(|(block, _)| block.clone())
-        .collect::<Vec<_>>();
+    let mut nearest = blocks.to_vec();
     nearest.sort_by(|left, right| {
         left.distance.total_cmp(&right.distance).then_with(|| {
             ranked_cell_card_block_identity(left).cmp(&ranked_cell_card_block_identity(right))
@@ -1653,7 +1699,7 @@ pub(crate) fn rank_cell_card_exact_blocks(
     let mut ranked = blocks
         .into_iter()
         .enumerate()
-        .map(|(index, (block, _))| (block, votes[index]))
+        .map(|(index, block)| (block, votes[index]))
         .collect::<Vec<_>>();
     ranked.sort_by(|(left, left_votes), (right, right_votes)| {
         right_votes
@@ -1663,173 +1709,52 @@ pub(crate) fn rank_cell_card_exact_blocks(
                 ranked_cell_card_block_identity(left).cmp(&ranked_cell_card_block_identity(right))
             })
     });
-    let nearest_quota = block_budget.div_ceil(4).min(target_rows);
+    let requested_rows = candidate_rows.max(target_rows);
+    let nearest_row_quota = requested_rows
+        .div_ceil(4)
+        .max(target_rows.min(requested_rows));
     let mut seen = std::collections::BTreeSet::new();
-    let mut selected = Vec::with_capacity(block_budget);
-    for block in nearest
-        .into_iter()
-        .take(nearest_quota)
-        .chain(ranked.into_iter().map(|(block, _)| block))
-    {
+    let mut selected = Vec::with_capacity(ranked.len());
+    let mut selected_rows = 0_usize;
+    for block in nearest {
         if seen.insert((
             block.group.path.clone(),
             block.reference.offset,
             block.reference.block_ordinal,
         )) {
+            selected_rows = selected_rows
+                .checked_add(block.reference.rows as usize)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card selected exact rows overflow".to_string(),
+                    )
+                })?;
             selected.push(block);
         }
-        if selected.len() == block_budget {
+        if selected_rows >= nearest_row_quota {
             break;
         }
     }
-    Ok(selected)
-}
-
-pub(crate) fn rank_cell_card_exact_windows(
-    heads: &[LoadedCellCardHead],
-    row_distances: &[Vec<f32>],
-    window_budget: usize,
-    blocks_per_window: usize,
-    target_rows: usize,
-) -> Result<Vec<RankedCellCardExactBlock>> {
-    if window_budget == 0 || blocks_per_window == 0 {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card exact window bounds must be non-zero".to_string(),
-        ));
-    }
-    if heads.is_empty() || heads.len() != row_distances.len() || target_rows == 0 {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card exact window ranking inputs are incomplete".to_string(),
-        ));
-    }
-    let mut windows = Vec::<(usize, usize, usize, f32, Vec<f32>)>::new();
-    for (head_index, (head, distances)) in heads.iter().zip(row_distances).enumerate() {
-        if distances.len() != head.head.codes.len()
-            || distances.iter().any(|distance| !distance.is_finite())
-        {
-            return Err(BorsukError::InvalidStorage(
-                "cell-card exact window distances are incomplete or non-finite".to_string(),
-            ));
+    if selected_rows < requested_rows {
+        for (block, _) in ranked {
+            if seen.insert((
+                block.group.path.clone(),
+                block.reference.offset,
+                block.reference.block_ordinal,
+            )) {
+                selected_rows = selected_rows
+                    .checked_add(block.reference.rows as usize)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "cell-card selected exact rows overflow".to_string(),
+                        )
+                    })?;
+                selected.push(block);
+            }
+            if selected_rows >= requested_rows {
+                break;
+            }
         }
-        let mut covered_rows = 0_usize;
-        for (window_ordinal, references) in
-            head.head.exact_blocks.chunks(blocks_per_window).enumerate()
-        {
-            let window_rows = references.iter().try_fold(0_usize, |rows, reference| {
-                rows.checked_add(reference.rows as usize).ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "cell-card exact window row count overflows".to_string(),
-                    )
-                })
-            })?;
-            let end_rows = covered_rows.checked_add(window_rows).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "cell-card exact window row coverage overflows".to_string(),
-                )
-            })?;
-            let rows = distances.get(covered_rows..end_rows).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "cell-card exact window rows exceed their code distances".to_string(),
-                )
-            })?;
-            let distance = rows.iter().copied().min_by(f32::total_cmp).ok_or_else(|| {
-                BorsukError::InvalidStorage("cell-card exact window has no rows".to_string())
-            })?;
-            let start = window_ordinal * blocks_per_window;
-            windows.push((
-                head_index,
-                start,
-                start + references.len(),
-                distance,
-                rows.to_vec(),
-            ));
-            covered_rows = end_rows;
-        }
-        if covered_rows != distances.len() {
-            return Err(BorsukError::InvalidStorage(
-                "cell-card exact windows do not cover their code distances".to_string(),
-            ));
-        }
-    }
-    let mut candidates = windows
-        .iter()
-        .enumerate()
-        .flat_map(|(window, (_, _, _, _, distances))| {
-            distances
-                .iter()
-                .copied()
-                .map(move |distance| (distance, window))
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_unstable_by(|left, right| {
-        left.0
-            .total_cmp(&right.0)
-            .then_with(|| left.1.cmp(&right.1))
-    });
-    let mut votes = vec![0_usize; windows.len()];
-    for (_, window) in candidates.into_iter().take(target_rows.saturating_mul(4)) {
-        votes[window] = votes[window].saturating_add(1);
-    }
-    let identity = |window: &(usize, usize, usize, f32, Vec<f32>)| {
-        let head = &heads[window.0];
-        (
-            head.head.cell_index,
-            head.head.card_ordinal,
-            window.1,
-            head.group.path.as_str(),
-        )
-    };
-    let mut nearest = (0..windows.len()).collect::<Vec<_>>();
-    nearest.sort_by(|left, right| {
-        windows[*left]
-            .3
-            .total_cmp(&windows[*right].3)
-            .then_with(|| identity(&windows[*left]).cmp(&identity(&windows[*right])))
-    });
-    let mut ranked = (0..windows.len()).collect::<Vec<_>>();
-    ranked.sort_by(|left, right| {
-        votes[*right]
-            .cmp(&votes[*left])
-            .then_with(|| windows[*left].3.total_cmp(&windows[*right].3))
-            .then_with(|| identity(&windows[*left]).cmp(&identity(&windows[*right])))
-    });
-    let nearest_quota = window_budget.div_ceil(4).min(target_rows);
-    let mut selected_windows = std::collections::BTreeSet::new();
-    let mut selected = Vec::with_capacity(window_budget.saturating_mul(blocks_per_window));
-    for window_index in nearest.into_iter().take(nearest_quota).chain(ranked) {
-        if !selected_windows.insert(window_index) {
-            continue;
-        }
-        let (head_index, window_start, window_end, distance, _) = &windows[window_index];
-        let head = &heads[*head_index];
-        for reference in &head.head.exact_blocks[*window_start..*window_end] {
-            selected.push(RankedCellCardExactBlock {
-                head_index: *head_index,
-                group: Arc::clone(&head.group),
-                cell_index: head.head.cell_index,
-                card_ordinal: head.head.card_ordinal,
-                reference: reference.clone(),
-                distance: *distance,
-            });
-        }
-        if selected_windows.len() == window_budget {
-            break;
-        }
-    }
-    if selected.is_empty() {
-        return Err(BorsukError::InvalidStorage(
-            "cell-card exact window ranking produced incomplete coverage".to_string(),
-        ));
-    }
-    let expected_blocks = window_budget
-        .checked_mul(blocks_per_window)
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage("cell-card exact window budget overflows".to_string())
-        })?;
-    if selected_windows.len() != window_budget || selected.len() != expected_blocks {
-        return Err(BorsukError::RecallGuaranteeViolated {
-            reason: crate::record::SearchTerminationReason::MaxSegments,
-        });
     }
     Ok(selected)
 }
@@ -1869,6 +1794,9 @@ impl CellCardExactWavePlan {
     }
     pub(crate) fn requests(&self) -> usize {
         self.reads.len()
+    }
+    pub(crate) fn blocks(&self) -> usize {
+        self.reads.iter().map(|read| read.blocks.len()).sum()
     }
     pub(crate) fn physical_bytes(&self) -> u64 {
         self.physical_bytes
@@ -2138,7 +2066,7 @@ impl GlobalCellCardAnnRef {
         purge_epoch: u64,
     ) -> Result<Self> {
         let reference = Self {
-            layout_version: 15,
+            layout_version: 16,
             codebook,
             root_path,
             root,
@@ -2159,10 +2087,10 @@ impl GlobalCellCardAnnRef {
         let checksum = blake3::Hash::from_bytes(self.root.checksum)
             .to_hex()
             .to_string();
-        if self.layout_version != 15
+        if self.layout_version != 16
             || self.root_path
                 != format!(
-                    "global-cell-cards/v15/roots/{}/root-{checksum}.parquet",
+                    "global-cell-cards/v16/roots/{}/root-{checksum}.parquet",
                     &checksum[..2]
                 )
             || self.root.encoded_bytes == 0
@@ -2176,7 +2104,7 @@ impl GlobalCellCardAnnRef {
             || self.purge_epoch > self.leaf_epoch
         {
             return Err(BorsukError::InvalidStorage(
-                "V15 global cell-card reference is invalid".to_string(),
+                "V16 global cell-card reference is invalid".to_string(),
             ));
         }
         Ok(())
@@ -2971,9 +2899,12 @@ mod tests {
                 id: RecordId::from(format!("row-{ordinal:03}")),
                 stamp: MutationStamp::new(
                     MutationVersion::from_parts(ordinal as u64 + 1, [ordinal as u8; 16]),
-                    [ordinal as u8 + 17; 32],
+                    [(ordinal as u8).wrapping_add(17); 32],
                 ),
-                code: GlobalLeafCodeInput::from(vec![ordinal as u8, ordinal as u8 + 1]),
+                code: GlobalLeafCodeInput::from(vec![
+                    ordinal as u8,
+                    (ordinal as u8).wrapping_add(1),
+                ]),
                 exact: vec![ordinal as u8; dimensions],
             })
             .collect()
@@ -3044,6 +2975,29 @@ mod tests {
                 .map(|row| row.id.clone())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn sift_locality_tile_is_one_authenticated_exact_request_unit() {
+        let dimensions = 128;
+        let tile_rows = cell_card_block_rows(dimensions, VectorElementType::Float32).unwrap();
+        assert_eq!(tile_rows, 128);
+        let encoded = encode_cell_card_group(
+            &[GlobalLeafPageInput {
+                cell_index: 3,
+                leaf_ordinal: 5,
+                centroid_code: vec![7, 9],
+                rows: rows(tile_rows, dimensions * std::mem::size_of::<f32>()),
+            }],
+            dimensions,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+
+        assert_eq!(encoded.cards.len(), 1);
+        assert_eq!(encoded.cards[0].head.rows, 128);
+        assert_eq!(encoded.cards[0].head.exact_blocks.len(), 1);
+        assert_eq!(encoded.cards[0].head.exact_blocks[0].rows, 128);
     }
 
     #[test]
@@ -3295,7 +3249,7 @@ mod tests {
         );
         assert_eq!(
             cell_card_block_rows(1536, VectorElementType::Int8).unwrap(),
-            32
+            64
         );
     }
 
@@ -3630,7 +3584,7 @@ mod tests {
             cell_index: 3,
             leaf_ordinal: 0,
             centroid_code: vec![3, 0],
-            rows: rows(35, dimensions),
+            rows: rows(129, dimensions),
         };
         let encoded = encode_cell_card_group(
             std::slice::from_ref(&input),
@@ -3675,8 +3629,8 @@ mod tests {
         .unwrap();
         assert_eq!(loaded.len(), 1);
 
-        let mut distances = vec![10.0; 35];
-        distances[32..].fill(0.0);
+        let mut distances = vec![10.0; 129];
+        distances[128..].fill(0.0);
         let ranked = super::rank_cell_card_exact_blocks(&loaded, &[distances], 1, 1).unwrap();
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].reference.block_ordinal, 1);
@@ -3715,8 +3669,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decoded_exact.len(), 1);
-        assert_eq!(decoded_exact[0].rows.len(), 3);
-        assert_eq!(decoded_exact[0].rows[0].id, input.rows[32].id);
+        assert_eq!(decoded_exact[0].rows.len(), 1);
+        assert_eq!(decoded_exact[0].rows[0].id, input.rows[128].id);
         let selected = &ranked[0];
         let block = &selected.reference;
         let exact = loaded[selected.head_index]
@@ -3729,33 +3683,136 @@ mod tests {
                 VectorElementType::Int8,
             )
             .unwrap();
-        assert_eq!(exact.len(), 3);
-        assert_eq!(exact[0].id, input.rows[32].id);
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].id, input.rows[128].id);
     }
 
     #[test]
-    fn four_authenticated_windows_bound_default_exact_reads_without_losing_block_checksums() {
-        let dimensions = 128;
-        let inputs = (0_u32..4)
-            .map(|cell_index| {
-                let mut page_rows = rows(128, dimensions);
-                for (ordinal, row) in page_rows.iter_mut().enumerate() {
-                    row.exact = (0..dimensions)
-                        .flat_map(|dimension| {
-                            ((ordinal * dimensions + dimension) as f32).to_le_bytes()
-                        })
-                        .collect();
-                }
-                GlobalLeafPageInput {
-                    cell_index,
-                    leaf_ordinal: 0,
-                    centroid_code: vec![cell_index as u8, 0],
-                    rows: page_rows,
-                }
+    fn exact_tile_ranking_spends_a_persisted_row_budget_not_a_tile_count() {
+        let dimensions = 4;
+        let input = GlobalLeafPageInput {
+            cell_index: 3,
+            leaf_ordinal: 0,
+            centroid_code: vec![3, 0],
+            rows: rows(129, dimensions),
+        };
+        let encoded = encode_cell_card_group(
+            std::slice::from_ref(&input),
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/run-0")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &[group], &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let head_plan = super::plan_cell_card_head_wave(&root, &[3], 2 * 1024 * 1024, 64).unwrap();
+        let fetched_heads = head_plan
+            .reads()
+            .iter()
+            .map(|read| encoded.bytes[read.start as usize..read.end as usize].to_vec())
+            .collect::<Vec<_>>();
+        let loaded = super::decode_cell_card_head_wave(
+            &head_plan,
+            &fetched_heads,
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+
+        let full_tile_first = vec![0.0; 129];
+        let ranked = super::rank_cell_card_exact_blocks(&loaded, &[full_tile_first], 2, 1).unwrap();
+        assert_eq!(ranked.len(), 1, "two rows fit in the first 128-row tile");
+        assert_eq!(ranked[0].reference.rows, 128);
+
+        let mut tail_first = vec![10.0; 129];
+        tail_first[128] = 0.0;
+        let ranked = super::rank_cell_card_exact_blocks(&loaded, &[tail_first], 128, 1).unwrap();
+        assert_eq!(ranked.len(), 2, "the one-row tile cannot satisfy 128 rows");
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|block| block.reference.rows as usize)
+                .sum::<usize>(),
+            129
+        );
+    }
+
+    #[test]
+    fn nearest_tile_quota_is_one_quarter_of_persisted_rows() {
+        let dimensions = 1536;
+        let input = GlobalLeafPageInput {
+            cell_index: 3,
+            leaf_ordinal: 0,
+            centroid_code: vec![3, 0],
+            rows: rows(512, dimensions * std::mem::size_of::<f32>()),
+        };
+        let encoded = encode_cell_card_group(
+            std::slice::from_ref(&input),
+            dimensions,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/run-0")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &[group], &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let head_plan = super::plan_cell_card_head_wave(&root, &[3], 8 * 1024 * 1024, 64).unwrap();
+        let fetched_heads = head_plan
+            .reads()
+            .iter()
+            .map(|read| encoded.bytes[read.start as usize..read.end as usize].to_vec())
+            .collect::<Vec<_>>();
+        let loaded = super::decode_cell_card_head_wave(
+            &head_plan,
+            &fetched_heads,
+            dimensions,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        assert_eq!(loaded[0].head.exact_blocks.len(), 32);
+
+        let mut distances = vec![100.0_f32; 512];
+        for block in 0..32 {
+            distances[block * 16] = block as f32;
+        }
+        distances[31 * 16..].fill(8.5);
+        let ranked = super::rank_cell_card_exact_blocks(&loaded, &[distances], 512, 10).unwrap();
+        assert_eq!(
+            ranked[..8]
+                .iter()
+                .map(|block| block.reference.block_ordinal)
+                .collect::<Vec<_>>(),
+            (0_u32..8).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn selected_head_admission_counts_every_coalescible_exact_tile() {
+        let dimensions = 4;
+        let inputs = (0_u32..33)
+            .map(|cell_index| GlobalLeafPageInput {
+                cell_index,
+                leaf_ordinal: 0,
+                centroid_code: vec![cell_index as u8, 0],
+                rows: rows(1, dimensions),
             })
             .collect::<Vec<_>>();
-        let encoded =
-            encode_cell_card_group(&inputs, dimensions, VectorElementType::Float32).unwrap();
+        let encoded = encode_cell_card_group(&inputs, dimensions, VectorElementType::Int8).unwrap();
         let path = encoded
             .content_addressed_path("global-cell-cards/run-0")
             .unwrap();
@@ -3769,79 +3826,13 @@ mod tests {
             "codebook-checksum",
         )
         .unwrap();
-        let selected_cells = (0_u32..4).collect::<Vec<_>>();
-        let head_plan =
-            super::plan_cell_card_head_wave(&root, &selected_cells, 8 * 1024 * 1024, 64).unwrap();
-        let fetched_heads = head_plan
-            .reads()
-            .iter()
-            .map(|read| encoded.bytes[read.start as usize..read.end as usize].to_vec())
-            .collect::<Vec<_>>();
-        let loaded = super::decode_cell_card_head_wave(
-            &head_plan,
-            &fetched_heads,
-            dimensions,
-            VectorElementType::Float32,
-        )
-        .unwrap();
-        assert_eq!(loaded.len(), 4);
-        assert!(loaded.iter().all(|head| head.head.exact_blocks.len() == 4));
 
-        let distances = loaded
-            .iter()
-            .map(|head| {
-                let mut values = vec![10.0_f32; head.head.codes.len()];
-                values[..8].fill(0.0);
-                values
-            })
-            .collect::<Vec<_>>();
-        let ranked = super::rank_cell_card_exact_windows(&loaded, &distances, 4, 4, 10).unwrap();
-
-        assert_eq!(ranked.len(), 16);
-        for head_index in 0..4 {
-            assert_eq!(
-                ranked
-                    .iter()
-                    .filter(|block| block.head_index == head_index)
-                    .map(|block| block.reference.block_ordinal)
-                    .collect::<Vec<_>>(),
-                vec![0, 1, 2, 3]
-            );
-        }
-        let selected_bytes = ranked
-            .iter()
-            .map(|block| u64::from(block.reference.bytes))
-            .sum::<u64>();
-        let plan = super::plan_cell_card_exact_wave(&ranked, selected_bytes, 4).unwrap();
-        assert!(plan.requests() <= 4);
-        let fetched_exact = plan
-            .reads()
-            .iter()
-            .map(|read| encoded.bytes[read.start as usize..read.end as usize].to_vec())
-            .collect::<Vec<_>>();
-        let decoded = super::decode_cell_card_exact_wave(
-            &plan,
-            &loaded,
-            &fetched_exact,
-            dimensions,
-            VectorElementType::Float32,
-        )
-        .unwrap();
-        assert_eq!(decoded.len(), 16);
-
-        let mut tail_loaded = loaded.clone();
-        tail_loaded[0].head.exact_blocks.truncate(1);
-        tail_loaded[0].head.codes.truncate(32);
-        let mut tail_distances = distances.clone();
-        tail_distances[0].truncate(32);
-        tail_distances[0].fill(0.0);
-        for values in &mut tail_distances[1..] {
-            values.fill(10.0);
-        }
-        assert!(matches!(
-            super::rank_cell_card_exact_windows(&tail_loaded, &tail_distances, 4, 4, 10),
-            Err(crate::BorsukError::RecallGuaranteeViolated { .. })
-        ));
+        let indexes = (0..33).collect::<Vec<_>>();
+        let (blocks, max_block_bytes, max_block_rows) =
+            super::cell_card_exact_admission_bounds(&root, &indexes).unwrap();
+        assert_eq!(blocks, 33);
+        assert!(max_block_bytes > 0);
+        assert_eq!(max_block_rows, 1);
     }
 
     #[test]
@@ -3895,6 +3886,7 @@ mod tests {
                 card_ordinal: loaded[0].head.card_ordinal,
                 reference: loaded[0].head.exact_blocks[block_ordinal].clone(),
                 distance: block_ordinal as f32,
+                row_distances: Box::new([]),
             })
             .collect::<Vec<_>>();
 
@@ -4317,6 +4309,7 @@ mod tests {
                     checksum: [ordinal as u8; 32],
                 },
                 distance: ordinal as f32,
+                row_distances: Box::new([]),
             })
             .collect::<Vec<_>>();
         let plan = super::plan_cell_card_exact_wave(&ranked, 1024 * 1024, 32).unwrap();
@@ -4353,6 +4346,7 @@ mod tests {
                     checksum: [ordinal as u8; 32],
                 },
                 distance: ordinal as f32,
+                row_distances: Box::new([]),
             })
             .collect::<Vec<_>>();
 

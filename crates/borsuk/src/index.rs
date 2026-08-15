@@ -52,12 +52,12 @@ use crate::{
         CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES, CELL_CARD_RANGE_READ_MAX_BYTES,
         CellCardExactBlockRef, CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead,
         CellCardHeadWavePlan, CellCardPush, GlobalCellCardAnnRef, LoadedCellCardHead,
-        decode_cell_card_exact_wave, decode_cell_card_run_root,
+        cell_card_exact_admission_bounds, decode_cell_card_exact_wave, decode_cell_card_run_root,
         decode_verified_cell_card_head_wave, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave, plan_ranked_cell_card_head_wave,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
-        rank_cell_card_exact_blocks, rank_cell_card_exact_windows, rank_cell_card_head_indexes,
-        score_loaded_cell_card_heads, validate_cell_card_code_range,
+        rank_cell_card_exact_blocks, rank_cell_card_head_indexes, score_loaded_cell_card_heads,
+        validate_cell_card_code_range,
     },
     global_leaf_run::{
         CarriedPrimaryDenseRun, GlobalAnnRef, GlobalCodebookRef, GlobalLeafArtifactRole,
@@ -382,38 +382,6 @@ fn global_leaf_exact_block_budget(page_budget: usize, target_rows: usize) -> usi
     )
 }
 
-fn global_cell_card_exact_block_budget(
-    candidate_rows: usize,
-    target_rows: usize,
-    bounded_exact_windows: bool,
-) -> usize {
-    let candidate_blocks = candidate_rows
-        .max(target_rows)
-        .div_ceil(crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS);
-    let candidate_blocks = if bounded_exact_windows {
-        candidate_blocks.min(GLOBAL_CELL_CARD_EXACT_BLOCK_MAX)
-    } else {
-        candidate_blocks
-    };
-    candidate_blocks.max(
-        target_rows
-            .saturating_mul(4)
-            .div_ceil(crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS),
-    )
-}
-
-fn use_bounded_cell_card_exact_windows(
-    _explicit_candidate_rows: Option<usize>,
-    _mutation_overlay_present: bool,
-    _target_rows: usize,
-) -> bool {
-    // Contiguous physical windows are not a recall-preserving substitute for
-    // the independently ranked exact blocks. Keep the experimental path
-    // disabled until the writer emits query-locality tiles whose authority is
-    // explicitly represented in the persistent format.
-    false
-}
-
 fn cell_card_code_plane_cache_key(path: &str, checksum: [u8; 32]) -> String {
     format!("{}\0{}", path, blake3::Hash::from_bytes(checksum).to_hex())
 }
@@ -520,7 +488,6 @@ const GLOBAL_LEAF_DIRECTORY_READ_WIDTH: usize = 8;
 // per-handle in-flight cap are configured through OpenOptions; directory
 // loading stays narrower because it may retain decoded metadata.
 const GLOBAL_LEAF_QUERY_WAVE_PAGES: usize = 32;
-const GLOBAL_CELL_CARD_EXACT_BLOCK_MAX: usize = 16;
 const CELL_CARD_CACHEABLE_PLANE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS: usize = 16;
 const GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS: usize = 64;
@@ -565,7 +532,7 @@ fn cell_card_exact_io_budget(max_bytes: u64, planned_head_bytes: u64) -> Option<
         .filter(|remaining| *remaining > 0)
 }
 
-/// Conservative peak allocation for one V15 code-head plus exact-rerank wave.
+/// Conservative peak allocation for one V16 code-head plus exact-rerank wave.
 ///
 /// The caller byte cap is an I/O ceiling, not an allocation plan. Charging a
 /// fixed multiple of that cap makes a normal 32 MiB query consume an entire
@@ -643,6 +610,12 @@ fn global_leaf_code_byte_ceiling(
 #[derive(Debug)]
 struct RoutedDecodedGlobalLeafRow {
     row: crate::global_leaf::DecodedGlobalLeafRow,
+    approximate_distance: Option<f32>,
+}
+
+fn truncate_cell_card_exact_candidates<T>(candidates: &mut Vec<(f32, T)>, maximum: usize) {
+    candidates.sort_by(|left, right| left.0.total_cmp(&right.0));
+    candidates.truncate(maximum);
 }
 
 #[derive(Clone, Copy)]
@@ -15973,7 +15946,7 @@ impl BorsukIndex {
                 || codebook.element_type() != self.manifest.build_config.vector_element_type
             {
                 return Err(BorsukError::InvalidStorage(
-                    "V15 GC codebook does not match its manifest reference".to_string(),
+                    "V16 GC codebook does not match its manifest reference".to_string(),
                 ));
             }
             read.bytes_read = read
@@ -16701,7 +16674,7 @@ impl BorsukIndex {
         let v14 = manifest.global_cell_card_ann_ref.as_ref();
         if v13.is_some() && v14.is_some() {
             return Err(BorsukError::InvalidStorage(
-                "manifest contains both V13 and V15 global ANN authority".into(),
+                "manifest contains both V13 and V16 global ANN authority".into(),
             ));
         }
         let Some(codebook_reference) = v13
@@ -16746,13 +16719,13 @@ impl BorsukIndex {
                     .checked_add(reference.root().encoded_bytes)
                     .ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "V15 durable storage byte count overflows".into(),
+                            "V16 durable storage byte count overflows".into(),
                         )
                     })?,
                 |total, group| {
                     total.checked_add(group.encoded_bytes).ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "V15 durable storage byte count overflows".into(),
+                            "V16 durable storage byte count overflows".into(),
                         )
                     })
                 },
@@ -16761,12 +16734,12 @@ impl BorsukIndex {
                 .ok()
                 .and_then(|groups| groups.checked_add(2))
                 .ok_or_else(|| {
-                    BorsukError::InvalidStorage("V15 durable storage object count overflows".into())
+                    BorsukError::InvalidStorage("V16 durable storage object count overflows".into())
                 })?;
             let durable_resident_bytes = (root.resident_bytes() as u64)
                 .checked_add(codebook_reference.resident_bytes())
                 .ok_or_else(|| {
-                    BorsukError::InvalidStorage("V15 durable resident byte count overflows".into())
+                    BorsukError::InvalidStorage("V16 durable resident byte count overflows".into())
                 })?;
             if root.rows() != reference.rows()
                 || durable_resident_bytes != reference.resident_bytes()
@@ -16774,7 +16747,7 @@ impl BorsukIndex {
                 || durable_storage_objects != reference.storage_objects()
             {
                 return Err(BorsukError::InvalidStorage(
-                    "V15 resident root does not match its manifest reference".into(),
+                    "V16 resident root does not match its manifest reference".into(),
                 ));
             }
             return Ok(Some(ResidentGlobalAnnPins {
@@ -17226,7 +17199,10 @@ impl BorsukIndex {
                             self.manifest.build_config.vector_element_type,
                         )?
                         .into_iter()
-                        .map(|row| RoutedDecodedGlobalLeafRow { row }),
+                        .map(|row| RoutedDecodedGlobalLeafRow {
+                            row,
+                            approximate_distance: None,
+                        }),
                     );
                 }
                 Ok::<_, BorsukError>((decoded, stored.len() as u64))
@@ -17730,12 +17706,12 @@ impl BorsukIndex {
         global_ref.validate()?;
         let pins = self.resident_global_ann_pins.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage(
-                "V15 manifest is visible without authenticated resident pins".to_string(),
+                "V16 manifest is visible without authenticated resident pins".to_string(),
             )
         })?;
         let root = pins.cell_card_root.as_ref().ok_or_else(|| {
             BorsukError::InvalidStorage(
-                "V15 manifest is visible without its authenticated resident root".to_string(),
+                "V16 manifest is visible without its authenticated resident root".to_string(),
             )
         })?;
         let codebook = self.load_resident_global_codebook(global_ref.codebook())?;
@@ -17759,47 +17735,24 @@ impl BorsukIndex {
         )?;
         let caller_max_bytes = match options.mode {
             SearchMode::Approx { max_bytes, .. } => max_bytes,
-            SearchMode::Exact => unreachable!("V15 eligibility requires approximate search"),
+            SearchMode::Exact => unreachable!("V16 eligibility requires approximate search"),
         };
         let mutation_overlay_present = context
             .mutation_states
             .is_some_and(|states| !states.entries.is_empty());
-        let (exact_candidate_rows, bounded_exact_windows, default_mvcc_continuation) = match options
-            .mode
-        {
+        let (exact_candidate_rows, default_mvcc_continuation) = match options.mode {
             SearchMode::Approx {
                 max_candidates_per_segment,
                 ..
             } => match max_candidates_per_segment {
-                Some(explicit) => (
-                    explicit,
-                    use_bounded_cell_card_exact_windows(
-                        Some(explicit),
-                        mutation_overlay_present,
-                        options.k,
-                    ),
-                    false,
-                ),
+                Some(explicit) => (explicit, false),
                 None => (
                     usize::try_from(codebook.candidates()).unwrap_or(usize::MAX),
-                    use_bounded_cell_card_exact_windows(None, mutation_overlay_present, options.k),
                     mutation_overlay_present,
                 ),
             },
-            SearchMode::Exact => unreachable!("V15 eligibility requires approximate search"),
+            SearchMode::Exact => unreachable!("V16 eligibility requires approximate search"),
         };
-        let mut requested_exact_block_budget = global_cell_card_exact_block_budget(
-            exact_candidate_rows,
-            options.k,
-            bounded_exact_windows,
-        );
-        // Default queries with a mutation overlay need a bounded continuation
-        // reserve: the nearest exact block may be entirely suppressed by newer
-        // deletes or updates. Explicit candidate limits remain authoritative,
-        // while immutable defaults stay decoupled from physical I/O width.
-        if default_mvcc_continuation {
-            requested_exact_block_budget = requested_exact_block_budget.max(context.page_budget);
-        }
         let max_bytes = caller_max_bytes.unwrap_or(GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES);
         let card_indexes = root.card_indexes_for_cells(&selected_cells)?;
         let centroid_distances = codebook.score_cell_card_codes(
@@ -17821,37 +17774,25 @@ impl BorsukIndex {
         )?;
         // Code ranges only choose the lossless blocks. Reserve the largest
         // authenticated block among the selected cards rather than the global
-        // format maximum; otherwise compact V15 code ranges can make an honest
+        // format maximum; otherwise compact V16 code ranges can make an honest
         // `code bytes + one actual block` caller budget look too small.
-        let (selected_exact_block_ceiling, selected_exact_row_ceiling) = ranked_card_indexes
-            .iter()
-            .try_fold((0_u64, 0_u64), |(byte_ceiling, row_ceiling), index| {
-                let (_, head) = root.head_ref(*index)?;
-                let Some(card_byte_ceiling) = head
-                    .exact_blocks
-                    .iter()
-                    .map(|block| u64::from(block.bytes))
-                    .max()
-                else {
-                    return Err(BorsukError::InvalidStorage(
-                        "V15 selected card has no exact-block authority".to_string(),
-                    ));
-                };
-                let card_row_ceiling = head
-                    .exact_blocks
-                    .iter()
-                    .map(|block| u64::from(block.rows))
-                    .max()
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "V15 selected card has no exact-block authority".to_string(),
-                        )
-                    })?;
-                Ok::<_, BorsukError>((
-                    byte_ceiling.max(card_byte_ceiling),
-                    row_ceiling.max(card_row_ceiling),
-                ))
-            })?;
+        // A 32-request exact wave may coalesce more than 32 authenticated
+        // tiles. Charge every tile reachable from the selected heads so the
+        // weighted RAM gate bounds the real executable plan, not its GET count.
+        let (
+            requested_exact_block_budget,
+            selected_exact_block_ceiling,
+            selected_exact_row_ceiling,
+        ) = cell_card_exact_admission_bounds(root, &ranked_card_indexes)?;
+        let exact_fetch_rows = if default_mvcc_continuation {
+            exact_candidate_rows.saturating_add(
+                context
+                    .page_budget
+                    .saturating_mul(selected_exact_row_ceiling as usize),
+            )
+        } else {
+            exact_candidate_rows
+        };
         let head_byte_ceiling =
             global_leaf_code_byte_ceiling(max_bytes, 0, selected_exact_block_ceiling);
         if head_byte_ceiling == 0 {
@@ -18000,40 +17941,10 @@ impl BorsukIndex {
                 self.manifest.config.dimensions,
                 self.manifest.build_config.vector_element_type,
             )?;
-            let available_exact_blocks = heads.iter().try_fold(0_usize, |total, head| {
-                total
-                    .checked_add(head.head.exact_blocks.len())
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "V15 available exact block count overflows".to_string(),
-                        )
-                    })
-            })?;
-            let exact_block_budget = requested_exact_block_budget.min(available_exact_blocks);
             let approximate_started = Instant::now();
             let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
-            let ranked = if bounded_exact_windows {
-                match rank_cell_card_exact_windows(
-                    &heads,
-                    &distances,
-                    exact_block_budget.div_ceil(4),
-                    4,
-                    options.k,
-                ) {
-                    Ok(ranked) => ranked,
-                    Err(BorsukError::RecallGuaranteeViolated { .. }) => {
-                        rank_cell_card_exact_blocks(
-                            &heads,
-                            &distances,
-                            exact_block_budget,
-                            options.k,
-                        )?
-                    }
-                    Err(error) => return Err(error),
-                }
-            } else {
-                rank_cell_card_exact_blocks(&heads, &distances, exact_block_budget, options.k)?
-            };
+            let ranked =
+                rank_cell_card_exact_blocks(&heads, &distances, exact_fetch_rows, options.k)?;
             let global_approximate_us =
                 u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
             Ok::<_, BorsukError>((
@@ -18051,7 +17962,7 @@ impl BorsukIndex {
             SearchExecution {
                 report: SearchReport {
                     hits: Vec::new(),
-                    leaf_mode: "bounded-cell-card-v15".to_string(),
+                    leaf_mode: "bounded-cell-card-v16".to_string(),
                     termination_reason: reason,
                     recall_guarantee: RecallGuarantee::Degraded,
                     segments_total,
@@ -18173,19 +18084,40 @@ impl BorsukIndex {
                         total.checked_add(head.head.codes.len())
                     })
                     .ok_or_else(|| {
-                        BorsukError::InvalidStorage("V15 identity row count overflows".to_string())
+                        BorsukError::InvalidStorage("V16 identity row count overflows".to_string())
                     })?;
                 let rows = exact_blocks
                     .into_iter()
-                    .flat_map(|block| block.rows)
-                    .map(|row| RoutedDecodedGlobalLeafRow { row })
+                    .flat_map(|block| {
+                        block.rows.into_iter().zip(block.block.row_distances).map(
+                            |(row, approximate_distance)| RoutedDecodedGlobalLeafRow {
+                                row,
+                                approximate_distance: Some(approximate_distance),
+                            },
+                        )
+                    })
                     .collect::<Vec<_>>();
                 let records_considered = rows.len();
                 let mut winners = BTreeMap::new();
                 self.merge_global_leaf_rows(&mut winners, rows, context.mutation_states)?;
-                let mut scored = winners
+                let mut exact_candidates = winners
                     .into_values()
                     .map(|candidate| {
+                        candidate
+                            .approximate_distance
+                            .map(|distance| (distance, candidate))
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "V16 exact candidate lacks its authenticated code distance"
+                                        .to_string(),
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                truncate_cell_card_exact_candidates(&mut exact_candidates, exact_candidate_rows);
+                let mut scored = exact_candidates
+                    .into_iter()
+                    .map(|(_, candidate)| {
                         Ok((
                             self.manifest
                                 .config
@@ -18226,12 +18158,12 @@ impl BorsukIndex {
             })?;
         let bytes_read = code_plane_storage_bytes
             .checked_add(exact_plan.physical_bytes())
-            .ok_or_else(|| BorsukError::InvalidStorage("V15 query bytes overflow".to_string()))?;
+            .ok_or_else(|| BorsukError::InvalidStorage("V16 query bytes overflow".to_string()))?;
         let speculative_bytes = head_plan
             .speculative_bytes()
             .checked_add(exact_plan.speculative_bytes())
             .ok_or_else(|| {
-                BorsukError::InvalidStorage("V15 speculative bytes overflow".to_string())
+                BorsukError::InvalidStorage("V16 speculative bytes overflow".to_string())
             })?;
         let termination_reason = resident_global_termination_reason(
             options,
@@ -18245,7 +18177,7 @@ impl BorsukIndex {
         Ok(Some(SearchExecution {
             report: SearchReport {
                 hits,
-                leaf_mode: "bounded-cell-card-v15".to_string(),
+                leaf_mode: "bounded-cell-card-v16".to_string(),
                 termination_reason,
                 recall_guarantee: RecallGuarantee::Degraded,
                 segments_total,
@@ -18277,7 +18209,7 @@ impl BorsukIndex {
                 global_leaf_code_pages_read: head_plan.cards(),
                 global_leaf_code_requests: code_storage_requests,
                 global_leaf_code_bytes: code_plane_storage_bytes,
-                global_leaf_pages_read: ranked.len(),
+                global_leaf_pages_read: exact_plan.blocks(),
                 global_leaf_exact_requests: exact_storage_requests,
                 global_leaf_page_bytes: exact_plan.physical_bytes(),
                 global_leaf_exact_scores: records_scored,
@@ -18330,7 +18262,7 @@ impl BorsukIndex {
                 report: SearchReport {
                     hits: Vec::new(),
                     leaf_mode: if cell_card_v14 {
-                        "bounded-cell-card-v15"
+                        "bounded-cell-card-v16"
                     } else {
                         "bounded-arrow-leaf-v13"
                     }
@@ -19301,14 +19233,14 @@ impl BorsukIndex {
                                 .expect("full cell-card writer is present")
                                 .finish()?;
                             let path =
-                                encoded.content_addressed_path("global-cell-cards/v15/groups")?;
+                                encoded.content_addressed_path("global-cell-cards/v16/groups")?;
                             self.storage
                                 .write_bytes_content_addressed(&path, &encoded.bytes)?;
                             cell_group_storage_bytes = cell_group_storage_bytes
                                 .checked_add(encoded.bytes.len() as u64)
                                 .ok_or_else(|| {
                                     BorsukError::InvalidStorage(
-                                        "V15 cell-card storage bytes overflow".into(),
+                                        "V16 cell-card storage bytes overflow".into(),
                                     )
                                 })?;
                             let (group, cards) = encoded.references(&path)?;
@@ -19321,7 +19253,7 @@ impl BorsukIndex {
                             )?;
                             if !matches!(next.try_push(page)?, CellCardPush::Accepted) {
                                 return Err(BorsukError::InvalidStorage(
-                                    "V15 cell-card page does not fit an empty group".into(),
+                                    "V16 cell-card page does not fit an empty group".into(),
                                 ));
                             }
                             cell_writer = Some(next);
@@ -19336,13 +19268,13 @@ impl BorsukIndex {
         })?;
         if let Some(writer) = cell_writer.take() {
             let encoded = writer.finish()?;
-            let path = encoded.content_addressed_path("global-cell-cards/v15/groups")?;
+            let path = encoded.content_addressed_path("global-cell-cards/v16/groups")?;
             self.storage
                 .write_bytes_content_addressed(&path, &encoded.bytes)?;
             cell_group_storage_bytes = cell_group_storage_bytes
                 .checked_add(encoded.bytes.len() as u64)
                 .ok_or_else(|| {
-                    BorsukError::InvalidStorage("V15 cell-card storage bytes overflow".into())
+                    BorsukError::InvalidStorage("V16 cell-card storage bytes overflow".into())
                 })?;
             let (group, cards) = encoded.references(&path)?;
             cell_groups.push(group);
@@ -19379,7 +19311,7 @@ impl BorsukIndex {
             .to_hex()
             .to_string();
         let root_path = format!(
-            "global-cell-cards/v15/roots/{}/root-{root_checksum}.parquet",
+            "global-cell-cards/v16/roots/{}/root-{root_checksum}.parquet",
             &root_checksum[..2]
         );
         self.storage
@@ -19388,19 +19320,19 @@ impl BorsukIndex {
             decode_cell_card_run_root(&root.reference, &root.bytes, &descriptor_checksum)?;
         if resident_root.card_count() != cell_cards.len() {
             return Err(BorsukError::InvalidStorage(
-                "V15 resident root changed its card coverage".into(),
+                "V16 resident root changed its card coverage".into(),
             ));
         }
         let storage_bytes = codebook_storage_bytes
             .checked_add(cell_group_storage_bytes)
             .and_then(|bytes| bytes.checked_add(root.reference.encoded_bytes))
-            .ok_or_else(|| BorsukError::InvalidStorage("V15 storage total overflows".into()))?;
+            .ok_or_else(|| BorsukError::InvalidStorage("V16 storage total overflows".into()))?;
         GlobalCellCardAnnRef::new(
             codebook,
             root_path,
             root.reference,
             u64::try_from(summaries.len()).map_err(|_| {
-                BorsukError::InvalidStorage("V15 source segment count exceeds u64".into())
+                BorsukError::InvalidStorage("V16 source segment count exceeds u64".into())
             })?,
             vectors_seen as u64,
             storage_bytes,
@@ -26306,7 +26238,11 @@ fn global_leaf_partition_order(
             "global leaf rows disagree on code width".to_string(),
         ));
     }
-    let max_rows = GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / exact_row_bytes;
+    // V16 publishes one independently authenticated exact batch per physical
+    // locality tile for every scan codec. Code-space codecs choose membership
+    // recursively; other codecs retain canonical ID order, but neither may
+    // create a page that the cell-card writer must split into multiple blocks.
+    let max_rows = (GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / exact_row_bytes).min(128);
     let mut by_cell = BTreeMap::<u32, Vec<usize>>::new();
     for (index, row) in rows.iter().enumerate() {
         by_cell.entry(row.cell_index).or_default().push(index);
@@ -27490,8 +27426,8 @@ fn is_global_pq_path(path: &str) -> bool {
 }
 
 fn is_global_cell_card_path(path: &str) -> bool {
-    (path.starts_with("global-cell-cards/v15/groups/") && path.ends_with(".arrow"))
-        || (path.starts_with("global-cell-cards/v15/roots/") && path.ends_with(".parquet"))
+    (path.starts_with("global-cell-cards/v16/groups/") && path.ends_with(".arrow"))
+        || (path.starts_with("global-cell-cards/v16/roots/") && path.ends_with(".parquet"))
 }
 
 /// Whether the filter's shape could ever be answered by the per-segment index
@@ -28329,7 +28265,7 @@ where
 
 /// Run checksum, decode, and ranking work on the bounded process-wide CPU pool.
 ///
-/// Object-store workers must remain blocking-I/O waiters: executing V15 CPU
+/// Object-store workers must remain blocking-I/O waiters: executing V16 CPU
 /// work on that wider pool would let concurrent searches oversubscribe the
 /// host and steal cores from the embedding application.
 fn run_cell_card_post_io<R, F>(work: F) -> R
@@ -30777,7 +30713,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.hits.len(), 2);
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v15");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v16");
         assert!(report.wal_records_examined > 0);
         assert!(report.elapsed_ms >= 100);
         assert_eq!(
@@ -36257,6 +36193,55 @@ mod tests {
     }
 
     #[test]
+    fn sift_code_space_partition_emits_at_most_128_rows_per_locality_tile() {
+        let codes = (0_u16..129)
+            .map(|ordinal| ordinal.to_le_bytes())
+            .collect::<Vec<_>>();
+        let ids = (0..129)
+            .map(|ordinal| format!("row-{ordinal:03}"))
+            .collect::<Vec<_>>();
+        let rows = (0..129)
+            .map(|ordinal| GlobalLeafPartitionRow {
+                cell_index: 11,
+                code: &codes[ordinal],
+                record_id: ids[ordinal].as_bytes(),
+                source_ordinal: ordinal,
+            })
+            .collect::<Vec<_>>();
+
+        let partitions = global_leaf_partition_order(&rows, 2, 512, true).unwrap();
+        assert_eq!(partitions.len(), 2);
+        assert!(
+            partitions
+                .iter()
+                .all(|tile| !tile.is_empty() && tile.len() <= 128)
+        );
+        assert_eq!(partitions.iter().map(Vec::len).sum::<usize>(), 129);
+    }
+
+    #[test]
+    fn non_pq_partition_also_emits_one_exact_block_per_v16_tile() {
+        let codes = (0_u16..129)
+            .map(|ordinal| ordinal.to_le_bytes())
+            .collect::<Vec<_>>();
+        let ids = (0..129)
+            .map(|ordinal| format!("row-{ordinal:03}"))
+            .collect::<Vec<_>>();
+        let rows = (0..129)
+            .map(|ordinal| GlobalLeafPartitionRow {
+                cell_index: 11,
+                code: &codes[ordinal],
+                record_id: ids[ordinal].as_bytes(),
+                source_ordinal: ordinal,
+            })
+            .collect::<Vec<_>>();
+
+        let partitions = global_leaf_partition_order(&rows, 2, 512, false).unwrap();
+        assert_eq!(partitions.len(), 2);
+        assert!(partitions.iter().all(|tile| tile.len() <= 128));
+    }
+
+    #[test]
     fn global_leaf_pages_encode_the_stored_physical_centroid_after_final_fitting() {
         let training = vec![
             vec![0.0, 0.0],
@@ -36490,7 +36475,7 @@ mod tests {
         let live_v14_paths = std::iter::once(reference.root_path().to_string())
             .chain(root.groups().iter().map(|group| group.path.clone()))
             .collect::<Vec<_>>();
-        let orphan = "global-cell-cards/v15/groups/orphan.arrow";
+        let orphan = "global-cell-cards/v16/groups/orphan.arrow";
         index.storage.write_bytes(orphan, b"orphan").unwrap();
         let gc = index
             .gc_obsolete_segments(GarbageCollectionOptions {
@@ -36523,7 +36508,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("v14-row-37"));
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v15");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v16");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.global_leaf_directory_reads, 0);
         assert_eq!(report.global_leaf_continuations, 1);
@@ -36645,7 +36630,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v15_reuses_stable_code_planes_after_disk_cache_reset() {
+    fn resident_global_v16_reuses_stable_code_planes_after_disk_cache_reset() {
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
@@ -36777,7 +36762,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v15", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v16", "{report:?}");
         assert_eq!(report.global_leaf_code_bytes, 0, "{report:?}");
         assert_eq!(report.global_leaf_code_requests, 0, "{report:?}");
         assert!(report.decoded_cache_hits > 0, "{report:?}");
@@ -36893,7 +36878,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v15_reuses_card_code_slices_without_full_plane_promotion() {
+    fn resident_global_v16_reuses_card_code_slices_without_full_plane_promotion() {
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
@@ -37035,7 +37020,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v15", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v16", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from("v14-mvcc-1"));
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.global_leaf_waves, 2);
@@ -37117,7 +37102,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v12_base_routes_and_exact_scores_without_segment_payloads() {
+    fn resident_global_v16_base_routes_and_exact_scores_without_segment_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -37166,19 +37151,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("row-37"));
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v15");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v16");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.segments_skipped, report.segments_total);
         assert_eq!(report.global_scan_chunks_searched, 0);
         assert_eq!(report.global_graph_chunks_searched, 0);
-        assert!(report.global_leaf_pages_read <= global_leaf_exact_block_budget(4, 3));
+        assert!(report.global_leaf_pages_read <= GLOBAL_LEAF_QUERY_WAVE_PAGES);
         assert!(report.global_leaf_code_pages_read >= report.global_leaf_pages_read);
         assert!(report.global_leaf_code_bytes > 0);
         assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
-        assert!(
-            report.records_considered <= 4 * crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS,
-            "V13 exact rerank fetched whole pages instead of bounded row blocks: {report:?}"
-        );
+        assert!(report.records_scored <= 64, "{report:?}");
         assert_eq!(report.global_leaf_exact_scores, report.records_scored);
         assert_eq!(report.global_leaf_waves, 2);
         assert_eq!(
@@ -37241,7 +37223,7 @@ mod tests {
             .with_max_segments(4)
             .with_max_candidates_per_segment(256);
         let report = index.search_with_report(query, options).unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v15");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v16");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.global_leaf_waves, 2);
         assert_eq!(report.hits[0].id, RecordId::from("nprobe-self-173"));
@@ -37273,7 +37255,7 @@ mod tests {
         reference.validate().unwrap();
 
         let stats = index.stats();
-        assert_eq!(stats.global_ann_layout_version, Some(15));
+        assert_eq!(stats.global_ann_layout_version, Some(16));
         assert_eq!(
             stats.global_ann_codebook_checksum.as_deref(),
             Some(reference.codebook().descriptor_checksum())
@@ -37923,7 +37905,7 @@ mod tests {
         assert_eq!(production.get(b"missing"), None);
     }
     #[test]
-    fn resident_global_v12_dispatch_accepts_only_qualified_page_budgets() {
+    fn resident_global_v16_dispatch_accepts_only_qualified_page_budgets() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -37955,13 +37937,10 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                report.leaf_mode, "bounded-cell-card-v15",
+                report.leaf_mode, "bounded-cell-card-v16",
                 "qualified page budget {budget} did not dispatch V12"
             );
-            assert!(
-                report.global_leaf_pages_read
-                    <= global_leaf_exact_block_budget(budget, report.hits.len().max(1))
-            );
+            assert!((1..=GLOBAL_LEAF_QUERY_WAVE_PAGES).contains(&report.global_leaf_pages_read));
             assert!(report.global_leaf_code_pages_read > 0);
         }
 
@@ -37994,7 +37973,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v15_bounds_lossless_rerank_independently_of_io_width() {
+    fn resident_global_v16_bounds_lossless_rerank_independently_of_io_width() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -38031,11 +38010,11 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v15");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v16");
         assert_eq!(report.hits.len(), 10, "{report:?}");
         assert_eq!(report.hits[0].id.as_bytes(), b"row-0", "{report:?}");
         assert!(
-            report.records_scored > GLOBAL_CELL_CARD_EXACT_BLOCK_MAX * 32,
+            report.records_scored > 512,
             "an explicit exact-candidate request was silently capped: {report:?}"
         );
 
@@ -38052,8 +38031,8 @@ mod tests {
             "the logical head breadth was silently capped at the physical request width: {wide:?}"
         );
         assert!(
-            wide.records_scored > report.records_scored && wide.records_scored <= 2_048,
-            "the explicit exact-candidate ceiling did not scale with available heads: {wide:?}"
+            wide.records_scored > 512 && wide.records_scored <= 2_048,
+            "the explicit exact-candidate ceiling was ignored or overrun: {wide:?}"
         );
 
         let bounded_default = reader
@@ -38065,12 +38044,10 @@ mod tests {
         assert_eq!(bounded_default.hits[0].id.as_bytes(), b"row-0");
         assert!(
             bounded_default.global_leaf_exact_requests <= 4,
-            "the immutable default rerank exceeded four authenticated exact windows: {bounded_default:?}"
+            "the immutable default rerank exceeded four authenticated exact tiles: {bounded_default:?}"
         );
         assert!(
-            bounded_default.records_scored
-                <= GLOBAL_CELL_CARD_EXACT_BLOCK_MAX
-                    * crate::global_leaf::GLOBAL_LEAF_EXACT_BLOCK_ROWS,
+            bounded_default.records_scored <= 512,
             "the immutable default rerank was not bounded: {bounded_default:?}"
         );
 
@@ -38088,6 +38065,20 @@ mod tests {
             "the explicit candidate ceiling was exceeded: {bounded_explicit:?}"
         );
 
+        let partial_tile_limit = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(64)
+                    .with_max_candidates_per_segment(129),
+            )
+            .unwrap();
+        assert_eq!(partial_tile_limit.hits[0].id.as_bytes(), b"row-0");
+        assert!(
+            partial_tile_limit.records_scored <= 129,
+            "a partial final tile exceeded the explicit exact-score ceiling: {partial_tile_limit:?}"
+        );
+
         let bounded = reader
             .search_with_report(
                 &[0.0; 8],
@@ -38097,19 +38088,30 @@ mod tests {
             )
             .unwrap();
         assert!(bounded.records_scored <= rows);
+        assert!(
+            bounded.global_leaf_pages_read <= GLOBAL_LEAF_QUERY_WAVE_PAGES,
+            "coalescing must not bypass the admitted exact-tile bound: {bounded:?}"
+        );
+
+        let wide_unbounded = reader
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(64)
+                    .with_max_candidates_per_segment(usize::MAX),
+            )
+            .unwrap();
+        assert!(
+            wide_unbounded.global_leaf_pages_read <= GLOBAL_LEAF_QUERY_WAVE_PAGES,
+            "coalesced exact reads bypassed the admitted 32-tile wave: {wide_unbounded:?}"
+        );
     }
 
     #[test]
-    fn resident_global_v15_never_substitutes_physical_windows_for_ranked_exact_blocks() {
-        assert!(!use_bounded_cell_card_exact_windows(Some(416), false, 10));
-        assert!(!use_bounded_cell_card_exact_windows(Some(128), false, 10));
-        assert!(!use_bounded_cell_card_exact_windows(Some(512), false, 128));
-        assert!(!use_bounded_cell_card_exact_windows(Some(512), false, 129));
-        assert!(!use_bounded_cell_card_exact_windows(Some(513), false, 10));
-        assert!(!use_bounded_cell_card_exact_windows(Some(2_048), false, 10));
-        assert!(!use_bounded_cell_card_exact_windows(None, false, 200));
-        assert!(!use_bounded_cell_card_exact_windows(Some(512), true, 10));
-        assert!(!use_bounded_cell_card_exact_windows(None, true, 10));
+    fn resident_global_v16_exact_score_ceiling_keeps_best_approximate_rows() {
+        let mut candidates = vec![(4.0_f32, "d"), (1.0, "a"), (3.0, "c"), (2.0, "b")];
+        truncate_cell_card_exact_candidates(&mut candidates, 2);
+        assert_eq!(candidates, [(1.0, "a"), (2.0, "b")]);
     }
 
     #[test]
@@ -38168,7 +38170,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v15");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v16");
         assert!(
             report.global_leaf_pages_read > 1,
             "V12 stopped after its first page found k live rows instead of spending the bounded recall budget"
@@ -38179,7 +38181,7 @@ mod tests {
         );
         assert!(
             report.transient_peak_bytes <= GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES,
-            "V15 admitted the caller byte cap instead of the selected wave: {report:?}"
+            "V16 admitted the caller byte cap instead of the selected wave: {report:?}"
         );
     }
 
@@ -38218,7 +38220,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v12_scores_the_bounded_page_wave_after_mvcc_suppression() {
+    fn resident_global_v16_scores_the_bounded_row_wave_after_mvcc_suppression() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let suffix = "x".repeat(100 * 1024);
@@ -38260,12 +38262,16 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v15", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v16", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
         assert_eq!(report.global_leaf_continuations, 1, "{report:?}");
         assert_eq!(report.global_leaf_waves, 2);
-        assert_eq!(report.global_leaf_pages_read, 4);
-        assert!(report.global_leaf_page_bytes <= 4 * 128 * 1024);
+        assert!((1..=GLOBAL_LEAF_QUERY_WAVE_PAGES).contains(&report.global_leaf_pages_read));
+        assert!(
+            report.records_considered > 4,
+            "the MVCC continuation regressed to a nominal four-tile guess: {report:?}"
+        );
+        assert!(report.global_leaf_page_bytes <= GLOBAL_LEAF_QUERY_WAVE_PAGES as u64 * 128 * 1024);
         assert!(
             report.transient_peak_bytes >= report.global_leaf_page_bytes,
             "the admitted V12 page prefix was not charged to transient memory: {report:?}"
@@ -38301,18 +38307,18 @@ mod tests {
             ),
             "{fallback_complete:?}"
         );
-        // This cap admits the authenticated V15 code wave and one exact-block
+        // This cap admits the authenticated V16 code wave and one exact-block
         // prefix, but not the complete exact wave. The query must return the
-        // affordable prefix on the V15 path instead of starting a second
+        // affordable prefix on the V16 path instead of starting a second
         // storage path that can spend the caller's cap again.
-        assert_eq!(fallback_complete.leaf_mode, "bounded-cell-card-v15");
+        assert_eq!(fallback_complete.leaf_mode, "bounded-cell-card-v16");
         assert!((1..=4).contains(&fallback_complete.global_leaf_pages_read));
         assert_eq!(fallback_complete.global_leaf_waves, 2);
         assert!(fallback_complete.global_leaf_code_pages_read > 0);
         assert!(fallback_complete.global_leaf_code_bytes > 0);
         assert!(
             fallback_complete.bytes_read >= fallback_complete.global_leaf_code_bytes,
-            "spent V15 code bytes were omitted from the fallback report: {fallback_complete:?}"
+            "spent V16 code bytes were omitted from the fallback report: {fallback_complete:?}"
         );
         assert!(
             fallback_complete.bytes_read <= max_bytes,
@@ -38331,7 +38337,10 @@ mod tests {
             exhausted.termination_reason,
             SearchTerminationReason::MaxSegments
         );
-        assert_eq!(exhausted.global_leaf_pages_read, 4);
+        assert!(
+            (5..=GLOBAL_LEAF_QUERY_WAVE_PAGES).contains(&exhausted.global_leaf_pages_read),
+            "the exhausted MVCC path regressed to four nominal tiles: {exhausted:?}"
+        );
         assert_eq!(exhausted.global_leaf_continuations, 1);
         assert_eq!(exhausted.global_leaf_waves, 2);
     }
@@ -40481,15 +40490,7 @@ fn v13_block_budget_can_return_four_times_k_rows() {
 }
 
 #[test]
-fn v15_exact_block_budget_bounds_only_the_immutable_default() {
-    assert_eq!(global_cell_card_exact_block_budget(4_096, 10, true), 16);
-    assert_eq!(global_cell_card_exact_block_budget(512, 10, true), 16);
-    assert_eq!(global_cell_card_exact_block_budget(128, 10, true), 4);
-    assert_eq!(global_cell_card_exact_block_budget(4_096, 10, false), 128);
-}
-
-#[test]
-fn v15_stable_code_planes_keep_each_backing_range_bounded() {
+fn v16_stable_code_planes_keep_each_backing_range_bounded() {
     let end = 5 * 1024 * 1024 + 17;
     let ranges = bounded_cell_card_plane_ranges(11, 11 + end).unwrap();
     assert_eq!(ranges.len(), 2);
@@ -40503,7 +40504,7 @@ fn v15_stable_code_planes_keep_each_backing_range_bounded() {
 }
 
 #[test]
-fn v15_large_stable_planes_require_a_retained_cache() {
+fn v16_large_stable_planes_require_a_retained_cache() {
     assert_eq!(
         cell_card_plane_promotion_ceiling(false),
         CELL_CARD_RANGE_READ_MAX_BYTES

@@ -154,7 +154,10 @@ use crate::{
 // cell-card with a shared contiguous PQ-code plane and moved exact-block
 // authority into the authenticated Parquet root. Pre-release v37 manifests
 // cannot safely interpret the new group and root layouts.
-const CURRENT_VERSION: u16 = 38;
+// Bumped 38 -> 39 when V16 replaced 32-row exact blocks with independently
+// partitioned, authenticated locality tiles of up to 128 rows. Pre-release
+// v38 manifests do not bind that one-tile/one-request-unit invariant.
+const CURRENT_VERSION: u16 = 39;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -186,7 +189,7 @@ pub(crate) const LEAN_SEGMENT_SCORING_COLUMNS: &[&str] = &[
 pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
     if manifest.global_ann_ref.is_some() && manifest.global_cell_card_ann_ref.is_some() {
         return Err(BorsukError::InvalidStorage(
-            "manifest cannot publish V13 and V15 global ANN authority together".to_string(),
+            "manifest cannot publish V13 and V16 global ANN authority together".to_string(),
         ));
     }
     validate_manifest_config(
@@ -246,7 +249,7 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
         .transpose()
         .map_err(|error| {
             BorsukError::InvalidStorage(format!(
-                "failed to serialize V15 global cell-card ref: {error}"
+                "failed to serialize V16 global cell-card ref: {error}"
             ))
         })?;
     let lexical_roots_json = serde_json::to_string(&manifest.lexical_roots).map_err(|err| {
@@ -453,7 +456,7 @@ fn manifest_global_cell_card_ann_ref(
         string_value(batch, column, 0, "global_cell_card_ann_ref_json")?,
     )
     .map_err(|error| {
-        BorsukError::InvalidStorage(format!("failed to parse V15 global cell-card ref: {error}"))
+        BorsukError::InvalidStorage(format!("failed to parse V16 global cell-card ref: {error}"))
     })?;
     reference.validate()?;
     Ok(Some(reference))
@@ -462,7 +465,7 @@ fn manifest_global_cell_card_ann_ref(
 fn validate_manifest_global_ann_authority(manifest: &Manifest) -> Result<()> {
     if manifest.global_ann_ref.is_some() && manifest.global_cell_card_ann_ref.is_some() {
         return Err(BorsukError::InvalidStorage(
-            "manifest contains both V13 and V15 global ANN authority".to_string(),
+            "manifest contains both V13 and V16 global ANN authority".to_string(),
         ));
     }
     Ok(())
@@ -9582,7 +9585,7 @@ mod tests {
         let bytes = manifest_to_parquet(&valid_manifest()).unwrap();
         let batch = first_batch(&bytes, "manifest").unwrap();
         let mut columns = batch.columns().to_vec();
-        for old_version in [35_u16, 37] {
+        for old_version in [35_u16, 37, 38] {
             columns[batch.schema().index_of("format_version").unwrap()] =
                 array(UInt16Array::from_iter_values([old_version]));
             let old = write_batch(RecordBatch::try_new(batch.schema(), columns.clone()).unwrap())

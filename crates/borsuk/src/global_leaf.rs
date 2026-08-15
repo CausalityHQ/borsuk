@@ -37,6 +37,7 @@ pub(crate) const GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES: u64 = 48 * 1024 * 1024;
 // conservative encoded-byte estimate and flushes on whichever bound comes first.
 pub(crate) const GLOBAL_LEAF_BUNDLE_MAX_PAGES: usize = 376;
 pub(crate) const GLOBAL_LEAF_EXACT_BLOCK_ROWS: usize = 32;
+pub(crate) const GLOBAL_LEAF_EXACT_BLOCK_MAX_ROWS: usize = 128;
 // Conservatively covers file magic, schema messages, the bounded exact-block
 // table, footer metadata, and alignment. Per-block body and metadata are
 // charged separately by `estimate_global_leaf_bundle_page`.
@@ -569,7 +570,9 @@ fn encode_global_leaf_bundle_with_max_bytes(
     exact_block_rows: usize,
     max_bytes: u64,
 ) -> Result<EncodedGlobalLeafBundle> {
-    if pages.is_empty() || exact_block_rows == 0 || exact_block_rows > GLOBAL_LEAF_EXACT_BLOCK_ROWS
+    if pages.is_empty()
+        || exact_block_rows == 0
+        || exact_block_rows > GLOBAL_LEAF_EXACT_BLOCK_MAX_ROWS
     {
         return Err(BorsukError::InvalidStorage(
             "global leaf bundle must contain at least one page".to_string(),
@@ -930,7 +933,7 @@ pub(crate) fn decode_global_leaf_exact_block(
     element_type: VectorElementType,
 ) -> Result<RecordBatch> {
     if block.rows == 0
-        || block.rows as usize > GLOBAL_LEAF_EXACT_BLOCK_ROWS
+        || block.rows as usize > GLOBAL_LEAF_EXACT_BLOCK_MAX_ROWS
         || block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES
         || block.metadata_bytes.checked_add(block.body_bytes) != Some(block.batch_bytes)
         || stored.len() != block.batch_bytes as usize
@@ -2784,7 +2787,7 @@ fn validate_global_leaf_directory(
                     )
                 })?;
             if block.rows == 0
-                || block.rows as usize > GLOBAL_LEAF_EXACT_BLOCK_ROWS
+                || block.rows as usize > GLOBAL_LEAF_EXACT_BLOCK_MAX_ROWS
                 || block.first_row != next_exact_row
                 || block.batch_offset != next_exact_offset
                 || block.metadata_bytes > GLOBAL_LEAF_MAX_METADATA_BYTES
