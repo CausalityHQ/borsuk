@@ -49,10 +49,10 @@ use crate::{
         tombstone_ids_to_parquet, wal_records_from_table,
     },
     global_cell_card::{
-        CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES, CELL_CARD_RANGE_READ_MAX_BYTES,
-        CellCardExactBlockRef, CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead,
-        CellCardHeadWavePlan, CellCardPush, GlobalCellCardAnnRef, LoadedCellCardHead,
-        cell_card_exact_admission_bounds, decode_cell_card_exact_wave, decode_cell_card_run_root,
+        CELL_CARD_RANGE_READ_MAX_BYTES, CellCardExactBlockRef, CellCardGroupRef,
+        CellCardGroupWriter, CellCardHeadRead, CellCardHeadWavePlan, CellCardPush,
+        GlobalCellCardAnnRef, LoadedCellCardHead, cell_card_exact_admission_bounds,
+        decode_cell_card_exact_wave, decode_cell_card_run_root,
         decode_verified_cell_card_head_wave, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave, plan_ranked_cell_card_head_wave,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
@@ -572,11 +572,10 @@ fn global_cell_card_wave_admission_bytes(
     let exact_selected = exact_blocks
         .saturating_mul(exact_block_bytes_ceiling)
         .min(max_bytes);
-    let coalesced_gap_ceiling = exact_blocks
-        .saturating_sub(1)
-        .saturating_mul(CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES);
     let exact_physical = exact_selected
-        .saturating_add(coalesced_gap_ceiling)
+        // The exact planner may spend at most one selected byte on skipped
+        // gaps, independent of the distance of any individual merge.
+        .saturating_add(exact_selected)
         .min(max_bytes);
     let decoded_row_bytes = (dimensions as u64)
         .saturating_mul(std::mem::size_of::<f32>() as u64)

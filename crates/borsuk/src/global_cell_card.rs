@@ -43,10 +43,6 @@ const CELL_CARD_MAX_METADATA_BYTES: u32 = 32 * 1024;
 const CELL_CARD_ROOT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CELL_CARD_ROOT_MAX_CARDS: usize = 4_000_000;
 const CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
-// Exact blocks are small (~16 KiB for SIFT-128). A bounded 128 KiB gap lets
-// nearby code-space microtiles share a GET, while the planner's independent
-// speculative-byte budget still prevents the old multi-megabyte overfetch.
-pub(crate) const CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES: u64 = 128 * 1024;
 
 pub(crate) fn cell_card_block_rows(
     dimensions: usize,
@@ -1877,14 +1873,8 @@ pub(crate) fn plan_cell_card_exact_wave(
                 }
                 let gap = next.start - prior.end;
                 (gap <= speculative_gap_budget
-                    && cell_card_ranges_should_coalesce(
-                        prior.start,
-                        prior.end,
-                        next.start,
-                        next.end,
-                        CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES,
-                    ))
-                .then_some((gap, index))
+                    && next.end - prior.start <= CELL_CARD_RANGE_READ_MAX_BYTES)
+                    .then_some((gap, index))
             })
             .min();
         let Some((gap, index)) = cheapest else {
@@ -4327,14 +4317,14 @@ mod tests {
             16 * 1024,
             48 * 1024,
             64 * 1024,
-            super::CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES,
+            super::CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES,
         ));
         assert!(!super::cell_card_ranges_should_coalesce(
             0,
             16 * 1024,
             512 * 1024,
             528 * 1024,
-            super::CELL_CARD_EXACT_RANGE_READ_MAX_GAP_BYTES,
+            super::CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES,
         ));
     }
 
@@ -4373,6 +4363,56 @@ mod tests {
         assert_eq!(plan.selected_bytes(), 48 * 1024);
         assert!(plan.speculative_bytes() <= plan.selected_bytes());
         assert_eq!(plan.requests(), 2);
+    }
+
+    #[test]
+    fn exact_wave_uses_global_gap_budget_across_the_selected_wave() {
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "group.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: 512 * 1024,
+            code_plane_offset: 0,
+            code_plane_bytes: 1,
+            code_plane_checksum: [2; 32],
+        });
+        let block_bytes = 16 * 1024_u64;
+        let large_gap = 160 * 1024_u64;
+        let ranked = (0_u64..11)
+            .map(|ordinal| {
+                let offset = if ordinal < 10 {
+                    ordinal * block_bytes
+                } else {
+                    10 * block_bytes + large_gap
+                };
+                super::RankedCellCardExactBlock {
+                    head_index: 0,
+                    group: Arc::clone(&group),
+                    cell_index: 0,
+                    card_ordinal: 0,
+                    reference: super::CellCardExactBlockRef {
+                        block_ordinal: ordinal as u32,
+                        offset,
+                        metadata_bytes: 1024,
+                        body_bytes: 15 * 1024,
+                        bytes: block_bytes as u32,
+                        rows: 32,
+                        checksum: [ordinal as u8; 32],
+                    },
+                    distance: ordinal as f32,
+                    row_distances: Box::new([]),
+                }
+            })
+            .collect::<Vec<_>>();
+        let selected_bytes = block_bytes * ranked.len() as u64;
+        let plan =
+            super::plan_cell_card_exact_wave(&ranked, selected_bytes + large_gap, ranked.len())
+                .unwrap();
+
+        assert_eq!(plan.blocks(), ranked.len());
+        assert_eq!(plan.requests(), 1);
+        assert_eq!(plan.speculative_bytes(), large_gap);
+        assert!(plan.speculative_bytes() <= plan.selected_bytes());
+        assert!(plan.physical_bytes() <= selected_bytes + large_gap);
     }
 
     #[test]
