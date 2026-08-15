@@ -68,6 +68,7 @@ def validate_effective_limits(expected: dict[str, int], actual: dict[str, Any]) 
         "max_inflight_leaf_reads": "borsuk_leaf_read_capacity",
         "page_budget": "borsuk_page_budget",
         "exact_candidates": "borsuk_exact_candidates",
+        "exact_hedge_after_ms": "borsuk_exact_hedge_after_ms",
         "ram_budget_bytes": "borsuk_ram_budget_bytes",
         "disk_cache_bytes": "borsuk_disk_cache_bytes",
     }
