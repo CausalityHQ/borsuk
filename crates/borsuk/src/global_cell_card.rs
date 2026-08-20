@@ -1904,11 +1904,10 @@ pub(crate) fn score_loaded_cell_card_heads(
     query: &[f32],
     heads: &[LoadedCellCardHead],
 ) -> Result<Vec<Vec<f32>>> {
+    let prepared = codebook.prepare_cell_card_query(query)?;
     heads
         .iter()
-        .map(|loaded| {
-            codebook.score_cell_card_codes(query, loaded.head.codes.iter().map(Vec::as_slice))
-        })
+        .map(|loaded| prepared.score_codes(loaded.head.codes.iter().map(Vec::as_slice)))
         .collect()
 }
 

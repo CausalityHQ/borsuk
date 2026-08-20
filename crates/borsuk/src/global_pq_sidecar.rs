@@ -1956,6 +1956,32 @@ pub(crate) struct ResidentGlobalCodebook {
     routing: ResidentGlobalRouting,
 }
 
+pub(crate) struct PreparedCellCardQuery<'a> {
+    codebook: &'a ResidentGlobalCodebook,
+    prepared: PreparedGlobalScan,
+}
+
+impl PreparedCellCardQuery<'_> {
+    pub(crate) fn score_codes<'a>(
+        &self,
+        codes: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<Vec<f32>> {
+        codes
+            .into_iter()
+            .map(|code| {
+                if code.len() != self.codebook.code_width {
+                    return invalid("V19 cell-card code width does not match its codebook");
+                }
+                let distance = self.codebook.quantizer.distance(&self.prepared, code)?;
+                if !distance.is_finite() {
+                    return invalid("V19 cell-card code distance is non-finite");
+                }
+                Ok(distance)
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 enum ResidentGlobalRouting {
     SegmentDerived {
@@ -2068,20 +2094,17 @@ impl ResidentGlobalCodebook {
         query: &[f32],
         codes: impl IntoIterator<Item = &'a [u8]>,
     ) -> Result<Vec<f32>> {
-        let prepared = self.quantizer.prepare_query(query)?;
-        codes
-            .into_iter()
-            .map(|code| {
-                if code.len() != self.code_width {
-                    return invalid("V19 cell-card code width does not match its codebook");
-                }
-                let distance = self.quantizer.distance(&prepared, code)?;
-                if !distance.is_finite() {
-                    return invalid("V19 cell-card code distance is non-finite");
-                }
-                Ok(distance)
-            })
-            .collect()
+        self.prepare_cell_card_query(query)?.score_codes(codes)
+    }
+
+    pub(crate) fn prepare_cell_card_query(
+        &self,
+        query: &[f32],
+    ) -> Result<PreparedCellCardQuery<'_>> {
+        Ok(PreparedCellCardQuery {
+            codebook: self,
+            prepared: self.quantizer.prepare_query(query)?,
+        })
     }
 
     pub(crate) fn rank_pages(
@@ -2913,6 +2936,33 @@ mod tests {
                 .score_cell_card_codes(&query, [near_code[..near_code.len() - 1].as_ref()])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn v19_cell_card_query_prepares_once_and_scores_multiple_batches() {
+        let descriptor = test_v12_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vectors(1, 64).pop().unwrap();
+        let mut far = query.clone();
+        far.iter_mut().for_each(|value| *value += 20.0);
+        let near_code = quantizer.encode(&query).unwrap();
+        let far_code = quantizer.encode(&far).unwrap();
+
+        let prepared = resident.prepare_cell_card_query(&query).unwrap();
+        let first = prepared.score_codes([near_code.as_slice()]).unwrap();
+        let second = prepared.score_codes([far_code.as_slice()]).unwrap();
+        let combined = prepared
+            .score_codes([near_code.as_slice(), far_code.as_slice()])
+            .unwrap();
+        let legacy = resident
+            .score_cell_card_codes(&query, [near_code.as_slice(), far_code.as_slice()])
+            .unwrap();
+
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert!(first[0] < second[0]);
+        assert_eq!(combined, legacy);
     }
 
     fn leaf_page(
