@@ -190,9 +190,53 @@ class RestCoexistenceLoadTest(unittest.TestCase):
         self.assertEqual(search["query_bytes_read"], 1_200_000)
 
     def test_search_telemetry_reads_physical_exact_blocks_and_query_bytes(self) -> None:
-        telemetry = _search_telemetry({"pages_read": 7, "bytes_read": 700_000})
+        telemetry = _search_telemetry(
+            {
+                "pages_read": 7,
+                "bytes_read": 700_000,
+                "transient_bytes": 3_000_000,
+                "transient_capacity_bytes": 8_000_000,
+                "transient_peak_bytes": 6_000_000,
+            }
+        )
         self.assertEqual(telemetry["global_leaf_pages_read"], 7)
         self.assertEqual(telemetry["query_bytes_read"], 700_000)
+        self.assertEqual(telemetry["transient_bytes"], 3_000_000)
+        self.assertEqual(telemetry["transient_capacity_bytes"], 8_000_000)
+        self.assertEqual(telemetry["transient_peak_bytes"], 6_000_000)
+
+    def test_summary_tracks_transient_admission_high_watermarks_without_summing(self) -> None:
+        samples = [
+            Sample(
+                "search",
+                0,
+                0,
+                1,
+                200,
+                1.0,
+                "bounded-cell-card-v17",
+                transient_bytes=3_000_000,
+                transient_capacity_bytes=8_000_000,
+                transient_peak_bytes=5_000_000,
+            ),
+            Sample(
+                "search",
+                1,
+                1,
+                2,
+                200,
+                1.0,
+                "bounded-cell-card-v17",
+                transient_bytes=4_000_000,
+                transient_capacity_bytes=8_000_000,
+                transient_peak_bytes=7_000_000,
+            ),
+        ]
+
+        search = summarize("search", 1.0, samples)["search"]
+        self.assertEqual(search["transient_bytes_max"], 4_000_000)
+        self.assertEqual(search["transient_capacity_bytes"], 8_000_000)
+        self.assertEqual(search["transient_peak_bytes"], 7_000_000)
 
     def test_uncached_gate_rejects_generator_lag_errors_cache_and_no_s3(self) -> None:
         baseline = {"cheap": {"p99_ms": 1.0, "errors": 0, "requests": 100}}

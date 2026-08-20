@@ -38,6 +38,9 @@ class Sample:
     global_base_exact_rerank_us: int = 0
     global_leaf_pages_read: int = 0
     query_bytes_read: int = 0
+    transient_bytes: int = 0
+    transient_capacity_bytes: int = 0
+    transient_peak_bytes: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -64,6 +67,9 @@ class Sample:
             "global_base_exact_rerank_us": self.global_base_exact_rerank_us,
             "global_leaf_pages_read": self.global_leaf_pages_read,
             "query_bytes_read": self.query_bytes_read,
+            "transient_bytes": self.transient_bytes,
+            "transient_capacity_bytes": self.transient_capacity_bytes,
+            "transient_peak_bytes": self.transient_peak_bytes,
         }
 
 
@@ -136,6 +142,13 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
             sample.global_leaf_pages_read for sample in samples
         ),
         "query_bytes_read": sum(sample.query_bytes_read for sample in samples),
+        "transient_bytes_max": max((sample.transient_bytes for sample in samples), default=0),
+        "transient_capacity_bytes": max(
+            (sample.transient_capacity_bytes for sample in samples), default=0
+        ),
+        "transient_peak_bytes": max(
+            (sample.transient_peak_bytes for sample in samples), default=0
+        ),
     }
 
 
@@ -222,6 +235,9 @@ def _search_telemetry(payload: dict[str, object]) -> dict[str, int]:
     return {
         "global_leaf_pages_read": int(payload.get("pages_read", 0)),
         "query_bytes_read": int(payload.get("bytes_read", 0)),
+        "transient_bytes": int(payload.get("transient_bytes", 0)),
+        "transient_capacity_bytes": int(payload.get("transient_capacity_bytes", 0)),
+        "transient_peak_bytes": int(payload.get("transient_peak_bytes", 0)),
     }
 
 
@@ -249,6 +265,9 @@ def _request(
     global_base_exact_rerank_us = 0
     global_leaf_pages_read = 0
     query_bytes_read = 0
+    transient_bytes = 0
+    transient_capacity_bytes = 0
+    transient_peak_bytes = 0
     if endpoint == "search":
         if query is None:
             raise ValueError("search request has no query")
@@ -295,6 +314,9 @@ def _request(
         telemetry = _search_telemetry(payload)
         global_leaf_pages_read = telemetry["global_leaf_pages_read"]
         query_bytes_read = telemetry["query_bytes_read"]
+        transient_bytes = telemetry["transient_bytes"]
+        transient_capacity_bytes = telemetry["transient_capacity_bytes"]
+        transient_peak_bytes = telemetry["transient_peak_bytes"]
     return Sample(
         endpoint,
         scheduled_ns,
@@ -317,6 +339,9 @@ def _request(
         global_base_exact_rerank_us,
         global_leaf_pages_read,
         query_bytes_read,
+        transient_bytes,
+        transient_capacity_bytes,
+        transient_peak_bytes,
     )
 
 

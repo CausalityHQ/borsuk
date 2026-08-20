@@ -109,6 +109,9 @@ struct SearchResponse {
     global_leaf_waves: usize,
     global_base_approximate_us: u64,
     global_base_exact_rerank_us: u64,
+    transient_bytes: u64,
+    transient_capacity_bytes: u64,
+    transient_peak_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -257,6 +260,9 @@ async fn search(State(state): State<AppState>, Json(request): Json<SearchRequest
             global_leaf_waves: report.global_leaf_waves,
             global_base_approximate_us: report.global_base_approximate_us,
             global_base_exact_rerank_us: report.global_base_exact_rerank_us,
+            transient_bytes: report.transient_bytes,
+            transient_capacity_bytes: report.transient_capacity_bytes,
+            transient_peak_bytes: report.transient_peak_bytes,
         })
         .into_response(),
         Ok(Err(error @ BorsukError::Overloaded { .. })) => {
@@ -436,6 +442,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(search.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn search_response_exposes_transient_admission_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let index = borsuk::BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: Some(8 * 1024 * 1024),
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let app = router(AppState {
+            index,
+            admission: SearchAdmission::new(1).unwrap(),
+            page_budget: 4,
+            exact_candidates: 512,
+            ram_budget_bytes: 8 * 1024 * 1024,
+            disk_cache_bytes: 0,
+            metrics: std::sync::Arc::new(AppMetrics::default()),
+        });
+
+        let response = app
+            .oneshot(
+                Request::post("/api/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"vector":[0.0,0.0],"k":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let used = value["transient_bytes"].as_u64().unwrap();
+        let capacity = value["transient_capacity_bytes"].as_u64().unwrap();
+        let peak = value["transient_peak_bytes"].as_u64().unwrap();
+        assert!(capacity > 0);
+        assert!(used <= capacity);
+        assert!(peak <= capacity);
     }
 
     #[tokio::test]
