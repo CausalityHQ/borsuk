@@ -933,6 +933,20 @@ struct ByteAdmissionState {
     peak: u64,
     next_ticket: u64,
     serving_ticket: u64,
+    admitted: u64,
+    wait_nanos: u64,
+    wait_count: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ByteAdmissionSnapshot {
+    pub(crate) capacity_bytes: u64,
+    pub(crate) used_bytes: u64,
+    pub(crate) peak_bytes: u64,
+    pub(crate) waiting: usize,
+    pub(crate) admitted: u64,
+    pub(crate) wait_micros: u64,
+    pub(crate) wait_count: u64,
 }
 
 impl ByteAdmissionGate {
@@ -972,11 +986,20 @@ impl ByteAdmissionGate {
             .next_ticket
             .checked_add(1)
             .expect("byte admission ticket counter exhausted");
+        let started = Instant::now();
+        let mut waited = false;
         while ticket != state.serving_ticket || state.used.saturating_add(weight) > self.capacity {
+            waited = true;
             state = self.ready.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+        if waited {
+            let nanos = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            state.wait_nanos = state.wait_nanos.saturating_add(nanos);
+            state.wait_count = state.wait_count.saturating_add(1);
         }
         state.used = state.used.saturating_add(weight);
         state.peak = state.peak.max(state.used);
+        state.admitted = state.admitted.saturating_add(1);
         state.serving_ticket = state
             .serving_ticket
             .checked_add(1)
@@ -1004,6 +1027,20 @@ impl ByteAdmissionGate {
 
     pub(crate) fn peak_bytes(&self) -> u64 {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).peak
+    }
+
+    pub(crate) fn snapshot(&self) -> ByteAdmissionSnapshot {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        ByteAdmissionSnapshot {
+            capacity_bytes: self.capacity,
+            used_bytes: state.used,
+            peak_bytes: state.peak,
+            waiting: usize::try_from(state.next_ticket.saturating_sub(state.serving_ticket))
+                .unwrap_or(usize::MAX),
+            admitted: state.admitted,
+            wait_micros: state.wait_nanos / 1_000,
+            wait_count: state.wait_count,
+        }
     }
 }
 
@@ -1433,11 +1470,19 @@ mod tests {
         });
         thread::sleep(Duration::from_millis(25));
         assert_eq!(acquired.load(Ordering::SeqCst), 0);
+        let waiting = gate.snapshot();
+        assert_eq!(waiting.waiting, 1);
+        assert_eq!(waiting.admitted, 1);
 
         drop(first);
         waiter.join().unwrap();
         assert_eq!(acquired.load(Ordering::SeqCst), 1);
         assert_eq!(gate.used_bytes(), 0);
+        let finished = gate.snapshot();
+        assert_eq!(finished.waiting, 0);
+        assert_eq!(finished.admitted, 2);
+        assert_eq!(finished.wait_count, 1);
+        assert!(finished.wait_micros > 0);
     }
 
     #[test]

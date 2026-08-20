@@ -104,7 +104,7 @@ pub use group_commit::{
     GroupCommitConfig, GroupCommitReceipt, GroupCommitTicket, GroupCommitWriter,
 };
 pub use index::{
-    AdmissionStats, BorsukIndex, CanonicalMutationBatch,
+    AdmissionStats, BorsukIndex, ByteAdmissionStats, CanonicalMutationBatch,
     DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION, DEFAULT_LATE_INTERACTION_BATCH_CACHE_BYTES,
     DEFAULT_LEAF_READ_WIDTH, DEFAULT_MAX_ACTIVE_SEARCHES, DEFAULT_MAX_INFLIGHT_LEAF_READS,
     DEFAULT_MAX_WAITING_SEARCHES, DEFAULT_RAM_BUDGET_BYTES, DEFAULT_ROUTING_PAGE_CACHE_BYTES,

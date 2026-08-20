@@ -1087,6 +1087,33 @@ impl CellCardHeadWavePlan {
         self.selected_bytes
     }
 
+    pub(crate) fn decoded_retained_bytes(&self) -> u64 {
+        let (rows, exact_blocks) = self.reads.iter().flat_map(|read| &read.cards).fold(
+            (0_u64, 0_u64),
+            |(rows, blocks), card| {
+                (
+                    rows.saturating_add(u64::from(card.reference.rows)),
+                    blocks.saturating_add(card.reference.exact_blocks.len() as u64),
+                )
+            },
+        );
+        self.selected_bytes
+            .saturating_add(rows.saturating_mul(std::mem::size_of::<Vec<u8>>() as u64))
+            .saturating_add(
+                exact_blocks.saturating_mul(std::mem::size_of::<CellCardExactBlockRef>() as u64),
+            )
+            .saturating_add(
+                (self.cards as u64)
+                    .saturating_mul(std::mem::size_of::<LoadedCellCardHead>() as u64),
+            )
+    }
+
+    pub(crate) fn transient_admission_bytes(&self) -> u64 {
+        self.physical_bytes
+            .saturating_add(self.decoded_retained_bytes())
+            .max(1)
+    }
+
     pub(crate) fn speculative_bytes(&self) -> u64 {
         self.physical_bytes.saturating_sub(
             self.selected_bytes
@@ -1910,6 +1937,13 @@ impl CellCardExactWavePlan {
     }
     pub(crate) fn blocks(&self) -> usize {
         self.reads.iter().map(|read| read.blocks.len()).sum()
+    }
+    pub(crate) fn rows(&self) -> u64 {
+        self.reads
+            .iter()
+            .flat_map(|read| &read.blocks)
+            .map(|block| u64::from(block.reference.rows))
+            .sum()
     }
     pub(crate) fn selected_cells(&self) -> usize {
         self.reads
@@ -4837,6 +4871,13 @@ mod tests {
         assert_eq!(plan.cards(), selected_cells.len());
         assert_eq!(plan.requests(), selected_requests);
         assert!(plan.physical_bytes() <= selected_physical_bytes.saturating_mul(2));
+        assert_eq!(
+            plan.transient_admission_bytes(),
+            plan.physical_bytes()
+                .saturating_add(plan.decoded_retained_bytes())
+                .max(1)
+        );
+        assert!(plan.transient_admission_bytes() < 4 * 1024 * 1024);
 
         let cached_selected =
             super::plan_cell_card_head_wave(&root, &selected_cells, 4 * 1024 * 1024, 64).unwrap();
@@ -4857,6 +4898,10 @@ mod tests {
         assert_eq!(cached_plan.physical_bytes(), 0);
         assert_eq!(cached_plan.backing_requests(), 0);
         assert_eq!(cached_plan.speculative_bytes(), 0);
+        assert_eq!(
+            cached_plan.transient_admission_bytes(),
+            cached_plan.decoded_retained_bytes().max(1)
+        );
         assert!(cached_plan.reads().iter().all(|read| {
             read.start == read.group.code_plane_offset
                 && read.end == read.group.code_plane_offset + read.group.code_plane_bytes

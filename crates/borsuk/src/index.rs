@@ -50,10 +50,9 @@ use crate::{
     },
     global_cell_card::{
         CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION, CELL_CARD_RANGE_READ_MAX_BYTES,
-        CellCardExactBlockRef, CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead,
-        CellCardHeadWavePlan, CellCardPush, GlobalCellCardAnnRef, LoadedCellCardHead,
-        cell_card_exact_admission_bounds, decode_cell_card_exact_wave, decode_cell_card_run_root,
-        decode_verified_cell_card_head_wave, encode_cell_card_run_root,
+        CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead, CellCardPush,
+        GlobalCellCardAnnRef, cell_card_exact_admission_bounds, decode_cell_card_exact_wave,
+        decode_cell_card_run_root, decode_verified_cell_card_head_wave, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave_with_amplification, plan_ranked_cell_card_head_wave,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
         rank_cell_card_exact_blocks, rank_cell_card_head_indexes, score_loaded_cell_card_heads,
@@ -532,66 +531,26 @@ fn cell_card_exact_io_budget(max_bytes: u64, planned_head_bytes: u64) -> Option<
         .filter(|remaining| *remaining > 0)
 }
 
-/// Conservative peak allocation for one V17 code-head plus exact-rerank wave.
-///
-/// The caller byte cap is an I/O ceiling, not an allocation plan. Charging a
-/// fixed multiple of that cap makes a normal 32 MiB query consume an entire
-/// small-runtime transient pool even when the selected wave is only a few MiB.
-/// This estimate instead covers the selected code payload, copied head state,
-/// the largest possible coalesced exact reads, Arrow decode buffers, and the
-/// decoded f32 rows that coexist until scoring completes.
-fn global_cell_card_wave_admission_bytes(
-    head_plan: &CellCardHeadWavePlan,
-    max_bytes: u64,
-    requested_exact_blocks: usize,
-    exact_block_bytes_ceiling: u64,
-    exact_block_rows_ceiling: u64,
+/// Peak transient memory for the authenticated exact plan that will actually
+/// execute. The algorithmic I/O ceiling is deliberately absent: reserving its
+/// worst case before ranking turned a 192 MiB pool into a three-query FIFO.
+fn global_cell_card_exact_wave_admission_bytes(
+    head_live_bytes: u64,
+    exact_physical_bytes: u64,
+    exact_selected_bytes: u64,
+    exact_rows: u64,
     dimensions: usize,
-    max_physical_amplification: u64,
 ) -> u64 {
-    let (head_rows, head_exact_blocks) = head_plan
-        .reads()
-        .iter()
-        .flat_map(|read| read.cards.iter())
-        .fold((0_u64, 0_u64), |(rows, blocks), card| {
-            (
-                rows.saturating_add(u64::from(card.reference.rows)),
-                blocks.saturating_add(card.reference.exact_blocks.len() as u64),
-            )
-        });
-    let head_decoded = head_plan
-        .selected_bytes()
-        .saturating_add(head_rows.saturating_mul(std::mem::size_of::<Vec<u8>>() as u64))
-        .saturating_add(
-            head_exact_blocks.saturating_mul(std::mem::size_of::<CellCardExactBlockRef>() as u64),
-        )
-        .saturating_add(
-            (head_plan.cards() as u64)
-                .saturating_mul(std::mem::size_of::<LoadedCellCardHead>() as u64),
-        );
-    let exact_blocks = (requested_exact_blocks as u64).min(head_exact_blocks);
-    let exact_selected = exact_blocks
-        .saturating_mul(exact_block_bytes_ceiling)
-        .min(max_bytes);
-    let exact_physical = exact_selected
-        // Bound the full query-latency tradeoff: selected exact payload plus
-        // the configured multiple's remaining allowance for skipped gaps.
-        .saturating_mul(max_physical_amplification)
-        .min(max_bytes);
     let decoded_row_bytes = (dimensions as u64)
         .saturating_mul(std::mem::size_of::<f32>() as u64)
         .saturating_add(std::mem::size_of::<crate::global_leaf::DecodedGlobalLeafRow>() as u64);
-    let exact_decoded = exact_blocks
-        .saturating_mul(exact_block_rows_ceiling)
-        .saturating_mul(decoded_row_bytes);
+    let exact_decoded = exact_rows.saturating_mul(decoded_row_bytes);
 
-    head_plan
-        .physical_bytes()
-        .saturating_add(head_decoded)
-        .saturating_add(exact_physical)
+    head_live_bytes
+        .saturating_add(exact_physical_bytes)
         // One selected-block copy backs Arrow decoding and another allowance
         // covers decoded IDs/stamps whose variable widths are in that payload.
-        .saturating_add(exact_selected.saturating_mul(2))
+        .saturating_add(exact_selected_bytes.saturating_mul(2))
         .saturating_add(exact_decoded)
         .max(1)
 }
@@ -983,10 +942,32 @@ pub struct FlowControlStats {
     pub searches: AdmissionStats,
     /// Immutable ANN range-read admission counters.
     pub leaf_reads: AdmissionStats,
+    /// Weighted transient-memory admission counters.
+    #[serde(default)]
+    pub transient: ByteAdmissionStats,
     /// Maximum immutable ANN reads launched in one query wave.
     pub leaf_read_width: usize,
     /// Maximum exact-rerank physical bytes per selected exact-block byte.
     pub exact_read_max_physical_amplification: u64,
+}
+
+/// Observable state for the collection-wide weighted transient-memory gate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ByteAdmissionStats {
+    /// Configured transient-memory capacity.
+    pub capacity_bytes: u64,
+    /// Bytes held by currently admitted work.
+    pub used_bytes: u64,
+    /// Highest admitted byte total since the handle opened.
+    pub peak_bytes: u64,
+    /// FIFO work units currently waiting for byte capacity.
+    pub waiting: usize,
+    /// Permit acquisitions admitted since open. V19 takes a head and exact permit per query.
+    pub admitted: u64,
+    /// Aggregate time spent waiting for transient-memory admission.
+    pub wait_micros: u64,
+    /// Permit acquisitions that waited. V19 may wait once in each of its two phases.
+    pub wait_count: u64,
 }
 
 /// A BORSUK index handle.
@@ -3289,6 +3270,21 @@ impl BorsukIndex {
         FlowControlStats {
             searches: public(self.admission.snapshot()),
             leaf_reads: public(self.global_pq_rerank_admission.snapshot()),
+            transient: self.read_runtime.transient_admission.as_ref().map_or_else(
+                ByteAdmissionStats::default,
+                |gate| {
+                    let snapshot = gate.snapshot();
+                    ByteAdmissionStats {
+                        capacity_bytes: snapshot.capacity_bytes,
+                        used_bytes: snapshot.used_bytes,
+                        peak_bytes: snapshot.peak_bytes,
+                        waiting: snapshot.waiting,
+                        admitted: snapshot.admitted,
+                        wait_micros: snapshot.wait_micros,
+                        wait_count: snapshot.wait_count,
+                    }
+                },
+            ),
             leaf_read_width: self.leaf_read_width,
             exact_read_max_physical_amplification: self
                 .read_runtime
@@ -17875,25 +17871,12 @@ impl BorsukIndex {
                 }
             },
         )?;
-        let wave_admission_bytes = global_cell_card_wave_admission_bytes(
-            &head_plan,
-            max_bytes,
-            requested_exact_block_budget,
-            selected_exact_block_ceiling,
-            selected_exact_row_ceiling,
-            self.manifest.config.dimensions,
-            self.read_runtime.exact_read_max_physical_amplification,
-        );
-        // Reserve both dependent waves with one permit. Retaining a head permit
-        // and then acquiring another permit from the same weighted gate can
-        // self-deadlock when the head wave already fills the configured cap.
-        // Charge the selected plan's conservative decoded peak, not a multiple
-        // of the caller's unrelated I/O ceiling.
-        let _wave_memory_permit = self
+        let head_admission_bytes = head_plan.transient_admission_bytes();
+        let head_memory_permit = self
             .read_runtime
             .transient_admission
             .as_ref()
-            .map(|gate| gate.acquire_owned(wave_admission_bytes));
+            .map(|gate| gate.acquire_owned(head_admission_bytes));
         // Cached slices are assembled into one physical-range buffer per read.
         // Acquire the transient permit before allocating those buffers so warm
         // concurrent queries obey the same peak-memory bound as cold reads.
@@ -18085,7 +18068,29 @@ impl BorsukIndex {
             }
             Err(error) => return Err(error),
         };
+        let exact_admission_bytes = global_cell_card_exact_wave_admission_bytes(
+            head_plan.decoded_retained_bytes(),
+            exact_plan.physical_bytes(),
+            exact_plan.selected_bytes(),
+            exact_plan.rows(),
+            self.manifest.config.dimensions,
+        );
         let exact_started = Instant::now();
+        // Only compact authenticated decoded heads cross this boundary. Drop
+        // every pinned physical buffer before releasing the head reservation;
+        // otherwise warm range assembly would remain resident but uncharged
+        // while this query waits at the back of the exact-wave FIFO.
+        pinned_code_planes.clear();
+        pinned_head_reads.clear();
+        // Holding one weighted permit while acquiring another can self-deadlock.
+        // The bounded search-slot gate limits compact decoded heads retained
+        // during this permit handoff.
+        drop(head_memory_permit);
+        let _exact_memory_permit = self
+            .read_runtime
+            .transient_admission
+            .as_ref()
+            .map(|gate| gate.acquire_owned(exact_admission_bytes));
         let exact_requests_before = self.storage.request_counts();
         let exact_reads = bounded_io_map_with_gate(
             exact_plan.reads(),
@@ -29992,6 +29997,92 @@ mod tests {
 
     use super::*;
     use std::sync::{Barrier, Mutex};
+
+    #[test]
+    fn exact_wave_admission_charges_the_real_plan_instead_of_the_io_ceiling() {
+        let admitted =
+            global_cell_card_exact_wave_admission_bytes(256 * 1024, 1_185_683, 310_000, 448, 128);
+        let decoded_row_bytes = 128 * std::mem::size_of::<f32>()
+            + std::mem::size_of::<crate::global_leaf::DecodedGlobalLeafRow>();
+        assert_eq!(
+            admitted,
+            256 * 1024 + 1_185_683 + 2 * 310_000 + 448 * decoded_row_bytes as u64
+        );
+        assert!(
+            admitted < 4 * 1024 * 1024,
+            "actual exact wave charged {admitted}"
+        );
+        assert!(admitted > 1_185_683);
+    }
+
+    #[test]
+    fn v19_searches_release_head_admission_before_exact_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("row-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let resident_bytes = index.collection_resident_bytes_estimate();
+        index.read_runtime = CollectionReadRuntime::new(
+            &OpenOptions::default(),
+            Some(resident_bytes.saturating_add(8 * 1024)),
+            resident_bytes,
+        );
+        let index = Arc::new(index);
+        let transient_capacity = index.flow_control_stats().transient.capacity_bytes;
+        assert!((1..=8192).contains(&transient_capacity));
+
+        let searches = 4_usize;
+        let start = Arc::new(Barrier::new(searches + 1));
+        let (send, receive) = std::sync::mpsc::channel();
+        let workers = (0..searches)
+            .map(|_| {
+                let index = Arc::clone(&index);
+                let start = Arc::clone(&start);
+                let send = send.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    let report = index.search_with_report(
+                        &[7.0; 8],
+                        SearchOptions::approx(3, LeafMode::SrhtPqScan)
+                            .with_max_segments(4)
+                            .with_max_candidates_per_segment(64),
+                    );
+                    send.send(report).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        drop(send);
+        start.wait();
+        for _ in 0..searches {
+            let report = receive
+                .recv_timeout(Duration::from_secs(30))
+                .unwrap()
+                .unwrap();
+            assert_eq!(report.leaf_mode, "bounded-cell-card-v19");
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let transient = index.flow_control_stats().transient;
+        assert_eq!(transient.admitted, (searches * 2) as u64);
+        assert!(transient.wait_count < transient.admitted);
+    }
 
     fn positioned_watermark_through(
         index: &BorsukIndex,

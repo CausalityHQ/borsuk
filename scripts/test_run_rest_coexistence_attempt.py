@@ -24,6 +24,8 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "borsuk_search_rejected": 2,
             "borsuk_search_wait_count": 0,
             "borsuk_search_wait_micros": 0,
+            "borsuk_transient_wait_count": 4,
+            "borsuk_transient_wait_micros": 80,
         }
         after = {
             "borsuk_leaf_read_wait_count": 8,
@@ -31,6 +33,8 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "borsuk_search_rejected": 4,
             "borsuk_search_wait_count": 1,
             "borsuk_search_wait_micros": 9,
+            "borsuk_transient_wait_count": 7,
+            "borsuk_transient_wait_micros": 230,
         }
         self.assertEqual(
             flow_control_delta(before, after),
@@ -40,6 +44,8 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
                 "borsuk_search_rejected": 2,
                 "borsuk_search_wait_count": 1,
                 "borsuk_search_wait_micros": 9,
+                "borsuk_transient_wait_count": 3,
+                "borsuk_transient_wait_micros": 150,
             },
         )
         after["borsuk_leaf_read_wait_count"] = 2
@@ -47,7 +53,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             flow_control_delta(before, after)
 
     def test_terminal_result_schema_cuts_with_effective_limit_shape(self) -> None:
-        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 6)
+        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 7)
 
     def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
         self.assertEqual(

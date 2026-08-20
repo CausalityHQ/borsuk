@@ -137,6 +137,12 @@ struct MetricsResponse {
     borsuk_leaf_read_peak_active: usize,
     borsuk_leaf_read_wait_count: u64,
     borsuk_leaf_read_wait_micros: u64,
+    borsuk_transient_waiting: usize,
+    borsuk_transient_admitted: u64,
+    borsuk_transient_wait_count: u64,
+    borsuk_transient_wait_micros: u64,
+    borsuk_transient_capacity_bytes: u64,
+    borsuk_transient_peak_bytes: u64,
     borsuk_search_rejected: u64,
     borsuk_search_capacity: usize,
     borsuk_leaf_read_width: usize,
@@ -191,6 +197,12 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         borsuk_leaf_read_peak_active: flow.leaf_reads.peak_active,
         borsuk_leaf_read_wait_count: flow.leaf_reads.wait_count,
         borsuk_leaf_read_wait_micros: flow.leaf_reads.wait_micros,
+        borsuk_transient_waiting: flow.transient.waiting,
+        borsuk_transient_admitted: flow.transient.admitted,
+        borsuk_transient_wait_count: flow.transient.wait_count,
+        borsuk_transient_wait_micros: flow.transient.wait_micros,
+        borsuk_transient_capacity_bytes: flow.transient.capacity_bytes,
+        borsuk_transient_peak_bytes: flow.transient.peak_bytes,
         borsuk_search_rejected: flow.searches.rejected,
         borsuk_search_capacity: flow.searches.capacity,
         borsuk_leaf_read_width: flow.leaf_read_width,
@@ -556,6 +568,15 @@ mod tests {
         assert_eq!(value["borsuk_leaf_read_peak_active"], 0);
         assert_eq!(value["borsuk_leaf_read_wait_count"], 0);
         assert_eq!(value["borsuk_leaf_read_wait_micros"], 0);
+        assert_eq!(value["borsuk_transient_waiting"], 0);
+        assert_eq!(value["borsuk_transient_admitted"], 0);
+        assert_eq!(value["borsuk_transient_wait_count"], 0);
+        assert_eq!(value["borsuk_transient_wait_micros"], 0);
+        // This fixture deliberately opens without a RAM budget, so no weighted
+        // transient gate exists. The search-response test above exercises and
+        // attests the nonzero-capacity path.
+        assert_eq!(value["borsuk_transient_capacity_bytes"], 0);
+        assert_eq!(value["borsuk_transient_peak_bytes"], 0);
         assert_eq!(value["borsuk_exact_read_max_physical_amplification"], 5);
         assert_eq!(value["borsuk_page_budget"], 4);
         assert_eq!(value["borsuk_exact_candidates"], 512);
