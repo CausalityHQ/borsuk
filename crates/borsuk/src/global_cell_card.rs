@@ -1617,12 +1617,14 @@ fn ranked_cell_card_block_identity(block: &RankedCellCardExactBlock) -> (u32, u3
 pub(crate) fn rank_cell_card_exact_blocks(
     heads: &[LoadedCellCardHead],
     row_distances: &[Vec<f32>],
-    candidate_rows: usize,
+    requested_rows: usize,
+    candidate_vote_rows: usize,
     target_rows: usize,
 ) -> Result<Vec<RankedCellCardExactBlock>> {
     if heads.is_empty()
         || heads.len() != row_distances.len()
-        || candidate_rows == 0
+        || requested_rows == 0
+        || candidate_vote_rows == 0
         || target_rows == 0
     {
         return Err(BorsukError::InvalidStorage(
@@ -1686,8 +1688,17 @@ pub(crate) fn rank_cell_card_exact_blocks(
             .total_cmp(&right.0)
             .then_with(|| left.1.cmp(&right.1))
     });
+    let requested_rows = requested_rows.max(target_rows);
+    // MVCC continuation may widen the physical fetch target, but only the
+    // configured candidate horizon is evidence about block quality.
+    let candidate_vote_rows = candidate_vote_rows.max(target_rows).min(requested_rows);
+    let vote_horizon = candidate_vote_rows.min(candidates.len());
+    let vote_cutoff = candidates[vote_horizon - 1].0;
     let mut votes = vec![0_usize; blocks.len()];
-    for (_, block) in candidates.into_iter().take(target_rows.saturating_mul(4)) {
+    for (_, block) in candidates
+        .into_iter()
+        .take_while(|(distance, _)| distance.total_cmp(&vote_cutoff) != std::cmp::Ordering::Greater)
+    {
         votes[block] = votes[block].saturating_add(1);
     }
     let mut nearest = blocks.to_vec();
@@ -1709,7 +1720,6 @@ pub(crate) fn rank_cell_card_exact_blocks(
                 ranked_cell_card_block_identity(left).cmp(&ranked_cell_card_block_identity(right))
             })
     });
-    let requested_rows = candidate_rows.max(target_rows);
     let nearest_row_quota = requested_rows
         .div_ceil(4)
         .max(target_rows.min(requested_rows));
@@ -1756,6 +1766,13 @@ pub(crate) fn rank_cell_card_exact_blocks(
             }
         }
     }
+    // Votes choose the set. Keep nearest blocks first so a later prefix
+    // reduction for byte/request bounds sheds the farthest selected blocks.
+    selected.sort_by(|left, right| {
+        left.distance.total_cmp(&right.distance).then_with(|| {
+            ranked_cell_card_block_identity(left).cmp(&ranked_cell_card_block_identity(right))
+        })
+    });
     Ok(selected)
 }
 
@@ -3667,7 +3684,7 @@ mod tests {
 
         let mut distances = vec![10.0; 129];
         distances[128..].fill(0.0);
-        let ranked = super::rank_cell_card_exact_blocks(&loaded, &[distances], 1, 1).unwrap();
+        let ranked = super::rank_cell_card_exact_blocks(&loaded, &[distances], 1, 1, 1).unwrap();
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].reference.block_ordinal, 4);
         let exact_plan = super::plan_cell_card_exact_wave(&ranked, 256 * 1024, 64).unwrap();
@@ -3764,7 +3781,8 @@ mod tests {
         .unwrap();
 
         let full_tile_first = vec![0.0; 129];
-        let ranked = super::rank_cell_card_exact_blocks(&loaded, &[full_tile_first], 2, 1).unwrap();
+        let ranked =
+            super::rank_cell_card_exact_blocks(&loaded, &[full_tile_first], 2, 2, 1).unwrap();
         assert_eq!(
             ranked.len(),
             1,
@@ -3774,7 +3792,8 @@ mod tests {
 
         let mut tail_first = vec![10.0; 129];
         tail_first[128] = 0.0;
-        let ranked = super::rank_cell_card_exact_blocks(&loaded, &[tail_first], 128, 1).unwrap();
+        let ranked =
+            super::rank_cell_card_exact_blocks(&loaded, &[tail_first], 128, 128, 1).unwrap();
         assert_eq!(ranked.len(), 5, "the one-row tail cannot satisfy 128 rows");
         assert_eq!(
             ranked
@@ -3782,6 +3801,100 @@ mod tests {
                 .map(|block| block.reference.rows as usize)
                 .sum::<usize>(),
             129
+        );
+    }
+
+    #[test]
+    fn exact_tile_votes_use_the_configured_candidate_depth_not_four_times_k() {
+        let dimensions = 4;
+        let input = GlobalLeafPageInput {
+            cell_index: 3,
+            leaf_ordinal: 0,
+            centroid_code: vec![3, 0],
+            rows: rows(128, dimensions),
+        };
+        let encoded = encode_cell_card_group(
+            std::slice::from_ref(&input),
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/run-0")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &[group], &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let head_plan = super::plan_cell_card_head_wave(&root, &[3], 2 * 1024 * 1024, 64).unwrap();
+        let fetched_heads = head_plan
+            .reads()
+            .iter()
+            .map(|read| encoded.bytes[read.start as usize..read.end as usize].to_vec())
+            .collect::<Vec<_>>();
+        let loaded = super::decode_cell_card_head_wave(
+            &head_plan,
+            &fetched_heads,
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+
+        let mut distances = (0_u32..128)
+            .map(|ordinal| 1_000.0 + ordinal as f32)
+            .collect::<Vec<_>>();
+        distances[0] = 0.0;
+        for (offset, distance) in (1_u32..=32).enumerate() {
+            distances[32 + offset] = 40.0 + distance as f32;
+        }
+        for (offset, distance) in (1_u32..=20).enumerate() {
+            distances[64 + offset] = distance as f32;
+            distances[96 + offset] = 20.0 + distance as f32;
+        }
+
+        let ranked = super::rank_cell_card_exact_blocks(
+            &loaded,
+            std::slice::from_ref(&distances),
+            96,
+            96,
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|block| block.reference.block_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 2, 1],
+            "the exact budget is unchanged, but votes must represent all 96 candidate rows"
+        );
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|block| block.reference.rows as usize)
+                .sum::<usize>(),
+            96
+        );
+
+        let continuation = super::rank_cell_card_exact_blocks(
+            &loaded,
+            std::slice::from_ref(&distances),
+            96,
+            40,
+            10,
+        )
+        .unwrap();
+        assert_eq!(
+            continuation
+                .iter()
+                .map(|block| block.reference.block_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 2, 3],
+            "fetch continuation headroom must not inflate the quality-vote horizon"
         );
     }
 
@@ -3831,7 +3944,8 @@ mod tests {
             distances[block * 16] = block as f32;
         }
         distances[31 * 16..].fill(8.5);
-        let ranked = super::rank_cell_card_exact_blocks(&loaded, &[distances], 512, 10).unwrap();
+        let ranked =
+            super::rank_cell_card_exact_blocks(&loaded, &[distances], 512, 512, 10).unwrap();
         assert_eq!(
             ranked[..8]
                 .iter()

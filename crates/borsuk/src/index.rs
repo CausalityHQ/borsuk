@@ -17942,8 +17942,13 @@ impl BorsukIndex {
             )?;
             let approximate_started = Instant::now();
             let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
-            let ranked =
-                rank_cell_card_exact_blocks(&heads, &distances, exact_fetch_rows, options.k)?;
+            let ranked = rank_cell_card_exact_blocks(
+                &heads,
+                &distances,
+                exact_fetch_rows,
+                exact_candidate_rows,
+                options.k,
+            )?;
             let global_approximate_us =
                 u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
             Ok::<_, BorsukError>((
