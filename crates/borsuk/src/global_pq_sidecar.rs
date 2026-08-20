@@ -2458,8 +2458,15 @@ impl ResidentGlobalCodebook {
 }
 
 fn checked_reconstruction_error_micros(distance: f64) -> Result<u64> {
-    let micros = (distance * 1_000_000.0).round();
-    if !micros.is_finite() || micros < 0.0 || micros >= 2_f64.powi(64) {
+    if !distance.is_finite() {
+        return invalid("V12 codebook reconstruction error micros are out of range");
+    }
+    // Quantized dot products may overshoot the exact self-dot slightly, which
+    // makes their squared-L2 estimate negative. The true reconstruction error
+    // is bounded below by zero; clamp that approximation before persisting the
+    // diagnostic while retaining the finite/overflow checks.
+    let micros = (distance.max(0.0) * 1_000_000.0).round();
+    if !micros.is_finite() || micros >= 2_f64.powi(64) {
         return invalid("V12 codebook reconstruction error micros are out of range");
     }
     Ok(micros as u64)
@@ -2866,6 +2873,27 @@ mod tests {
         let distance = 2_f64.powi(64) / 1_000_000.0;
         let error = checked_reconstruction_error_micros(distance).unwrap_err();
         assert!(error.to_string().contains("out of range"), "{error}");
+    }
+
+    #[test]
+    fn production_turboquant_reconstruction_baseline_accepts_approximate_self_distances() {
+        let quantizer =
+            crate::turboquant::FastTurboQuantProdScanQuantizer::new(23, 128, 3).unwrap();
+        let scan = GlobalScanQuantizer::from(quantizer);
+        let sample = (0..256)
+            .map(|row| {
+                (0..128)
+                    .map(|dimension| {
+                        let value = (row * 131 + dimension * 17) % 257;
+                        (value as f32 - 128.0) / 128.0
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let baseline = scan.reconstruction_error_p95_micros(&sample).unwrap();
+
+        assert!(baseline > 0);
     }
 
     #[test]
