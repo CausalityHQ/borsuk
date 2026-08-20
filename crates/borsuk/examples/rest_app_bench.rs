@@ -12,7 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use borsuk::{BorsukError, BorsukIndex, LeafMode, OpenOptions, ProcessLimits, SearchOptions};
+use borsuk::{BorsukError, BorsukIndex, OpenOptions, ProcessLimits, SearchOptions};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -154,6 +154,8 @@ struct MetricsResponse {
     borsuk_s3_get_concurrency: usize,
     borsuk_page_budget: usize,
     borsuk_exact_candidates: usize,
+    borsuk_global_scan_codec: String,
+    borsuk_serving_leaf_mode: String,
     borsuk_ram_budget_bytes: u64,
     borsuk_disk_cache_bytes: u64,
 }
@@ -214,6 +216,13 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         borsuk_s3_get_concurrency: borsuk::configured_backing_get_concurrency(),
         borsuk_page_budget: state.page_budget,
         borsuk_exact_candidates: state.exact_candidates,
+        borsuk_global_scan_codec: state.index.build_config().global_scan_codec.to_string(),
+        borsuk_serving_leaf_mode: state
+            .index
+            .build_config()
+            .global_scan_codec
+            .leaf_mode()
+            .to_string(),
         borsuk_ram_budget_bytes: state.ram_budget_bytes,
         borsuk_disk_cache_bytes: state.disk_cache_bytes,
     })
@@ -251,9 +260,10 @@ async fn search(State(state): State<AppState>, Json(request): Json<SearchRequest
     let metrics = Arc::clone(&state.metrics);
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        let leaf_mode = index.build_config().global_scan_codec.leaf_mode();
         let result = index.search_with_report(
             &request.vector,
-            SearchOptions::approx(request.k, LeafMode::SrhtPqScan)
+            SearchOptions::approx(request.k, leaf_mode)
                 .with_max_segments(page_budget)
                 .with_max_candidates_per_segment(exact_candidates),
         );
@@ -395,7 +405,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
-    use borsuk::{IndexConfig, VectorMetric};
+    use borsuk::{BuildConfig, GlobalScanCodec, IndexConfig, VectorMetric, VectorRecord};
     use tower::ServiceExt;
 
     use super::{AppMetrics, AppState, SearchAdmission, router, validate_page_budget};
@@ -537,6 +547,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_uses_the_immutable_index_scan_codec() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = borsuk::BorsukIndex::create_with_build_config(
+            IndexConfig {
+                uri: directory.path().to_string_lossy().into_owned(),
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 64,
+                ram_budget_bytes: Some(8 * 1024 * 1024),
+                text: false,
+                named_vectors: Default::default(),
+            },
+            BuildConfig {
+                global_scan_codec: GlobalScanCodec::FastTurboQuantProd,
+                ..BuildConfig::default()
+            },
+        )
+        .unwrap();
+        index
+            .add(
+                (0..512)
+                    .map(|ordinal| {
+                        VectorRecord::new(
+                            format!("row-{ordinal}"),
+                            vec![ordinal as f32, (ordinal % 17) as f32],
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index.prepare_serving_metadata().unwrap();
+        let app = router(AppState {
+            index,
+            admission: SearchAdmission::new(1).unwrap(),
+            page_budget: 4,
+            exact_candidates: 512,
+            ram_budget_bytes: 8 * 1024 * 1024,
+            disk_cache_bytes: 0,
+            metrics: std::sync::Arc::new(AppMetrics::default()),
+        });
+
+        let response = app
+            .oneshot(
+                Request::post("/api/search")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"vector":[0.0,0.0],"k":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["engine"], "bounded-cell-card-v19");
+        assert!(value["global_leaf_code_pages_read"].as_u64().unwrap() > 0);
+        assert!(value["global_leaf_exact_requests"].as_u64().unwrap() > 0);
+        assert!(value["global_leaf_exact_selected_bytes"].as_u64().unwrap() > 0);
+    }
+
+    #[tokio::test]
     async fn metrics_attest_effective_process_and_handle_limits() {
         let directory = tempfile::tempdir().unwrap();
         let index = borsuk::BorsukIndex::create(IndexConfig {
@@ -585,6 +656,8 @@ mod tests {
         assert_eq!(value["borsuk_exact_read_max_physical_amplification"], 1);
         assert_eq!(value["borsuk_page_budget"], 4);
         assert_eq!(value["borsuk_exact_candidates"], 512);
+        assert_eq!(value["borsuk_global_scan_codec"], "srht-pq-scan");
+        assert_eq!(value["borsuk_serving_leaf_mode"], "srht-pq-scan");
         assert_eq!(value["borsuk_ram_budget_bytes"], 1024);
         assert_eq!(value["borsuk_disk_cache_bytes"], 0);
         assert_eq!(
