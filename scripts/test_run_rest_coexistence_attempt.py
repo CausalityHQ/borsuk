@@ -9,11 +9,31 @@ from scripts.run_rest_coexistence_attempt import (
     staircase_has_only_expected_capacity_failures,
     staircase_rates,
     validated_authority_sha256,
+    validated_aws_identity,
     validate_effective_limits,
 )
 
 
 class RestCoexistenceAttemptTest(unittest.TestCase):
+    def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
+        self.assertEqual(
+            validated_aws_identity(
+                "causality", "453182569524", "453182569524"
+            ),
+            {
+                "controller_aws_profile": "causality",
+                "aws_account_id": "453182569524",
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "runtime AWS account differs"):
+            validated_aws_identity(
+                "causality", "453182569524", "139078140588"
+            )
+        with self.assertRaisesRegex(ValueError, "Causality AWS account"):
+            validated_aws_identity(
+                "causality", "139078140588", "139078140588"
+            )
+
     def test_smoke_staircase_crosses_the_expected_small_runtime_knee(self) -> None:
         self.assertEqual(staircase_rates(True), [16, 32, 64, 96])
         self.assertEqual(staircase_rates(False), [8, 16, 32, 64, 96, 128])

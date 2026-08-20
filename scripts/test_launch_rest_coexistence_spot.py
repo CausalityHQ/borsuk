@@ -5,15 +5,19 @@ import json
 import shlex
 import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from scripts.launch_rest_coexistence_spot import (
     AttemptObservation,
+    _resolve_aws_account,
     _user_data,
     _record_launch_authority,
+    _record_identity,
     build_launch_pair,
     cold_s3_cap_matrix,
     generator_worker_script,
+    main,
     server_worker_script,
     classify_attempt,
     execute_pair,
@@ -21,8 +25,70 @@ from scripts.launch_rest_coexistence_spot import (
 
 
 class RestCoexistenceSpotLauncherTest(unittest.TestCase):
+    def test_controller_resolves_and_rejects_the_wrong_aws_account_before_launch(self) -> None:
+        calls: list[list[str]] = []
+
+        def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="453182569524\n")
+
+        self.assertEqual(
+            _resolve_aws_account("causality", run=run),
+            "453182569524",
+        )
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "aws",
+                    "--profile",
+                    "causality",
+                    "sts",
+                    "get-caller-identity",
+                    "--query",
+                    "Account",
+                    "--output",
+                    "text",
+                ]
+            ],
+        )
+
+        def private_account(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(command, 0, stdout="139078140588\n")
+
+        with self.assertRaisesRegex(ValueError, "expected Causality AWS account"):
+            _resolve_aws_account("default", run=private_account)
+
+        with patch(
+            "scripts.launch_rest_coexistence_spot.subprocess.run",
+            side_effect=private_account,
+        ):
+            with self.assertRaisesRegex(ValueError, "expected Causality AWS account"):
+                _resolve_aws_account("causality")
+
+    def test_main_resolves_account_before_building_or_launching(self) -> None:
+        with (
+            patch("sys.argv", ["launch_rest_coexistence_spot.py", "config.json"]),
+            patch("builtins.open"),
+            patch("scripts.launch_rest_coexistence_spot.json.load", return_value={}),
+            patch(
+                "scripts.launch_rest_coexistence_spot._resolve_aws_account",
+                side_effect=ValueError("wrong account"),
+            ),
+            patch("scripts.launch_rest_coexistence_spot.build_launch_pair") as build,
+            patch("scripts.launch_rest_coexistence_spot.execute_pair") as execute,
+        ):
+            with self.assertRaisesRegex(ValueError, "wrong account"):
+                main()
+        build.assert_not_called()
+        execute.assert_not_called()
+
     def setUp(self) -> None:
         self.pair = build_launch_pair(
+            aws_profile="causality",
+            aws_account_id="453182569524",
             campaign_id="rest-coexistence-c2dbbcd",
             attempt=1,
             image_id="ami-0123456789abcdef0",
@@ -110,6 +176,20 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("BORSUK_REST_MAX_INFLIGHT_LEAF_READS=48", user_data)
         self.assertIn("BORSUK_REST_RAM_BUDGET_BYTES=2147483648", user_data)
         self.assertIn("BORSUK_REST_DISK_CACHE_BYTES=0", user_data)
+        self.assertIn("BORSUK_CONTROLLER_AWS_PROFILE=causality", user_data)
+        self.assertIn("BORSUK_EXPECTED_AWS_ACCOUNT=453182569524", user_data)
+        self.assertLess(
+            user_data.index("aws sts get-caller-identity"),
+            user_data.index("watch_spot_interruption &"),
+        )
+        self.assertGreaterEqual(
+            user_data.count(
+                '--expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT"'
+            ),
+            4,
+        )
+        self.assertIn('"aws_account_id":"%s"', user_data)
+        self.assertIn('"controller_aws_profile":"%s"', user_data)
         self.assertIn("--setenv=BORSUK_SOURCE_SHA256=" + "1" * 64, user_data)
         self.assertIn("--setenv=BORSUK_BINARY_SHA256=" + "2" * 64, user_data)
         self.assertIn("--setenv=BORSUK_OUTPUT_URI=s3://", user_data)
@@ -127,9 +207,35 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("/health", generator_data)
         self.assertIn('--setenv=BORSUK_SERVER_ENDPOINT="$server_endpoint"', generator_data)
         self.assertIn("systemctl stop borsuk-rest-rest-generator.service", generator_data)
+        self.assertIn("BORSUK_CONTROLLER_AWS_PROFILE=causality", generator_data)
+        self.assertIn("BORSUK_EXPECTED_AWS_ACCOUNT=453182569524", generator_data)
+        self.assertLess(
+            generator_data.index("aws sts get-caller-identity"),
+            generator_data.index("aws s3 cp"),
+        )
+
+        with self.assertRaisesRegex(ValueError, "AWS profile"):
+            _user_data(
+                aws_profile="causality; touch /tmp/escaped",
+                aws_account_id="453182569524",
+                campaign_id="size-check",
+                attempt=1,
+                role="rest-server",
+                worker="echo server",
+                source_sha256="1" * 64,
+                binary_sha256="2" * 64,
+                index_receipt_sha256="3" * 64,
+                dataset_receipt_sha256="4" * 64,
+                attempt_authority_sha256="5" * 64,
+                output_uri="s3://bucket/size-check/attempts/0001",
+                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+            )
 
     def test_pair_binds_immutable_inputs_and_terminal_prefix(self) -> None:
         receipt = self.pair["receipt"]
+        self.assertEqual(receipt["schema_version"], 2)
+        self.assertEqual(receipt["aws_profile"], "causality")
+        self.assertEqual(receipt["aws_account_id"], "453182569524")
         self.assertEqual(receipt["runtime"], self.pair["runtime"])
         self.assertEqual(receipt["runtime"]["disk_cache_bytes"], 0)
         self.assertEqual(receipt["source_sha256"], "1" * 64)
@@ -257,6 +363,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             execute_pair(
                 self.pair,
                 profile="causality",
+                resolve_account=lambda _profile: "453182569524",
                 run_instance=run_instance,
                 terminate_instances=lambda _profile, ids: terminated.extend(ids),
                 record_authority=lambda: events.append("authority"),
@@ -268,6 +375,29 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertEqual(recorded, [("server", "i-server")])
         self.assertEqual(terminated, ["i-server"])
         self.assertEqual(events, ["authority", "launch", "launch"])
+
+    def test_execute_rejects_a_profile_not_bound_into_the_launch_receipt(self) -> None:
+        events: list[str] = []
+        with self.assertRaisesRegex(ValueError, "profile differs from launch receipt"):
+            execute_pair(
+                self.pair,
+                profile="default",
+                run_instance=lambda *_args: events.append("launch"),
+                record_authority=lambda: events.append("authority"),
+            )
+        self.assertEqual(events, [])
+
+    def test_execute_rechecks_numeric_account_before_authority_upload(self) -> None:
+        events: list[str] = []
+        with self.assertRaisesRegex(ValueError, "resolved account differs"):
+            execute_pair(
+                self.pair,
+                profile="causality",
+                resolve_account=lambda _profile: "139078140588",
+                run_instance=lambda *_args: events.append("launch"),
+                record_authority=lambda: events.append("authority"),
+            )
+        self.assertEqual(events, [])
 
     def test_launch_authority_persists_the_exact_worker_plan(self) -> None:
         with patch("scripts.launch_rest_coexistence_spot.subprocess.run") as run:
@@ -288,9 +418,42 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             },
         )
         self.assertTrue(all("--if-none-match" in call.args[0] for call in run.call_args_list))
+        self.assertTrue(
+            all(
+                call.args[0][call.args[0].index("--expected-bucket-owner") + 1]
+                == "453182569524"
+                for call in run.call_args_list
+            )
+        )
+
+    def test_instance_identity_receipt_binds_the_aws_account_and_profile(self) -> None:
+        recorded: list[dict[str, object]] = []
+
+        def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            body = command[command.index("--body") + 1]
+            recorded.append(json.loads(Path(body).read_text(encoding="utf-8")))
+            return subprocess.CompletedProcess(command, 0, stdout="")
+
+        with patch("scripts.launch_rest_coexistence_spot.subprocess.run", side_effect=run):
+            _record_identity("causality", self.pair, "server", "i-deadbeef")
+        self.assertEqual(
+            recorded,
+            [
+                {
+                    "schema_version": 2,
+                    "aws_profile": "causality",
+                    "aws_account_id": "453182569524",
+                    "role": "server",
+                    "instance_id": "i-deadbeef",
+                    "launch_sha256": self.pair["receipt"]["server_launch_sha256"],
+                }
+            ],
+        )
 
     def test_attempt_number_must_match_immutable_output_prefix(self) -> None:
         config = {
+            "aws_profile": "causality",
+            "aws_account_id": "453182569524",
             "campaign_id": "rest-coexistence-c2dbbcd",
             "attempt": 2,
             "image_id": "ami-0123456789abcdef0",
@@ -332,12 +495,16 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         runtime["s3_get_concurrency"] = 64
         with self.assertRaisesRegex(ValueError, "io_threads"):
             build_launch_pair(
+                aws_profile="causality",
+                aws_account_id="453182569524",
                 campaign_id="invalid-runtime",
                 attempt=1,
                 image_id="ami-a",
                 subnet_id="subnet-a",
                 security_group_id="sg-a",
-                instance_profile_arn="arn:a",
+                instance_profile_arn=(
+                    "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+                ),
                 source_sha256="1" * 64,
                 binary_sha256="2" * 64,
                 index_receipt_sha256="3" * 64,
@@ -349,16 +516,44 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 generator_worker="echo generator",
             )
 
+    def test_launch_rejects_an_instance_profile_from_another_account(self) -> None:
+        with self.assertRaisesRegex(ValueError, "instance profile.*Causality"):
+            build_launch_pair(
+                aws_profile="causality",
+                aws_account_id="453182569524",
+                campaign_id="wrong-instance-account",
+                attempt=1,
+                image_id="ami-a",
+                subnet_id="subnet-a",
+                security_group_id="sg-a",
+                instance_profile_arn=(
+                    "arn:aws:iam::139078140588:instance-profile/private-bench"
+                ),
+                source_sha256="1" * 64,
+                binary_sha256="2" * 64,
+                index_receipt_sha256="3" * 64,
+                dataset_receipt_sha256="4" * 64,
+                smoke=True,
+                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                output_uri="s3://bucket/wrong-instance-account/attempts/0001",
+                server_worker="echo server",
+                generator_worker="# borsuk-rest-mode=smoke\necho generator",
+            )
+
     def test_runtime_accepts_engine_supported_64_page_recall_ablation(self) -> None:
         runtime = dict(self.pair["runtime"])
         runtime["page_budget"] = 64
         pair = build_launch_pair(
+            aws_profile="causality",
+            aws_account_id="453182569524",
             campaign_id="page-64",
             attempt=1,
             image_id="ami-a",
             subnet_id="subnet-a",
             security_group_id="sg-a",
-            instance_profile_arn="arn:a",
+            instance_profile_arn=(
+                "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+            ),
             source_sha256="1" * 64,
             binary_sha256="2" * 64,
             index_receipt_sha256="3" * 64,
@@ -374,12 +569,16 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
     def test_workload_receipt_rejects_a_worker_for_the_other_mode(self) -> None:
         with self.assertRaisesRegex(ValueError, "worker mode"):
             build_launch_pair(
+                aws_profile="causality",
+                aws_account_id="453182569524",
                 campaign_id="wrong-worker-mode",
                 attempt=1,
                 image_id="ami-a",
                 subnet_id="subnet-a",
                 security_group_id="sg-a",
-                instance_profile_arn="arn:a",
+                instance_profile_arn=(
+                    "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+                ),
                 source_sha256="1" * 64,
                 binary_sha256="2" * 64,
                 index_receipt_sha256="3" * 64,
@@ -441,6 +640,10 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         )
         compile(shlex.split(server_memory_gate)[2], "server-memory-gate", "exec")
         self.assertIn("generator evidence authority differs", server)
+        self.assertLess(
+            server.index("aws sts get-caller-identity"),
+            server.index("aws s3 cp"),
+        )
         self.assertIn('touch "$work/stop-sampler"', server)
         self.assertLess(
             server.index('touch "$work/stop-sampler"'),
@@ -480,14 +683,27 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("server evidence authority differs", generator)
         self.assertIn('test "$(sha256sum "$queries"', generator)
         self.assertIn("run_rest_coexistence_attempt.py", generator)
+        self.assertIn("aws sts get-caller-identity", generator)
+        self.assertIn('test "$runtime_aws_account" = "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator)
+        self.assertIn('--controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE"', generator)
+        self.assertIn('--expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator)
+        self.assertIn('--runtime-aws-account "$runtime_aws_account"', generator)
+        self.assertLess(
+            generator.index("aws sts get-caller-identity"),
+            generator.index("aws s3 cp"),
+        )
         self.assertIn("ATTEMPT_COMPLETE.json", generator)
         self.assertIn("rest-server-spot-interruption.json", generator)
         self.assertIn("rest-generator-spot-interruption.json", generator)
         self.assertIn("--if-none-match '*'", generator)
+        self.assertIn('--expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT"', server)
+        self.assertIn('--expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator)
         subprocess.run(["bash", "-n"], input=generator, text=True, check=True)
         runtime = {key: int(value) for key, value in self.pair["runtime"].items()}
         for role, worker in (("rest-server", server), ("rest-generator", generator)):
             user_data = _user_data(
+                aws_profile="causality",
+                aws_account_id="453182569524",
                 campaign_id="size-check",
                 attempt=1,
                 role=role,

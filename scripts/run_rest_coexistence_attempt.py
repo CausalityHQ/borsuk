@@ -16,6 +16,8 @@ try:
 except ImportError:
     from rest_coexistence_load import evaluate_phase, run_phase, summarize
 
+CAUSALITY_AWS_ACCOUNT = "453182569524"
+
 
 def accepted_search_qps(summary: dict[str, Any]) -> float:
     search = summary.get("search")
@@ -33,6 +35,29 @@ def validated_authority_sha256(value: str) -> str:
     if re.fullmatch(r"[0-9a-f]{64}", value) is None:
         raise ValueError("attempt authority must be a lowercase SHA-256 digest")
     return value
+
+
+def validated_aws_identity(
+    controller_profile: str,
+    expected_account: str,
+    runtime_account: str,
+) -> dict[str, str]:
+    if not controller_profile:
+        raise ValueError("controller AWS profile must be nonempty")
+    if re.fullmatch(r"[0-9]{12}", expected_account) is None:
+        raise ValueError("expected AWS account must be a 12-digit account ID")
+    if expected_account != CAUSALITY_AWS_ACCOUNT:
+        raise ValueError(
+            f"expected account must be the Causality AWS account {CAUSALITY_AWS_ACCOUNT}"
+        )
+    if runtime_account != expected_account:
+        raise ValueError(
+            "runtime AWS account differs from the controller-authorized account"
+        )
+    return {
+        "controller_aws_profile": controller_profile,
+        "aws_account_id": runtime_account,
+    }
 
 
 def select_sustainable_search_qps(rows: list[dict[str, Any]]) -> float:
@@ -132,6 +157,9 @@ def main() -> int:
     parser.add_argument("--queries", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expected-runtime", type=Path, required=True)
+    parser.add_argument("--controller-aws-profile", required=True)
+    parser.add_argument("--expected-aws-account", required=True)
+    parser.add_argument("--runtime-aws-account", required=True)
     parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
@@ -139,6 +167,11 @@ def main() -> int:
     expected = json.loads(args.expected_runtime.read_text(encoding="utf-8"))
     attempt_authority_sha256 = validated_authority_sha256(
         os.environ.get("BORSUK_ATTEMPT_AUTHORITY_SHA256", "")
+    )
+    aws_identity = validated_aws_identity(
+        args.controller_aws_profile,
+        args.expected_aws_account,
+        args.runtime_aws_account,
     )
     before = _metrics(base_url)
     validate_effective_limits(expected, before)
@@ -207,7 +240,8 @@ def main() -> int:
         and mixed_overload["passed"]
     )
     receipt = {
-        "schema_version": 2,
+        "schema_version": 3,
+        **aws_identity,
         "status": "complete" if passed else "failed",
         "attempt_authority_sha256": attempt_authority_sha256,
         "effective_limits": before,

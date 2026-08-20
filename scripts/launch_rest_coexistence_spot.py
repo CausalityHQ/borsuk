@@ -18,6 +18,7 @@ from typing import Any
 COMPLETE_MARKER = "ATTEMPT_COMPLETE.json"
 FAILED_MARKER = "ATTEMPT_FAILED.json"
 KNOWN_MARKERS = {COMPLETE_MARKER, FAILED_MARKER}
+EXPECTED_AWS_ACCOUNT = "453182569524"
 RUNTIME_FIELDS = {
     "cpu_threads",
     "io_threads",
@@ -46,6 +47,37 @@ class AttemptObservation:
 class AttemptDecision:
     action: str
     discard_measurements: bool
+
+
+def _resolve_aws_account(
+    profile: str,
+    *,
+    run: Any | None = None,
+) -> str:
+    runner = subprocess.run if run is None else run
+    completed = runner(
+        [
+            "aws",
+            "--profile",
+            profile,
+            "sts",
+            "get-caller-identity",
+            "--query",
+            "Account",
+            "--output",
+            "text",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    account = completed.stdout.strip()
+    if account != EXPECTED_AWS_ACCOUNT:
+        raise ValueError(
+            "expected Causality AWS account "
+            f"{EXPECTED_AWS_ACCOUNT}, but profile {profile!r} resolved to {account!r}"
+        )
+    return account
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -136,6 +168,8 @@ def server_worker_script(
     return f"""set -euo pipefail
 work=/var/lib/borsuk-rest-server
 mkdir -p "$work/cache"
+runtime_aws_account=$(aws sts get-caller-identity --query Account --output text)
+test "$runtime_aws_account" = "$BORSUK_EXPECTED_AWS_ACCOUNT"
 cg=$(awk -F: '$1=="0" {{print $3}}' /proc/self/cgroup)
 cg_root="/sys/fs/cgroup${{cg}}"
 cp "$cg_root/memory.events" "$work/memory.events.before"
@@ -158,7 +192,7 @@ until curl -fsS http://127.0.0.1:8080/metrics >"$work/effective.json"; do
   sleep 2
 done
 bucket=${{BORSUK_OUTPUT_URI#s3://}}; bucket=${{bucket%%/*}}; prefix=${{BORSUK_OUTPUT_URI#s3://$bucket/}}
-put() {{ aws s3api put-object --bucket "$bucket" --key "$prefix/$2" --body "$1" --if-none-match '*' >/dev/null; }}
+put() {{ aws s3api put-object --bucket "$bucket" --key "$prefix/$2" --body "$1" --expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT" --if-none-match '*' >/dev/null; }}
 imds_token=$(curl --fail --silent --request PUT --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
 private_ip=$(curl --fail --silent --header "X-aws-ec2-metadata-token: $imds_token" http://169.254.169.254/latest/meta-data/local-ipv4)
 printf '{{"attempt_authority_sha256":"%s","endpoint":"http://%s:8080","schema_version":1}}\n' "$BORSUK_ATTEMPT_AUTHORITY_SHA256" "$private_ip" >"$work/endpoint.json"
@@ -187,7 +221,7 @@ until aws s3api head-object --bucket "$bucket" --key "$prefix/GENERATOR_EVIDENCE
   sleep 2
 done
 aws s3 cp "s3://$bucket/$prefix/GENERATOR_EVIDENCE_COMPLETE.json" "$work/generator-evidence.json" --only-show-errors
-python3 -c 'import json,os,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==1 and v.get("status")=="complete" and v.get("attempt_authority_sha256")==os.environ["BORSUK_ATTEMPT_AUTHORITY_SHA256"]) or sys.exit("generator evidence authority differs")' "$work/generator-evidence.json"
+python3 -c 'import json,os,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==2 and v.get("status")=="complete" and v.get("attempt_authority_sha256")==os.environ["BORSUK_ATTEMPT_AUTHORITY_SHA256"] and v.get("aws_account_id")==os.environ["BORSUK_EXPECTED_AWS_ACCOUNT"] and v.get("controller_aws_profile")==os.environ["BORSUK_CONTROLLER_AWS_PROFILE"]) or sys.exit("generator evidence authority differs")' "$work/generator-evidence.json"
 touch "$work/stop-sampler"
 wait "$sampler"
 kill "$app_pid"; wait "$app_pid" || true
@@ -199,7 +233,7 @@ put "$work/effective.json" effective-limits.json
 put "$work/resources.csv" resources.csv
 put "$work/memory-events.json" memory-events.json
 put "$work/app.log" APP.log
-printf '{{"attempt_authority_sha256":"%s","schema_version":1,"status":"complete"}}\n' "$BORSUK_ATTEMPT_AUTHORITY_SHA256" >"$work/server.json"
+printf '{{"attempt_authority_sha256":"%s","aws_account_id":"%s","controller_aws_profile":"%s","schema_version":2,"status":"complete"}}\n' "$BORSUK_ATTEMPT_AUTHORITY_SHA256" "$BORSUK_EXPECTED_AWS_ACCOUNT" "$BORSUK_CONTROLLER_AWS_PROFILE" >"$work/server.json"
 put "$work/server.json" SERVER_EVIDENCE_COMPLETE.json
 terminal_deadline=$((SECONDS + 300))
 until aws s3api head-object --bucket "$bucket" --key "$prefix/ATTEMPT_COMPLETE.json" >/dev/null 2>&1 || aws s3api head-object --bucket "$bucket" --key "$prefix/ATTEMPT_FAILED.json" >/dev/null 2>&1; do (( SECONDS < terminal_deadline )) || exit 77; sleep 2; done
@@ -248,6 +282,8 @@ def generator_worker_script(
 set -euo pipefail
 work=/var/lib/borsuk-rest-generator
 mkdir -p "$work/scripts"
+runtime_aws_account=$(aws sts get-caller-identity --query Account --output text)
+test "$runtime_aws_account" = "$BORSUK_EXPECTED_AWS_ACCOUNT"
 cg=$(awk -F: '$1=="0" {{print $3}}' /proc/self/cgroup)
 cg_root="/sys/fs/cgroup${{cg}}"
 cp "$cg_root/memory.events" "$work/memory.events.before"
@@ -270,7 +306,7 @@ python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_vers
 printf '%s\n' '{expected}' >"$work/runtime.json"
 cpu_before=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 started_ns=$(date +%s%N)
-PYTHONPATH="$work/scripts" python3 "$runner" --base-url "$BORSUK_SERVER_ENDPOINT" --queries "$queries" --output "$work/output" --expected-runtime "$work/runtime.json"{smoke_flag}
+PYTHONPATH="$work/scripts" python3 "$runner" --base-url "$BORSUK_SERVER_ENDPOINT" --queries "$queries" --output "$work/output" --expected-runtime "$work/runtime.json" --controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE" --expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT" --runtime-aws-account "$runtime_aws_account"{smoke_flag}
 finished_ns=$(date +%s%N)
 cpu_after=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 cp "$cg_root/memory.events" "$work/memory.events.after"
@@ -278,17 +314,17 @@ swap_bytes=$(cat "$cg_root/memory.swap.current")
 memory_peak_bytes=$(cat "$cg_root/memory.peak")
 python3 -c 'import json,sys; parse=lambda p: dict((k,int(v)) for k,v in (line.split() for line in open(p))); before=parse(sys.argv[1]); after=parse(sys.argv[2]); keys=("low","high","max","oom","oom_kill","oom_group_kill"); delta=dict((k,after.get(k,0)-before.get(k,0)) for k in keys); elapsed=int(sys.argv[4])-int(sys.argv[3]); fraction=(int(sys.argv[6])-int(sys.argv[5]))*1000/(elapsed*2); report=dict(schema_version=1,cpu_fraction=fraction,elapsed_ns=elapsed,cpu_usage_usec=int(sys.argv[6])-int(sys.argv[5]),memory_peak_bytes=int(sys.argv[7]),swap_bytes=int(sys.argv[8]),memory_event_delta=delta); open(sys.argv[9],"w").write(json.dumps(report,sort_keys=True,separators=(",",":"))+"\\n"); (elapsed>0 and fraction<=0.50 and int(sys.argv[8])==0 and not any(delta.values())) or sys.exit("generator resource gate failed")' "$work/memory.events.before" "$work/memory.events.after" "$started_ns" "$finished_ns" "$cpu_before" "$cpu_after" "$memory_peak_bytes" "$swap_bytes" "$work/output/generator-resources.json"
 bucket=${{BORSUK_OUTPUT_URI#s3://}}; bucket=${{bucket%%/*}}; prefix=${{BORSUK_OUTPUT_URI#s3://$bucket/}}
-put() {{ aws s3api put-object --bucket "$bucket" --key "$prefix/$2" --body "$1" --if-none-match '*' >/dev/null; }}
+put() {{ aws s3api put-object --bucket "$bucket" --key "$prefix/$2" --body "$1" --expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT" --if-none-match '*' >/dev/null; }}
 interrupted() {{ [[ -e /run/borsuk-spot-interruption ]] || aws s3api head-object --bucket "$bucket" --key "$prefix/rest-server-spot-interruption.json" >/dev/null 2>&1 || aws s3api head-object --bucket "$bucket" --key "$prefix/rest-generator-spot-interruption.json" >/dev/null 2>&1; }}
 interrupted && exit 75
 while IFS= read -r file; do relative=${{file#"$work/output/"}}; put "$file" "output/$relative"; done < <(find "$work/output" -type f | sort)
-printf '{{"attempt_authority_sha256":"%s","schema_version":1,"status":"complete"}}\n' "$BORSUK_ATTEMPT_AUTHORITY_SHA256" >"$work/generator.json"
+printf '{{"attempt_authority_sha256":"%s","aws_account_id":"%s","controller_aws_profile":"%s","schema_version":2,"status":"complete"}}\n' "$BORSUK_ATTEMPT_AUTHORITY_SHA256" "$BORSUK_EXPECTED_AWS_ACCOUNT" "$BORSUK_CONTROLLER_AWS_PROFILE" >"$work/generator.json"
 put "$work/generator.json" GENERATOR_EVIDENCE_COMPLETE.json
 deadline=$((SECONDS + 300))
 until aws s3api head-object --bucket "$bucket" --key "$prefix/SERVER_EVIDENCE_COMPLETE.json" >/dev/null 2>&1; do interrupted && exit 76; (( SECONDS < deadline )) || exit 73; sleep 2; done
 interrupted && exit 77
 aws s3 cp "s3://$bucket/$prefix/SERVER_EVIDENCE_COMPLETE.json" "$work/server-evidence.json" --only-show-errors
-python3 -c 'import json,os,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==1 and v.get("status")=="complete" and v.get("attempt_authority_sha256")==os.environ["BORSUK_ATTEMPT_AUTHORITY_SHA256"]) or sys.exit("server evidence authority differs")' "$work/server-evidence.json"
+python3 -c 'import json,os,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==2 and v.get("status")=="complete" and v.get("attempt_authority_sha256")==os.environ["BORSUK_ATTEMPT_AUTHORITY_SHA256"] and v.get("aws_account_id")==os.environ["BORSUK_EXPECTED_AWS_ACCOUNT"] and v.get("controller_aws_profile")==os.environ["BORSUK_CONTROLLER_AWS_PROFILE"]) or sys.exit("server evidence authority differs")' "$work/server-evidence.json"
 status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$work/output/REST_RESULT.json")
 if [[ "$status" == complete ]]; then terminal=ATTEMPT_COMPLETE.json; elif [[ "$status" == failed ]]; then terminal=ATTEMPT_FAILED.json; else exit 74; fi
 put "$work/output/REST_RESULT.json" "$terminal"
@@ -309,6 +345,8 @@ def _tags(campaign_id: str, attempt: int, role: str) -> list[dict[str, str]]:
 
 def _user_data(
     *,
+    aws_profile: str,
+    aws_account_id: str,
     campaign_id: str,
     attempt: int,
     role: str,
@@ -321,6 +359,10 @@ def _user_data(
     output_uri: str,
     runtime: dict[str, int],
 ) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", aws_profile) is None:
+        raise ValueError("AWS profile must be a canonical profile name")
+    if aws_account_id != EXPECTED_AWS_ACCOUNT:
+        raise ValueError("AWS account must be the Causality AWS account")
     if not worker or "\x00" in worker:
         raise ValueError("worker script must be nonempty UTF-8 text")
     payload = base64.b64encode(worker.encode("utf-8")).decode("ascii")
@@ -385,18 +427,23 @@ upload_failure() {{
   journalctl --no-pager -u borsuk-rest-{role}.service >"$journal" 2>&1 || true
   aws s3api put-object --bucket "$output_bucket" \
     --key "$output_prefix/FAILURE.log" --body "$journal" \
+    --expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT" \
     --if-none-match '*' >/dev/null 2>&1 || true
   if [ -d /var/lib/borsuk-rest-generator/output ]; then
     while IFS= read -r file; do
       relative=${{file#/var/lib/borsuk-rest-generator/output/}}
       aws s3api put-object --bucket "$output_bucket" \
         --key "$output_prefix/diagnostic-output/$relative" --body "$file" \
+        --expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT" \
         --if-none-match '*' >/dev/null 2>&1 || true
     done < <(find /var/lib/borsuk-rest-generator/output -type f | sort)
   fi
-  printf '{{"attempt_authority_sha256":"%s","role":"%s","schema_version":1,"status":%s}}\n' "$BORSUK_ATTEMPT_AUTHORITY_SHA256" '{role}' "$status" >"$receipt"
+  printf '{{"attempt_authority_sha256":"%s","aws_account_id":"%s","controller_aws_profile":"%s","role":"%s","schema_version":2,"status":%s}}\n' \
+    "$BORSUK_ATTEMPT_AUTHORITY_SHA256" "$BORSUK_EXPECTED_AWS_ACCOUNT" \
+    "$BORSUK_CONTROLLER_AWS_PROFILE" '{role}' "$status" >"$receipt"
   aws s3api put-object --bucket "$output_bucket" \
     --key "$output_prefix/{FAILED_MARKER}" --body "$receipt" \
+    --expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT" \
     --if-none-match '*' >/dev/null 2>&1 || true
 }}
 watch_spot_interruption() {{
@@ -411,10 +458,12 @@ watch_spot_interruption() {{
     [ -n "$action" ] || continue
     touch /run/borsuk-spot-interruption
     receipt=/tmp/{role}-spot-interruption.json
-    printf '{{"attempt_authority_sha256":"%s","role":"%s","schema_version":1,"spot_action":%s}}\n' \
-      "$BORSUK_ATTEMPT_AUTHORITY_SHA256" '{role}' "$action" >"$receipt"
+    printf '{{"attempt_authority_sha256":"%s","aws_account_id":"%s","controller_aws_profile":"%s","role":"%s","schema_version":2,"spot_action":%s}}\n' \
+      "$BORSUK_ATTEMPT_AUTHORITY_SHA256" "$BORSUK_EXPECTED_AWS_ACCOUNT" \
+      "$BORSUK_CONTROLLER_AWS_PROFILE" '{role}' "$action" >"$receipt"
     aws s3api put-object --bucket "$output_bucket" \
       --key "$output_prefix/{role}-spot-interruption.json" --body "$receipt" \
+      --expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT" \
       --if-none-match '*' >/dev/null 2>&1 || true
     systemctl stop borsuk-rest-{role}.service >/dev/null 2>&1 || true
     return 0
@@ -428,12 +477,16 @@ set -euo pipefail
 export HOME=/root
 export AWS_REGION=eu-central-1
 export AWS_DEFAULT_REGION=eu-central-1
+export BORSUK_CONTROLLER_AWS_PROFILE={aws_profile}
+export BORSUK_EXPECTED_AWS_ACCOUNT={aws_account_id}
 export BORSUK_SOURCE_SHA256={source_sha256}
 export BORSUK_BINARY_SHA256={binary_sha256}
 export BORSUK_INDEX_RECEIPT_SHA256={index_receipt_sha256}
 export BORSUK_DATASET_RECEIPT_SHA256={dataset_receipt_sha256}
 export BORSUK_ATTEMPT_AUTHORITY_SHA256={attempt_authority_sha256}
 export BORSUK_OUTPUT_URI={output_uri}
+controller_runtime_aws_account=$(aws sts get-caller-identity --query Account --output text)
+test "$controller_runtime_aws_account" = "$BORSUK_EXPECTED_AWS_ACCOUNT"
 {lifecycle}finish() {{
   status=$?
   trap - EXIT
@@ -448,6 +501,8 @@ trap finish EXIT
 printf '%s' '{payload}' | base64 -d >/var/lib/borsuk-rest-worker.sh
 chmod 700 /var/lib/borsuk-rest-worker.sh
 {readiness}systemd-run --wait --collect --unit=borsuk-rest-{role} {properties}{endpoint_property} \
+  --setenv=BORSUK_CONTROLLER_AWS_PROFILE={aws_profile} \
+  --setenv=BORSUK_EXPECTED_AWS_ACCOUNT={aws_account_id} \
   /bin/bash /var/lib/borsuk-rest-worker.sh
 """
     if len(script.encode("utf-8")) > 16 * 1024:
@@ -513,6 +568,8 @@ def _request(
 
 def build_launch_pair(
     *,
+    aws_profile: str,
+    aws_account_id: str,
     campaign_id: str,
     attempt: int,
     image_id: str,
@@ -529,6 +586,12 @@ def build_launch_pair(
     server_worker: str,
     generator_worker: str,
 ) -> dict[str, Any]:
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", aws_profile) is None:
+        raise ValueError("AWS profile must be a canonical profile name")
+    if aws_account_id != EXPECTED_AWS_ACCOUNT:
+        raise ValueError(
+            f"AWS account must be the Causality account {EXPECTED_AWS_ACCOUNT}"
+        )
     if not campaign_id or attempt <= 0:
         raise ValueError("campaign must be nonempty and attempt must be positive")
     if (
@@ -553,6 +616,11 @@ def build_launch_pair(
     ):
         if not value:
             raise ValueError(f"{label} must be nonempty")
+    if re.fullmatch(
+        rf"arn:aws:iam::{EXPECTED_AWS_ACCOUNT}:instance-profile/[A-Za-z0-9+=,.@_/-]+",
+        instance_profile_arn,
+    ) is None:
+        raise ValueError("instance profile must belong to the Causality AWS account")
     runtime = _validated_runtime(runtime)
     expected_worker_mode = "smoke" if smoke else "full"
     if not generator_worker.startswith(f"# borsuk-rest-mode={expected_worker_mode}\n"):
@@ -580,7 +648,9 @@ def build_launch_pair(
     generator_worker_sha256 = hashlib.sha256(generator_worker.encode("utf-8")).hexdigest()
     workload_sha256 = hashlib.sha256(_canonical_bytes(workload)).hexdigest()
     authority = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "aws_profile": aws_profile,
+        "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,
         "attempt": attempt,
         "source_sha256": source_sha256,
@@ -595,7 +665,9 @@ def build_launch_pair(
     }
     attempt_authority_sha256 = hashlib.sha256(_canonical_bytes(authority)).hexdigest()
     receipt = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "aws_profile": aws_profile,
+        "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,
         "attempt": attempt,
         "source_sha256": source_sha256,
@@ -620,6 +692,8 @@ def build_launch_pair(
         "instance_profile_arn": instance_profile_arn,
     }
     server_user_data = _user_data(
+        aws_profile=aws_profile,
+        aws_account_id=aws_account_id,
         campaign_id=campaign_id,
         attempt=attempt,
         role="rest-server",
@@ -633,6 +707,8 @@ def build_launch_pair(
         runtime=runtime,
     )
     generator_user_data = _user_data(
+        aws_profile=aws_profile,
+        aws_account_id=aws_account_id,
         campaign_id=campaign_id,
         attempt=attempt,
         role="rest-generator",
@@ -744,7 +820,9 @@ def _record_identity(
     location = output_uri.removeprefix("s3://")
     bucket, prefix = location.split("/", 1)
     identity = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "aws_profile": pair["receipt"]["aws_profile"],
+        "aws_account_id": pair["receipt"]["aws_account_id"],
         "role": role,
         "instance_id": instance_id,
         "launch_sha256": pair["receipt"][f"{role}_launch_sha256"],
@@ -765,6 +843,8 @@ def _record_identity(
                 f"{prefix}/launch-identities/{role}.json",
                 "--body",
                 str(body),
+                "--expected-bucket-owner",
+                EXPECTED_AWS_ACCOUNT,
                 "--if-none-match",
                 "*",
             ],
@@ -804,6 +884,8 @@ def _record_launch_authority(profile: str, pair: dict[str, Any]) -> None:
                     f"{prefix}/{name}",
                     "--body",
                     str(body),
+                    "--expected-bucket-owner",
+                    EXPECTED_AWS_ACCOUNT,
                     "--if-none-match",
                     "*",
                 ],
@@ -817,11 +899,20 @@ def execute_pair(
     pair: dict[str, Any],
     *,
     profile: str,
+    resolve_account: Any = _resolve_aws_account,
     run_instance: Any = _run_instance,
     terminate_instances: Any = _terminate_instances,
     record_authority: Any | None = None,
     record_identity: Any | None = None,
 ) -> dict[str, str]:
+    receipt = pair.get("receipt")
+    if not isinstance(receipt, dict) or receipt.get("aws_profile") != profile:
+        raise ValueError("controller AWS profile differs from launch receipt")
+    if receipt.get("aws_account_id") != EXPECTED_AWS_ACCOUNT:
+        raise ValueError("launch receipt does not bind the Causality AWS account")
+    resolved_account = resolve_account(profile)
+    if resolved_account != receipt["aws_account_id"]:
+        raise ValueError("freshly resolved account differs from launch receipt")
     identities: dict[str, str] = {}
     try:
         if record_authority is not None:
@@ -845,7 +936,12 @@ def main() -> int:
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as source:
         config = json.load(source)
-    pair = build_launch_pair(**config)
+    aws_account_id = _resolve_aws_account(args.profile)
+    pair = build_launch_pair(
+        **config,
+        aws_profile=args.profile,
+        aws_account_id=aws_account_id,
+    )
     if args.execute:
         def announce(role: str, instance_id: str) -> None:
             _record_identity(args.profile, pair, role, instance_id)
