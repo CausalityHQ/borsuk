@@ -107,7 +107,7 @@ class RestCoexistenceLoadTest(unittest.TestCase):
             Sample("search", 1, 1, 2, 200, 1.0, "bounded-cell-card-v19", 3, 3072, 2, 2048),
         ]
         summary = summarize("search", 1.0, samples)
-        self.assertEqual(summary["schema_version"], 2)
+        self.assertEqual(summary["schema_version"], 3)
         search = summary["search"]
         self.assertEqual(search["backing_reads"], 7)
         self.assertEqual(search["backing_bytes_read"], 7168)
@@ -130,6 +130,7 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 global_leaf_exact_requests=12,
                 global_leaf_exact_cells=8,
                 global_leaf_exact_cards=11,
+                global_leaf_deepest_winning_card_rank=48,
                 global_leaf_exact_groups=3,
                 global_leaf_exact_selected_bytes=240_000,
                 global_leaf_exact_speculative_bytes=720_000,
@@ -152,6 +153,7 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 global_leaf_exact_requests=11,
                 global_leaf_exact_cells=7,
                 global_leaf_exact_cards=10,
+                global_leaf_deepest_winning_card_rank=112,
                 global_leaf_exact_groups=2,
                 global_leaf_exact_selected_bytes=230_000,
                 global_leaf_exact_speculative_bytes=690_000,
@@ -168,6 +170,10 @@ class RestCoexistenceLoadTest(unittest.TestCase):
         self.assertEqual(search["global_leaf_exact_requests"], 23)
         self.assertEqual(search["global_leaf_exact_cells"], 15)
         self.assertEqual(search["global_leaf_exact_cards"], 21)
+        self.assertEqual(search["global_leaf_deepest_winning_card_rank_p50"], 48)
+        self.assertEqual(search["global_leaf_deepest_winning_card_rank_p95"], 112)
+        self.assertEqual(search["global_leaf_deepest_winning_card_rank_p99"], 112)
+        self.assertEqual(search["global_leaf_deepest_winning_card_rank_max"], 112)
         self.assertEqual(search["global_leaf_exact_groups"], 5)
         self.assertEqual(search["global_leaf_exact_selected_bytes"], 470_000)
         self.assertEqual(search["global_leaf_exact_speculative_bytes"], 1_410_000)

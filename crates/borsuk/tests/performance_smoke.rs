@@ -356,6 +356,7 @@ fn synthetic_report(
         global_leaf_exact_requests: 0,
         global_leaf_exact_cells: 0,
         global_leaf_exact_cards: 0,
+        global_leaf_deepest_winning_card_rank: 0,
         global_leaf_exact_groups: 0,
         global_leaf_exact_selected_bytes: 0,
         global_leaf_exact_speculative_bytes: 0,

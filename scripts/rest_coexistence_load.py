@@ -34,6 +34,7 @@ class Sample:
     global_leaf_exact_requests: int = 0
     global_leaf_exact_cells: int = 0
     global_leaf_exact_cards: int = 0
+    global_leaf_deepest_winning_card_rank: int = 0
     global_leaf_exact_groups: int = 0
     global_leaf_exact_selected_bytes: int = 0
     global_leaf_exact_speculative_bytes: int = 0
@@ -68,6 +69,9 @@ class Sample:
             "global_leaf_exact_requests": self.global_leaf_exact_requests,
             "global_leaf_exact_cells": self.global_leaf_exact_cells,
             "global_leaf_exact_cards": self.global_leaf_exact_cards,
+            "global_leaf_deepest_winning_card_rank": (
+                self.global_leaf_deepest_winning_card_rank
+            ),
             "global_leaf_exact_groups": self.global_leaf_exact_groups,
             "global_leaf_exact_selected_bytes": self.global_leaf_exact_selected_bytes,
             "global_leaf_exact_speculative_bytes": self.global_leaf_exact_speculative_bytes,
@@ -110,6 +114,11 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
     lags = [(sample.started_ns - sample.scheduled_ns) / 1_000_000 for sample in samples]
     recalls = [sample.recall_at_10 for sample in samples if sample.recall_at_10 is not None]
     engines = sorted({sample.engine for sample in samples if sample.engine is not None})
+    winning_card_ranks = [
+        sample.global_leaf_deepest_winning_card_rank
+        for sample in samples
+        if sample.global_leaf_deepest_winning_card_rank > 0
+    ]
     errors = sum(not 200 <= sample.status < 300 and sample.status != 429 for sample in samples)
     return {
         "requests": len(samples),
@@ -143,6 +152,18 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         ),
         "global_leaf_exact_cards": sum(
             sample.global_leaf_exact_cards for sample in samples
+        ),
+        "global_leaf_deepest_winning_card_rank_p50": int(
+            percentile(winning_card_ranks, 0.50)
+        ),
+        "global_leaf_deepest_winning_card_rank_p95": int(
+            percentile(winning_card_ranks, 0.95)
+        ),
+        "global_leaf_deepest_winning_card_rank_p99": int(
+            percentile(winning_card_ranks, 0.99)
+        ),
+        "global_leaf_deepest_winning_card_rank_max": max(
+            winning_card_ranks, default=0
         ),
         "global_leaf_exact_groups": sum(
             sample.global_leaf_exact_groups for sample in samples
@@ -183,7 +204,7 @@ def summarize(phase: str, duration_seconds: float, samples: list[Sample]) -> dic
         for endpoint in ("cheap", "search")
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "phase": phase,
         "duration_seconds": duration_seconds,
         **{
@@ -286,6 +307,7 @@ def _request(
     global_leaf_exact_requests = 0
     global_leaf_exact_cells = 0
     global_leaf_exact_cards = 0
+    global_leaf_deepest_winning_card_rank = 0
     global_leaf_exact_groups = 0
     global_leaf_exact_selected_bytes = 0
     global_leaf_exact_speculative_bytes = 0
@@ -337,6 +359,9 @@ def _request(
         global_leaf_exact_requests = int(payload.get("global_leaf_exact_requests", 0))
         global_leaf_exact_cells = int(payload.get("global_leaf_exact_cells", 0))
         global_leaf_exact_cards = int(payload.get("global_leaf_exact_cards", 0))
+        global_leaf_deepest_winning_card_rank = int(
+            payload.get("global_leaf_deepest_winning_card_rank", 0)
+        )
         global_leaf_exact_groups = int(payload.get("global_leaf_exact_groups", 0))
         global_leaf_exact_selected_bytes = int(
             payload.get("global_leaf_exact_selected_bytes", 0)
@@ -374,6 +399,7 @@ def _request(
         global_leaf_exact_requests,
         global_leaf_exact_cells,
         global_leaf_exact_cards,
+        global_leaf_deepest_winning_card_rank,
         global_leaf_exact_groups,
         global_leaf_exact_selected_bytes,
         global_leaf_exact_speculative_bytes,

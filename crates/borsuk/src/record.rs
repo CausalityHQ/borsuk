@@ -1137,6 +1137,11 @@ pub struct SearchReport {
     /// Distinct cell cards contributing selected exact-row blocks.
     #[serde(default)]
     pub global_leaf_exact_cards: usize,
+    /// One-based centroid rank of the deepest cell card contributing a final top-k hit.
+    ///
+    /// Zero means the query did not execute the bounded cell-card engine or returned no hit.
+    #[serde(default)]
+    pub global_leaf_deepest_winning_card_rank: usize,
     /// Distinct immutable group objects containing selected exact-row blocks.
     #[serde(default)]
     pub global_leaf_exact_groups: usize,

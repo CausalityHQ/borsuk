@@ -525,6 +525,21 @@ fn global_cell_card_head_request_budget(page_budget: usize) -> usize {
     )
 }
 
+fn one_based_cell_card_ranks(ranked_root_indexes: &[usize]) -> Result<HashMap<usize, usize>> {
+    let ranks = ranked_root_indexes
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(rank, root_index)| (root_index, rank + 1))
+        .collect::<HashMap<_, _>>();
+    if ranks.len() != ranked_root_indexes.len() {
+        return Err(BorsukError::InvalidStorage(
+            "V19 centroid ranking repeats a cell-card root index".to_string(),
+        ));
+    }
+    Ok(ranks)
+}
+
 fn cell_card_exact_io_budget(max_bytes: u64, planned_head_bytes: u64) -> Option<u64> {
     max_bytes
         .checked_sub(planned_head_bytes)
@@ -570,6 +585,7 @@ fn global_leaf_code_byte_ceiling(
 struct RoutedDecodedGlobalLeafRow {
     row: crate::global_leaf::DecodedGlobalLeafRow,
     approximate_distance: Option<f32>,
+    cell_card_rank: Option<usize>,
 }
 
 fn truncate_cell_card_exact_candidates<T>(candidates: &mut Vec<(f32, T)>, maximum: usize) {
@@ -11235,6 +11251,7 @@ impl BorsukIndex {
             global_leaf_exact_requests: 0,
             global_leaf_exact_cells: 0,
             global_leaf_exact_cards: 0,
+            global_leaf_deepest_winning_card_rank: 0,
             global_leaf_exact_groups: 0,
             global_leaf_exact_selected_bytes: 0,
             global_leaf_exact_speculative_bytes: 0,
@@ -17225,6 +17242,7 @@ impl BorsukIndex {
                         .map(|row| RoutedDecodedGlobalLeafRow {
                             row,
                             approximate_distance: None,
+                            cell_card_rank: None,
                         }),
                     );
                 }
@@ -17795,6 +17813,7 @@ impl BorsukIndex {
             &centroid_distances,
             head_card_budget,
         )?;
+        let card_rank_by_root_index = one_based_cell_card_ranks(&ranked_card_indexes)?;
         // Code ranges only choose the lossless blocks. Reserve the largest
         // authenticated block among the selected cards rather than the global
         // format maximum; otherwise compact V17 code ranges can make an honest
@@ -18014,6 +18033,7 @@ impl BorsukIndex {
                     global_leaf_exact_requests: 0,
                     global_leaf_exact_cells: 0,
                     global_leaf_exact_cards: 0,
+                    global_leaf_deepest_winning_card_rank: 0,
                     global_leaf_exact_groups: 0,
                     global_leaf_exact_selected_bytes: 0,
                     global_leaf_exact_speculative_bytes: 0,
@@ -18111,97 +18131,126 @@ impl BorsukIndex {
                 .saturating_add(exact_request_counts.heads),
         )
         .unwrap_or(usize::MAX);
-        let (identity_rows, records_considered, records_scored, hits, vectors) =
-            run_cell_card_post_io(|| {
-                let mut fetched_exact = Vec::with_capacity(exact_reads.len());
-                for read in exact_reads {
-                    fetched_exact.push(read?);
-                }
-                let exact_blocks = decode_cell_card_exact_wave(
-                    &exact_plan,
-                    &heads,
-                    &fetched_exact,
-                    self.manifest.config.dimensions,
-                    self.manifest.build_config.vector_element_type,
-                )?;
-                let identity_rows = heads
-                    .iter()
-                    .try_fold(0_usize, |total, head| {
-                        total.checked_add(head.head.codes.len())
-                    })
+        let (
+            identity_rows,
+            records_considered,
+            records_scored,
+            deepest_winning_card_rank,
+            hits,
+            vectors,
+        ) = run_cell_card_post_io(|| {
+            let mut fetched_exact = Vec::with_capacity(exact_reads.len());
+            for read in exact_reads {
+                fetched_exact.push(read?);
+            }
+            let exact_blocks = decode_cell_card_exact_wave(
+                &exact_plan,
+                &heads,
+                &fetched_exact,
+                self.manifest.config.dimensions,
+                self.manifest.build_config.vector_element_type,
+            )?;
+            let identity_rows = heads
+                .iter()
+                .try_fold(0_usize, |total, head| {
+                    total.checked_add(head.head.codes.len())
+                })
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V17 identity row count overflows".to_string())
+                })?;
+            let mut rows = Vec::new();
+            for block in exact_blocks {
+                let root_index = heads
+                    .get(block.block.head_index)
                     .ok_or_else(|| {
-                        BorsukError::InvalidStorage("V17 identity row count overflows".to_string())
-                    })?;
-                let rows = exact_blocks
-                    .into_iter()
-                    .flat_map(|block| {
-                        block.rows.into_iter().zip(block.block.row_distances).map(
-                            |(row, approximate_distance)| RoutedDecodedGlobalLeafRow {
-                                row,
-                                approximate_distance: Some(approximate_distance),
-                            },
+                        BorsukError::InvalidStorage(
+                            "V19 exact block references an absent decoded head".to_string(),
                         )
-                    })
-                    .collect::<Vec<_>>();
-                let records_considered = rows.len();
-                let mut winners = BTreeMap::new();
-                self.merge_global_leaf_rows(&mut winners, rows, context.mutation_states)?;
-                let mut exact_candidates = winners
-                    .into_values()
-                    .map(|candidate| {
-                        candidate
-                            .approximate_distance
-                            .map(|distance| (distance, candidate))
-                            .ok_or_else(|| {
-                                BorsukError::InvalidStorage(
-                                    "V17 exact candidate lacks its authenticated code distance"
-                                        .to_string(),
-                                )
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                truncate_cell_card_exact_candidates(&mut exact_candidates, exact_candidate_rows);
-                let mut scored = exact_candidates
-                    .into_iter()
-                    .map(|(_, candidate)| {
-                        Ok((
-                            self.manifest
-                                .config
-                                .metric
-                                .distance_unchecked(query, &candidate.row.vector)?,
-                            candidate.row.id,
-                            candidate.row.vector,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                scored.sort_by(|left, right| {
-                    left.0
-                        .total_cmp(&right.0)
-                        .then_with(|| left.1.cmp(&right.1))
-                });
-                let records_scored = scored.len();
-                scored.truncate(options.k);
-                let hits = scored
-                    .iter()
-                    .map(|(distance, id, _)| SearchHit {
-                        id: id.clone(),
-                        distance: *distance,
-                        metadata: None,
-                    })
-                    .collect::<Vec<_>>();
-                let vectors = if include_vectors {
-                    scored.into_iter().map(|(_, _, vector)| vector).collect()
-                } else {
-                    Vec::new()
-                };
-                Ok::<_, BorsukError>((
-                    identity_rows,
-                    records_considered,
-                    records_scored,
-                    hits,
-                    vectors,
-                ))
-            })?;
+                    })?
+                    .root_index;
+                let card_rank = *card_rank_by_root_index.get(&root_index).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V19 exact block has no centroid-ranked card authority".to_string(),
+                    )
+                })?;
+                rows.extend(block.rows.into_iter().zip(block.block.row_distances).map(
+                    |(row, approximate_distance)| RoutedDecodedGlobalLeafRow {
+                        row,
+                        approximate_distance: Some(approximate_distance),
+                        cell_card_rank: Some(card_rank),
+                    },
+                ));
+            }
+            let records_considered = rows.len();
+            let mut winners = BTreeMap::new();
+            self.merge_global_leaf_rows(&mut winners, rows, context.mutation_states)?;
+            let mut exact_candidates = winners
+                .into_values()
+                .map(|candidate| {
+                    candidate
+                        .approximate_distance
+                        .map(|distance| (distance, candidate))
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V17 exact candidate lacks its authenticated code distance"
+                                    .to_string(),
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            truncate_cell_card_exact_candidates(&mut exact_candidates, exact_candidate_rows);
+            let mut scored = exact_candidates
+                .into_iter()
+                .map(|(_, candidate)| {
+                    Ok((
+                        self.manifest
+                            .config
+                            .metric
+                            .distance_unchecked(query, &candidate.row.vector)?,
+                        candidate.row.id,
+                        candidate.row.vector,
+                        candidate.cell_card_rank.ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V19 exact candidate lacks its centroid card rank".to_string(),
+                            )
+                        })?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            scored.sort_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            let records_scored = scored.len();
+            scored.truncate(options.k);
+            let deepest_winning_card_rank = scored
+                .iter()
+                .map(|(_, _, _, card_rank)| *card_rank)
+                .max()
+                .unwrap_or(0);
+            let hits = scored
+                .iter()
+                .map(|(distance, id, _, _)| SearchHit {
+                    id: id.clone(),
+                    distance: *distance,
+                    metadata: None,
+                })
+                .collect::<Vec<_>>();
+            let vectors = if include_vectors {
+                scored.into_iter().map(|(_, _, vector, _)| vector).collect()
+            } else {
+                Vec::new()
+            };
+            Ok::<_, BorsukError>((
+                identity_rows,
+                records_considered,
+                records_scored,
+                deepest_winning_card_rank,
+                hits,
+                vectors,
+            ))
+        })?;
         let bytes_read = code_plane_storage_bytes
             .checked_add(exact_plan.physical_bytes())
             .ok_or_else(|| BorsukError::InvalidStorage("V17 query bytes overflow".to_string()))?;
@@ -18259,6 +18308,7 @@ impl BorsukIndex {
                 global_leaf_exact_requests: exact_storage_requests,
                 global_leaf_exact_cells: exact_plan.selected_cells(),
                 global_leaf_exact_cards: exact_plan.selected_cards(),
+                global_leaf_deepest_winning_card_rank: deepest_winning_card_rank,
                 global_leaf_exact_groups: exact_plan.selected_groups(),
                 global_leaf_exact_selected_bytes: exact_plan.selected_bytes(),
                 global_leaf_exact_speculative_bytes: exact_plan.speculative_bytes(),
@@ -18353,6 +18403,7 @@ impl BorsukIndex {
                     global_leaf_exact_requests: 0,
                     global_leaf_exact_cells: 0,
                     global_leaf_exact_cards: 0,
+                    global_leaf_deepest_winning_card_rank: 0,
                     global_leaf_exact_groups: 0,
                     global_leaf_exact_selected_bytes: 0,
                     global_leaf_exact_speculative_bytes: 0,
@@ -18811,6 +18862,7 @@ impl BorsukIndex {
                 global_leaf_exact_requests: 0,
                 global_leaf_exact_cells: 0,
                 global_leaf_exact_cards: 0,
+                global_leaf_deepest_winning_card_rank: 0,
                 global_leaf_exact_groups: 0,
                 global_leaf_exact_selected_bytes: logical_page_bytes,
                 global_leaf_exact_speculative_bytes: 0,
@@ -21246,6 +21298,11 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_leaf_exact_cards)
                 .sum(),
+            global_leaf_deepest_winning_card_rank: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_deepest_winning_card_rank)
+                .max()
+                .unwrap_or(0),
             global_leaf_exact_groups: reports
                 .iter()
                 .map(|(_, report)| report.global_leaf_exact_groups)
@@ -21441,6 +21498,7 @@ impl BorsukIndex {
                 global_leaf_exact_requests: 0,
                 global_leaf_exact_cells: 0,
                 global_leaf_exact_cards: 0,
+                global_leaf_deepest_winning_card_rank: 0,
                 global_leaf_exact_groups: 0,
                 global_leaf_exact_selected_bytes: 0,
                 global_leaf_exact_speculative_bytes: 0,
@@ -21666,6 +21724,7 @@ impl BorsukIndex {
             global_leaf_exact_requests: 0,
             global_leaf_exact_cells: 0,
             global_leaf_exact_cards: 0,
+            global_leaf_deepest_winning_card_rank: 0,
             global_leaf_exact_groups: 0,
             global_leaf_exact_selected_bytes: 0,
             global_leaf_exact_speculative_bytes: 0,
@@ -22027,6 +22086,7 @@ impl BorsukIndex {
                     global_leaf_exact_requests: 0,
                     global_leaf_exact_cells: 0,
                     global_leaf_exact_cards: 0,
+                    global_leaf_deepest_winning_card_rank: 0,
                     global_leaf_exact_groups: 0,
                     global_leaf_exact_selected_bytes: 0,
                     global_leaf_exact_speculative_bytes: 0,
@@ -22797,6 +22857,7 @@ impl BorsukIndex {
                 global_leaf_exact_requests: 0,
                 global_leaf_exact_cells: 0,
                 global_leaf_exact_cards: 0,
+                global_leaf_deepest_winning_card_rank: 0,
                 global_leaf_exact_groups: 0,
                 global_leaf_exact_selected_bytes: 0,
                 global_leaf_exact_speculative_bytes: 0,
@@ -22914,6 +22975,7 @@ impl BorsukIndex {
                 global_leaf_exact_requests: 0,
                 global_leaf_exact_cells: 0,
                 global_leaf_exact_cards: 0,
+                global_leaf_deepest_winning_card_rank: 0,
                 global_leaf_exact_groups: 0,
                 global_leaf_exact_selected_bytes: 0,
                 global_leaf_exact_speculative_bytes: 0,
@@ -36935,6 +36997,72 @@ mod tests {
             "stable resident code planes did not remove their backing GET: first={first:?} second={second:?}"
         );
         assert_eq!(second.hits, first.hits);
+    }
+
+    #[test]
+    fn resident_global_v19_reports_one_based_deepest_winning_card_rank() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut builder = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..256)
+            .map(|row| {
+                (0..8)
+                    .map(|dimension| ((row * 31 + dimension * 17) % 257) as f32)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        builder
+            .add(
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| {
+                        VectorRecord::new(format!("winning-card-rank-{row}"), vector.clone())
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        builder.finish_bulk_load().unwrap();
+        drop(builder);
+
+        let report = BorsukIndex::open(&uri)
+            .unwrap()
+            .search_with_report(
+                &vectors[137],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(64)
+                    .with_max_candidates_per_segment(128),
+            )
+            .unwrap();
+
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v19", "{report:?}");
+        assert!(
+            report.global_leaf_deepest_winning_card_rank >= 1,
+            "{report:?}"
+        );
+        assert!(
+            report.global_leaf_deepest_winning_card_rank <= report.global_leaf_code_pages_read,
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn one_based_cell_card_rank_map_preserves_centroid_order_not_root_order() {
+        let ranks = one_based_cell_card_ranks(&[9, 4, 7]).unwrap();
+
+        assert_eq!(ranks.get(&9), Some(&1));
+        assert_eq!(ranks.get(&4), Some(&2));
+        assert_eq!(ranks.get(&7), Some(&3));
+        assert!(one_based_cell_card_ranks(&[4, 4]).is_err());
     }
 
     #[test]

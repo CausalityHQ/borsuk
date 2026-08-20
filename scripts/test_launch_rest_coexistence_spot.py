@@ -786,6 +786,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn('--runtime-aws-account "$runtime_aws_account"', generator)
         self.assertIn("--repetition 2", generator)
         self.assertIn("terminal repetition differs", generator)
+        self.assertIn('v.get("schema_version")==10', generator)
         self.assertTrue(
             generator.startswith(
                 "# borsuk-rest-mode=smoke\n# borsuk-rest-repetition=2\n"

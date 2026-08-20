@@ -17,7 +17,7 @@ except ImportError:
     from rest_coexistence_load import evaluate_phase, run_phase, summarize
 
 CAUSALITY_AWS_ACCOUNT = "453182569524"
-REST_RESULT_SCHEMA_VERSION = 9
+REST_RESULT_SCHEMA_VERSION = 10
 FLOW_CONTROL_COUNTERS = (
     "borsuk_leaf_read_wait_count",
     "borsuk_leaf_read_wait_micros",

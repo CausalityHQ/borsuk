@@ -316,7 +316,7 @@ printf '%s\n' '{expected}' >"$work/runtime.json"
 cpu_before=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 started_ns=$(date +%s%N)
 PYTHONPATH="$work/scripts" python3 "$runner" --base-url "$BORSUK_SERVER_ENDPOINT" --queries "$queries" --output "$work/output" --expected-runtime "$work/runtime.json" --controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE" --expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT" --runtime-aws-account "$runtime_aws_account" --repetition {repetition}{smoke_flag}
-python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==9 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==10 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
 finished_ns=$(date +%s%N)
 cpu_after=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 cp "$cg_root/memory.events" "$work/memory.events.after"

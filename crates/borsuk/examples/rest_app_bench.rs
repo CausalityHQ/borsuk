@@ -107,6 +107,7 @@ struct SearchResponse {
     global_leaf_exact_requests: usize,
     global_leaf_exact_cells: usize,
     global_leaf_exact_cards: usize,
+    global_leaf_deepest_winning_card_rank: usize,
     global_leaf_exact_groups: usize,
     global_leaf_exact_selected_bytes: u64,
     global_leaf_exact_speculative_bytes: u64,
@@ -285,6 +286,7 @@ async fn search(State(state): State<AppState>, Json(request): Json<SearchRequest
             global_leaf_exact_requests: report.global_leaf_exact_requests,
             global_leaf_exact_cells: report.global_leaf_exact_cells,
             global_leaf_exact_cards: report.global_leaf_exact_cards,
+            global_leaf_deepest_winning_card_rank: report.global_leaf_deepest_winning_card_rank,
             global_leaf_exact_groups: report.global_leaf_exact_groups,
             global_leaf_exact_selected_bytes: report.global_leaf_exact_selected_bytes,
             global_leaf_exact_speculative_bytes: report.global_leaf_exact_speculative_bytes,
@@ -519,6 +521,7 @@ mod tests {
         for field in [
             "global_leaf_exact_cells",
             "global_leaf_exact_cards",
+            "global_leaf_deepest_winning_card_rank",
             "global_leaf_exact_groups",
             "global_leaf_exact_selected_bytes",
             "global_leaf_exact_speculative_bytes",
