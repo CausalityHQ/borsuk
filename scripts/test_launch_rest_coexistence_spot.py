@@ -10,17 +10,17 @@ from unittest.mock import patch
 
 from scripts.launch_rest_coexistence_spot import (
     AttemptObservation,
+    _record_identity,
+    _record_launch_authority,
     _resolve_aws_account,
     _user_data,
-    _record_launch_authority,
-    _record_identity,
     build_launch_pair,
+    classify_attempt,
     cold_s3_cap_matrix,
+    execute_pair,
     generator_worker_script,
     main,
     server_worker_script,
-    classify_attempt,
-    execute_pair,
 )
 
 
@@ -269,8 +269,8 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "phase_order_policy": "cyclic-three-v1",
                 "repetition": 1,
                 "repetitions": 1,
-                "schema_version": 3,
-                "search_staircase_qps": [16, 32, 64, 96],
+                "schema_version": 4,
+                "search_staircase_qps": [32, 64, 96, 128, 160, 192, 256],
                 "separate_generator": True,
                 "smoke": True,
                 "vector_p99_ms": 100.0,
@@ -279,7 +279,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         )
         self.assertEqual(
             receipt["workload_sha256"],
-            "8c7e3107dc45b7e2ea6ef1239ac71dece34a59842d7e7ca516210fb3f4c5fb80",
+            "1e4a04c414110c1eba9bf4f3e40ef3679c678ab70bb887c79aad91e00417f7c1",
         )
         self.assertEqual(
             receipt["server_worker_sha256"],
@@ -702,7 +702,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         )
         self.assertTrue(all(cell["disk_cache_bytes"] == 0 for cell in cells))
         self.assertTrue(
-            all(cell["exact_read_max_physical_amplification"] == 5 for cell in cells)
+            all(cell["exact_read_max_physical_amplification"] == 1 for cell in cells)
         )
         self.assertTrue(all("exact_hedge_after_ms" not in cell for cell in cells))
         self.assertTrue(

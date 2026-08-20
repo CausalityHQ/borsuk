@@ -61,7 +61,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             flow_control_delta(before, after)
 
     def test_terminal_result_schema_cuts_with_effective_limit_shape(self) -> None:
-        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 8)
+        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 9)
 
     def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
         self.assertEqual(
@@ -83,28 +83,30 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             )
 
     def test_smoke_staircase_crosses_the_expected_small_runtime_knee(self) -> None:
-        self.assertEqual(staircase_rates(True), [16, 32, 64, 96])
-        self.assertEqual(staircase_rates(False), [8, 16, 32, 64, 96, 128])
+        self.assertEqual(staircase_rates(True), [32, 64, 96, 128, 160, 192, 256])
+        self.assertEqual(
+            staircase_rates(False), [8, 16, 32, 64, 96, 128, 160, 192, 256]
+        )
 
     def test_three_repetitions_rotate_independent_measurement_order(self) -> None:
         self.assertEqual(
             phase_schedule(False, 1),
             {
-                "staircase_rates": [8, 16, 32, 64, 96, 128],
+                "staircase_rates": [8, 16, 32, 64, 96, 128, 160, 192, 256],
                 "mixed_phases": ["mixed-normal", "mixed-overload"],
             },
         )
         self.assertEqual(
             phase_schedule(False, 2),
             {
-                "staircase_rates": [32, 64, 96, 128, 8, 16],
+                "staircase_rates": [64, 96, 128, 160, 192, 256, 8, 16, 32],
                 "mixed_phases": ["mixed-overload", "mixed-normal"],
             },
         )
         self.assertEqual(
             phase_schedule(False, 3),
             {
-                "staircase_rates": [96, 128, 8, 16, 32, 64],
+                "staircase_rates": [160, 192, 256, 8, 16, 32, 64, 96, 128],
                 "mixed_phases": ["mixed-normal", "mixed-overload"],
             },
         )
@@ -208,10 +210,13 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
                 terminal["phase_order"],
                 [
                     "cheap-baseline",
+                    "staircase-96",
+                    "staircase-128",
+                    "staircase-160",
+                    "staircase-192",
+                    "staircase-256",
                     "staircase-32",
                     "staircase-64",
-                    "staircase-96",
-                    "staircase-16",
                     "mixed-overload",
                     "mixed-normal",
                 ],
@@ -242,8 +247,8 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
         ]
         self.assertEqual(select_sustainable_search_qps(rows), 31.5)
 
-    def test_overload_rate_crosses_the_observed_staircase_capacity_boundary(self) -> None:
-        self.assertEqual(overload_search_qps(16.0, [16, 32, 64, 96]), 96.0)
+    def test_overload_rate_is_exactly_the_attested_sustainable_fraction(self) -> None:
+        self.assertEqual(overload_search_qps(16.0, [16, 32, 64, 96]), 24.0)
         self.assertEqual(overload_search_qps(96.0, [16, 32, 64, 96]), 144.0)
 
     def test_staircase_never_masks_server_errors_as_capacity(self) -> None:

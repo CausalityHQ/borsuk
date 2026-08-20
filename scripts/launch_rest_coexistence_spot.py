@@ -14,7 +14,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
 COMPLETE_MARKER = "ATTEMPT_COMPLETE.json"
 FAILED_MARKER = "ATTEMPT_FAILED.json"
 KNOWN_MARKERS = {COMPLETE_MARKER, FAILED_MARKER}
@@ -138,7 +137,7 @@ def cold_s3_cap_matrix() -> list[dict[str, int | str]]:
                 "search_admission": search_admission,
                 "page_budget": 32,
                 "exact_candidates": 512,
-                "exact_read_max_physical_amplification": 5,
+                "exact_read_max_physical_amplification": 1,
                 "leaf_read_width": leaf_width,
                 "max_inflight_leaf_reads": inflight,
                 "ram_budget_bytes": 2 * 1024**3,
@@ -317,7 +316,7 @@ printf '%s\n' '{expected}' >"$work/runtime.json"
 cpu_before=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 started_ns=$(date +%s%N)
 PYTHONPATH="$work/scripts" python3 "$runner" --base-url "$BORSUK_SERVER_ENDPOINT" --queries "$queries" --output "$work/output" --expected-runtime "$work/runtime.json" --controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE" --expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT" --runtime-aws-account "$runtime_aws_account" --repetition {repetition}{smoke_flag}
-python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==8 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==9 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
 finished_ns=$(date +%s%N)
 cpu_after=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 cp "$cg_root/memory.events" "$work/memory.events.after"
@@ -408,15 +407,15 @@ def _user_data(
     readiness = ""
     endpoint_property = ""
     if role == "rest-generator":
-        readiness = f"""server_endpoint=''
+        readiness = """server_endpoint=''
 endpoint_receipt=/tmp/borsuk-rest-endpoint.json
-endpoint_path=${{BORSUK_OUTPUT_URI#s3://}}
-endpoint_bucket=${{endpoint_path%%/*}}
-endpoint_prefix=${{endpoint_path#*/}}
+endpoint_path=${BORSUK_OUTPUT_URI#s3://}
+endpoint_bucket=${endpoint_path%%/*}
+endpoint_prefix=${endpoint_path#*/}
 deadline=$((SECONDS + 900))
 while [ "$SECONDS" -lt "$deadline" ]; do
   if aws s3 cp "s3://$endpoint_bucket/$endpoint_prefix/APP_ENDPOINT.json" "$endpoint_receipt" --only-show-errors >/dev/null 2>&1; then
-    server_endpoint=$(python3 -c 'import json,os,re,sys; v=json.load(open(sys.argv[1])); endpoint=str(v.get("endpoint","")); ok=v.get("schema_version")==1 and v.get("attempt_authority_sha256")==os.environ["BORSUK_ATTEMPT_AUTHORITY_SHA256"] and re.fullmatch(r"http://(?:[0-9]{{1,3}}\\.){{3}}[0-9]{{1,3}}:8080",endpoint); print(endpoint if ok else "")' "$endpoint_receipt")
+    server_endpoint=$(python3 -c 'import json,os,re,sys; v=json.load(open(sys.argv[1])); endpoint=str(v.get("endpoint","")); ok=v.get("schema_version")==1 and v.get("attempt_authority_sha256")==os.environ["BORSUK_ATTEMPT_AUTHORITY_SHA256"] and re.fullmatch(r"http://(?:[0-9]{1,3}\\.){3}[0-9]{1,3}:8080",endpoint); print(endpoint if ok else "")' "$endpoint_receipt")
   fi
   if [ -n "$server_endpoint" ] && curl --fail --silent --max-time 2 \
       "$server_endpoint/health" >/dev/null; then
@@ -672,10 +671,10 @@ def build_launch_pair(
         "repetition": repetition,
         "repetitions": 1,
         "separate_generator": True,
-        "schema_version": 3,
-        "search_staircase_qps": [16, 32, 64, 96]
+        "schema_version": 4,
+        "search_staircase_qps": [32, 64, 96, 128, 160, 192, 256]
         if smoke
-        else [8, 16, 32, 64, 96, 128],
+        else [8, 16, 32, 64, 96, 128, 160, 192, 256],
         "smoke": smoke,
         "vector_p99_ms": 100.0,
         "warmup_seconds": 5 if smoke else 30,

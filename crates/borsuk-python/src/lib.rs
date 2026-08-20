@@ -2477,7 +2477,7 @@ fn create(
 }
 
 #[pyfunction]
-#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None, preload = false, max_active_searches = 8, max_waiting_searches = 16, leaf_read_width = 32, max_inflight_leaf_reads = 48, exact_read_max_physical_amplification = 5))]
+#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None, preload = false, max_active_searches = 8, max_waiting_searches = 16, leaf_read_width = 32, max_inflight_leaf_reads = 48, exact_read_max_physical_amplification = 1))]
 #[pyo3(name = "open")]
 #[allow(clippy::too_many_arguments)] // These are explicit Python keyword controls.
 fn open_py(

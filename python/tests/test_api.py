@@ -1,3 +1,4 @@
+import inspect
 import os
 import sys
 import tempfile
@@ -189,12 +190,19 @@ class PythonApiTests(unittest.TestCase):
 
     def test_open_has_runtime_annotations(self) -> None:
         hints = get_type_hints(borsuk.open)
+        signature = inspect.signature(borsuk.open)
 
         self.assertEqual(hints["uri"], str)
         self.assertEqual(hints["cache_dir"], str | None)
         self.assertEqual(hints["ram_budget"], int | str | None)
         self.assertEqual(hints["resident_routing"], bool)
         self.assertEqual(hints["cache_max_bytes"], int | str | None)
+        self.assertEqual(
+            signature.parameters[
+                "exact_read_max_physical_amplification"
+            ].default,
+            1,
+        )
         self.assertIs(hints["return"], borsuk.Index)
 
     def test_metric_helper_functions_have_runtime_annotations(self) -> None:

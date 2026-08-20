@@ -354,8 +354,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let search_limit = env_usize("BORSUK_REST_SEARCH_ADMISSION", 2)?;
     let leaf_read_width = env_usize("BORSUK_REST_LEAF_READ_WIDTH", 32)?;
     let max_inflight_leaf_reads = env_usize("BORSUK_REST_MAX_INFLIGHT_LEAF_READS", 48)?;
-    let exact_read_max_physical_amplification =
-        env_usize("BORSUK_REST_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION", 5)? as u64;
+    let exact_read_max_physical_amplification = env_usize(
+        "BORSUK_REST_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION",
+        borsuk::DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION as usize,
+    )? as u64;
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
@@ -577,7 +579,7 @@ mod tests {
         // attests the nonzero-capacity path.
         assert_eq!(value["borsuk_transient_capacity_bytes"], 0);
         assert_eq!(value["borsuk_transient_peak_bytes"], 0);
-        assert_eq!(value["borsuk_exact_read_max_physical_amplification"], 5);
+        assert_eq!(value["borsuk_exact_read_max_physical_amplification"], 1);
         assert_eq!(value["borsuk_page_budget"], 4);
         assert_eq!(value["borsuk_exact_candidates"], 512);
         assert_eq!(value["borsuk_ram_budget_bytes"], 1024);

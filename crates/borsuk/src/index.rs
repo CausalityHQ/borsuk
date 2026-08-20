@@ -723,10 +723,12 @@ pub const DEFAULT_LEAF_READ_WIDTH: usize = 32;
 /// Default per-handle cap on immutable ANN range reads across all searches.
 pub const DEFAULT_MAX_INFLIGHT_LEAF_READS: usize = 48;
 /// Default upper bound on exact-rerank physical range bytes relative to the
-/// selected exact-block bytes. Values below this trade more requests for less
-/// uncached S3 transfer; production never permits values above this bound.
-pub const DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION: u64 =
-    CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION;
+/// selected exact-block bytes.
+///
+/// The uncached production default reads only selected authenticated blocks.
+/// Callers may opt into bounded speculative gap reads to reduce request count,
+/// but production never permits values above the format-wide cap.
+pub const DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION: u64 = 1;
 /// Leave half the process RAM envelope available for routing, dense search,
 /// caches, result assembly, allocator slack, and the application embedding the
 /// library. Lexical transient decodes share the other half through a weighted
@@ -864,7 +866,7 @@ pub struct OpenOptions {
     pub max_inflight_leaf_reads: usize,
     /// Maximum physical bytes fetched for an exact-rerank wave as a multiple
     /// of its selected exact-block bytes. `1` disables speculative gap reads;
-    /// values up to the proven default of `5` may trade additional bytes for
+    /// values up to the format-wide cap of `5` may trade additional bytes for
     /// fewer S3 range requests.
     pub exact_read_max_physical_amplification: u64,
 }
@@ -35997,7 +35999,8 @@ mod tests {
         );
         assert_eq!(
             OpenOptions::default().exact_read_max_physical_amplification,
-            CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION
+            1,
+            "the production default must not fetch speculative exact bytes from uncached S3"
         );
         assert_eq!(
             SearchOptions::default().prefetch_depth,

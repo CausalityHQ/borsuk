@@ -853,7 +853,7 @@ def open(
     max_waiting_searches: int = 16,
     leaf_read_width: int = 32,
     max_inflight_leaf_reads: int = 48,
-    exact_read_max_physical_amplification: int = 5,
+    exact_read_max_physical_amplification: int = 1,
 ) -> Index:
     max_active_searches = _validate_required_int(
         max_active_searches, "max_active_searches"
