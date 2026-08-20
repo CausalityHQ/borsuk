@@ -316,6 +316,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 {
                     "logical_cell_catalog_checksum": "3" * 64,
                     "logical_cells": str(cell["index_profile"]["logical_cells"]),
+                    "scan_codec": str(cell["index_profile"]["leaf_codec"]),
                     "records": str(cell["dataset"]["scale"]["rows"]),
                     "total_active_index_bytes": str(123 * 1024 * 1024),
                     "ingest_ms": "1234.500",
@@ -380,7 +381,55 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            row["scan_codec"] = "pq-scan"
+            (output / "bench_build.csv").write_text(
+                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "codec identity differs"):
+                read_build_artifact(output, cell=cell)
+            row["scan_codec"] = cell["index_profile"]["leaf_codec"]
+            (output / "bench_build.csv").write_text(
+                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                encoding="utf-8",
+            )
             artifact = read_build_artifact(output, cell=cell)
+
+            turboquant_cell = {
+                **cell,
+                "index_profile": {
+                    **cell["index_profile"],
+                    "leaf_codec": "fast-turboquant-scan",
+                    "turboquant_bits": 3,
+                    "turboquant_qjl_bits": 0,
+                    "turboquant_shards": 1,
+                },
+            }
+            turboquant_cell["index_profile"].pop("code_bytes")
+            row.update(
+                {
+                    "scan_codec": "fast-turboquant-scan",
+                    "turboquant_bits": "2",
+                    "turboquant_qjl_bits": "0",
+                    "turboquant_shards": "1",
+                }
+            )
+            (output / "bench_build.csv").write_text(
+                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "codec identity differs"):
+                read_build_artifact(output, cell=turboquant_cell)
+            row["turboquant_bits"] = "3"
+            (output / "bench_build.csv").write_text(
+                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                encoding="utf-8",
+            )
+            read_build_artifact(output, cell=turboquant_cell)
         metrics = artifact["storage_metrics"]
         self.assertEqual(artifact["index_stats"]["records"], cell["dataset"]["scale"]["rows"])
         self.assertEqual(
@@ -607,6 +656,72 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(benchmark_env["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"], str(1024**3))
         self.assertEqual(plan["runtime_client"]["instance_type"], "c7g.xlarge")
         self.assertEqual(plan["runtime_storage"]["volume_size_gib"], 32)
+
+    def test_borsuk_turboquant_plan_omits_incompatible_pq_width(self) -> None:
+        manifest = paid_v3_manifest()
+        profile = manifest["index_profiles"]["borsuk"]
+        profile["leaf_codec"] = "fast-turboquant-scan"
+        profile.pop("code_bytes")
+        profile.update(
+            {
+                "turboquant_bits": 3,
+                "turboquant_qjl_bits": 0,
+                "turboquant_shards": 1,
+            }
+        )
+        cell = next(
+            cell
+            for cell in build_schedule_document(validate_manifest(manifest))["cells"]
+            if cell["system"] == "borsuk"
+            and cell["workload"]["kind"] == "read-recall"
+            and cell["dataset"]["source"].get("generator")
+            == "synthetic-clustered-v1"
+        )
+        with tempfile.TemporaryDirectory() as root:
+            plan = build_execution_plan(
+                cell,
+                arm=plan_arms(cell)[0],
+                workspace=Path(root),
+                generator=Path("/opt/borsuk/generate_synthetic_dataset"),
+                borsuk_bench=Path("/opt/borsuk/production_bench"),
+                mode="smoke",
+            )
+
+        environment = plan["steps"][-1]["env"]
+        self.assertEqual(
+            environment["BORSUK_BENCH_GLOBAL_SCAN_CODEC"],
+            "fast-turboquant-scan",
+        )
+        self.assertEqual(environment["BORSUK_BENCH_TURBOQUANT_BITS"], "3")
+        self.assertEqual(environment["BORSUK_BENCH_TURBOQUANT_QJL_BITS"], "0")
+        self.assertEqual(environment["BORSUK_BENCH_TURBOQUANT_SHARDS"], "1")
+        self.assertEqual(
+            environment["BORSUK_BENCH_RECALL_LEAF_MODE"],
+            "fast-turboquant-scan",
+        )
+        self.assertEqual(
+            environment["BORSUK_BENCH_SERVING_LEAF_MODE"],
+            "fast-turboquant-scan",
+        )
+        self.assertNotIn("BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES", environment)
+
+        malformed = {
+            **cell,
+            "index_profile": {
+                **cell["index_profile"],
+            },
+        }
+        malformed["index_profile"].pop("turboquant_bits")
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, "index profile is not executable"):
+                build_execution_plan(
+                    malformed,
+                    arm=plan_arms(malformed)[0],
+                    workspace=Path(root),
+                    generator=Path("/opt/borsuk/generate_synthetic_dataset"),
+                    borsuk_bench=Path("/opt/borsuk/production_bench"),
+                    mode="smoke",
+                )
 
     def test_smoke_plan_is_scaled_and_cannot_be_published(self) -> None:
         cell = next(

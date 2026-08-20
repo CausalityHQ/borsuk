@@ -27,6 +27,7 @@ try:
         validate_clone_receipt,
     )
     from scripts.publication_v3_protocol import (
+        BORSUK_TURBOQUANT_LEAF_CODECS,
         build_schedule_document,
         canonical_json_bytes,
         read_protocol,
@@ -53,6 +54,7 @@ except ModuleNotFoundError:
         validate_clone_receipt,
     )
     from publication_v3_protocol import (
+        BORSUK_TURBOQUANT_LEAF_CODECS,
         build_schedule_document,
         canonical_json_bytes,
         read_protocol,
@@ -408,13 +410,32 @@ def build_execution_plan(
             disk_cache_limit_mib * 1024 * 1024
         ),
     }
+    leaf_codec = index_profile.get("leaf_codec")
+    turboquant = leaf_codec in BORSUK_TURBOQUANT_LEAF_CODECS
     code_bytes = index_profile.get("code_bytes")
+    turboquant_values = tuple(
+        index_profile.get(field)
+        for field in (
+            "turboquant_bits",
+            "turboquant_qjl_bits",
+            "turboquant_shards",
+        )
+    )
     training_rows_per_cell = index_profile.get("training_rows_per_cell")
     training_iterations = index_profile.get("training_iterations")
     if (
-        isinstance(code_bytes, bool)
-        or not isinstance(code_bytes, int)
-        or code_bytes <= 0
+        (not turboquant and (
+            isinstance(code_bytes, bool)
+            or not isinstance(code_bytes, int)
+            or code_bytes <= 0
+        ))
+        or (
+            turboquant
+            and any(
+                isinstance(value, bool) or not isinstance(value, int)
+                for value in turboquant_values
+            )
+        )
         or isinstance(training_rows_per_cell, bool)
         or not isinstance(training_rows_per_cell, int)
         or training_rows_per_cell <= 0
@@ -437,10 +458,25 @@ def build_execution_plan(
             "BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS": str(training_rows),
             "BORSUK_BENCH_LOGICAL_CELL_SEED": str(dataset_training_seed(dataset)),
             "BORSUK_BENCH_LOGICAL_CELL_ITERATIONS": str(training_iterations),
-            "BORSUK_BENCH_GLOBAL_SCAN_CODEC": str(index_profile.get("leaf_codec")),
-            "BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES": str(code_bytes),
+            "BORSUK_BENCH_GLOBAL_SCAN_CODEC": str(leaf_codec),
         }
     )
+    if turboquant:
+        benchmark_env.update(
+            {
+                "BORSUK_BENCH_TURBOQUANT_BITS": str(index_profile["turboquant_bits"]),
+                "BORSUK_BENCH_TURBOQUANT_QJL_BITS": str(
+                    index_profile["turboquant_qjl_bits"]
+                ),
+                "BORSUK_BENCH_TURBOQUANT_SHARDS": str(
+                    index_profile["turboquant_shards"]
+                ),
+                "BORSUK_BENCH_RECALL_LEAF_MODE": str(leaf_codec),
+                "BORSUK_BENCH_SERVING_LEAF_MODE": str(leaf_codec),
+            }
+        )
+    else:
+        benchmark_env["BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES"] = str(code_bytes)
     if mode == "publication":
         index_uri = str(cell.get("index_prefix"))
         runtime_dataset_dir = workspace / "runtime-dataset"
@@ -1248,6 +1284,19 @@ def read_build_artifact(
     expected_cells = profile.get("logical_cells") if isinstance(profile, dict) else None
     if parsed["records"] != expected_rows or parsed["logical_cells"] != expected_cells:
         raise ValueError("publication build identity differs from its scheduled index")
+    expected_codec = profile.get("leaf_codec") if isinstance(profile, dict) else None
+    if row.get("scan_codec") != expected_codec:
+        raise ValueError("publication build codec identity differs from its scheduled index")
+    if expected_codec in BORSUK_TURBOQUANT_LEAF_CODECS:
+        for artifact_field, profile_field in (
+            ("turboquant_bits", "turboquant_bits"),
+            ("turboquant_qjl_bits", "turboquant_qjl_bits"),
+            ("turboquant_shards", "turboquant_shards"),
+        ):
+            if row.get(artifact_field) != str(profile.get(profile_field)):
+                raise ValueError(
+                    "publication build codec identity differs from its scheduled index"
+                )
     checksum = row.get("logical_cell_catalog_checksum", "")
     if len(checksum) != 64 or any(character not in "0123456789abcdef" for character in checksum):
         raise ValueError("publication build catalog checksum is invalid")

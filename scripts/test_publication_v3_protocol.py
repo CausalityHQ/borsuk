@@ -252,6 +252,52 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "power of two"):
             validate_manifest(manifest)
 
+    def test_borsuk_turboquant_profile_uses_typed_codec_parameters(self) -> None:
+        manifest = paid_v3_manifest()
+        profile = manifest["index_profiles"]["borsuk"]
+        profile["leaf_codec"] = "fast-turboquant-scan"
+        profile.pop("code_bytes")
+        profile.update(
+            {
+                "turboquant_bits": 3,
+                "turboquant_qjl_bits": 0,
+                "turboquant_shards": 1,
+            }
+        )
+
+        validated = validate_manifest(manifest)["index_profiles"]["borsuk"]
+
+        self.assertEqual(validated["leaf_codec"], "fast-turboquant-scan")
+        self.assertEqual(validated["turboquant_bits"], 3)
+        self.assertEqual(validated["turboquant_qjl_bits"], 0)
+        self.assertEqual(validated["turboquant_shards"], 1)
+        self.assertNotIn("code_bytes", validated)
+
+        profile["code_bytes"] = 64
+        with self.assertRaisesRegex(ValueError, "fields differ"):
+            validate_manifest(manifest)
+        profile.pop("code_bytes")
+        profile["turboquant_qjl_bits"] = 16
+        with self.assertRaisesRegex(ValueError, "does not accept.*QJL"):
+            validate_manifest(manifest)
+
+        profile["turboquant_qjl_bits"] = 0
+        profile["leaf_codec"] = "fast-turboquant-mse-scan"
+        profile["turboquant_bits"] = 1
+        profile["turboquant_shards"] = 3
+        validated_mse = validate_manifest(manifest)["index_profiles"]["borsuk"]
+        self.assertEqual(validated_mse["leaf_codec"], "fast-turboquant-mse-scan")
+        self.assertEqual(validated_mse["turboquant_bits"], 1)
+        self.assertEqual(validated_mse["turboquant_shards"], 3)
+
+    def test_borsuk_profile_rejects_unknown_leaf_codec_before_scheduling(self) -> None:
+        manifest = paid_v3_manifest()
+        manifest["index_profiles"]["borsuk"]["leaf_codec"] = (
+            "fast-turboquant-prod-scan"
+        )
+        with self.assertRaisesRegex(ValueError, "leaf codec is unsupported"):
+            validate_manifest(manifest)
+
     def test_protocol_is_exact_scheduled_cell_without_reconstruction(self) -> None:
         cell = build_schedule_document(validate_manifest(valid_v3_manifest()))["cells"][0]
         with tempfile.TemporaryDirectory() as directory:

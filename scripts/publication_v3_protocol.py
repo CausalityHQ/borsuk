@@ -78,6 +78,11 @@ PREFIX_FIELDS = frozenset({"result", "index", "dataset", "cache"})
 S3_PREFIX = re.compile(r"s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/[^\s/](?:[^\s]*[^\s/])?")
 SYSTEMS = ("borsuk", "amazon-s3-vectors", "faiss")
 METRICS = frozenset({"cosine", "l2", "dot", "hamming", "jaccard"})
+BORSUK_PQ_LEAF_CODECS = frozenset({"pq-scan", "srht-pq-scan"})
+BORSUK_TURBOQUANT_LEAF_CODECS = frozenset(
+    {"fast-turboquant-mse-scan", "fast-turboquant-scan"}
+)
+BORSUK_LEAF_CODECS = BORSUK_PQ_LEAF_CODECS | BORSUK_TURBOQUANT_LEAF_CODECS
 IDENTIFIER = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?")
 HEX_40 = re.compile(r"[0-9a-f]{40}")
 HEX_64 = re.compile(r"[0-9a-f]{64}")
@@ -340,7 +345,7 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
     profile = _dict(value, f"{system} index profile")
     engine = profile.get("engine")
     if system == "borsuk":
-        expected = frozenset(
+        common_fields = frozenset(
             {
                 "engine",
                 "logical_cells",
@@ -351,19 +356,60 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
                 "hnsw_m",
                 "hnsw_ef_construction",
                 "leaf_codec",
-                "code_bytes",
                 "bundle_target_mib",
                 "row_group_target_mib",
                 "max_active_levels",
             }
         )
+        leaf_codec = _identifier(profile.get("leaf_codec"), "borsuk leaf codec")
+        if leaf_codec not in BORSUK_LEAF_CODECS:
+            raise ValueError("borsuk leaf codec is unsupported")
+        turboquant = leaf_codec in BORSUK_TURBOQUANT_LEAF_CODECS
+        expected = common_fields | (
+            frozenset(
+                {
+                    "turboquant_bits",
+                    "turboquant_qjl_bits",
+                    "turboquant_shards",
+                }
+            )
+            if turboquant
+            else frozenset({"code_bytes"})
+        )
         _exact_fields(profile, expected, "borsuk index profile")
         if engine != "borsuk-v12":
             raise ValueError("borsuk index engine must be borsuk-v12")
-        code_bytes = _positive_int(profile["code_bytes"], "borsuk code bytes")
-        if code_bytes & (code_bytes - 1):
-            raise ValueError("borsuk code bytes must be a power of two")
-        return {
+        codec_parameters: dict[str, int]
+        if turboquant:
+            bits = _positive_int(profile["turboquant_bits"], "borsuk TurboQuant bits")
+            if bits > 8 or (leaf_codec == "fast-turboquant-scan" and bits < 2):
+                raise ValueError("borsuk TurboQuant bits are invalid for the selected codec")
+            qjl_bits = profile["turboquant_qjl_bits"]
+            if (
+                isinstance(qjl_bits, bool)
+                or not isinstance(qjl_bits, int)
+                or qjl_bits < 0
+                or qjl_bits > 2**32 - 1
+            ):
+                raise ValueError("borsuk TurboQuant QJL bits must fit u32")
+            shards = _positive_int(
+                profile["turboquant_shards"], "borsuk TurboQuant shards"
+            )
+            if qjl_bits != 0:
+                raise ValueError("borsuk TurboQuant codec does not accept a QJL override")
+            if leaf_codec == "fast-turboquant-scan" and shards != 1:
+                raise ValueError("borsuk production TurboQuant codec requires one shard")
+            codec_parameters = {
+                "turboquant_bits": bits,
+                "turboquant_qjl_bits": qjl_bits,
+                "turboquant_shards": shards,
+            }
+        else:
+            code_bytes = _positive_int(profile["code_bytes"], "borsuk code bytes")
+            if code_bytes & (code_bytes - 1):
+                raise ValueError("borsuk code bytes must be a power of two")
+            codec_parameters = {"code_bytes": code_bytes}
+        validated = {
             "engine": "borsuk-v12",
             "logical_cells": _positive_int(profile["logical_cells"], "logical cells"),
             "minimum_rows_per_logical_cell": _positive_int(
@@ -381,8 +427,7 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
             "hnsw_ef_construction": _positive_int(
                 profile["hnsw_ef_construction"], "borsuk hnsw ef construction"
             ),
-            "leaf_codec": _identifier(profile["leaf_codec"], "borsuk leaf codec"),
-            "code_bytes": code_bytes,
+            "leaf_codec": leaf_codec,
             "bundle_target_mib": _positive_int(
                 profile["bundle_target_mib"], "borsuk bundle target MiB"
             ),
@@ -393,6 +438,8 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
                 profile["max_active_levels"], "borsuk max active levels"
             ),
         }
+        validated.update(codec_parameters)
+        return validated
     if system == "faiss":
         _exact_fields(
             profile,
