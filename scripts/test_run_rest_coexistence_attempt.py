@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from scripts.run_rest_coexistence_attempt import (
     REST_RESULT_SCHEMA_VERSION,
     accepted_search_qps,
     flow_control_delta,
+    main,
     overload_search_qps,
+    phase_schedule,
+    run_phase_with_warmup,
     select_sustainable_search_qps,
     staircase_has_only_expected_capacity_failures,
     staircase_rates,
+    validate_effective_limits,
     validated_authority_sha256,
     validated_aws_identity,
-    validate_effective_limits,
 )
 
 
@@ -53,7 +61,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             flow_control_delta(before, after)
 
     def test_terminal_result_schema_cuts_with_effective_limit_shape(self) -> None:
-        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 7)
+        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 8)
 
     def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
         self.assertEqual(
@@ -77,6 +85,137 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
     def test_smoke_staircase_crosses_the_expected_small_runtime_knee(self) -> None:
         self.assertEqual(staircase_rates(True), [16, 32, 64, 96])
         self.assertEqual(staircase_rates(False), [8, 16, 32, 64, 96, 128])
+
+    def test_three_repetitions_rotate_independent_measurement_order(self) -> None:
+        self.assertEqual(
+            phase_schedule(False, 1),
+            {
+                "staircase_rates": [8, 16, 32, 64, 96, 128],
+                "mixed_phases": ["mixed-normal", "mixed-overload"],
+            },
+        )
+        self.assertEqual(
+            phase_schedule(False, 2),
+            {
+                "staircase_rates": [32, 64, 96, 128, 8, 16],
+                "mixed_phases": ["mixed-overload", "mixed-normal"],
+            },
+        )
+        self.assertEqual(
+            phase_schedule(False, 3),
+            {
+                "staircase_rates": [96, 128, 8, 16, 32, 64],
+                "mixed_phases": ["mixed-normal", "mixed-overload"],
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "repetition"):
+            phase_schedule(False, 0)
+
+    def test_each_measured_phase_has_an_excluded_warmup_and_observed_order(self) -> None:
+        observed: list[str] = []
+        measured = {"passed": True}
+        with (
+            patch(
+                "scripts.run_rest_coexistence_attempt.run_phase",
+                return_value=[],
+            ) as warm,
+            patch(
+                "scripts.run_rest_coexistence_attempt._run",
+                return_value=measured,
+            ) as run,
+        ):
+            result = run_phase_with_warmup(
+                Path("/tmp/output"),
+                "http://127.0.0.1:8080",
+                "staircase-64",
+                5.0,
+                10.0,
+                0.0,
+                64.0,
+                [{"vector": [1.0]}],
+                None,
+                observed,
+            )
+
+        self.assertIs(result, measured)
+        warm.assert_called_once_with(
+            "http://127.0.0.1:8080",
+            5.0,
+            0.0,
+            64.0,
+            [{"vector": [1.0]}],
+            256,
+            30.0,
+        )
+        run.assert_called_once()
+        self.assertEqual(observed, ["staircase-64"])
+
+    def test_main_persists_the_authorized_repetition_and_observed_order(self) -> None:
+        def measured(*args: object) -> dict[str, object]:
+            name = str(args[2])
+            observed = args[-1]
+            assert isinstance(observed, list)
+            observed.append(name)
+            if name.startswith("staircase-"):
+                return {
+                    "duration_seconds": 1.0,
+                    "passed": True,
+                    "search": {"successful_requests": 1, "rejected_429": 0},
+                }
+            return {"passed": True}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / "runtime.json"
+            runtime.write_text("{}", encoding="utf-8")
+            output = root / "output"
+            argv = [
+                "run_rest_coexistence_attempt.py",
+                "--base-url",
+                "http://127.0.0.1:8080",
+                "--queries",
+                str(root / "queries.jsonl"),
+                "--output",
+                str(output),
+                "--expected-runtime",
+                str(runtime),
+                "--controller-aws-profile",
+                "causality",
+                "--expected-aws-account",
+                "453182569524",
+                "--runtime-aws-account",
+                "453182569524",
+                "--repetition",
+                "2",
+                "--smoke",
+            ]
+            with (
+                patch("sys.argv", argv),
+                patch.dict(os.environ, {"BORSUK_ATTEMPT_AUTHORITY_SHA256": "a" * 64}),
+                patch("scripts.run_rest_coexistence_attempt._metrics", return_value={}),
+                patch("scripts.run_rest_coexistence_attempt._queries", return_value=[]),
+                patch("scripts.run_rest_coexistence_attempt.validate_effective_limits"),
+                patch(
+                    "scripts.run_rest_coexistence_attempt.run_phase_with_warmup",
+                    side_effect=measured,
+                ),
+            ):
+                self.assertEqual(main(), 0)
+
+            terminal = json.loads((output / "REST_RESULT.json").read_text())
+            self.assertEqual(terminal["repetition"], 2)
+            self.assertEqual(
+                terminal["phase_order"],
+                [
+                    "cheap-baseline",
+                    "staircase-32",
+                    "staircase-64",
+                    "staircase-96",
+                    "staircase-16",
+                    "mixed-overload",
+                    "mixed-normal",
+                ],
+            )
 
     def test_attempt_authority_is_a_canonical_digest(self) -> None:
         self.assertEqual(validated_authority_sha256("a" * 64), "a" * 64)

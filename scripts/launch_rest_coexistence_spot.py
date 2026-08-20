@@ -261,7 +261,10 @@ def generator_worker_script(
     dataset_id: str,
     runtime: dict[str, int],
     smoke: bool = True,
+    repetition: int = 1,
 ) -> str:
+    if repetition <= 0:
+        raise ValueError("REST repetition must be positive")
     if re.fullmatch(r"[A-Za-z0-9._-]+", dataset_id) is None:
         raise ValueError("dataset ID must be a canonical identity")
     for label, uri in (
@@ -285,6 +288,7 @@ def generator_worker_script(
     smoke_flag = " --smoke" if smoke else ""
     mode = "smoke" if smoke else "full"
     return f"""# borsuk-rest-mode={mode}
+# borsuk-rest-repetition={repetition}
 set -euo pipefail
 work=/var/lib/borsuk-rest-generator
 mkdir -p "$work/scripts"
@@ -312,7 +316,8 @@ python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_vers
 printf '%s\n' '{expected}' >"$work/runtime.json"
 cpu_before=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 started_ns=$(date +%s%N)
-PYTHONPATH="$work/scripts" python3 "$runner" --base-url "$BORSUK_SERVER_ENDPOINT" --queries "$queries" --output "$work/output" --expected-runtime "$work/runtime.json" --controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE" --expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT" --runtime-aws-account "$runtime_aws_account"{smoke_flag}
+PYTHONPATH="$work/scripts" python3 "$runner" --base-url "$BORSUK_SERVER_ENDPOINT" --queries "$queries" --output "$work/output" --expected-runtime "$work/runtime.json" --controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE" --expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT" --runtime-aws-account "$runtime_aws_account" --repetition {repetition}{smoke_flag}
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==8 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
 finished_ns=$(date +%s%N)
 cpu_after=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 cp "$cg_root/memory.events" "$work/memory.events.after"
@@ -635,6 +640,27 @@ def build_launch_pair(
         raise ValueError(
             f"generator worker mode must be {expected_worker_mode} for the workload receipt"
         )
+    repetition_match = re.match(
+        rf"# borsuk-rest-mode={expected_worker_mode}\n"
+        r"# borsuk-rest-repetition=([1-9][0-9]*)\n",
+        generator_worker,
+    )
+    if repetition_match is None:
+        raise ValueError("generator worker lacks its positive repetition identity")
+    repetition = int(repetition_match.group(1))
+    executed_repetitions = [
+        int(value)
+        for value in re.findall(
+            r"(?<!\S)--repetition\s+([1-9][0-9]*)(?=\s|$)", generator_worker
+        )
+    ]
+    if executed_repetitions != [repetition]:
+        raise ValueError(
+            "generator worker executed repetition differs from its workload identity"
+        )
+    executed_smoke = bool(re.search(r"(?<!\S)--smoke(?=\s|$)", generator_worker))
+    if executed_smoke != smoke:
+        raise ValueError("generator worker executed mode differs from its workload identity")
     workload = {
         "cheap_baseline": True,
         "cheap_qps": 200,
@@ -642,9 +668,11 @@ def build_launch_pair(
         "mixed_normal_sustainable_fraction": 0.70,
         "mixed_overload_sustainable_fraction": 1.50,
         "open_loop": True,
+        "phase_order_policy": "cyclic-three-v1",
+        "repetition": repetition,
         "repetitions": 1,
         "separate_generator": True,
-        "schema_version": 2,
+        "schema_version": 3,
         "search_staircase_qps": [16, 32, 64, 96]
         if smoke
         else [8, 16, 32, 64, 96, 128],

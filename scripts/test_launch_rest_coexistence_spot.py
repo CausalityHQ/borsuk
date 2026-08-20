@@ -120,7 +120,11 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "20260812/rest-coexistence/attempts/0001"
             ),
             server_worker="echo server",
-            generator_worker="# borsuk-rest-mode=smoke\necho generator",
+            generator_worker=(
+                "# borsuk-rest-mode=smoke\n"
+                "# borsuk-rest-repetition=1\n"
+                "python3 runner.py --repetition 1 --smoke\n"
+            ),
         )
 
     def test_pair_is_spot_hardened_and_uses_separate_instance_identities(self) -> None:
@@ -262,8 +266,10 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "mixed_normal_sustainable_fraction": 0.70,
                 "mixed_overload_sustainable_fraction": 1.50,
                 "open_loop": True,
+                "phase_order_policy": "cyclic-three-v1",
+                "repetition": 1,
                 "repetitions": 1,
-                "schema_version": 2,
+                "schema_version": 3,
                 "search_staircase_qps": [16, 32, 64, 96],
                 "separate_generator": True,
                 "smoke": True,
@@ -273,7 +279,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         )
         self.assertEqual(
             receipt["workload_sha256"],
-            "b53dc2abf64fad0e194047f7fbb7d6f110d383679fff090142d58732cd2d45e4",
+            "8c7e3107dc45b7e2ea6ef1239ac71dece34a59842d7e7ca516210fb3f4c5fb80",
         )
         self.assertEqual(
             receipt["server_worker_sha256"],
@@ -281,7 +287,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         )
         self.assertEqual(
             receipt["generator_worker_sha256"],
-            "8297013fb0d04ba4cd6c4f9d2801bb96273e8d0477d08b1292909ba207426ff6",
+            "c09d0fc2349ed4b56e7c22d48e00a1f41018672760233e5d82d843395a2343a5",
         )
         for role in ("server", "generator"):
             encoded = json.dumps(
@@ -566,7 +572,11 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             runtime=runtime,
             output_uri="s3://bucket/page-64/attempts/0001",
             server_worker="echo server",
-            generator_worker="# borsuk-rest-mode=smoke\necho generator",
+            generator_worker=(
+                "# borsuk-rest-mode=smoke\n"
+                "# borsuk-rest-repetition=1\n"
+                "python3 runner.py --repetition 1 --smoke\n"
+            ),
         )
         self.assertEqual(pair["runtime"]["page_budget"], 64)
 
@@ -592,6 +602,84 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 output_uri="s3://bucket/wrong-worker-mode/attempts/0001",
                 server_worker="echo server",
                 generator_worker="# borsuk-rest-mode=smoke\necho generator",
+            )
+        with self.assertRaisesRegex(ValueError, "repetition identity"):
+            build_launch_pair(
+                aws_profile="causality",
+                aws_account_id="453182569524",
+                campaign_id="missing-repetition",
+                attempt=1,
+                image_id="ami-a",
+                subnet_id="subnet-a",
+                security_group_id="sg-a",
+                instance_profile_arn=(
+                    "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+                ),
+                source_sha256="1" * 64,
+                binary_sha256="2" * 64,
+                index_receipt_sha256="3" * 64,
+                dataset_receipt_sha256="4" * 64,
+                smoke=True,
+                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                output_uri="s3://bucket/missing-repetition/attempts/0001",
+                server_worker="echo server",
+                generator_worker="# borsuk-rest-mode=smoke\necho generator",
+            )
+
+    def test_workload_receipt_rejects_repetition_marker_body_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "executed repetition"):
+            build_launch_pair(
+                aws_profile="causality",
+                aws_account_id="453182569524",
+                campaign_id="mismatched-repetition",
+                attempt=1,
+                image_id="ami-a",
+                subnet_id="subnet-a",
+                security_group_id="sg-a",
+                instance_profile_arn=(
+                    "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+                ),
+                source_sha256="1" * 64,
+                binary_sha256="2" * 64,
+                index_receipt_sha256="3" * 64,
+                dataset_receipt_sha256="4" * 64,
+                smoke=True,
+                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                output_uri="s3://bucket/mismatched-repetition/attempts/0001",
+                server_worker="echo server",
+                generator_worker=(
+                    "# borsuk-rest-mode=smoke\n"
+                    "# borsuk-rest-repetition=3\n"
+                    "python3 runner.py --repetition 1 --smoke\n"
+                ),
+            )
+
+    def test_workload_receipt_rejects_mode_marker_body_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "executed mode"):
+            build_launch_pair(
+                aws_profile="causality",
+                aws_account_id="453182569524",
+                campaign_id="mismatched-mode",
+                attempt=1,
+                image_id="ami-a",
+                subnet_id="subnet-a",
+                security_group_id="sg-a",
+                instance_profile_arn=(
+                    "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+                ),
+                source_sha256="1" * 64,
+                binary_sha256="2" * 64,
+                index_receipt_sha256="3" * 64,
+                dataset_receipt_sha256="4" * 64,
+                smoke=True,
+                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                output_uri="s3://bucket/mismatched-mode/attempts/0001",
+                server_worker="echo server",
+                generator_worker=(
+                    "# borsuk-rest-mode=smoke\n"
+                    "# borsuk-rest-repetition=1\n"
+                    "python3 runner.py --repetition 1\n"
+                ),
             )
 
     def test_cold_s3_matrix_separates_search_wave_handle_and_process_caps(self) -> None:
@@ -670,6 +758,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             dataset_receipt_sha256="9" * 64,
             dataset_id="sift-128",
             runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+            repetition=2,
         )
         self.assertIn('test "$(sha256sum "$runner"', generator)
         self.assertIn('test "$(sha256sum "$load"', generator)
@@ -695,6 +784,13 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn('--controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE"', generator)
         self.assertIn('--expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator)
         self.assertIn('--runtime-aws-account "$runtime_aws_account"', generator)
+        self.assertIn("--repetition 2", generator)
+        self.assertIn("terminal repetition differs", generator)
+        self.assertTrue(
+            generator.startswith(
+                "# borsuk-rest-mode=smoke\n# borsuk-rest-repetition=2\n"
+            )
+        )
         self.assertLess(
             generator.index("aws sts get-caller-identity"),
             generator.index("aws s3 cp"),

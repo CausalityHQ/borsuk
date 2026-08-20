@@ -17,7 +17,7 @@ except ImportError:
     from rest_coexistence_load import evaluate_phase, run_phase, summarize
 
 CAUSALITY_AWS_ACCOUNT = "453182569524"
-REST_RESULT_SCHEMA_VERSION = 7
+REST_RESULT_SCHEMA_VERSION = 8
 FLOW_CONTROL_COUNTERS = (
     "borsuk_leaf_read_wait_count",
     "borsuk_leaf_read_wait_micros",
@@ -39,6 +39,18 @@ def accepted_search_qps(summary: dict[str, Any]) -> float:
 
 def staircase_rates(smoke: bool) -> list[int]:
     return [16, 32, 64, 96] if smoke else [8, 16, 32, 64, 96, 128]
+
+
+def phase_schedule(smoke: bool, repetition: int) -> dict[str, list[int] | list[str]]:
+    if repetition <= 0:
+        raise ValueError("REST repetition must be positive")
+    rates = staircase_rates(smoke)
+    mixed = ["mixed-normal", "mixed-overload"]
+    offset = ((repetition - 1) % 3) * max(1, len(rates) // 3)
+    rates = rates[offset:] + rates[:offset]
+    if repetition % 2 == 0:
+        mixed.reverse()
+    return {"staircase_rates": rates, "mixed_phases": mixed}
 
 
 def validated_authority_sha256(value: str) -> str:
@@ -180,6 +192,41 @@ def _run(
     return summary
 
 
+def run_phase_with_warmup(
+    output: Path,
+    base_url: str,
+    name: str,
+    warmup_duration: float,
+    duration: float,
+    cheap_qps: float,
+    search_qps: float,
+    queries: list[dict[str, object]],
+    baseline: dict[str, Any] | None,
+    observed_order: list[str],
+) -> dict[str, Any]:
+    run_phase(
+        base_url,
+        warmup_duration,
+        cheap_qps,
+        search_qps,
+        queries,
+        256,
+        30.0,
+    )
+    summary = _run(
+        output,
+        base_url,
+        name,
+        duration,
+        cheap_qps,
+        search_qps,
+        queries,
+        baseline,
+    )
+    observed_order.append(name)
+    return summary
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
@@ -189,6 +236,7 @@ def main() -> int:
     parser.add_argument("--controller-aws-profile", required=True)
     parser.add_argument("--expected-aws-account", required=True)
     parser.add_argument("--runtime-aws-account", required=True)
+    parser.add_argument("--repetition", type=int, default=1)
     parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
@@ -205,32 +253,37 @@ def main() -> int:
     before = _metrics(base_url)
     validate_effective_limits(expected, before)
     queries = _queries(args.queries)
+    warmup_duration = 5.0 if args.smoke else 30.0
     baseline_duration = 10.0 if args.smoke else 30.0
     phase_duration = 10.0 if args.smoke else 120.0
-    run_phase(
+    observed_order: list[str] = []
+    baseline = run_phase_with_warmup(
+        args.output,
         base_url,
-        5.0 if args.smoke else 30.0,
-        20.0,
-        4.0,
+        "cheap-baseline",
+        warmup_duration,
+        baseline_duration,
+        200.0,
+        0.0,
         queries,
-        64,
-        30.0,
+        None,
+        observed_order,
     )
-    baseline = _run(
-        args.output, base_url, "cheap-baseline", baseline_duration, 200.0, 0.0, [], None
-    )
-    rates = staircase_rates(args.smoke)
+    schedule = phase_schedule(args.smoke, args.repetition)
+    rates = [int(rate) for rate in schedule["staircase_rates"]]
     staircase: list[dict[str, Any]] = []
     for rate in rates:
-        summary = _run(
+        summary = run_phase_with_warmup(
             args.output,
             base_url,
             f"staircase-{rate}",
+            warmup_duration,
             phase_duration,
             0.0,
             float(rate),
             queries,
             baseline,
+            observed_order,
         )
         staircase.append(
             {
@@ -240,26 +293,28 @@ def main() -> int:
             }
         )
     sustainable = select_sustainable_search_qps(staircase)
-    mixed_normal = _run(
-        args.output,
-        base_url,
-        "mixed-normal",
-        phase_duration,
-        200.0,
-        sustainable * 0.70,
-        queries,
-        baseline,
-    )
-    mixed_overload = _run(
-        args.output,
-        base_url,
-        "mixed-overload",
-        phase_duration,
-        200.0,
-        overload_search_qps(sustainable, rates),
-        queries,
-        baseline,
-    )
+    mixed: dict[str, dict[str, Any]] = {}
+    for phase in schedule["mixed_phases"]:
+        name = str(phase)
+        search_qps = (
+            sustainable * 0.70
+            if name == "mixed-normal"
+            else overload_search_qps(sustainable, rates)
+        )
+        mixed[name] = run_phase_with_warmup(
+            args.output,
+            base_url,
+            name,
+            warmup_duration,
+            phase_duration,
+            200.0,
+            search_qps,
+            queries,
+            baseline,
+            observed_order,
+        )
+    mixed_normal = mixed["mixed-normal"]
+    mixed_overload = mixed["mixed-overload"]
     after = _metrics(base_url)
     validate_effective_limits(expected, after)
     passed = bool(
@@ -272,6 +327,8 @@ def main() -> int:
         "schema_version": REST_RESULT_SCHEMA_VERSION,
         **aws_identity,
         "status": "complete" if passed else "failed",
+        "repetition": args.repetition,
+        "phase_order": observed_order,
         "attempt_authority_sha256": attempt_authority_sha256,
         "effective_limits": before,
         "effective_limits_after": after,
