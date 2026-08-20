@@ -16,7 +16,7 @@ mod float8;
 mod format;
 #[allow(
     dead_code,
-    reason = "V18 cell-card codec is wired into publication and query in the next planned slices"
+    reason = "incremental cell-card construction helpers remain unwired until atomic publication"
 )]
 mod global_cell_card;
 mod global_leaf;

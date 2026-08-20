@@ -163,7 +163,11 @@ use crate::{
 // Bumped 40 -> 41 when V18 reordered independently authenticated exact
 // microtiles by product-code locality across cards in one bounded object.
 // Pre-release v40 manifests assume page-major exact-block placement.
-const CURRENT_VERSION: u16 = 41;
+// Bumped 41 -> 42 when V19 restored card-clustered exact microtiles after
+// production evidence showed global residual-code ordering fragmented the
+// same selected byte budget across substantially more S3 range requests.
+// Pre-release v41 manifests bind the superseded global-block placement.
+const CURRENT_VERSION: u16 = 42;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

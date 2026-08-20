@@ -32,7 +32,7 @@ use crate::{
     record::VectorElementType,
 };
 
-pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v18";
+pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v19";
 pub(crate) const CELL_CARD_GROUP_MAX_BYTES: u64 = 48 * 1024 * 1024;
 const CELL_CARD_VECTOR_PAYLOAD_BYTES: usize = 96 * 1024;
 // Ranking/authentication granularity is deliberately smaller than the 128-row
@@ -2247,7 +2247,7 @@ impl GlobalCellCardAnnRef {
         purge_epoch: u64,
     ) -> Result<Self> {
         let reference = Self {
-            layout_version: 18,
+            layout_version: 19,
             codebook,
             root_path,
             root,
@@ -2268,10 +2268,10 @@ impl GlobalCellCardAnnRef {
         let checksum = blake3::Hash::from_bytes(self.root.checksum)
             .to_hex()
             .to_string();
-        if self.layout_version != 18
+        if self.layout_version != 19
             || self.root_path
                 != format!(
-                    "global-cell-cards/v18/roots/{}/root-{checksum}.parquet",
+                    "global-cell-cards/v19/roots/{}/root-{checksum}.parquet",
                     &checksum[..2]
                 )
             || self.root.encoded_bytes == 0
@@ -2285,7 +2285,7 @@ impl GlobalCellCardAnnRef {
             || self.purge_epoch > self.leaf_epoch
         {
             return Err(BorsukError::InvalidStorage(
-                "V18 global cell-card reference is invalid".to_string(),
+                "V19 global cell-card reference is invalid".to_string(),
             ));
         }
         Ok(())
@@ -3176,8 +3176,8 @@ mod tests {
     }
 
     #[test]
-    fn locality_merged_exact_plane_retires_the_v17_layout_marker() {
-        assert_eq!(super::CELL_CARD_LAYOUT, "cell-card-leaf-v18");
+    fn card_clustered_exact_plane_retires_the_v18_layout_marker() {
+        assert_eq!(super::CELL_CARD_LAYOUT, "cell-card-leaf-v19");
     }
 
     #[test]
@@ -3233,7 +3233,7 @@ mod tests {
                 .all(|block| block.rows == 32)
         );
         let path = encoded
-            .content_addressed_path("global-cell-cards/v18/groups")
+            .content_addressed_path("global-cell-cards/v19/groups")
             .unwrap();
         let (group, cards) = encoded.references(&path).unwrap();
         let ranked = cards[0]
@@ -3265,21 +3265,14 @@ mod tests {
     }
 
     #[test]
-    fn equal_pq_locality_microtiles_across_cards_share_one_strict_range() {
-        let dimensions = 128;
-        let block_rows = cell_card_block_rows(dimensions, VectorElementType::Float32).unwrap();
+    fn diverse_pq_microtiles_in_neighboring_cards_share_one_bounded_range() {
+        let dimensions = 4;
+        let block_rows = cell_card_block_rows(dimensions, VectorElementType::Int8).unwrap();
         assert_eq!(block_rows, 32);
-        let inputs = (0..12_u32)
+        let inputs = (0..64_u32)
             .map(|cell_index| {
-                let block_codes: [[u8; 2]; 4] = if cell_index % 2 == 0 {
-                    [[0, 0], [128, 0], [192, 0], [224, 0]]
-                } else {
-                    [[0, 0], [64, 0], [128, 0], [224, 0]]
-                };
-                let mut page_rows = rows(
-                    block_rows * block_codes.len(),
-                    dimensions * std::mem::size_of::<f32>(),
-                );
+                let block_codes = [[0_u8, 0_u8], [64, 0], [128, 0], [192, 0]];
+                let mut page_rows = rows(block_rows * block_codes.len(), dimensions);
                 for (block, code) in block_codes.into_iter().enumerate() {
                     for row in &mut page_rows[block * block_rows..(block + 1) * block_rows] {
                         row.code = GlobalLeafCodeInput::from(code.to_vec());
@@ -3294,25 +3287,22 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let encoded =
-            encode_cell_card_group(&inputs, dimensions, VectorElementType::Float32).unwrap();
+        let encoded = encode_cell_card_group(&inputs, dimensions, VectorElementType::Int8).unwrap();
         let path = encoded
-            .content_addressed_path("global-cell-cards/locality-merged")
+            .content_addressed_path("global-cell-cards/card-clustered")
             .unwrap();
         let (group, cards) = encoded.references(&path).unwrap();
         let selected = cards
             .iter()
-            .map(|card| {
-                let block_ordinal = if card.head.cell_index % 2 == 0 { 1 } else { 2 };
-                super::RankedCellCardExactBlock {
-                    head_index: card.head.cell_index as usize,
-                    group: Arc::clone(&group),
-                    cell_index: card.head.cell_index,
-                    card_ordinal: card.head.card_ordinal,
-                    reference: card.head.exact_blocks[block_ordinal].clone(),
-                    distance: 0.0,
-                    row_distances: Box::new([]),
-                }
+            .take(12)
+            .map(|card| super::RankedCellCardExactBlock {
+                head_index: card.head.cell_index as usize,
+                group: Arc::clone(&group),
+                cell_index: card.head.cell_index,
+                card_ordinal: card.head.card_ordinal,
+                reference: card.head.exact_blocks[card.head.cell_index as usize % 4].clone(),
+                distance: 0.0,
+                row_distances: Box::new([]),
             })
             .collect::<Vec<_>>();
         let selected_bytes = selected
@@ -3322,18 +3312,21 @@ mod tests {
 
         let plan = super::plan_cell_card_exact_wave_with_amplification(
             &selected,
-            selected_bytes,
+            selected_bytes * 5,
             selected.len(),
-            1,
+            5,
         )
         .unwrap();
 
         assert_eq!(plan.blocks(), selected.len());
-        assert_eq!(plan.speculative_bytes(), 0);
         assert_eq!(
             plan.requests(),
             1,
-            "same-locality microtiles at different card ordinals must be physically adjacent"
+            "neighboring cards must remain contiguous even when their selected residual-code tiles differ"
+        );
+        assert!(
+            plan.speculative_bytes() <= selected_bytes * 3,
+            "card clustering spent more than three speculative bytes per selected byte"
         );
     }
 

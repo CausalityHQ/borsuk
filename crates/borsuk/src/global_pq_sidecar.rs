@@ -2073,11 +2073,11 @@ impl ResidentGlobalCodebook {
             .into_iter()
             .map(|code| {
                 if code.len() != self.code_width {
-                    return invalid("V18 cell-card code width does not match its codebook");
+                    return invalid("V19 cell-card code width does not match its codebook");
                 }
                 let distance = self.quantizer.distance(&prepared, code)?;
                 if !distance.is_finite() {
-                    return invalid("V18 cell-card code distance is non-finite");
+                    return invalid("V19 cell-card code distance is non-finite");
                 }
                 Ok(distance)
             })
@@ -3420,7 +3420,7 @@ mod tests {
 
         assert!(
             emitted_keys.windows(2).all(|pair| pair[0] <= pair[1]),
-            "cell-card locality ordering relies on canonical spool order"
+            "spool chunks must retain canonical product-code order"
         );
     }
 

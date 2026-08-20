@@ -581,14 +581,7 @@ pub(crate) fn encode_global_leaf_bundle_with_block_rows(
         element_type,
         exact_block_rows,
         GLOBAL_LEAF_BUNDLE_MAX_ENCODED_BYTES,
-        GlobalLeafExactBlockOrder::ProductCodeLocality,
     )
-}
-
-#[derive(Clone, Copy)]
-enum GlobalLeafExactBlockOrder {
-    PageMajor,
-    ProductCodeLocality,
 }
 
 fn encode_global_leaf_bundle_with_max_bytes(
@@ -604,7 +597,6 @@ fn encode_global_leaf_bundle_with_max_bytes(
         element_type,
         exact_block_rows,
         max_bytes,
-        GlobalLeafExactBlockOrder::PageMajor,
     )?;
     let bytes = encoded.bytes;
     let pages = encoded
@@ -674,7 +666,6 @@ fn encode_global_leaf_block_bundle(
     element_type: VectorElementType,
     exact_block_rows: usize,
     max_bytes: u64,
-    order: GlobalLeafExactBlockOrder,
 ) -> Result<EncodedGlobalLeafBlockBundle> {
     if pages.is_empty()
         || pages.iter().any(|page| page.rows.is_empty())
@@ -709,7 +700,11 @@ fn encode_global_leaf_block_bundle(
         ));
     }
     let schema = global_leaf_schema(dimensions, element_type, code_width)?;
-    let mut exact_block_order = pages
+    // Keep the hierarchy used by query selection as the physical hierarchy:
+    // centroid-local cell order, then card/page, then its 32-row microtiles.
+    // A global residual-code sort fragments co-probed cards because residual
+    // codes are comparable within a card but do not predict cross-card access.
+    let exact_block_order = pages
         .iter()
         .enumerate()
         .flat_map(|(page_index, page)| {
@@ -717,25 +712,6 @@ fn encode_global_leaf_block_bundle(
                 .map(move |block_ordinal| (page_index, block_ordinal))
         })
         .collect::<Vec<_>>();
-    if matches!(order, GlobalLeafExactBlockOrder::ProductCodeLocality) {
-        // GlobalPqCellSpool emits each cell in this same Morton-style order.
-        // That invariant makes the middle row a stable representative of the
-        // block's code-space interval; the sidecar tests pin the ordering.
-        exact_block_order.sort_by_cached_key(|(page_index, block_ordinal)| {
-            let page = &pages[*page_index];
-            let rows = &page.rows[*block_ordinal * exact_block_rows
-                ..((*block_ordinal + 1) * exact_block_rows).min(page.rows.len())];
-            let representative = &rows[rows.len() / 2].code;
-            (
-                crate::rotated_product_quantizer::product_code_locality_key(
-                    representative.as_slice(),
-                ),
-                page.cell_index,
-                page.leaf_ordinal,
-                *block_ordinal,
-            )
-        });
-    }
     let mut bytes = Vec::new();
     {
         let mut writer =
