@@ -1689,16 +1689,18 @@ pub(crate) fn rank_cell_card_exact_blocks(
             .then_with(|| left.1.cmp(&right.1))
     });
     let requested_rows = requested_rows.max(target_rows);
-    // MVCC continuation may widen the physical fetch target, but only the
-    // configured candidate horizon is evidence about block quality.
+    // MVCC continuation may widen the physical fetch target, but voting over
+    // that whole horizon lets large blocks of mediocre rows outvote the
+    // nearest query neighborhood.  Bound votes to the proven local horizon;
+    // the wider candidate budget controls how many exact rows we fetch, not
+    // which distant blocks win locality selection.
     let candidate_vote_rows = candidate_vote_rows.max(target_rows).min(requested_rows);
-    let vote_horizon = candidate_vote_rows.min(candidates.len());
-    let vote_cutoff = candidates[vote_horizon - 1].0;
+    let vote_horizon = target_rows
+        .saturating_mul(4)
+        .min(candidate_vote_rows)
+        .min(candidates.len());
     let mut votes = vec![0_usize; blocks.len()];
-    for (_, block) in candidates
-        .into_iter()
-        .take_while(|(distance, _)| distance.total_cmp(&vote_cutoff) != std::cmp::Ordering::Greater)
-    {
+    for (_, block) in candidates.into_iter().take(vote_horizon) {
         votes[block] = votes[block].saturating_add(1);
     }
     let mut nearest = blocks.to_vec();
@@ -3873,7 +3875,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_tile_votes_use_the_configured_candidate_depth_not_four_times_k() {
+    fn exact_tile_votes_preserve_nearest_neighborhood_at_wide_candidate_depth() {
         let dimensions = 4;
         let input = GlobalLeafPageInput {
             cell_index: 3,
@@ -3937,8 +3939,8 @@ mod tests {
                 .iter()
                 .map(|block| block.reference.block_ordinal)
                 .collect::<Vec<_>>(),
-            vec![0, 2, 1],
-            "the exact budget is unchanged, but votes must represent all 96 candidate rows"
+            vec![0, 2, 3],
+            "a wide exact budget must not let mediocre rows outvote the nearest neighborhood"
         );
         assert_eq!(
             ranked
