@@ -51,6 +51,7 @@ pub(crate) enum Phase {
 }
 
 const PHASE_COUNT: usize = 31;
+const BUILD_TIMING_SCHEMA_VERSION: u8 = 2;
 
 const PHASE_NAMES: [&str; PHASE_COUNT] = [
     "logical_cell_routing",
@@ -173,7 +174,10 @@ fn write_phase_csv(path: &Path, label: &str, values: &[(u64, u64); PHASE_COUNT])
         writeln!(output, "schema_version,group,phase,nanos,calls")?;
     }
     for (phase, &(nanos, calls)) in PHASE_NAMES.iter().zip(values) {
-        writeln!(output, "1,{label},{phase},{nanos},{calls}")?;
+        writeln!(
+            output,
+            "{BUILD_TIMING_SCHEMA_VERSION},{label},{phase},{nanos},{calls}"
+        )?;
     }
     output.flush()
 }
@@ -272,10 +276,10 @@ mod tests {
         let lines = text.lines().collect::<Vec<_>>();
         assert_eq!(lines[0], "schema_version,group,phase,nanos,calls");
         assert_eq!(lines.len(), 1 + 2 * PHASE_COUNT);
-        assert_eq!(lines[1], "1,ingest,logical_cell_routing,1,2");
+        assert_eq!(lines[1], "2,ingest,logical_cell_routing,1,2");
         assert_eq!(
             lines.last().copied(),
-            Some("1,compaction,locality_sort,131,132")
+            Some("2,compaction,locality_sort,131,132")
         );
     }
 }

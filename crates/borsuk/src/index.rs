@@ -153,10 +153,30 @@ const POSITIONED_SOURCE_EPOCH: u64 = INITIAL_POSITIONED_SOURCE_EPOCH;
 /// builder accounts for variable paths/checksums, so high segment counts do not
 /// turn a nominal page into an unbounded allocation.
 const DEFAULT_LEXICAL_TERM_PAGE_BYTES: usize = 1024 * 1024;
+/// Prepared segment artifacts retained while immutable PUTs are in flight.
+/// This matches the maximum automatic CPU build width, so network waits can
+/// overlap without allowing the much wider blocking-I/O pool to multiply the
+/// encoded working set.
+const MAX_PARALLEL_SEGMENT_UPLOADS: usize = crate::DEFAULT_BUILD_THREADS;
 /// Bound concurrent immutable-object reads for one batched point lookup.
 /// Newest segments are still resolved first; only independent candidates in a
 /// bounded window are fetched together to hide object-store RTT.
 const POINT_READ_IO_BATCH: usize = 8;
+
+struct PreparedObjectWrite {
+    path: String,
+    bytes: Vec<u8>,
+}
+
+struct PreparedLexicalSegmentWrite {
+    shard: Option<SegmentLexicalShardRef>,
+    objects: Vec<PreparedObjectWrite>,
+}
+
+struct PreparedSegmentWrite {
+    summary: SegmentSummary,
+    objects: Vec<PreparedObjectWrite>,
+}
 
 fn elapsed_ns(started: Instant) -> u64 {
     started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64
@@ -167,6 +187,15 @@ fn parallel_segment_write_batch_size(segment_max_vectors: usize) -> usize {
         .checked_div(segment_max_vectors.max(1))
         .unwrap_or(0)
         .clamp(1, MAX_PARALLEL_SEGMENT_WRITES)
+}
+
+fn parallel_segment_upload_wave_size(segment_count: usize) -> usize {
+    segment_count.clamp(1, MAX_PARALLEL_SEGMENT_UPLOADS)
+}
+
+fn segment_upload_admission() -> &'static AdmissionGate {
+    static GATE: OnceLock<AdmissionGate> = OnceLock::new();
+    GATE.get_or_init(|| AdmissionGate::new(MAX_PARALLEL_SEGMENT_UPLOADS))
 }
 
 fn join_rows(rows: &[usize]) -> String {
@@ -19698,7 +19727,7 @@ impl BorsukIndex {
             ));
         }
         let shard = self
-            .persist_lexical_segment_build(modality, segment_key, &build)?
+            .persist_lexical_segment_build(modality, segment_key, build)?
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("nonempty lexical build emitted no shard".to_owned())
             })?;
@@ -23888,6 +23917,11 @@ impl BorsukIndex {
     }
 
     fn write_segment(&self, segment: Segment) -> Result<SegmentSummary> {
+        let prepared = crate::parallel::install(|| self.prepare_segment_write(segment))?;
+        self.persist_prepared_segment_write(prepared)
+    }
+
+    fn prepare_segment_write(&self, segment: Segment) -> Result<PreparedSegmentWrite> {
         let layout = crate::PhysicalLayoutRef::resolve(
             &self.manifest.build_config.physical_layout,
             crate::PhysicalObjectRole::NormalSegment,
@@ -23903,6 +23937,11 @@ impl BorsukIndex {
             segment.id,
             layout.physical_format.extension()
         );
+        let size_bytes = bytes.len() as u64;
+        let mut objects = vec![PreparedObjectWrite {
+            path: path.clone(),
+            bytes,
+        }];
 
         // Build and write the per-segment graph only when the index's leaf
         // capability allows a graph-backed leaf mode. A `PqScanOnly` index never
@@ -23923,34 +23962,33 @@ impl BorsukIndex {
                     segment.level, segment.id
                 );
                 let graph_size_bytes = graph_bytes.len() as u64;
-                crate::build_timing::timed(crate::build_timing::Phase::ObjectPuts, || {
-                    self.storage.write_bytes(&path, &bytes)?;
-                    self.storage.write_bytes(&graph_path, &graph_bytes)
-                })?;
+                objects.push(PreparedObjectWrite {
+                    path: graph_path.clone(),
+                    bytes: graph_bytes,
+                });
                 (graph_path, graph_checksum, graph_size_bytes)
             } else {
-                crate::build_timing::timed(crate::build_timing::Phase::ObjectPuts, || {
-                    self.storage.write_bytes(&path, &bytes)
-                })?;
                 (String::new(), String::new(), 0)
             };
         // Persist the on-demand filter-index sidecar (always, so filtered reads
         // never miss it). It rides object storage, not RAM.
-        crate::build_timing::timed(crate::build_timing::Phase::FilterIndex, || {
-            let filter_index = crate::MetadataIndex::from_rows(
-                segment.records.iter().map(|record| &record.metadata),
-            );
-            self.storage.write_bytes(
-                &filter_index_relative_path(&checksum),
-                &encode_filter_index(&checksum, &filter_index),
-            )
-        })?;
+        let filter_bytes =
+            crate::build_timing::timed(crate::build_timing::Phase::FilterIndex, || {
+                let filter_index = crate::MetadataIndex::from_rows(
+                    segment.records.iter().map(|record| &record.metadata),
+                );
+                Ok::<_, BorsukError>(encode_filter_index(&checksum, &filter_index))
+            })?;
+        objects.push(PreparedObjectWrite {
+            path: filter_index_relative_path(&checksum),
+            bytes: filter_bytes,
+        });
         // Persist the per-segment dense-vector sidecar (Arrow IPC) so projected
         // rerank can range-read one candidate row instead of re-reading a
         // Parquet row group. Records store a full-width dense vector even when
         // their Parquet encoding is sparse; a defensively empty vector is
         // written as zeros so every sidecar row is dimension-consistent.
-        let vector_size_bytes = if segment.dimensions > 0 {
+        let vector_bytes = if segment.dimensions > 0 {
             crate::build_timing::timed(crate::build_timing::Phase::VectorSidecar, || {
                 let mut sidecar_records = segment.records.clone();
                 for record in &mut sidecar_records {
@@ -23964,30 +24002,37 @@ impl BorsukIndex {
                     self.manifest.build_config.vector_element_type,
                     self.manifest.build_config.sidecar_compression,
                 )?;
-                self.storage
-                    .write_bytes(&vector_sidecar_relative_path(&checksum), &vector_bytes)?;
-                Ok::<_, BorsukError>(vector_bytes.len() as u64)
+                Ok::<_, BorsukError>(vector_bytes)
             })?
         } else {
-            0
+            Vec::new()
         };
+        let vector_size_bytes = vector_bytes.len() as u64;
+        if segment.dimensions > 0 {
+            objects.push(PreparedObjectWrite {
+                path: vector_sidecar_relative_path(&checksum),
+                bytes: vector_bytes,
+            });
+        }
         for (name, spec) in &self.manifest.config.named_vectors {
             if spec.kind != VectorKind::LateInteraction {
                 continue;
             }
-            crate::build_timing::timed(crate::build_timing::Phase::VectorSidecar, || {
-                let bytes = crate::late_interaction_sidecar::encode(
-                    &segment.records,
-                    name,
-                    spec.dimensions,
-                    spec.element_type,
-                    self.manifest.build_config.sidecar_compression,
-                )?;
-                self.storage.write_bytes(
-                    &late_interaction_sidecar_relative_path(name, &checksum),
-                    &bytes,
-                )
-            })?;
+            let bytes =
+                crate::build_timing::timed(crate::build_timing::Phase::VectorSidecar, || {
+                    let bytes = crate::late_interaction_sidecar::encode(
+                        &segment.records,
+                        name,
+                        spec.dimensions,
+                        spec.element_type,
+                        self.manifest.build_config.sidecar_compression,
+                    )?;
+                    Ok::<_, BorsukError>(bytes)
+                })?;
+            objects.push(PreparedObjectWrite {
+                path: late_interaction_sidecar_relative_path(name, &checksum),
+                bytes,
+            });
         }
         let sparse_encoded = segment
             .records
@@ -24035,12 +24080,7 @@ impl BorsukIndex {
                     &lexical_rows,
                     DEFAULT_LEXICAL_BLOCK_BYTES,
                 )?;
-                if let Some(shard) =
-                    self.persist_lexical_segment_build("text", &checksum, &lexical_build)?
-                {
-                    lexical_shards.push(shard);
-                }
-                (
+                let metrics = (
                     u32::try_from(lexical_build.document_count).unwrap_or(u32::MAX),
                     lexical_build.total_document_length,
                     lexical_build
@@ -24050,7 +24090,14 @@ impl BorsukIndex {
                         .map(|entry| entry.run.decoded_bytes)
                         .max()
                         .unwrap_or(0),
-                )
+                );
+                let prepared =
+                    Self::prepare_lexical_segment_write("text", &checksum, lexical_build)?;
+                if let Some(shard) = prepared.shard {
+                    lexical_shards.push(shard);
+                }
+                objects.extend(prepared.objects);
+                metrics
             } else {
                 (0, 0, 0)
             };
@@ -24103,11 +24150,6 @@ impl BorsukIndex {
                 &lexical_rows,
                 DEFAULT_LEXICAL_BLOCK_BYTES,
             )?;
-            if let Some(shard) =
-                self.persist_lexical_segment_build(name, &checksum, &lexical_build)?
-            {
-                lexical_shards.push(shard);
-            }
             sparse_lexical_max_decoded_bytes = sparse_lexical_max_decoded_bytes.max(
                 lexical_build
                     .term_page
@@ -24117,6 +24159,11 @@ impl BorsukIndex {
                     .max()
                     .unwrap_or(0),
             );
+            let prepared = Self::prepare_lexical_segment_write(name, &checksum, lexical_build)?;
+            if let Some(shard) = prepared.shard {
+                lexical_shards.push(shard);
+            }
+            objects.extend(prepared.objects);
         }
         let id_bloom = segment_id_bloom(segment.records.iter().map(|record| record.id.as_bytes()));
         let vector_signature_bloom = segment_vector_signature_bloom(
@@ -24130,7 +24177,7 @@ impl BorsukIndex {
         let metadata_stats =
             crate::MetadataStats::from_rows(segment.records.iter().map(|record| &record.metadata));
 
-        Ok(SegmentSummary {
+        let summary = SegmentSummary {
             id: segment.id,
             level: segment.level,
             path,
@@ -24142,7 +24189,7 @@ impl BorsukIndex {
             bounds_min,
             bounds_max,
             checksum,
-            size_bytes: bytes.len() as u64,
+            size_bytes,
             vector_size_bytes,
             graph_path,
             graph_checksum,
@@ -24159,29 +24206,71 @@ impl BorsukIndex {
             sparse_lexical_max_decoded_bytes,
             lexical_shards,
             created_at: segment.created_at,
+        };
+        Ok(PreparedSegmentWrite { summary, objects })
+    }
+
+    fn persist_prepared_segment_write(
+        &self,
+        prepared: PreparedSegmentWrite,
+    ) -> Result<SegmentSummary> {
+        let PreparedSegmentWrite { summary, objects } = prepared;
+        crate::build_timing::timed(crate::build_timing::Phase::ObjectPuts, || {
+            crate::parallel::install_io(|| {
+                objects
+                    .into_par_iter()
+                    .map(|object| {
+                        let _permit = segment_upload_admission().acquire();
+                        self.storage.write_bytes(&object.path, &object.bytes)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })?;
+            Ok::<_, BorsukError>(summary)
         })
     }
 
     fn write_segment_batch(&self, segments: &mut Vec<Segment>) -> Result<Vec<SegmentSummary>> {
-        crate::parallel::install(|| {
-            std::mem::take(segments)
-                .into_par_iter()
-                .map(|segment| self.write_segment(segment))
-                .collect()
-        })
+        let mut segments = std::mem::take(segments).into_iter();
+        let wave_size = parallel_segment_upload_wave_size(segments.len());
+        let mut summaries = Vec::with_capacity(segments.len());
+        loop {
+            let wave = segments.by_ref().take(wave_size).collect::<Vec<_>>();
+            if wave.is_empty() {
+                break;
+            }
+            let mut written = crate::parallel::install_io(|| {
+                wave.into_par_iter()
+                    .map(|segment| self.write_segment(segment))
+                    .collect::<Result<Vec<_>>>()
+            })?;
+            summaries.append(&mut written);
+        }
+        Ok(summaries)
     }
 
     fn persist_lexical_segment_build(
         &self,
         field_name: &str,
         segment_key: &str,
-        build: &LexicalSegmentBuild,
+        build: LexicalSegmentBuild,
     ) -> Result<Option<SegmentLexicalShardRef>> {
-        if build.document_count == 0 {
-            return Ok(None);
-        }
-        for object in &build.objects {
+        let prepared = Self::prepare_lexical_segment_write(field_name, segment_key, build)?;
+        for object in prepared.objects {
             self.storage.write_bytes(&object.path, &object.bytes)?;
+        }
+        Ok(prepared.shard)
+    }
+
+    fn prepare_lexical_segment_write(
+        field_name: &str,
+        segment_key: &str,
+        build: LexicalSegmentBuild,
+    ) -> Result<PreparedLexicalSegmentWrite> {
+        if build.document_count == 0 {
+            return Ok(PreparedLexicalSegmentWrite {
+                shard: None,
+                objects: Vec::new(),
+            });
         }
         let root = LexicalRoot {
             kind: build.kind,
@@ -24201,8 +24290,7 @@ impl BorsukIndex {
             segment_key,
             &shard_checksum[..12],
         );
-        self.storage.write_bytes(&shard_path, &shard_bytes)?;
-        Ok(Some(SegmentLexicalShardRef {
+        let shard = SegmentLexicalShardRef {
             kind: build.kind.as_str().to_string(),
             name: field_name.to_string(),
             path: shard_path,
@@ -24211,7 +24299,23 @@ impl BorsukIndex {
             document_count: build.document_count,
             total_document_length: build.total_document_length,
             dimensions: build.dimensions,
-        }))
+        };
+        let mut objects = build
+            .objects
+            .into_iter()
+            .map(|object| PreparedObjectWrite {
+                path: object.path,
+                bytes: object.bytes,
+            })
+            .collect::<Vec<_>>();
+        objects.push(PreparedObjectWrite {
+            path: shard.path.clone(),
+            bytes: shard_bytes,
+        });
+        Ok(PreparedLexicalSegmentWrite {
+            shard: Some(shard),
+            objects,
+        })
     }
 
     fn write_lexical_term_pages(
@@ -38905,6 +39009,10 @@ mod tests {
         assert_eq!(parallel_segment_write_batch_size(1_024), 16);
         assert_eq!(parallel_segment_write_batch_size(16_384), 1);
         assert_eq!(parallel_segment_write_batch_size(131_072), 1);
+        assert_eq!(parallel_segment_upload_wave_size(0), 1);
+        assert_eq!(parallel_segment_upload_wave_size(1), 1);
+        assert_eq!(parallel_segment_upload_wave_size(2), 2);
+        assert_eq!(parallel_segment_upload_wave_size(32), 4);
     }
 
     #[test]

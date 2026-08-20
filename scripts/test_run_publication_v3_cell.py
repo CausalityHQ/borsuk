@@ -374,7 +374,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             (output / "bench_build_phases.csv").write_text(
                 "schema_version,group,phase,nanos,calls\n"
                 + "".join(
-                    f"1,{group},{phase},{index + 1},{index + 2}\n"
+                    f"2,{group},{phase},{index + 1},{index + 2}\n"
                     for group in ("ingest", "compaction")
                     for index, phase in enumerate(phase_names)
                 ),

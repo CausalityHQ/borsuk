@@ -1176,7 +1176,7 @@ def _read_build_phase_artifact(output_dir: Path) -> dict[str, object]:
     }
     observed: dict[tuple[str, str], dict[str, int | str]] = {}
     for row in rows:
-        if row.get("schema_version") != "1":
+        if row.get("schema_version") != "2":
             raise ValueError("publication build phase timing schema differs")
         key = (str(row.get("group", "")), str(row.get("phase", "")))
         if key in observed:
