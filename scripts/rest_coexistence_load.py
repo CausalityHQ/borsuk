@@ -36,6 +36,8 @@ class Sample:
     global_leaf_waves: int = 0
     global_base_approximate_us: int = 0
     global_base_exact_rerank_us: int = 0
+    global_leaf_pages_read: int = 0
+    query_bytes_read: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -60,6 +62,8 @@ class Sample:
             "global_leaf_waves": self.global_leaf_waves,
             "global_base_approximate_us": self.global_base_approximate_us,
             "global_base_exact_rerank_us": self.global_base_exact_rerank_us,
+            "global_leaf_pages_read": self.global_leaf_pages_read,
+            "query_bytes_read": self.query_bytes_read,
         }
 
 
@@ -128,6 +132,10 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "global_base_exact_rerank_us": sum(
             sample.global_base_exact_rerank_us for sample in samples
         ),
+        "global_leaf_pages_read": sum(
+            sample.global_leaf_pages_read for sample in samples
+        ),
+        "query_bytes_read": sum(sample.query_bytes_read for sample in samples),
     }
 
 
@@ -210,6 +218,13 @@ def _recall_at_10(actual: list[str], expected: list[str]) -> float:
     return len(set(actual[:10]).intersection(expected[:10])) / denominator
 
 
+def _search_telemetry(payload: dict[str, object]) -> dict[str, int]:
+    return {
+        "global_leaf_pages_read": int(payload.get("pages_read", 0)),
+        "query_bytes_read": int(payload.get("bytes_read", 0)),
+    }
+
+
 def _request(
     base_url: str,
     endpoint: str,
@@ -232,6 +247,8 @@ def _request(
     global_leaf_waves = 0
     global_base_approximate_us = 0
     global_base_exact_rerank_us = 0
+    global_leaf_pages_read = 0
+    query_bytes_read = 0
     if endpoint == "search":
         if query is None:
             raise ValueError("search request has no query")
@@ -275,6 +292,9 @@ def _request(
         global_base_exact_rerank_us = int(
             payload.get("global_base_exact_rerank_us", 0)
         )
+        telemetry = _search_telemetry(payload)
+        global_leaf_pages_read = telemetry["global_leaf_pages_read"]
+        query_bytes_read = telemetry["query_bytes_read"]
     return Sample(
         endpoint,
         scheduled_ns,
@@ -295,6 +315,8 @@ def _request(
         global_leaf_waves,
         global_base_approximate_us,
         global_base_exact_rerank_us,
+        global_leaf_pages_read,
+        query_bytes_read,
     )
 
 

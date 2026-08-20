@@ -4,6 +4,7 @@ import unittest
 
 from scripts.rest_coexistence_load import (
     Sample,
+    _search_telemetry,
     evaluate_phase,
     percentile,
     scheduled_offsets_ns,
@@ -157,6 +158,41 @@ class RestCoexistenceLoadTest(unittest.TestCase):
         self.assertEqual(search["global_leaf_waves"], 2)
         self.assertEqual(search["global_base_approximate_us"], 1_500)
         self.assertEqual(search["global_base_exact_rerank_us"], 13_000)
+
+    def test_summary_accumulates_exact_blocks_and_query_bytes(self) -> None:
+        samples = [
+            Sample(
+                "search",
+                0,
+                0,
+                1,
+                200,
+                1.0,
+                "bounded-cell-card-v17",
+                global_leaf_pages_read=7,
+                query_bytes_read=700_000,
+            ),
+            Sample(
+                "search",
+                1,
+                1,
+                2,
+                200,
+                1.0,
+                "bounded-cell-card-v17",
+                global_leaf_pages_read=5,
+                query_bytes_read=500_000,
+            ),
+        ]
+
+        search = summarize("search", 1.0, samples)["search"]
+        self.assertEqual(search["global_leaf_pages_read"], 12)
+        self.assertEqual(search["query_bytes_read"], 1_200_000)
+
+    def test_search_telemetry_reads_physical_exact_blocks_and_query_bytes(self) -> None:
+        telemetry = _search_telemetry({"pages_read": 7, "bytes_read": 700_000})
+        self.assertEqual(telemetry["global_leaf_pages_read"], 7)
+        self.assertEqual(telemetry["query_bytes_read"], 700_000)
 
     def test_uncached_gate_rejects_generator_lag_errors_cache_and_no_s3(self) -> None:
         baseline = {"cheap": {"p99_ms": 1.0, "errors": 0, "requests": 100}}
