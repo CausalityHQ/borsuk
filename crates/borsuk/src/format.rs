@@ -160,7 +160,10 @@ use crate::{
 // Bumped 39 -> 40 when V17 separated each 128-row code-space locality tile
 // into independently authenticated 32-row exact-ranking microtiles. Pre-release
 // v39 manifests do not bind the restored ranking granularity.
-const CURRENT_VERSION: u16 = 40;
+// Bumped 40 -> 41 when V18 reordered independently authenticated exact
+// microtiles by product-code locality across cards in one bounded object.
+// Pre-release v40 manifests assume page-major exact-block placement.
+const CURRENT_VERSION: u16 = 41;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;

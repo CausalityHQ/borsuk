@@ -2100,7 +2100,7 @@ fn write_recall_latency_csv(
                 run_recall_cache_phases(config, dataset, index, options, preload_complete)?
             {
                 if !config.force_segment_path {
-                    validate_bounded_v17_execution(&summary)?;
+                    validate_bounded_v18_execution(&summary)?;
                 }
                 write_query_samples(
                     &mut samples_writer,
@@ -3893,10 +3893,10 @@ fn validate_v12_leaf_mode(
     Ok(())
 }
 
-fn validate_bounded_v17_execution(summary: &QuerySummary) -> io::Result<()> {
-    if summary.execution_engine() != "bounded-cell-card-v17" {
+fn validate_bounded_v18_execution(summary: &QuerySummary) -> io::Result<()> {
+    if summary.execution_engine() != "bounded-cell-card-v18" {
         return Err(invalid_input(&format!(
-            "production recall expected bounded-cell-card-v17 but observed {}",
+            "production recall expected bounded-cell-card-v18 but observed {}",
             summary.execution_engine()
         )));
     }
@@ -4251,7 +4251,7 @@ mod tests {
         read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
         rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
         uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
-        validate_bounded_v17_execution, validate_build_only, validate_disk_cached_network,
+        validate_bounded_v18_execution, validate_build_only, validate_disk_cached_network,
         validate_exact_read_max_physical_amplification, validate_generated_id_range,
         validate_insert_only, validate_leaf_capability_modes, validate_phase_selection,
         validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
@@ -4436,7 +4436,7 @@ mod tests {
     }
 
     #[test]
-    fn production_v17_pins_the_preregistered_exact_rerank_budget() {
+    fn production_v18_pins_the_preregistered_exact_rerank_budget() {
         validate_v12_candidate_budgets(DEFAULT_RECALL_CANDIDATES).unwrap();
         assert_eq!(SERVING_CANDIDATES, DEFAULT_RECALL_CANDIDATES[0]);
         let error = validate_v12_candidate_budgets(&[128, 4_096])
@@ -4451,13 +4451,13 @@ mod tests {
     }
 
     #[test]
-    fn production_recall_requires_the_frozen_v17_engine() {
+    fn production_recall_requires_the_frozen_v18_engine() {
         let mut fallback = QuerySummary::default();
         fallback.execution_engines.insert("srht-pq-scan".to_owned());
-        let error = validate_bounded_v17_execution(&fallback)
+        let error = validate_bounded_v18_execution(&fallback)
             .expect_err("legacy segment execution was accepted as a V17 measurement");
         assert!(
-            error.to_string().contains("bounded-cell-card-v17")
+            error.to_string().contains("bounded-cell-card-v18")
                 && error.to_string().contains("srht-pq-scan"),
             "{error}"
         );
@@ -4465,8 +4465,8 @@ mod tests {
         let mut bounded = QuerySummary::default();
         bounded
             .execution_engines
-            .insert("bounded-cell-card-v17".to_owned());
-        validate_bounded_v17_execution(&bounded).unwrap();
+            .insert("bounded-cell-card-v18".to_owned());
+        validate_bounded_v18_execution(&bounded).unwrap();
     }
 
     #[test]

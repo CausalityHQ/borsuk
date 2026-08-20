@@ -52,7 +52,7 @@ def classify_index_object(path: str) -> tuple[str, str]:
         return "query-page", "packed"
     if path.endswith(".arrow") and path.startswith(
         (
-            "global-cell-cards/v17/groups/",
+            "global-cell-cards/v18/groups/",
             "global-leaf/",
             "vectors/",
             "late-interaction/",
@@ -62,7 +62,7 @@ def classify_index_object(path: str) -> tuple[str, str]:
     if path.endswith(".parquet") and path.startswith(
         (
             "global-leaf/",
-            "global-cell-cards/v17/roots/",
+            "global-cell-cards/v18/roots/",
             "logical-cell-catalogs/",
             "manifests/",
             "positioned-log/",

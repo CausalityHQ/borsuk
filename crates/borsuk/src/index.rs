@@ -17993,7 +17993,7 @@ impl BorsukIndex {
             SearchExecution {
                 report: SearchReport {
                     hits: Vec::new(),
-                    leaf_mode: "bounded-cell-card-v17".to_string(),
+                    leaf_mode: "bounded-cell-card-v18".to_string(),
                     termination_reason: reason,
                     recall_guarantee: RecallGuarantee::Degraded,
                     segments_total,
@@ -18215,7 +18215,7 @@ impl BorsukIndex {
         Ok(Some(SearchExecution {
             report: SearchReport {
                 hits,
-                leaf_mode: "bounded-cell-card-v17".to_string(),
+                leaf_mode: "bounded-cell-card-v18".to_string(),
                 termination_reason,
                 recall_guarantee: RecallGuarantee::Degraded,
                 segments_total,
@@ -18305,7 +18305,7 @@ impl BorsukIndex {
                 report: SearchReport {
                     hits: Vec::new(),
                     leaf_mode: if cell_card_v14 {
-                        "bounded-cell-card-v17"
+                        "bounded-cell-card-v18"
                     } else {
                         "bounded-arrow-leaf-v13"
                     }
@@ -19286,14 +19286,14 @@ impl BorsukIndex {
                                 .expect("full cell-card writer is present")
                                 .finish()?;
                             let path =
-                                encoded.content_addressed_path("global-cell-cards/v17/groups")?;
+                                encoded.content_addressed_path("global-cell-cards/v18/groups")?;
                             self.storage
                                 .write_bytes_content_addressed(&path, &encoded.bytes)?;
                             cell_group_storage_bytes = cell_group_storage_bytes
                                 .checked_add(encoded.bytes.len() as u64)
                                 .ok_or_else(|| {
                                     BorsukError::InvalidStorage(
-                                        "V17 cell-card storage bytes overflow".into(),
+                                        "V18 cell-card storage bytes overflow".into(),
                                     )
                                 })?;
                             let (group, cards) = encoded.references(&path)?;
@@ -19306,7 +19306,7 @@ impl BorsukIndex {
                             )?;
                             if !matches!(next.try_push(page)?, CellCardPush::Accepted) {
                                 return Err(BorsukError::InvalidStorage(
-                                    "V17 cell-card page does not fit an empty group".into(),
+                                    "V18 cell-card page does not fit an empty group".into(),
                                 ));
                             }
                             cell_writer = Some(next);
@@ -19321,13 +19321,13 @@ impl BorsukIndex {
         })?;
         if let Some(writer) = cell_writer.take() {
             let encoded = writer.finish()?;
-            let path = encoded.content_addressed_path("global-cell-cards/v17/groups")?;
+            let path = encoded.content_addressed_path("global-cell-cards/v18/groups")?;
             self.storage
                 .write_bytes_content_addressed(&path, &encoded.bytes)?;
             cell_group_storage_bytes = cell_group_storage_bytes
                 .checked_add(encoded.bytes.len() as u64)
                 .ok_or_else(|| {
-                    BorsukError::InvalidStorage("V17 cell-card storage bytes overflow".into())
+                    BorsukError::InvalidStorage("V18 cell-card storage bytes overflow".into())
                 })?;
             let (group, cards) = encoded.references(&path)?;
             cell_groups.push(group);
@@ -19364,7 +19364,7 @@ impl BorsukIndex {
             .to_hex()
             .to_string();
         let root_path = format!(
-            "global-cell-cards/v17/roots/{}/root-{root_checksum}.parquet",
+            "global-cell-cards/v18/roots/{}/root-{root_checksum}.parquet",
             &root_checksum[..2]
         );
         self.storage
@@ -27524,8 +27524,8 @@ fn is_global_pq_path(path: &str) -> bool {
 }
 
 fn is_global_cell_card_path(path: &str) -> bool {
-    (path.starts_with("global-cell-cards/v17/groups/") && path.ends_with(".arrow"))
-        || (path.starts_with("global-cell-cards/v17/roots/") && path.ends_with(".parquet"))
+    (path.starts_with("global-cell-cards/v18/groups/") && path.ends_with(".arrow"))
+        || (path.starts_with("global-cell-cards/v18/roots/") && path.ends_with(".parquet"))
 }
 
 /// Whether the filter's shape could ever be answered by the per-segment index
@@ -30818,7 +30818,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.hits.len(), 2);
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v17");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v18");
         assert!(report.wal_records_examined > 0);
         assert!(report.elapsed_ms >= 100);
         assert_eq!(
@@ -36361,7 +36361,7 @@ mod tests {
     }
 
     #[test]
-    fn non_pq_partition_also_emits_one_exact_block_per_v17_microtile() {
+    fn non_pq_partition_also_emits_one_exact_block_per_v18_microtile() {
         let codes = (0_u16..129)
             .map(|ordinal| ordinal.to_le_bytes())
             .collect::<Vec<_>>();
@@ -36616,7 +36616,7 @@ mod tests {
         let live_v14_paths = std::iter::once(reference.root_path().to_string())
             .chain(root.groups().iter().map(|group| group.path.clone()))
             .collect::<Vec<_>>();
-        let orphan = "global-cell-cards/v17/groups/orphan.arrow";
+        let orphan = "global-cell-cards/v18/groups/orphan.arrow";
         index.storage.write_bytes(orphan, b"orphan").unwrap();
         let gc = index
             .gc_obsolete_segments(GarbageCollectionOptions {
@@ -36649,7 +36649,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("v14-row-37"));
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v17");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v18");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.global_leaf_directory_reads, 0);
         assert_eq!(report.global_leaf_continuations, 1);
@@ -36771,7 +36771,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v17_reuses_stable_code_planes_after_disk_cache_reset() {
+    fn resident_global_v18_reuses_stable_code_planes_after_disk_cache_reset() {
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
@@ -36903,7 +36903,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v17", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v18", "{report:?}");
         assert_eq!(report.global_leaf_code_bytes, 0, "{report:?}");
         assert_eq!(report.global_leaf_code_requests, 0, "{report:?}");
         assert!(report.decoded_cache_hits > 0, "{report:?}");
@@ -37019,7 +37019,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v17_reuses_card_code_slices_without_full_plane_promotion() {
+    fn resident_global_v18_reuses_card_code_slices_without_full_plane_promotion() {
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
@@ -37161,7 +37161,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v17", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v18", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from("v14-mvcc-1"));
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.global_leaf_waves, 2);
@@ -37243,7 +37243,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v17_base_routes_and_exact_scores_without_segment_payloads() {
+    fn resident_global_v18_base_routes_and_exact_scores_without_segment_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -37292,7 +37292,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("row-37"));
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v17");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v18");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.segments_skipped, report.segments_total);
         assert_eq!(report.global_scan_chunks_searched, 0);
@@ -37364,7 +37364,7 @@ mod tests {
             .with_max_segments(4)
             .with_max_candidates_per_segment(256);
         let report = index.search_with_report(query, options).unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v17");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v18");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.global_leaf_waves, 2);
         assert_eq!(report.hits[0].id, RecordId::from("nprobe-self-173"));
@@ -37396,7 +37396,7 @@ mod tests {
         reference.validate().unwrap();
 
         let stats = index.stats();
-        assert_eq!(stats.global_ann_layout_version, Some(17));
+        assert_eq!(stats.global_ann_layout_version, Some(18));
         assert_eq!(
             stats.global_ann_codebook_checksum.as_deref(),
             Some(reference.codebook().descriptor_checksum())
@@ -38046,7 +38046,7 @@ mod tests {
         assert_eq!(production.get(b"missing"), None);
     }
     #[test]
-    fn resident_global_v17_dispatch_accepts_only_qualified_page_budgets() {
+    fn resident_global_v18_dispatch_accepts_only_qualified_page_budgets() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -38078,7 +38078,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                report.leaf_mode, "bounded-cell-card-v17",
+                report.leaf_mode, "bounded-cell-card-v18",
                 "qualified page budget {budget} did not dispatch V12"
             );
             assert!((1..=GLOBAL_LEAF_QUERY_WAVE_PAGES).contains(&report.global_leaf_pages_read));
@@ -38114,7 +38114,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v17_bounds_lossless_rerank_independently_of_io_width() {
+    fn resident_global_v18_bounds_lossless_rerank_independently_of_io_width() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -38151,7 +38151,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v17");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v18");
         assert_eq!(report.hits.len(), 10, "{report:?}");
         assert_eq!(report.hits[0].id.as_bytes(), b"row-0", "{report:?}");
         assert!(
@@ -38249,7 +38249,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v17_exact_score_ceiling_keeps_best_approximate_rows() {
+    fn resident_global_v18_exact_score_ceiling_keeps_best_approximate_rows() {
         let mut candidates = vec![(4.0_f32, "d"), (1.0, "a"), (3.0, "c"), (2.0, "b")];
         truncate_cell_card_exact_candidates(&mut candidates, 2);
         assert_eq!(candidates, [(1.0, "a"), (2.0, "b")]);
@@ -38311,7 +38311,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v17");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v18");
         assert!(
             report.global_leaf_pages_read > 1,
             "V12 stopped after its first page found k live rows instead of spending the bounded recall budget"
@@ -38361,7 +38361,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v17_scores_the_bounded_row_wave_after_mvcc_suppression() {
+    fn resident_global_v18_scores_the_bounded_row_wave_after_mvcc_suppression() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let suffix = "x".repeat(100 * 1024);
@@ -38403,7 +38403,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v17", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v18", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
         assert_eq!(report.global_leaf_continuations, 1, "{report:?}");
         assert_eq!(report.global_leaf_waves, 2);
@@ -38452,7 +38452,7 @@ mod tests {
         // prefix, but not the complete exact wave. The query must return the
         // affordable prefix on the V17 path instead of starting a second
         // storage path that can spend the caller's cap again.
-        assert_eq!(fallback_complete.leaf_mode, "bounded-cell-card-v17");
+        assert_eq!(fallback_complete.leaf_mode, "bounded-cell-card-v18");
         assert!((1..=4).contains(&fallback_complete.global_leaf_pages_read));
         assert_eq!(fallback_complete.global_leaf_waves, 2);
         assert!(fallback_complete.global_leaf_code_pages_read > 0);
@@ -40631,7 +40631,7 @@ fn v13_block_budget_can_return_four_times_k_rows() {
 }
 
 #[test]
-fn v17_stable_code_planes_keep_each_backing_range_bounded() {
+fn v18_stable_code_planes_keep_each_backing_range_bounded() {
     let end = 5 * 1024 * 1024 + 17;
     let ranges = bounded_cell_card_plane_ranges(11, 11 + end).unwrap();
     assert_eq!(ranges.len(), 2);
@@ -40645,7 +40645,7 @@ fn v17_stable_code_planes_keep_each_backing_range_bounded() {
 }
 
 #[test]
-fn v17_large_stable_planes_require_a_retained_cache() {
+fn v18_large_stable_planes_require_a_retained_cache() {
     assert_eq!(
         cell_card_plane_promotion_ceiling(false),
         CELL_CARD_RANGE_READ_MAX_BYTES

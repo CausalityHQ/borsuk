@@ -2073,11 +2073,11 @@ impl ResidentGlobalCodebook {
             .into_iter()
             .map(|code| {
                 if code.len() != self.code_width {
-                    return invalid("V17 cell-card code width does not match its codebook");
+                    return invalid("V18 cell-card code width does not match its codebook");
                 }
                 let distance = self.quantizer.distance(&prepared, code)?;
                 if !distance.is_finite() {
-                    return invalid("V17 cell-card code distance is non-finite");
+                    return invalid("V18 cell-card code distance is non-finite");
                 }
                 Ok(distance)
             })
@@ -3366,6 +3366,62 @@ mod tests {
         }
 
         assert_eq!(emitted_ids(false), emitted_ids(true));
+    }
+
+    #[test]
+    fn cell_spool_emits_codes_in_product_locality_order() {
+        let fit = vectors(32, 64);
+        let quantizer = RotatedProductQuantizer::fit(config(), &fit).unwrap();
+        let mut coarse = config();
+        coarse.subspaces = 1;
+        coarse.centroids = 1;
+        let coarse = RotatedProductQuantizer::fit(coarse, &fit).unwrap();
+        let code_width = quantizer.code_bytes_per_vector();
+        let mut spool = GlobalPqCellSpool::new(
+            quantizer,
+            coarse,
+            code_width * 2,
+            64,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        for row in (0..8).rev() {
+            let vector = &fit[row];
+            let (cell, code) = spool
+                .encode_vector_with_scratch(vector, &mut Vec::new(), &mut Vec::new())
+                .unwrap();
+            spool
+                .push_encoded(
+                    cell,
+                    &code,
+                    vector,
+                    format!("row-{row:02}").as_bytes(),
+                    MutationStamp::new(
+                        MutationVersion::from_parts(row as u64 + 1, [1; 16]),
+                        [row as u8; 32],
+                    ),
+                )
+                .unwrap();
+        }
+        let mut emitted_keys = Vec::new();
+        spool
+            .finish(|event| {
+                if let GlobalPqCellSpoolEvent::Chunk { chunk, .. } = event {
+                    emitted_keys.extend(
+                        chunk
+                            .bytes
+                            .chunks_exact(code_width)
+                            .map(product_code_locality_key),
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(
+            emitted_keys.windows(2).all(|pair| pair[0] <= pair[1]),
+            "cell-card locality ordering relies on canonical spool order"
+        );
     }
 
     fn coarse_state(fit_vectors: &[Vec<f32>]) -> ProductQuantizerState {
