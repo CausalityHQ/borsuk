@@ -2996,6 +2996,32 @@ mod tests {
     }
 
     #[test]
+    fn sift_128_exact_block_stays_within_one_and_a_half_times_raw_vector_bytes() {
+        let dimensions = 128;
+        let block_rows = cell_card_block_rows(dimensions, VectorElementType::Float32).unwrap();
+        assert_eq!(block_rows, 32);
+        let encoded = encode_cell_card_group(
+            &[GlobalLeafPageInput {
+                cell_index: 7,
+                leaf_ordinal: 3,
+                centroid_code: vec![9, 11],
+                rows: rows(block_rows, dimensions * std::mem::size_of::<f32>()),
+            }],
+            dimensions,
+            VectorElementType::Float32,
+        )
+        .unwrap();
+        let block = &encoded.cards[0].head.exact_blocks[0];
+        let raw_vector_bytes = block_rows * dimensions * std::mem::size_of::<f32>();
+
+        assert!(
+            block.bytes as usize <= raw_vector_bytes * 3 / 2,
+            "SIFT-sized exact block encoded {} bytes for {raw_vector_bytes} raw vector bytes",
+            block.bytes
+        );
+    }
+
+    #[test]
     fn sift_code_tile_exposes_four_independent_ranking_microtiles() {
         let dimensions = 128;
         let code_tile_rows = 128;
