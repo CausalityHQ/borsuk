@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
 };
@@ -43,6 +43,7 @@ const CELL_CARD_MAX_METADATA_BYTES: u32 = 32 * 1024;
 const CELL_CARD_ROOT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CELL_CARD_ROOT_MAX_CARDS: usize = 4_000_000;
 const CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES: u64 = 64 * 1024;
+const CELL_CARD_ZERO_VOTE_LOCALITY_LOOKAHEAD: usize = 8;
 
 pub(crate) fn cell_card_block_rows(
     dimensions: usize,
@@ -1614,6 +1615,71 @@ fn ranked_cell_card_block_identity(block: &RankedCellCardExactBlock) -> (u32, u3
     )
 }
 
+#[derive(Debug, Default)]
+struct RankedCellCardRunIndex {
+    groups: BTreeMap<String, BTreeMap<u64, u64>>,
+}
+
+impl RankedCellCardRunIndex {
+    fn from_selected(selected: &[RankedCellCardExactBlock]) -> Self {
+        let mut index = Self::default();
+        for block in selected {
+            index.insert(block);
+        }
+        index
+    }
+
+    fn can_extend(&self, candidate: &RankedCellCardExactBlock) -> bool {
+        let candidate_start = candidate.reference.offset;
+        let Some(candidate_end) = candidate_start.checked_add(u64::from(candidate.reference.bytes))
+        else {
+            return false;
+        };
+        let Some(runs) = self.groups.get(&candidate.group.path) else {
+            return false;
+        };
+        let predecessor = runs
+            .range(..candidate_start)
+            .next_back()
+            .filter(|(_, end)| **end == candidate_start);
+        let successor = runs.get_key_value(&candidate_end);
+        if predecessor.is_none() && successor.is_none() {
+            return false;
+        }
+        let combined_start = predecessor
+            .map(|(start, _)| *start)
+            .unwrap_or(candidate_start);
+        let combined_end = successor.map(|(_, end)| *end).unwrap_or(candidate_end);
+        combined_end
+            .checked_sub(combined_start)
+            .is_some_and(|span| span <= CELL_CARD_RANGE_READ_MAX_BYTES)
+    }
+
+    fn insert(&mut self, block: &RankedCellCardExactBlock) {
+        let candidate_start = block.reference.offset;
+        let Some(candidate_end) = candidate_start.checked_add(u64::from(block.reference.bytes))
+        else {
+            return;
+        };
+        let runs = self.groups.entry(block.group.path.clone()).or_default();
+        let predecessor = runs
+            .range(..candidate_start)
+            .next_back()
+            .filter(|(_, end)| **end == candidate_start)
+            .map(|(start, _)| *start);
+        let successor = runs.get(&candidate_end).copied();
+        let run_start = predecessor.unwrap_or(candidate_start);
+        let run_end = successor.unwrap_or(candidate_end);
+        if let Some(predecessor) = predecessor {
+            runs.remove(&predecessor);
+        }
+        if successor.is_some() {
+            runs.remove(&candidate_end);
+        }
+        runs.insert(run_start, run_end);
+    }
+}
+
 pub(crate) fn rank_cell_card_exact_blocks(
     heads: &[LoadedCellCardHead],
     row_distances: &[Vec<f32>],
@@ -1722,6 +1788,7 @@ pub(crate) fn rank_cell_card_exact_blocks(
                 ranked_cell_card_block_identity(left).cmp(&ranked_cell_card_block_identity(right))
             })
     });
+    let mut ranked = VecDeque::from(ranked);
     let nearest_row_quota = requested_rows
         .div_ceil(4)
         .max(target_rows.min(requested_rows));
@@ -1747,26 +1814,47 @@ pub(crate) fn rank_cell_card_exact_blocks(
             break;
         }
     }
-    if selected_rows < requested_rows {
-        for (block, _) in ranked {
-            if seen.insert((
-                block.group.path.clone(),
-                block.reference.offset,
-                block.reference.block_ordinal,
-            )) {
-                selected_rows = selected_rows
-                    .checked_add(block.reference.rows as usize)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "cell-card selected exact rows overflow".to_string(),
-                        )
-                    })?;
-                selected.push(block);
-            }
-            if selected_rows >= requested_rows {
-                break;
-            }
-        }
+    ranked.retain(|(block, _)| {
+        !seen.contains(&(
+            block.group.path.clone(),
+            block.reference.offset,
+            block.reference.block_ordinal,
+        ))
+    });
+    let mut selected_runs = RankedCellCardRunIndex::from_selected(&selected);
+    while selected_rows < requested_rows && !ranked.is_empty() {
+        let Some((_, first_votes)) = ranked.front() else {
+            break;
+        };
+        // Positive votes encode the proven nearest-row quality horizon and
+        // retain their exact ranking. Once that horizon is exhausted, inspect
+        // only a tiny distance-ranked window and prefer a tile that extends a
+        // physically contiguous selected run. This removes an S3 request with
+        // no speculative bytes, without allowing a far locality candidate to
+        // displace the approximate-quality frontier.
+        let next = if *first_votes == 0 {
+            ranked
+                .iter()
+                .enumerate()
+                .take_while(|(_, (_, votes))| *votes == 0)
+                .take(CELL_CARD_ZERO_VOTE_LOCALITY_LOOKAHEAD)
+                .find_map(|(index, (block, _))| selected_runs.can_extend(block).then_some(index))
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let (block, _) = ranked.remove(next).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "cell-card locality selection escaped its ranked window".to_string(),
+            )
+        })?;
+        selected_rows = selected_rows
+            .checked_add(block.reference.rows as usize)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card selected exact rows overflow".to_string())
+            })?;
+        selected_runs.insert(&block);
+        selected.push(block);
     }
     // Votes choose the set. Keep nearest blocks first so a later prefix
     // reduction for byte/request bounds sheds the farthest selected blocks.
@@ -3990,6 +4078,169 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 2, 3],
             "fetch continuation headroom must not inflate the quality-vote horizon"
+        );
+    }
+
+    #[test]
+    fn zero_vote_remainder_prefers_a_real_adjacent_block_over_a_new_s3_group() {
+        let dimensions = 4;
+        let encoded_a = encode_cell_card_group(
+            &[GlobalLeafPageInput {
+                cell_index: 0,
+                leaf_ordinal: 0,
+                centroid_code: vec![0, 0],
+                rows: rows(96, dimensions),
+            }],
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+        let encoded_b = encode_cell_card_group(
+            &[GlobalLeafPageInput {
+                cell_index: 1,
+                leaf_ordinal: 0,
+                centroid_code: vec![1, 1],
+                rows: rows(32, dimensions),
+            }],
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+        let path_a = encoded_a
+            .content_addressed_path("global-cell-cards/a")
+            .unwrap();
+        let path_b = encoded_b
+            .content_addressed_path("global-cell-cards/b")
+            .unwrap();
+        let (group_a, mut cards) = encoded_a.references(&path_a).unwrap();
+        let (group_b, cards_b) = encoded_b.references(&path_b).unwrap();
+        cards.extend(cards_b);
+        let mut groups = vec![Arc::clone(&group_a), Arc::clone(&group_b)];
+        groups.sort_by(|left, right| left.path.cmp(&right.path));
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &groups, &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let head_plan = super::plan_cell_card_head_wave(&root, &[0, 1], 1024 * 1024, 8).unwrap();
+        let fetched = head_plan
+            .reads()
+            .iter()
+            .map(|read| {
+                let bytes = if read.group.path == path_a {
+                    &encoded_a.bytes
+                } else if read.group.path == path_b {
+                    &encoded_b.bytes
+                } else {
+                    panic!("unexpected encoded cell-card group {}", read.group.path)
+                };
+                bytes[read.start as usize..read.end as usize].to_vec()
+            })
+            .collect::<Vec<_>>();
+        let loaded = super::decode_cell_card_head_wave(
+            &head_plan,
+            &fetched,
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+        assert_eq!(loaded[0].head.exact_blocks.len(), 3);
+        for pair in loaded[0].head.exact_blocks.windows(2) {
+            assert_eq!(
+                pair[0].offset + u64::from(pair[0].bytes),
+                pair[1].offset,
+                "the locality fixture must use physically contiguous production blocks"
+            );
+        }
+        let distances = vec![
+            (0_u32..32)
+                .map(|row| row as f32 / 100.0)
+                .chain(std::iter::repeat_n(3.0, 32))
+                .chain((0_u32..32).map(|row| 1.0 + row as f32 / 100.0))
+                .collect::<Vec<_>>(),
+            vec![2.0; 32],
+        ];
+
+        let ranked = super::rank_cell_card_exact_blocks(&loaded, &distances, 96, 96, 10).unwrap();
+
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|selected| (
+                    selected.group.path.as_str(),
+                    selected.reference.block_ordinal
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (path_a.as_str(), 0),
+                (path_a.as_str(), 2),
+                (path_a.as_str(), 1),
+            ],
+            "the nearest quota and voted block stay fixed while only the zero-vote tail gains locality"
+        );
+        let selected_bytes = ranked
+            .iter()
+            .map(|block| u64::from(block.reference.bytes))
+            .sum();
+        let plan = super::plan_cell_card_exact_wave(&ranked, selected_bytes, 4).unwrap();
+        assert_eq!(plan.requests(), 1);
+        assert_eq!(plan.speculative_bytes(), 0);
+    }
+
+    #[test]
+    fn zero_vote_locality_does_not_extend_a_full_four_mib_run() {
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "a.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: 5 * 1024 * 1024,
+            code_plane_offset: 0,
+            code_plane_bytes: 1,
+            code_plane_checksum: [2; 32],
+        });
+        let block_bytes = 64 * 1024_u64;
+        let selected = (0_u64..64)
+            .map(|ordinal| super::RankedCellCardExactBlock {
+                head_index: 0,
+                group: Arc::clone(&group),
+                cell_index: 0,
+                card_ordinal: 0,
+                reference: super::CellCardExactBlockRef {
+                    block_ordinal: ordinal as u32,
+                    offset: ordinal * block_bytes,
+                    metadata_bytes: 1024,
+                    body_bytes: block_bytes as u32 - 1024,
+                    bytes: block_bytes as u32,
+                    rows: 1,
+                    checksum: [ordinal as u8; 32],
+                },
+                distance: ordinal as f32,
+                row_distances: Box::new([]),
+            })
+            .collect::<Vec<_>>();
+        let candidate = super::RankedCellCardExactBlock {
+            head_index: 0,
+            group,
+            cell_index: 0,
+            card_ordinal: 0,
+            reference: super::CellCardExactBlockRef {
+                block_ordinal: 64,
+                offset: 4 * 1024 * 1024,
+                metadata_bytes: 1024,
+                body_bytes: block_bytes as u32 - 1024,
+                bytes: block_bytes as u32,
+                rows: 1,
+                checksum: [64; 32],
+            },
+            distance: 64.0,
+            row_distances: Box::new([]),
+        };
+
+        let selected_runs = super::RankedCellCardRunIndex::from_selected(&selected);
+        assert!(
+            !selected_runs.can_extend(&candidate),
+            "pairwise adjacency must not hide that the complete selected run already reached its range cap"
         );
     }
 
