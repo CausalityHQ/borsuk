@@ -32,6 +32,11 @@ class Sample:
     global_leaf_code_pages_read: int = 0
     global_leaf_code_requests: int = 0
     global_leaf_exact_requests: int = 0
+    global_leaf_exact_cells: int = 0
+    global_leaf_exact_cards: int = 0
+    global_leaf_exact_groups: int = 0
+    global_leaf_exact_selected_bytes: int = 0
+    global_leaf_exact_speculative_bytes: int = 0
     global_leaf_exact_scores: int = 0
     global_leaf_waves: int = 0
     global_base_approximate_us: int = 0
@@ -61,6 +66,11 @@ class Sample:
             "global_leaf_code_pages_read": self.global_leaf_code_pages_read,
             "global_leaf_code_requests": self.global_leaf_code_requests,
             "global_leaf_exact_requests": self.global_leaf_exact_requests,
+            "global_leaf_exact_cells": self.global_leaf_exact_cells,
+            "global_leaf_exact_cards": self.global_leaf_exact_cards,
+            "global_leaf_exact_groups": self.global_leaf_exact_groups,
+            "global_leaf_exact_selected_bytes": self.global_leaf_exact_selected_bytes,
+            "global_leaf_exact_speculative_bytes": self.global_leaf_exact_speculative_bytes,
             "global_leaf_exact_scores": self.global_leaf_exact_scores,
             "global_leaf_waves": self.global_leaf_waves,
             "global_base_approximate_us": self.global_base_approximate_us,
@@ -128,6 +138,21 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "global_leaf_exact_requests": sum(
             sample.global_leaf_exact_requests for sample in samples
         ),
+        "global_leaf_exact_cells": sum(
+            sample.global_leaf_exact_cells for sample in samples
+        ),
+        "global_leaf_exact_cards": sum(
+            sample.global_leaf_exact_cards for sample in samples
+        ),
+        "global_leaf_exact_groups": sum(
+            sample.global_leaf_exact_groups for sample in samples
+        ),
+        "global_leaf_exact_selected_bytes": sum(
+            sample.global_leaf_exact_selected_bytes for sample in samples
+        ),
+        "global_leaf_exact_speculative_bytes": sum(
+            sample.global_leaf_exact_speculative_bytes for sample in samples
+        ),
         "global_leaf_exact_scores": sum(
             sample.global_leaf_exact_scores for sample in samples
         ),
@@ -158,7 +183,7 @@ def summarize(phase: str, duration_seconds: float, samples: list[Sample]) -> dic
         for endpoint in ("cheap", "search")
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "phase": phase,
         "duration_seconds": duration_seconds,
         **{
@@ -259,6 +284,11 @@ def _request(
     global_leaf_code_pages_read = 0
     global_leaf_code_requests = 0
     global_leaf_exact_requests = 0
+    global_leaf_exact_cells = 0
+    global_leaf_exact_cards = 0
+    global_leaf_exact_groups = 0
+    global_leaf_exact_selected_bytes = 0
+    global_leaf_exact_speculative_bytes = 0
     global_leaf_exact_scores = 0
     global_leaf_waves = 0
     global_base_approximate_us = 0
@@ -305,6 +335,15 @@ def _request(
         global_leaf_code_pages_read = int(payload.get("global_leaf_code_pages_read", 0))
         global_leaf_code_requests = int(payload.get("global_leaf_code_requests", 0))
         global_leaf_exact_requests = int(payload.get("global_leaf_exact_requests", 0))
+        global_leaf_exact_cells = int(payload.get("global_leaf_exact_cells", 0))
+        global_leaf_exact_cards = int(payload.get("global_leaf_exact_cards", 0))
+        global_leaf_exact_groups = int(payload.get("global_leaf_exact_groups", 0))
+        global_leaf_exact_selected_bytes = int(
+            payload.get("global_leaf_exact_selected_bytes", 0)
+        )
+        global_leaf_exact_speculative_bytes = int(
+            payload.get("global_leaf_exact_speculative_bytes", 0)
+        )
         global_leaf_exact_scores = int(payload.get("global_leaf_exact_scores", 0))
         global_leaf_waves = int(payload.get("global_leaf_waves", 0))
         global_base_approximate_us = int(payload.get("global_base_approximate_us", 0))
@@ -333,6 +372,11 @@ def _request(
         global_leaf_code_pages_read,
         global_leaf_code_requests,
         global_leaf_exact_requests,
+        global_leaf_exact_cells,
+        global_leaf_exact_cards,
+        global_leaf_exact_groups,
+        global_leaf_exact_selected_bytes,
+        global_leaf_exact_speculative_bytes,
         global_leaf_exact_scores,
         global_leaf_waves,
         global_base_approximate_us,

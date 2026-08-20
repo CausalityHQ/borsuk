@@ -1131,6 +1131,21 @@ pub struct SearchReport {
     /// Backing-store exact-block range requests issued for this query.
     #[serde(default)]
     pub global_leaf_exact_requests: usize,
+    /// Distinct coarse cells contributing selected exact-row blocks.
+    #[serde(default)]
+    pub global_leaf_exact_cells: usize,
+    /// Distinct cell cards contributing selected exact-row blocks.
+    #[serde(default)]
+    pub global_leaf_exact_cards: usize,
+    /// Distinct immutable group objects containing selected exact-row blocks.
+    #[serde(default)]
+    pub global_leaf_exact_groups: usize,
+    /// Encoded bytes belonging to selected exact-row blocks, excluding gap reads.
+    #[serde(default)]
+    pub global_leaf_exact_selected_bytes: u64,
+    /// Extra exact-range bytes read only to coalesce selected blocks.
+    #[serde(default)]
+    pub global_leaf_exact_speculative_bytes: u64,
     /// Encoded V13 Arrow batch bytes read for selected exact-row blocks.
     #[serde(default)]
     pub global_leaf_page_bytes: u64,

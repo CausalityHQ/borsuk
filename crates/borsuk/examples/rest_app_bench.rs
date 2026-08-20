@@ -105,6 +105,11 @@ struct SearchResponse {
     global_leaf_code_pages_read: usize,
     global_leaf_code_requests: usize,
     global_leaf_exact_requests: usize,
+    global_leaf_exact_cells: usize,
+    global_leaf_exact_cards: usize,
+    global_leaf_exact_groups: usize,
+    global_leaf_exact_selected_bytes: u64,
+    global_leaf_exact_speculative_bytes: u64,
     global_leaf_exact_scores: usize,
     global_leaf_waves: usize,
     global_base_approximate_us: u64,
@@ -266,6 +271,11 @@ async fn search(State(state): State<AppState>, Json(request): Json<SearchRequest
             global_leaf_code_pages_read: report.global_leaf_code_pages_read,
             global_leaf_code_requests: report.global_leaf_code_requests,
             global_leaf_exact_requests: report.global_leaf_exact_requests,
+            global_leaf_exact_cells: report.global_leaf_exact_cells,
+            global_leaf_exact_cards: report.global_leaf_exact_cards,
+            global_leaf_exact_groups: report.global_leaf_exact_groups,
+            global_leaf_exact_selected_bytes: report.global_leaf_exact_selected_bytes,
+            global_leaf_exact_speculative_bytes: report.global_leaf_exact_speculative_bytes,
             global_leaf_exact_scores: report.global_leaf_exact_scores,
             global_leaf_waves: report.global_leaf_waves,
             global_base_approximate_us: report.global_base_approximate_us,
@@ -492,6 +502,18 @@ mod tests {
         let used = value["transient_bytes"].as_u64().unwrap();
         let capacity = value["transient_capacity_bytes"].as_u64().unwrap();
         let peak = value["transient_peak_bytes"].as_u64().unwrap();
+        for field in [
+            "global_leaf_exact_cells",
+            "global_leaf_exact_cards",
+            "global_leaf_exact_groups",
+            "global_leaf_exact_selected_bytes",
+            "global_leaf_exact_speculative_bytes",
+        ] {
+            assert!(
+                value[field].is_u64(),
+                "missing search topology field {field}"
+            );
+        }
         assert!(capacity > 0);
         assert!(used <= capacity);
         assert!(peak <= capacity);

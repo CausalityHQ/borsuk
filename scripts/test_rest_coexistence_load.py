@@ -106,7 +106,9 @@ class RestCoexistenceLoadTest(unittest.TestCase):
             Sample("search", 0, 0, 1, 200, 1.0, "bounded-cell-card-v17", 4, 4096, 0, 0),
             Sample("search", 1, 1, 2, 200, 1.0, "bounded-cell-card-v17", 3, 3072, 2, 2048),
         ]
-        search = summarize("search", 1.0, samples)["search"]
+        summary = summarize("search", 1.0, samples)
+        self.assertEqual(summary["schema_version"], 2)
+        search = summary["search"]
         self.assertEqual(search["backing_reads"], 7)
         self.assertEqual(search["backing_bytes_read"], 7168)
         self.assertEqual(search["disk_cache_reads"], 2)
@@ -126,6 +128,11 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 global_leaf_code_pages_read=128,
                 global_leaf_code_requests=4,
                 global_leaf_exact_requests=12,
+                global_leaf_exact_cells=8,
+                global_leaf_exact_cards=11,
+                global_leaf_exact_groups=3,
+                global_leaf_exact_selected_bytes=240_000,
+                global_leaf_exact_speculative_bytes=720_000,
                 global_leaf_exact_scores=512,
                 global_leaf_waves=1,
                 global_base_approximate_us=800,
@@ -143,6 +150,11 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 global_leaf_code_pages_read=120,
                 global_leaf_code_requests=3,
                 global_leaf_exact_requests=11,
+                global_leaf_exact_cells=7,
+                global_leaf_exact_cards=10,
+                global_leaf_exact_groups=2,
+                global_leaf_exact_selected_bytes=230_000,
+                global_leaf_exact_speculative_bytes=690_000,
                 global_leaf_exact_scores=500,
                 global_leaf_waves=1,
                 global_base_approximate_us=700,
@@ -154,6 +166,11 @@ class RestCoexistenceLoadTest(unittest.TestCase):
         self.assertEqual(search["global_leaf_code_pages_read"], 248)
         self.assertEqual(search["global_leaf_code_requests"], 7)
         self.assertEqual(search["global_leaf_exact_requests"], 23)
+        self.assertEqual(search["global_leaf_exact_cells"], 15)
+        self.assertEqual(search["global_leaf_exact_cards"], 21)
+        self.assertEqual(search["global_leaf_exact_groups"], 5)
+        self.assertEqual(search["global_leaf_exact_selected_bytes"], 470_000)
+        self.assertEqual(search["global_leaf_exact_speculative_bytes"], 1_410_000)
         self.assertEqual(search["global_leaf_exact_scores"], 1_012)
         self.assertEqual(search["global_leaf_waves"], 2)
         self.assertEqual(search["global_base_approximate_us"], 1_500)

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
 };
@@ -1816,6 +1816,31 @@ impl CellCardExactWavePlan {
     }
     pub(crate) fn blocks(&self) -> usize {
         self.reads.iter().map(|read| read.blocks.len()).sum()
+    }
+    pub(crate) fn selected_cells(&self) -> usize {
+        self.reads
+            .iter()
+            .flat_map(|read| read.blocks.iter().map(|block| block.cell_index))
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+    pub(crate) fn selected_cards(&self) -> usize {
+        self.reads
+            .iter()
+            .flat_map(|read| {
+                read.blocks
+                    .iter()
+                    .map(|block| (block.cell_index, block.card_ordinal))
+            })
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+    pub(crate) fn selected_groups(&self) -> usize {
+        self.reads
+            .iter()
+            .map(|read| read.group.path.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
     }
     pub(crate) fn physical_bytes(&self) -> u64 {
         self.physical_bytes
@@ -4569,6 +4594,53 @@ mod tests {
         assert_eq!(plan.selected_bytes(), 48 * 1024);
         assert!(plan.speculative_bytes() <= plan.selected_bytes() * 3);
         assert_eq!(plan.requests(), 1);
+    }
+
+    #[test]
+    fn exact_wave_reports_distinct_selected_cells_cards_and_groups() {
+        let groups = ["a.arrow", "b.arrow"].map(|path| {
+            Arc::new(super::CellCardGroupRef {
+                path: path.to_string(),
+                checksum: [1; 32],
+                encoded_bytes: 512 * 1024,
+                code_plane_offset: 0,
+                code_plane_bytes: 1,
+                code_plane_checksum: [2; 32],
+            })
+        });
+        let ranked = [
+            (0_usize, 7_u32, 0_u32, 0_u32, 0_u64),
+            (0, 7, 0, 1, 16 * 1024),
+            (0, 7, 1, 0, 64 * 1024),
+            (1, 9, 0, 0, 0),
+        ]
+        .into_iter()
+        .map(|(group, cell_index, card_ordinal, block_ordinal, offset)| {
+            super::RankedCellCardExactBlock {
+                head_index: 0,
+                group: Arc::clone(&groups[group]),
+                cell_index,
+                card_ordinal,
+                reference: super::CellCardExactBlockRef {
+                    block_ordinal,
+                    offset,
+                    metadata_bytes: 1024,
+                    body_bytes: 15 * 1024,
+                    bytes: 16 * 1024,
+                    rows: 32,
+                    checksum: [block_ordinal as u8; 32],
+                },
+                distance: block_ordinal as f32,
+                row_distances: Box::new([]),
+            }
+        })
+        .collect::<Vec<_>>();
+
+        let plan = super::plan_cell_card_exact_wave(&ranked, 1024 * 1024, 32).unwrap();
+
+        assert_eq!(plan.selected_cells(), 2);
+        assert_eq!(plan.selected_cards(), 3);
+        assert_eq!(plan.selected_groups(), 2);
     }
 
     #[test]

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 V10_PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v10"
-PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v12"
+PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v13"
 V10_QUERY_TELEMETRY_FIELDS = (
     "global_leaf_directory_reads",
     "global_leaf_directory_bytes",
@@ -25,6 +25,11 @@ V11_QUERY_TELEMETRY_FIELDS = (
     "global_leaf_code_bytes",
     "global_leaf_pages_read",
     "global_leaf_page_bytes",
+    "global_leaf_exact_cells",
+    "global_leaf_exact_cards",
+    "global_leaf_exact_groups",
+    "global_leaf_exact_selected_bytes",
+    "global_leaf_exact_speculative_bytes",
     "global_leaf_waves",
     "global_leaf_continuations",
     "global_leaf_exact_scores",

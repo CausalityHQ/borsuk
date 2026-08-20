@@ -38,7 +38,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v12",
+                    "borsuk-production-bench-v13",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -89,10 +89,15 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "global_leaf_exact_scores",
                 "backing_reads",
                 "backing_bytes_read",
+                "global_leaf_exact_cells",
+                "global_leaf_exact_cards",
+                "global_leaf_exact_groups",
+                "global_leaf_exact_selected_bytes",
+                "global_leaf_exact_speculative_bytes",
             ],
             [
                 [
-                    "borsuk-production-bench-v12",
+                    "borsuk-production-bench-v13",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -121,9 +126,14 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     2,
                     1,
                     100,
+                    1,
+                    1,
+                    1,
+                    100,
+                    0,
                 ],
                 [
-                    "borsuk-production-bench-v12",
+                    "borsuk-production-bench-v13",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -152,6 +162,11 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     2,
                     1,
                     100,
+                    1,
+                    1,
+                    1,
+                    100,
+                    0,
                 ],
             ],
         )

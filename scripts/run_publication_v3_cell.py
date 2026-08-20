@@ -753,7 +753,7 @@ def summarize_query_samples(
         "global_leaf_exact_requests": [],
     }
     for row in rows:
-        if row.get("schema_version") != "borsuk-production-bench-v12":
+        if row.get("schema_version") != "borsuk-production-bench-v13":
             raise ValueError("query sample schema differs")
         expected_phase = "uncached" if arm["cache_state"] == "cold" else "disk_cached"
         if (
@@ -844,7 +844,7 @@ def summarize_concurrency_artifacts(
     for row in summaries:
         worker = int(row.get("workers", "-1"))
         if (
-            row.get("schema_version") != "borsuk-production-bench-v12"
+            row.get("schema_version") != "borsuk-production-bench-v13"
             or worker not in expected
             or worker in by_worker
             or int(row.get("total_queries", "-1")) != expected_queries
@@ -862,7 +862,7 @@ def summarize_concurrency_artifacts(
     recalls = {worker: [] for worker in expected_workers}
     for row in samples:
         worker = int(row.get("workers", "-1"))
-        if row.get("schema_version") != "borsuk-production-bench-v12" or worker not in expected:
+        if row.get("schema_version") != "borsuk-production-bench-v13" or worker not in expected:
             raise ValueError("concurrency sample differs from its authority")
         sample_index = int(row.get("sample_index", "-1"))
         if sample_index < 0 or sample_index in sample_indices[worker]:

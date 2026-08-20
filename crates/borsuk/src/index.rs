@@ -11235,6 +11235,11 @@ impl BorsukIndex {
             global_leaf_code_bytes: 0,
             global_leaf_pages_read: 0,
             global_leaf_exact_requests: 0,
+            global_leaf_exact_cells: 0,
+            global_leaf_exact_cards: 0,
+            global_leaf_exact_groups: 0,
+            global_leaf_exact_selected_bytes: 0,
+            global_leaf_exact_speculative_bytes: 0,
             global_leaf_page_bytes: 0,
             global_leaf_exact_scores: 0,
             global_leaf_continuations: 0,
@@ -18022,6 +18027,11 @@ impl BorsukIndex {
                     global_leaf_code_bytes: code_plane_storage_bytes,
                     global_leaf_pages_read: 0,
                     global_leaf_exact_requests: 0,
+                    global_leaf_exact_cells: 0,
+                    global_leaf_exact_cards: 0,
+                    global_leaf_exact_groups: 0,
+                    global_leaf_exact_selected_bytes: 0,
+                    global_leaf_exact_speculative_bytes: 0,
                     global_leaf_page_bytes: 0,
                     global_leaf_exact_scores: 0,
                     global_leaf_continuations: 0,
@@ -18239,6 +18249,11 @@ impl BorsukIndex {
                 global_leaf_code_bytes: code_plane_storage_bytes,
                 global_leaf_pages_read: exact_plan.blocks(),
                 global_leaf_exact_requests: exact_storage_requests,
+                global_leaf_exact_cells: exact_plan.selected_cells(),
+                global_leaf_exact_cards: exact_plan.selected_cards(),
+                global_leaf_exact_groups: exact_plan.selected_groups(),
+                global_leaf_exact_selected_bytes: exact_plan.selected_bytes(),
+                global_leaf_exact_speculative_bytes: exact_plan.speculative_bytes(),
                 global_leaf_page_bytes: exact_plan.physical_bytes(),
                 global_leaf_exact_scores: records_scored,
                 global_leaf_continuations: 1,
@@ -18328,6 +18343,11 @@ impl BorsukIndex {
                     global_leaf_code_bytes: 0,
                     global_leaf_pages_read: 0,
                     global_leaf_exact_requests: 0,
+                    global_leaf_exact_cells: 0,
+                    global_leaf_exact_cards: 0,
+                    global_leaf_exact_groups: 0,
+                    global_leaf_exact_selected_bytes: 0,
+                    global_leaf_exact_speculative_bytes: 0,
                     global_leaf_page_bytes: 0,
                     global_leaf_exact_scores: 0,
                     global_leaf_continuations: 0,
@@ -18781,6 +18801,11 @@ impl BorsukIndex {
                 global_leaf_code_bytes: physical_code_bytes,
                 global_leaf_pages_read: fetched_pages,
                 global_leaf_exact_requests: 0,
+                global_leaf_exact_cells: 0,
+                global_leaf_exact_cards: 0,
+                global_leaf_exact_groups: 0,
+                global_leaf_exact_selected_bytes: logical_page_bytes,
+                global_leaf_exact_speculative_bytes: 0,
                 global_leaf_page_bytes: logical_page_bytes,
                 global_leaf_exact_scores: records_scored,
                 global_leaf_continuations: continuations,
@@ -21205,6 +21230,26 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_leaf_exact_requests)
                 .sum(),
+            global_leaf_exact_cells: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_exact_cells)
+                .sum(),
+            global_leaf_exact_cards: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_exact_cards)
+                .sum(),
+            global_leaf_exact_groups: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_exact_groups)
+                .sum(),
+            global_leaf_exact_selected_bytes: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_exact_selected_bytes)
+                .sum(),
+            global_leaf_exact_speculative_bytes: reports
+                .iter()
+                .map(|(_, report)| report.global_leaf_exact_speculative_bytes)
+                .sum(),
             global_leaf_page_bytes: reports
                 .iter()
                 .map(|(_, report)| report.global_leaf_page_bytes)
@@ -21386,6 +21431,11 @@ impl BorsukIndex {
                 global_leaf_code_bytes: 0,
                 global_leaf_pages_read: 0,
                 global_leaf_exact_requests: 0,
+                global_leaf_exact_cells: 0,
+                global_leaf_exact_cards: 0,
+                global_leaf_exact_groups: 0,
+                global_leaf_exact_selected_bytes: 0,
+                global_leaf_exact_speculative_bytes: 0,
                 global_leaf_page_bytes: 0,
                 global_leaf_exact_scores: 0,
                 global_leaf_continuations: 0,
@@ -21606,6 +21656,11 @@ impl BorsukIndex {
             global_leaf_code_bytes: 0,
             global_leaf_pages_read: 0,
             global_leaf_exact_requests: 0,
+            global_leaf_exact_cells: 0,
+            global_leaf_exact_cards: 0,
+            global_leaf_exact_groups: 0,
+            global_leaf_exact_selected_bytes: 0,
+            global_leaf_exact_speculative_bytes: 0,
             global_leaf_page_bytes: 0,
             global_leaf_exact_scores: 0,
             global_leaf_continuations: 0,
@@ -21962,6 +22017,11 @@ impl BorsukIndex {
                     global_leaf_code_bytes: 0,
                     global_leaf_pages_read: 0,
                     global_leaf_exact_requests: 0,
+                    global_leaf_exact_cells: 0,
+                    global_leaf_exact_cards: 0,
+                    global_leaf_exact_groups: 0,
+                    global_leaf_exact_selected_bytes: 0,
+                    global_leaf_exact_speculative_bytes: 0,
                     global_leaf_page_bytes: 0,
                     global_leaf_exact_scores: 0,
                     global_leaf_continuations: 0,
@@ -22727,6 +22787,11 @@ impl BorsukIndex {
                 global_leaf_code_bytes: 0,
                 global_leaf_pages_read: 0,
                 global_leaf_exact_requests: 0,
+                global_leaf_exact_cells: 0,
+                global_leaf_exact_cards: 0,
+                global_leaf_exact_groups: 0,
+                global_leaf_exact_selected_bytes: 0,
+                global_leaf_exact_speculative_bytes: 0,
                 global_leaf_page_bytes: 0,
                 global_leaf_exact_scores: 0,
                 global_leaf_continuations: 0,
@@ -22839,6 +22904,11 @@ impl BorsukIndex {
                 global_leaf_code_bytes: 0,
                 global_leaf_pages_read: 0,
                 global_leaf_exact_requests: 0,
+                global_leaf_exact_cells: 0,
+                global_leaf_exact_cards: 0,
+                global_leaf_exact_groups: 0,
+                global_leaf_exact_selected_bytes: 0,
+                global_leaf_exact_speculative_bytes: 0,
                 global_leaf_page_bytes: 0,
                 global_leaf_exact_scores: 0,
                 global_leaf_continuations: 0,
