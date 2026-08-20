@@ -716,11 +716,13 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             index_uri="s3://bucket/index",
             index_receipt_uri="s3://bucket/INDEX_COMPLETE.json",
             index_receipt_sha256="e" * 64,
+            index_source_sha256="f" * 64,
         )
         self.assertIn('test "$(sha256sum "$binary"', server)
         self.assertIn("BORSUK_REST_INDEX_URI=s3://bucket/index", server)
         self.assertIn("index receipt does not authorize the requested index", server)
         self.assertIn("source_archive_sha256", server)
+        self.assertIn("BORSUK_INDEX_SOURCE_SHA256=" + "f" * 64, server)
         self.assertIn("/metrics", server)
         self.assertIn("APP_ENDPOINT.json", server)
         self.assertIn("resources.csv", server)

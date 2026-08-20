@@ -164,12 +164,14 @@ def server_worker_script(
     index_uri: str,
     index_receipt_uri: str,
     index_receipt_sha256: str,
+    index_source_sha256: str,
 ) -> str:
     _require_s3_object("REST binary", binary_uri)
     _require_s3_object("REST index", index_uri)
     _require_s3_object("index receipt", index_receipt_uri)
     _require_sha256("REST binary", binary_sha256)
     _require_sha256("index receipt", index_receipt_sha256)
+    _require_sha256("index source", index_source_sha256)
     return f"""set -euo pipefail
 work=/var/lib/borsuk-rest-server
 mkdir -p "$work/cache"
@@ -188,7 +190,8 @@ chmod 700 "$binary"
 export BORSUK_REST_INDEX_URI={index_uri}
 export BORSUK_REST_CACHE_DIR="$work/cache"
 export BORSUK_REST_LISTEN=0.0.0.0:8080
-python3 -c 'import json,os,sys; v=json.load(open(sys.argv[1])); ok=v.get("schema_version")==1 and v.get("document_kind")=="publication-v3-index-complete" and v.get("status")=="complete" and v.get("index_uri")==os.environ["BORSUK_REST_INDEX_URI"] and v.get("source_archive_sha256")==os.environ["BORSUK_SOURCE_SHA256"]; ok or sys.exit("index receipt does not authorize the requested index")' "$index_receipt"
+export BORSUK_INDEX_SOURCE_SHA256={index_source_sha256}
+python3 -c 'import json,os,sys; v=json.load(open(sys.argv[1])); ok=v.get("schema_version")==1 and v.get("document_kind")=="publication-v3-index-complete" and v.get("status")=="complete" and v.get("index_uri")==os.environ["BORSUK_REST_INDEX_URI"] and v.get("source_archive_sha256")==os.environ["BORSUK_INDEX_SOURCE_SHA256"]; ok or sys.exit("index receipt does not authorize the requested index")' "$index_receipt"
 "$binary" >"$work/app.log" 2>&1 & app_pid=$!
 deadline=$((SECONDS + 900))
 until curl -fsS http://127.0.0.1:8080/metrics >"$work/effective.json"; do
