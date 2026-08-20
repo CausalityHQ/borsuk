@@ -68,7 +68,7 @@ use crate::{
     manifest::{Manifest, RoutingLayerPageRef, SegmentSummary},
     observability,
     record::RequestCounts,
-    segment_cache::DecodedObjectCache,
+    segment_cache::{AdmissionGate, DecodedObjectCache, OwnedAdmissionPermit},
     storage_trace::{
         StorageAccessEvent, StorageAccessTrace, configured_storage_access_trace,
         physical_format_for_path,
@@ -734,11 +734,19 @@ impl ObjectStore for CountingObjectStore {
 /// this exact bridge; current-thread hosts use a scoped helper thread.
 struct BlockingRuntime {
     inner: Option<Runtime>,
+    #[cfg(test)]
+    block_on_entries: AtomicU64,
 }
+
+type RangeWaveOutcome = std::thread::Result<Result<Vec<u8>>>;
 
 impl BlockingRuntime {
     fn new(inner: Runtime) -> Self {
-        Self { inner: Some(inner) }
+        Self {
+            inner: Some(inner),
+            #[cfg(test)]
+            block_on_entries: AtomicU64::new(0),
+        }
     }
 
     fn runtime(&self) -> &Runtime {
@@ -755,11 +763,33 @@ impl BlockingRuntime {
         self.runtime().spawn(future)
     }
 
+    fn spawn_range_wave_read(
+        &self,
+        index: usize,
+        context: PrefetchReadContext,
+        relative: String,
+        range: Range<u64>,
+        permit: Option<OwnedAdmissionPermit>,
+        completed: std::sync::mpsc::Sender<(usize, RangeWaveOutcome)>,
+    ) {
+        std::mem::drop(self.runtime().spawn(async move {
+            let outcome = AssertUnwindSafe(async move {
+                let _permit = permit;
+                context.read_range_cached_traced(&relative, range).await
+            })
+            .catch_unwind()
+            .await;
+            let _ = completed.send((index, outcome));
+        }));
+    }
+
     fn block_on<F>(&self, future: F) -> F::Output
     where
         F: Future + Send,
         F::Output: Send,
     {
+        #[cfg(test)]
+        self.block_on_entries.fetch_add(1, Ordering::Relaxed);
         match Handle::try_current().map(|handle| handle.runtime_flavor()) {
             Err(_) => self.runtime().block_on(future),
             Ok(RuntimeFlavor::MultiThread) => {
@@ -772,6 +802,11 @@ impl BlockingRuntime {
                     .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
             }),
         }
+    }
+
+    #[cfg(test)]
+    fn block_on_entries(&self) -> u64 {
+        self.block_on_entries.load(Ordering::Relaxed)
     }
 }
 
@@ -801,11 +836,14 @@ fn process_storage_runtime() -> Result<Arc<BlockingRuntime>> {
     if let Some(runtime) = runtime.as_ref() {
         return Ok(Arc::clone(runtime));
     }
-    let cpu_threads = crate::configured_cpu_threads();
+    let shape = storage_runtime_thread_shape(
+        crate::configured_cpu_threads(),
+        crate::configured_backing_get_concurrency(),
+    );
     let created = Arc::new(BlockingRuntime::new(
         Builder::new_multi_thread()
-            .worker_threads(cpu_threads)
-            .max_blocking_threads(cpu_threads)
+            .worker_threads(shape.worker_threads)
+            .max_blocking_threads(shape.max_blocking_threads)
             .enable_all()
             .build()
             .map_err(|error| {
@@ -814,6 +852,22 @@ fn process_storage_runtime() -> Result<Arc<BlockingRuntime>> {
     ));
     *runtime = Some(Arc::clone(&created));
     Ok(created)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StorageRuntimeThreadShape {
+    worker_threads: usize,
+    max_blocking_threads: usize,
+}
+
+fn storage_runtime_thread_shape(
+    cpu_threads: usize,
+    backing_get_concurrency: usize,
+) -> StorageRuntimeThreadShape {
+    StorageRuntimeThreadShape {
+        worker_threads: cpu_threads.max(1),
+        max_blocking_threads: backing_get_concurrency.max(cpu_threads).max(1),
+    }
 }
 
 fn process_backing_get_admission() -> Arc<Semaphore> {
@@ -1198,13 +1252,50 @@ impl PrefetchReadContext {
         Ok((bytes.to_vec(), object_bytes))
     }
 
+    async fn read_cache_file_blocking(&self, relative: &str) -> Result<Option<Vec<u8>>> {
+        if self.cache_path(relative).is_none() {
+            return Ok(None);
+        }
+        let context = self.clone();
+        let relative = relative.to_string();
+        join_storage_blocking(tokio::task::spawn_blocking(move || {
+            context.read_cache_file(&relative)
+        }))
+        .await?
+    }
+
+    async fn delete_cache_file_blocking(&self, relative: &str) -> Result<()> {
+        if self.cache_path(relative).is_none() {
+            return Ok(());
+        }
+        let context = self.clone();
+        let relative = relative.to_string();
+        join_storage_blocking(tokio::task::spawn_blocking(move || {
+            context.delete_cache_file(&relative)
+        }))
+        .await?
+    }
+
+    async fn write_cache_file_blocking(&self, relative: &str, bytes: &[u8]) -> Result<()> {
+        if self.cache_path(relative).is_none() {
+            return Ok(());
+        }
+        let context = self.clone();
+        let relative = relative.to_string();
+        let bytes = bytes.to_vec();
+        join_storage_blocking(tokio::task::spawn_blocking(move || {
+            context.write_cache_file(&relative, &bytes)
+        }))
+        .await?
+    }
+
     async fn read_range_cached(
         &self,
         relative: &str,
         range: Range<u64>,
     ) -> Result<(Vec<u8>, bool)> {
         let cacheable = !is_mutable_lane_head(relative);
-        if cacheable && let Some(bytes) = self.read_cache_file(relative)? {
+        if cacheable && let Some(bytes) = self.read_cache_file_blocking(relative).await? {
             let start = usize::try_from(range.start).map_err(|_| {
                 BorsukError::InvalidStorage("cached range start exceeds usize".to_string())
             })?;
@@ -1220,7 +1311,7 @@ impl PrefetchReadContext {
             return Ok((slice.to_vec(), true));
         }
         let cache_key = range_cache_key(relative, range.start, range.end);
-        if cacheable && let Some(bytes) = self.read_cache_file(&cache_key)? {
+        if cacheable && let Some(bytes) = self.read_cache_file_blocking(&cache_key).await? {
             let expected =
                 usize::try_from(range.end.saturating_sub(range.start)).unwrap_or(usize::MAX);
             if bytes.len() == expected {
@@ -1229,12 +1320,12 @@ impl PrefetchReadContext {
             // A corrupt cache entry is only a miss. Failure to remove it must
             // not turn an otherwise valid backing-store read into a query
             // failure (for example on a read-only or exhausted cache disk).
-            let _ = self.delete_cache_file(&cache_key);
+            let _ = self.delete_cache_file_blocking(&cache_key).await;
         }
         let requested_bytes = range.end.saturating_sub(range.start);
         let (bytes, object_bytes) = self.read_range_uncached(relative, range).await?;
         if cacheable {
-            self.write_cache_file(&cache_key, &bytes)?;
+            self.write_cache_file_blocking(&cache_key, &bytes).await?;
         }
         self.storage_trace
             .record(StorageAccessEvent::observed_read(
@@ -1245,6 +1336,18 @@ impl PrefetchReadContext {
                 requested_bytes,
             ))?;
         Ok((bytes, false))
+    }
+
+    async fn read_range_cached_traced(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {
+        let (bytes, cache_hit) = self.read_range_cached(relative, range).await?;
+        if cache_hit {
+            self.storage_trace.record(StorageAccessEvent::cached_read(
+                relative,
+                physical_format_for_path(relative),
+                0,
+            ))?;
+        }
+        Ok(bytes)
     }
 
     fn resolve(&self, relative: &str) -> Result<ObjectPath> {
@@ -1343,6 +1446,16 @@ impl PrefetchReadContext {
                 path.display()
             ))
         })
+    }
+}
+
+async fn join_storage_blocking<T: Send + 'static>(handle: JoinHandle<T>) -> Result<T> {
+    match handle.await {
+        Ok(output) => Ok(output),
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => Err(BorsukError::InvalidStorage(format!(
+            "storage blocking task was cancelled: {error}"
+        ))),
     }
 }
 
@@ -3225,6 +3338,86 @@ impl Storage {
                 requested_bytes,
             ))?;
         Ok(bytes)
+    }
+
+    /// Fetch one already-bounded cross-object range wave without re-entering
+    /// the async runtime for each physical GET. At most `max_parallel` tasks
+    /// are active; each completion immediately refills the rolling window.
+    /// Results retain request order and the individual-read cache and trace
+    /// semantics.
+    pub(crate) fn read_range_wave(
+        &self,
+        requests: &[(String, Range<u64>)],
+        max_parallel: usize,
+        gate: Option<&Arc<AdmissionGate>>,
+    ) -> Vec<Result<Vec<u8>>> {
+        if requests.is_empty() {
+            return Vec::new();
+        }
+        let width = max_parallel.max(1).min(requests.len());
+        let context = PrefetchReadContext::from_storage(self);
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        let mut output = (0..requests.len()).map(|_| None).collect::<Vec<_>>();
+        let mut next = 0_usize;
+        let mut completed = 0_usize;
+        let mut coordinator = Some(completed_tx);
+        while next < width {
+            let (relative, range) = &requests[next];
+            let permit = gate.map(AdmissionGate::acquire_owned);
+            self.runtime.spawn_range_wave_read(
+                next,
+                context.clone(),
+                relative.clone(),
+                range.clone(),
+                permit,
+                coordinator
+                    .as_ref()
+                    .expect("range-wave sender exists")
+                    .clone(),
+            );
+            next += 1;
+        }
+        if next == requests.len() {
+            coordinator.take();
+        }
+        while completed < requests.len() {
+            let Ok((index, outcome)) = completed_rx.recv() else {
+                for slot in output.iter_mut().filter(|slot| slot.is_none()) {
+                    *slot = Some(Err(BorsukError::InvalidStorage(
+                        "range-wave storage tasks ended before reporting every result".to_string(),
+                    )));
+                }
+                break;
+            };
+            output[index] = Some(match outcome {
+                Ok(result) => result,
+                Err(panic) => std::panic::resume_unwind(panic),
+            });
+            completed += 1;
+            if next < requests.len() {
+                let (relative, range) = &requests[next];
+                let permit = gate.map(AdmissionGate::acquire_owned);
+                self.runtime.spawn_range_wave_read(
+                    next,
+                    context.clone(),
+                    relative.clone(),
+                    range.clone(),
+                    permit,
+                    coordinator
+                        .as_ref()
+                        .expect("range-wave sender exists")
+                        .clone(),
+                );
+                next += 1;
+                if next == requests.len() {
+                    coordinator.take();
+                }
+            }
+        }
+        output
+            .into_iter()
+            .map(|result| result.expect("every range-wave slot is completed or failed"))
+            .collect()
     }
 
     pub(crate) fn read_suffix(&self, relative: &str, length: u64) -> Result<ReadBytes> {
@@ -5715,6 +5908,107 @@ mod tests {
             storage.runtime.runtime().metrics().num_workers(),
             crate::configured_cpu_threads(),
             "object-store I/O workers must not silently scale to every host CPU"
+        );
+    }
+
+    #[test]
+    fn storage_runtime_blocking_capacity_tracks_backing_gets_not_cpu_threads() {
+        let shape = super::storage_runtime_thread_shape(3, 64);
+
+        assert_eq!(shape.worker_threads, 3);
+        assert!(shape.max_blocking_threads >= 64);
+    }
+
+    #[test]
+    fn cross_object_range_wave_avoids_block_on_and_preserves_order() {
+        let inner = Arc::new(ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(50),
+                ..ThrottleConfig::default()
+            },
+        ));
+        let mut storage = Storage::from_object_store(
+            "memory:///range-wave".to_string(),
+            Arc::clone(&inner) as Arc<dyn ObjectStore>,
+        )
+        .unwrap();
+        storage.runtime = Arc::new(super::BlockingRuntime::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .max_blocking_threads(4)
+                .enable_all()
+                .build()
+                .unwrap(),
+        ));
+        storage.write_bytes("wave/a.bin", b"abcdefgh").unwrap();
+        storage.write_bytes("wave/b.bin", b"ABCDEFGH").unwrap();
+        storage.write_bytes("wave/c.bin", b"01234567").unwrap();
+        storage.write_bytes("wave/d.bin", b"87654321").unwrap();
+        let requests = vec![
+            ("wave/c.bin".to_string(), 2..6),
+            ("wave/a.bin".to_string(), 1..4),
+            ("wave/b.bin".to_string(), 0..2),
+            ("wave/d.bin".to_string(), 4..8),
+        ];
+        let gate = Arc::new(crate::segment_cache::AdmissionGate::new(4));
+        let before = storage.runtime.block_on_entries();
+        let started = Instant::now();
+
+        let reads = storage.read_range_wave(&requests, 2, Some(&gate));
+
+        assert!(
+            started.elapsed() < Duration::from_millis(180),
+            "four fixed-latency GETs must overlap in two rolling async batches"
+        );
+        assert_eq!(reads.len(), 4);
+        assert_eq!(reads[0].as_deref().unwrap(), b"2345");
+        assert_eq!(reads[1].as_deref().unwrap(), b"bcd");
+        assert_eq!(reads[2].as_deref().unwrap(), b"AB");
+        assert_eq!(reads[3].as_deref().unwrap(), b"4321");
+        assert_eq!(storage.runtime.block_on_entries() - before, 0);
+        let gate = gate.snapshot();
+        assert_eq!(gate.active, 0);
+        assert_eq!(gate.admitted, 4);
+        assert!(gate.peak_active <= 2);
+    }
+
+    #[test]
+    fn cross_object_range_wave_preserves_cached_read_trace_without_backing_gets() {
+        let objects = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let trace_dir = tempfile::tempdir().unwrap();
+        let trace_path = trace_dir.path().join("storage-access.csv");
+        let uri = file_uri(objects.path());
+        Storage::from_uri(&uri)
+            .unwrap()
+            .write_bytes("wave/cached.bin", b"01234567")
+            .unwrap();
+        let mut storage =
+            Storage::from_uri_with_cache(&uri, Some(cache.path().to_path_buf())).unwrap();
+        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
+        let request = vec![("wave/cached.bin".to_string(), 2..6)];
+        assert_eq!(
+            storage.read_range_wave(&request, 1, None)[0]
+                .as_deref()
+                .unwrap(),
+            b"2345"
+        );
+        storage.storage_trace.reset().unwrap();
+        let before = storage.request_counts();
+
+        assert_eq!(
+            storage.read_range_wave(&request, 1, None)[0]
+                .as_deref()
+                .unwrap(),
+            b"2345"
+        );
+
+        assert_eq!(storage.request_counts().delta(&before).gets, 0);
+        assert_eq!(
+            fs::read_to_string(trace_path).unwrap().lines().count(),
+            2,
+            "the cached wave must retain one zero-backing-I/O trace row"
         );
     }
 

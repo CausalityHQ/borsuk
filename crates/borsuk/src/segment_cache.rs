@@ -731,6 +731,18 @@ impl AdmissionGate {
         AdmissionPermit { gate: self }
     }
 
+    /// Block the synchronous coordinator until a permit is available and
+    /// retain it independently of that coordinator's stack frame. Never call
+    /// this method on an async runtime worker: its wait uses a condition
+    /// variable by design.
+    pub(crate) fn acquire_owned(self: &Arc<Self>) -> OwnedAdmissionPermit {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        self.acquire_locked(state);
+        OwnedAdmissionPermit {
+            gate: Arc::clone(self),
+        }
+    }
+
     /// Join the bounded FIFO queue, or reject immediately when every active
     /// and waiting slot is already occupied.
     pub(crate) fn acquire_bounded(&self) -> Option<AdmissionPermit<'_>> {
@@ -808,6 +820,18 @@ pub(crate) struct AdmissionPermit<'a> {
 }
 
 impl Drop for AdmissionPermit<'_> {
+    fn drop(&mut self) {
+        self.gate.release();
+    }
+}
+
+/// Owned counterpart to [`AdmissionPermit`] for work executing on the shared
+/// async storage runtime.
+pub(crate) struct OwnedAdmissionPermit {
+    gate: Arc<AdmissionGate>,
+}
+
+impl Drop for OwnedAdmissionPermit {
     fn drop(&mut self) {
         self.gate.release();
     }

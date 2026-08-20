@@ -18092,14 +18092,15 @@ impl BorsukIndex {
             .as_ref()
             .map(|gate| gate.acquire_owned(exact_admission_bytes));
         let exact_requests_before = self.storage.request_counts();
-        let exact_reads = bounded_io_map_with_gate(
-            exact_plan.reads(),
+        let exact_range_requests = exact_plan
+            .reads()
+            .iter()
+            .map(|read| (read.group.path.clone(), read.start..read.end))
+            .collect::<Vec<_>>();
+        let exact_reads = self.storage.read_range_wave(
+            &exact_range_requests,
             self.leaf_read_width,
             Some(&self.global_pq_rerank_admission),
-            |read| {
-                self.storage
-                    .read_range(&read.group.path, read.start..read.end)
-            },
         );
         let exact_request_counts = self.storage.request_counts().delta(&exact_requests_before);
         let exact_storage_requests = usize::try_from(
