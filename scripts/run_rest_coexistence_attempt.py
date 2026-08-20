@@ -17,7 +17,14 @@ except ImportError:
     from rest_coexistence_load import evaluate_phase, run_phase, summarize
 
 CAUSALITY_AWS_ACCOUNT = "453182569524"
-REST_RESULT_SCHEMA_VERSION = 4
+REST_RESULT_SCHEMA_VERSION = 5
+FLOW_CONTROL_COUNTERS = (
+    "borsuk_leaf_read_wait_count",
+    "borsuk_leaf_read_wait_micros",
+    "borsuk_search_rejected",
+    "borsuk_search_wait_count",
+    "borsuk_search_wait_micros",
+)
 
 
 def accepted_search_qps(summary: dict[str, Any]) -> float:
@@ -124,6 +131,19 @@ def _metrics(base_url: str) -> dict[str, Any]:
         return json.loads(response.read())
 
 
+def flow_control_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, int]:
+    delta: dict[str, int] = {}
+    for field in FLOW_CONTROL_COUNTERS:
+        first = before.get(field)
+        last = after.get(field)
+        if type(first) is not int or type(last) is not int:
+            raise ValueError(f"REST flow-control counter {field} is missing or non-integer")
+        if last < first:
+            raise ValueError(f"REST flow-control counter {field} regressed")
+        delta[field] = last - first
+    return delta
+
+
 def _queries(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
@@ -138,8 +158,11 @@ def _run(
     queries: list[dict[str, object]],
     baseline: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    flow_before = _metrics(base_url)
     samples = run_phase(base_url, duration, cheap_qps, search_qps, queries, 256, 30.0)
+    flow_after = _metrics(base_url)
     summary = summarize(name, duration, samples)
+    summary["flow_control_delta"] = flow_control_delta(flow_before, flow_after)
     failures = evaluate_phase(name, summary if baseline is None else baseline, summary)
     summary["gate_failures"] = failures
     summary["passed"] = not failures

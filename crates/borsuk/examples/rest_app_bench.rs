@@ -126,7 +126,12 @@ struct MetricsResponse {
     search_rejected: u64,
     search_in_flight: u64,
     borsuk_search_waiting: usize,
+    borsuk_search_wait_count: u64,
+    borsuk_search_wait_micros: u64,
     borsuk_leaf_reads_in_flight: usize,
+    borsuk_leaf_read_peak_active: usize,
+    borsuk_leaf_read_wait_count: u64,
+    borsuk_leaf_read_wait_micros: u64,
     borsuk_search_rejected: u64,
     borsuk_search_capacity: usize,
     borsuk_leaf_read_width: usize,
@@ -175,7 +180,12 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         search_rejected: state.metrics.search_rejected.load(Relaxed),
         search_in_flight: state.metrics.search_in_flight.load(Relaxed),
         borsuk_search_waiting: flow.searches.waiting,
+        borsuk_search_wait_count: flow.searches.wait_count,
+        borsuk_search_wait_micros: flow.searches.wait_micros,
         borsuk_leaf_reads_in_flight: flow.leaf_reads.active,
+        borsuk_leaf_read_peak_active: flow.leaf_reads.peak_active,
+        borsuk_leaf_read_wait_count: flow.leaf_reads.wait_count,
+        borsuk_leaf_read_wait_micros: flow.leaf_reads.wait_micros,
         borsuk_search_rejected: flow.searches.rejected,
         borsuk_search_capacity: flow.searches.capacity,
         borsuk_leaf_read_width: flow.leaf_read_width,
@@ -517,8 +527,13 @@ mod tests {
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["borsuk_search_capacity"], 8);
+        assert_eq!(value["borsuk_search_wait_count"], 0);
+        assert_eq!(value["borsuk_search_wait_micros"], 0);
         assert_eq!(value["borsuk_leaf_read_width"], 32);
         assert_eq!(value["borsuk_leaf_read_capacity"], 48);
+        assert_eq!(value["borsuk_leaf_read_peak_active"], 0);
+        assert_eq!(value["borsuk_leaf_read_wait_count"], 0);
+        assert_eq!(value["borsuk_leaf_read_wait_micros"], 0);
         assert_eq!(value["borsuk_exact_read_max_physical_amplification"], 5);
         assert_eq!(value["borsuk_page_budget"], 4);
         assert_eq!(value["borsuk_exact_candidates"], 512);

@@ -5,6 +5,7 @@ import unittest
 from scripts.run_rest_coexistence_attempt import (
     REST_RESULT_SCHEMA_VERSION,
     accepted_search_qps,
+    flow_control_delta,
     overload_search_qps,
     select_sustainable_search_qps,
     staircase_has_only_expected_capacity_failures,
@@ -16,8 +17,37 @@ from scripts.run_rest_coexistence_attempt import (
 
 
 class RestCoexistenceAttemptTest(unittest.TestCase):
+    def test_flow_control_delta_is_phase_scoped_and_monotonic(self) -> None:
+        before = {
+            "borsuk_leaf_read_wait_count": 3,
+            "borsuk_leaf_read_wait_micros": 100,
+            "borsuk_search_rejected": 2,
+            "borsuk_search_wait_count": 0,
+            "borsuk_search_wait_micros": 0,
+        }
+        after = {
+            "borsuk_leaf_read_wait_count": 8,
+            "borsuk_leaf_read_wait_micros": 325,
+            "borsuk_search_rejected": 4,
+            "borsuk_search_wait_count": 1,
+            "borsuk_search_wait_micros": 9,
+        }
+        self.assertEqual(
+            flow_control_delta(before, after),
+            {
+                "borsuk_leaf_read_wait_count": 5,
+                "borsuk_leaf_read_wait_micros": 225,
+                "borsuk_search_rejected": 2,
+                "borsuk_search_wait_count": 1,
+                "borsuk_search_wait_micros": 9,
+            },
+        )
+        after["borsuk_leaf_read_wait_count"] = 2
+        with self.assertRaisesRegex(ValueError, "regressed"):
+            flow_control_delta(before, after)
+
     def test_terminal_result_schema_cuts_with_effective_limit_shape(self) -> None:
-        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 4)
+        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 5)
 
     def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
         self.assertEqual(
