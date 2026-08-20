@@ -26,6 +26,7 @@ RUNTIME_FIELDS = {
     "search_admission",
     "page_budget",
     "exact_candidates",
+    "exact_read_max_physical_amplification",
     "leaf_read_width",
     "max_inflight_leaf_reads",
     "ram_budget_bytes",
@@ -108,6 +109,10 @@ def _validated_runtime(value: dict[str, int]) -> dict[str, int]:
         raise ValueError("runtime page_budget must be 4, 8, 16, 32, or 64")
     if not 10 <= value["exact_candidates"] <= 2_048:
         raise ValueError("runtime exact_candidates must be in 10..=2048")
+    if value["exact_read_max_physical_amplification"] not in (1, 2, 3, 4, 5):
+        raise ValueError(
+            "runtime exact_read_max_physical_amplification must be in 1..=5"
+        )
     for field in ("leaf_read_width", "max_inflight_leaf_reads"):
         if not 1 <= value[field] <= 1024:
             raise ValueError(f"runtime {field} must be in 1..=1024")
@@ -133,6 +138,7 @@ def cold_s3_cap_matrix() -> list[dict[str, int | str]]:
                 "search_admission": search_admission,
                 "page_budget": 32,
                 "exact_candidates": 512,
+                "exact_read_max_physical_amplification": 5,
                 "leaf_read_width": leaf_width,
                 "max_inflight_leaf_reads": inflight,
                 "ram_budget_bytes": 2 * 1024**3,
@@ -375,6 +381,8 @@ def _user_data(
             f"--setenv=BORSUK_REST_SEARCH_ADMISSION={runtime['search_admission']} "
             f"--setenv=BORSUK_REST_PAGE_BUDGET={runtime['page_budget']} "
             f"--setenv=BORSUK_REST_EXACT_CANDIDATES={runtime['exact_candidates']} "
+            "--setenv=BORSUK_REST_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION="
+            f"{runtime['exact_read_max_physical_amplification']} "
             f"--setenv=BORSUK_REST_LEAF_READ_WIDTH={runtime['leaf_read_width']} "
             f"--setenv=BORSUK_REST_MAX_INFLIGHT_LEAF_READS={runtime['max_inflight_leaf_reads']} "
             f"--setenv=BORSUK_REST_RAM_BUDGET_BYTES={runtime['ram_budget_bytes']} "
@@ -648,7 +656,7 @@ def build_launch_pair(
     generator_worker_sha256 = hashlib.sha256(generator_worker.encode("utf-8")).hexdigest()
     workload_sha256 = hashlib.sha256(_canonical_bytes(workload)).hexdigest()
     authority = {
-        "schema_version": 2,
+        "schema_version": 3,
         "aws_profile": aws_profile,
         "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,
@@ -665,7 +673,7 @@ def build_launch_pair(
     }
     attempt_authority_sha256 = hashlib.sha256(_canonical_bytes(authority)).hexdigest()
     receipt = {
-        "schema_version": 2,
+        "schema_version": 3,
         "aws_profile": aws_profile,
         "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,

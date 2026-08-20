@@ -853,6 +853,7 @@ def open(
     max_waiting_searches: int = 16,
     leaf_read_width: int = 32,
     max_inflight_leaf_reads: int = 48,
+    exact_read_max_physical_amplification: int = 5,
 ) -> Index:
     max_active_searches = _validate_required_int(
         max_active_searches, "max_active_searches"
@@ -864,6 +865,10 @@ def open(
     max_inflight_leaf_reads = _validate_required_int(
         max_inflight_leaf_reads, "max_inflight_leaf_reads"
     )
+    exact_read_max_physical_amplification = _validate_required_int(
+        exact_read_max_physical_amplification,
+        "exact_read_max_physical_amplification",
+    )
     if max_active_searches <= 0:
         raise ValueError("max_active_searches must be greater than zero")
     if max_waiting_searches < 0:
@@ -872,6 +877,10 @@ def open(
         raise ValueError("leaf_read_width must be greater than zero")
     if max_inflight_leaf_reads <= 0:
         raise ValueError("max_inflight_leaf_reads must be greater than zero")
+    if not 1 <= exact_read_max_physical_amplification <= 5:
+        raise ValueError(
+            "exact_read_max_physical_amplification must be between 1 and 5"
+        )
     return _open(
         uri,
         cache_dir=cache_dir,
@@ -883,6 +892,7 @@ def open(
         max_waiting_searches=max_waiting_searches,
         leaf_read_width=leaf_read_width,
         max_inflight_leaf_reads=max_inflight_leaf_reads,
+        exact_read_max_physical_amplification=exact_read_max_physical_amplification,
     )
 
 

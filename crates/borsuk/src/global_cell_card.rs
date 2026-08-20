@@ -1826,14 +1826,34 @@ impl CellCardExactWavePlan {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn plan_cell_card_exact_wave(
     ranked: &[RankedCellCardExactBlock],
     max_physical_bytes: u64,
     max_requests: usize,
 ) -> Result<CellCardExactWavePlan> {
+    plan_cell_card_exact_wave_with_amplification(
+        ranked,
+        max_physical_bytes,
+        max_requests,
+        CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION,
+    )
+}
+
+pub(crate) fn plan_cell_card_exact_wave_with_amplification(
+    ranked: &[RankedCellCardExactBlock],
+    max_physical_bytes: u64,
+    max_requests: usize,
+    max_physical_amplification: u64,
+) -> Result<CellCardExactWavePlan> {
     if ranked.is_empty() || max_physical_bytes == 0 || max_requests == 0 {
         return Err(BorsukError::InvalidStorage(
             "cell-card exact wave bounds and blocks must be non-empty".to_string(),
+        ));
+    }
+    if !(1..=CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION).contains(&max_physical_amplification) {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card exact physical amplification is outside 1..=5".to_string(),
         ));
     }
     let selected_total = ranked.iter().try_fold(0_u64, |total, block| {
@@ -1879,7 +1899,7 @@ pub(crate) fn plan_cell_card_exact_wave(
         });
     }
     let mut speculative_gap_budget = (max_physical_bytes - selected_total)
-        .min(selected_total.saturating_mul(CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION - 1));
+        .min(selected_total.saturating_mul(max_physical_amplification - 1));
     loop {
         let cheapest = reads
             .windows(2)
@@ -1937,11 +1957,28 @@ pub(crate) fn plan_cell_card_exact_wave(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn plan_ranked_cell_card_exact_wave(
     ranked: &[RankedCellCardExactBlock],
     max_physical_bytes: u64,
     max_blocks: usize,
     max_requests: usize,
+) -> Result<(CellCardExactWavePlan, bool)> {
+    plan_ranked_cell_card_exact_wave_with_amplification(
+        ranked,
+        max_physical_bytes,
+        max_blocks,
+        max_requests,
+        CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION,
+    )
+}
+
+pub(crate) fn plan_ranked_cell_card_exact_wave_with_amplification(
+    ranked: &[RankedCellCardExactBlock],
+    max_physical_bytes: u64,
+    max_blocks: usize,
+    max_requests: usize,
+    max_physical_amplification: u64,
 ) -> Result<(CellCardExactWavePlan, bool)> {
     if max_blocks == 0 {
         return Err(BorsukError::InvalidStorage(
@@ -1950,7 +1987,12 @@ pub(crate) fn plan_ranked_cell_card_exact_wave(
     }
     let mut last_limit = None;
     for prefix in (1..=ranked.len().min(max_blocks)).rev() {
-        match plan_cell_card_exact_wave(&ranked[..prefix], max_physical_bytes, max_requests) {
+        match plan_cell_card_exact_wave_with_amplification(
+            &ranked[..prefix],
+            max_physical_bytes,
+            max_requests,
+            max_physical_amplification,
+        ) {
             Ok(plan) => return Ok((plan, prefix < ranked.len())),
             Err(error @ BorsukError::RecallGuaranteeViolated { .. }) => last_limit = Some(error),
             Err(error) => return Err(error),
@@ -4074,6 +4116,26 @@ mod tests {
             .iter()
             .map(|block| u64::from(block.reference.bytes))
             .sum::<u64>();
+        let strict = super::plan_cell_card_exact_wave_with_amplification(
+            &selected,
+            selected_bytes * 2,
+            2,
+            1,
+        )
+        .unwrap();
+        assert_eq!(strict.requests(), 2);
+        assert_eq!(strict.physical_bytes(), selected_bytes);
+
+        let bounded_coalesced = super::plan_cell_card_exact_wave_with_amplification(
+            &selected,
+            selected_bytes * 2,
+            2,
+            2,
+        )
+        .unwrap();
+        assert_eq!(bounded_coalesced.requests(), 1);
+        assert!(bounded_coalesced.physical_bytes() <= selected_bytes * 2);
+
         let plan = super::plan_cell_card_exact_wave(&selected, selected_bytes, 2).unwrap();
         assert_eq!(plan.requests(), 2);
         assert_eq!(plan.physical_bytes(), selected_bytes);

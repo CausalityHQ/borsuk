@@ -711,6 +711,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(runtime_env["BORSUK_BENCH_MAX_WAITING_SEARCHES"], "16")
         self.assertEqual(runtime_env["BORSUK_BENCH_LEAF_READ_WIDTH"], "32")
         self.assertEqual(runtime_env["BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"], "48")
+        self.assertEqual(
+            runtime_env["BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"], "5"
+        )
         self.assertEqual(runtime_env["BORSUK_CPU_THREADS"], "3")
         self.assertEqual(runtime_env["BORSUK_IO_THREADS"], "88")
         self.assertEqual(runtime_env["BORSUK_BACKING_GET_CONCURRENCY"], "64")
@@ -722,12 +725,13 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertNotIn("arm_id", concurrency_result_arm(arm))
 
         effective = {
-            "schema_version": 1,
+            "schema_version": 2,
             "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
             "max_active_searches": 4,
             "max_waiting_searches": 16,
             "leaf_read_width": 32,
             "max_inflight_leaf_reads": 48,
+            "exact_read_max_physical_amplification": 5,
             "cpu_threads": 3,
             "io_threads": 88,
             "s3_get_concurrency": 64,
@@ -736,13 +740,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(
             contract,
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "runtime_profile": "concurrency",
                 "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
                 "max_active_searches": 4,
                 "max_waiting_searches": 16,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
+                "exact_read_max_physical_amplification": 5,
                 "cpu_threads": 3,
                 "io_threads": 88,
                 "s3_get_concurrency": 64,
@@ -762,6 +767,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 plan,
                 "concurrency",
                 {**effective, "max_active_searches": 3},
+            )
+        runtime_env["BORSUK_BENCH_RAM_BUDGET_BYTES"] = str(2 * 1024 * 1024 * 1024)
+        runtime_env["BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"] = "6"
+        with self.assertRaisesRegex(ValueError, "physical amplification"):
+            runtime_execution_contract(
+                plan,
+                "concurrency",
+                {**effective, "exact_read_max_physical_amplification": 6},
             )
 
     def test_concurrency_artifacts_require_complete_workers_queries_and_recall(self) -> None:

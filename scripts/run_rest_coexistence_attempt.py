@@ -17,6 +17,7 @@ except ImportError:
     from rest_coexistence_load import evaluate_phase, run_phase, summarize
 
 CAUSALITY_AWS_ACCOUNT = "453182569524"
+REST_RESULT_SCHEMA_VERSION = 4
 
 
 def accepted_search_qps(summary: dict[str, Any]) -> float:
@@ -99,6 +100,9 @@ def validate_effective_limits(expected: dict[str, int], actual: dict[str, Any]) 
         "max_inflight_leaf_reads": "borsuk_leaf_read_capacity",
         "page_budget": "borsuk_page_budget",
         "exact_candidates": "borsuk_exact_candidates",
+        "exact_read_max_physical_amplification": (
+            "borsuk_exact_read_max_physical_amplification"
+        ),
         "ram_budget_bytes": "borsuk_ram_budget_bytes",
         "disk_cache_bytes": "borsuk_disk_cache_bytes",
     }
@@ -240,7 +244,7 @@ def main() -> int:
         and mixed_overload["passed"]
     )
     receipt = {
-        "schema_version": 3,
+        "schema_version": REST_RESULT_SCHEMA_VERSION,
         **aws_identity,
         "status": "complete" if passed else "failed",
         "attempt_authority_sha256": attempt_authority_sha256,

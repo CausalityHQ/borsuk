@@ -51,6 +51,7 @@ pub struct OpenOptionsJs {
     pub max_waiting_searches: Option<u32>,
     pub leaf_read_width: Option<u32>,
     pub max_inflight_leaf_reads: Option<u32>,
+    pub exact_read_max_physical_amplification: Option<u32>,
 }
 
 #[napi(object)]
@@ -1608,6 +1609,12 @@ fn open(uri: String, options: OpenOptionsJs) -> Result<JsIndex> {
                 .map_or(borsuk::DEFAULT_MAX_INFLIGHT_LEAF_READS, |value| {
                     value as usize
                 }),
+            exact_read_max_physical_amplification: options
+                .exact_read_max_physical_amplification
+                .map_or(
+                    borsuk::DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION,
+                    u64::from,
+                ),
             ..OpenOptions::default()
         },
     )

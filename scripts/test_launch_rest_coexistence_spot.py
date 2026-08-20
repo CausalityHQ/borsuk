@@ -109,6 +109,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "search_admission": 4,
                 "page_budget": 32,
                 "exact_candidates": 512,
+            "exact_read_max_physical_amplification": 5,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
                 "ram_budget_bytes": 2 * 1024**3,
@@ -171,6 +172,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("BORSUK_REST_SEARCH_ADMISSION=4", user_data)
         self.assertIn("BORSUK_REST_PAGE_BUDGET=32", user_data)
         self.assertIn("BORSUK_REST_EXACT_CANDIDATES=512", user_data)
+        self.assertIn(
+            "BORSUK_REST_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION=5", user_data
+        )
         self.assertNotIn("BORSUK_REST_EXACT_HEDGE_AFTER_MS", user_data)
         self.assertIn("BORSUK_REST_LEAF_READ_WIDTH=32", user_data)
         self.assertIn("BORSUK_REST_MAX_INFLIGHT_LEAF_READS=48", user_data)
@@ -233,7 +237,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
 
     def test_pair_binds_immutable_inputs_and_terminal_prefix(self) -> None:
         receipt = self.pair["receipt"]
-        self.assertEqual(receipt["schema_version"], 2)
+        self.assertEqual(receipt["schema_version"], 3)
         self.assertEqual(receipt["aws_profile"], "causality")
         self.assertEqual(receipt["aws_account_id"], "453182569524")
         self.assertEqual(receipt["runtime"], self.pair["runtime"])
@@ -609,6 +613,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             {(16, 32, 32), (32, 48, 64), (32, 96, 128)},
         )
         self.assertTrue(all(cell["disk_cache_bytes"] == 0 for cell in cells))
+        self.assertTrue(
+            all(cell["exact_read_max_physical_amplification"] == 5 for cell in cells)
+        )
         self.assertTrue(all("exact_hedge_after_ms" not in cell for cell in cells))
         self.assertTrue(
             all(cell["io_threads"] >= cell["s3_get_concurrency"] for cell in cells)

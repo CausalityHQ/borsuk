@@ -54,7 +54,7 @@ use crate::{
         CellCardHeadWavePlan, CellCardPush, GlobalCellCardAnnRef, LoadedCellCardHead,
         cell_card_exact_admission_bounds, decode_cell_card_exact_wave, decode_cell_card_run_root,
         decode_verified_cell_card_head_wave, encode_cell_card_run_root,
-        plan_ranked_cell_card_exact_wave, plan_ranked_cell_card_head_wave,
+        plan_ranked_cell_card_exact_wave_with_amplification, plan_ranked_cell_card_head_wave,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
         rank_cell_card_exact_blocks, rank_cell_card_head_indexes, score_loaded_cell_card_heads,
         validate_cell_card_code_range,
@@ -547,6 +547,7 @@ fn global_cell_card_wave_admission_bytes(
     exact_block_bytes_ceiling: u64,
     exact_block_rows_ceiling: u64,
     dimensions: usize,
+    max_physical_amplification: u64,
 ) -> u64 {
     let (head_rows, head_exact_blocks) = head_plan
         .reads()
@@ -574,8 +575,8 @@ fn global_cell_card_wave_admission_bytes(
         .min(max_bytes);
     let exact_physical = exact_selected
         // Bound the full query-latency tradeoff: selected exact payload plus
-        // at most four selected bytes of skipped gaps.
-        .saturating_mul(CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION)
+        // the configured multiple's remaining allowance for skipped gaps.
+        .saturating_mul(max_physical_amplification)
         .min(max_bytes);
     let decoded_row_bytes = (dimensions as u64)
         .saturating_mul(std::mem::size_of::<f32>() as u64)
@@ -762,6 +763,11 @@ pub const DEFAULT_MAX_WAITING_SEARCHES: usize = 16;
 pub const DEFAULT_LEAF_READ_WIDTH: usize = 32;
 /// Default per-handle cap on immutable ANN range reads across all searches.
 pub const DEFAULT_MAX_INFLIGHT_LEAF_READS: usize = 48;
+/// Default upper bound on exact-rerank physical range bytes relative to the
+/// selected exact-block bytes. Values below this trade more requests for less
+/// uncached S3 transfer; production never permits values above this bound.
+pub const DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION: u64 =
+    CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION;
 /// Leave half the process RAM envelope available for routing, dense search,
 /// caches, result assembly, allocator slack, and the application embedding the
 /// library. Lexical transient decodes share the other half through a weighted
@@ -897,6 +903,11 @@ pub struct OpenOptions {
     /// named modality children. The lower of this and the process-wide backing
     /// GET cap provides per-index fairness.
     pub max_inflight_leaf_reads: usize,
+    /// Maximum physical bytes fetched for an exact-rerank wave as a multiple
+    /// of its selected exact-block bytes. `1` disables speculative gap reads;
+    /// values up to the proven default of `5` may trade additional bytes for
+    /// fewer S3 range requests.
+    pub exact_read_max_physical_amplification: u64,
 }
 
 impl Default for OpenOptions {
@@ -921,6 +932,7 @@ impl Default for OpenOptions {
             max_waiting_searches: DEFAULT_MAX_WAITING_SEARCHES,
             leaf_read_width: DEFAULT_LEAF_READ_WIDTH,
             max_inflight_leaf_reads: DEFAULT_MAX_INFLIGHT_LEAF_READS,
+            exact_read_max_physical_amplification: DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION,
         }
     }
 }
@@ -973,6 +985,8 @@ pub struct FlowControlStats {
     pub leaf_reads: AdmissionStats,
     /// Maximum immutable ANN reads launched in one query wave.
     pub leaf_read_width: usize,
+    /// Maximum exact-rerank physical bytes per selected exact-block byte.
+    pub exact_read_max_physical_amplification: u64,
 }
 
 /// A BORSUK index handle.
@@ -1269,6 +1283,7 @@ struct CollectionReadRuntime {
     segment_cache: Arc<OnceLock<Arc<DecodedSegmentCache>>>,
     admission: Arc<AdmissionGate>,
     leaf_read_width: usize,
+    exact_read_max_physical_amplification: u64,
     global_pq_rerank_admission: Arc<AdmissionGate>,
     cell_card_code_planes: Arc<DecodedObjectCache<Vec<u8>>>,
     prepared_cell_card_code_planes: Mutex<Option<PreparedCellCardCodePlanes>>,
@@ -3162,6 +3177,7 @@ impl CollectionReadRuntime {
                 options.max_waiting_searches,
             )),
             leaf_read_width: options.leaf_read_width,
+            exact_read_max_physical_amplification: options.exact_read_max_physical_amplification,
             global_pq_rerank_admission: Arc::new(AdmissionGate::new(
                 options.max_inflight_leaf_reads,
             )),
@@ -3274,6 +3290,9 @@ impl BorsukIndex {
             searches: public(self.admission.snapshot()),
             leaf_reads: public(self.global_pq_rerank_admission.snapshot()),
             leaf_read_width: self.leaf_read_width,
+            exact_read_max_physical_amplification: self
+                .read_runtime
+                .exact_read_max_physical_amplification,
         }
     }
 
@@ -4281,6 +4300,8 @@ impl BorsukIndex {
                 max_waiting_searches: DEFAULT_MAX_WAITING_SEARCHES,
                 leaf_read_width: DEFAULT_LEAF_READ_WIDTH,
                 max_inflight_leaf_reads: DEFAULT_MAX_INFLIGHT_LEAF_READS,
+                exact_read_max_physical_amplification:
+                    DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION,
             },
         )
     }
@@ -17856,6 +17877,7 @@ impl BorsukIndex {
             selected_exact_block_ceiling,
             selected_exact_row_ceiling,
             self.manifest.config.dimensions,
+            self.read_runtime.exact_read_max_physical_amplification,
         );
         // Reserve both dependent waves with one permit. Retaining a head permit
         // and then acquiring another permit from the same weighted gate can
@@ -18040,11 +18062,12 @@ impl BorsukIndex {
                 SearchTerminationReason::MaxLatency,
             )));
         }
-        let (exact_plan, exact_limited) = match plan_ranked_cell_card_exact_wave(
+        let (exact_plan, exact_limited) = match plan_ranked_cell_card_exact_wave_with_amplification(
             &ranked,
             exact_budget,
             GLOBAL_LEAF_QUERY_WAVE_PAGES,
             GLOBAL_LEAF_QUERY_WAVE_PAGES,
+            self.read_runtime.exact_read_max_physical_amplification,
         ) {
             Ok(plan) => plan,
             Err(BorsukError::RecallGuaranteeViolated { reason }) => {
@@ -27722,6 +27745,13 @@ fn validate_open_options(options: &OpenOptions) -> Result<()> {
             "max_inflight_leaf_reads must be at most 1024".to_string(),
         ));
     }
+    if !(1..=CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION)
+        .contains(&options.exact_read_max_physical_amplification)
+    {
+        return Err(BorsukError::InvalidOpenOptions(
+            "exact_read_max_physical_amplification must be in 1..=5".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -31579,9 +31609,28 @@ mod tests {
         index.flush().unwrap();
         drop(index);
 
-        let reopened = BorsukIndex::open(&uri).unwrap();
+        let reopened = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                exact_read_max_physical_amplification: 2,
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
         let child = &reopened.named["dense-child"];
         assert!(Arc::ptr_eq(&reopened.read_runtime, &child.read_runtime));
+        assert_eq!(
+            reopened
+                .flow_control_stats()
+                .exact_read_max_physical_amplification,
+            2
+        );
+        assert_eq!(
+            child
+                .flow_control_stats()
+                .exact_read_max_physical_amplification,
+            2
+        );
         assert!(Arc::ptr_eq(
             &reopened.wal_tail_runtime,
             &child.wal_tail_runtime
@@ -35785,6 +35834,10 @@ mod tests {
             DEFAULT_MAX_INFLIGHT_LEAF_READS
         );
         assert_eq!(
+            OpenOptions::default().exact_read_max_physical_amplification,
+            CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION
+        );
+        assert_eq!(
             SearchOptions::default().prefetch_depth,
             16,
             "the production query default should overlap S3 waits up to the bounded per-query width"
@@ -35828,6 +35881,19 @@ mod tests {
             assert!(error.to_string().contains(field));
         }
         validate_open_options(&OpenOptions::default()).unwrap();
+        for amplification in [0, CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION + 1] {
+            let error = validate_open_options(&OpenOptions {
+                exact_read_max_physical_amplification: amplification,
+                ..OpenOptions::default()
+            })
+            .unwrap_err();
+            assert!(matches!(error, BorsukError::InvalidOpenOptions(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("exact_read_max_physical_amplification")
+            );
+        }
     }
 
     #[test]

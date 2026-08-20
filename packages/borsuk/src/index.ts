@@ -708,6 +708,7 @@ export interface OpenOptions {
   maxWaitingSearches?: number;
   leafReadWidth?: number;
   maxInflightLeafReads?: number;
+  exactReadMaxPhysicalAmplification?: number;
 }
 
 interface NativeOpenOptions {
@@ -728,6 +729,8 @@ interface NativeOpenOptions {
   leaf_read_width?: number;
   maxInflightLeafReads?: number;
   max_inflight_leaf_reads?: number;
+  exactReadMaxPhysicalAmplification?: number;
+  exact_read_max_physical_amplification?: number;
 }
 
 interface NativeSearchOptions {
@@ -1815,6 +1818,18 @@ export async function open(uri: string, options: OpenOptions = {}): Promise<Inde
     options.maxInflightLeafReads,
     "max_inflight_leaf_reads",
   );
+  const exactReadMaxPhysicalAmplification = validateOptionalIntegerOption(
+    options.exactReadMaxPhysicalAmplification,
+    "exact_read_max_physical_amplification",
+  );
+  if (
+    exactReadMaxPhysicalAmplification !== undefined &&
+    (exactReadMaxPhysicalAmplification < 1 || exactReadMaxPhysicalAmplification > 5)
+  ) {
+    throw new BorsukError(
+      "exact_read_max_physical_amplification must be between 1 and 5 when set",
+    );
+  }
   const inner = await wrapNativeError(() =>
     native.open(uri, {
       cacheDir: options.cacheDir,
@@ -1834,6 +1849,8 @@ export async function open(uri: string, options: OpenOptions = {}): Promise<Inde
       leaf_read_width: leafReadWidth,
       maxInflightLeafReads,
       max_inflight_leaf_reads: maxInflightLeafReads,
+      exactReadMaxPhysicalAmplification,
+      exact_read_max_physical_amplification: exactReadMaxPhysicalAmplification,
     }),
   );
   return new Index(uri, inner);

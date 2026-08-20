@@ -1421,6 +1421,15 @@ class PythonApiTests(unittest.TestCase):
             ValueError, "max_waiting_searches must be non-negative"
         ):
             borsuk.open("unused", max_waiting_searches=-1)
+        for value in (0, 6):
+            with self.subTest(exact_read_max_physical_amplification=value):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "exact_read_max_physical_amplification must be between 1 and 5",
+                ):
+                    borsuk.open(
+                        "unused", exact_read_max_physical_amplification=value
+                    )
 
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)
@@ -1431,6 +1440,7 @@ class PythonApiTests(unittest.TestCase):
                 max_waiting_searches=0,
                 leaf_read_width=1,
                 max_inflight_leaf_reads=1,
+                exact_read_max_physical_amplification=1,
             )
             self.assertEqual(reopened.stats().dimensions, 2)
 

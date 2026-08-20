@@ -19,12 +19,13 @@ use arrow_array::{
 };
 use borsuk::{
     BACKING_GET_CONCURRENCY_ENV, BorsukIndex, BuildConfig, CPU_THREADS_ENV, CacheExecutionPolicy,
-    CompactionOptions, DEFAULT_LEAF_READ_WIDTH, DEFAULT_MAX_ACTIVE_SEARCHES,
-    DEFAULT_MAX_INFLIGHT_LEAF_READS, DEFAULT_MAX_WAITING_SEARCHES, GlobalPqLayout, GlobalScanCodec,
-    IO_THREADS_ENV, IndexConfig, LeafCapability, LeafMode, OpenOptions, ProcessLimits,
-    RequestCounts, SearchOptions, SearchReport, VectorElementType, VectorMetric, VectorRecord,
-    WalConfig, WarmReport, configure_process, configured_backing_get_concurrency,
-    configured_cpu_threads, configured_io_threads, recall_at_k, recommended_segment_max_vectors,
+    CompactionOptions, DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION, DEFAULT_LEAF_READ_WIDTH,
+    DEFAULT_MAX_ACTIVE_SEARCHES, DEFAULT_MAX_INFLIGHT_LEAF_READS, DEFAULT_MAX_WAITING_SEARCHES,
+    GlobalPqLayout, GlobalScanCodec, IO_THREADS_ENV, IndexConfig, LeafCapability, LeafMode,
+    OpenOptions, ProcessLimits, RequestCounts, SearchOptions, SearchReport, VectorElementType,
+    VectorMetric, VectorRecord, WalConfig, WarmReport, configure_process,
+    configured_backing_get_concurrency, configured_cpu_threads, configured_io_threads, recall_at_k,
+    recommended_segment_max_vectors,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
@@ -140,6 +141,7 @@ struct ResolvedConfig {
     max_waiting_searches: usize,
     leaf_read_width: usize,
     max_inflight_leaf_reads: usize,
+    exact_read_max_physical_amplification: u64,
     uncached_queries: usize,
     cache_profile: BenchmarkCacheProfile,
     cache_coverage_percent: usize,
@@ -164,6 +166,7 @@ struct EffectiveRuntimeFlowControl {
     max_waiting_searches: usize,
     leaf_read_width: usize,
     max_inflight_leaf_reads: usize,
+    exact_read_max_physical_amplification: u64,
     cpu_threads: usize,
     io_threads: usize,
     s3_get_concurrency: usize,
@@ -803,12 +806,13 @@ fn write_effective_runtime_flow_control(config: &ResolvedConfig) -> BenchResult<
     serde_json::to_writer(
         &mut output,
         &EffectiveRuntimeFlowControl {
-            schema_version: 1,
+            schema_version: 2,
             ram_budget_bytes: config.ram_budget_bytes,
             max_active_searches: config.max_active_searches,
             max_waiting_searches: config.max_waiting_searches,
             leaf_read_width: config.leaf_read_width,
             max_inflight_leaf_reads: config.max_inflight_leaf_reads,
+            exact_read_max_physical_amplification: config.exact_read_max_physical_amplification,
             cpu_threads: configured_cpu_threads(),
             io_threads: configured_io_threads(),
             s3_get_concurrency: configured_backing_get_concurrency(),
@@ -817,6 +821,16 @@ fn write_effective_runtime_flow_control(config: &ResolvedConfig) -> BenchResult<
     output.write_all(b"\n")?;
     output.flush()?;
     Ok(())
+}
+
+fn validate_exact_read_max_physical_amplification(value: usize) -> BenchResult<u64> {
+    if !(1..=5).contains(&value) {
+        return Err(invalid_input(
+            "BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION must be in 1..=5",
+        )
+        .into());
+    }
+    Ok(value as u64)
 }
 
 fn recall_preloads_local_snapshot(preload: bool) -> bool {
@@ -868,6 +882,7 @@ fn open_serving_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
             max_waiting_searches: config.max_waiting_searches,
             leaf_read_width: config.leaf_read_width,
             max_inflight_leaf_reads: config.max_inflight_leaf_reads,
+            exact_read_max_physical_amplification: config.exact_read_max_physical_amplification,
             ..OpenOptions::default()
         },
     )?;
@@ -1088,6 +1103,11 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS",
         DEFAULT_MAX_INFLIGHT_LEAF_READS,
     )?;
+    let exact_read_max_physical_amplification =
+        validate_exact_read_max_physical_amplification(env_usize(
+            "BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION",
+            DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION as usize,
+        )?)?;
     let uncached_queries = env_usize("BORSUK_BENCH_UNCACHED_QUERIES", queries.min(100))?;
     if uncached_queries == 0 {
         return Err(
@@ -1160,6 +1180,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         max_waiting_searches,
         leaf_read_width,
         max_inflight_leaf_reads,
+        exact_read_max_physical_amplification,
         uncached_queries: uncached_queries.min(queries),
         cache_profile,
         cache_coverage_percent,
@@ -1187,7 +1208,7 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
@@ -1231,6 +1252,7 @@ fn print_config(config: &ResolvedConfig) {
         config.max_waiting_searches,
         config.leaf_read_width,
         config.max_inflight_leaf_reads,
+        config.exact_read_max_physical_amplification,
         config.cache_profile,
         config.cache_coverage_percent,
         config.build_index,
@@ -4198,25 +4220,27 @@ mod tests {
         BUILD_HEADER, BenchmarkCacheProfile, BorsukIndex, CACHE_COVERAGE_HEADER,
         CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
         DEFAULT_NPROBE_SWEEP, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
-        GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER, LeafCapability, LeafMode,
-        MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample,
-        QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES, ServingMode, VectorMetric,
-        WRITE_COST_HEADER, WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase,
-        approximate_options, benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
-        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
-        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
-        dollars_per_million_queries, ingest_batch_size, ingest_generated_batch,
-        is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
-        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
-        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
-        parse_positive_list, parse_serving_mode, percentage_operation_count, permuted_positions,
-        preload_query_count, read_logical_cell_catalog, recall_preloads_local_snapshot,
-        recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
-        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER,
+        LeafCapability, LeafMode, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER,
+        QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES,
+        ServingMode, VectorMetric, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
+        allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
+        cache_coverage_cohort_size, cache_coverage_enabled, cache_state_summary_enabled,
+        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
+        default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
+        ingest_batch_size, ingest_generated_batch, is_hot_workload_position,
+        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
+        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
+        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
+        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
+        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
+        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
+        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_bounded_v17_execution, validate_build_only, validate_disk_cached_network,
-        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
-        validate_v12_leaf_page_budgets, vector_row, write_batch_len, write_operation_count,
+        validate_exact_read_max_physical_amplification, validate_generated_id_range,
+        validate_insert_only, validate_leaf_capability_modes, validate_phase_selection,
+        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
+        vector_row, write_batch_len, write_operation_count,
     };
 
     #[test]
@@ -5072,6 +5096,40 @@ mod tests {
     #[test]
     fn production_profile_has_a_bounded_routing_memory_default() {
         assert_eq!(DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, 536_870_912);
+    }
+
+    #[test]
+    fn runtime_flow_receipt_attests_exact_read_physical_amplification() {
+        let value = serde_json::to_value(EffectiveRuntimeFlowControl {
+            schema_version: 2,
+            ram_budget_bytes: Some(512 * 1024 * 1024),
+            max_active_searches: 8,
+            max_waiting_searches: 16,
+            leaf_read_width: 32,
+            max_inflight_leaf_reads: 48,
+            exact_read_max_physical_amplification: 2,
+            cpu_threads: 4,
+            io_threads: 4,
+            s3_get_concurrency: 16,
+        })
+        .unwrap();
+
+        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["exact_read_max_physical_amplification"], 2);
+    }
+
+    #[test]
+    fn benchmark_rejects_invalid_exact_read_physical_amplification_before_receipt() {
+        assert_eq!(
+            validate_exact_read_max_physical_amplification(1).unwrap(),
+            1
+        );
+        assert_eq!(
+            validate_exact_read_max_physical_amplification(5).unwrap(),
+            5
+        );
+        assert!(validate_exact_read_max_physical_amplification(0).is_err());
+        assert!(validate_exact_read_max_physical_amplification(6).is_err());
     }
 
     #[test]

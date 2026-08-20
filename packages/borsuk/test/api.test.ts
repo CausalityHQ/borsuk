@@ -61,6 +61,7 @@ test("metric name catalogs expose canonical names", () => {
     maxWaitingSearches: 16,
     leafReadWidth: 32,
     maxInflightLeafReads: 48,
+    exactReadMaxPhysicalAmplification: 5,
   };
   const readonlyVector = [1, 0] as const;
   const readonlyIds = ["doc-a", "doc-b"] as const;
@@ -74,6 +75,7 @@ test("metric name catalogs expose canonical names", () => {
   assert.equal(typedOpenOptions.residentRouting, false);
   assert.equal(typedOpenOptions.maxActiveSearches, 8);
   assert.equal(typedOpenOptions.maxInflightLeafReads, 48);
+  assert.equal(typedOpenOptions.exactReadMaxPhysicalAmplification, 5);
   assert.equal(
     Math.abs(vectorDistance(typedMinkowskiMetric, [0, 0], [1, 2]) - Math.cbrt(9)) < 1e-6,
     true,
@@ -128,6 +130,12 @@ test("open rejects invalid flow-control caps before native I/O", async () => {
     async () => open("unused", { maxInflightLeafReads: 0 }),
     /max_inflight_leaf_reads must be greater than zero/,
   );
+  for (const exactReadMaxPhysicalAmplification of [0, 6]) {
+    await assert.rejects(
+      async () => open("unused", { exactReadMaxPhysicalAmplification }),
+      /exact_read_max_physical_amplification must be between 1 and 5/,
+    );
+  }
 });
 
 test("vectorDistance exposes dense metric catalog", () => {

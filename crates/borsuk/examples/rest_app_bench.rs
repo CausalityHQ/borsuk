@@ -128,6 +128,7 @@ struct MetricsResponse {
     borsuk_search_capacity: usize,
     borsuk_leaf_read_width: usize,
     borsuk_leaf_read_capacity: usize,
+    borsuk_exact_read_max_physical_amplification: u64,
     borsuk_cpu_threads: usize,
     borsuk_io_threads: usize,
     borsuk_s3_get_concurrency: usize,
@@ -176,6 +177,7 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         borsuk_search_capacity: flow.searches.capacity,
         borsuk_leaf_read_width: flow.leaf_read_width,
         borsuk_leaf_read_capacity: flow.leaf_reads.capacity,
+        borsuk_exact_read_max_physical_amplification: flow.exact_read_max_physical_amplification,
         borsuk_cpu_threads: borsuk::configured_cpu_threads(),
         borsuk_io_threads: borsuk::configured_io_threads(),
         borsuk_s3_get_concurrency: borsuk::configured_backing_get_concurrency(),
@@ -314,6 +316,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let search_limit = env_usize("BORSUK_REST_SEARCH_ADMISSION", 2)?;
     let leaf_read_width = env_usize("BORSUK_REST_LEAF_READ_WIDTH", 32)?;
     let max_inflight_leaf_reads = env_usize("BORSUK_REST_MAX_INFLIGHT_LEAF_READS", 48)?;
+    let exact_read_max_physical_amplification =
+        env_usize("BORSUK_REST_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION", 5)? as u64;
     let index = BorsukIndex::open_with_options(
         &uri,
         OpenOptions {
@@ -324,6 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_waiting_searches: 0,
             leaf_read_width,
             max_inflight_leaf_reads,
+            exact_read_max_physical_amplification,
             ..OpenOptions::default()
         },
     )?;
@@ -465,6 +470,7 @@ mod tests {
         assert_eq!(value["borsuk_search_capacity"], 8);
         assert_eq!(value["borsuk_leaf_read_width"], 32);
         assert_eq!(value["borsuk_leaf_read_capacity"], 48);
+        assert_eq!(value["borsuk_exact_read_max_physical_amplification"], 5);
         assert_eq!(value["borsuk_page_budget"], 4);
         assert_eq!(value["borsuk_exact_candidates"], 512);
         assert_eq!(value["borsuk_ram_budget_bytes"], 1024);

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from scripts.run_rest_coexistence_attempt import (
+    REST_RESULT_SCHEMA_VERSION,
     accepted_search_qps,
     overload_search_qps,
     select_sustainable_search_qps,
@@ -15,6 +16,9 @@ from scripts.run_rest_coexistence_attempt import (
 
 
 class RestCoexistenceAttemptTest(unittest.TestCase):
+    def test_terminal_result_schema_cuts_with_effective_limit_shape(self) -> None:
+        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 4)
+
     def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
         self.assertEqual(
             validated_aws_identity(
@@ -91,6 +95,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "max_inflight_leaf_reads": 48,
             "page_budget": 32,
             "exact_candidates": 512,
+            "exact_read_max_physical_amplification": 5,
             "ram_budget_bytes": 2 * 1024**3,
             "disk_cache_bytes": 0,
         }
@@ -103,6 +108,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "borsuk_leaf_read_capacity": 48,
             "borsuk_page_budget": 32,
             "borsuk_exact_candidates": 512,
+            "borsuk_exact_read_max_physical_amplification": 5,
             "borsuk_ram_budget_bytes": 2 * 1024**3,
             "borsuk_disk_cache_bytes": 0,
         }

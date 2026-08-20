@@ -541,6 +541,10 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
                 "BORSUK_HYBRID_MAX_INFLIGHT_LEAF_READS",
                 borsuk::DEFAULT_MAX_INFLIGHT_LEAF_READS,
             )?,
+            exact_read_max_physical_amplification: env_u64(
+                "BORSUK_HYBRID_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION",
+                borsuk::DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION,
+            )?,
         },
     )?;
     let open_ms = elapsed_ms(open_started);

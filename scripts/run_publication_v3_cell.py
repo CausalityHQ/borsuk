@@ -400,6 +400,7 @@ def build_execution_plan(
         "BORSUK_BENCH_MAX_WAITING_SEARCHES": "16",
         "BORSUK_BENCH_LEAF_READ_WIDTH": "32",
         "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS": "48",
+        "BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION": "5",
         "BORSUK_CPU_THREADS": str(max(1, min(runtime_vcpus - 1, 4))),
         "BORSUK_IO_THREADS": "88",
         "BORSUK_BACKING_GET_CONCURRENCY": "64",
@@ -1583,21 +1584,26 @@ def runtime_execution_contract(
         "max_inflight_leaf_reads": positive_environment_integer(
             "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"
         ),
+        "exact_read_max_physical_amplification": positive_environment_integer(
+            "BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"
+        ),
         "cpu_threads": positive_environment_integer("BORSUK_CPU_THREADS"),
         "io_threads": positive_environment_integer("BORSUK_IO_THREADS"),
         "s3_get_concurrency": positive_environment_integer(
             "BORSUK_BACKING_GET_CONCURRENCY"
         ),
     }
+    if not 1 <= requested["exact_read_max_physical_amplification"] <= 5:
+        raise ValueError("exact-read physical amplification must be in 1..=5")
     if (
         not isinstance(effective_flow_control, dict)
         or frozenset(effective_flow_control) != {"schema_version", *requested}
-        or effective_flow_control.get("schema_version") != 1
+        or effective_flow_control.get("schema_version") != 2
         or any(effective_flow_control.get(key) != value for key, value in requested.items())
     ):
         raise ValueError("effective runtime flow control differs from its frozen request")
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "runtime_profile": runtime_profile,
         **requested,
     }
