@@ -713,6 +713,14 @@ fn unpack_fixed_width_fast(bytes: &[u8], index: usize, bits: u8) -> u8 {
     }
 }
 
+#[inline]
+fn unpack_eight_7bit_values(bytes: &[u8; 7]) -> [u8; 8] {
+    let word = u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], 0,
+    ]);
+    std::array::from_fn(|lane| ((word >> (lane * 7)) & 0x7f) as u8)
+}
+
 /// Dot a contiguous query slice with packed scalar-centroid codes.
 ///
 /// Code unpack and centroid lookup are scalar gathers, while eight gathered
@@ -728,8 +736,18 @@ fn packed_centroid_dot_simd(query: &[f32], packed: &[u8], bits: u8, centroids: &
         let mut query_lanes = [0.0_f32; LANES];
         query_lanes.copy_from_slice(&query[base..base + LANES]);
         let mut centroid_lanes = [0.0_f32; LANES];
+        let seven_bit_codes = (bits == 7).then(|| {
+            let packed_start = base * 7 / LANES;
+            let group = packed[packed_start..packed_start + 7]
+                .try_into()
+                .expect("validated seven-bit packed group width");
+            unpack_eight_7bit_values(group)
+        });
         for (lane, centroid) in centroid_lanes.iter_mut().enumerate() {
-            let code = unpack_fixed_width_fast(packed, base + lane, bits);
+            let code = seven_bit_codes.map_or_else(
+                || unpack_fixed_width_fast(packed, base + lane, bits),
+                |codes| codes[lane],
+            );
             *centroid = centroids[usize::from(code)];
         }
         accumulator += f32x8::from(query_lanes) * f32x8::from(centroid_lanes);
@@ -1749,7 +1767,26 @@ mod tests {
             for (index, expected) in values.iter().enumerate() {
                 assert_eq!(unpack_fixed_width_fast(&packed, index, bits), *expected);
             }
+            if bits == 7 {
+                for group_index in 0..values.len() / 8 {
+                    let packed_start = group_index * 7;
+                    let group = packed[packed_start..packed_start + 7].try_into().unwrap();
+                    for (lane, actual) in unpack_eight_7bit_values(group).into_iter().enumerate() {
+                        assert_eq!(actual, values[group_index * 8 + lane]);
+                    }
+                }
+            }
         }
+    }
+
+    #[test]
+    fn seven_bit_group_decode_recovers_eight_codes_from_seven_bytes() {
+        let packed = [128_u8, 128, 96, 64, 40, 248, 255];
+
+        assert_eq!(
+            unpack_eight_7bit_values(&packed),
+            [0, 1, 2, 3, 4, 5, 126, 127]
+        );
     }
 
     #[test]
@@ -2097,30 +2134,32 @@ mod tests {
 
     #[test]
     fn packed_centroid_simd_dot_matches_scalar_reference() {
-        for bits in 1..=8 {
-            let levels = 1_usize << bits;
-            let centroids = (0..levels)
-                .map(|index| index as f32 * 0.03125 - 1.75)
-                .collect::<Vec<_>>();
-            let query = (0..79)
-                .map(|index| ((index * 31 % 47) as f32 - 19.0) * 0.0625)
-                .collect::<Vec<_>>();
-            let codes = (0..query.len())
-                .map(|index| ((index * 17 + 3) % levels) as u8)
-                .collect::<Vec<_>>();
-            let mut packed = Vec::new();
-            pack_fixed_width(&codes, bits, &mut packed);
-            let expected = query
-                .iter()
-                .zip(&codes)
-                .map(|(value, code)| value * centroids[usize::from(*code)])
-                .sum::<f32>();
-            let actual = packed_centroid_dot_simd(&query, &packed, bits, &centroids);
-            let tolerance = expected.abs().max(1.0) * 1.0e-5;
-            assert!(
-                (actual - expected).abs() <= tolerance,
-                "bits={bits} actual={actual} expected={expected}"
-            );
+        for len in [79_usize, 128] {
+            for bits in 1..=8 {
+                let levels = 1_usize << bits;
+                let centroids = (0..levels)
+                    .map(|index| index as f32 * 0.03125 - 1.75)
+                    .collect::<Vec<_>>();
+                let query = (0..len)
+                    .map(|index| ((index * 31 % 47) as f32 - 19.0) * 0.0625)
+                    .collect::<Vec<_>>();
+                let codes = (0..query.len())
+                    .map(|index| ((index * 17 + 3) % levels) as u8)
+                    .collect::<Vec<_>>();
+                let mut packed = Vec::new();
+                pack_fixed_width(&codes, bits, &mut packed);
+                let expected = query
+                    .iter()
+                    .zip(&codes)
+                    .map(|(value, code)| value * centroids[usize::from(*code)])
+                    .sum::<f32>();
+                let actual = packed_centroid_dot_simd(&query, &packed, bits, &centroids);
+                let tolerance = expected.abs().max(1.0) * 1.0e-5;
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "len={len} bits={bits} actual={actual} expected={expected}"
+                );
+            }
         }
     }
 
