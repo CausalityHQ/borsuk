@@ -17,6 +17,7 @@ use arrow_ipc::{
     writer::{FileWriter, IpcWriteOptions},
 };
 use arrow_schema::{DataType, Field, Fields, Schema, UnionFields, UnionMode};
+use bytes::Bytes;
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
     basic::Compression,
@@ -308,8 +309,9 @@ pub(crate) struct VerifiedCellCardHead {
     pub(crate) cell_index: u32,
     pub(crate) card_ordinal: u32,
     pub(crate) leaf_ordinal: u32,
-    codes: Vec<u8>,
+    codes: Bytes,
     code_width: usize,
+    rows: usize,
     pub(crate) exact_blocks: Vec<CellCardExactBlockRef>,
 }
 
@@ -831,6 +833,22 @@ fn decode_cell_card_head_inner(
     element_type: VectorElementType,
 ) -> Result<VerifiedCellCardHead> {
     validate_cell_card_code_range(reference, stored)?;
+    decode_validated_cell_card_head_bytes(
+        reference,
+        Bytes::copy_from_slice(stored),
+        group_encoded_bytes,
+        dimensions,
+        element_type,
+    )
+}
+
+fn decode_validated_cell_card_head_bytes(
+    reference: &CellCardHeadRef,
+    stored: Bytes,
+    group_encoded_bytes: u64,
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<VerifiedCellCardHead> {
     let code_end = reference
         .code_offset
         .checked_add(u64::from(reference.code_bytes))
@@ -847,8 +865,9 @@ fn decode_cell_card_head_inner(
         cell_index: reference.cell_index,
         card_ordinal: reference.card_ordinal,
         leaf_ordinal: reference.leaf_ordinal,
-        codes: stored.to_vec(),
+        codes: stored,
         code_width: reference.code_width as usize,
+        rows: reference.rows as usize,
         exact_blocks: reference.exact_blocks.to_vec(),
     })
 }
@@ -940,7 +959,7 @@ fn validate_exact_block_refs(
 
 impl VerifiedCellCardHead {
     pub(crate) fn code_count(&self) -> usize {
-        self.codes.len() / self.code_width
+        self.rows
     }
 
     #[cfg(test)]
@@ -956,6 +975,19 @@ impl VerifiedCellCardHead {
 
     fn codes(&self) -> std::slice::ChunksExact<'_, u8> {
         self.codes.chunks_exact(self.code_width)
+    }
+
+    fn release_codes(&mut self) {
+        self.codes = Bytes::new();
+    }
+
+    #[cfg(test)]
+    fn shares_code_backing(&self, backing: &Bytes) -> bool {
+        let code_start = self.codes.as_ptr() as usize;
+        let code_end = code_start.saturating_add(self.codes.len());
+        let backing_start = backing.as_ptr() as usize;
+        let backing_end = backing_start.saturating_add(backing.len());
+        !self.codes.is_empty() && code_start >= backing_start && code_end <= backing_end
     }
 
     pub(crate) fn verify_block(
@@ -1106,20 +1138,15 @@ impl CellCardHeadWavePlan {
     }
 
     pub(crate) fn decoded_retained_bytes(&self) -> u64 {
-        let (rows, exact_blocks) = self.reads.iter().flat_map(|read| &read.cards).fold(
-            (0_u64, 0_u64),
-            |(rows, blocks), card| {
-                (
-                    rows.saturating_add(u64::from(card.reference.rows)),
-                    blocks.saturating_add(card.reference.exact_blocks.len() as u64),
-                )
-            },
-        );
-        self.selected_bytes
-            .saturating_add(rows.saturating_mul(std::mem::size_of::<Vec<u8>>() as u64))
-            .saturating_add(
-                exact_blocks.saturating_mul(std::mem::size_of::<CellCardExactBlockRef>() as u64),
-            )
+        let exact_blocks = self
+            .reads
+            .iter()
+            .flat_map(|read| &read.cards)
+            .fold(0_u64, |blocks, card| {
+                blocks.saturating_add(card.reference.exact_blocks.len() as u64)
+            });
+        exact_blocks
+            .saturating_mul(std::mem::size_of::<CellCardExactBlockRef>() as u64)
             .saturating_add(
                 (self.cards as u64)
                     .saturating_mul(std::mem::size_of::<LoadedCellCardHead>() as u64),
@@ -1550,36 +1577,61 @@ pub(crate) fn decode_cell_card_head_wave<B: AsRef<[u8]>>(
     dimensions: usize,
     element_type: VectorElementType,
 ) -> Result<Vec<LoadedCellCardHead>> {
-    decode_cell_card_head_wave_inner(plan, fetched, dimensions, element_type, false)
+    catch_unwind(AssertUnwindSafe(|| {
+        decode_cell_card_head_wave_inner(
+            plan,
+            fetched,
+            dimensions,
+            element_type,
+            false,
+            |bytes, range| Bytes::copy_from_slice(&bytes.as_ref()[range]),
+        )
+    }))
+    .map_err(|_| BorsukError::InvalidStorage("cell-card head wave decode panicked".to_string()))?
 }
 
 /// Decode a wave whose complete stable planes were authenticated by the
 /// bounded loader before they entered the immutable cache. Individual card
-/// checksums are still verified by [`decode_cell_card_head`].
-pub(crate) fn decode_verified_cell_card_head_wave<B: AsRef<[u8]>>(
+/// checksums are still verified before their zero-copy slices are retained.
+pub(crate) fn decode_verified_cell_card_head_wave(
     plan: &CellCardHeadWavePlan,
-    fetched: &[B],
+    fetched: &[Bytes],
     dimensions: usize,
     element_type: VectorElementType,
 ) -> Result<Vec<LoadedCellCardHead>> {
-    decode_cell_card_head_wave_inner(plan, fetched, dimensions, element_type, true)
+    catch_unwind(AssertUnwindSafe(|| {
+        decode_cell_card_head_wave_inner(
+            plan,
+            fetched,
+            dimensions,
+            element_type,
+            true,
+            |bytes, range| bytes.slice(range),
+        )
+    }))
+    .map_err(|_| BorsukError::InvalidStorage("cell-card head wave decode panicked".to_string()))?
 }
 
-fn decode_cell_card_head_wave_inner<B: AsRef<[u8]>>(
+fn decode_cell_card_head_wave_inner<B, F>(
     plan: &CellCardHeadWavePlan,
     fetched: &[B],
     dimensions: usize,
     element_type: VectorElementType,
     complete_planes_verified: bool,
-) -> Result<Vec<LoadedCellCardHead>> {
+    code_slice: F,
+) -> Result<Vec<LoadedCellCardHead>>
+where
+    B: AsRef<[u8]>,
+    F: Fn(&B, std::ops::Range<usize>) -> Bytes,
+{
     if fetched.len() != plan.reads.len() {
         return Err(BorsukError::InvalidStorage(
             "cell-card head wave response count mismatch".to_string(),
         ));
     }
     let mut loaded = Vec::with_capacity(plan.cards);
-    for (read, bytes) in plan.reads.iter().zip(fetched) {
-        let bytes = bytes.as_ref();
+    for (read, fetched_bytes) in plan.reads.iter().zip(fetched) {
+        let bytes = fetched_bytes.as_ref();
         if bytes.len() as u64 != read.end - read.start {
             return Err(BorsukError::InvalidStorage(
                 "cell-card head wave response length mismatch".to_string(),
@@ -1614,17 +1666,19 @@ fn decode_cell_card_head_wave_inner<B: AsRef<[u8]>>(
                         "cell-card head response range overflows".to_string(),
                     )
                 })?;
-            let stored = bytes.get(start as usize..end as usize).ok_or_else(|| {
+            let local_range = start as usize..end as usize;
+            let stored = bytes.get(local_range.clone()).ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "cell-card head response does not contain its card".to_string(),
                 )
             })?;
+            validate_cell_card_code_range(&card.reference, stored)?;
             loaded.push(LoadedCellCardHead {
                 root_index: card.root_index,
                 group: Arc::clone(&read.group),
-                head: decode_cell_card_head(
+                head: decode_validated_cell_card_head_bytes(
                     &card.reference,
-                    stored,
+                    code_slice(fetched_bytes, local_range),
                     read.group.encoded_bytes,
                     dimensions,
                     element_type,
@@ -1643,6 +1697,12 @@ fn decode_cell_card_head_wave_inner<B: AsRef<[u8]>>(
         ));
     }
     Ok(loaded)
+}
+
+pub(crate) fn release_loaded_cell_card_codes(heads: &mut [LoadedCellCardHead]) {
+    for head in heads {
+        head.head.release_codes();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -4289,15 +4349,21 @@ mod tests {
         let fetched_heads = head_plan
             .reads()
             .iter()
-            .map(|read| encoded.bytes[read.start as usize..read.end as usize].to_vec())
+            .map(|read| {
+                bytes::Bytes::copy_from_slice(
+                    &encoded.bytes[read.start as usize..read.end as usize],
+                )
+            })
             .collect::<Vec<_>>();
-        let loaded = super::decode_cell_card_head_wave(
+        let mut loaded = super::decode_verified_cell_card_head_wave(
             &head_plan,
             &fetched_heads,
             dimensions,
             VectorElementType::Int8,
         )
         .unwrap();
+        assert!(loaded[0].head.shares_code_backing(&fetched_heads[0]));
+        let code_count = loaded[0].head.code_count();
 
         let full_tile_first = vec![0.0; 129];
         let ranked =
@@ -4321,6 +4387,9 @@ mod tests {
                 .sum::<usize>(),
             129
         );
+        super::release_loaded_cell_card_codes(&mut loaded);
+        assert!(!loaded[0].head.shares_code_backing(&fetched_heads[0]));
+        assert_eq!(loaded[0].head.code_count(), code_count);
     }
 
     #[test]

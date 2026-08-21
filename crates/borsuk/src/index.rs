@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use object_store::ObjectStore;
 use rayon::prelude::*;
@@ -55,8 +56,8 @@ use crate::{
         decode_cell_card_run_root, decode_verified_cell_card_head_wave, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave_with_amplification, plan_ranked_cell_card_head_wave,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
-        rank_cell_card_exact_blocks, rank_cell_card_head_indexes, score_loaded_cell_card_heads,
-        validate_cell_card_code_range,
+        rank_cell_card_exact_blocks, rank_cell_card_head_indexes, release_loaded_cell_card_codes,
+        score_loaded_cell_card_heads, validate_cell_card_code_range,
     },
     global_leaf_run::{
         CarriedPrimaryDenseRun, GlobalAnnRef, GlobalCodebookRef, GlobalLeafArtifactRole,
@@ -1391,6 +1392,14 @@ struct FetchedCellCardHeadRead {
     physical_bytes: u64,
     cache_hit: bool,
     trusted: bool,
+}
+
+struct SharedCellCardRead(Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedCellCardRead {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
 }
 
 fn decoded_cache_with_pool<T>(
@@ -18079,8 +18088,8 @@ impl BorsukIndex {
                     fetched_heads.push(bytes);
                 }
                 let fetched_head_slices = fetched_heads
-                    .iter()
-                    .map(|bytes| bytes.as_slice())
+                    .into_iter()
+                    .map(|bytes| Bytes::from_owner(SharedCellCardRead(bytes)))
                     .collect::<Vec<_>>();
                 let heads = decode_verified_cell_card_head_wave(
                     &head_plan,
@@ -18112,7 +18121,7 @@ impl BorsukIndex {
                 ))
             });
         let (
-            heads,
+            mut heads,
             ranked,
             code_plane_cache_hits,
             code_plane_cache_bytes,
@@ -18234,6 +18243,7 @@ impl BorsukIndex {
             self.manifest.config.dimensions,
         );
         let exact_started = Instant::now();
+        release_loaded_cell_card_codes(&mut heads);
         // Only compact authenticated decoded heads cross this boundary. Drop
         // every pinned physical buffer before releasing the head reservation;
         // otherwise warm range assembly would remain resident but uncharged
