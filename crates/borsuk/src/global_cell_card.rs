@@ -1714,6 +1714,25 @@ impl RankedCellCardRunIndex {
     }
 }
 
+fn retain_nearest_candidate_vote_horizon(candidates: &mut Vec<(f32, usize)>, vote_horizon: usize) {
+    // The block tie-break makes the selected set deterministic when equal
+    // distances straddle the horizon. Equal keys then always vote identically.
+    let compare = |left: &(f32, usize), right: &(f32, usize)| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    };
+    if vote_horizon == 0 {
+        candidates.clear();
+        return;
+    }
+    if vote_horizon < candidates.len() {
+        candidates.select_nth_unstable_by(vote_horizon, compare);
+        candidates.truncate(vote_horizon);
+    }
+    candidates.sort_unstable_by(compare);
+}
+
 pub(crate) fn rank_cell_card_exact_blocks(
     heads: &[LoadedCellCardHead],
     row_distances: &[Vec<f32>],
@@ -1783,11 +1802,6 @@ pub(crate) fn rank_cell_card_exact_blocks(
                 .map(move |distance| (distance, block))
         })
         .collect::<Vec<_>>();
-    candidates.sort_unstable_by(|left, right| {
-        left.0
-            .total_cmp(&right.0)
-            .then_with(|| left.1.cmp(&right.1))
-    });
     let requested_rows = requested_rows.max(target_rows);
     // MVCC continuation may widen the physical fetch target, but voting over
     // that whole horizon lets large blocks of mediocre rows outvote the
@@ -1799,8 +1813,9 @@ pub(crate) fn rank_cell_card_exact_blocks(
         .saturating_mul(4)
         .min(candidate_vote_rows)
         .min(candidates.len());
+    retain_nearest_candidate_vote_horizon(&mut candidates, vote_horizon);
     let mut votes = vec![0_usize; blocks.len()];
-    for (_, block) in candidates.into_iter().take(vote_horizon) {
+    for (_, block) in candidates {
         votes[block] = votes[block].saturating_add(1);
     }
     let mut nearest = blocks.to_vec();
@@ -4598,6 +4613,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             (0_u32..8).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn candidate_vote_horizon_matches_full_sort_without_ranking_every_row() {
+        let mut candidates = (0..8_192_usize)
+            .map(|row| (((row * 37) % 251) as f32, row % 113))
+            .collect::<Vec<_>>();
+        candidates.extend((0..64_usize).flat_map(|block| [(0.0, block), (0.0, block)]));
+        let mut expected = candidates.clone();
+        expected.sort_unstable_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        expected.truncate(40);
+
+        super::retain_nearest_candidate_vote_horizon(&mut candidates, 40);
+
+        assert_eq!(candidates, expected);
+
+        let mut all = vec![(2.0, 2), (1.0, 1), (1.0, 0)];
+        super::retain_nearest_candidate_vote_horizon(&mut all, 3);
+        assert_eq!(all, vec![(1.0, 0), (1.0, 1), (2.0, 2)]);
+
+        super::retain_nearest_candidate_vote_horizon(&mut all, 0);
+        assert!(all.is_empty());
     }
 
     #[test]
