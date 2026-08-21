@@ -279,6 +279,25 @@ impl GlobalScanQuantizer {
             _ => invalid("prepared query does not match the global scan codec"),
         }
     }
+
+    fn distances_contiguous(
+        &self,
+        prepared: &PreparedGlobalScan,
+        codes: &[u8],
+    ) -> Result<Vec<f32>> {
+        match (self, prepared) {
+            (Self::Pq(_), PreparedGlobalScan::Pq(prepared)) => prepared.distances_contiguous(codes),
+            (
+                Self::FastTurboQuantMse(quantizer),
+                PreparedGlobalScan::FastTurboQuantMse(prepared),
+            ) => quantizer.distances_contiguous(prepared, codes),
+            (
+                Self::FastTurboQuantProd(quantizer),
+                PreparedGlobalScan::FastTurboQuantProd(prepared),
+            ) => quantizer.distances_contiguous(prepared, codes),
+            _ => invalid("prepared query does not match the global scan codec"),
+        }
+    }
 }
 
 /// A correlation-preserving IVF router: a cheap full-dimensional parent
@@ -1962,6 +1981,28 @@ pub(crate) struct PreparedCellCardQuery<'a> {
 }
 
 impl PreparedCellCardQuery<'_> {
+    pub(crate) fn score_contiguous_codes(
+        &self,
+        codes: &[u8],
+        expected_codes: usize,
+    ) -> Result<Vec<f32>> {
+        let width = self.codebook.code_width;
+        if expected_codes == 0 || width == 0 || codes.len() != expected_codes.saturating_mul(width)
+        {
+            return invalid("V20 cell-card code plane does not contain complete codes");
+        }
+        let distances = self
+            .codebook
+            .quantizer
+            .distances_contiguous(&self.prepared, codes)?;
+        if distances.len() != expected_codes
+            || distances.iter().any(|distance| !distance.is_finite())
+        {
+            return invalid("V20 cell-card code distances are incomplete or non-finite");
+        }
+        Ok(distances)
+    }
+
     pub(crate) fn score_codes<'a>(
         &self,
         codes: impl IntoIterator<Item = &'a [u8]>,
@@ -2991,6 +3032,36 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert!(first[0] < second[0]);
         assert_eq!(combined, legacy);
+    }
+
+    #[test]
+    fn v20_cell_card_query_scores_one_contiguous_code_plane() {
+        let descriptor = test_v12_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vectors(1, 64).pop().unwrap();
+        let mut farther = query.clone();
+        farther.iter_mut().for_each(|value| *value += 7.0);
+        let codes = [
+            quantizer.encode(&query).unwrap(),
+            quantizer.encode(&farther).unwrap(),
+        ];
+        let code_plane = codes.concat();
+        let prepared = resident.prepare_cell_card_query(&query).unwrap();
+        let expected = prepared
+            .score_codes(codes.iter().map(Vec::as_slice))
+            .unwrap();
+
+        let actual = prepared.score_contiguous_codes(&code_plane, 2).unwrap();
+
+        assert_eq!(actual, expected);
+        assert!(actual[0] < actual[1]);
+        assert!(
+            prepared
+                .score_contiguous_codes(&code_plane[..code_plane.len() - 1], 2)
+                .is_err()
+        );
+        assert!(prepared.score_contiguous_codes(&code_plane, 1).is_err());
     }
 
     fn leaf_page(

@@ -973,8 +973,8 @@ impl VerifiedCellCardHead {
         self.codes.get(start..start.checked_add(self.code_width)?)
     }
 
-    fn codes(&self) -> std::slice::ChunksExact<'_, u8> {
-        self.codes.chunks_exact(self.code_width)
+    fn code_plane(&self) -> &[u8] {
+        &self.codes
     }
 
     fn release_codes(&mut self) {
@@ -1705,7 +1705,7 @@ pub(crate) fn release_loaded_cell_card_codes(heads: &mut [LoadedCellCardHead]) {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct RankedCellCardExactBlock {
     pub(crate) head_index: usize,
     pub(crate) group: Arc<CellCardGroupRef>,
@@ -1716,7 +1716,62 @@ pub(crate) struct RankedCellCardExactBlock {
     pub(crate) row_distances: Box<[f32]>,
 }
 
-fn ranked_cell_card_block_identity(block: &RankedCellCardExactBlock) -> (u32, u32, u32, &str, u64) {
+#[derive(Debug)]
+struct CandidateCellCardExactBlock {
+    head_index: usize,
+    group: Arc<CellCardGroupRef>,
+    cell_index: u32,
+    card_ordinal: u32,
+    reference: CellCardExactBlockRef,
+    distance: f32,
+    row_range: std::ops::Range<usize>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static RANKED_CELL_CARD_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static RANKED_CELL_CARD_MATERIALIZED_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl Clone for RankedCellCardExactBlock {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        RANKED_CELL_CARD_CLONES.with(|count| count.set(count.get().saturating_add(1)));
+        Self {
+            head_index: self.head_index,
+            group: Arc::clone(&self.group),
+            cell_index: self.cell_index,
+            card_ordinal: self.card_ordinal,
+            reference: self.reference.clone(),
+            distance: self.distance,
+            row_distances: self.row_distances.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+fn reset_ranked_cell_card_clone_count() {
+    RANKED_CELL_CARD_CLONES.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn ranked_cell_card_clone_count() -> usize {
+    RANKED_CELL_CARD_CLONES.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_ranked_cell_card_materialized_rows() {
+    RANKED_CELL_CARD_MATERIALIZED_ROWS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn ranked_cell_card_materialized_rows() -> usize {
+    RANKED_CELL_CARD_MATERIALIZED_ROWS.with(std::cell::Cell::get)
+}
+
+fn candidate_cell_card_block_identity(
+    block: &CandidateCellCardExactBlock,
+) -> (u32, u32, u32, &str, u64) {
     (
         block.cell_index,
         block.card_ordinal,
@@ -1732,6 +1787,7 @@ struct RankedCellCardRunIndex {
 }
 
 impl RankedCellCardRunIndex {
+    #[cfg(test)]
     fn from_selected(selected: &[RankedCellCardExactBlock]) -> Self {
         let mut index = Self::default();
         for block in selected {
@@ -1740,13 +1796,29 @@ impl RankedCellCardRunIndex {
         index
     }
 
+    #[cfg(test)]
     fn can_extend(&self, candidate: &RankedCellCardExactBlock) -> bool {
-        let candidate_start = candidate.reference.offset;
-        let Some(candidate_end) = candidate_start.checked_add(u64::from(candidate.reference.bytes))
-        else {
+        self.can_extend_range(
+            candidate.group.path.as_str(),
+            candidate.reference.offset,
+            candidate.reference.bytes,
+        )
+    }
+
+    fn can_extend_candidate(&self, candidate: &CandidateCellCardExactBlock) -> bool {
+        self.can_extend_range(
+            candidate.group.path.as_str(),
+            candidate.reference.offset,
+            candidate.reference.bytes,
+        )
+    }
+
+    fn can_extend_range(&self, path: &str, offset: u64, bytes: u32) -> bool {
+        let candidate_start = offset;
+        let Some(candidate_end) = candidate_start.checked_add(u64::from(bytes)) else {
             return false;
         };
-        let Some(runs) = self.groups.get(&candidate.group.path) else {
+        let Some(runs) = self.groups.get(path) else {
             return false;
         };
         let predecessor = runs
@@ -1766,13 +1838,35 @@ impl RankedCellCardRunIndex {
             .is_some_and(|span| span <= CELL_CARD_RANGE_READ_MAX_BYTES)
     }
 
+    #[cfg(test)]
     fn insert(&mut self, block: &RankedCellCardExactBlock) {
-        let candidate_start = block.reference.offset;
-        let Some(candidate_end) = candidate_start.checked_add(u64::from(block.reference.bytes))
-        else {
+        self.insert_range(
+            block.group.path.as_str(),
+            block.reference.offset,
+            block.reference.bytes,
+        );
+    }
+
+    fn insert_candidate(&mut self, block: &CandidateCellCardExactBlock) {
+        self.insert_range(
+            block.group.path.as_str(),
+            block.reference.offset,
+            block.reference.bytes,
+        );
+    }
+
+    fn insert_range(&mut self, path: &str, offset: u64, bytes: u32) {
+        let candidate_start = offset;
+        let Some(candidate_end) = candidate_start.checked_add(u64::from(bytes)) else {
             return;
         };
-        let runs = self.groups.entry(block.group.path.clone()).or_default();
+        if !self.groups.contains_key(path) {
+            self.groups.insert(path.to_string(), BTreeMap::new());
+        }
+        let runs = self
+            .groups
+            .get_mut(path)
+            .expect("cell-card path was inserted before lookup");
         let predecessor = runs
             .range(..candidate_start)
             .next_back()
@@ -1827,7 +1921,13 @@ pub(crate) fn rank_cell_card_exact_blocks(
             "cell-card block ranking inputs are incomplete".to_string(),
         ));
     }
-    let mut blocks = Vec::<RankedCellCardExactBlock>::new();
+    let block_capacity = heads.iter().try_fold(0_usize, |total, loaded| {
+        total.checked_add(loaded.head.exact_blocks.len())
+    });
+    let mut blocks =
+        Vec::<CandidateCellCardExactBlock>::with_capacity(block_capacity.ok_or_else(|| {
+            BorsukError::InvalidStorage("cell-card exact block count overflow".to_string())
+        })?);
     for (head_index, (loaded, distances)) in heads.iter().zip(row_distances).enumerate() {
         if distances.len() != loaded.head.code_count()
             || distances.iter().any(|distance| !distance.is_finite())
@@ -1851,14 +1951,14 @@ pub(crate) fn rank_cell_card_exact_blocks(
             let distance = rows.iter().copied().min_by(f32::total_cmp).ok_or_else(|| {
                 BorsukError::InvalidStorage("cell-card block has no rows".to_string())
             })?;
-            blocks.push(RankedCellCardExactBlock {
+            blocks.push(CandidateCellCardExactBlock {
                 head_index,
                 group: Arc::clone(&loaded.group),
                 cell_index: loaded.head.cell_index,
                 card_ordinal: loaded.head.card_ordinal,
                 reference: reference.clone(),
                 distance,
-                row_distances: rows.into(),
+                row_range: covered..end,
             });
             covered = end;
         }
@@ -1868,17 +1968,22 @@ pub(crate) fn rank_cell_card_exact_blocks(
             ));
         }
     }
-    let mut candidates = blocks
-        .iter()
-        .enumerate()
-        .flat_map(|(block, candidate)| {
-            candidate
-                .row_distances
-                .iter()
-                .copied()
-                .map(move |distance| (distance, block))
-        })
-        .collect::<Vec<_>>();
+    let mut candidates = Vec::with_capacity(
+        blocks
+            .iter()
+            .map(|candidate| candidate.row_range.len())
+            .sum(),
+    );
+    for (block, candidate) in blocks.iter().enumerate() {
+        let distances = row_distances[candidate.head_index]
+            .get(candidate.row_range.clone())
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cell-card candidate rows exceed their code distances".to_string(),
+                )
+            })?;
+        candidates.extend(distances.iter().copied().map(|distance| (distance, block)));
+    }
     let requested_rows = requested_rows.max(target_rows);
     // MVCC continuation may widen the physical fetch target, but voting over
     // that whole horizon lets large blocks of mediocre rows outvote the
@@ -1895,35 +2000,40 @@ pub(crate) fn rank_cell_card_exact_blocks(
     for (_, block) in candidates {
         votes[block] = votes[block].saturating_add(1);
     }
-    let mut nearest = blocks.to_vec();
+    let mut nearest = (0..blocks.len()).collect::<Vec<_>>();
     nearest.sort_by(|left, right| {
-        left.distance.total_cmp(&right.distance).then_with(|| {
-            ranked_cell_card_block_identity(left).cmp(&ranked_cell_card_block_identity(right))
-        })
+        blocks[*left]
+            .distance
+            .total_cmp(&blocks[*right].distance)
+            .then_with(|| {
+                candidate_cell_card_block_identity(&blocks[*left])
+                    .cmp(&candidate_cell_card_block_identity(&blocks[*right]))
+            })
     });
-    let mut ranked = blocks
-        .into_iter()
-        .enumerate()
-        .map(|(index, block)| (block, votes[index]))
+    let mut ranked = (0..blocks.len())
+        .map(|index| (index, votes[index]))
         .collect::<Vec<_>>();
     ranked.sort_by(|(left, left_votes), (right, right_votes)| {
         right_votes
             .cmp(left_votes)
-            .then_with(|| left.distance.total_cmp(&right.distance))
+            .then_with(|| blocks[*left].distance.total_cmp(&blocks[*right].distance))
             .then_with(|| {
-                ranked_cell_card_block_identity(left).cmp(&ranked_cell_card_block_identity(right))
+                candidate_cell_card_block_identity(&blocks[*left])
+                    .cmp(&candidate_cell_card_block_identity(&blocks[*right]))
             })
     });
     let mut ranked = VecDeque::from(ranked);
     let nearest_row_quota = requested_rows
         .div_ceil(4)
         .max(target_rows.min(requested_rows));
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = std::collections::BTreeSet::<(&str, u64, u32)>::new();
     let mut selected = Vec::with_capacity(ranked.len());
+    let mut selected_runs = RankedCellCardRunIndex::default();
     let mut selected_rows = 0_usize;
-    for block in nearest {
+    for index in nearest {
+        let block = &blocks[index];
         if seen.insert((
-            block.group.path.clone(),
+            block.group.path.as_str(),
             block.reference.offset,
             block.reference.block_ordinal,
         )) {
@@ -1934,20 +2044,21 @@ pub(crate) fn rank_cell_card_exact_blocks(
                         "cell-card selected exact rows overflow".to_string(),
                     )
                 })?;
-            selected.push(block);
+            selected_runs.insert_candidate(block);
+            selected.push(index);
         }
         if selected_rows >= nearest_row_quota {
             break;
         }
     }
-    ranked.retain(|(block, _)| {
+    ranked.retain(|(index, _)| {
+        let block = &blocks[*index];
         !seen.contains(&(
-            block.group.path.clone(),
+            block.group.path.as_str(),
             block.reference.offset,
             block.reference.block_ordinal,
         ))
     });
-    let mut selected_runs = RankedCellCardRunIndex::from_selected(&selected);
     while selected_rows < requested_rows && !ranked.is_empty() {
         let Some((_, first_votes)) = ranked.front() else {
             break;
@@ -1964,32 +2075,68 @@ pub(crate) fn rank_cell_card_exact_blocks(
                 .enumerate()
                 .take_while(|(_, (_, votes))| *votes == 0)
                 .take(CELL_CARD_ZERO_VOTE_LOCALITY_LOOKAHEAD)
-                .find_map(|(index, (block, _))| selected_runs.can_extend(block).then_some(index))
+                .find_map(|(position, (index, _))| {
+                    selected_runs
+                        .can_extend_candidate(&blocks[*index])
+                        .then_some(position)
+                })
                 .unwrap_or(0)
         } else {
             0
         };
-        let (block, _) = ranked.remove(next).ok_or_else(|| {
+        let (index, _) = ranked.remove(next).ok_or_else(|| {
             BorsukError::InvalidStorage(
                 "cell-card locality selection escaped its ranked window".to_string(),
             )
         })?;
+        let block = &blocks[index];
         selected_rows = selected_rows
             .checked_add(block.reference.rows as usize)
             .ok_or_else(|| {
                 BorsukError::InvalidStorage("cell-card selected exact rows overflow".to_string())
             })?;
-        selected_runs.insert(&block);
-        selected.push(block);
+        selected_runs.insert_candidate(block);
+        selected.push(index);
     }
     // Votes choose the set. Keep nearest blocks first so a later prefix
     // reduction for byte/request bounds sheds the farthest selected blocks.
     selected.sort_by(|left, right| {
-        left.distance.total_cmp(&right.distance).then_with(|| {
-            ranked_cell_card_block_identity(left).cmp(&ranked_cell_card_block_identity(right))
-        })
+        blocks[*left]
+            .distance
+            .total_cmp(&blocks[*right].distance)
+            .then_with(|| {
+                candidate_cell_card_block_identity(&blocks[*left])
+                    .cmp(&candidate_cell_card_block_identity(&blocks[*right]))
+            })
     });
-    Ok(selected)
+    drop(seen);
+    selected
+        .into_iter()
+        .map(|index| {
+            let candidate = blocks.get(index).ok_or_else(|| {
+                BorsukError::InvalidStorage("selected cell-card block is absent".to_string())
+            })?;
+            let rows = row_distances[candidate.head_index]
+                .get(candidate.row_range.clone())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "selected cell-card rows exceed their code distances".to_string(),
+                    )
+                })?;
+            #[cfg(test)]
+            RANKED_CELL_CARD_MATERIALIZED_ROWS
+                .with(|count| count.set(count.get().saturating_add(rows.len())));
+            Ok(RankedCellCardExactBlock {
+                head_index: candidate.head_index,
+                group: Arc::clone(&candidate.group),
+                cell_index: candidate.cell_index,
+                card_ordinal: candidate.card_ordinal,
+                reference: candidate.reference.clone(),
+                distance: candidate.distance,
+                row_distances: rows.into(),
+            })
+        })
+        .collect()
 }
 
 fn map_cell_card_heads_in_order<T, U, E, F>(heads: &[T], score: F) -> std::result::Result<Vec<U>, E>
@@ -2026,7 +2173,9 @@ pub(crate) fn score_loaded_cell_card_heads(
     heads: &[LoadedCellCardHead],
 ) -> Result<Vec<Vec<f32>>> {
     let prepared = codebook.prepare_cell_card_query(query)?;
-    map_cell_card_heads_in_bounded_pool(heads, |loaded| prepared.score_codes(loaded.head.codes()))
+    map_cell_card_heads_in_bounded_pool(heads, |loaded| {
+        prepared.score_contiguous_codes(loaded.head.code_plane(), loaded.head.code_count())
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -4317,6 +4466,61 @@ mod tests {
             .unwrap();
         assert_eq!(exact.len(), 1);
         assert_eq!(exact[0].id, input.rows[128].id);
+    }
+
+    #[test]
+    fn block_ranking_does_not_clone_unselected_distance_payloads() {
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "group.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: 4096,
+            code_plane_offset: 0,
+            code_plane_bytes: 4,
+            code_plane_checksum: [2; 32],
+        });
+        let loaded = vec![super::LoadedCellCardHead {
+            root_index: 0,
+            group,
+            head: super::VerifiedCellCardHead {
+                cell_index: 0,
+                card_ordinal: 0,
+                leaf_ordinal: 0,
+                codes: bytes::Bytes::from_static(&[0, 1, 2, 3]),
+                code_width: 1,
+                rows: 4,
+                exact_blocks: vec![
+                    super::CellCardExactBlockRef {
+                        block_ordinal: 0,
+                        offset: 1024,
+                        metadata_bytes: 64,
+                        body_bytes: 64,
+                        bytes: 128,
+                        rows: 2,
+                        checksum: [3; 32],
+                    },
+                    super::CellCardExactBlockRef {
+                        block_ordinal: 1,
+                        offset: 1152,
+                        metadata_bytes: 64,
+                        body_bytes: 64,
+                        bytes: 128,
+                        rows: 2,
+                        checksum: [4; 32],
+                    },
+                ],
+            },
+        }];
+        super::reset_ranked_cell_card_clone_count();
+        super::reset_ranked_cell_card_materialized_rows();
+
+        let ranked =
+            super::rank_cell_card_exact_blocks(&loaded, &[vec![0.0, 1.0, 2.0, 3.0]], 2, 2, 1)
+                .unwrap();
+
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].reference.block_ordinal, 0);
+        assert_eq!(super::ranked_cell_card_clone_count(), 0);
+        assert_eq!(super::ranked_cell_card_materialized_rows(), 2);
     }
 
     #[test]

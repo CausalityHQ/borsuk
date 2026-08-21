@@ -365,6 +365,24 @@ impl PreparedAdc {
                 code.len()
             )));
         }
+        self.distance_known_width(code)
+    }
+
+    pub(crate) fn distances_contiguous(&self, codes: &[u8]) -> Result<Vec<f32>> {
+        if self.subspaces == 0 || codes.is_empty() || !codes.len().is_multiple_of(self.subspaces) {
+            return Err(BorsukError::InvalidStorage(
+                "product code plane does not contain complete codes".to_string(),
+            ));
+        }
+        let mut distances = Vec::with_capacity(codes.len() / self.subspaces);
+        for code in codes.chunks_exact(self.subspaces) {
+            distances.push(self.distance_known_width(code)?);
+        }
+        Ok(distances)
+    }
+
+    fn distance_known_width(&self, code: &[u8]) -> Result<f32> {
+        debug_assert_eq!(code.len(), self.subspaces);
         for &centroid in code {
             let centroid = usize::from(centroid);
             if centroid >= self.centroids {

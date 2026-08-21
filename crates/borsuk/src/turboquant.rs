@@ -982,6 +982,33 @@ impl FastTurboQuantMseScanQuantizer {
                 code.len()
             )));
         }
+        self.distance_known_width(prepared, code)
+    }
+
+    pub(crate) fn distances_contiguous(
+        &self,
+        prepared: &PreparedFastTurboQuantMseScan,
+        codes: &[u8],
+    ) -> Result<Vec<f32>> {
+        let width = self.packed_code_len();
+        if codes.is_empty() || !codes.len().is_multiple_of(width) {
+            return Err(BorsukError::InvalidStorage(
+                "packed TurboQuant scan plane does not contain complete codes".to_string(),
+            ));
+        }
+        let mut distances = Vec::with_capacity(codes.len() / width);
+        for code in codes.chunks_exact(width) {
+            distances.push(self.distance_known_width(prepared, code)?);
+        }
+        Ok(distances)
+    }
+
+    fn distance_known_width(
+        &self,
+        prepared: &PreparedFastTurboQuantMseScan,
+        code: &[u8],
+    ) -> Result<f32> {
+        debug_assert_eq!(code.len(), self.packed_code_len());
         let norm_offset = code.len() - std::mem::size_of::<f32>();
         let vector_norm = read_le_f32(code, norm_offset);
         if !vector_norm.is_finite() || vector_norm < 0.0 {
@@ -1183,6 +1210,33 @@ impl FastTurboQuantProdScanQuantizer {
                 code.len()
             )));
         }
+        self.distance_known_width(prepared, code)
+    }
+
+    pub(crate) fn distances_contiguous(
+        &self,
+        prepared: &PreparedFastTurboQuantProdScan,
+        codes: &[u8],
+    ) -> Result<Vec<f32>> {
+        let width = self.packed_code_len();
+        if codes.is_empty() || !codes.len().is_multiple_of(width) {
+            return Err(BorsukError::InvalidStorage(
+                "packed production TurboQuant plane does not contain complete codes".to_string(),
+            ));
+        }
+        let mut distances = Vec::with_capacity(codes.len() / width);
+        for code in codes.chunks_exact(width) {
+            distances.push(self.distance_known_width(prepared, code)?);
+        }
+        Ok(distances)
+    }
+
+    fn distance_known_width(
+        &self,
+        prepared: &PreparedFastTurboQuantProdScan,
+        code: &[u8],
+    ) -> Result<f32> {
+        debug_assert_eq!(code.len(), self.packed_code_len());
         let scalar_bytes = self.scalar_bytes();
         let sign_bytes = self.qjl.sign_len();
         let residual_norm = read_le_f32(code, scalar_bytes + sign_bytes);
@@ -2106,6 +2160,41 @@ mod tests {
     }
 
     #[test]
+    fn scan_turboquant_contiguous_distances_match_individual_codes() {
+        let quantizer = FastTurboQuantMseScanQuantizer::new(29, 64, 4, 1).unwrap();
+        let query = (0..64)
+            .map(|index| (index as f32 * 0.17).sin())
+            .collect::<Vec<_>>();
+        let vectors = [
+            query.clone(),
+            query.iter().map(|value| value + 0.25).collect(),
+            query.iter().rev().copied().collect(),
+        ];
+        let prepared = quantizer.prepare_query(&query).unwrap();
+        let codes = vectors
+            .iter()
+            .map(|vector| quantizer.encode(vector).unwrap())
+            .collect::<Vec<_>>();
+        let expected = codes
+            .iter()
+            .map(|code| quantizer.distance(&prepared, code).unwrap())
+            .collect::<Vec<_>>();
+        let contiguous = codes.concat();
+
+        assert_eq!(
+            quantizer
+                .distances_contiguous(&prepared, &contiguous)
+                .unwrap(),
+            expected
+        );
+        assert!(
+            quantizer
+                .distances_contiguous(&prepared, &contiguous[..contiguous.len() - 1])
+                .is_err()
+        );
+    }
+
+    #[test]
     fn scan_turboquant_state_round_trips_without_dense_rotation_memory() {
         let fitted = FastTurboQuantMseScanQuantizer::new(41, 960, 3, 1).unwrap();
         let restored = FastTurboQuantMseScanQuantizer::from_state(fitted.state()).unwrap();
@@ -2164,6 +2253,41 @@ mod tests {
         assert!(
             near_distance < far_distance,
             "near={near_distance}, orthogonal={far_distance}"
+        );
+    }
+
+    #[test]
+    fn production_turboquant_contiguous_distances_match_individual_codes() {
+        let quantizer = FastTurboQuantProdScanQuantizer::new(29, 64, 4).unwrap();
+        let query = (0..64)
+            .map(|index| (index as f32 * 0.17).cos())
+            .collect::<Vec<_>>();
+        let vectors = [
+            query.clone(),
+            query.iter().map(|value| value - 0.25).collect(),
+            query.iter().rev().copied().collect(),
+        ];
+        let prepared = quantizer.prepare_query(&query).unwrap();
+        let codes = vectors
+            .iter()
+            .map(|vector| quantizer.encode(vector).unwrap())
+            .collect::<Vec<_>>();
+        let expected = codes
+            .iter()
+            .map(|code| quantizer.distance(&prepared, code).unwrap())
+            .collect::<Vec<_>>();
+        let contiguous = codes.concat();
+
+        assert_eq!(
+            quantizer
+                .distances_contiguous(&prepared, &contiguous)
+                .unwrap(),
+            expected
+        );
+        assert!(
+            quantizer
+                .distances_contiguous(&prepared, &contiguous[..contiguous.len() - 1])
+                .is_err()
         );
     }
 
