@@ -19,6 +19,13 @@ from pathlib import Path
 if __package__:
     from scripts.check_publication_disk import require_free_disk
     from scripts.publication_v3_aws import staging_jobs
+    from scripts.publication_v3_beir import (
+        BEIR_DENSE_MODEL,
+        BEIR_DENSE_REVISION,
+        BEIR_DOCUMENT_PREFIX,
+        BEIR_QUERY_PREFIX,
+        BEIR_SPARSE_MAX_FEATURES,
+    )
     from scripts.publication_v3_datasets import (
         build_dataset_descriptor,
         validate_dataset_descriptor,
@@ -27,6 +34,13 @@ if __package__:
 else:
     from check_publication_disk import require_free_disk
     from publication_v3_aws import staging_jobs
+    from publication_v3_beir import (
+        BEIR_DENSE_MODEL,
+        BEIR_DENSE_REVISION,
+        BEIR_DOCUMENT_PREFIX,
+        BEIR_QUERY_PREFIX,
+        BEIR_SPARSE_MAX_FEATURES,
+    )
     from publication_v3_datasets import (
         build_dataset_descriptor,
         validate_dataset_descriptor,
@@ -85,11 +99,15 @@ def adapter_command(
         return tuple(command)
     if kind == "realistic-dense":
         if source_cache is not None:
-            raise ValueError("VDBBench acquisition does not accept a local source cache")
+            raise ValueError(
+                "VDBBench acquisition does not accept a local source cache"
+            )
         try:
             upstream_name = VDB_DATASET_NAMES[dataset_id]
         except KeyError as error:
-            raise ValueError(f"VDBBench dataset has no exact adapter: {dataset_id}") from error
+            raise ValueError(
+                f"VDBBench dataset has no exact adapter: {dataset_id}"
+            ) from error
         return (
             sys.executable,
             str(ROOT / "scripts/fetch_vdbbench_dataset.py"),
@@ -102,13 +120,34 @@ def adapter_command(
             str(output.parent / ".publication"),
         )
     if kind == "beir-hybrid":
-        raise ValueError("BEIR multimodal Parquet staging is not implemented")
+        command = [
+            sys.executable,
+            str(ROOT / "scripts/prepare_beir_publication_dataset.py"),
+            "--dataset",
+            dataset_id,
+            "--out",
+            str(output),
+            "--expected-source",
+            str(dataset["source"]["expected_source"]),
+            "--dense-model",
+            BEIR_DENSE_MODEL,
+            "--dense-revision",
+            BEIR_DENSE_REVISION,
+            "--dense-query-prefix",
+            BEIR_QUERY_PREFIX,
+            "--dense-document-prefix",
+            BEIR_DOCUMENT_PREFIX,
+            "--sparse-max-features",
+            str(BEIR_SPARSE_MAX_FEATURES),
+            "--publication",
+        ]
+        if source_cache is not None:
+            command.extend(("--source", str(source_cache)))
+        return tuple(command)
     raise ValueError(f"dataset kind has no external staging adapter: {kind}")
 
 
-def _staged_uri(
-    manifest: dict[str, object], dataset_id: str, attempt: int
-) -> str:
+def _staged_uri(manifest: dict[str, object], dataset_id: str, attempt: int) -> str:
     matches = [
         job.output_uri
         for job in staging_jobs(manifest, attempt=attempt)
@@ -123,7 +162,9 @@ def _load_provenance(dataset: dict[str, object], path: Path) -> dict[str, object
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("materialized dataset provenance is missing or invalid") from error
+        raise ValueError(
+            "materialized dataset provenance is missing or invalid"
+        ) from error
     required = {
         "schema_version",
         "dataset",
@@ -171,7 +212,9 @@ def _descriptor(
     try:
         descriptor = build_dataset_descriptor(inspected)
     except ValueError as error:
-        raise ValueError(f"materialized dataset differs from provenance: {error}") from error
+        raise ValueError(
+            f"materialized dataset differs from provenance: {error}"
+        ) from error
     staged = copy.deepcopy(dataset)
     staged["source"] = {
         "state": "staged",
@@ -192,7 +235,7 @@ def required_staging_bytes(dataset: dict[str, object]) -> int:
     return 2 * vector_bytes + reserve
 
 
-def materialize_dense_dataset(
+def materialize_dataset(
     manifest: dict[str, object],
     *,
     dataset_id: str,
@@ -206,18 +249,14 @@ def materialize_dense_dataset(
     if attempt <= 0 or attempt > 9_999:
         raise ValueError("dataset staging attempt must be in 1..=9999")
     dataset = _dataset(normalized, dataset_id)
-    if dataset["kind"] == "beir-hybrid":
-        raise ValueError("BEIR multimodal Parquet staging is not implemented")
     work_root.mkdir(parents=True, exist_ok=True)
     attempts_root = work_root / "attempts"
     attempt_root = attempts_root / f"{attempt:04d}"
     output = attempt_root / "materialized"
     provenance_path = attempt_root / "materialized.provenance.json"
     if output.exists():
-        descriptor = _descriptor(
-            normalized, dataset, output, provenance_path, attempt
-        )
-        if dataset["kind"] == "realistic-dense":
+        descriptor = _descriptor(normalized, dataset, output, provenance_path, attempt)
+        if dataset["kind"] in {"realistic-dense", "beir-hybrid"}:
             shutil.rmtree(attempt_root / "acquired", ignore_errors=True)
         return descriptor
     if attempt_root.exists():
@@ -252,12 +291,12 @@ def materialize_dense_dataset(
                     "VDBBench adapter did not produce the exact publication directory"
                 )
             candidate.rename(scratch_output)
-            candidate_provenance.rename(
-                scratch_root / "materialized.provenance.json"
-            )
+            candidate_provenance.rename(scratch_root / "materialized.provenance.json")
             shutil.rmtree(scratch_root / ".publication")
         if not scratch_output.is_dir():
-            raise ValueError("dataset adapter did not produce a materialization directory")
+            raise ValueError(
+                "dataset adapter did not produce a materialization directory"
+            )
         descriptor = _descriptor(
             normalized,
             dataset,
@@ -266,7 +305,7 @@ def materialize_dense_dataset(
             attempt,
         )
         scratch_root.rename(attempt_root)
-        if dataset["kind"] == "realistic-dense":
+        if dataset["kind"] in {"realistic-dense", "beir-hybrid"}:
             shutil.rmtree(attempt_root / "acquired", ignore_errors=True)
         return descriptor
     except BaseException:
@@ -283,7 +322,7 @@ def main() -> int:
     parser.add_argument("--source-cache", type=Path)
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-    descriptor = materialize_dense_dataset(
+    descriptor = materialize_dataset(
         manifest,
         dataset_id=args.dataset,
         attempt=args.attempt,
@@ -297,6 +336,11 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+    except (
+        OSError,
+        ValueError,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+    ) as error:
         print(f"publication-v3 dataset staging failed: {error}", file=sys.stderr)
         raise SystemExit(2) from None

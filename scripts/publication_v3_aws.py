@@ -170,6 +170,14 @@ def build_staging_worker_script(
         "dataset": job.dataset_id,
         "attempt": str(job.attempt),
         "instance_type": instance_type,
+        "requirements": (
+            "requirements-beir-stage.txt"
+            if job.adapter == "beir"
+            else "requirements-format-bench.txt"
+        ),
+        "pip_flags": (
+            "--require-hashes --only-binary=:all: " if job.adapter == "beir" else ""
+        ),
     }
     quoted = {key: shlex.quote(value) for key, value in values.items()}
     return f"""set -euo pipefail
@@ -199,7 +207,7 @@ aws --region "$region" s3 cp {quoted["manifest_uri"]} "$work/manifest.json" --on
 printf '%s  %s\n' {quoted["manifest_sha"]} "$work/manifest.json" | sha256sum -c -
 phase=extract; tar -xzf "$work/source.tar.gz" -C "$work/source"
 phase=python-env; python3.12 --version; python3.12 -m venv "$work/venv"
-phase=dependencies; "$work/venv/bin/pip" install --disable-pip-version-check --no-cache-dir -r "$work/source/scripts/requirements-format-bench.txt"
+phase=dependencies; "$work/venv/bin/pip" install --disable-pip-version-check --no-cache-dir {values["pip_flags"]}-r "$work/source/scripts/{quoted["requirements"]}"
 phase=metadata
 token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
 instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
@@ -377,9 +385,7 @@ timeout --signal=TERM --kill-after=60 {max_seconds} /bin/bash /var/lib/borsuk-pu
         "TagSpecifications": [
             {
                 "ResourceType": resource_type,
-                "Tags": _tags(
-                    campaign_id, cell_id, attempt, role, purchase_option
-                ),
+                "Tags": _tags(campaign_id, cell_id, attempt, role, purchase_option),
             }
             for resource_type in ("instance", "volume")
         ],

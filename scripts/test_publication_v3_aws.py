@@ -167,9 +167,7 @@ class PublicationV3AwsTests(unittest.TestCase):
             "max_seconds": 7200,
         }
         spot = build_launch_request(**common, purchase_option="spot")
-        on_demand = build_launch_request(
-            **common, purchase_option="on-demand"
-        )
+        on_demand = build_launch_request(**common, purchase_option="on-demand")
         self.assertNotIn("InstanceMarketOptions", on_demand)
         self.assertEqual(
             spot["ClientToken"],
@@ -418,6 +416,23 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertIn("--attempt 4", script)
         self.assertIn("--dataset sift-128", script)
         self.assertNotIn("python3 -m venv", script)
+
+    def test_beir_staging_worker_uses_isolated_pinned_dependencies(self) -> None:
+        job = next(
+            job for job in staging_jobs(self.manifest) if job.dataset_id == "scifact"
+        )
+        script = build_staging_worker_script(
+            self.manifest,
+            job,
+            source_uri="s3://borsuk-bench-453182569524-euc1/source/archive.tar.gz",
+            source_archive_sha256="a" * 64,
+            manifest_uri="s3://borsuk-bench-453182569524-euc1/manifests/frozen.json",
+            manifest_sha256="b" * 64,
+        )
+        self.assertIn("scripts/requirements-beir-stage.txt", script)
+        self.assertIn("--require-hashes", script)
+        self.assertIn("--only-binary=:all:", script)
+        self.assertNotIn("scripts/requirements-format-bench.txt", script)
 
     def test_staging_receipt_roundtrip_verifier_rejects_substitution(self) -> None:
         job = next(

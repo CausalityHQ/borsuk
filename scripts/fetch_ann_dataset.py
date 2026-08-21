@@ -97,7 +97,9 @@ def convert_hdf5_dataset(
     h5py, np, pa, _ = _require_format_dependencies()
     if output.exists():
         if not output.is_dir() or any(output.iterdir()):
-            raise FileExistsError(f"refusing to reuse nonempty dataset directory {output}")
+            raise FileExistsError(
+                f"refusing to reuse nonempty dataset directory {output}"
+            )
     else:
         output.mkdir(parents=True)
 
@@ -172,7 +174,9 @@ def convert_hdf5_dataset(
         "dataset": publication_id,
         "source": f"{BASE_URL}/{dataset_name}.hdf5",
         "source_sha256": _sha256(source),
-        "materialization_sha256": dataset_materialization_sha256(output),
+        "materialization_sha256": dataset_materialization_sha256(
+            output, kind="standard-ann"
+        ),
     }
     (output.parent / f"{output.name}.provenance.json").write_text(
         json.dumps(provenance, sort_keys=True, separators=(",", ":")) + "\n"
@@ -190,7 +194,10 @@ def _download(source: Path, dataset: str) -> None:
         with (
             urllib.request.urlopen(request) as response,  # noqa: S310
             tempfile.NamedTemporaryFile(
-                dir=source.parent, prefix=f".{source.name}.", suffix=".partial", delete=False
+                dir=source.parent,
+                prefix=f".{source.name}.",
+                suffix=".partial",
+                delete=False,
             ) as handle,
         ):
             temporary_name = handle.name
@@ -208,13 +215,17 @@ def _download(source: Path, dataset: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", required=True, help="ann-benchmarks dataset name")
-    parser.add_argument("--out", required=True, type=Path, help="empty output directory")
+    parser.add_argument(
+        "--out", required=True, type=Path, help="empty output directory"
+    )
     parser.add_argument("--publication-id", help="manifest dataset id")
     parser.add_argument("--source-cache", type=Path, help="downloaded HDF5 path")
     parser.add_argument("--limit-train", type=int, default=0, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.limit_train:
-        raise ValueError("partial corpus conversion cannot preserve shipped ground truth")
+        raise ValueError(
+            "partial corpus conversion cannot preserve shipped ground truth"
+        )
     source = args.source_cache or args.out.parent / f".{args.dataset}.source.hdf5"
     if not source.exists():
         _download(source, args.dataset)

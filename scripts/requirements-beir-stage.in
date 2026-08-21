@@ -1,0 +1,8 @@
+# Direct Publication V3 BEIR staging dependencies. Compile this file with uv
+# into requirements-beir-stage.txt; the source archive checksum authenticates
+# the complete resolved environment used by the staging worker.
+numpy==1.26.4
+pyarrow==24.0.0
+sentence-transformers==3.4.1
+torch==2.5.1
+transformers==4.48.3

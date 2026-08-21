@@ -59,14 +59,22 @@ class FetchVectorDbBenchDatasetTest(unittest.TestCase):
     def test_train_shards_sort_by_parsed_index_and_reject_gaps(self) -> None:
         self.assertEqual(
             fetch.ordered_train_files(
-                ["train-2-of-3.parquet", "train-0-of-3.parquet", "train-1-of-3.parquet"],
+                [
+                    "train-2-of-3.parquet",
+                    "train-0-of-3.parquet",
+                    "train-1-of-3.parquet",
+                ],
                 3,
             ),
             ["train-0-of-3.parquet", "train-1-of-3.parquet", "train-2-of-3.parquet"],
         )
         with self.assertRaisesRegex(ValueError, "numbering"):
             fetch.ordered_train_files(
-                ["train-0-of-3.parquet", "train-1-of-3.parquet", "train-3-of-3.parquet"],
+                [
+                    "train-0-of-3.parquet",
+                    "train-1-of-3.parquet",
+                    "train-3-of-3.parquet",
+                ],
                 3,
             )
 
@@ -232,7 +240,9 @@ class FetchVectorDbBenchDatasetTest(unittest.TestCase):
                     "source": {
                         "state": "staged",
                         "url": output.resolve().as_uri(),
-                        "sha256": dataset_materialization_sha256(output),
+                        "sha256": dataset_materialization_sha256(
+                            output, kind="realistic-dense"
+                        ),
                         "license": "fixture",
                     },
                 }
@@ -293,13 +303,19 @@ class FetchVectorDbBenchDatasetTest(unittest.TestCase):
                 )
                 pq.write_table(
                     pa.table(
-                        {"neighbors_id": pa.array([list(range(10))], type=pa.list_(pa.int64()))}
+                        {
+                            "neighbors_id": pa.array(
+                                [list(range(10))], type=pa.list_(pa.int64())
+                            )
+                        }
                     ),
                     source / "neighbors.parquet",
                 )
                 fetch.write_json(
                     source / "meta.json",
-                    fetch.metadata_document("cohere-medium-1M", contract, n_test=1, k=10),
+                    fetch.metadata_document(
+                        "cohere-medium-1M", contract, n_test=1, k=10
+                    ),
                 )
                 remote_files = ["neighbors.parquet", "test.parquet", "train.parquet"]
                 fetch.write_json(

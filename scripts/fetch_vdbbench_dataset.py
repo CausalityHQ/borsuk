@@ -116,10 +116,10 @@ def ordered_train_files(files: list[str], expected: int) -> list[str]:
     totals = {int(match.group(2)) for _, match in matches}
     indices = [int(match.group(1)) for _, match in matches]
     if totals != {expected} or set(indices) != set(range(expected)):
-        raise ValueError("training Parquet shard numbering is not complete and canonical")
-    return [
-        name for name, _ in sorted(matches, key=lambda item: int(item[1].group(1)))
-    ]
+        raise ValueError(
+            "training Parquet shard numbering is not complete and canonical"
+        )
+    return [name for name, _ in sorted(matches, key=lambda item: int(item[1].group(1)))]
 
 
 def validate_local_files(dataset_dir: Path, expected: list[str]) -> None:
@@ -235,14 +235,20 @@ def materialize_publication_dataset(
             contract.train_files,
         )
     ]
-    remote_files = ["neighbors.parquet", "test.parquet", *[p.name for p in source_train]]
+    remote_files = [
+        "neighbors.parquet",
+        "test.parquet",
+        *[p.name for p in source_train],
+    ]
     expected_source_descriptor = descriptor_document(
         dataset, source_dir, remote_files, contract
     )
     try:
         source_descriptor = json.loads((source_dir / "dataset.json").read_text())
     except (FileNotFoundError, json.JSONDecodeError) as error:
-        raise ValueError("acquired dataset has no valid frozen source descriptor") from error
+        raise ValueError(
+            "acquired dataset has no valid frozen source descriptor"
+        ) from error
     if source_descriptor != expected_source_descriptor:
         raise ValueError("acquired source bytes differ from their frozen descriptor")
     rows_per_shard = max(1, shard_target_bytes // (contract.dimensions * 4))
@@ -283,7 +289,9 @@ def materialize_publication_dataset(
                     range(total_rows, total_rows + batch.num_rows), type=pa.int64()
                 )
                 if not pc.all(pc.equal(ids, expected_ids)).as_py():
-                    raise ValueError("training source ids are not canonical row positions")
+                    raise ValueError(
+                        "training source ids are not canonical row positions"
+                    )
                 table = _fixed_list_table(
                     batch.column(batch.schema.get_field_index("emb")),
                     contract.dimensions,
@@ -325,9 +333,7 @@ def materialize_publication_dataset(
     if not pc.all(pc.equal(test.column("id"), expected_test_ids)).as_py():
         raise ValueError("query source ids are not canonical row positions")
     pq.write_table(
-        _fixed_list_table(
-            test.column("emb"), contract.dimensions, "emb", pa.float32()
-        ),
+        _fixed_list_table(test.column("emb"), contract.dimensions, "emb", pa.float32()),
         output_dir / "test.parquet",
         compression="snappy",
         use_dictionary=False,
@@ -340,9 +346,7 @@ def materialize_publication_dataset(
     first_neighbors = neighbors.column(0)[0].as_py()
     truth_width = len(first_neighbors)
     pq.write_table(
-        _fixed_list_table(
-            neighbors.column(0), truth_width, "neighbors_id", pa.int32()
-        ),
+        _fixed_list_table(neighbors.column(0), truth_width, "neighbors_id", pa.int32()),
         output_dir / "neighbors.parquet",
         compression="snappy",
         use_dictionary=False,
@@ -364,7 +368,9 @@ def materialize_publication_dataset(
         "source": source_uri(contract),
         "source_sha256": source_descriptor["source_sha256"],
         "source_descriptor_sha256": sha256_file(source_dir / "dataset.json"),
-        "materialization_sha256": dataset_materialization_sha256(output_dir),
+        "materialization_sha256": dataset_materialization_sha256(
+            output_dir, kind="realistic-dense"
+        ),
     }
     write_json(output_dir.parent / f"{output_dir.name}.provenance.json", provenance)
     return output_dir

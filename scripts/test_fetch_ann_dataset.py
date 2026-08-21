@@ -26,9 +26,7 @@ class FetchAnnDatasetTests(unittest.TestCase):
             output = root / "dataset"
             train = np.arange(400, dtype=np.float32).reshape(100, 4)
             test = train[[1, 51]]
-            neighbors = np.array(
-                [list(range(10)), list(range(50, 60))], dtype=np.int32
-            )
+            neighbors = np.array([list(range(10)), list(range(50, 60))], dtype=np.int32)
             with h5py.File(source, "w") as handle:
                 handle.create_dataset("train", data=train)
                 handle.create_dataset("test", data=test)
@@ -44,7 +42,9 @@ class FetchAnnDatasetTests(unittest.TestCase):
             )
             train_paths = sorted(output.glob("train-*.parquet"))
             self.assertEqual(len(train_paths), 4)
-            self.assertTrue(all(path.stat().st_size < 128 * 1024 * 1024 for path in train_paths))
+            self.assertTrue(
+                all(path.stat().st_size < 128 * 1024 * 1024 for path in train_paths)
+            )
             decoded = np.concatenate(
                 [pq.read_table(path).column("emb").to_pylist() for path in train_paths]
             )
@@ -60,13 +60,19 @@ class FetchAnnDatasetTests(unittest.TestCase):
                 "source": {
                     "state": "staged",
                     "url": output.resolve().as_uri(),
-                    "sha256": dataset_materialization_sha256(output),
+                    "sha256": dataset_materialization_sha256(
+                        output, kind="standard-ann"
+                    ),
                     "license": "fixture",
                 },
             }
             descriptor = build_dataset_descriptor(dataset)
             self.assertEqual(
-                sum(item["rows"] for item in descriptor["objects"] if item["role"] == "train"),
+                sum(
+                    item["rows"]
+                    for item in descriptor["objects"]
+                    if item["role"] == "train"
+                ),
                 100,
             )
 

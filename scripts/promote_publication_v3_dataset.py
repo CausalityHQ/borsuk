@@ -19,17 +19,23 @@ from urllib.parse import urlparse
 if __package__:
     from scripts.publication_v3_aws import build_staging_receipt, staging_jobs
     from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
-    from scripts.stage_publication_v3_dataset import materialize_dense_dataset
+    from scripts.stage_publication_v3_dataset import materialize_dataset
 else:
     from publication_v3_aws import build_staging_receipt, staging_jobs
     from publication_v3_protocol import canonical_json_bytes, validate_manifest
-    from stage_publication_v3_dataset import materialize_dense_dataset
+    from stage_publication_v3_dataset import materialize_dataset
 
 
 def _s3_parts(uri: str) -> tuple[str, str]:
     parsed = urlparse(uri)
     key = parsed.path.lstrip("/")
-    if parsed.scheme != "s3" or not parsed.netloc or not key or parsed.query or parsed.fragment:
+    if (
+        parsed.scheme != "s3"
+        or not parsed.netloc
+        or not key
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ValueError("publication object URI must be a canonical S3 URI")
     return parsed.netloc, key
 
@@ -81,7 +87,11 @@ def _require_aws_cli(run_command) -> None:
         ["aws", "--version"], check=False, capture_output=True, text=True
     )
     match = re.search(r"aws-cli/(\d+)\.(\d+)", f"{result.stdout} {result.stderr}")
-    if result.returncode != 0 or match is None or tuple(map(int, match.groups())) < (2, 19):
+    if (
+        result.returncode != 0
+        or match is None
+        or tuple(map(int, match.groups())) < (2, 19)
+    ):
         raise RuntimeError("AWS CLI v2.19 or newer is required before materialization")
 
 
@@ -194,7 +204,7 @@ def promote_sealed_attempt(
     if len(jobs) != 1:
         raise ValueError("dataset has no unique staging job")
     job = jobs[0]
-    descriptor = materialize_dense_dataset(
+    descriptor = materialize_dataset(
         normalized,
         dataset_id=dataset_id,
         attempt=attempt,
@@ -207,6 +217,7 @@ def promote_sealed_attempt(
     provenance = json.loads(provenance_bytes)
     region = str(normalized["environment_contract"]["region"])
     owner = str(normalized["environment_contract"]["aws_account"])
+
     def upload_item(item: dict[str, object]) -> dict[str, object]:
         uri = f"{job.output_uri}/{item['path']}"
         _upload_verified(
