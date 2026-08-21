@@ -554,6 +554,19 @@ fn global_cell_card_head_request_budget(page_budget: usize) -> usize {
     )
 }
 
+fn global_cell_card_exact_request_budget(page_budget: usize) -> usize {
+    page_budget.clamp(
+        GLOBAL_LEAF_QUERY_WAVE_PAGES,
+        GLOBAL_CELL_CARD_HEAD_MAX_REQUESTS,
+    )
+}
+
+fn global_cell_card_head_card_budget(page_budget: usize, available_cards: usize) -> usize {
+    page_budget
+        .saturating_mul(GLOBAL_CELL_CARD_HEAD_CARD_MULTIPLIER)
+        .min(available_cards)
+}
+
 fn one_based_cell_card_ranks(ranked_root_indexes: &[usize]) -> Result<HashMap<usize, usize>> {
     let ranks = ranked_root_indexes
         .iter()
@@ -600,6 +613,7 @@ fn global_cell_card_exact_wave_admission_bytes(
 }
 const _: () = assert!(GLOBAL_LEAF_QUERY_WAVE_PAGES <= DEFAULT_MAX_INFLIGHT_LEAF_READS);
 const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 4;
+const GLOBAL_CELL_CARD_HEAD_CARD_MULTIPLIER: usize = 8;
 
 fn global_leaf_code_byte_ceiling(
     limit: u64,
@@ -17832,10 +17846,8 @@ impl BorsukIndex {
                 .map(|index| root.centroid_code(*index))
                 .collect::<Result<Vec<_>>>()?,
         )?;
-        let head_card_budget = context
-            .page_budget
-            .saturating_mul(GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER)
-            .max(context.page_budget);
+        let head_card_budget =
+            global_cell_card_head_card_budget(context.page_budget, card_indexes.len());
         let ranked_card_indexes = rank_cell_card_head_indexes(
             root,
             &card_indexes,
@@ -18109,8 +18121,8 @@ impl BorsukIndex {
         let (exact_plan, exact_limited) = match plan_ranked_cell_card_exact_wave_with_amplification(
             &ranked,
             exact_budget,
-            GLOBAL_LEAF_QUERY_WAVE_PAGES,
-            GLOBAL_LEAF_QUERY_WAVE_PAGES,
+            global_cell_card_exact_request_budget(context.page_budget),
+            global_cell_card_exact_request_budget(context.page_budget),
             self.read_runtime.exact_read_max_physical_amplification,
         ) {
             Ok(plan) => plan,
@@ -38441,6 +38453,20 @@ mod tests {
     }
 
     #[test]
+    fn resident_global_v19_exact_request_budget_tracks_qualified_page_budget() {
+        assert_eq!(global_cell_card_exact_request_budget(4), 32);
+        assert_eq!(global_cell_card_exact_request_budget(8), 32);
+        assert_eq!(global_cell_card_exact_request_budget(16), 32);
+        assert_eq!(global_cell_card_exact_request_budget(32), 32);
+        assert_eq!(global_cell_card_exact_request_budget(64), 64);
+    }
+
+    #[test]
+    fn resident_global_v19_scores_all_300_resident_cards_at_page_budget_64() {
+        assert_eq!(global_cell_card_head_card_budget(64, 300), 300);
+    }
+
+    #[test]
     fn resident_global_v19_bounds_lossless_rerank_independently_of_io_width() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
@@ -38570,8 +38596,8 @@ mod tests {
             )
             .unwrap();
         assert!(
-            wide_unbounded.global_leaf_pages_read <= GLOBAL_LEAF_QUERY_WAVE_PAGES,
-            "coalesced exact reads bypassed the admitted 32-tile wave: {wide_unbounded:?}"
+            wide_unbounded.global_leaf_pages_read <= 64,
+            "coalesced exact reads bypassed the admitted page-budget wave: {wide_unbounded:?}"
         );
     }
 
