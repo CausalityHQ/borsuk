@@ -114,6 +114,7 @@ if [[ "$mode" == "--stage-dataset" ]]; then
     --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
     --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
     --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
+    --start-attempt "${BORSUK_PUBLICATION_V3_START_ATTEMPT:-1}" \
     --max-attempts "${BORSUK_PUBLICATION_V3_MAX_ATTEMPTS:-6}"
   exit 0
 fi

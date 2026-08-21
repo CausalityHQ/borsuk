@@ -718,6 +718,33 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(aws.launched, [4])
         self.assertEqual(aws.terminated, ["i-0123456789abcdef0"])
 
+    def test_explicit_start_attempt_skips_orphaned_lower_attempts(self) -> None:
+        manifest = unstaged_sift_manifest()
+        aws = FakeAws(receipt_for(manifest, 5))
+        prefix = "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812"
+        result = stage_dataset(
+            manifest,
+            dataset_id="sift-128",
+            source_uri=f"{prefix}/source/a.tar.gz",
+            source_archive_sha256="a" * 64,
+            manifest_uri=f"{prefix}/manifests/m.json",
+            manifest_sha256=hashlib.sha256(canonical_json_bytes(manifest)).hexdigest(),
+            launch=LaunchEnvironment(
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
+                "aarch64",
+                "eu-central-1",
+            ),
+            aws=aws,
+            start_attempt=5,
+            max_attempts=6,
+            poll_seconds=0.01,
+        )
+        self.assertEqual(result["attempt"], 5)
+        self.assertEqual(aws.launched, [5])
+
     def test_corrupt_terminal_receipt_fails_closed_instead_of_advancing(self) -> None:
         manifest = unstaged_sift_manifest()
         aws = FakeAws(receipt_for(manifest, 4))

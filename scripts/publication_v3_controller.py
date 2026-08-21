@@ -375,6 +375,7 @@ def stage_dataset(
     manifest_sha256: str,
     launch: LaunchEnvironment,
     aws: Any,
+    start_attempt: int = 1,
     max_attempts: int = 4,
     poll_seconds: float = 15.0,
 ) -> dict[str, object]:
@@ -382,11 +383,11 @@ def stage_dataset(
     expected_manifest_sha = hashlib.sha256(canonical_json_bytes(normalized)).hexdigest()
     if manifest_sha256 != expected_manifest_sha:
         raise ValueError("staging manifest checksum differs from canonical bytes")
-    if not 0 < max_attempts <= 9_999 or poll_seconds <= 0:
-        raise ValueError("staging attempt cap and poll interval must be positive")
+    if not 0 < start_attempt <= max_attempts <= 9_999 or poll_seconds <= 0:
+        raise ValueError("staging attempt range and poll interval must be positive")
     max_seconds = int(normalized["budget_contract"]["max_index_build_seconds"])
 
-    for attempt in range(1, max_attempts + 1):
+    for attempt in range(start_attempt, max_attempts + 1):
         job = next(
             (
                 j
@@ -739,6 +740,7 @@ def main() -> int:
     stage.add_argument("--subnet-id", required=True)
     stage.add_argument("--security-group-id", required=True)
     stage.add_argument("--instance-profile-arn", required=True)
+    stage.add_argument("--start-attempt", type=int, default=1)
     stage.add_argument("--max-attempts", type=int, default=4)
     build = subparsers.add_parser("build-sift")
     build.add_argument("--manifest", type=Path, required=True)
@@ -818,6 +820,7 @@ def main() -> int:
             manifest_sha256=manifest_sha,
             launch=launch,
             aws=aws,
+            start_attempt=args.start_attempt,
             max_attempts=args.max_attempts,
         )
     else:

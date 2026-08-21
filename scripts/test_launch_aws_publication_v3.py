@@ -163,6 +163,7 @@ manifest = json.loads(manifest_path.read_text())
 assert manifest['source']['state'] == 'frozen'
 assert manifest['source']['archive_sha256'] == hashlib.sha256(archive_path.read_bytes()).hexdigest()
 assert sys.argv[sys.argv.index('--dataset') + 1] == 'cohere-large-10m-768'
+assert sys.argv[sys.argv.index('--start-attempt') + 1] == '5'
 print(json.dumps({'dataset_id':'cohere-large-10m-768','attempt':1}, sort_keys=True))
 """,
                 encoding="utf-8",
@@ -179,6 +180,7 @@ print(json.dumps({'dataset_id':'cohere-large-10m-768','attempt':1}, sort_keys=Tr
                 env={
                     **os.environ,
                     "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                    "BORSUK_PUBLICATION_V3_START_ATTEMPT": "5",
                 },
                 capture_output=True,
                 text=True,
