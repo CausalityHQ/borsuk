@@ -52,6 +52,7 @@ pub struct OpenOptionsJs {
     pub max_waiting_searches: Option<u32>,
     pub leaf_read_width: Option<u32>,
     pub max_inflight_leaf_reads: Option<u32>,
+    pub max_parallel_decode_rank_tasks: Option<u32>,
     pub exact_read_max_physical_amplification: Option<u32>,
 }
 
@@ -1612,6 +1613,11 @@ fn open(uri: String, options: OpenOptionsJs) -> Result<JsIndex> {
             max_inflight_leaf_reads: options
                 .max_inflight_leaf_reads
                 .map_or(borsuk::DEFAULT_MAX_INFLIGHT_LEAF_READS, |value| {
+                    value as usize
+                }),
+            max_parallel_decode_rank_tasks: options
+                .max_parallel_decode_rank_tasks
+                .map_or(borsuk::DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS, |value| {
                     value as usize
                 }),
             exact_read_max_physical_amplification: options

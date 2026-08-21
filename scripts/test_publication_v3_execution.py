@@ -183,6 +183,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             max_waiting_searches=16,
             leaf_read_width=32,
             max_inflight_leaf_reads=48,
+            max_parallel_decode_rank_tasks=1,
             cpu_threads=3,
             io_threads=88,
             s3_get_concurrency=64,
@@ -208,6 +209,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn('test "$instance_purchase_option" = on-demand', script)
         self.assertIn('"purchase_option":"%s"', script)
         self.assertIn('--purchase-option "$instance_purchase_option"', script)
+        self.assertIn('test "$actual_max_parallel_decode_rank_tasks" = 1', script)
         self.assertLess(script.index("stage=attest-purchase"), script.index("stage=provision"))
         self.assertIn("stage=mount-cache", script)
         self.assertIn("stage=verify-index", script)
@@ -251,6 +253,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             max_waiting_searches=16,
             leaf_read_width=32,
             max_inflight_leaf_reads=48,
+            max_parallel_decode_rank_tasks=1,
             cpu_threads=3,
             io_threads=88,
             s3_get_concurrency=64,

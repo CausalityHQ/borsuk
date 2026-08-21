@@ -325,7 +325,7 @@ fn default_build_config_matches_plain_create_byte_for_byte() {
         .unwrap();
 
     let default_dir = tempfile::tempdir().unwrap();
-    let _default = build_and_compact(
+    let default = build_and_compact(
         default_dir.path().to_string_lossy().into_owned(),
         dimensions,
         BuildConfig::default(),
@@ -340,8 +340,16 @@ fn default_build_config_matches_plain_create_byte_for_byte() {
         "default BuildConfig diverged from plain create"
     );
 
-    // And the default index reports the default config.
-    assert_eq!(plain.build_config(), &BuildConfig::default());
+    // Both creation paths report the same resolved persisted config. Automatic
+    // fields such as the global TurboQuant width are resolved before the
+    // manifest is written, so comparing against the unresolved input template
+    // would incorrectly expect its sentinel value.
+    let expected_resolved = BuildConfig {
+        global_turboquant_bits: 4,
+        ..BuildConfig::default()
+    };
+    assert_eq!(plain.build_config(), &expected_resolved);
+    assert_eq!(default.build_config(), &expected_resolved);
 }
 
 #[test]

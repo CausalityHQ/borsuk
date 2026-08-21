@@ -17,8 +17,10 @@ except ImportError:
     from rest_coexistence_load import evaluate_phase, run_phase, summarize
 
 CAUSALITY_AWS_ACCOUNT = "453182569524"
-REST_RESULT_SCHEMA_VERSION = 11
+REST_RESULT_SCHEMA_VERSION = 12
 FLOW_CONTROL_COUNTERS = (
+    "borsuk_decode_rank_wait_count",
+    "borsuk_decode_rank_wait_micros",
     "borsuk_leaf_read_wait_count",
     "borsuk_leaf_read_wait_micros",
     "borsuk_search_rejected",
@@ -123,6 +125,7 @@ def validate_effective_limits(expected: dict[str, int], actual: dict[str, Any]) 
         "search_admission": "borsuk_search_capacity",
         "leaf_read_width": "borsuk_leaf_read_width",
         "max_inflight_leaf_reads": "borsuk_leaf_read_capacity",
+        "max_parallel_decode_rank_tasks": "borsuk_decode_rank_capacity",
         "page_budget": "borsuk_page_budget",
         "exact_candidates": "borsuk_exact_candidates",
         "exact_read_max_physical_amplification": (

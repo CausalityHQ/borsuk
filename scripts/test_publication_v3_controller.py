@@ -498,7 +498,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             )
         self.assertEqual(aws.purchase_option, "on-demand")
 
-    def test_runtime_schema_two_receipt_matches_flow_control_authority(self) -> None:
+    def test_runtime_schema_three_receipt_matches_flow_control_authority(self) -> None:
         manifest = unstaged_sift_manifest()
         manifest["source"] = {
             "state": "frozen",
@@ -527,6 +527,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             "max_waiting_searches": 16,
             "leaf_read_width": 32,
             "max_inflight_leaf_reads": 48,
+            "max_parallel_decode_rank_tasks": 1,
             "cpu_threads": 3,
             "io_threads": 88,
             "s3_get_concurrency": 64,
@@ -544,7 +545,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "status": "complete",
                     "role": "runtime",
                     "attempt": 1,
@@ -564,7 +565,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             poll_seconds=0.01,
             purchase_option="spot",
         )
-        self.assertEqual(receipt["schema_version"], 2)
+        self.assertEqual(receipt["schema_version"], 3)
 
     def test_execution_instance_identity_is_role_cell_and_attempt_bound(self) -> None:
         manifest = unstaged_sift_manifest()

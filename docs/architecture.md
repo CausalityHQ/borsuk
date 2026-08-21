@@ -120,7 +120,13 @@ reads, process-wide S3 GETs, and CPU execution. Defaults admit eight active and
 sixteen waiting searches, issue leaf waves of at most 32, and allow at most 48
 in-flight leaf reads per handle. The process CPU pool reserves one core on
 small machines and caps itself at four workers; blocking I/O and S3 GETs have
-separate configurable ceilings. Reads of an identical immutable checksum are
+separate configurable ceilings. After immutable ANN bytes arrive, a
+collection-local FIFO gate admits at most one inner-parallel approximate head
+decode/rank stage into that shared CPU pool by default. This prevents concurrent
+queries from fragmenting the pool across many Rayon jobs without serializing S3
+downloads; the serial exact-rerank stage remains outside this gate. Fetched bytes
+remain charged to transient-memory admission while waiting. Reads of an
+identical immutable checksum are
 single-flight while they
 overlap, so concurrent users share one decode without retaining it as a
 resident cache afterward. An explicitly byte-budgeted decoded-segment cache is

@@ -28,6 +28,7 @@ RUNTIME_FIELDS = {
     "exact_read_max_physical_amplification",
     "leaf_read_width",
     "max_inflight_leaf_reads",
+    "max_parallel_decode_rank_tasks",
     "ram_budget_bytes",
     "disk_cache_bytes",
 }
@@ -112,7 +113,11 @@ def _validated_runtime(value: dict[str, int]) -> dict[str, int]:
         raise ValueError(
             "runtime exact_read_max_physical_amplification must be in 1..=5"
         )
-    for field in ("leaf_read_width", "max_inflight_leaf_reads"):
+    for field in (
+        "leaf_read_width",
+        "max_inflight_leaf_reads",
+        "max_parallel_decode_rank_tasks",
+    ):
         if not 1 <= value[field] <= 1024:
             raise ValueError(f"runtime {field} must be in 1..=1024")
     if value["ram_budget_bytes"] <= 0 or value["disk_cache_bytes"] < 0:
@@ -128,27 +133,29 @@ def cold_s3_cap_matrix() -> list[dict[str, int | str]]:
         ("wide", 32, 96, 128, 160),
     )
     cells: list[dict[str, int | str]] = []
-    for search_admission in (2, 4, 8):
-        for name, leaf_width, inflight, get_cap, io_threads in read_planes:
-            runtime: dict[str, int] = {
-                "cpu_threads": 3,
-                "io_threads": io_threads,
-                "s3_get_concurrency": get_cap,
-                "search_admission": search_admission,
-                "page_budget": 32,
-                "exact_candidates": 512,
-                "exact_read_max_physical_amplification": 1,
-                "leaf_read_width": leaf_width,
-                "max_inflight_leaf_reads": inflight,
-                "ram_budget_bytes": 2 * 1024**3,
-                "disk_cache_bytes": 0,
-            }
-            cells.append(
-                {
-                    "cell_id": f"a{search_admission}-{name}",
-                    **_validated_runtime(runtime),
+    for decode_rank_tasks in (1, 3):
+        for search_admission in (2, 4, 8):
+            for name, leaf_width, inflight, get_cap, io_threads in read_planes:
+                runtime: dict[str, int] = {
+                    "cpu_threads": 3,
+                    "io_threads": io_threads,
+                    "s3_get_concurrency": get_cap,
+                    "search_admission": search_admission,
+                    "page_budget": 32,
+                    "exact_candidates": 512,
+                    "exact_read_max_physical_amplification": 1,
+                    "leaf_read_width": leaf_width,
+                    "max_inflight_leaf_reads": inflight,
+                    "max_parallel_decode_rank_tasks": decode_rank_tasks,
+                    "ram_budget_bytes": 2 * 1024**3,
+                    "disk_cache_bytes": 0,
                 }
-            )
+                cells.append(
+                    {
+                        "cell_id": f"d{decode_rank_tasks}-a{search_admission}-{name}",
+                        **_validated_runtime(runtime),
+                    }
+                )
     return cells
 
 
@@ -319,7 +326,7 @@ printf '%s\n' '{expected}' >"$work/runtime.json"
 cpu_before=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 started_ns=$(date +%s%N)
 PYTHONPATH="$work/scripts" python3 "$runner" --base-url "$BORSUK_SERVER_ENDPOINT" --queries "$queries" --output "$work/output" --expected-runtime "$work/runtime.json" --controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE" --expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT" --runtime-aws-account "$runtime_aws_account" --repetition {repetition}{smoke_flag}
-python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==11 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==12 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
 finished_ns=$(date +%s%N)
 cpu_after=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 cp "$cg_root/memory.events" "$work/memory.events.after"
@@ -392,6 +399,8 @@ def _user_data(
             f"{runtime['exact_read_max_physical_amplification']} "
             f"--setenv=BORSUK_REST_LEAF_READ_WIDTH={runtime['leaf_read_width']} "
             f"--setenv=BORSUK_REST_MAX_INFLIGHT_LEAF_READS={runtime['max_inflight_leaf_reads']} "
+            "--setenv=BORSUK_REST_MAX_PARALLEL_DECODE_RANK_TASKS="
+            f"{runtime['max_parallel_decode_rank_tasks']} "
             f"--setenv=BORSUK_REST_RAM_BUDGET_BYTES={runtime['ram_budget_bytes']} "
             f"--setenv=BORSUK_REST_DISK_CACHE_BYTES={runtime['disk_cache_bytes']}"
         )
@@ -692,7 +701,7 @@ def build_launch_pair(
     generator_worker_sha256 = hashlib.sha256(generator_worker.encode("utf-8")).hexdigest()
     workload_sha256 = hashlib.sha256(_canonical_bytes(workload)).hexdigest()
     authority = {
-        "schema_version": 4,
+        "schema_version": 5,
         "aws_profile": aws_profile,
         "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,
@@ -710,7 +719,7 @@ def build_launch_pair(
     }
     attempt_authority_sha256 = hashlib.sha256(_canonical_bytes(authority)).hexdigest()
     receipt = {
-        "schema_version": 4,
+        "schema_version": 5,
         "aws_profile": aws_profile,
         "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,

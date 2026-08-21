@@ -541,6 +541,10 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
                 "BORSUK_HYBRID_MAX_INFLIGHT_LEAF_READS",
                 borsuk::DEFAULT_MAX_INFLIGHT_LEAF_READS,
             )?,
+            max_parallel_decode_rank_tasks: env_usize(
+                "BORSUK_HYBRID_MAX_PARALLEL_DECODE_RANK_TASKS",
+                borsuk::DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS,
+            )?,
             exact_read_max_physical_amplification: env_u64(
                 "BORSUK_HYBRID_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION",
                 borsuk::DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION,

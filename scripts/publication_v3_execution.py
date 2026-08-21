@@ -327,6 +327,7 @@ def runtime_worker_script(
     max_waiting_searches: int,
     leaf_read_width: int,
     max_inflight_leaf_reads: int,
+    max_parallel_decode_rank_tasks: int,
     cpu_threads: int,
     io_threads: int,
     s3_get_concurrency: int,
@@ -345,6 +346,7 @@ def runtime_worker_script(
         max_waiting_searches,
         leaf_read_width,
         max_inflight_leaf_reads,
+        max_parallel_decode_rank_tasks,
         cpu_threads,
         io_threads,
         s3_get_concurrency,
@@ -442,6 +444,7 @@ def runtime_worker_script(
         actual_max_waiting=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_waiting_searches"])' "$execution_contract")
         actual_leaf_width=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["leaf_read_width"])' "$execution_contract")
         actual_max_leaf_reads=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_inflight_leaf_reads"])' "$execution_contract")
+        actual_max_parallel_decode_rank_tasks=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_parallel_decode_rank_tasks"])' "$execution_contract")
         actual_cpu_threads=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["cpu_threads"])' "$execution_contract")
         actual_io_threads=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["io_threads"])' "$execution_contract")
         actual_s3_gets=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["s3_get_concurrency"])' "$execution_contract")
@@ -451,6 +454,7 @@ def runtime_worker_script(
         test "$actual_max_waiting" = {_q(max_waiting_searches)}
         test "$actual_leaf_width" = {_q(leaf_read_width)}
         test "$actual_max_leaf_reads" = {_q(max_inflight_leaf_reads)}
+        test "$actual_max_parallel_decode_rank_tasks" = {_q(max_parallel_decode_rank_tasks)}
         test "$actual_cpu_threads" = {_q(cpu_threads)}
         test "$actual_io_threads" = {_q(io_threads)}
         test "$actual_s3_gets" = {_q(s3_get_concurrency)}
@@ -466,7 +470,7 @@ def runtime_worker_script(
           concurrency_samples_sha=$(sha256sum "$work/cell/runtime-output/bench_concurrency_samples.csv" | awk '{{print $1}}')
           concurrency_fields=$(printf ',"concurrency_summary_sha256":"%s","concurrency_samples_sha256":"%s"' "$concurrency_summary_sha" "$concurrency_samples_sha")
         fi
-        printf '{{"schema_version":2,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"execution_contract_sha256":"%s"%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$execution_contract_sha" "$concurrency_fields" >"$work/complete.json"
+        printf '{{"schema_version":3,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"execution_contract_sha256":"%s"%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$execution_contract_sha" "$concurrency_fields" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/RUNTIME_TERMINAL_COMPLETE.json")}
         complete=1
         """

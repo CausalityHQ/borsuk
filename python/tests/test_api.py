@@ -1424,6 +1424,7 @@ class PythonApiTests(unittest.TestCase):
             "max_active_searches",
             "leaf_read_width",
             "max_inflight_leaf_reads",
+            "max_parallel_decode_rank_tasks",
         ):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(ValueError, f"{field} must be greater than zero"):
@@ -1451,9 +1452,17 @@ class PythonApiTests(unittest.TestCase):
                 max_waiting_searches=0,
                 leaf_read_width=1,
                 max_inflight_leaf_reads=1,
+                max_parallel_decode_rank_tasks=1,
                 exact_read_max_physical_amplification=1,
             )
             self.assertEqual(reopened.stats().dimensions, 2)
+
+    def test_open_appends_new_flow_control_parameters_after_existing_positionals(self) -> None:
+        parameters = list(inspect.signature(borsuk.open).parameters)
+        self.assertLess(
+            parameters.index("exact_read_max_physical_amplification"),
+            parameters.index("max_parallel_decode_rank_tasks"),
+        )
 
     def test_open_can_use_paged_routing_without_resident_segment_summaries(
         self,

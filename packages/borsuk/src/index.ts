@@ -711,6 +711,7 @@ export interface OpenOptions {
   maxWaitingSearches?: number;
   leafReadWidth?: number;
   maxInflightLeafReads?: number;
+  maxParallelDecodeRankTasks?: number;
   exactReadMaxPhysicalAmplification?: number;
 }
 
@@ -732,6 +733,8 @@ interface NativeOpenOptions {
   leaf_read_width?: number;
   maxInflightLeafReads?: number;
   max_inflight_leaf_reads?: number;
+  maxParallelDecodeRankTasks?: number;
+  max_parallel_decode_rank_tasks?: number;
   exactReadMaxPhysicalAmplification?: number;
   exact_read_max_physical_amplification?: number;
 }
@@ -1821,6 +1824,10 @@ export async function open(uri: string, options: OpenOptions = {}): Promise<Inde
     options.maxInflightLeafReads,
     "max_inflight_leaf_reads",
   );
+  const maxParallelDecodeRankTasks = validateOptionalPositiveIntegerOption(
+    options.maxParallelDecodeRankTasks,
+    "max_parallel_decode_rank_tasks",
+  );
   const exactReadMaxPhysicalAmplification = validateOptionalIntegerOption(
     options.exactReadMaxPhysicalAmplification,
     "exact_read_max_physical_amplification",
@@ -1852,6 +1859,8 @@ export async function open(uri: string, options: OpenOptions = {}): Promise<Inde
       leaf_read_width: leafReadWidth,
       maxInflightLeafReads,
       max_inflight_leaf_reads: maxInflightLeafReads,
+      maxParallelDecodeRankTasks,
+      max_parallel_decode_rank_tasks: maxParallelDecodeRankTasks,
       exactReadMaxPhysicalAmplification,
       exact_read_max_physical_amplification: exactReadMaxPhysicalAmplification,
     }),

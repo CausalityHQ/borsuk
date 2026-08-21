@@ -916,6 +916,7 @@ impl PyIndex {
                 max_waiting_searches: borsuk::DEFAULT_MAX_WAITING_SEARCHES,
                 leaf_read_width: borsuk::DEFAULT_LEAF_READ_WIDTH,
                 max_inflight_leaf_reads: borsuk::DEFAULT_MAX_INFLIGHT_LEAF_READS,
+                max_parallel_decode_rank_tasks: borsuk::DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS,
                 exact_read_max_physical_amplification:
                     borsuk::DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION,
             })
@@ -2477,7 +2478,7 @@ fn create(
 }
 
 #[pyfunction]
-#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None, preload = false, max_active_searches = 8, max_waiting_searches = 16, leaf_read_width = 32, max_inflight_leaf_reads = 48, exact_read_max_physical_amplification = 1))]
+#[pyo3(signature = (uri, cache_dir = None, ram_budget = None, resident_routing = false, cache_max_bytes = None, preload = false, max_active_searches = 8, max_waiting_searches = 16, leaf_read_width = 32, max_inflight_leaf_reads = 48, exact_read_max_physical_amplification = 1, max_parallel_decode_rank_tasks = 1))]
 #[pyo3(name = "open")]
 #[allow(clippy::too_many_arguments)] // These are explicit Python keyword controls.
 fn open_py(
@@ -2493,6 +2494,7 @@ fn open_py(
     leaf_read_width: usize,
     max_inflight_leaf_reads: usize,
     exact_read_max_physical_amplification: u64,
+    max_parallel_decode_rank_tasks: usize,
 ) -> PyResult<PyIndex> {
     py.detach(move || {
         open(PythonOpenOptions {
@@ -2506,6 +2508,7 @@ fn open_py(
             max_waiting_searches,
             leaf_read_width,
             max_inflight_leaf_reads,
+            max_parallel_decode_rank_tasks,
             exact_read_max_physical_amplification,
         })
     })
@@ -2548,6 +2551,7 @@ struct PythonOpenOptions {
     max_waiting_searches: usize,
     leaf_read_width: usize,
     max_inflight_leaf_reads: usize,
+    max_parallel_decode_rank_tasks: usize,
     exact_read_max_physical_amplification: u64,
 }
 
@@ -2577,6 +2581,7 @@ fn open(options: PythonOpenOptions) -> PyResult<PyIndex> {
             max_waiting_searches: options.max_waiting_searches,
             leaf_read_width: options.leaf_read_width,
             max_inflight_leaf_reads: options.max_inflight_leaf_reads,
+            max_parallel_decode_rank_tasks: options.max_parallel_decode_rank_tasks,
             exact_read_max_physical_amplification: options.exact_read_max_physical_amplification,
             ..OpenOptions::default()
         },

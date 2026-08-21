@@ -483,7 +483,7 @@ def run_execution_job(
             if "complete" in markers:
                 value = aws.read_receipt(job)
                 required = {
-                    "schema_version": 2 if job.role == "runtime" else 1,
+                    "schema_version": 3 if job.role == "runtime" else 1,
                     "status": "complete",
                     "role": job.role,
                     "attempt": job.attempt,
@@ -621,6 +621,7 @@ def prepare_qualification_execution(
     max_waiting_searches = 16
     leaf_read_width = 32
     max_inflight_leaf_reads = 48
+    max_parallel_decode_rank_tasks = 1
     cpu_threads = max(1, min(max_active_searches - 1, 4))
     io_threads = 88
     s3_get_concurrency = 64
@@ -682,6 +683,7 @@ def prepare_qualification_execution(
             max_waiting_searches=max_waiting_searches,
             leaf_read_width=leaf_read_width,
             max_inflight_leaf_reads=max_inflight_leaf_reads,
+            max_parallel_decode_rank_tasks=max_parallel_decode_rank_tasks,
             cpu_threads=cpu_threads,
             io_threads=io_threads,
             s3_get_concurrency=s3_get_concurrency,
@@ -696,6 +698,7 @@ def prepare_qualification_execution(
         expected["max_waiting_searches"] = max_waiting_searches
         expected["leaf_read_width"] = leaf_read_width
         expected["max_inflight_leaf_reads"] = max_inflight_leaf_reads
+        expected["max_parallel_decode_rank_tasks"] = max_parallel_decode_rank_tasks
         expected["cpu_threads"] = cpu_threads
         expected["io_threads"] = io_threads
         expected["s3_get_concurrency"] = s3_get_concurrency

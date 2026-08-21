@@ -781,6 +781,15 @@ pub const DEFAULT_MAX_WAITING_SEARCHES: usize = 16;
 pub const DEFAULT_LEAF_READ_WIDTH: usize = 32;
 /// Default per-handle cap on immutable ANN range reads across all searches.
 pub const DEFAULT_MAX_INFLIGHT_LEAF_READS: usize = 48;
+/// Default number of post-I/O inner-parallel decode/rank jobs from one
+/// collection allowed to enter the process-wide Rayon query pool concurrently.
+///
+/// One job can use every configured SIMD/query worker. Serializing these
+/// inner-parallel stages prevents concurrent searches on that collection from
+/// fragmenting the worker pool. Object-store reads happen outside this gate;
+/// fetched bytes still retain their separately bounded transient-memory permit
+/// while waiting for CPU admission.
+pub const DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS: usize = 1;
 /// Default upper bound on exact-rerank physical range bytes relative to the
 /// selected exact-block bytes.
 ///
@@ -923,6 +932,9 @@ pub struct OpenOptions {
     /// named modality children. The lower of this and the process-wide backing
     /// GET cap provides per-index fairness.
     pub max_inflight_leaf_reads: usize,
+    /// Maximum post-I/O decode/rank jobs concurrently using the process-wide
+    /// query pool. Object-store reads do not hold this permit.
+    pub max_parallel_decode_rank_tasks: usize,
     /// Maximum physical bytes fetched for an exact-rerank wave as a multiple
     /// of its selected exact-block bytes. `1` disables speculative gap reads;
     /// values up to the format-wide cap of `5` may trade additional bytes for
@@ -952,6 +964,7 @@ impl Default for OpenOptions {
             max_waiting_searches: DEFAULT_MAX_WAITING_SEARCHES,
             leaf_read_width: DEFAULT_LEAF_READ_WIDTH,
             max_inflight_leaf_reads: DEFAULT_MAX_INFLIGHT_LEAF_READS,
+            max_parallel_decode_rank_tasks: DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS,
             exact_read_max_physical_amplification: DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION,
         }
     }
@@ -1003,6 +1016,9 @@ pub struct FlowControlStats {
     pub searches: AdmissionStats,
     /// Immutable ANN range-read admission counters.
     pub leaf_reads: AdmissionStats,
+    /// Post-I/O decode/rank admission counters.
+    #[serde(default)]
+    pub decode_rank: AdmissionStats,
     /// Weighted transient-memory admission counters.
     #[serde(default)]
     pub transient: ByteAdmissionStats,
@@ -1125,6 +1141,8 @@ pub struct BorsukIndex {
     /// Per-handle cap for immutable ANN range reads. Concurrent callers and
     /// named modality children share this cap.
     global_pq_rerank_admission: Arc<AdmissionGate>,
+    /// Shared post-I/O CPU-stage gate across the root and named modalities.
+    decode_rank_admission: Arc<AdmissionGate>,
     /// Same-cell reads shared only while they overlap. Unlike `segment_cache`,
     /// this never retains decoded cells after the active callers release them.
     inflight_segment_reads: Arc<InFlightSegmentReads>,
@@ -1327,6 +1345,7 @@ struct CollectionReadRuntime {
     leaf_read_width: usize,
     exact_read_max_physical_amplification: u64,
     global_pq_rerank_admission: Arc<AdmissionGate>,
+    decode_rank_admission: Arc<AdmissionGate>,
     cell_card_code_planes: Arc<DecodedObjectCache<Vec<u8>>>,
     prepared_cell_card_code_planes: Mutex<Option<PreparedCellCardCodePlanes>>,
     inflight_cell_card_code_planes: Arc<InFlightReads<Vec<u8>>>,
@@ -3223,6 +3242,9 @@ impl CollectionReadRuntime {
             global_pq_rerank_admission: Arc::new(AdmissionGate::new(
                 options.max_inflight_leaf_reads,
             )),
+            decode_rank_admission: Arc::new(AdmissionGate::new(
+                options.max_parallel_decode_rank_tasks,
+            )),
             cell_card_code_planes: decoded_cache_with_pool(
                 retained_pool
                     .as_ref()
@@ -3331,6 +3353,7 @@ impl BorsukIndex {
         FlowControlStats {
             searches: public(self.admission.snapshot()),
             leaf_reads: public(self.global_pq_rerank_admission.snapshot()),
+            decode_rank: public(self.decode_rank_admission.snapshot()),
             transient: self.read_runtime.transient_admission.as_ref().map_or_else(
                 ByteAdmissionStats::default,
                 |gate| {
@@ -3480,6 +3503,7 @@ impl BorsukIndex {
         self.admission = Arc::clone(&runtime.admission);
         self.leaf_read_width = runtime.leaf_read_width;
         self.global_pq_rerank_admission = Arc::clone(&runtime.global_pq_rerank_admission);
+        self.decode_rank_admission = Arc::clone(&runtime.decode_rank_admission);
         self.inflight_segment_reads = Arc::clone(&runtime.inflight_segment_reads);
         self.inflight_graph_reads = Arc::clone(&runtime.inflight_graph_reads);
         self.inflight_lexical_reads = Arc::clone(&runtime.inflight_lexical_reads);
@@ -4247,6 +4271,7 @@ impl BorsukIndex {
             admission: Arc::clone(&read_runtime.admission),
             leaf_read_width: read_runtime.leaf_read_width,
             global_pq_rerank_admission: Arc::clone(&read_runtime.global_pq_rerank_admission),
+            decode_rank_admission: Arc::clone(&read_runtime.decode_rank_admission),
             inflight_segment_reads: Arc::clone(&read_runtime.inflight_segment_reads),
             inflight_graph_reads: Arc::clone(&read_runtime.inflight_graph_reads),
             inflight_lexical_reads: Arc::clone(&read_runtime.inflight_lexical_reads),
@@ -4365,6 +4390,7 @@ impl BorsukIndex {
                 max_waiting_searches: DEFAULT_MAX_WAITING_SEARCHES,
                 leaf_read_width: DEFAULT_LEAF_READ_WIDTH,
                 max_inflight_leaf_reads: DEFAULT_MAX_INFLIGHT_LEAF_READS,
+                max_parallel_decode_rank_tasks: DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS,
                 exact_read_max_physical_amplification:
                     DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION,
             },
@@ -4593,6 +4619,7 @@ impl BorsukIndex {
             admission: Arc::clone(&read_runtime.admission),
             leaf_read_width: read_runtime.leaf_read_width,
             global_pq_rerank_admission: Arc::clone(&read_runtime.global_pq_rerank_admission),
+            decode_rank_admission: Arc::clone(&read_runtime.decode_rank_admission),
             inflight_segment_reads: Arc::clone(&read_runtime.inflight_segment_reads),
             inflight_graph_reads: Arc::clone(&read_runtime.inflight_graph_reads),
             inflight_lexical_reads: Arc::clone(&read_runtime.inflight_lexical_reads),
@@ -18015,7 +18042,7 @@ impl BorsukIndex {
             code_plane_cache_bytes,
             code_plane_storage_bytes,
             global_approximate_us,
-        ) = run_cell_card_post_io(|| {
+        ) = run_cell_card_post_io(&self.decode_rank_admission, || {
             let finished_heads = head_plan
                 .reads()
                 .par_iter()
@@ -18213,7 +18240,7 @@ impl BorsukIndex {
             deepest_winning_card_rank,
             hits,
             vectors,
-        ) = run_cell_card_post_io(|| {
+        ) = run_cell_card_exact_post_io(|| {
             let mut fetched_exact = Vec::with_capacity(exact_reads.len());
             for read in exact_reads {
                 fetched_exact.push(read?);
@@ -28280,6 +28307,10 @@ fn validate_open_options(options: &OpenOptions) -> Result<()> {
         ("max_active_searches", options.max_active_searches),
         ("leaf_read_width", options.leaf_read_width),
         ("max_inflight_leaf_reads", options.max_inflight_leaf_reads),
+        (
+            "max_parallel_decode_rank_tasks",
+            options.max_parallel_decode_rank_tasks,
+        ),
     ] {
         if value == 0 {
             return Err(BorsukError::InvalidOpenOptions(format!(
@@ -28855,7 +28886,21 @@ where
 /// Object-store workers must remain blocking-I/O waiters: executing V17 CPU
 /// work on that wider pool would let concurrent searches oversubscribe the
 /// host and steal cores from the embedding application.
-fn run_cell_card_post_io<R, F>(work: F) -> R
+fn run_cell_card_post_io<R, F>(gate: &AdmissionGate, work: F) -> R
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    let _permit = gate.acquire();
+    crate::parallel::install(work)
+}
+
+/// Run the serial exact decode/rerank stage on one query worker.
+///
+/// This stage has no inner Rayon fan-out. It deliberately bypasses the
+/// inner-parallel head-stage gate so independent exact reranks can occupy the
+/// remaining query workers instead of being serialized collection-wide.
+fn run_cell_card_exact_post_io<R, F>(work: F) -> R
 where
     R: Send,
     F: FnOnce() -> R + Send,
@@ -31193,8 +31238,10 @@ mod tests {
         let fetched = index
             .fetch_cell_card_head_read(&read, None)
             .expect("the I/O stage must only fetch bytes");
-        let error =
-            run_cell_card_post_io(|| index.finish_cell_card_head_read(&read, fetched)).unwrap_err();
+        let error = run_cell_card_post_io(&index.decode_rank_admission, || {
+            index.finish_cell_card_head_read(&read, fetched)
+        })
+        .unwrap_err();
 
         assert!(error.to_string().contains("checksum or bounds mismatch"));
     }
@@ -32233,9 +32280,17 @@ mod tests {
             &index.global_pq_rerank_admission,
             &child.global_pq_rerank_admission
         ));
+        assert!(Arc::ptr_eq(
+            &index.decode_rank_admission,
+            &child.decode_rank_admission
+        ));
         let flow = index.flow_control_stats();
         assert_eq!(flow.searches.capacity, DEFAULT_MAX_ACTIVE_SEARCHES);
         assert_eq!(flow.leaf_reads.capacity, DEFAULT_MAX_INFLIGHT_LEAF_READS);
+        assert_eq!(
+            flow.decode_rank.capacity,
+            DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS
+        );
         assert_eq!(flow.leaf_read_width, DEFAULT_LEAF_READ_WIDTH);
         index
             .add(vec![
@@ -36473,6 +36528,10 @@ mod tests {
             DEFAULT_MAX_INFLIGHT_LEAF_READS
         );
         assert_eq!(
+            OpenOptions::default().max_parallel_decode_rank_tasks,
+            DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS
+        );
+        assert_eq!(
             OpenOptions::default().exact_read_max_physical_amplification,
             1,
             "the production default must not fetch speculative exact bytes from uncached S3"
@@ -36489,6 +36548,18 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn flow_control_stats_defaults_an_absent_decode_rank_snapshot() {
+        let mut value = serde_json::to_value(FlowControlStats::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("decode_rank")
+            .unwrap();
+        let decoded: FlowControlStats = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.decode_rank, AdmissionStats::default());
     }
 
     #[test]
@@ -36512,6 +36583,13 @@ mod tests {
                 "max_inflight_leaf_reads",
                 OpenOptions {
                     max_inflight_leaf_reads: 0,
+                    ..OpenOptions::default()
+                },
+            ),
+            (
+                "max_parallel_decode_rank_tasks",
+                OpenOptions {
+                    max_parallel_decode_rank_tasks: 0,
                     ..OpenOptions::default()
                 },
             ),
@@ -40068,16 +40146,48 @@ mod tests {
 
     #[test]
     fn cell_card_post_io_work_runs_on_the_bounded_query_pool() {
-        let worker_name = run_cell_card_post_io(|| {
+        let gate = Arc::new(AdmissionGate::new(1));
+        let held = gate.acquire_owned();
+        let worker_gate = Arc::clone(&gate);
+        let worker = std::thread::spawn(move || {
+            run_cell_card_post_io(&worker_gate, || {
+                std::thread::current()
+                    .name()
+                    .unwrap_or("unnamed")
+                    .to_string()
+            })
+        });
+
+        let waiting_deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while gate.snapshot().waiting != 1 && Instant::now() < waiting_deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(gate.snapshot().waiting, 1);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        drop(held);
+        let worker_name = worker.join().unwrap();
+
+        let exact_worker_name = run_cell_card_exact_post_io(|| {
             std::thread::current()
                 .name()
                 .unwrap_or("unnamed")
                 .to_string()
         });
 
+        let snapshot = gate.snapshot();
+        assert_eq!(snapshot.capacity, 1);
+        assert_eq!(snapshot.peak_active, 1);
+        assert_eq!(snapshot.wait_count, 1);
+        assert_eq!(snapshot.admitted, 2);
+        assert!(snapshot.wait_micros > 0);
+
         assert!(
             worker_name.starts_with("borsuk-query-"),
             "cell-card checksum/decode/ranking ran on {worker_name} instead of the CPU pool"
+        );
+        assert!(
+            exact_worker_name.starts_with("borsuk-query-"),
+            "cell-card exact rerank ran on {exact_worker_name} instead of the CPU pool"
         );
     }
 

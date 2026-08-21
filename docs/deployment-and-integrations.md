@@ -203,6 +203,15 @@ admission defaults to eight active and sixteen waiting queries; excess load
 fails explicitly. Keep these caps. An uncapped research profile must not be
 copied into a production deployment.
 
+`max_parallel_decode_rank_tasks=1` separately bounds inner-parallel
+approximate ANN head decode/rank stages after their immutable bytes arrive.
+Other queries' S3 reads continue independently, and serial exact rerank still
+uses the shared CPU pool without taking this permit. Increase this value only
+when a paired cache-off concurrency run improves throughput without hurting
+application endpoint tails. `flow_control_stats()` and the REST benchmark
+`/metrics` expose capacity, active, waiting, peak-active, wait-count, and
+wait-time so a low cap is distinguishable from network starvation.
+
 Keep CPU, I/O-wait, and physical-GET concurrency separate. CPU workers default
 to one fewer than the available CPUs, clamped to 1–4. `BORSUK_IO_THREADS=88`
 provides shared 1 MiB-stack waiters for S3 reads, while

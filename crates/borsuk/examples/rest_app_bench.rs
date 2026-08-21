@@ -138,6 +138,12 @@ struct MetricsResponse {
     borsuk_leaf_read_peak_active: usize,
     borsuk_leaf_read_wait_count: u64,
     borsuk_leaf_read_wait_micros: u64,
+    borsuk_decode_rank_capacity: usize,
+    borsuk_decode_rank_active: usize,
+    borsuk_decode_rank_waiting: usize,
+    borsuk_decode_rank_peak_active: usize,
+    borsuk_decode_rank_wait_count: u64,
+    borsuk_decode_rank_wait_micros: u64,
     borsuk_transient_waiting: usize,
     borsuk_transient_admitted: u64,
     borsuk_transient_wait_count: u64,
@@ -200,6 +206,12 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         borsuk_leaf_read_peak_active: flow.leaf_reads.peak_active,
         borsuk_leaf_read_wait_count: flow.leaf_reads.wait_count,
         borsuk_leaf_read_wait_micros: flow.leaf_reads.wait_micros,
+        borsuk_decode_rank_capacity: flow.decode_rank.capacity,
+        borsuk_decode_rank_active: flow.decode_rank.active,
+        borsuk_decode_rank_waiting: flow.decode_rank.waiting,
+        borsuk_decode_rank_peak_active: flow.decode_rank.peak_active,
+        borsuk_decode_rank_wait_count: flow.decode_rank.wait_count,
+        borsuk_decode_rank_wait_micros: flow.decode_rank.wait_micros,
         borsuk_transient_waiting: flow.transient.waiting,
         borsuk_transient_admitted: flow.transient.admitted,
         borsuk_transient_wait_count: flow.transient.wait_count,
@@ -366,6 +378,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let search_limit = env_usize("BORSUK_REST_SEARCH_ADMISSION", 2)?;
     let leaf_read_width = env_usize("BORSUK_REST_LEAF_READ_WIDTH", 32)?;
     let max_inflight_leaf_reads = env_usize("BORSUK_REST_MAX_INFLIGHT_LEAF_READS", 48)?;
+    let max_parallel_decode_rank_tasks = env_usize(
+        "BORSUK_REST_MAX_PARALLEL_DECODE_RANK_TASKS",
+        OpenOptions::default().max_parallel_decode_rank_tasks,
+    )?;
     let exact_read_max_physical_amplification = env_usize(
         "BORSUK_REST_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION",
         borsuk::DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION as usize,
@@ -380,6 +396,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_waiting_searches: 0,
             leaf_read_width,
             max_inflight_leaf_reads,
+            max_parallel_decode_rank_tasks,
             exact_read_max_physical_amplification,
             ..OpenOptions::default()
         },
@@ -644,6 +661,12 @@ mod tests {
         assert_eq!(value["borsuk_leaf_read_peak_active"], 0);
         assert_eq!(value["borsuk_leaf_read_wait_count"], 0);
         assert_eq!(value["borsuk_leaf_read_wait_micros"], 0);
+        assert_eq!(value["borsuk_decode_rank_capacity"], 1);
+        assert_eq!(value["borsuk_decode_rank_active"], 0);
+        assert_eq!(value["borsuk_decode_rank_waiting"], 0);
+        assert_eq!(value["borsuk_decode_rank_peak_active"], 0);
+        assert_eq!(value["borsuk_decode_rank_wait_count"], 0);
+        assert_eq!(value["borsuk_decode_rank_wait_micros"], 0);
         assert_eq!(value["borsuk_transient_waiting"], 0);
         assert_eq!(value["borsuk_transient_admitted"], 0);
         assert_eq!(value["borsuk_transient_wait_count"], 0);

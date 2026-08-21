@@ -112,6 +112,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             "exact_read_max_physical_amplification": 5,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
+                "max_parallel_decode_rank_tasks": 1,
                 "ram_budget_bytes": 2 * 1024**3,
                 "disk_cache_bytes": 0,
             },
@@ -221,6 +222,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertNotIn("BORSUK_REST_EXACT_HEDGE_AFTER_MS", user_data)
         self.assertIn("BORSUK_REST_LEAF_READ_WIDTH=32", user_data)
         self.assertIn("BORSUK_REST_MAX_INFLIGHT_LEAF_READS=48", user_data)
+        self.assertIn("BORSUK_REST_MAX_PARALLEL_DECODE_RANK_TASKS=1", user_data)
         self.assertIn("BORSUK_REST_RAM_BUDGET_BYTES=2147483648", user_data)
         self.assertIn("BORSUK_REST_DISK_CACHE_BYTES=0", user_data)
         self.assertIn("BORSUK_CONTROLLER_AWS_PROFILE=causality", user_data)
@@ -280,7 +282,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
 
     def test_pair_binds_immutable_inputs_and_terminal_prefix(self) -> None:
         receipt = self.pair["receipt"]
-        self.assertEqual(receipt["schema_version"], 4)
+        self.assertEqual(receipt["schema_version"], 5)
         self.assertEqual(receipt["aws_profile"], "causality")
         self.assertEqual(receipt["aws_account_id"], "453182569524")
         self.assertEqual(receipt["runtime"], self.pair["runtime"])
@@ -525,6 +527,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "exact_candidates": 512,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
+                "max_parallel_decode_rank_tasks": 1,
                 "ram_budget_bytes": 2 * 1024**3,
                 "disk_cache_bytes": 0,
             },
@@ -723,8 +726,8 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
 
     def test_cold_s3_matrix_separates_search_wave_handle_and_process_caps(self) -> None:
         cells = cold_s3_cap_matrix()
-        self.assertEqual(len(cells), 9)
-        self.assertEqual(len({cell["cell_id"] for cell in cells}), 9)
+        self.assertEqual(len(cells), 18)
+        self.assertEqual(len({cell["cell_id"] for cell in cells}), 18)
         self.assertEqual(
             {cell["search_admission"] for cell in cells}, {2, 4, 8}
         )
@@ -740,6 +743,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             {(16, 32, 32), (32, 48, 64), (32, 96, 128)},
         )
         self.assertTrue(all(cell["disk_cache_bytes"] == 0 for cell in cells))
+        self.assertEqual(
+            {cell["max_parallel_decode_rank_tasks"] for cell in cells}, {1, 3}
+        )
         self.assertTrue(
             all(cell["exact_read_max_physical_amplification"] == 1 for cell in cells)
         )
@@ -827,7 +833,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn('--runtime-aws-account "$runtime_aws_account"', generator)
         self.assertIn("--repetition 2", generator)
         self.assertIn("terminal repetition differs", generator)
-        self.assertIn('v.get("schema_version")==11', generator)
+        self.assertIn('v.get("schema_version")==12', generator)
         self.assertTrue(
             generator.startswith(
                 "# borsuk-rest-mode=smoke\n# borsuk-rest-repetition=2\n"

@@ -27,6 +27,8 @@ from scripts.run_rest_coexistence_attempt import (
 class RestCoexistenceAttemptTest(unittest.TestCase):
     def test_flow_control_delta_is_phase_scoped_and_monotonic(self) -> None:
         before = {
+            "borsuk_decode_rank_wait_count": 2,
+            "borsuk_decode_rank_wait_micros": 40,
             "borsuk_leaf_read_wait_count": 3,
             "borsuk_leaf_read_wait_micros": 100,
             "borsuk_search_rejected": 2,
@@ -36,6 +38,8 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "borsuk_transient_wait_micros": 80,
         }
         after = {
+            "borsuk_decode_rank_wait_count": 7,
+            "borsuk_decode_rank_wait_micros": 190,
             "borsuk_leaf_read_wait_count": 8,
             "borsuk_leaf_read_wait_micros": 325,
             "borsuk_search_rejected": 4,
@@ -47,6 +51,8 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
         self.assertEqual(
             flow_control_delta(before, after),
             {
+                "borsuk_decode_rank_wait_count": 5,
+                "borsuk_decode_rank_wait_micros": 150,
                 "borsuk_leaf_read_wait_count": 5,
                 "borsuk_leaf_read_wait_micros": 225,
                 "borsuk_search_rejected": 2,
@@ -61,7 +67,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             flow_control_delta(before, after)
 
     def test_terminal_result_schema_cuts_with_effective_limit_shape(self) -> None:
-        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 11)
+        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 12)
 
     def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
         self.assertEqual(
@@ -273,6 +279,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "search_admission": 4,
             "leaf_read_width": 32,
             "max_inflight_leaf_reads": 48,
+            "max_parallel_decode_rank_tasks": 1,
             "page_budget": 32,
             "exact_candidates": 512,
             "exact_read_max_physical_amplification": 5,
@@ -286,6 +293,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "borsuk_search_capacity": 4,
             "borsuk_leaf_read_width": 32,
             "borsuk_leaf_read_capacity": 48,
+            "borsuk_decode_rank_capacity": 1,
             "borsuk_page_budget": 32,
             "borsuk_exact_candidates": 512,
             "borsuk_exact_read_max_physical_amplification": 5,
