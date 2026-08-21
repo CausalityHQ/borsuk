@@ -52,9 +52,11 @@ use crate::{
     global_cell_card::{
         CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION, CELL_CARD_RANGE_READ_MAX_BYTES,
         CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead, CellCardPush,
-        GlobalCellCardAnnRef, cell_card_exact_admission_bounds, decode_cell_card_exact_read,
-        decode_cell_card_run_root, decode_verified_cell_card_head_wave, encode_cell_card_run_root,
+        GlobalCellCardAnnRef, cell_card_exact_admission_bounds,
+        decode_authenticated_cell_card_head_wave, decode_cell_card_exact_read,
+        decode_cell_card_run_root, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave_with_amplification, plan_ranked_cell_card_head_wave,
+        project_authenticated_cell_card_head_read,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
         rank_cell_card_exact_blocks, rank_cell_card_head_indexes, release_loaded_cell_card_codes,
         score_loaded_cell_card_heads, validate_cell_card_code_range,
@@ -1388,10 +1390,14 @@ struct PreparedCellCardCodePlanes {
 }
 
 struct FetchedCellCardHeadRead {
-    bytes: Arc<Vec<u8>>,
+    bytes: FetchedCellCardHeadBytes,
     physical_bytes: u64,
     cache_hit: bool,
-    trusted: bool,
+}
+
+enum FetchedCellCardHeadBytes {
+    Authenticated(Arc<Vec<u8>>),
+    Unverified(Arc<Vec<u8>>),
 }
 
 struct SharedCellCardRead(Arc<Vec<u8>>);
@@ -5012,6 +5018,19 @@ impl BorsukIndex {
                 ));
             }
         }
+        let complete_planes = groups
+            .iter()
+            .map(|group| {
+                let key = cell_card_code_plane_cache_key(&group.path, group.code_plane_checksum);
+                let bytes = entries.get(&key).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card prepared code plane disappeared before validation".to_string(),
+                    )
+                })?;
+                Ok((group.as_ref(), bytes.as_slice()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        root.validate_complete_code_planes(&complete_planes)?;
         *prepared = Some(PreparedCellCardCodePlanes {
             owner_modality: self.manifest_reference.modality.clone(),
             entries,
@@ -16880,10 +16899,14 @@ impl BorsukIndex {
                 reference.root().encoded_bytes,
                 &reference.root_checksum(),
             )?;
-            let root = decode_cell_card_run_root(
+            let mut root = decode_cell_card_run_root(
                 reference.root(),
                 &root_read.bytes,
                 codebook_reference.descriptor_checksum(),
+            )?;
+            root.validate_serving_shape(
+                manifest.config.dimensions,
+                manifest.build_config.vector_element_type,
             )?;
             let durable_storage_bytes = root.groups().iter().try_fold(
                 codebook_reference
@@ -17620,10 +17643,9 @@ impl BorsukIndex {
             })?;
         if let Some(bytes) = pinned_read {
             return Ok(FetchedCellCardHeadRead {
-                bytes: Arc::clone(bytes),
+                bytes: FetchedCellCardHeadBytes::Authenticated(Arc::clone(bytes)),
                 physical_bytes: 0,
                 cache_hit: true,
-                trusted: true,
             });
         }
         if read.start != read.group.code_plane_offset || read.end != plane_end {
@@ -17632,19 +17654,17 @@ impl BorsukIndex {
                 .read_range(&read.group.path, read.start..read.end)?;
             let physical_bytes = bytes.len() as u64;
             return Ok(FetchedCellCardHeadRead {
-                bytes: Arc::new(bytes),
+                bytes: FetchedCellCardHeadBytes::Unverified(Arc::new(bytes)),
                 physical_bytes,
                 cache_hit: false,
-                trusted: false,
             });
         }
         let key = cell_card_code_plane_cache_key(&read.group.path, read.group.code_plane_checksum);
         if let Some(bytes) = self.read_runtime.cell_card_code_planes.get(&key) {
             return Ok(FetchedCellCardHeadRead {
-                bytes,
+                bytes: FetchedCellCardHeadBytes::Authenticated(bytes),
                 physical_bytes: 0,
                 cache_hit: true,
-                trusted: true,
             });
         }
         let (bytes, physical_bytes, _shared) = self
@@ -17665,10 +17685,9 @@ impl BorsukIndex {
                 Ok((bytes, physical_bytes))
             })?;
         Ok(FetchedCellCardHeadRead {
-            bytes,
+            bytes: FetchedCellCardHeadBytes::Unverified(bytes),
             physical_bytes,
             cache_hit: false,
-            trusted: false,
         })
     }
 
@@ -17677,9 +17696,22 @@ impl BorsukIndex {
         read: &CellCardHeadRead,
         fetched: FetchedCellCardHeadRead,
     ) -> Result<(Arc<Vec<u8>>, u64, bool)> {
-        if fetched.trusted {
-            return Ok((fetched.bytes, fetched.physical_bytes, fetched.cache_hit));
-        }
+        let FetchedCellCardHeadRead {
+            bytes,
+            physical_bytes,
+            cache_hit,
+        } = fetched;
+        let bytes = match bytes {
+            FetchedCellCardHeadBytes::Authenticated(bytes) => {
+                if bytes.len() as u64 != read.end.saturating_sub(read.start) {
+                    return Err(BorsukError::InvalidStorage(
+                        "cell-card authenticated read length mismatch".to_string(),
+                    ));
+                }
+                return Ok((bytes, physical_bytes, cache_hit));
+            }
+            FetchedCellCardHeadBytes::Unverified(bytes) => bytes,
+        };
         let plane_end = read
             .group
             .code_plane_offset
@@ -17690,9 +17722,26 @@ impl BorsukIndex {
         if read.start == read.group.code_plane_offset && read.end == plane_end {
             let key =
                 cell_card_code_plane_cache_key(&read.group.path, read.group.code_plane_checksum);
-            let raw = Arc::clone(&fetched.bytes);
+            // A complete plane only needs its object checksum when it will be
+            // retained for cards outside this query. Cache-disabled serving
+            // authenticates the selected card ranges below instead of hashing
+            // and discarding speculative plane bytes.
+            if self.read_runtime.retained_pool.is_none() {
+                self.cache_cell_card_head_read_slices(read, bytes.as_slice())?;
+                return Ok((bytes, physical_bytes, cache_hit));
+            }
+            let raw = Arc::clone(&bytes);
             let expected_bytes = read.group.code_plane_bytes;
             let expected_checksum = read.group.code_plane_checksum;
+            let root = self
+                .resident_global_ann_pins
+                .as_ref()
+                .and_then(|pins| pins.cell_card_root.as_ref())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card code plane is visible without its resident root".to_string(),
+                    )
+                })?;
             let cache = Arc::clone(&self.read_runtime.cell_card_code_planes);
             let cache_key = key.clone();
             let (verified, _, _) = self
@@ -17706,18 +17755,15 @@ impl BorsukIndex {
                             "cell-card code-plane checksum or bounds mismatch".to_string(),
                         ));
                     }
+                    root.validate_complete_code_planes(&[(&read.group, raw.as_slice())])?;
                     cache.insert(cache_key, Arc::clone(&raw), raw.len() as u64);
                     Ok((raw, 0))
                 })?;
-            return Ok((
-                Arc::clone(verified.as_ref()),
-                fetched.physical_bytes,
-                fetched.cache_hit,
-            ));
+            return Ok((Arc::clone(verified.as_ref()), physical_bytes, cache_hit));
         } else {
-            self.cache_cell_card_head_read_slices(read, fetched.bytes.as_slice())?;
+            self.cache_cell_card_head_read_slices(read, bytes.as_slice())?;
         }
-        Ok((fetched.bytes, fetched.physical_bytes, fetched.cache_hit))
+        Ok((bytes, physical_bytes, cache_hit))
     }
 
     fn cached_cell_card_head_read(&self, read: &CellCardHeadRead) -> Result<Option<Arc<Vec<u8>>>> {
@@ -17760,6 +17806,14 @@ impl BorsukIndex {
             let Some(bytes) = self.read_runtime.cell_card_code_planes.get(&key) else {
                 return Ok(None);
             };
+            let expected_bytes = usize::try_from(card.reference.code_bytes).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "cached cell-card code slice exceeds addressable memory".to_string(),
+                )
+            })?;
+            if bytes.len() != expected_bytes {
+                return Ok(None);
+            }
             let start = card
                 .reference
                 .code_offset
@@ -17770,7 +17824,7 @@ impl BorsukIndex {
                         "cached cell-card code slice starts before its read".to_string(),
                     )
                 })?;
-            let end = start.checked_add(bytes.len()).ok_or_else(|| {
+            let end = start.checked_add(expected_bytes).ok_or_else(|| {
                 BorsukError::InvalidStorage(
                     "cached cell-card code slice range overflows".to_string(),
                 )
@@ -17794,9 +17848,6 @@ impl BorsukIndex {
             return Err(BorsukError::InvalidStorage(
                 "cell-card head response length mismatch".to_string(),
             ));
-        }
-        if self.read_runtime.retained_pool.is_none() {
-            return Ok(());
         }
         for card in &read.cards {
             let start = card
@@ -17823,17 +17874,19 @@ impl BorsukIndex {
                 )
             })?;
             validate_cell_card_code_range(&card.reference, stored)?;
-            let key = cell_card_code_slice_cache_key(
-                &read.group,
-                card.reference.code_offset,
-                card.reference.code_bytes,
-                card.reference.code_checksum,
-            );
-            self.read_runtime.cell_card_code_planes.insert(
-                key,
-                Arc::new(stored.to_vec()),
-                u64::from(card.reference.code_bytes),
-            );
+            if self.read_runtime.retained_pool.is_some() {
+                let key = cell_card_code_slice_cache_key(
+                    &read.group,
+                    card.reference.code_offset,
+                    card.reference.code_bytes,
+                    card.reference.code_checksum,
+                );
+                self.read_runtime.cell_card_code_planes.insert(
+                    key,
+                    Arc::new(stored.to_vec()),
+                    u64::from(card.reference.code_bytes),
+                );
+            }
         }
         Ok(())
     }
@@ -18093,11 +18146,18 @@ impl BorsukIndex {
                     }
                     fetched_heads.push(bytes);
                 }
-                let fetched_head_slices = fetched_heads
-                    .into_iter()
-                    .map(|bytes| Bytes::from_owner(SharedCellCardRead(bytes)))
-                    .collect::<Vec<_>>();
-                let heads = decode_verified_cell_card_head_wave(
+                let fetched_head_slices = head_plan
+                    .reads()
+                    .iter()
+                    .zip(fetched_heads)
+                    .map(|(read, bytes)| {
+                        project_authenticated_cell_card_head_read(
+                            read,
+                            Bytes::from_owner(SharedCellCardRead(bytes)),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let heads = decode_authenticated_cell_card_head_wave(
                     &head_plan,
                     &fetched_head_slices,
                     self.manifest.config.dimensions,
@@ -19731,8 +19791,10 @@ impl BorsukIndex {
         );
         self.storage
             .write_bytes_content_addressed(&root_path, &root.bytes)?;
-        let resident_root =
+        let mut resident_root =
             decode_cell_card_run_root(&root.reference, &root.bytes, &descriptor_checksum)?;
+        resident_root
+            .validate_serving_shape(dimensions, self.manifest.build_config.vector_element_type)?;
         if resident_root.card_count() != cell_cards.len() {
             return Err(BorsukError::InvalidStorage(
                 "V17 resident root changed its card coverage".into(),
@@ -31650,7 +31712,21 @@ mod tests {
             start: 0,
             end: bytes.len() as u64,
             selected_bytes: bytes.len() as u64,
-            cards: Vec::new(),
+            cards: vec![crate::global_cell_card::PlannedCellCardHead {
+                root_index: 0,
+                reference: crate::global_cell_card::CellCardHeadRef {
+                    cell_index: 0,
+                    card_ordinal: 0,
+                    leaf_ordinal: 0,
+                    code_offset: 0,
+                    code_bytes: bytes.len() as u32,
+                    rows: 2,
+                    code_width: 2,
+                    code_checksum: [9; 32],
+                    centroid_code: vec![0, 0].into(),
+                    exact_blocks: Vec::new().into(),
+                },
+            }],
         };
 
         let fetched = index
@@ -31661,6 +31737,56 @@ mod tests {
         })
         .unwrap_err();
 
+        assert!(error.to_string().contains("checksum or bounds mismatch"));
+    }
+
+    #[test]
+    fn cache_disabled_partial_cell_card_read_is_authenticated_before_decode() {
+        let directory = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        assert!(index.read_runtime.retained_pool.is_none());
+        let bytes = [1_u8, 2, 3, 4];
+        let read = CellCardHeadRead {
+            group: Arc::new(crate::global_cell_card::CellCardGroupRef {
+                path: "cell-card/partial.arrow".to_string(),
+                checksum: [8; 32],
+                encoded_bytes: bytes.len() as u64,
+                code_plane_offset: 0,
+                code_plane_bytes: 8,
+                code_plane_checksum: [7; 32],
+            }),
+            start: 0,
+            end: bytes.len() as u64,
+            selected_bytes: bytes.len() as u64,
+            cards: vec![crate::global_cell_card::PlannedCellCardHead {
+                root_index: 0,
+                reference: crate::global_cell_card::CellCardHeadRef {
+                    cell_index: 0,
+                    card_ordinal: 0,
+                    leaf_ordinal: 0,
+                    code_offset: 0,
+                    code_bytes: bytes.len() as u32,
+                    rows: 2,
+                    code_width: 2,
+                    code_checksum: [9; 32],
+                    centroid_code: vec![0, 0].into_boxed_slice(),
+                    exact_blocks: Vec::new().into(),
+                },
+            }],
+        };
+
+        let error = index
+            .cache_cell_card_head_read_slices(&read, &bytes)
+            .unwrap_err();
         assert!(error.to_string().contains("checksum or bounds mismatch"));
     }
 

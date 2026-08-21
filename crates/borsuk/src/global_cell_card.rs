@@ -88,7 +88,7 @@ pub(crate) struct CellCardHeadRef {
     pub(crate) code_width: u32,
     pub(crate) code_checksum: [u8; 32],
     pub(crate) centroid_code: Box<[u8]>,
-    pub(crate) exact_blocks: Box<[CellCardExactBlockRef]>,
+    pub(crate) exact_blocks: Arc<[CellCardExactBlockRef]>,
 }
 
 #[derive(Debug, Clone)]
@@ -312,7 +312,7 @@ pub(crate) struct VerifiedCellCardHead {
     codes: Bytes,
     code_width: usize,
     rows: usize,
-    pub(crate) exact_blocks: Vec<CellCardExactBlockRef>,
+    pub(crate) exact_blocks: Arc<[CellCardExactBlockRef]>,
 }
 
 #[derive(Clone)]
@@ -746,7 +746,7 @@ pub(crate) fn encode_cell_card_group(
                             })?,
                     ),
                     centroid_code: page.centroid_code.into_boxed_slice(),
-                    exact_blocks: exact_blocks.into_boxed_slice(),
+                    exact_blocks: exact_blocks.into(),
                 },
             })
         })
@@ -800,23 +800,34 @@ pub(crate) fn validate_cell_card_code_range(
     reference: &CellCardHeadRef,
     stored: &[u8],
 ) -> Result<()> {
-    if reference.rows == 0
-        || reference.code_width == 0
-        || reference.code_bytes
-            != reference
-                .rows
-                .checked_mul(reference.code_width)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage("cell-card code byte count overflows".into())
-                })?
-        || stored.len() != reference.code_bytes as usize
-        || code_checksum(
-            reference.cell_index,
-            reference.card_ordinal,
-            reference.rows,
-            reference.code_width,
-            stored,
-        ) != reference.code_checksum
+    validate_cell_card_code_identity(
+        reference.cell_index,
+        reference.card_ordinal,
+        reference.rows,
+        reference.code_width,
+        reference.code_bytes,
+        reference.code_checksum,
+        stored,
+    )
+}
+
+fn validate_cell_card_code_identity(
+    cell_index: u32,
+    card_ordinal: u32,
+    rows: u32,
+    code_width: u32,
+    declared_bytes: u32,
+    checksum: [u8; 32],
+    stored: &[u8],
+) -> Result<()> {
+    if rows == 0
+        || code_width == 0
+        || declared_bytes
+            != rows.checked_mul(code_width).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card code byte count overflows".into())
+            })?
+        || stored.len() != declared_bytes as usize
+        || code_checksum(cell_index, card_ordinal, rows, code_width, stored) != checksum
     {
         return Err(BorsukError::InvalidStorage(
             "cell-card code range checksum or bounds mismatch".to_string(),
@@ -861,15 +872,7 @@ fn decode_validated_cell_card_head_bytes(
         dimensions,
         element_type,
     )?;
-    Ok(VerifiedCellCardHead {
-        cell_index: reference.cell_index,
-        card_ordinal: reference.card_ordinal,
-        leaf_ordinal: reference.leaf_ordinal,
-        codes: stored,
-        code_width: reference.code_width as usize,
-        rows: reference.rows as usize,
-        exact_blocks: reference.exact_blocks.to_vec(),
-    })
+    Ok(materialize_cell_card_head_bytes(reference, stored))
 }
 
 pub(crate) fn decode_cell_card_head(
@@ -1071,10 +1074,17 @@ pub(crate) struct ResidentCellCardRoot {
     rows: Box<[u32]>,
     code_widths: Box<[u32]>,
     code_checksums: Box<[[u8; 32]]>,
-    exact_blocks: Box<[Box<[CellCardExactBlockRef]>]>,
+    exact_blocks: Box<[Arc<[CellCardExactBlockRef]>]>,
     centroid_offsets: Box<[u32]>,
     centroid_codes: Box<[u8]>,
     resident_bytes: usize,
+    serving_shape: Option<CellCardServingShape>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CellCardServingShape {
+    dimensions: usize,
+    element_type: VectorElementType,
 }
 
 pub(crate) const CELL_CARD_RANGE_READ_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -1115,6 +1125,51 @@ pub(crate) struct CellCardHeadWavePlan {
     cached_selected_bytes: u64,
     backing_requests: usize,
     cards: usize,
+    serving_shape: Option<CellCardServingShape>,
+}
+
+/// A read buffer whose selected card ranges have already been authenticated.
+/// Coalesced gap bytes are deliberately outside this authority and remain
+/// inaccessible to the decoder.
+pub(crate) struct AuthenticatedCellCardHeadRead {
+    bytes: Bytes,
+}
+
+pub(crate) fn project_authenticated_cell_card_head_read(
+    read: &CellCardHeadRead,
+    bytes: Bytes,
+) -> Result<AuthenticatedCellCardHeadRead> {
+    if bytes.len() as u64 != read.end.saturating_sub(read.start) {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card authenticated read length mismatch".to_string(),
+        ));
+    }
+    for card in &read.cards {
+        let start = card
+            .reference
+            .code_offset
+            .checked_sub(read.start)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cell-card authenticated range starts before its read".to_string(),
+                )
+            })?;
+        let expected = usize::try_from(card.reference.code_bytes).map_err(|_| {
+            BorsukError::InvalidStorage(
+                "cell-card authenticated range exceeds addressable memory".to_string(),
+            )
+        })?;
+        let end = start.checked_add(expected).ok_or_else(|| {
+            BorsukError::InvalidStorage("cell-card authenticated range overflows".to_string())
+        })?;
+        if bytes.get(start..end).is_none() {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card authenticated read does not contain its complete card".to_string(),
+            ));
+        }
+    }
+    Ok(AuthenticatedCellCardHeadRead { bytes })
 }
 
 impl CellCardHeadWavePlan {
@@ -1138,19 +1193,7 @@ impl CellCardHeadWavePlan {
     }
 
     pub(crate) fn decoded_retained_bytes(&self) -> u64 {
-        let exact_blocks = self
-            .reads
-            .iter()
-            .flat_map(|read| &read.cards)
-            .fold(0_u64, |blocks, card| {
-                blocks.saturating_add(card.reference.exact_blocks.len() as u64)
-            });
-        exact_blocks
-            .saturating_mul(std::mem::size_of::<CellCardExactBlockRef>() as u64)
-            .saturating_add(
-                (self.cards as u64)
-                    .saturating_mul(std::mem::size_of::<LoadedCellCardHead>() as u64),
-            )
+        (self.cards as u64).saturating_mul(std::mem::size_of::<LoadedCellCardHead>() as u64)
     }
 
     pub(crate) fn transient_admission_bytes(&self) -> u64 {
@@ -1417,6 +1460,7 @@ fn plan_cell_card_head_indexes(
         cached_selected_bytes: 0,
         backing_requests,
         cards: card_count,
+        serving_shape: root.serving_shape,
     })
 }
 
@@ -1561,6 +1605,7 @@ where
         cached_selected_bytes,
         backing_requests,
         cards: plan.cards,
+        serving_shape: plan.serving_shape,
     })
 }
 
@@ -1569,6 +1614,13 @@ pub(crate) struct LoadedCellCardHead {
     pub(crate) root_index: usize,
     pub(crate) group: Arc<CellCardGroupRef>,
     pub(crate) head: VerifiedCellCardHead,
+}
+
+#[derive(Clone, Copy)]
+struct CellCardHeadDecodeAuthority {
+    complete_planes_verified: bool,
+    code_ranges_verified: bool,
+    exact_refs_verified: bool,
 }
 
 pub(crate) fn decode_cell_card_head_wave<B: AsRef<[u8]>>(
@@ -1583,7 +1635,12 @@ pub(crate) fn decode_cell_card_head_wave<B: AsRef<[u8]>>(
             fetched,
             dimensions,
             element_type,
-            false,
+            CellCardHeadDecodeAuthority {
+                complete_planes_verified: false,
+                code_ranges_verified: false,
+                exact_refs_verified: false,
+            },
+            |bytes| bytes.as_ref(),
             |bytes, range| Bytes::copy_from_slice(&bytes.as_ref()[range]),
         )
     }))
@@ -1593,6 +1650,7 @@ pub(crate) fn decode_cell_card_head_wave<B: AsRef<[u8]>>(
 /// Decode a wave whose complete stable planes were authenticated by the
 /// bounded loader before they entered the immutable cache. Individual card
 /// checksums are still verified before their zero-copy slices are retained.
+#[cfg(test)]
 pub(crate) fn decode_verified_cell_card_head_wave(
     plan: &CellCardHeadWavePlan,
     fetched: &[Bytes],
@@ -1605,24 +1663,85 @@ pub(crate) fn decode_verified_cell_card_head_wave(
             fetched,
             dimensions,
             element_type,
-            true,
+            CellCardHeadDecodeAuthority {
+                complete_planes_verified: true,
+                code_ranges_verified: false,
+                exact_refs_verified: false,
+            },
+            |bytes| bytes.as_ref(),
             |bytes, range| bytes.slice(range),
         )
     }))
     .map_err(|_| BorsukError::InvalidStorage("cell-card head wave decode panicked".to_string()))?
 }
 
-fn decode_cell_card_head_wave_inner<B, F>(
+/// Materialize a wave whose code bytes were authenticated by the I/O stage and
+/// whose exact-block geometry was validated once when the serving root opened.
+/// This is the hot serving path: it deliberately performs no redundant hashes
+/// or exact-reference validation.
+pub(crate) fn decode_authenticated_cell_card_head_wave(
+    plan: &CellCardHeadWavePlan,
+    fetched: &[AuthenticatedCellCardHeadRead],
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<Vec<LoadedCellCardHead>> {
+    if plan.serving_shape
+        != Some(CellCardServingShape {
+            dimensions,
+            element_type,
+        })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card authenticated wave serving-shape authority mismatch".to_string(),
+        ));
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        decode_cell_card_head_wave_inner(
+            plan,
+            fetched,
+            dimensions,
+            element_type,
+            CellCardHeadDecodeAuthority {
+                complete_planes_verified: true,
+                code_ranges_verified: true,
+                exact_refs_verified: true,
+            },
+            |read| read.bytes.as_ref(),
+            |read, range| read.bytes.slice(range),
+        )
+    }))
+    .map_err(|_| {
+        BorsukError::InvalidStorage("cell-card authenticated head decode panicked".to_string())
+    })?
+}
+
+fn materialize_cell_card_head_bytes(
+    reference: &CellCardHeadRef,
+    stored: Bytes,
+) -> VerifiedCellCardHead {
+    VerifiedCellCardHead {
+        cell_index: reference.cell_index,
+        card_ordinal: reference.card_ordinal,
+        leaf_ordinal: reference.leaf_ordinal,
+        codes: stored,
+        code_width: reference.code_width as usize,
+        rows: reference.rows as usize,
+        exact_blocks: Arc::clone(&reference.exact_blocks),
+    }
+}
+
+fn decode_cell_card_head_wave_inner<B, ReadBytes, CodeSlice>(
     plan: &CellCardHeadWavePlan,
     fetched: &[B],
     dimensions: usize,
     element_type: VectorElementType,
-    complete_planes_verified: bool,
-    code_slice: F,
+    authority: CellCardHeadDecodeAuthority,
+    read_bytes: ReadBytes,
+    code_slice: CodeSlice,
 ) -> Result<Vec<LoadedCellCardHead>>
 where
-    B: AsRef<[u8]>,
-    F: Fn(&B, std::ops::Range<usize>) -> Bytes,
+    ReadBytes: for<'a> Fn(&'a B) -> &'a [u8],
+    CodeSlice: Fn(&B, std::ops::Range<usize>) -> Bytes,
 {
     if fetched.len() != plan.reads.len() {
         return Err(BorsukError::InvalidStorage(
@@ -1631,7 +1750,7 @@ where
     }
     let mut loaded = Vec::with_capacity(plan.cards);
     for (read, fetched_bytes) in plan.reads.iter().zip(fetched) {
-        let bytes = fetched_bytes.as_ref();
+        let bytes = read_bytes(fetched_bytes);
         if bytes.len() as u64 != read.end - read.start {
             return Err(BorsukError::InvalidStorage(
                 "cell-card head wave response length mismatch".to_string(),
@@ -1644,7 +1763,7 @@ where
             .ok_or_else(|| BorsukError::InvalidStorage("cell-card code plane overflows".into()))?;
         if read.start == read.group.code_plane_offset
             && read.end == plane_end
-            && !complete_planes_verified
+            && !authority.complete_planes_verified
             && blake3::hash(bytes).as_bytes() != &read.group.code_plane_checksum
         {
             return Err(BorsukError::InvalidStorage(
@@ -1672,17 +1791,25 @@ where
                     "cell-card head response does not contain its card".to_string(),
                 )
             })?;
-            validate_cell_card_code_range(&card.reference, stored)?;
-            loaded.push(LoadedCellCardHead {
-                root_index: card.root_index,
-                group: Arc::clone(&read.group),
-                head: decode_validated_cell_card_head_bytes(
+            if !authority.code_ranges_verified {
+                validate_cell_card_code_range(&card.reference, stored)?;
+            }
+            let codes = code_slice(fetched_bytes, local_range);
+            let head = if authority.exact_refs_verified {
+                materialize_cell_card_head_bytes(&card.reference, codes)
+            } else {
+                decode_validated_cell_card_head_bytes(
                     &card.reference,
-                    code_slice(fetched_bytes, local_range),
+                    codes,
                     read.group.encoded_bytes,
                     dimensions,
                     element_type,
-                )?,
+                )?
+            };
+            loaded.push(LoadedCellCardHead {
+                root_index: card.root_index,
+                group: Arc::clone(&read.group),
+                head,
             });
         }
     }
@@ -1937,7 +2064,7 @@ pub(crate) fn rank_cell_card_exact_blocks(
             ));
         }
         let mut covered = 0_usize;
-        for reference in &loaded.head.exact_blocks {
+        for reference in loaded.head.exact_blocks.iter() {
             let end = covered
                 .checked_add(reference.rows as usize)
                 .ok_or_else(|| {
@@ -2669,6 +2796,132 @@ pub(crate) struct EncodedCellCardRunRoot {
 }
 
 impl ResidentCellCardRoot {
+    pub(crate) fn validate_complete_code_planes(
+        &self,
+        planes: &[(&CellCardGroupRef, &[u8])],
+    ) -> Result<()> {
+        let mut stored_by_group = BTreeMap::<usize, &[u8]>::new();
+        for (group, stored) in planes {
+            if stored.len() as u64 != group.code_plane_bytes {
+                return Err(BorsukError::InvalidStorage(
+                    "cell-card complete code-plane length mismatch".to_string(),
+                ));
+            }
+            let group_index = self
+                .groups
+                .iter()
+                .position(|candidate| candidate.as_ref() == *group)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card complete code plane is absent from its resident root"
+                            .to_string(),
+                    )
+                })?;
+            if stored_by_group.insert(group_index, *stored).is_some() {
+                return Err(BorsukError::InvalidStorage(
+                    "cell-card complete code plane is duplicated".to_string(),
+                ));
+            }
+        }
+        if stored_by_group.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card complete code-plane validation is empty".to_string(),
+            ));
+        }
+        let mut cards_by_group = vec![0_usize; self.groups.len()];
+        for index in 0..self.card_count() {
+            let group_index = self.group_indexes[index] as usize;
+            let Some(stored) = stored_by_group.get(&group_index).copied() else {
+                continue;
+            };
+            cards_by_group[group_index] = cards_by_group[group_index].saturating_add(1);
+            let group = &self.groups[group_index];
+            let start = self.code_offsets[index]
+                .checked_sub(group.code_plane_offset)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card complete code range starts before its plane".to_string(),
+                    )
+                })?;
+            let end = start
+                .checked_add(self.code_bytes[index] as usize)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card complete code range overflows".to_string(),
+                    )
+                })?;
+            let codes = stored.get(start..end).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cell-card complete code plane omits a card".to_string(),
+                )
+            })?;
+            validate_cell_card_code_identity(
+                self.cell_indexes[index],
+                self.card_ordinals[index],
+                self.rows[index],
+                self.code_widths[index],
+                self.code_bytes[index],
+                self.code_checksums[index],
+                codes,
+            )?;
+        }
+        if stored_by_group
+            .keys()
+            .any(|group_index| cards_by_group[*group_index] == 0)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card complete code plane contains no resident cards".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_serving_shape(
+        &mut self,
+        dimensions: usize,
+        element_type: VectorElementType,
+    ) -> Result<()> {
+        for index in 0..self.card_count() {
+            let group_index = *self.group_indexes.get(index).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card group index is missing".to_string())
+            })? as usize;
+            let group = self.groups.get(group_index).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card group index is out of range".to_string())
+            })?;
+            let code_offset = *self.code_offsets.get(index).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card code offset is missing".to_string())
+            })?;
+            let code_bytes = *self.code_bytes.get(index).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card code byte count is missing".to_string())
+            })?;
+            let rows = *self.rows.get(index).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card row count is missing".to_string())
+            })?;
+            let exact_blocks = self.exact_blocks.get(index).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card exact blocks are missing".to_string())
+            })?;
+            let code_end = code_offset
+                .checked_add(u64::from(code_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("cell-card code range overflows".to_string())
+                })?;
+            validate_exact_block_refs(
+                exact_blocks,
+                rows,
+                code_end,
+                group.encoded_bytes,
+                dimensions,
+                element_type,
+            )?;
+        }
+        self.serving_shape = Some(CellCardServingShape {
+            dimensions,
+            element_type,
+        });
+        Ok(())
+    }
+
     pub(crate) fn groups(&self) -> &[Arc<CellCardGroupRef>] {
         &self.groups
     }
@@ -2723,7 +2976,7 @@ impl ResidentCellCardRoot {
         hasher.update(&(self.exact_blocks.len() as u64).to_le_bytes());
         for blocks in &self.exact_blocks {
             hasher.update(&(blocks.len() as u64).to_le_bytes());
-            for block in blocks {
+            for block in blocks.iter() {
                 hasher.update(&block.block_ordinal.to_le_bytes());
                 hasher.update(&block.offset.to_le_bytes());
                 hasher.update(&block.metadata_bytes.to_le_bytes());
@@ -2797,7 +3050,7 @@ impl ResidentCellCardRoot {
                 centroid_code: self.centroid_codes[centroid_start..centroid_end]
                     .to_vec()
                     .into_boxed_slice(),
-                exact_blocks: self.exact_blocks[index].clone(),
+                exact_blocks: Arc::clone(&self.exact_blocks[index]),
             },
         ))
     }
@@ -2965,7 +3218,7 @@ pub(crate) fn encode_cell_card_run_root(
     let mut block_rows = ListBuilder::new(UInt32Builder::new());
     let mut block_checksums = ListBuilder::new(BinaryBuilder::new());
     for card in cards {
-        for block in &card.head.exact_blocks {
+        for block in card.head.exact_blocks.iter() {
             block_offsets.values().append_value(block.offset);
             block_metadata.values().append_value(block.metadata_bytes);
             block_bodies.values().append_value(block.body_bytes);
@@ -3099,7 +3352,7 @@ pub(crate) fn decode_cell_card_run_root(
         let mut rows = Vec::with_capacity(total_rows);
         let mut code_widths = Vec::with_capacity(total_rows);
         let mut code_checksums = Vec::with_capacity(total_rows);
-        let mut exact_blocks = Vec::with_capacity(total_rows);
+        let mut exact_blocks = Vec::<Arc<[CellCardExactBlockRef]>>::with_capacity(total_rows);
         let mut centroid_offsets = Vec::with_capacity(total_rows + 1);
         let mut centroid_codes = Vec::new();
         let mut prior_key = None;
@@ -3324,7 +3577,7 @@ pub(crate) fn decode_cell_card_run_root(
                 rows.push(row_count);
                 code_widths.push(code_width);
                 code_checksums.push(fixed_32(binaries(15).value(row), "code checksum")?);
-                exact_blocks.push(card_blocks.into_boxed_slice());
+                exact_blocks.push(card_blocks.into());
                 centroid_codes.extend_from_slice(centroids.value(row));
                 centroid_offsets.push(u32::try_from(centroid_codes.len()).map_err(|_| {
                     BorsukError::InvalidStorage(
@@ -3372,7 +3625,10 @@ pub(crate) fn decode_cell_card_run_root(
             + code_checksums.len() * std::mem::size_of::<[u8; 32]>()
             + exact_blocks
                 .iter()
-                .map(|blocks| blocks.len() * std::mem::size_of::<CellCardExactBlockRef>())
+                .map(|blocks| {
+                    2 * std::mem::size_of::<usize>()
+                        + blocks.len() * std::mem::size_of::<CellCardExactBlockRef>()
+                })
                 .sum::<usize>()
             + centroid_offsets.len() * std::mem::size_of::<u32>()
             + centroid_codes.len();
@@ -3391,6 +3647,7 @@ pub(crate) fn decode_cell_card_run_root(
             centroid_offsets,
             centroid_codes,
             resident_bytes,
+            serving_shape: None,
         })
     }))
     .map_err(|_| BorsukError::InvalidStorage("cell-card root decode panicked".to_string()))?
@@ -3413,8 +3670,9 @@ mod tests {
     use super::{
         CELL_CARD_GROUP_MAX_BYTES, CellCardGroupRef, CellCardGroupWriter, CellCardHeadRef,
         CellCardPush, CellCardRef, CellCardRunRootRef, GlobalCellCardAnnRef, cell_card_block_rows,
-        decode_cell_card_head, decode_cell_card_run_root, encode_cell_card_group,
-        encode_cell_card_run_root, validate_exact_block_refs,
+        decode_authenticated_cell_card_head_wave, decode_cell_card_head, decode_cell_card_run_root,
+        encode_cell_card_group, encode_cell_card_run_root,
+        project_authenticated_cell_card_head_read, validate_exact_block_refs,
     };
     use crate::{
         BorsukError, VectorElementType,
@@ -3559,7 +3817,7 @@ mod tests {
         assert_eq!(head.exact_blocks.len(), 2);
 
         let mut decoded_ids = Vec::new();
-        for block in &head.exact_blocks {
+        for block in head.exact_blocks.iter() {
             let start = block.offset as usize;
             let end = start + block.bytes as usize;
             let rows = head
@@ -3912,10 +4170,11 @@ mod tests {
         let foreign_bytes = &encoded.bytes
             [foreign.offset as usize..(foreign.offset + foreign.bytes as u64) as usize];
         let mut forged = first_head.clone();
-        forged.exact_blocks[0].bytes = foreign.bytes;
-        forged.exact_blocks[0].metadata_bytes = foreign.metadata_bytes;
-        forged.exact_blocks[0].body_bytes = foreign.body_bytes;
-        forged.exact_blocks[0].rows = foreign.rows;
+        let forged_blocks = Arc::make_mut(&mut forged.exact_blocks);
+        forged_blocks[0].bytes = foreign.bytes;
+        forged_blocks[0].metadata_bytes = foreign.metadata_bytes;
+        forged_blocks[0].body_bytes = foreign.body_bytes;
+        forged_blocks[0].rows = foreign.rows;
 
         assert!(
             forged
@@ -4164,6 +4423,95 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_head_wave_reuses_serving_root_shape_authority() {
+        let dimensions = 4;
+        let encoded = encode_cell_card_group(
+            &[GlobalLeafPageInput {
+                cell_index: 7,
+                leaf_ordinal: 0,
+                centroid_code: vec![7, 1],
+                rows: rows(65, dimensions),
+            }],
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/trusted")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes =
+            encode_cell_card_run_root("codebook-checksum", std::slice::from_ref(&group), &cards)
+                .unwrap();
+        let mut root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        assert!(
+            root.validate_serving_shape(4_096, VectorElementType::Int8)
+                .is_err(),
+            "a root cannot acquire serving authority under the wrong vector shape"
+        );
+        let untrusted_plan = super::plan_cell_card_head_wave(&root, &[7], 1024 * 1024, 8).unwrap();
+        assert!(
+            decode_authenticated_cell_card_head_wave(
+                &untrusted_plan,
+                &[],
+                dimensions,
+                VectorElementType::Int8,
+            )
+            .is_err(),
+            "a failed serving-shape check cannot mint trusted decode authority"
+        );
+        root.validate_serving_shape(dimensions, VectorElementType::Int8)
+            .unwrap();
+        let plan = super::plan_cell_card_head_wave(&root, &[7], 1024 * 1024, 8).unwrap();
+        let fetched = plan
+            .reads()
+            .iter()
+            .map(|read| {
+                project_authenticated_cell_card_head_read(
+                    read,
+                    bytes::Bytes::copy_from_slice(
+                        &encoded.bytes[read.start as usize..read.end as usize],
+                    ),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            decode_authenticated_cell_card_head_wave(
+                &plan,
+                &fetched,
+                dimensions + 1,
+                VectorElementType::Int8,
+            )
+            .is_err(),
+            "trusted decode must remain bound to the serving manifest shape"
+        );
+        let loaded = decode_authenticated_cell_card_head_wave(
+            &plan,
+            &fetched,
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].head.exact_blocks.len(), 3);
+        assert!(loaded[0].head.shares_code_backing(&fetched[0].bytes));
+        assert!(
+            Arc::ptr_eq(
+                &loaded[0].head.exact_blocks,
+                &plan.reads()[0].cards[0].reference.exact_blocks,
+            ),
+            "trusted decode must reuse the resident exact-reference authority"
+        );
+    }
+
+    #[test]
     fn multi_group_root_preserves_run_global_card_ordinals() {
         let encode = |leaf_ordinal| {
             encode_cell_card_group(
@@ -4253,7 +4601,7 @@ mod tests {
                         rows: 32,
                         checksum: [cell_index as u8; 32],
                     }]
-                    .into_boxed_slice(),
+                    .into(),
                 },
             })
             .collect::<Vec<_>>();
@@ -4542,7 +4890,8 @@ mod tests {
                         rows: 2,
                         checksum: [4; 32],
                     },
-                ],
+                ]
+                .into(),
             },
         }];
         super::reset_ranked_cell_card_clone_count();
@@ -5459,6 +5808,7 @@ mod tests {
             cached_selected_bytes: 0,
             backing_requests: 1,
             cards: 0,
+            serving_shape: None,
         };
 
         let plan = super::promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(
@@ -5795,6 +6145,7 @@ mod tests {
             cached_selected_bytes: 0,
             backing_requests: 1,
             cards: 0,
+            serving_shape: None,
         };
 
         let refused = super::promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(
