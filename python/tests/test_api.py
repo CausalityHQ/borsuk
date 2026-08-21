@@ -1061,8 +1061,14 @@ class PythonApiTests(unittest.TestCase):
             self.assertEqual(report.global_base_head_decode_us, 0)
             self.assertEqual(report.global_base_exact_admission_us, 0)
             self.assertEqual(report.global_base_exact_fetch_us, 0)
+            self.assertEqual(report.global_base_exact_read_us_max, 0)
             self.assertEqual(report.global_base_exact_cpu_us, 0)
             self.assertEqual(report.global_base_exact_rerank_us, 0)
+            self.assertEqual(report.global_base_exact_read_us_sum, 0)
+            self.assertEqual(report.global_base_exact_reads_over_20ms, 0)
+            self.assertEqual(report.global_base_exact_reads_over_30ms, 0)
+            self.assertEqual(report.global_base_exact_reads_over_50ms, 0)
+            self.assertEqual(report.global_base_exact_reads_over_100ms, 0)
 
     def test_open_with_cache_reads_fresh_current_after_external_publish(self) -> None:
         with (

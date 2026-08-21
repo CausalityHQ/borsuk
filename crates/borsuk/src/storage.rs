@@ -738,7 +738,34 @@ struct BlockingRuntime {
     block_on_entries: AtomicU64,
 }
 
-type RangeWaveOutcome = std::thread::Result<Result<Vec<u8>>>;
+struct RangeWaveRead {
+    bytes: Vec<u8>,
+    backing_get: bool,
+}
+
+type RangeWaveOutcome = std::thread::Result<Result<RangeWaveRead>>;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RangeWaveStats {
+    pub(crate) read_us_sum: u64,
+    pub(crate) read_us_max: u64,
+    pub(crate) reads_over_20ms: usize,
+    pub(crate) reads_over_30ms: usize,
+    pub(crate) reads_over_50ms: usize,
+    pub(crate) reads_over_100ms: usize,
+}
+
+#[cfg(test)]
+pub(crate) struct RangeWaveReport {
+    pub(crate) reads: Vec<Result<Vec<u8>>>,
+    pub(crate) stats: RangeWaveStats,
+}
+
+struct RangeWaveCompletion {
+    index: usize,
+    outcome: RangeWaveOutcome,
+    elapsed_us: u64,
+}
 
 impl BlockingRuntime {
     fn new(inner: Runtime) -> Self {
@@ -770,16 +797,28 @@ impl BlockingRuntime {
         relative: String,
         range: Range<u64>,
         permit: Option<OwnedAdmissionPermit>,
-        completed: std::sync::mpsc::Sender<(usize, RangeWaveOutcome)>,
+        completed: std::sync::mpsc::Sender<RangeWaveCompletion>,
     ) {
         std::mem::drop(self.runtime().spawn(async move {
+            let started = Instant::now();
             let outcome = AssertUnwindSafe(async move {
                 let _permit = permit;
-                context.read_range_cached_traced(&relative, range).await
+                context
+                    .read_range_cached_traced(&relative, range)
+                    .await
+                    .map(|(bytes, cache_hit)| RangeWaveRead {
+                        bytes,
+                        backing_get: !cache_hit,
+                    })
             })
             .catch_unwind()
             .await;
-            let _ = completed.send((index, outcome));
+            let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            let _ = completed.send(RangeWaveCompletion {
+                index,
+                outcome,
+                elapsed_us,
+            });
         }));
     }
 
@@ -1338,7 +1377,11 @@ impl PrefetchReadContext {
         Ok((bytes, false))
     }
 
-    async fn read_range_cached_traced(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {
+    async fn read_range_cached_traced(
+        &self,
+        relative: &str,
+        range: Range<u64>,
+    ) -> Result<(Vec<u8>, bool)> {
         let (bytes, cache_hit) = self.read_range_cached(relative, range).await?;
         if cache_hit {
             self.storage_trace.record(StorageAccessEvent::cached_read(
@@ -1347,7 +1390,7 @@ impl PrefetchReadContext {
                 0,
             ))?;
         }
-        Ok(bytes)
+        Ok((bytes, cache_hit))
     }
 
     fn resolve(&self, relative: &str) -> Result<ObjectPath> {
@@ -3345,21 +3388,55 @@ impl Storage {
     /// are active; each completion immediately refills the rolling window.
     /// Results retain request order and the individual-read cache and trace
     /// semantics.
+    #[cfg(test)]
     pub(crate) fn read_range_wave(
         &self,
         requests: &[(String, Range<u64>)],
         max_parallel: usize,
         gate: Option<&Arc<AdmissionGate>>,
     ) -> Vec<Result<Vec<u8>>> {
+        self.read_range_wave_report(requests, max_parallel, gate)
+            .reads
+    }
+
+    #[cfg(test)]
+    pub(crate) fn read_range_wave_report(
+        &self,
+        requests: &[(String, Range<u64>)],
+        max_parallel: usize,
+        gate: Option<&Arc<AdmissionGate>>,
+    ) -> RangeWaveReport {
+        let mut output = (0..requests.len()).map(|_| None).collect::<Vec<_>>();
+        let stats =
+            self.for_each_range_wave_completion(requests, max_parallel, gate, |index, result| {
+                output[index] = Some(result)
+            });
+        RangeWaveReport {
+            reads: output
+                .into_iter()
+                .map(|result| result.expect("every range-wave slot is completed or failed"))
+                .collect(),
+            stats,
+        }
+    }
+
+    pub(crate) fn for_each_range_wave_completion(
+        &self,
+        requests: &[(String, Range<u64>)],
+        max_parallel: usize,
+        gate: Option<&Arc<AdmissionGate>>,
+        mut on_complete: impl FnMut(usize, Result<Vec<u8>>),
+    ) -> RangeWaveStats {
         if requests.is_empty() {
-            return Vec::new();
+            return RangeWaveStats::default();
         }
         let width = max_parallel.max(1).min(requests.len());
         let context = PrefetchReadContext::from_storage(self);
         let (completed_tx, completed_rx) = std::sync::mpsc::channel();
-        let mut output = (0..requests.len()).map(|_| None).collect::<Vec<_>>();
+        let mut finished = vec![false; requests.len()];
         let mut next = 0_usize;
         let mut completed = 0_usize;
+        let mut stats = RangeWaveStats::default();
         let mut coordinator = Some(completed_tx);
         while next < width {
             let (relative, range) = &requests[next];
@@ -3381,18 +3458,25 @@ impl Storage {
             coordinator.take();
         }
         while completed < requests.len() {
-            let Ok((index, outcome)) = completed_rx.recv() else {
-                for slot in output.iter_mut().filter(|slot| slot.is_none()) {
-                    *slot = Some(Err(BorsukError::InvalidStorage(
-                        "range-wave storage tasks ended before reporting every result".to_string(),
-                    )));
+            let Ok(completion) = completed_rx.recv() else {
+                for (index, was_finished) in finished.iter().enumerate() {
+                    if !was_finished {
+                        on_complete(
+                            index,
+                            Err(BorsukError::InvalidStorage(
+                                "range-wave storage tasks ended before reporting every result"
+                                    .to_string(),
+                            )),
+                        );
+                    }
                 }
                 break;
             };
-            output[index] = Some(match outcome {
-                Ok(result) => result,
+            let outcome = match completion.outcome {
+                Ok(outcome) => outcome,
                 Err(panic) => std::panic::resume_unwind(panic),
-            });
+            };
+            finished[completion.index] = true;
             completed += 1;
             if next < requests.len() {
                 let (relative, range) = &requests[next];
@@ -3413,11 +3497,26 @@ impl Storage {
                     coordinator.take();
                 }
             }
+            on_complete(
+                completion.index,
+                match outcome {
+                    Ok(read) => {
+                        if read.backing_get {
+                            stats.read_us_sum =
+                                stats.read_us_sum.saturating_add(completion.elapsed_us);
+                            stats.read_us_max = stats.read_us_max.max(completion.elapsed_us);
+                            stats.reads_over_20ms += usize::from(completion.elapsed_us > 20_000);
+                            stats.reads_over_30ms += usize::from(completion.elapsed_us > 30_000);
+                            stats.reads_over_50ms += usize::from(completion.elapsed_us > 50_000);
+                            stats.reads_over_100ms += usize::from(completion.elapsed_us > 100_000);
+                        }
+                        Ok(read.bytes)
+                    }
+                    Err(error) => Err(error),
+                },
+            );
         }
-        output
-            .into_iter()
-            .map(|result| result.expect("every range-wave slot is completed or failed"))
-            .collect()
+        stats
     }
 
     pub(crate) fn read_suffix(&self, relative: &str, length: u64) -> Result<ReadBytes> {
@@ -5974,6 +6073,84 @@ mod tests {
     }
 
     #[test]
+    fn cross_object_range_wave_reports_backing_read_latency_distribution() {
+        let inner = Arc::new(ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(50),
+                ..ThrottleConfig::default()
+            },
+        ));
+        let storage = Storage::from_object_store(
+            "memory:///range-wave-stats".to_string(),
+            Arc::clone(&inner) as Arc<dyn ObjectStore>,
+        )
+        .unwrap();
+        storage.write_bytes("wave/a.bin", b"abcdefgh").unwrap();
+        storage.write_bytes("wave/b.bin", b"ABCDEFGH").unwrap();
+        storage.write_bytes("wave/c.bin", b"01234567").unwrap();
+        storage.write_bytes("wave/d.bin", b"87654321").unwrap();
+        let requests = vec![
+            ("wave/a.bin".to_string(), 0..2),
+            ("wave/b.bin".to_string(), 0..2),
+            ("wave/c.bin".to_string(), 0..2),
+            ("wave/d.bin".to_string(), 0..2),
+        ];
+
+        let wave = storage.read_range_wave_report(&requests, 2, None);
+
+        assert_eq!(wave.reads.len(), 4);
+        assert!(wave.stats.read_us_max >= 40_000);
+        assert!(wave.stats.read_us_sum >= 160_000);
+        assert_eq!(wave.stats.reads_over_20ms, 4);
+        assert_eq!(wave.stats.reads_over_30ms, 4);
+        assert!(wave.stats.reads_over_50ms <= wave.stats.reads_over_30ms);
+        assert!(wave.stats.reads_over_100ms <= wave.stats.reads_over_50ms);
+    }
+
+    #[test]
+    fn range_wave_refills_io_before_running_completion_cpu_work() {
+        let inner = Arc::new(ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(50),
+                ..ThrottleConfig::default()
+            },
+        ));
+        let storage = Storage::from_object_store(
+            "memory:///range-wave-stream".to_string(),
+            Arc::clone(&inner) as Arc<dyn ObjectStore>,
+        )
+        .unwrap();
+        storage.write_bytes("wave/a.bin", b"abcdefgh").unwrap();
+        storage.write_bytes("wave/b.bin", b"ABCDEFGH").unwrap();
+        let requests = vec![
+            ("wave/a.bin".to_string(), 0..2),
+            ("wave/b.bin".to_string(), 0..2),
+        ];
+        let mut completions = Vec::new();
+        let before = storage.request_counts();
+
+        storage.for_each_range_wave_completion(&requests, 1, None, |index, read| {
+            completions.push((index, read.unwrap()));
+            if index == 0 {
+                let deadline = Instant::now() + Duration::from_secs(1);
+                while storage.request_counts().delta(&before).gets < 2 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the rolling I/O window was not refilled before completion CPU work"
+                    );
+                    std::thread::yield_now();
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        });
+
+        assert_eq!(completions[0], (0, b"ab".to_vec()));
+        assert_eq!(completions[1], (1, b"AB".to_vec()));
+    }
+
+    #[test]
     fn cross_object_range_wave_preserves_cached_read_trace_without_backing_gets() {
         let objects = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
@@ -5996,15 +6173,14 @@ mod tests {
         );
         storage.storage_trace.reset().unwrap();
         let before = storage.request_counts();
+        let cached_wave = storage.read_range_wave_report(&request, 1, None);
+        assert_eq!(cached_wave.reads[0].as_deref().unwrap(), b"2345");
+        assert_eq!(cached_wave.stats.read_us_sum, 0);
+        assert_eq!(cached_wave.stats.read_us_max, 0);
+        assert_eq!(cached_wave.stats.reads_over_20ms, 0);
 
-        assert_eq!(
-            storage.read_range_wave(&request, 1, None)[0]
-                .as_deref()
-                .unwrap(),
-            b"2345"
-        );
-
-        assert_eq!(storage.request_counts().delta(&before).gets, 0);
+        let cached_requests = storage.request_counts().delta(&before);
+        assert_eq!(cached_requests.gets, 0);
         assert_eq!(
             fs::read_to_string(trace_path).unwrap().lines().count(),
             2,

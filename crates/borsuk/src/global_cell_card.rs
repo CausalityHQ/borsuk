@@ -2430,6 +2430,73 @@ pub(crate) struct LoadedCellCardExactBlock {
     pub(crate) rows: Vec<DecodedGlobalLeafRow>,
 }
 
+pub(crate) fn decode_cell_card_exact_read(
+    plan: &CellCardExactWavePlan,
+    read_index: usize,
+    heads: &[LoadedCellCardHead],
+    bytes: &[u8],
+    dimensions: usize,
+    element_type: VectorElementType,
+) -> Result<Vec<LoadedCellCardExactBlock>> {
+    let read = plan.reads.get(read_index).ok_or_else(|| {
+        BorsukError::InvalidStorage(
+            "cell-card exact wave response references an absent read".to_string(),
+        )
+    })?;
+    if bytes.len() as u64 != read.end - read.start {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card exact wave response length mismatch".to_string(),
+        ));
+    }
+    let mut loaded = Vec::with_capacity(read.blocks.len());
+    for block in &read.blocks {
+        let head = heads.get(block.head_index).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "cell-card exact wave references an absent head".to_string(),
+            )
+        })?;
+        if *block.group != *read.group
+            || *block.group != *head.group
+            || block.cell_index != head.head.cell_index
+            || block.card_ordinal != head.head.card_ordinal
+        {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card exact wave block/head authority mismatch".to_string(),
+            ));
+        }
+        let start = block
+            .reference
+            .offset
+            .checked_sub(read.start)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cell-card exact block starts before its read".to_string(),
+                )
+            })?;
+        let end = start
+            .checked_add(u64::from(block.reference.bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card exact response range overflows".to_string())
+            })?;
+        let stored = bytes.get(start as usize..end as usize).ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "cell-card exact response does not contain its block".to_string(),
+            )
+        })?;
+        loaded.push(LoadedCellCardExactBlock {
+            block: block.clone(),
+            rows: head.head.verify_block(
+                block.reference.block_ordinal,
+                stored,
+                dimensions,
+                element_type,
+            )?,
+        });
+    }
+    Ok(loaded)
+}
+
+#[cfg(test)]
 pub(crate) fn decode_cell_card_exact_wave(
     plan: &CellCardExactWavePlan,
     heads: &[LoadedCellCardHead],
@@ -2448,58 +2515,15 @@ pub(crate) fn decode_cell_card_exact_wave(
         })
     })?;
     let mut loaded = Vec::with_capacity(expected_blocks);
-    for (read, bytes) in plan.reads.iter().zip(fetched) {
-        if bytes.len() as u64 != read.end - read.start {
-            return Err(BorsukError::InvalidStorage(
-                "cell-card exact wave response length mismatch".to_string(),
-            ));
-        }
-        for block in &read.blocks {
-            let head = heads.get(block.head_index).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "cell-card exact wave references an absent head".to_string(),
-                )
-            })?;
-            if *block.group != *read.group
-                || *block.group != *head.group
-                || block.cell_index != head.head.cell_index
-                || block.card_ordinal != head.head.card_ordinal
-            {
-                return Err(BorsukError::InvalidStorage(
-                    "cell-card exact wave block/head authority mismatch".to_string(),
-                ));
-            }
-            let start = block
-                .reference
-                .offset
-                .checked_sub(read.start)
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "cell-card exact block starts before its read".to_string(),
-                    )
-                })?;
-            let end = start
-                .checked_add(u64::from(block.reference.bytes))
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "cell-card exact response range overflows".to_string(),
-                    )
-                })?;
-            let stored = bytes.get(start as usize..end as usize).ok_or_else(|| {
-                BorsukError::InvalidStorage(
-                    "cell-card exact response does not contain its block".to_string(),
-                )
-            })?;
-            loaded.push(LoadedCellCardExactBlock {
-                block: block.clone(),
-                rows: head.head.verify_block(
-                    block.reference.block_ordinal,
-                    stored,
-                    dimensions,
-                    element_type,
-                )?,
-            });
-        }
+    for (read_index, bytes) in fetched.iter().enumerate() {
+        loaded.extend(decode_cell_card_exact_read(
+            plan,
+            read_index,
+            heads,
+            bytes,
+            dimensions,
+            element_type,
+        )?);
     }
     if loaded.len() != expected_blocks {
         return Err(BorsukError::InvalidStorage(
@@ -4449,7 +4473,18 @@ mod tests {
             VectorElementType::Int8,
         )
         .unwrap();
+        let decoded_first_read = super::decode_cell_card_exact_read(
+            &exact_plan,
+            0,
+            &loaded,
+            &fetched_exact[0],
+            dimensions,
+            VectorElementType::Int8,
+        )
+        .unwrap();
         assert_eq!(decoded_exact.len(), 1);
+        assert_eq!(decoded_first_read.len(), 1);
+        assert_eq!(decoded_first_read[0].rows[0].id, input.rows[128].id);
         assert_eq!(decoded_exact[0].rows.len(), 1);
         assert_eq!(decoded_exact[0].rows[0].id, input.rows[128].id);
         let selected = &ranked[0];

@@ -237,7 +237,19 @@ export interface SearchReport {
   globalBaseExactAdmissionUs: number;
   /** Time fetching exact-vector ranges. */
   globalBaseExactFetchUs: number;
-  /** Time decoding, resolving, and exact-scoring fetched candidates. */
+  /** Slowest successful end-to-end backing range read in the exact wave. */
+  globalBaseExactReadUsMax: number;
+  /** Sum of successful end-to-end backing range-read service times. */
+  globalBaseExactReadUsSum: number;
+  /** Successful exact-wave backing reads slower than 20 ms. */
+  globalBaseExactReadsOver20Ms: number;
+  /** Successful exact-wave backing reads slower than 30 ms. */
+  globalBaseExactReadsOver30Ms: number;
+  /** Successful exact-wave backing reads slower than 50 ms. */
+  globalBaseExactReadsOver50Ms: number;
+  /** Successful exact-wave backing reads slower than 100 ms. */
+  globalBaseExactReadsOver100Ms: number;
+  /** Non-overlapped time draining decodes, resolving, and exact-scoring. */
   globalBaseExactCpuUs: number;
   /** Aggregate global exact-fetch/rerank work across merged immutable runs. */
   globalBaseExactRerankUs: number;

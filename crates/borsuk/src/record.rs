@@ -1187,7 +1187,27 @@ pub struct SearchReport {
     /// including collection-wide leaf-read admission.
     #[serde(default)]
     pub global_base_exact_fetch_us: u64,
-    /// Aggregate microseconds spent decoding, resolving, and scoring exact rows.
+    /// Slowest successful end-to-end backing range read in the global exact wave.
+    #[serde(default)]
+    pub global_base_exact_read_us_max: u64,
+    /// Sum of successful end-to-end backing range-read service times.
+    #[serde(default)]
+    pub global_base_exact_read_us_sum: u64,
+    /// Successful exact-wave backing reads taking longer than 20 milliseconds.
+    #[serde(default)]
+    pub global_base_exact_reads_over_20ms: u64,
+    /// Successful exact-wave backing reads taking longer than 30 milliseconds.
+    #[serde(default)]
+    pub global_base_exact_reads_over_30ms: u64,
+    /// Successful exact-wave backing reads taking longer than 50 milliseconds.
+    #[serde(default)]
+    pub global_base_exact_reads_over_50ms: u64,
+    /// Successful exact-wave backing reads taking longer than 100 milliseconds.
+    #[serde(default)]
+    pub global_base_exact_reads_over_100ms: u64,
+    /// Non-overlapped wall microseconds spent draining queued exact decodes,
+    /// resolving winners, and scoring exact rows. Decode work overlapped with
+    /// active range reads is already included in the exact fetch wall.
     #[serde(default)]
     pub global_base_exact_cpu_us: u64,
     /// Aggregate microseconds spent fetching and exact-scoring global shortlists

@@ -52,7 +52,7 @@ use crate::{
     global_cell_card::{
         CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION, CELL_CARD_RANGE_READ_MAX_BYTES,
         CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead, CellCardPush,
-        GlobalCellCardAnnRef, cell_card_exact_admission_bounds, decode_cell_card_exact_wave,
+        GlobalCellCardAnnRef, cell_card_exact_admission_bounds, decode_cell_card_exact_read,
         decode_cell_card_run_root, decode_verified_cell_card_head_wave, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave_with_amplification, plan_ranked_cell_card_head_wave,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
@@ -11378,6 +11378,12 @@ impl BorsukIndex {
             global_base_head_decode_us: 0,
             global_base_exact_admission_us: 0,
             global_base_exact_fetch_us: 0,
+            global_base_exact_read_us_max: 0,
+            global_base_exact_read_us_sum: 0,
+            global_base_exact_reads_over_20ms: 0,
+            global_base_exact_reads_over_30ms: 0,
+            global_base_exact_reads_over_50ms: 0,
+            global_base_exact_reads_over_100ms: 0,
             global_base_exact_cpu_us: 0,
             global_base_exact_rerank_us: 0,
             resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
@@ -18186,6 +18192,12 @@ impl BorsukIndex {
                     global_base_head_decode_us,
                     global_base_exact_admission_us: 0,
                     global_base_exact_fetch_us: 0,
+                    global_base_exact_read_us_max: 0,
+                    global_base_exact_read_us_sum: 0,
+                    global_base_exact_reads_over_20ms: 0,
+                    global_base_exact_reads_over_30ms: 0,
+                    global_base_exact_reads_over_50ms: 0,
+                    global_base_exact_reads_over_100ms: 0,
                     global_base_exact_cpu_us: 0,
                     global_base_exact_rerank_us: 0,
                     resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
@@ -18235,6 +18247,7 @@ impl BorsukIndex {
             }
             Err(error) => return Err(error),
         };
+        let exact_plan = Arc::new(exact_plan);
         let exact_admission_bytes = global_cell_card_exact_wave_admission_bytes(
             head_plan.decoded_retained_bytes(),
             exact_plan.physical_bytes(),
@@ -18262,6 +18275,7 @@ impl BorsukIndex {
             .map(|gate| gate.acquire_owned(exact_admission_bytes));
         let global_base_exact_admission_us =
             u64::try_from(exact_admission_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let heads = Arc::new(heads);
         let exact_requests_before = self.storage.request_counts();
         let exact_range_requests = exact_plan
             .reads()
@@ -18269,13 +18283,98 @@ impl BorsukIndex {
             .map(|read| (read.group.path.clone(), read.start..read.end))
             .collect::<Vec<_>>();
         let exact_io_started = Instant::now();
-        let exact_reads = self.storage.read_range_wave(
+        let dimensions = self.manifest.config.dimensions;
+        let element_type = self.manifest.build_config.vector_element_type;
+        let (decoded_tx, decoded_rx) = std::sync::mpsc::channel();
+        let exact_wave_stats = self.storage.for_each_range_wave_completion(
             &exact_range_requests,
             self.leaf_read_width,
             Some(&self.global_pq_rerank_admission),
+            |read_index, read| {
+                let sender = decoded_tx.clone();
+                match read {
+                    Ok(bytes) => {
+                        let exact_plan = Arc::clone(&exact_plan);
+                        let heads = Arc::clone(&heads);
+                        spawn_cell_card_exact_post_io(move || {
+                            let decoded =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    decode_cell_card_exact_read(
+                                        &exact_plan,
+                                        read_index,
+                                        &heads,
+                                        &bytes,
+                                        dimensions,
+                                        element_type,
+                                    )
+                                }))
+                                .unwrap_or_else(|_| {
+                                    Err(BorsukError::InvalidStorage(
+                                        "cell-card exact read decode panicked".to_string(),
+                                    ))
+                                });
+                            let _ = sender.send((read_index, decoded));
+                        });
+                    }
+                    Err(error) => {
+                        let _ = sender.send((read_index, Err(error)));
+                    }
+                }
+            },
         );
+        drop(decoded_tx);
         let global_base_exact_fetch_us =
             u64::try_from(exact_io_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let mut streamed_exact_blocks_by_read =
+            (0..exact_plan.requests()).map(|_| None).collect::<Vec<_>>();
+        let exact_decode_drain_started = Instant::now();
+        let mut decode_protocol_error = None;
+        for _ in 0..exact_plan.requests() {
+            let Ok((read_index, decoded)) = decoded_rx.recv() else {
+                decode_protocol_error.get_or_insert_with(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card exact decode tasks ended before reporting every read"
+                            .to_string(),
+                    )
+                });
+                break;
+            };
+            let Some(slot) = streamed_exact_blocks_by_read.get_mut(read_index) else {
+                decode_protocol_error.get_or_insert_with(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card exact decode task reported an absent read".to_string(),
+                    )
+                });
+                continue;
+            };
+            if slot.is_some() {
+                decode_protocol_error.get_or_insert_with(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card exact decode task reported one read twice".to_string(),
+                    )
+                });
+                continue;
+            }
+            *slot = Some(decoded);
+        }
+        let exact_decode_drain_us =
+            u64::try_from(exact_decode_drain_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        if let Some(error) = decode_protocol_error {
+            return Err(error);
+        }
+        let mut streamed_exact_blocks = Vec::with_capacity(exact_plan.blocks());
+        for decoded in streamed_exact_blocks_by_read {
+            streamed_exact_blocks.extend(decoded.ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "cell-card exact decode task omitted a planned read".to_string(),
+                )
+            })??);
+        }
+        if streamed_exact_blocks.len() != exact_plan.blocks() {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card exact wave did not decode each planned block once".to_string(),
+            ));
+        }
         let exact_request_counts = self.storage.request_counts().delta(&exact_requests_before);
         let exact_storage_requests = usize::try_from(
             exact_request_counts
@@ -18293,17 +18392,6 @@ impl BorsukIndex {
             global_base_exact_cpu_us,
         ) = run_cell_card_exact_post_io(|| {
             let exact_cpu_started = Instant::now();
-            let mut fetched_exact = Vec::with_capacity(exact_reads.len());
-            for read in exact_reads {
-                fetched_exact.push(read?);
-            }
-            let exact_blocks = decode_cell_card_exact_wave(
-                &exact_plan,
-                &heads,
-                &fetched_exact,
-                self.manifest.config.dimensions,
-                self.manifest.build_config.vector_element_type,
-            )?;
             let identity_rows = heads
                 .iter()
                 .try_fold(0_usize, |total, head| {
@@ -18313,7 +18401,7 @@ impl BorsukIndex {
                     BorsukError::InvalidStorage("V17 identity row count overflows".to_string())
                 })?;
             let mut rows = Vec::new();
-            for block in exact_blocks {
+            for block in streamed_exact_blocks {
                 let root_index = heads
                     .get(block.block.head_index)
                     .ok_or_else(|| {
@@ -18396,8 +18484,13 @@ impl BorsukIndex {
             } else {
                 Vec::new()
             };
-            let global_base_exact_cpu_us =
-                u64::try_from(exact_cpu_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            // Decode work that overlaps active S3 reads is already represented
+            // in exact fetch wall time. Charge only the post-fetch drain plus
+            // the serial resolution/scoring wall so stage components never
+            // double-count concurrent work.
+            let global_base_exact_cpu_us = exact_decode_drain_us.saturating_add(
+                u64::try_from(exact_cpu_started.elapsed().as_micros()).unwrap_or(u64::MAX),
+            );
             Ok::<_, BorsukError>((
                 identity_rows,
                 records_considered,
@@ -18480,6 +18573,18 @@ impl BorsukIndex {
                 global_base_head_decode_us,
                 global_base_exact_admission_us,
                 global_base_exact_fetch_us,
+                global_base_exact_read_us_max: exact_wave_stats.read_us_max,
+                global_base_exact_read_us_sum: exact_wave_stats.read_us_sum,
+                global_base_exact_reads_over_20ms: u64::try_from(exact_wave_stats.reads_over_20ms)
+                    .unwrap_or(u64::MAX),
+                global_base_exact_reads_over_30ms: u64::try_from(exact_wave_stats.reads_over_30ms)
+                    .unwrap_or(u64::MAX),
+                global_base_exact_reads_over_50ms: u64::try_from(exact_wave_stats.reads_over_50ms)
+                    .unwrap_or(u64::MAX),
+                global_base_exact_reads_over_100ms: u64::try_from(
+                    exact_wave_stats.reads_over_100ms,
+                )
+                .unwrap_or(u64::MAX),
                 global_base_exact_cpu_us,
                 global_base_exact_rerank_us: u64::try_from(exact_started.elapsed().as_micros())
                     .unwrap_or(u64::MAX),
@@ -18582,6 +18687,12 @@ impl BorsukIndex {
                     global_base_head_decode_us: 0,
                     global_base_exact_admission_us: 0,
                     global_base_exact_fetch_us: 0,
+                    global_base_exact_read_us_max: 0,
+                    global_base_exact_read_us_sum: 0,
+                    global_base_exact_reads_over_20ms: 0,
+                    global_base_exact_reads_over_30ms: 0,
+                    global_base_exact_reads_over_50ms: 0,
+                    global_base_exact_reads_over_100ms: 0,
                     global_base_exact_cpu_us: 0,
                     global_base_exact_rerank_us: 0,
                     resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
@@ -19048,6 +19159,12 @@ impl BorsukIndex {
                 global_base_head_decode_us: 0,
                 global_base_exact_admission_us: 0,
                 global_base_exact_fetch_us: 0,
+                global_base_exact_read_us_max: 0,
+                global_base_exact_read_us_sum: 0,
+                global_base_exact_reads_over_20ms: 0,
+                global_base_exact_reads_over_30ms: 0,
+                global_base_exact_reads_over_50ms: 0,
+                global_base_exact_reads_over_100ms: 0,
                 global_base_exact_cpu_us: 0,
                 global_base_exact_rerank_us: u64::try_from(exact_started.elapsed().as_micros())
                     .unwrap_or(u64::MAX),
@@ -21544,6 +21661,31 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_base_exact_fetch_us)
                 .sum(),
+            global_base_exact_read_us_max: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_read_us_max)
+                .max()
+                .unwrap_or(0),
+            global_base_exact_read_us_sum: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_read_us_sum)
+                .sum(),
+            global_base_exact_reads_over_20ms: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_reads_over_20ms)
+                .sum(),
+            global_base_exact_reads_over_30ms: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_reads_over_30ms)
+                .sum(),
+            global_base_exact_reads_over_50ms: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_reads_over_50ms)
+                .sum(),
+            global_base_exact_reads_over_100ms: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_reads_over_100ms)
+                .sum(),
             global_base_exact_cpu_us: reports
                 .iter()
                 .map(|(_, report)| report.global_base_exact_cpu_us)
@@ -21726,6 +21868,12 @@ impl BorsukIndex {
                 global_base_head_decode_us: 0,
                 global_base_exact_admission_us: 0,
                 global_base_exact_fetch_us: 0,
+                global_base_exact_read_us_max: 0,
+                global_base_exact_read_us_sum: 0,
+                global_base_exact_reads_over_20ms: 0,
+                global_base_exact_reads_over_30ms: 0,
+                global_base_exact_reads_over_50ms: 0,
+                global_base_exact_reads_over_100ms: 0,
                 global_base_exact_cpu_us: 0,
                 global_base_exact_rerank_us: 0,
                 resident_bytes_estimate,
@@ -21959,6 +22107,12 @@ impl BorsukIndex {
             global_base_head_decode_us: 0,
             global_base_exact_admission_us: 0,
             global_base_exact_fetch_us: 0,
+            global_base_exact_read_us_max: 0,
+            global_base_exact_read_us_sum: 0,
+            global_base_exact_reads_over_20ms: 0,
+            global_base_exact_reads_over_30ms: 0,
+            global_base_exact_reads_over_50ms: 0,
+            global_base_exact_reads_over_100ms: 0,
             global_base_exact_cpu_us: 0,
             global_base_exact_rerank_us: 0,
             resident_bytes_estimate,
@@ -22328,6 +22482,12 @@ impl BorsukIndex {
                     global_base_head_decode_us: 0,
                     global_base_exact_admission_us: 0,
                     global_base_exact_fetch_us: 0,
+                    global_base_exact_read_us_max: 0,
+                    global_base_exact_read_us_sum: 0,
+                    global_base_exact_reads_over_20ms: 0,
+                    global_base_exact_reads_over_30ms: 0,
+                    global_base_exact_reads_over_50ms: 0,
+                    global_base_exact_reads_over_100ms: 0,
                     global_base_exact_cpu_us: 0,
                     global_base_exact_rerank_us: 0,
                     resident_bytes_estimate,
@@ -23106,6 +23266,12 @@ impl BorsukIndex {
                 global_base_head_decode_us: 0,
                 global_base_exact_admission_us: 0,
                 global_base_exact_fetch_us: 0,
+                global_base_exact_read_us_max: 0,
+                global_base_exact_read_us_sum: 0,
+                global_base_exact_reads_over_20ms: 0,
+                global_base_exact_reads_over_30ms: 0,
+                global_base_exact_reads_over_50ms: 0,
+                global_base_exact_reads_over_100ms: 0,
                 global_base_exact_cpu_us: 0,
                 global_base_exact_rerank_us: 0,
                 resident_bytes_estimate,
@@ -23233,6 +23399,12 @@ impl BorsukIndex {
                 global_base_head_decode_us: 0,
                 global_base_exact_admission_us: 0,
                 global_base_exact_fetch_us: 0,
+                global_base_exact_read_us_max: 0,
+                global_base_exact_read_us_sum: 0,
+                global_base_exact_reads_over_20ms: 0,
+                global_base_exact_reads_over_30ms: 0,
+                global_base_exact_reads_over_50ms: 0,
+                global_base_exact_reads_over_100ms: 0,
                 global_base_exact_cpu_us: 0,
                 global_base_exact_rerank_us: 0,
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
@@ -29060,6 +29232,18 @@ where
     crate::parallel::install(work)
 }
 
+/// Queue exact-page decode work without stalling the S3 completion loop.
+fn spawn_cell_card_exact_post_io<F>(work: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    if crate::parallel::is_query_worker() {
+        work();
+    } else {
+        crate::parallel::spawn(work);
+    }
+}
+
 /// Execute bounded I/O waves while a query still owns latency budget.
 ///
 /// The deadline is checked before every wave, so a slow completed wave cannot
@@ -30203,6 +30387,30 @@ fn merge_search_execution_hits(
         .report
         .global_base_exact_fetch_us
         .saturating_add(delta_report.global_base_exact_fetch_us);
+    base.report.global_base_exact_read_us_max = base
+        .report
+        .global_base_exact_read_us_max
+        .max(delta_report.global_base_exact_read_us_max);
+    base.report.global_base_exact_read_us_sum = base
+        .report
+        .global_base_exact_read_us_sum
+        .saturating_add(delta_report.global_base_exact_read_us_sum);
+    base.report.global_base_exact_reads_over_20ms = base
+        .report
+        .global_base_exact_reads_over_20ms
+        .saturating_add(delta_report.global_base_exact_reads_over_20ms);
+    base.report.global_base_exact_reads_over_30ms = base
+        .report
+        .global_base_exact_reads_over_30ms
+        .saturating_add(delta_report.global_base_exact_reads_over_30ms);
+    base.report.global_base_exact_reads_over_50ms = base
+        .report
+        .global_base_exact_reads_over_50ms
+        .saturating_add(delta_report.global_base_exact_reads_over_50ms);
+    base.report.global_base_exact_reads_over_100ms = base
+        .report
+        .global_base_exact_reads_over_100ms
+        .saturating_add(delta_report.global_base_exact_reads_over_100ms);
     base.report.global_base_exact_cpu_us = base
         .report
         .global_base_exact_cpu_us
@@ -40456,6 +40664,62 @@ mod tests {
         assert!(
             exact_worker_name.starts_with("borsuk-query-"),
             "cell-card exact rerank ran on {exact_worker_name} instead of the CPU pool"
+        );
+    }
+
+    #[test]
+    fn cell_card_exact_submission_does_not_block_on_saturated_query_workers() {
+        let workers = crate::configured_cpu_threads();
+        let entered = Arc::new(std::sync::Barrier::new(workers + 1));
+        let release = Arc::new(std::sync::Barrier::new(workers + 1));
+        for _ in 0..workers {
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            spawn_cell_card_exact_post_io(move || {
+                entered.wait();
+                release.wait();
+            });
+        }
+        entered.wait();
+
+        let (submitted_tx, submitted_rx) = std::sync::mpsc::channel();
+        let (ran_tx, ran_rx) = std::sync::mpsc::channel();
+        let submitter = std::thread::spawn(move || {
+            spawn_cell_card_exact_post_io(move || {
+                ran_tx.send(()).unwrap();
+            });
+            submitted_tx.send(()).unwrap();
+        });
+        let submitted_without_worker = submitted_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .is_ok();
+
+        release.wait();
+        submitter.join().unwrap();
+        ran_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        assert!(
+            submitted_without_worker,
+            "exact decode submission waited for a CPU worker instead of merely queueing work"
+        );
+    }
+
+    #[test]
+    fn cell_card_exact_submission_runs_inline_when_caller_is_a_query_worker() {
+        let ran_inline = run_cell_card_exact_post_io(|| {
+            let caller = std::thread::current().id();
+            let (tx, rx) = std::sync::mpsc::channel();
+            spawn_cell_card_exact_post_io(move || {
+                let _ = tx.send(std::thread::current().id());
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(1))
+                .is_ok_and(|worker| worker == caller)
+        });
+
+        assert!(
+            ran_inline,
+            "a query worker must not enqueue work that it will synchronously wait to receive"
         );
     }
 

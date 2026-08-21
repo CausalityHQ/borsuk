@@ -43,6 +43,19 @@ where
     query_pool().install(work)
 }
 
+/// Queue independent query CPU work without waiting for a worker to become
+/// available. The fixed process-wide pool remains the concurrency bound.
+pub(crate) fn spawn<F>(work: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    query_pool().spawn(work);
+}
+
+pub(crate) fn is_query_worker() -> bool {
+    query_pool().current_thread_index().is_some()
+}
+
 pub(crate) fn install_io<R, F>(work: F) -> R
 where
     R: Send,

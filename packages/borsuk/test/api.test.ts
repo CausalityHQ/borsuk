@@ -1502,8 +1502,14 @@ test("searchWithReport exposes query counters", async () => {
   assert.equal(report.globalBaseHeadDecodeUs, 0);
   assert.equal(report.globalBaseExactAdmissionUs, 0);
   assert.equal(report.globalBaseExactFetchUs, 0);
+  assert.equal(report.globalBaseExactReadUsMax, 0);
   assert.equal(report.globalBaseExactCpuUs, 0);
   assert.equal(report.globalBaseExactRerankUs, 0);
+  assert.equal(report.globalBaseExactReadUsSum, 0);
+  assert.equal(report.globalBaseExactReadsOver20Ms, 0);
+  assert.equal(report.globalBaseExactReadsOver30Ms, 0);
+  assert.equal(report.globalBaseExactReadsOver50Ms, 0);
+  assert.equal(report.globalBaseExactReadsOver100Ms, 0);
 });
 
 test("searchWithReportBuffer accepts contiguous Float32Array query", async () => {

@@ -660,6 +660,18 @@ struct PySearchReport {
     #[pyo3(get)]
     global_base_exact_fetch_us: u64,
     #[pyo3(get)]
+    global_base_exact_read_us_max: u64,
+    #[pyo3(get)]
+    global_base_exact_read_us_sum: u64,
+    #[pyo3(get)]
+    global_base_exact_reads_over_20ms: u64,
+    #[pyo3(get)]
+    global_base_exact_reads_over_30ms: u64,
+    #[pyo3(get)]
+    global_base_exact_reads_over_50ms: u64,
+    #[pyo3(get)]
+    global_base_exact_reads_over_100ms: u64,
+    #[pyo3(get)]
     global_base_exact_cpu_us: u64,
     #[pyo3(get)]
     global_base_exact_rerank_us: u64,
@@ -3196,6 +3208,12 @@ impl TryFrom<SearchReport> for PySearchReport {
             global_base_head_decode_us: report.global_base_head_decode_us,
             global_base_exact_admission_us: report.global_base_exact_admission_us,
             global_base_exact_fetch_us: report.global_base_exact_fetch_us,
+            global_base_exact_read_us_max: report.global_base_exact_read_us_max,
+            global_base_exact_read_us_sum: report.global_base_exact_read_us_sum,
+            global_base_exact_reads_over_20ms: report.global_base_exact_reads_over_20ms,
+            global_base_exact_reads_over_30ms: report.global_base_exact_reads_over_30ms,
+            global_base_exact_reads_over_50ms: report.global_base_exact_reads_over_50ms,
+            global_base_exact_reads_over_100ms: report.global_base_exact_reads_over_100ms,
             global_base_exact_cpu_us: report.global_base_exact_cpu_us,
             global_base_exact_rerank_us: report.global_base_exact_rerank_us,
             resident_bytes_estimate: report.resident_bytes_estimate,
