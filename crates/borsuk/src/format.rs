@@ -167,7 +167,11 @@ use crate::{
 // production evidence showed global residual-code ordering fragmented the
 // same selected byte budget across substantially more S3 range requests.
 // Pre-release v41 manifests bind the superseded global-block placement.
-const CURRENT_VERSION: u16 = 42;
+// Bumped 42 -> 43 when V20 replaced TurboQuant's record-ID order inside each
+// authenticated logical cell with deterministic raw-vector locality down to
+// the bounded exact-block boundary. Pre-release v42 manifests bind a physical
+// order that scatters geometrically adjacent exact candidates across blocks.
+const CURRENT_VERSION: u16 = 43;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -9595,7 +9599,7 @@ mod tests {
         let bytes = manifest_to_parquet(&valid_manifest()).unwrap();
         let batch = first_batch(&bytes, "manifest").unwrap();
         let mut columns = batch.columns().to_vec();
-        for old_version in [35_u16, 37, 38, 39] {
+        for old_version in [35_u16, 37, 38, 39, 42] {
             columns[batch.schema().index_of("format_version").unwrap()] =
                 array(UInt16Array::from_iter_values([old_version]));
             let old = write_batch(RecordBatch::try_new(batch.schema(), columns.clone()).unwrap())
@@ -10514,6 +10518,7 @@ mod tests {
             primitive_value_by_name::<UInt16Type>(&batch, 0, "format_version").unwrap(),
             CURRENT_VERSION
         );
+        assert_eq!(CURRENT_VERSION, 43);
         assert_eq!(
             crate::logical_cell_catalog::LOGICAL_CELL_CATALOG_FORMAT_VERSION,
             34

@@ -601,7 +601,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["engine"], "bounded-cell-card-v19");
+        assert_eq!(value["engine"], "bounded-cell-card-v20");
         assert!(value["global_leaf_code_pages_read"].as_u64().unwrap() > 0);
         assert!(value["global_leaf_exact_requests"].as_u64().unwrap() > 0);
         assert!(value["global_leaf_exact_selected_bytes"].as_u64().unwrap() > 0);

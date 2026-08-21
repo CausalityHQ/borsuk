@@ -33,7 +33,7 @@ use crate::{
     record::VectorElementType,
 };
 
-pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v19";
+pub(crate) const CELL_CARD_LAYOUT: &str = "cell-card-leaf-v20";
 pub(crate) const CELL_CARD_GROUP_MAX_BYTES: u64 = 48 * 1024 * 1024;
 const CELL_CARD_VECTOR_PAYLOAD_BYTES: usize = 96 * 1024;
 // Ranking/authentication granularity is deliberately smaller than the 128-row
@@ -2308,7 +2308,7 @@ impl GlobalCellCardAnnRef {
         purge_epoch: u64,
     ) -> Result<Self> {
         let reference = Self {
-            layout_version: 19,
+            layout_version: 20,
             codebook,
             root_path,
             root,
@@ -2329,10 +2329,10 @@ impl GlobalCellCardAnnRef {
         let checksum = blake3::Hash::from_bytes(self.root.checksum)
             .to_hex()
             .to_string();
-        if self.layout_version != 19
+        if self.layout_version != 20
             || self.root_path
                 != format!(
-                    "global-cell-cards/v19/roots/{}/root-{checksum}.parquet",
+                    "global-cell-cards/v20/roots/{}/root-{checksum}.parquet",
                     &checksum[..2]
                 )
             || self.root.encoded_bytes == 0
@@ -2346,7 +2346,7 @@ impl GlobalCellCardAnnRef {
             || self.purge_epoch > self.leaf_epoch
         {
             return Err(BorsukError::InvalidStorage(
-                "V19 global cell-card reference is invalid".to_string(),
+                "V20 global cell-card reference is invalid".to_string(),
             ));
         }
         Ok(())
@@ -3149,12 +3149,12 @@ mod tests {
 
     use super::{
         CELL_CARD_GROUP_MAX_BYTES, CellCardGroupRef, CellCardGroupWriter, CellCardHeadRef,
-        CellCardPush, CellCardRef, CellCardRunRootRef, cell_card_block_rows, decode_cell_card_head,
-        decode_cell_card_run_root, encode_cell_card_group, encode_cell_card_run_root,
-        validate_exact_block_refs,
+        CellCardPush, CellCardRef, CellCardRunRootRef, GlobalCellCardAnnRef, cell_card_block_rows,
+        decode_cell_card_head, decode_cell_card_run_root, encode_cell_card_group,
+        encode_cell_card_run_root, validate_exact_block_refs,
     };
     use crate::{
-        VectorElementType,
+        BorsukError, VectorElementType,
         global_leaf::{GlobalLeafCodeInput, GlobalLeafPageInput, GlobalLeafRowInput},
         mutation::{MutationStamp, MutationVersion},
         record::RecordId,
@@ -3313,8 +3313,59 @@ mod tests {
     }
 
     #[test]
-    fn card_clustered_exact_plane_retires_the_v18_layout_marker() {
-        assert_eq!(super::CELL_CARD_LAYOUT, "cell-card-leaf-v19");
+    fn vector_locality_exact_plane_retires_the_v19_layout_marker() {
+        assert_eq!(super::CELL_CARD_LAYOUT, "cell-card-leaf-v20");
+    }
+
+    #[test]
+    fn v19_cell_card_reference_is_rejected_at_the_layout_boundary() {
+        let root = CellCardRunRootRef {
+            checksum: [7_u8; 32],
+            encoded_bytes: 128,
+        };
+        let checksum = blake3::Hash::from_bytes(root.checksum).to_hex().to_string();
+        let reference = GlobalCellCardAnnRef::new(
+            crate::global_leaf_run::GlobalCodebookRef::new(
+                "global/codebook.json".to_owned(),
+                "ab".repeat(32),
+                crate::metric::VectorMetric::Euclidean,
+                4,
+                VectorElementType::Float32,
+                4,
+                1,
+                1,
+                1,
+                0,
+                64,
+                128,
+            ),
+            format!(
+                "global-cell-cards/v20/roots/{}/root-{checksum}.parquet",
+                &checksum[..2]
+            ),
+            root,
+            1,
+            1,
+            256,
+            3,
+            64,
+            1,
+            0,
+        )
+        .unwrap();
+        let mut retired = serde_json::to_value(reference).unwrap();
+        retired["layout_version"] = serde_json::json!(19);
+        retired["root_path"] = serde_json::json!(format!(
+            "global-cell-cards/v19/roots/{}/root-{checksum}.parquet",
+            &checksum[..2]
+        ));
+        let retired: GlobalCellCardAnnRef = serde_json::from_value(retired).unwrap();
+
+        assert!(matches!(
+            retired.validate(),
+            Err(BorsukError::InvalidStorage(message))
+                if message.contains("V20 global cell-card reference is invalid")
+        ));
     }
 
     #[test]
@@ -3370,7 +3421,7 @@ mod tests {
                 .all(|block| block.rows == 32)
         );
         let path = encoded
-            .content_addressed_path("global-cell-cards/v19/groups")
+            .content_addressed_path("global-cell-cards/v20/groups")
             .unwrap();
         let (group, cards) = encoded.references(&path).unwrap();
         let ranked = cards[0]

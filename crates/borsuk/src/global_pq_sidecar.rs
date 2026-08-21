@@ -1970,11 +1970,11 @@ impl PreparedCellCardQuery<'_> {
             .into_iter()
             .map(|code| {
                 if code.len() != self.codebook.code_width {
-                    return invalid("V19 cell-card code width does not match its codebook");
+                    return invalid("V20 cell-card code width does not match its codebook");
                 }
                 let distance = self.codebook.quantizer.distance(&self.prepared, code)?;
                 if !distance.is_finite() {
-                    return invalid("V19 cell-card code distance is non-finite");
+                    return invalid("V20 cell-card code distance is non-finite");
                 }
                 Ok(distance)
             })
@@ -2967,7 +2967,7 @@ mod tests {
     }
 
     #[test]
-    fn v19_cell_card_query_prepares_once_and_scores_multiple_batches() {
+    fn v20_cell_card_query_prepares_once_and_scores_multiple_batches() {
         let descriptor = test_v12_codebook_descriptor();
         let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
         let resident = ResidentGlobalCodebook::load(descriptor).unwrap();

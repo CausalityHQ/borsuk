@@ -576,7 +576,7 @@ fn one_based_cell_card_ranks(ranked_root_indexes: &[usize]) -> Result<HashMap<us
         .collect::<HashMap<_, _>>();
     if ranks.len() != ranked_root_indexes.len() {
         return Err(BorsukError::InvalidStorage(
-            "V19 centroid ranking repeats a cell-card root index".to_string(),
+            "V20 centroid ranking repeats a cell-card root index".to_string(),
         ));
     }
     Ok(ranks)
@@ -1023,11 +1023,11 @@ pub struct ByteAdmissionStats {
     pub peak_bytes: u64,
     /// FIFO work units currently waiting for byte capacity.
     pub waiting: usize,
-    /// Permit acquisitions admitted since open. V19 takes a head and exact permit per query.
+    /// Permit acquisitions admitted since open. V20 takes a head and exact permit per query.
     pub admitted: u64,
     /// Aggregate time spent waiting for transient-memory admission.
     pub wait_micros: u64,
-    /// Permit acquisitions that waited. V19 may wait once in each of its two phases.
+    /// Permit acquisitions that waited. V20 may wait once in each of its two phases.
     pub wait_count: u64,
 }
 
@@ -18038,7 +18038,7 @@ impl BorsukIndex {
             SearchExecution {
                 report: SearchReport {
                     hits: Vec::new(),
-                    leaf_mode: "bounded-cell-card-v19".to_string(),
+                    leaf_mode: "bounded-cell-card-v20".to_string(),
                     termination_reason: reason,
                     recall_guarantee: RecallGuarantee::Degraded,
                     segments_total,
@@ -18205,13 +18205,13 @@ impl BorsukIndex {
                     .get(block.block.head_index)
                     .ok_or_else(|| {
                         BorsukError::InvalidStorage(
-                            "V19 exact block references an absent decoded head".to_string(),
+                            "V20 exact block references an absent decoded head".to_string(),
                         )
                     })?
                     .root_index;
                 let card_rank = *card_rank_by_root_index.get(&root_index).ok_or_else(|| {
                     BorsukError::InvalidStorage(
-                        "V19 exact block has no centroid-ranked card authority".to_string(),
+                        "V20 exact block has no centroid-ranked card authority".to_string(),
                     )
                 })?;
                 rows.extend(block.rows.into_iter().zip(block.block.row_distances).map(
@@ -18252,7 +18252,7 @@ impl BorsukIndex {
                         candidate.row.vector,
                         candidate.cell_card_rank.ok_or_else(|| {
                             BorsukError::InvalidStorage(
-                                "V19 exact candidate lacks its centroid card rank".to_string(),
+                                "V20 exact candidate lacks its centroid card rank".to_string(),
                             )
                         })?,
                     ))
@@ -18313,7 +18313,7 @@ impl BorsukIndex {
         Ok(Some(SearchExecution {
             report: SearchReport {
                 hits,
-                leaf_mode: "bounded-cell-card-v19".to_string(),
+                leaf_mode: "bounded-cell-card-v20".to_string(),
                 termination_reason,
                 recall_guarantee: RecallGuarantee::Degraded,
                 segments_total,
@@ -18404,7 +18404,7 @@ impl BorsukIndex {
                 report: SearchReport {
                     hits: Vec::new(),
                     leaf_mode: if cell_card_v14 {
-                        "bounded-cell-card-v19"
+                        "bounded-cell-card-v20"
                     } else {
                         "bounded-arrow-leaf-v13"
                     }
@@ -19387,14 +19387,14 @@ impl BorsukIndex {
                                 .expect("full cell-card writer is present")
                                 .finish()?;
                             let path =
-                                encoded.content_addressed_path("global-cell-cards/v19/groups")?;
+                                encoded.content_addressed_path("global-cell-cards/v20/groups")?;
                             self.storage
                                 .write_bytes_content_addressed(&path, &encoded.bytes)?;
                             cell_group_storage_bytes = cell_group_storage_bytes
                                 .checked_add(encoded.bytes.len() as u64)
                                 .ok_or_else(|| {
                                     BorsukError::InvalidStorage(
-                                        "V19 cell-card storage bytes overflow".into(),
+                                        "V20 cell-card storage bytes overflow".into(),
                                     )
                                 })?;
                             let (group, cards) = encoded.references(&path)?;
@@ -19407,7 +19407,7 @@ impl BorsukIndex {
                             )?;
                             if !matches!(next.try_push(page)?, CellCardPush::Accepted) {
                                 return Err(BorsukError::InvalidStorage(
-                                    "V19 cell-card page does not fit an empty group".into(),
+                                    "V20 cell-card page does not fit an empty group".into(),
                                 ));
                             }
                             cell_writer = Some(next);
@@ -19422,13 +19422,13 @@ impl BorsukIndex {
         })?;
         if let Some(writer) = cell_writer.take() {
             let encoded = writer.finish()?;
-            let path = encoded.content_addressed_path("global-cell-cards/v19/groups")?;
+            let path = encoded.content_addressed_path("global-cell-cards/v20/groups")?;
             self.storage
                 .write_bytes_content_addressed(&path, &encoded.bytes)?;
             cell_group_storage_bytes = cell_group_storage_bytes
                 .checked_add(encoded.bytes.len() as u64)
                 .ok_or_else(|| {
-                    BorsukError::InvalidStorage("V19 cell-card storage bytes overflow".into())
+                    BorsukError::InvalidStorage("V20 cell-card storage bytes overflow".into())
                 })?;
             let (group, cards) = encoded.references(&path)?;
             cell_groups.push(group);
@@ -19465,7 +19465,7 @@ impl BorsukIndex {
             .to_hex()
             .to_string();
         let root_path = format!(
-            "global-cell-cards/v19/roots/{}/root-{root_checksum}.parquet",
+            "global-cell-cards/v20/roots/{}/root-{root_checksum}.parquet",
             &root_checksum[..2]
         );
         self.storage
@@ -26496,12 +26496,42 @@ struct GlobalLeafPartitionRow<'a> {
     source_ordinal: usize,
 }
 
+#[cfg(test)]
+thread_local! {
+    static GLOBAL_LEAF_LOCALITY_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GLOBAL_LEAF_LOCALITY_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn global_leaf_partition_order(
     rows: &[GlobalLeafPartitionRow<'_>],
     code_width: usize,
     exact_row_bytes: usize,
     use_code_space: bool,
 ) -> Result<Vec<Vec<usize>>> {
+    let max_rows = global_leaf_partition_max_rows(rows, code_width, exact_row_bytes)?;
+    let mut by_cell = BTreeMap::<u32, Vec<usize>>::new();
+    for (index, row) in rows.iter().enumerate() {
+        by_cell.entry(row.cell_index).or_default().push(index);
+    }
+    let mut leaves = Vec::new();
+    for mut cell_rows in by_cell.into_values() {
+        if use_code_space {
+            partition_global_leaf_code_rows(rows, &mut cell_rows, max_rows, &mut leaves);
+        } else {
+            cell_rows.sort_unstable_by(|&left, &right| {
+                global_leaf_partition_row_order(rows, left, right)
+            });
+            leaves.extend(cell_rows.chunks(max_rows).map(<[usize]>::to_vec));
+        }
+    }
+    Ok(leaves)
+}
+
+fn global_leaf_partition_max_rows(
+    rows: &[GlobalLeafPartitionRow<'_>],
+    code_width: usize,
+    exact_row_bytes: usize,
+) -> Result<usize> {
     if code_width == 0 {
         return Err(BorsukError::InvalidStorage(
             "global leaf code width must be positive".to_string(),
@@ -26522,29 +26552,49 @@ fn global_leaf_partition_order(
             "global leaf rows disagree on code width".to_string(),
         ));
     }
-    // V17 publishes independently authenticated 32-row ranking microtiles per physical
-    // locality tile for every scan codec. Code-space codecs choose membership
-    // recursively; other codecs retain canonical ID order, but neither may
-    // create a page that the cell-card writer must split into multiple blocks.
+    // V20 publishes independently authenticated ranking microtiles per physical
+    // locality tile for every scan codec. Code-space and raw-vector codecs choose
+    // membership geometrically, but neither may create a page that the cell-card
+    // writer must split into multiple pages.
     let max_rows = (GLOBAL_LEAF_VECTOR_PAYLOAD_BYTES / exact_row_bytes).min(128);
+    Ok(max_rows)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn global_leaf_partition_order_with_vector_locality(
+    rows: &[GlobalLeafPartitionRow<'_>],
+    exact_rows: &[&[u8]],
+    code_width: usize,
+    exact_row_bytes: usize,
+    dimensions: usize,
+    element_type: crate::record::VectorElementType,
+    normalize: bool,
+    use_code_space: bool,
+) -> Result<Vec<Vec<usize>>> {
+    if use_code_space {
+        return global_leaf_partition_order(rows, code_width, exact_row_bytes, true);
+    }
+    let max_rows = global_leaf_partition_max_rows(rows, code_width, exact_row_bytes)?;
+    let microtile_rows = crate::global_cell_card::cell_card_block_rows(dimensions, element_type)?;
+    // `rows` is one bounded spool wave, not a corpus-sized cell allocation.
+    // Cards from every wave still compete in the same authenticated centroid
+    // ranking, so keeping this boundary preserves small-machine build memory.
     let mut by_cell = BTreeMap::<u32, Vec<usize>>::new();
     for (index, row) in rows.iter().enumerate() {
         by_cell.entry(row.cell_index).or_default().push(index);
     }
     let mut leaves = Vec::new();
-    for mut cell_rows in by_cell.into_values() {
-        if use_code_space {
-            partition_global_leaf_code_rows(rows, &mut cell_rows, max_rows, &mut leaves);
-        } else {
-            cell_rows.sort_unstable_by(|&left, &right| {
-                rows[left]
-                    .record_id
-                    .cmp(rows[right].record_id)
-                    .then_with(|| rows[left].source_ordinal.cmp(&rows[right].source_ordinal))
-                    .then_with(|| rows[left].code.cmp(rows[right].code))
-            });
-            leaves.extend(cell_rows.chunks(max_rows).map(<[usize]>::to_vec));
-        }
+    for cell_rows in by_cell.into_values() {
+        leaves.extend(partition_global_leaf_vector_rows(
+            rows,
+            &cell_rows,
+            exact_rows,
+            dimensions,
+            element_type,
+            normalize,
+            max_rows,
+            microtile_rows,
+        )?);
     }
     Ok(leaves)
 }
@@ -26616,6 +26666,138 @@ fn partition_global_leaf_code_rows(
     partition_global_leaf_code_rows(rows, right, max_rows, leaves);
 }
 
+fn global_leaf_partition_row_order(
+    rows: &[GlobalLeafPartitionRow<'_>],
+    left: usize,
+    right: usize,
+) -> std::cmp::Ordering {
+    rows[left]
+        .record_id
+        .cmp(rows[right].record_id)
+        .then_with(|| rows[left].source_ordinal.cmp(&rows[right].source_ordinal))
+        .then_with(|| rows[left].code.cmp(rows[right].code))
+}
+
+fn global_leaf_locality_geometry(
+    exact: &[u8],
+    dimensions: usize,
+    element_type: crate::record::VectorElementType,
+    normalize: bool,
+) -> Result<Vec<f32>> {
+    #[cfg(test)]
+    GLOBAL_LEAF_LOCALITY_DECODES.set(GLOBAL_LEAF_LOCALITY_DECODES.get().saturating_add(1));
+    let vector = element_type.decode_fixed_width(exact, dimensions)?;
+    if normalize {
+        Ok(crate::metric::unit_l2_normalized(&vector))
+    } else {
+        Ok(vector)
+    }
+}
+
+fn sort_global_leaf_rows_by_two_pivot_locality(
+    rows: &[GlobalLeafPartitionRow<'_>],
+    cell_rows: &mut [usize],
+    exact_rows: &[&[u8]],
+    dimensions: usize,
+    element_type: crate::record::VectorElementType,
+    normalize: bool,
+) -> Result<()> {
+    if cell_rows.len() <= 1 {
+        return Ok(());
+    }
+    #[cfg(test)]
+    GLOBAL_LEAF_LOCALITY_PROJECTIONS.set(GLOBAL_LEAF_LOCALITY_PROJECTIONS.get().saturating_add(1));
+    let first = *cell_rows
+        .iter()
+        .min_by(|&&left, &&right| global_leaf_partition_row_order(rows, left, right))
+        .expect("nonempty locality partition");
+    let first_geometry =
+        global_leaf_locality_geometry(exact_rows[first], dimensions, element_type, normalize)?;
+    let mut second = first;
+    let mut second_distance = f32::NEG_INFINITY;
+    for &row in cell_rows.iter() {
+        let geometry =
+            global_leaf_locality_geometry(exact_rows[row], dimensions, element_type, normalize)?;
+        let distance = squared_distance(&first_geometry, &geometry);
+        if distance.total_cmp(&second_distance).is_gt()
+            || (distance.total_cmp(&second_distance).is_eq()
+                && global_leaf_partition_row_order(rows, row, second).is_lt())
+        {
+            second = row;
+            second_distance = distance;
+        }
+    }
+    let second_geometry =
+        global_leaf_locality_geometry(exact_rows[second], dimensions, element_type, normalize)?;
+    let projection_axis = second_geometry
+        .iter()
+        .zip(&first_geometry)
+        .map(|(second, first)| second - first)
+        .collect::<Vec<_>>();
+    let mut scored = cell_rows
+        .iter()
+        .copied()
+        .map(|row| {
+            let mut geometry = global_leaf_locality_geometry(
+                exact_rows[row],
+                dimensions,
+                element_type,
+                normalize,
+            )?;
+            for (value, first) in geometry.iter_mut().zip(&first_geometry) {
+                *value -= first;
+            }
+            Ok((row, crate::metric::dot_product(&geometry, &projection_axis)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    scored.sort_unstable_by(|(left_row, left_score), (right_row, right_score)| {
+        left_score
+            .total_cmp(right_score)
+            .then_with(|| global_leaf_partition_row_order(rows, *left_row, *right_row))
+    });
+    for (target, (row, _)) in cell_rows.iter_mut().zip(scored) {
+        *target = row;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn partition_global_leaf_vector_rows(
+    rows: &[GlobalLeafPartitionRow<'_>],
+    cell_rows: &[usize],
+    exact_rows: &[&[u8]],
+    dimensions: usize,
+    element_type: crate::record::VectorElementType,
+    normalize: bool,
+    max_rows: usize,
+    microtile_rows: usize,
+) -> Result<Vec<Vec<usize>>> {
+    if exact_rows.len() != rows.len() {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf exact locality rows disagree on row count".to_string(),
+        ));
+    }
+    if max_rows == 0 || microtile_rows == 0 || microtile_rows > max_rows {
+        return Err(BorsukError::InvalidStorage(
+            "global leaf locality row bounds are invalid".to_string(),
+        ));
+    }
+    let mut ordered = cell_rows.to_vec();
+    sort_global_leaf_rows_by_two_pivot_locality(
+        rows,
+        &mut ordered,
+        exact_rows,
+        dimensions,
+        element_type,
+        normalize,
+    )?;
+    // One scalar projection orders the complete bounded cell chunk. Cutting
+    // that order only at full page boundaries keeps build work and scratch
+    // memory linear while minimizing page and exact-block request slots. A
+    // card may still end in a short block when its row cap is not block-aligned.
+    Ok(ordered.chunks(max_rows).map(<[usize]>::to_vec).collect())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_global_leaf_pages(
     pending: &mut [PendingGlobalPqChunk],
@@ -26662,8 +26844,27 @@ fn build_global_leaf_pages(
             sources.push((chunk_index, local_row));
         }
     }
-    let partitions =
-        global_leaf_partition_order(&partition_rows, code_width, exact_row_bytes, use_code_space)?;
+    let exact_rows = if use_code_space {
+        Vec::new()
+    } else {
+        sources
+            .iter()
+            .map(|&(chunk_index, local_row)| {
+                let start = local_row * exact_row_bytes;
+                &pending[chunk_index].chunk.exact_bytes[start..start + exact_row_bytes]
+            })
+            .collect::<Vec<_>>()
+    };
+    let partitions = global_leaf_partition_order_with_vector_locality(
+        &partition_rows,
+        &exact_rows,
+        code_width,
+        exact_row_bytes,
+        dimensions,
+        element_type,
+        normalize,
+        use_code_space,
+    )?;
     let mut pages = Vec::new();
     for partition in partitions {
         let cell_index = partition_rows[partition[0]].cell_index;
@@ -27710,8 +27911,16 @@ fn is_global_pq_path(path: &str) -> bool {
 }
 
 fn is_global_cell_card_path(path: &str) -> bool {
-    (path.starts_with("global-cell-cards/v19/groups/") && path.ends_with(".arrow"))
-        || (path.starts_with("global-cell-cards/v19/roots/") && path.ends_with(".parquet"))
+    let Some(rest) = path.strip_prefix("global-cell-cards/v") else {
+        return false;
+    };
+    let Some((generation, tail)) = rest.split_once('/') else {
+        return false;
+    };
+    !generation.is_empty()
+        && generation.bytes().all(|byte| byte.is_ascii_digit())
+        && ((tail.starts_with("groups/") && path.ends_with(".arrow"))
+            || (tail.starts_with("roots/") && path.ends_with(".parquet")))
 }
 
 /// Whether the filter's shape could ever be answered by the per-segment index
@@ -30197,7 +30406,7 @@ mod tests {
     }
 
     #[test]
-    fn v19_searches_release_head_admission_before_exact_admission() {
+    fn v20_searches_release_head_admission_before_exact_admission() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -30255,7 +30464,7 @@ mod tests {
                 .recv_timeout(Duration::from_secs(30))
                 .unwrap()
                 .unwrap();
-            assert_eq!(report.leaf_mode, "bounded-cell-card-v19");
+            assert_eq!(report.leaf_mode, "bounded-cell-card-v20");
         }
         for worker in workers {
             worker.join().unwrap();
@@ -31090,7 +31299,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.hits.len(), 2);
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20");
         assert!(report.wal_records_examined > 0);
         assert!(report.elapsed_ms >= 100);
         assert_eq!(
@@ -36586,6 +36795,374 @@ mod tests {
     }
 
     #[test]
+    fn turboquant_cell_rows_are_ordered_by_vector_locality_not_record_id() {
+        const CLUSTERS: usize = 4;
+        const ROWS_PER_CLUSTER: usize = 32;
+        let ids = (0..CLUSTERS * ROWS_PER_CLUSTER)
+            .map(|ordinal| {
+                let cluster = ordinal / ROWS_PER_CLUSTER;
+                let within = ordinal % ROWS_PER_CLUSTER;
+                // Lexicographic ID order deliberately interleaves all clusters.
+                format!("row-{within:02}-cluster-{cluster}")
+            })
+            .collect::<Vec<_>>();
+        let exact = (0..CLUSTERS * ROWS_PER_CLUSTER)
+            .map(|ordinal| {
+                let cluster = ordinal / ROWS_PER_CLUSTER;
+                let within = ordinal % ROWS_PER_CLUSTER;
+                [cluster as f32 * 1_000.0, within as f32 / 1_000.0]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let codes = vec![[0_u8; 2]; CLUSTERS * ROWS_PER_CLUSTER];
+        let rows = (0..CLUSTERS * ROWS_PER_CLUSTER)
+            .map(|ordinal| GlobalLeafPartitionRow {
+                cell_index: 7,
+                code: &codes[ordinal],
+                record_id: ids[ordinal].as_bytes(),
+                source_ordinal: ordinal,
+            })
+            .collect::<Vec<_>>();
+        let exact = exact.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let source = (0..rows.len()).collect::<Vec<_>>();
+
+        let ordered = partition_global_leaf_vector_rows(
+            &rows,
+            &source,
+            &exact,
+            2,
+            crate::VectorElementType::Float32,
+            false,
+            128,
+            32,
+        )
+        .unwrap();
+
+        assert_eq!(ordered.len(), 1);
+        assert_eq!(ordered[0].len(), CLUSTERS * ROWS_PER_CLUSTER);
+        for block in ordered[0].chunks_exact(ROWS_PER_CLUSTER) {
+            let cluster = block[0] / ROWS_PER_CLUSTER;
+            assert!(
+                block
+                    .iter()
+                    .all(|ordinal| ordinal / ROWS_PER_CLUSTER == cluster),
+                "exact block mixed geometric clusters: {block:?}"
+            );
+        }
+        let mut covered = ordered[0].clone();
+        covered.sort_unstable();
+        assert_eq!(covered, source);
+
+        let reversed = source.iter().rev().copied().collect::<Vec<_>>();
+        assert_eq!(
+            ordered,
+            partition_global_leaf_vector_rows(
+                &rows,
+                &reversed,
+                &exact,
+                2,
+                crate::VectorElementType::Float32,
+                false,
+                128,
+                32,
+            )
+            .unwrap(),
+            "input/chunk order must not change durable V20 locality"
+        );
+    }
+
+    #[test]
+    fn raw_vector_locality_centers_projection_before_f32_ranking() {
+        const OFFSET: f32 = 10_000_000.0;
+        let ids = ["a-first", "z-one", "c-two", "x-three", "y-last"];
+        let exact = (0..ids.len())
+            .map(|ordinal| {
+                (0..4)
+                    .map(|dimension| OFFSET + f32::from(dimension < ordinal))
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let codes = [[0_u8; 2]; 5];
+        let rows = ids
+            .iter()
+            .enumerate()
+            .map(|(ordinal, id)| GlobalLeafPartitionRow {
+                cell_index: 0,
+                code: &codes[ordinal],
+                record_id: id.as_bytes(),
+                source_ordinal: ordinal,
+            })
+            .collect::<Vec<_>>();
+        let exact = exact.iter().map(Vec::as_slice).collect::<Vec<_>>();
+
+        let cards = global_leaf_partition_order_with_vector_locality(
+            &rows,
+            &exact,
+            2,
+            16,
+            4,
+            crate::VectorElementType::Float32,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(cards, [vec![0, 1, 2, 3, 4]]);
+    }
+
+    #[test]
+    fn turboquant_partition_path_uses_raw_vector_locality() {
+        const ROWS: usize = 64;
+        let ids = (0..ROWS)
+            .map(|ordinal| format!("id-{:02}-cluster-{}", ordinal % 32, ordinal / 32))
+            .collect::<Vec<_>>();
+        let exact = (0..ROWS)
+            .map(|ordinal| {
+                [
+                    ordinal.div_euclid(32) as f32 * 10_000.0,
+                    (ordinal % 32) as f32,
+                ]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let codes = [[0_u8; 2]; ROWS];
+        let rows = (0..ROWS)
+            .map(|ordinal| GlobalLeafPartitionRow {
+                cell_index: 3,
+                code: &codes[ordinal],
+                record_id: ids[ordinal].as_bytes(),
+                source_ordinal: ordinal,
+            })
+            .collect::<Vec<_>>();
+        let exact = exact.iter().map(Vec::as_slice).collect::<Vec<_>>();
+
+        let cards = global_leaf_partition_order_with_vector_locality(
+            &rows,
+            &exact,
+            2,
+            8,
+            2,
+            crate::VectorElementType::Float32,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].len(), ROWS);
+        for block in cards[0].chunks_exact(32) {
+            let cluster = block[0] / 32;
+            assert!(block.iter().all(|ordinal| ordinal / 32 == cluster));
+        }
+    }
+
+    #[test]
+    fn raw_vector_locality_reaches_exact_blocks_across_multiple_cards() {
+        const CLUSTERS: usize = 8;
+        const ROWS_PER_CLUSTER: usize = 32;
+        const ROWS: usize = CLUSTERS * ROWS_PER_CLUSTER;
+        let ids = (0..ROWS)
+            .map(|ordinal| {
+                format!(
+                    "id-{:02}-cluster-{}",
+                    ordinal % ROWS_PER_CLUSTER,
+                    ordinal / ROWS_PER_CLUSTER
+                )
+            })
+            .collect::<Vec<_>>();
+        let exact = (0..ROWS)
+            .map(|ordinal| {
+                [
+                    ordinal.div_euclid(ROWS_PER_CLUSTER) as f32 * 10_000.0,
+                    (ordinal % ROWS_PER_CLUSTER) as f32 / 1_000.0,
+                ]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let codes = [[0_u8; 2]; ROWS];
+        let rows = (0..ROWS)
+            .map(|ordinal| GlobalLeafPartitionRow {
+                cell_index: 5,
+                code: &codes[ordinal],
+                record_id: ids[ordinal].as_bytes(),
+                source_ordinal: ordinal,
+            })
+            .collect::<Vec<_>>();
+        let exact = exact.iter().map(Vec::as_slice).collect::<Vec<_>>();
+
+        let cards = global_leaf_partition_order_with_vector_locality(
+            &rows,
+            &exact,
+            2,
+            8,
+            2,
+            crate::VectorElementType::Float32,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(cards.len(), 2);
+        assert!(cards.iter().all(|card| card.len() == 128));
+        for block in cards
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>()
+            .chunks_exact(32)
+        {
+            let cluster = block[0] / ROWS_PER_CLUSTER;
+            assert!(
+                block
+                    .iter()
+                    .all(|ordinal| ordinal / ROWS_PER_CLUSTER == cluster),
+                "V20 exact block mixed geometric clusters: {block:?}"
+            );
+        }
+        let mut covered = cards.into_iter().flatten().collect::<Vec<_>>();
+        covered.sort_unstable();
+        assert_eq!(covered, (0..ROWS).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn raw_vector_locality_preserves_minimum_block_count_when_caps_align() {
+        const ROWS: usize = 388;
+        const CARD_ROWS: usize = 128;
+        const BLOCK_ROWS: usize = 32;
+        let ids = (0..ROWS)
+            .map(|ordinal| format!("row-{ordinal:04}"))
+            .collect::<Vec<_>>();
+        let exact = (0..ROWS)
+            .map(|ordinal| {
+                [ordinal as f32, (ordinal % BLOCK_ROWS) as f32]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let codes = [[0_u8; 2]; ROWS];
+        let rows = (0..ROWS)
+            .map(|ordinal| GlobalLeafPartitionRow {
+                cell_index: 9,
+                code: &codes[ordinal],
+                record_id: ids[ordinal].as_bytes(),
+                source_ordinal: ordinal,
+            })
+            .collect::<Vec<_>>();
+        let exact = exact.iter().map(Vec::as_slice).collect::<Vec<_>>();
+
+        let cards = global_leaf_partition_order_with_vector_locality(
+            &rows,
+            &exact,
+            2,
+            8,
+            2,
+            crate::VectorElementType::Float32,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            cards.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![CARD_ROWS, CARD_ROWS, CARD_ROWS, ROWS % CARD_ROWS]
+        );
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card.len().div_ceil(BLOCK_ROWS))
+                .sum::<usize>(),
+            ROWS.div_ceil(BLOCK_ROWS),
+            "locality ordering must not consume extra exact-request budget slots"
+        );
+    }
+
+    #[test]
+    fn raw_vector_locality_keeps_decode_work_linear_and_bounded() {
+        const ROWS: usize = 64;
+        let ids = (0..ROWS)
+            .map(|ordinal| format!("identical-{ordinal:03}"))
+            .collect::<Vec<_>>();
+        let exact = [[7_u8, 7, 7, 7]; ROWS];
+        let codes = [[0_u8; 2]; ROWS];
+        let rows = (0..ROWS)
+            .map(|ordinal| GlobalLeafPartitionRow {
+                cell_index: u32::from(ordinal >= ROWS / 2),
+                code: &codes[ordinal],
+                record_id: ids[ordinal].as_bytes(),
+                source_ordinal: ordinal,
+            })
+            .collect::<Vec<_>>();
+        let exact = exact.iter().map(<[u8; 4]>::as_slice).collect::<Vec<_>>();
+        GLOBAL_LEAF_LOCALITY_DECODES.set(0);
+
+        let cards = global_leaf_partition_order_with_vector_locality(
+            &rows,
+            &exact,
+            2,
+            4,
+            4,
+            crate::VectorElementType::Int8,
+            true,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(GLOBAL_LEAF_LOCALITY_DECODES.get(), 2 * ROWS + 4);
+        assert_eq!(cards.iter().map(Vec::len).sum::<usize>(), ROWS);
+        assert_eq!(cards.len(), 2);
+    }
+
+    #[test]
+    fn raw_vector_locality_uses_one_linear_projection_per_cell() {
+        const ROWS: usize = 256;
+        let ids = (0..ROWS)
+            .map(|ordinal| format!("linear-{ordinal:04}"))
+            .collect::<Vec<_>>();
+        let exact = (0..ROWS)
+            .map(|ordinal| {
+                [ordinal as f32, (ordinal % 17) as f32]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let codes = [[0_u8; 2]; ROWS];
+        let rows = (0..ROWS)
+            .map(|ordinal| GlobalLeafPartitionRow {
+                cell_index: 0,
+                code: &codes[ordinal],
+                record_id: ids[ordinal].as_bytes(),
+                source_ordinal: ordinal,
+            })
+            .collect::<Vec<_>>();
+        let exact = exact.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        GLOBAL_LEAF_LOCALITY_PROJECTIONS.set(0);
+
+        let cards = global_leaf_partition_order_with_vector_locality(
+            &rows,
+            &exact,
+            2,
+            8,
+            2,
+            crate::VectorElementType::Float32,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(GLOBAL_LEAF_LOCALITY_PROJECTIONS.get(), 1);
+        assert_eq!(cards.iter().map(Vec::len).collect::<Vec<_>>(), [128, 128]);
+    }
+
+    #[test]
     fn global_leaf_partition_rejects_one_exact_row_above_payload_ceiling() {
         let error = global_leaf_partition_order(
             &[GlobalLeafPartitionRow {
@@ -36634,7 +37211,7 @@ mod tests {
     }
 
     #[test]
-    fn non_pq_partition_also_emits_one_exact_block_per_v19_microtile() {
+    fn non_pq_partition_also_emits_one_exact_block_per_v20_microtile() {
         let codes = (0_u16..129)
             .map(|ordinal| ordinal.to_le_bytes())
             .collect::<Vec<_>>();
@@ -36889,8 +37466,13 @@ mod tests {
         let live_v14_paths = std::iter::once(reference.root_path().to_string())
             .chain(root.groups().iter().map(|group| group.path.clone()))
             .collect::<Vec<_>>();
-        let orphan = "global-cell-cards/v19/groups/orphan.arrow";
+        let orphan = "global-cell-cards/v20/groups/orphan.arrow";
+        let retired_orphan = "global-cell-cards/v19/groups/orphan.arrow";
         index.storage.write_bytes(orphan, b"orphan").unwrap();
+        index
+            .storage
+            .write_bytes(retired_orphan, b"retired-orphan")
+            .unwrap();
         let gc = index
             .gc_obsolete_segments(GarbageCollectionOptions {
                 dry_run: true,
@@ -36898,6 +37480,10 @@ mod tests {
             })
             .unwrap();
         assert!(gc.candidates.iter().any(|path| path == orphan));
+        assert!(
+            gc.candidates.iter().any(|path| path == retired_orphan),
+            "retired cell-card generations must remain visible to GC"
+        );
         assert!(
             live_v14_paths
                 .iter()
@@ -36922,7 +37508,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("v14-row-37"));
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.global_leaf_directory_reads, 0);
         assert_eq!(report.global_leaf_continuations, 1);
@@ -37044,7 +37630,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v19_reuses_stable_code_planes_after_disk_cache_reset() {
+    fn resident_global_v20_reuses_stable_code_planes_after_disk_cache_reset() {
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
@@ -37116,7 +37702,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v19_reports_one_based_deepest_winning_card_rank() {
+    fn resident_global_v20_reports_one_based_deepest_winning_card_rank() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut builder = BorsukIndex::create(IndexConfig {
@@ -37160,7 +37746,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
         assert!(
             report.global_leaf_deepest_winning_card_rank >= 1,
             "{report:?}"
@@ -37242,7 +37828,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
         assert_eq!(report.global_leaf_code_bytes, 0, "{report:?}");
         assert_eq!(report.global_leaf_code_requests, 0, "{report:?}");
         assert!(report.decoded_cache_hits > 0, "{report:?}");
@@ -37358,7 +37944,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v19_reuses_card_code_slices_without_full_plane_promotion() {
+    fn resident_global_v20_reuses_card_code_slices_without_full_plane_promotion() {
         let dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
@@ -37500,7 +38086,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from("v14-mvcc-1"));
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.global_leaf_waves, 2);
@@ -37582,7 +38168,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v19_base_routes_and_exact_scores_without_segment_payloads() {
+    fn resident_global_v20_base_routes_and_exact_scores_without_segment_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -37631,7 +38217,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(report.hits[0].id, RecordId::from("row-37"));
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.segments_skipped, report.segments_total);
         assert_eq!(report.global_scan_chunks_searched, 0);
@@ -37703,7 +38289,7 @@ mod tests {
             .with_max_segments(4)
             .with_max_candidates_per_segment(256);
         let report = index.search_with_report(query, options).unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20");
         assert_eq!(report.segments_searched, 0);
         assert_eq!(report.global_leaf_waves, 2);
         assert_eq!(report.hits[0].id, RecordId::from("nprobe-self-173"));
@@ -37735,7 +38321,7 @@ mod tests {
         reference.validate().unwrap();
 
         let stats = index.stats();
-        assert_eq!(stats.global_ann_layout_version, Some(19));
+        assert_eq!(stats.global_ann_layout_version, Some(20));
         assert_eq!(
             stats.global_ann_codebook_checksum.as_deref(),
             Some(reference.codebook().descriptor_checksum())
@@ -38385,7 +38971,7 @@ mod tests {
         assert_eq!(production.get(b"missing"), None);
     }
     #[test]
-    fn resident_global_v19_dispatch_accepts_only_qualified_page_budgets() {
+    fn resident_global_v20_dispatch_accepts_only_qualified_page_budgets() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -38417,7 +39003,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                report.leaf_mode, "bounded-cell-card-v19",
+                report.leaf_mode, "bounded-cell-card-v20",
                 "qualified page budget {budget} did not dispatch V12"
             );
             assert!((1..=GLOBAL_LEAF_QUERY_WAVE_PAGES).contains(&report.global_leaf_pages_read));
@@ -38453,7 +39039,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v19_exact_request_budget_tracks_qualified_page_budget() {
+    fn resident_global_v20_exact_request_budget_tracks_qualified_page_budget() {
         assert_eq!(global_cell_card_exact_request_budget(4), 32);
         assert_eq!(global_cell_card_exact_request_budget(8), 32);
         assert_eq!(global_cell_card_exact_request_budget(16), 32);
@@ -38462,12 +39048,12 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v19_scores_all_300_resident_cards_at_page_budget_64() {
+    fn resident_global_v20_scores_all_300_resident_cards_at_page_budget_64() {
         assert_eq!(global_cell_card_head_card_budget(64, 300), 300);
     }
 
     #[test]
-    fn resident_global_v19_bounds_lossless_rerank_independently_of_io_width() {
+    fn resident_global_v20_bounds_lossless_rerank_independently_of_io_width() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -38504,7 +39090,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20");
         assert_eq!(report.hits.len(), 10, "{report:?}");
         assert_eq!(report.hits[0].id.as_bytes(), b"row-0", "{report:?}");
         assert!(
@@ -38602,7 +39188,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v19_exact_score_ceiling_keeps_best_approximate_rows() {
+    fn resident_global_v20_exact_score_ceiling_keeps_best_approximate_rows() {
         let mut candidates = vec![(4.0_f32, "d"), (1.0, "a"), (3.0, "c"), (2.0, "b")];
         truncate_cell_card_exact_candidates(&mut candidates, 2);
         assert_eq!(candidates, [(1.0, "a"), (2.0, "b")]);
@@ -38664,7 +39250,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20");
         assert!(
             report.global_leaf_pages_read > 1,
             "V12 stopped after its first page found k live rows instead of spending the bounded recall budget"
@@ -38714,7 +39300,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v19_scores_the_bounded_row_wave_after_mvcc_suppression() {
+    fn resident_global_v20_scores_the_bounded_row_wave_after_mvcc_suppression() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let suffix = "x".repeat(100 * 1024);
@@ -38756,7 +39342,7 @@ mod tests {
                 SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
             )
             .unwrap();
-        assert_eq!(report.leaf_mode, "bounded-cell-card-v19", "{report:?}");
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from(ids[1].clone()));
         assert_eq!(report.global_leaf_continuations, 1, "{report:?}");
         assert_eq!(report.global_leaf_waves, 2);
@@ -38805,7 +39391,7 @@ mod tests {
         // prefix, but not the complete exact wave. The query must return the
         // affordable prefix on the V17 path instead of starting a second
         // storage path that can spend the caller's cap again.
-        assert_eq!(fallback_complete.leaf_mode, "bounded-cell-card-v19");
+        assert_eq!(fallback_complete.leaf_mode, "bounded-cell-card-v20");
         assert!((1..=4).contains(&fallback_complete.global_leaf_pages_read));
         assert_eq!(fallback_complete.global_leaf_waves, 2);
         assert!(fallback_complete.global_leaf_code_pages_read > 0);
@@ -40988,7 +41574,7 @@ fn v13_block_budget_can_return_four_times_k_rows() {
 }
 
 #[test]
-fn v19_stable_code_planes_keep_each_backing_range_bounded() {
+fn v20_stable_code_planes_keep_each_backing_range_bounded() {
     let end = 5 * 1024 * 1024 + 17;
     let ranges = bounded_cell_card_plane_ranges(11, 11 + end).unwrap();
     assert_eq!(ranges.len(), 2);
@@ -41002,7 +41588,7 @@ fn v19_stable_code_planes_keep_each_backing_range_bounded() {
 }
 
 #[test]
-fn v19_large_stable_planes_require_a_retained_cache() {
+fn v20_large_stable_planes_require_a_retained_cache() {
     assert_eq!(
         cell_card_plane_promotion_ceiling(false),
         CELL_CARD_RANGE_READ_MAX_BYTES

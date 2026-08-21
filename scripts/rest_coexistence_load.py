@@ -254,9 +254,9 @@ def evaluate_phase(
         if recall is None or float(recall) < 0.95:
             failures.append(f"vector recall@10 {recall} is below 0.95")
         engines = search.get("engines")
-        if engines != ["bounded-cell-card-v19"]:
+        if engines != ["bounded-cell-card-v20"]:
             failures.append(
-                "vector engine must be exactly bounded-cell-card-v19; "
+                "vector engine must be exactly bounded-cell-card-v20; "
                 f"observed {engines}"
             )
         if phase == "mixed-overload" and rejected == 0:
