@@ -2,11 +2,16 @@
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
-if [[ "$#" -ne 1 || ( "$1" != "--dry-run" && "$1" != "--stage-sift" && "$1" != "--build-sift" && "$1" != "--read-recall-sift" && "$1" != "--read-concurrency-sift" ) ]]; then
+if [[ "$#" -eq 2 && "$1" == "--stage-dataset" && -n "$2" ]]; then
+  mode="$1"
+  stage_dataset="$2"
+elif [[ "$#" -eq 1 && ( "$1" == "--dry-run" || "$1" == "--build-sift" || "$1" == "--read-recall-sift" || "$1" == "--read-concurrency-sift" ) ]]; then
+  mode="$1"
+else
   printf 'Publication V3 paid launch is unavailable until the AWS execution plan is implemented and reviewed\n' >&2
+  printf 'usage: %s --dry-run|--build-sift|--read-recall-sift|--read-concurrency-sift|--stage-dataset <manifest-dataset-id>\n' "$0" >&2
   exit 2
 fi
-mode="$1"
 
 cd "$(dirname "$0")/.."
 
@@ -93,12 +98,17 @@ if [[ "$paid_ready" == "true" ]]; then
   structural_replay="structurally-valid"
 fi
 
-if [[ "$mode" == "--stage-sift" ]]; then
+if [[ "$mode" == "--stage-dataset" ]]; then
+  if ! python3 -c 'import json,sys; sys.exit(0 if sys.argv[2] in {job["dataset_id"] for job in json.load(open(sys.argv[1]))["jobs"]} else 1)' \
+    "$staging_plan" "$stage_dataset"; then
+    printf 'Publication V3 stage dataset %s is not an unstaged manifest dataset\n' "$stage_dataset" >&2
+    exit 2
+  fi
   controller="${BORSUK_PUBLICATION_V3_CONTROLLER:-scripts/publication_v3_controller.py}"
   python3 "$controller" stage \
     --manifest "$manifest" \
     --source-archive "$archive" \
-    --dataset sift-128 \
+    --dataset "$stage_dataset" \
     --profile "${AWS_PROFILE:-causality}" \
     --image-id "${BORSUK_PUBLICATION_V3_AMI_ID:-ami-07bcecd13a160173f}" \
     --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \

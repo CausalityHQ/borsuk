@@ -144,7 +144,9 @@ class LaunchAwsPublicationV3Tests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("delivered to origin/main", completed.stderr)
 
-    def test_stage_sift_passes_frozen_archive_and_manifest_to_controller(self) -> None:
+    def test_stage_dataset_passes_requested_id_and_frozen_inputs_to_controller(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             repository = temp / "repository"
@@ -160,14 +162,19 @@ archive_path = pathlib.Path(sys.argv[sys.argv.index('--source-archive') + 1])
 manifest = json.loads(manifest_path.read_text())
 assert manifest['source']['state'] == 'frozen'
 assert manifest['source']['archive_sha256'] == hashlib.sha256(archive_path.read_bytes()).hexdigest()
-assert sys.argv[sys.argv.index('--dataset') + 1] == 'sift-128'
-print(json.dumps({'dataset_id':'sift-128','attempt':4}, sort_keys=True))
+assert sys.argv[sys.argv.index('--dataset') + 1] == 'cohere-large-10m-768'
+print(json.dumps({'dataset_id':'cohere-large-10m-768','attempt':1}, sort_keys=True))
 """,
                 encoding="utf-8",
             )
             fake.chmod(0o755)
             completed = subprocess.run(
-                ["bash", "scripts/launch_aws_publication_v3.sh", "--stage-sift"],
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--stage-dataset",
+                    "cohere-large-10m-768",
+                ],
                 cwd=repository,
                 env={
                     **os.environ,
@@ -177,7 +184,88 @@ print(json.dumps({'dataset_id':'sift-128','attempt':4}, sort_keys=True))
                 text=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(json.loads(completed.stdout)["dataset_id"], "sift-128")
+            self.assertEqual(
+                json.loads(completed.stdout)["dataset_id"], "cohere-large-10m-768"
+            )
+
+    def test_stage_dataset_rejects_unknown_id_before_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            repository = temp / "repository"
+            repository.mkdir()
+            make_clean_repository(repository)
+            fake = temp / "controller.py"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport sys\n"
+                "print('CONTROLLER_WAS_CALLED', file=sys.stderr)\n",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--stage-dataset",
+                    "cohere-large-10m-786",
+                ],
+                cwd=repository,
+                env={
+                    **os.environ,
+                    "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                },
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("not an unstaged manifest dataset", completed.stderr)
+            self.assertNotIn("CONTROLLER_WAS_CALLED", completed.stderr)
+
+    def test_stage_dataset_requires_one_nonempty_id(self) -> None:
+        for arguments in (["--stage-dataset"], ["--stage-dataset", ""]):
+            with self.subTest(arguments=arguments):
+                completed = subprocess.run(
+                    ["bash", str(SCRIPT), *arguments],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(completed.returncode, 2)
+                self.assertIn("usage:", completed.stderr)
+
+    def test_stage_dataset_rejects_undelivered_commit_before_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            repository = temp / "repository"
+            repository.mkdir()
+            make_clean_repository(repository)
+            (repository / "Cargo.toml").write_text("# local-only commit\n")
+            run(["git", "add", "Cargo.toml"], repository)
+            run(["git", "commit", "-m", "local only"], repository)
+            fake = temp / "controller.py"
+            fake.write_text(
+                "#!/usr/bin/env python3\nimport sys\n"
+                "print('CONTROLLER_WAS_CALLED', file=sys.stderr)\n",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--stage-dataset",
+                    "cohere-large-10m-768",
+                ],
+                cwd=repository,
+                env={
+                    **os.environ,
+                    "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                },
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("delivered to origin/main", completed.stderr)
+            self.assertNotIn("CONTROLLER_WAS_CALLED", completed.stderr)
 
     def test_build_sift_passes_frozen_archive_and_manifest_to_controller(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -215,7 +303,9 @@ print(json.dumps({'role':'build','attempt':1}, sort_keys=True))
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(json.loads(completed.stdout)["role"], "build")
 
-    def test_read_recall_sift_passes_frozen_archive_and_manifest_to_controller(self) -> None:
+    def test_read_recall_sift_passes_frozen_archive_and_manifest_to_controller(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             repository = temp / "repository"
@@ -271,7 +361,11 @@ print(json.dumps({'role':'runtime','attempt':17}, sort_keys=True))
             )
             fake.chmod(0o755)
             completed = subprocess.run(
-                ["bash", "scripts/launch_aws_publication_v3.sh", "--read-concurrency-sift"],
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--read-concurrency-sift",
+                ],
                 cwd=repository,
                 env={
                     **os.environ,
@@ -284,7 +378,9 @@ print(json.dumps({'role':'runtime','attempt':17}, sort_keys=True))
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(json.loads(completed.stdout)["attempt"], 17)
 
-    def test_build_and_read_can_replay_frozen_ancestor_but_not_unpushed_commit(self) -> None:
+    def test_build_and_read_can_replay_frozen_ancestor_but_not_unpushed_commit(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             repository = temp / "repository"
@@ -305,7 +401,11 @@ print(json.dumps({'role':'runtime','attempt':17}, sort_keys=True))
                 **os.environ,
                 "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
             }
-            for mode in ("--build-sift", "--read-recall-sift", "--read-concurrency-sift"):
+            for mode in (
+                "--build-sift",
+                "--read-recall-sift",
+                "--read-concurrency-sift",
+            ):
                 replay = subprocess.run(
                     ["bash", "scripts/launch_aws_publication_v3.sh", mode],
                     cwd=repository,
