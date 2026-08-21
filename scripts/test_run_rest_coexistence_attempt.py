@@ -67,7 +67,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             flow_control_delta(before, after)
 
     def test_terminal_result_schema_cuts_with_effective_limit_shape(self) -> None:
-        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 12)
+        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 13)
 
     def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
         self.assertEqual(
@@ -277,6 +277,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "io_threads": 88,
             "s3_get_concurrency": 64,
             "search_admission": 4,
+            "max_waiting_searches": 16,
             "leaf_read_width": 32,
             "max_inflight_leaf_reads": 48,
             "max_parallel_decode_rank_tasks": 1,
@@ -291,6 +292,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             "borsuk_io_threads": 88,
             "borsuk_s3_get_concurrency": 64,
             "borsuk_search_capacity": 4,
+            "borsuk_search_waiting_capacity": 16,
             "borsuk_leaf_read_width": 32,
             "borsuk_leaf_read_capacity": 48,
             "borsuk_decode_rank_capacity": 1,

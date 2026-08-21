@@ -17,7 +17,7 @@ flowchart LR
     L[Separate load generator] -->|open-loop HTTP arrivals| A
     subgraph A[Small application EC2: 4 vCPU / 8 GiB]
       H[Async HTTP runtime\ncheap endpoints]
-      Q[Bounded search admission\ntry-acquire, explicit 429]
+      Q[Bounded active + waiting admission\nFIFO queue, explicit 429 at cap]
       B[BORSUK blocking search\n3 CPU workers]
       H --> Q --> B
     end
@@ -30,10 +30,13 @@ The server and BORSUK run in the same process. The async HTTP runtime never
 executes vector search directly: accepted search requests enter a bounded
 blocking path, while overload is returned as HTTP 429 instead of creating an
 unbounded queue. `BORSUK_REST_CPU_THREADS=3` reserves scheduling capacity on the
-four-vCPU server for HTTP, metrics, and kernel work. BORSUK's own
-`OpenOptions::max_active_searches` remains enabled as a second, library-side
-work bound, with `max_waiting_searches=0` because the REST layer already owns
-the queue. Leaf-wave and in-flight leaf-read caps separately bound S3 fan-out.
+four-vCPU server for HTTP, metrics, and kernel work.
+`BORSUK_REST_SEARCH_ADMISSION` independently caps active BORSUK searches and
+`BORSUK_REST_MAX_WAITING_SEARCHES` caps the FIFO queue behind them. The REST
+layer admits at most the sum of those two bounds, preventing an unbounded Tokio
+blocking queue while allowing short S3-tail overlaps to wait instead of being
+misclassified as capacity failures. Leaf-wave and in-flight leaf-read caps
+separately bound S3 fan-out.
 
 The load generator runs on a separate instance and schedules requests against
 absolute monotonic deadlines. A late request is still emitted and its queueing
@@ -77,7 +80,7 @@ All gates apply independently to every completed repetition:
 
 - vector recall@10 is at least `0.95` against the exact frozen oracle;
 - accepted vector-search p99 is at most `100 ms` during staircase and mixed phases;
-- vector execution engine is always `bounded-cell-card-v15`;
+- vector execution engine is always `bounded-cell-card-v20`;
 - mixed-normal cheap p99 is at most `max(baseline_p99 * 1.25,
   baseline_p99 + 2 ms)` and cheap error rate is below `0.1%`;
 - mixed-overload cheap p99 is at most `max(baseline_p99 * 1.50,

@@ -107,9 +107,10 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "io_threads": 88,
                 "s3_get_concurrency": 64,
                 "search_admission": 4,
+                "max_waiting_searches": 16,
                 "page_budget": 32,
                 "exact_candidates": 512,
-            "exact_read_max_physical_amplification": 5,
+                "exact_read_max_physical_amplification": 5,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
                 "max_parallel_decode_rank_tasks": 1,
@@ -214,6 +215,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("BORSUK_REST_S3_GET_CONCURRENCY=64", user_data)
         self.assertNotIn("--setenv=BORSUK_CPU_THREADS=", user_data)
         self.assertIn("BORSUK_REST_SEARCH_ADMISSION=4", user_data)
+        self.assertIn("BORSUK_REST_MAX_WAITING_SEARCHES=16", user_data)
         self.assertIn("BORSUK_REST_PAGE_BUDGET=32", user_data)
         self.assertIn("BORSUK_REST_EXACT_CANDIDATES=512", user_data)
         self.assertIn(
@@ -282,7 +284,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
 
     def test_pair_binds_immutable_inputs_and_terminal_prefix(self) -> None:
         receipt = self.pair["receipt"]
-        self.assertEqual(receipt["schema_version"], 5)
+        self.assertEqual(receipt["schema_version"], 6)
         self.assertEqual(receipt["aws_profile"], "causality")
         self.assertEqual(receipt["aws_account_id"], "453182569524")
         self.assertEqual(receipt["runtime"], self.pair["runtime"])
@@ -523,8 +525,10 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "io_threads": 88,
                 "s3_get_concurrency": 64,
                 "search_admission": 4,
+                "max_waiting_searches": 16,
                 "page_budget": 32,
                 "exact_candidates": 512,
+                "exact_read_max_physical_amplification": 5,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
                 "max_parallel_decode_rank_tasks": 1,
@@ -564,6 +568,61 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 smoke=True,
                 runtime=runtime,
                 output_uri="s3://bucket/invalid-runtime/attempts/0001",
+                server_worker="echo server",
+                generator_worker="echo generator",
+            )
+
+        runtime = dict(self.pair["runtime"])
+        runtime["max_waiting_searches"] = 257
+        with self.assertRaisesRegex(ValueError, "max_waiting_searches"):
+            build_launch_pair(
+                aws_profile="causality",
+                aws_account_id="453182569524",
+                campaign_id="invalid-waiting-cap",
+                attempt=1,
+                image_id="ami-a",
+                subnet_id="subnet-a",
+                security_group_id="sg-a",
+                instance_profile_arn=(
+                    "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+                ),
+                source_sha256="1" * 64,
+                binary_sha256="2" * 64,
+                index_receipt_sha256="3" * 64,
+                dataset_receipt_sha256="4" * 64,
+                smoke=True,
+                runtime=runtime,
+                output_uri="s3://bucket/invalid-waiting-cap/attempts/0001",
+                server_worker="echo server",
+                generator_worker=(
+                    "# borsuk-rest-mode=smoke\n"
+                    "# borsuk-rest-repetition=1\n"
+                    "python3 runner.py --repetition 1 --smoke\n"
+                ),
+            )
+
+        runtime = dict(self.pair["runtime"])
+        runtime["search_admission"] = 1
+        runtime["max_waiting_searches"] = 256
+        with self.assertRaisesRegex(ValueError, "active plus waiting"):
+            build_launch_pair(
+                aws_profile="causality",
+                aws_account_id="453182569524",
+                campaign_id="invalid-total-search-cap",
+                attempt=1,
+                image_id="ami-a",
+                subnet_id="subnet-a",
+                security_group_id="sg-a",
+                instance_profile_arn=(
+                    "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+                ),
+                source_sha256="1" * 64,
+                binary_sha256="2" * 64,
+                index_receipt_sha256="3" * 64,
+                dataset_receipt_sha256="4" * 64,
+                smoke=True,
+                runtime=runtime,
+                output_uri="s3://bucket/invalid-total-search-cap/attempts/0001",
                 server_worker="echo server",
                 generator_worker="echo generator",
             )
@@ -733,6 +792,13 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         )
         self.assertEqual(
             {
+                (cell["search_admission"], cell["max_waiting_searches"])
+                for cell in cells
+            },
+            {(2, 8), (4, 16), (8, 32)},
+        )
+        self.assertEqual(
+            {
                 (
                     cell["leaf_read_width"],
                     cell["max_inflight_leaf_reads"],
@@ -833,7 +899,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn('--runtime-aws-account "$runtime_aws_account"', generator)
         self.assertIn("--repetition 2", generator)
         self.assertIn("terminal repetition differs", generator)
-        self.assertIn('v.get("schema_version")==12', generator)
+        self.assertIn('v.get("schema_version")==13', generator)
         self.assertTrue(
             generator.startswith(
                 "# borsuk-rest-mode=smoke\n# borsuk-rest-repetition=2\n"

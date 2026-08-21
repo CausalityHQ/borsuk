@@ -23,6 +23,7 @@ RUNTIME_FIELDS = {
     "io_threads",
     "s3_get_concurrency",
     "search_admission",
+    "max_waiting_searches",
     "page_budget",
     "exact_candidates",
     "exact_read_max_physical_amplification",
@@ -105,6 +106,12 @@ def _validated_runtime(value: dict[str, int]) -> dict[str, int]:
         raise ValueError("runtime io_threads must be at least s3_get_concurrency and at most 256")
     if value["search_admission"] <= 0:
         raise ValueError("runtime search_admission must be positive")
+    if not 0 <= value["max_waiting_searches"] <= 256:
+        raise ValueError("runtime max_waiting_searches must be in 0..=256")
+    if value["search_admission"] + value["max_waiting_searches"] > 256:
+        raise ValueError(
+            "runtime search active plus waiting capacity must be at most 256"
+        )
     if value["page_budget"] not in (4, 8, 16, 32, 64):
         raise ValueError("runtime page_budget must be 4, 8, 16, 32, or 64")
     if not 10 <= value["exact_candidates"] <= 2_048:
@@ -141,6 +148,7 @@ def cold_s3_cap_matrix() -> list[dict[str, int | str]]:
                     "io_threads": io_threads,
                     "s3_get_concurrency": get_cap,
                     "search_admission": search_admission,
+                    "max_waiting_searches": 4 * search_admission,
                     "page_budget": 32,
                     "exact_candidates": 512,
                     "exact_read_max_physical_amplification": 1,
@@ -326,7 +334,7 @@ printf '%s\n' '{expected}' >"$work/runtime.json"
 cpu_before=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 started_ns=$(date +%s%N)
 PYTHONPATH="$work/scripts" python3 "$runner" --base-url "$BORSUK_SERVER_ENDPOINT" --queries "$queries" --output "$work/output" --expected-runtime "$work/runtime.json" --controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE" --expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT" --runtime-aws-account "$runtime_aws_account" --repetition {repetition}{smoke_flag}
-python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==12 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==13 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
 finished_ns=$(date +%s%N)
 cpu_after=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 cp "$cg_root/memory.events" "$work/memory.events.after"
@@ -393,6 +401,8 @@ def _user_data(
             f"--setenv=BORSUK_REST_IO_THREADS={runtime['io_threads']} "
             f"--setenv=BORSUK_REST_S3_GET_CONCURRENCY={runtime['s3_get_concurrency']} "
             f"--setenv=BORSUK_REST_SEARCH_ADMISSION={runtime['search_admission']} "
+            "--setenv=BORSUK_REST_MAX_WAITING_SEARCHES="
+            f"{runtime['max_waiting_searches']} "
             f"--setenv=BORSUK_REST_PAGE_BUDGET={runtime['page_budget']} "
             f"--setenv=BORSUK_REST_EXACT_CANDIDATES={runtime['exact_candidates']} "
             "--setenv=BORSUK_REST_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION="
@@ -701,7 +711,7 @@ def build_launch_pair(
     generator_worker_sha256 = hashlib.sha256(generator_worker.encode("utf-8")).hexdigest()
     workload_sha256 = hashlib.sha256(_canonical_bytes(workload)).hexdigest()
     authority = {
-        "schema_version": 5,
+        "schema_version": 6,
         "aws_profile": aws_profile,
         "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,
@@ -719,7 +729,7 @@ def build_launch_pair(
     }
     attempt_authority_sha256 = hashlib.sha256(_canonical_bytes(authority)).hexdigest()
     receipt = {
-        "schema_version": 5,
+        "schema_version": 6,
         "aws_profile": aws_profile,
         "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,

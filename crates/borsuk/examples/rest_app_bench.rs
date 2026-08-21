@@ -1,7 +1,8 @@
 //! Same-process REST workload-isolation benchmark application.
 //!
 //! The cheap endpoints remain on Axum's async runtime, while vector search is
-//! admitted without queueing and executed on BORSUK's bounded blocking pools.
+//! admitted through a bounded active-plus-waiting budget and executed on
+//! BORSUK's bounded blocking pools.
 
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -22,10 +23,13 @@ struct SearchAdmission {
 }
 
 impl SearchAdmission {
-    fn new(limit: usize) -> Result<Self, String> {
-        if limit == 0 {
+    fn new(active: usize, waiting: usize) -> Result<Self, String> {
+        if active == 0 {
             return Err("REST search admission must be greater than zero".to_owned());
         }
+        let limit = active
+            .checked_add(waiting)
+            .ok_or_else(|| "REST search admission exceeds usize".to_owned())?;
         Ok(Self {
             permits: Arc::new(Semaphore::new(limit)),
         })
@@ -165,6 +169,7 @@ struct MetricsResponse {
     borsuk_transient_peak_bytes: u64,
     borsuk_search_rejected: u64,
     borsuk_search_capacity: usize,
+    borsuk_search_waiting_capacity: usize,
     borsuk_leaf_read_width: usize,
     borsuk_leaf_read_capacity: usize,
     borsuk_exact_read_max_physical_amplification: u64,
@@ -233,6 +238,10 @@ async fn metrics(State(state): State<AppState>) -> Json<MetricsResponse> {
         borsuk_transient_peak_bytes: flow.transient.peak_bytes,
         borsuk_search_rejected: flow.searches.rejected,
         borsuk_search_capacity: flow.searches.capacity,
+        borsuk_search_waiting_capacity: flow
+            .searches
+            .waiting_capacity
+            .expect("Borsuk search admission must have a bounded waiting queue"),
         borsuk_leaf_read_width: flow.leaf_read_width,
         borsuk_leaf_read_capacity: flow.leaf_reads.capacity,
         borsuk_exact_read_max_physical_amplification: flow.exact_read_max_physical_amplification,
@@ -402,6 +411,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let exact_candidates =
         validate_exact_candidates(env_usize("BORSUK_REST_EXACT_CANDIDATES", 512)?)?;
     let search_limit = env_usize("BORSUK_REST_SEARCH_ADMISSION", 2)?;
+    let max_waiting_searches = env_usize(
+        "BORSUK_REST_MAX_WAITING_SEARCHES",
+        OpenOptions::default().max_waiting_searches,
+    )?;
     let leaf_read_width = env_usize("BORSUK_REST_LEAF_READ_WIDTH", 32)?;
     let max_inflight_leaf_reads = env_usize("BORSUK_REST_MAX_INFLIGHT_LEAF_READS", 48)?;
     let max_parallel_decode_rank_tasks = env_usize(
@@ -419,7 +432,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cache_max_bytes: (disk_cache_bytes > 0).then_some(disk_cache_bytes as u64),
             ram_budget_bytes: Some(ram_budget_bytes as u64),
             max_active_searches: search_limit,
-            max_waiting_searches: 0,
+            max_waiting_searches,
             leaf_read_width,
             max_inflight_leaf_reads,
             max_parallel_decode_rank_tasks,
@@ -430,7 +443,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     index.prepare_serving_metadata()?;
     let state = AppState {
         index,
-        admission: SearchAdmission::new(search_limit)?,
+        admission: SearchAdmission::new(search_limit, max_waiting_searches)?,
         page_budget,
         exact_candidates,
         ram_budget_bytes: ram_budget_bytes as u64,
@@ -479,7 +492,7 @@ mod tests {
 
     #[tokio::test]
     async fn saturated_search_admission_rejects_without_queueing() {
-        let admission = SearchAdmission::new(1).unwrap();
+        let admission = SearchAdmission::new(1, 0).unwrap();
         let _held = admission
             .try_acquire()
             .expect("first search should be admitted");
@@ -502,7 +515,7 @@ mod tests {
             named_vectors: Default::default(),
         })
         .unwrap();
-        let admission = SearchAdmission::new(1).unwrap();
+        let admission = SearchAdmission::new(1, 0).unwrap();
         let _held = admission.try_acquire().unwrap();
         let app = router(AppState {
             index,
@@ -548,7 +561,7 @@ mod tests {
         .unwrap();
         let app = router(AppState {
             index,
-            admission: SearchAdmission::new(1).unwrap(),
+            admission: SearchAdmission::new(1, 0).unwrap(),
             page_budget: 4,
             exact_candidates: 512,
             ram_budget_bytes: 8 * 1024 * 1024,
@@ -630,7 +643,7 @@ mod tests {
         index.prepare_serving_metadata().unwrap();
         let app = router(AppState {
             index,
-            admission: SearchAdmission::new(1).unwrap(),
+            admission: SearchAdmission::new(1, 0).unwrap(),
             page_budget: 4,
             exact_candidates: 512,
             ram_budget_bytes: 8 * 1024 * 1024,
@@ -671,7 +684,7 @@ mod tests {
         .unwrap();
         let app = router(AppState {
             index,
-            admission: SearchAdmission::new(1).unwrap(),
+            admission: SearchAdmission::new(1, 0).unwrap(),
             page_budget: 4,
             exact_candidates: 512,
             ram_budget_bytes: 1024,
@@ -686,6 +699,7 @@ mod tests {
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["borsuk_search_capacity"], 8);
+        assert_eq!(value["borsuk_search_waiting_capacity"], 16);
         assert_eq!(value["borsuk_search_wait_count"], 0);
         assert_eq!(value["borsuk_search_wait_micros"], 0);
         assert_eq!(value["borsuk_leaf_read_width"], 32);
@@ -724,5 +738,17 @@ mod tests {
             value["borsuk_s3_get_concurrency"],
             borsuk::configured_backing_get_concurrency()
         );
+    }
+
+    #[test]
+    fn request_admission_bounds_active_and_waiting_searches_together() {
+        let admission = SearchAdmission::new(2, 3).unwrap();
+        let permits = (0..5)
+            .map(|_| admission.try_acquire().expect("active or waiting slot"))
+            .collect::<Vec<_>>();
+
+        assert!(admission.try_acquire().is_none());
+        drop(permits);
+        assert!(admission.try_acquire().is_some());
     }
 }

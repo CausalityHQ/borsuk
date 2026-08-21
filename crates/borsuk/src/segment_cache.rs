@@ -678,6 +678,7 @@ struct AdmissionState {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct AdmissionSnapshot {
     pub(crate) capacity: usize,
+    pub(crate) waiting_capacity: Option<usize>,
     pub(crate) active: usize,
     pub(crate) waiting: usize,
     pub(crate) admitted: u64,
@@ -790,6 +791,7 @@ impl AdmissionGate {
         let active = outstanding.min(state.permits);
         AdmissionSnapshot {
             capacity: state.permits as usize,
+            waiting_capacity: state.max_waiters.map(|value| value as usize),
             active: active as usize,
             waiting: outstanding.saturating_sub(active) as usize,
             admitted: state.admitted,
@@ -1451,6 +1453,7 @@ mod tests {
         let snapshot = gate.snapshot();
         assert_eq!(snapshot.active, 0);
         assert_eq!(snapshot.waiting, 0);
+        assert_eq!(snapshot.waiting_capacity, Some(1));
         assert_eq!(snapshot.admitted, 2);
     }
 

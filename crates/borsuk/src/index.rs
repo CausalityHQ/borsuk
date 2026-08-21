@@ -1001,6 +1001,9 @@ pub struct WarmReport {
 pub struct AdmissionStats {
     /// Maximum simultaneously active work units.
     pub capacity: usize,
+    /// Maximum queued work units, or `None` for an unbounded internal gate.
+    #[serde(default)]
+    pub waiting_capacity: Option<usize>,
     /// Work units currently holding permits.
     pub active: usize,
     /// Work units currently queued for permits.
@@ -3362,6 +3365,7 @@ impl BorsukIndex {
         fn public(snapshot: crate::segment_cache::AdmissionSnapshot) -> AdmissionStats {
             AdmissionStats {
                 capacity: snapshot.capacity,
+                waiting_capacity: snapshot.waiting_capacity,
                 active: snapshot.active,
                 waiting: snapshot.waiting,
                 admitted: snapshot.admitted,
