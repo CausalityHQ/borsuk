@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     env,
     error::Error,
     fs::{self, File},
@@ -814,9 +814,8 @@ fn configure_benchmark_process() -> BenchResult<()> {
 
 fn write_effective_runtime_flow_control(config: &ResolvedConfig) -> BenchResult<()> {
     let path = config.output_dir.join("bench_runtime_flow_control.json");
-    let mut output = BufWriter::new(File::create(path)?);
-    serde_json::to_writer(
-        &mut output,
+    write_runtime_flow_control_receipt(
+        &path,
         &EffectiveRuntimeFlowControl {
             schema_version: 2,
             ram_budget_bytes: config.ram_budget_bytes,
@@ -829,10 +828,33 @@ fn write_effective_runtime_flow_control(config: &ResolvedConfig) -> BenchResult<
             io_threads: configured_io_threads(),
             s3_get_concurrency: configured_backing_get_concurrency(),
         },
-    )?;
-    output.write_all(b"\n")?;
+    )
+}
+
+fn write_runtime_flow_control_receipt(
+    path: &Path,
+    value: &EffectiveRuntimeFlowControl,
+) -> BenchResult<()> {
+    let mut output = BufWriter::new(File::create(path)?);
+    output.write_all(&effective_runtime_flow_control_json_line(value)?)?;
     output.flush()?;
     Ok(())
+}
+
+fn effective_runtime_flow_control_json_line(
+    value: &EffectiveRuntimeFlowControl,
+) -> BenchResult<Vec<u8>> {
+    // Publication V3 deliberately limits this persisted receipt to integer and
+    // null values, whose serde_json spelling is identical to Python's strict
+    // canonical_json_bytes contract after lexicographic key ordering.
+    let value = serde_json::to_value(value)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_input("runtime flow control must be a JSON object"))?;
+    let ordered = object.iter().collect::<BTreeMap<_, _>>();
+    let mut bytes = serde_json::to_vec(&ordered)?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 fn validate_exact_read_max_physical_amplification(value: usize) -> BenchResult<u64> {
@@ -4262,7 +4284,7 @@ mod tests {
         validate_exact_read_max_physical_amplification, validate_generated_id_range,
         validate_insert_only, validate_leaf_capability_modes, validate_phase_selection,
         validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
-        vector_row, write_batch_len, write_operation_count,
+        vector_row, write_batch_len, write_operation_count, write_runtime_flow_control_receipt,
     };
 
     #[test]
@@ -5165,6 +5187,33 @@ mod tests {
 
         assert_eq!(value["schema_version"], 2);
         assert_eq!(value["exact_read_max_physical_amplification"], 2);
+    }
+
+    #[test]
+    fn runtime_flow_receipt_is_canonical_json_for_publication() {
+        let receipt = EffectiveRuntimeFlowControl {
+            schema_version: 2,
+            ram_budget_bytes: Some(536_870_912),
+            max_active_searches: 8,
+            max_waiting_searches: 16,
+            leaf_read_width: 32,
+            max_inflight_leaf_reads: 48,
+            exact_read_max_physical_amplification: 2,
+            cpu_threads: 4,
+            io_threads: 88,
+            s3_get_concurrency: 64,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bench_runtime_flow_control.json");
+
+        write_runtime_flow_control_receipt(&path, &receipt).unwrap();
+        let bytes = std::fs::read(path).unwrap();
+
+        assert_eq!(
+            bytes,
+            br#"{"cpu_threads":4,"exact_read_max_physical_amplification":2,"io_threads":88,"leaf_read_width":32,"max_active_searches":8,"max_inflight_leaf_reads":48,"max_waiting_searches":16,"ram_budget_bytes":536870912,"s3_get_concurrency":64,"schema_version":2}
+"#
+        );
     }
 
     #[test]
