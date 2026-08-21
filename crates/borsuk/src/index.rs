@@ -367,6 +367,10 @@ struct LiveWalRanking {
     rows_evaluated: usize,
     rows_passed_filter: usize,
     records_scored: usize,
+    #[cfg(test)]
+    parallel_worker_names: BTreeSet<String>,
+    #[cfg(test)]
+    parallel_chunks: usize,
 }
 
 #[derive(Debug)]
@@ -375,6 +379,8 @@ struct LiveWalChunkRanking {
     rows_evaluated: usize,
     rows_passed_filter: usize,
     records_scored: usize,
+    #[cfg(test)]
+    worker_name: String,
 }
 
 const HYBRID_TEXT_MODALITY: &str = "@text";
@@ -23033,12 +23039,14 @@ impl BorsukIndex {
             include_vectors,
             live_wal_tail,
             live_wal_norms,
+            Some(&self.decode_rank_admission),
         )?;
         let LiveWalRanking {
             ranked,
             rows_evaluated,
             rows_passed_filter,
             records_scored,
+            ..
         } = ranking;
         let vectors = ranked
             .iter()
@@ -29736,7 +29744,27 @@ fn rank_live_wal_chunk(
         rows_evaluated,
         rows_passed_filter,
         records_scored,
+        #[cfg(test)]
+        worker_name: std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .to_string(),
     })
+}
+
+/// Run live-WAL inner-parallel exact scoring on BORSUK's bounded query pool.
+///
+/// The public search entry point may run on an application or REST worker
+/// thread or on a blocking-I/O worker running a hybrid search leg. Entering the
+/// private pool here prevents Rayon from borrowing either registry and stealing
+/// unrelated application CPU or turning object-store waiters into scorers.
+fn run_live_wal_parallel<R, F>(gate: Option<&AdmissionGate>, work: F) -> R
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    let _permit = gate.map(AdmissionGate::acquire);
+    crate::parallel::install(work)
 }
 
 fn rank_live_wal_exact(
@@ -29746,6 +29774,7 @@ fn rank_live_wal_exact(
     include_vectors: bool,
     records: &[VectorRecord],
     stored_norms: Option<&[f32]>,
+    gate: Option<&AdmissionGate>,
 ) -> Result<LiveWalRanking> {
     const PARALLEL_WAL_RECORDS: usize = 1_024;
     const WAL_SCORE_CHUNK_RECORDS: usize = 256;
@@ -29759,15 +29788,17 @@ fn rank_live_wal_exact(
             stored_norms,
         )?]
     } else {
-        records
-            .par_chunks(WAL_SCORE_CHUNK_RECORDS)
-            .enumerate()
-            .map(|(chunk, rows)| {
-                let offset = chunk * WAL_SCORE_CHUNK_RECORDS;
-                let chunk_norms = stored_norms.map(|norms| &norms[offset..offset + rows.len()]);
-                rank_live_wal_chunk(metric, query, options, offset, rows, chunk_norms)
-            })
-            .collect::<Result<Vec<_>>>()?
+        run_live_wal_parallel(gate, || {
+            records
+                .par_chunks(WAL_SCORE_CHUNK_RECORDS)
+                .enumerate()
+                .map(|(chunk, rows)| {
+                    let offset = chunk * WAL_SCORE_CHUNK_RECORDS;
+                    let chunk_norms = stored_norms.map(|norms| &norms[offset..offset + rows.len()]);
+                    rank_live_wal_chunk(metric, query, options, offset, rows, chunk_norms)
+                })
+                .collect::<Result<Vec<_>>>()
+        })?
     };
     let mut ranked = chunks
         .iter()
@@ -29801,6 +29832,13 @@ fn rank_live_wal_exact(
         rows_evaluated: chunks.iter().map(|chunk| chunk.rows_evaluated).sum(),
         rows_passed_filter: chunks.iter().map(|chunk| chunk.rows_passed_filter).sum(),
         records_scored: chunks.iter().map(|chunk| chunk.records_scored).sum(),
+        #[cfg(test)]
+        parallel_worker_names: chunks
+            .iter()
+            .map(|chunk| chunk.worker_name.clone())
+            .collect(),
+        #[cfg(test)]
+        parallel_chunks: chunks.len(),
     })
 }
 
@@ -39767,6 +39805,7 @@ mod tests {
             false,
             &records,
             Some(&norms),
+            None,
         )
         .unwrap();
 
@@ -39797,6 +39836,7 @@ mod tests {
             false,
             &records,
             None,
+            None,
         )
         .unwrap();
         let cosine_cached = rank_live_wal_exact(
@@ -39806,6 +39846,7 @@ mod tests {
             false,
             &records,
             Some(&norms),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -39821,6 +39862,43 @@ mod tests {
                 .collect::<Vec<_>>()
         );
     }
+
+    #[test]
+    fn parallel_live_wal_work_runs_on_the_bounded_query_pool() {
+        let records = (0..4_096)
+            .map(|row| VectorRecord::new(format!("wal-{row}"), vec![row as f32, 1.0]))
+            .collect::<Vec<_>>();
+        let gate = AdmissionGate::new(1);
+        let ranking = rank_live_wal_exact(
+            &VectorMetric::Euclidean,
+            &[0.0, 1.0],
+            &SearchOptions::exact(10),
+            false,
+            &records,
+            None,
+            Some(&gate),
+        )
+        .unwrap();
+
+        assert!(
+            ranking.parallel_chunks > 1,
+            "parallel WAL branch was not used"
+        );
+        assert!(!ranking.parallel_worker_names.is_empty());
+        assert!(
+            ranking
+                .parallel_worker_names
+                .iter()
+                .all(|name| name.starts_with("borsuk-query-")),
+            "live-WAL exact scoring escaped the bounded query pool: {:?}",
+            ranking.parallel_worker_names
+        );
+        let snapshot = gate.snapshot();
+        assert_eq!(snapshot.capacity, 1);
+        assert_eq!(snapshot.admitted, 1);
+        assert_eq!(snapshot.peak_active, 1);
+    }
+
     #[test]
     fn positioned_flush_locality_orders_records_before_segmenting() {
         let dir = tempfile::tempdir().unwrap();
