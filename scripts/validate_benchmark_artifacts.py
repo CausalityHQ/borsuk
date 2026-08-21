@@ -12,11 +12,13 @@ from pathlib import Path
 try:
     from .production_bench_schema import (
         V11_QUERY_TELEMETRY_FIELDS,
+        validate_production_bench_schema_rows,
         validate_v11_query_sample_rows,
     )
 except ImportError:
     from production_bench_schema import (  # type: ignore[no-redef]
         V11_QUERY_TELEMETRY_FIELDS,
+        validate_production_bench_schema_rows,
         validate_v11_query_sample_rows,
     )
 
@@ -89,8 +91,12 @@ REQUIRED_COLUMNS = {
         *V11_QUERY_TELEMETRY_FIELDS,
     },
     "bench_concurrency.csv": {
+        "schema_version",
         "scan_codec",
         "cache_execution",
+        "execution_engine",
+        "nprobe",
+        "max_candidates",
         "workers",
         "total_queries",
         "qps",
@@ -102,8 +108,12 @@ REQUIRED_COLUMNS = {
         "max_ms",
     },
     "bench_concurrency_samples.csv": {
+        "schema_version",
         "scan_codec",
         "cache_execution",
+        "execution_engine",
+        "nprobe",
+        "max_candidates",
         "workers",
         "sample_index",
         "latency_ms",
@@ -723,6 +733,8 @@ def validate_directory(
             parsed[name] = list(csv.DictReader(handle))
         if name == "bench_query_samples.csv":
             validate_v11_query_sample_rows(parsed[name], path)
+        elif name in {"bench_concurrency.csv", "bench_concurrency_samples.csv"}:
+            validate_production_bench_schema_rows(parsed[name], path)
         _validate_distribution_rows(path, parsed[name])
 
     _validate_sample_reconciliation(
@@ -736,7 +748,13 @@ def validate_directory(
         directory,
         "bench_concurrency.csv",
         "bench_concurrency_samples.csv",
-        ("scan_codec", "cache_execution", "workers"),
+        (
+            "scan_codec",
+            "cache_execution",
+            "nprobe",
+            "max_candidates",
+            "workers",
+        ),
         "total_queries",
     )
     _validate_sample_reconciliation(

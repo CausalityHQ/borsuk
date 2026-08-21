@@ -18,9 +18,13 @@ except ModuleNotFoundError:
     from freeze_layout_dataset_identity import validate_manifest
 
 try:
-    from .production_bench_schema import validate_v11_query_sample_rows
+    from .production_bench_schema import (
+        PRODUCTION_BENCH_SCHEMA_VERSION,
+        validate_v11_query_sample_rows,
+    )
 except ImportError:
     from production_bench_schema import (
+        PRODUCTION_BENCH_SCHEMA_VERSION,
         validate_v11_query_sample_rows,  # type: ignore[no-redef]
     )
 
@@ -241,7 +245,7 @@ def _case_metrics(result_root: Path, case_id: str) -> dict[str, Any]:
 
 
 def _validate_segment_path(row: dict[str, str], case_id: str) -> None:
-    if row.get("schema_version") != "borsuk-production-bench-v14":
+    if row.get("schema_version") != PRODUCTION_BENCH_SCHEMA_VERSION:
         raise ValueError(f"unsupported production benchmark schema for {case_id}")
     try:
         segments_searched = int(row["segments_searched"])

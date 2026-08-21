@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 V10_PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v10"
-PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v14"
+PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v15"
 V10_QUERY_TELEMETRY_FIELDS = (
     "global_leaf_directory_reads",
     "global_leaf_directory_bytes",
@@ -38,6 +38,20 @@ V11_QUERY_TELEMETRY_FIELDS = (
 )
 
 
+def validate_production_bench_schema_rows(
+    rows: Sequence[Mapping[str, object]], path: str | Path
+) -> None:
+    """Reject every row outside the exact current production schema."""
+
+    for line, row in enumerate(rows, start=2):
+        version = row.get("schema_version")
+        if version != PRODUCTION_BENCH_SCHEMA_VERSION:
+            raise ValueError(
+                f"{path}:{line} production benchmark schema {version!r}; "
+                f"expected {PRODUCTION_BENCH_SCHEMA_VERSION!r}"
+            )
+
+
 def validate_v10_query_sample_rows(
     rows: Sequence[Mapping[str, object]], path: str | Path
 ) -> None:
@@ -66,13 +80,8 @@ def validate_v11_query_sample_rows(
 ) -> None:
     """Reject every query-sample row outside the current V11 contract."""
 
+    validate_production_bench_schema_rows(rows, path)
     for line, row in enumerate(rows, start=2):
-        version = row.get("schema_version")
-        if version != PRODUCTION_BENCH_SCHEMA_VERSION:
-            raise ValueError(
-                f"{path}:{line} production benchmark schema {version!r}; "
-                f"expected {PRODUCTION_BENCH_SCHEMA_VERSION!r}"
-            )
         missing = [
             field
             for field in V11_QUERY_TELEMETRY_FIELDS

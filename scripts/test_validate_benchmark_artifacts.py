@@ -38,7 +38,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v14",
+                    "borsuk-production-bench-v15",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -97,7 +97,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v14",
+                    "borsuk-production-bench-v15",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -133,7 +133,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     0,
                 ],
                 [
-                    "borsuk-production-bench-v14",
+                    "borsuk-production-bench-v15",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -181,9 +181,9 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 ],
             ),
             (
-                "V9",
+                "V14",
                 lambda rows: [
-                    row.__setitem__("schema_version", "borsuk-production-bench-v9")
+                    row.__setitem__("schema_version", "borsuk-production-bench-v14")
                     for row in rows
                 ],
             ),
@@ -267,6 +267,118 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     "bench_query_samples.csv",
                 ),
             )
+
+    def test_concurrency_requires_v15_authority_and_routing_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            summary_header = [
+                "schema_version",
+                "scan_codec",
+                "cache_execution",
+                "execution_engine",
+                "nprobe",
+                "max_candidates",
+                "workers",
+                "total_queries",
+                "qps",
+                "mean_ms",
+                "stddev_ms",
+                "p50_ms",
+                "p95_ms",
+                "p99_ms",
+                "max_ms",
+            ]
+            sample_header = [
+                "schema_version",
+                "scan_codec",
+                "cache_execution",
+                "execution_engine",
+                "nprobe",
+                "max_candidates",
+                "workers",
+                "sample_index",
+                "latency_ms",
+                "recall_at_10",
+                "ram_budget_bytes",
+                "collection_resident_bytes",
+                "retained_bytes",
+                "retained_capacity_bytes",
+                "retained_peak_bytes",
+                "transient_bytes",
+                "transient_capacity_bytes",
+                "transient_peak_bytes",
+            ]
+            summary = [
+                "borsuk-production-bench-v15",
+                "fast-turboquant-scan",
+                "scan",
+                "bounded-cell-card-v20",
+                64,
+                512,
+                1,
+                1,
+                10,
+                5,
+                0,
+                5,
+                5,
+                5,
+                5,
+            ]
+            sample = [
+                "borsuk-production-bench-v15",
+                "fast-turboquant-scan",
+                "scan",
+                "bounded-cell-card-v20",
+                64,
+                512,
+                1,
+                0,
+                5,
+                0.99,
+                4096,
+                1024,
+                100,
+                2048,
+                200,
+                50,
+                1024,
+                100,
+            ]
+            self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
+            self.write_csv(
+                root, "bench_concurrency_samples.csv", sample_header, [sample]
+            )
+            required = ("bench_concurrency.csv", "bench_concurrency_samples.csv")
+            validate_directory(root, "fast-turboquant-scan", required)
+
+            summary[0] = "borsuk-production-bench-v14"
+            sample[0] = "borsuk-production-bench-v14"
+            self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
+            self.write_csv(
+                root, "bench_concurrency_samples.csv", sample_header, [sample]
+            )
+            with self.assertRaisesRegex(ValueError, "schema"):
+                validate_directory(root, "fast-turboquant-scan", required)
+
+            summary[0] = "borsuk-production-bench-v15"
+            sample[0] = "borsuk-production-bench-v15"
+            sample[4] = 32
+            self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
+            self.write_csv(
+                root, "bench_concurrency_samples.csv", sample_header, [sample]
+            )
+            with self.assertRaisesRegex(ValueError, "sample count mismatch"):
+                validate_directory(root, "fast-turboquant-scan", required)
+
+            sample[4] = 64
+            summary[3] = "mixed"
+            sample[3] = "graph"
+            self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
+            self.write_csv(
+                root, "bench_concurrency_samples.csv", sample_header, [sample]
+            )
+            validate_directory(root, "fast-turboquant-scan", required)
 
     def test_rejects_ragged_or_empty_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

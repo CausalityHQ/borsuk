@@ -27,12 +27,14 @@ try:
         validate_clone_receipt,
     )
     from scripts.publication_v3_protocol import (
+        BORSUK_LEAF_CODECS,
         BORSUK_TURBOQUANT_LEAF_CODECS,
         build_schedule_document,
         canonical_json_bytes,
         read_protocol,
         validate_manifest,
     )
+    from scripts.production_bench_schema import PRODUCTION_BENCH_SCHEMA_VERSION
     from scripts.publication_v3_receipts import (
         build_index_receipt,
         receipt_document_sha256,
@@ -54,12 +56,14 @@ except ModuleNotFoundError:
         validate_clone_receipt,
     )
     from publication_v3_protocol import (
+        BORSUK_LEAF_CODECS,
         BORSUK_TURBOQUANT_LEAF_CODECS,
         build_schedule_document,
         canonical_json_bytes,
         read_protocol,
         validate_manifest,
     )
+    from production_bench_schema import PRODUCTION_BENCH_SCHEMA_VERSION
     from publication_v3_receipts import (
         build_index_receipt,
         receipt_document_sha256,
@@ -72,7 +76,8 @@ except ModuleNotFoundError:
 
 
 SUPPORTED_LOCAL_KINDS = frozenset({"read-recall", "write-update-delete-compact"})
-V12_COMPATIBILITY_CANDIDATES = 512
+V20_COMPATIBILITY_CANDIDATES = 512
+V20_EXECUTION_ENGINE = "bounded-cell-card-v20"
 PRODUCTION_BUILD_FIELDS = tuple(
     "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
 )
@@ -390,7 +395,7 @@ def build_execution_plan(
         "BORSUK_BENCH_QUERY_SEED": str(cell.get("query_seed")),
         "BORSUK_BENCH_REPETITION_ID": str(cell.get("repetition_id")),
         "BORSUK_BENCH_NPROBES": str(routing_budget),
-        "BORSUK_BENCH_CANDIDATES": str(V12_COMPATIBILITY_CANDIDATES),
+        "BORSUK_BENCH_CANDIDATES": str(V20_COMPATIBILITY_CANDIDATES),
         "BORSUK_BENCH_READ_ONLY": "1",
         "BORSUK_BENCH_CONCURRENCY": "1",
         "BORSUK_BENCH_SKIP_EXACT_RECALL": "1",
@@ -505,10 +510,10 @@ def build_execution_plan(
             build_env.pop(field, None)
         # Index construction does not execute recall queries, but the benchmark
         # validates all query knobs at startup. Keep this build-only phase on a
-        # valid V12 leaf-page/candidate compatibility pair; runtime owns the
+        # valid V20 leaf-page/candidate compatibility pair; runtime owns the
         # scheduled recall sweep and its result labels.
         build_env["BORSUK_BENCH_NPROBES"] = "4"
-        build_env["BORSUK_BENCH_CANDIDATES"] = str(V12_COMPATIBILITY_CANDIDATES)
+        build_env["BORSUK_BENCH_CANDIDATES"] = str(V20_COMPATIBILITY_CANDIDATES)
         runtime_env = {
             **benchmark_env,
             "BORSUK_BENCH_DATASET": str(runtime_dataset_dir),
@@ -527,7 +532,7 @@ def build_execution_plan(
                     "BORSUK_BENCH_CONCURRENCY": "1,2,4",
                     "BORSUK_BENCH_SERVING_NPROBE": str(routing_budget),
                     "BORSUK_BENCH_SERVING_CANDIDATES": str(
-                        V12_COMPATIBILITY_CANDIDATES
+                        V20_COMPATIBILITY_CANDIDATES
                     ),
                 }
             )
@@ -776,6 +781,12 @@ def summarize_query_samples(
 ) -> dict[str, int]:
     if len(rows) != expected_queries:
         raise ValueError("query sample artifact is incomplete for its arm")
+    index_profile = cell.get("index_profile")
+    expected_mode = (
+        index_profile.get("leaf_codec") if isinstance(index_profile, dict) else None
+    )
+    if expected_mode not in BORSUK_LEAF_CODECS:
+        raise ValueError("query sample has no scheduled leaf-codec authority")
     latencies_us: list[int] = []
     recalls_ppm: list[int] = []
     sample_indices: set[int] = set()
@@ -789,15 +800,17 @@ def summarize_query_samples(
         "global_leaf_exact_requests": [],
     }
     for row in rows:
-        if row.get("schema_version") != "borsuk-production-bench-v14":
+        if row.get("schema_version") != PRODUCTION_BENCH_SCHEMA_VERSION:
             raise ValueError("query sample schema differs")
         expected_phase = "uncached" if arm["cache_state"] == "cold" else "disk_cached"
         if (
             row.get("phase") != expected_phase
-            or row.get("mode") != "srht-pq-scan"
+            or row.get("mode") != expected_mode
+            or row.get("scan_codec") != expected_mode
+            or row.get("execution_engine") != V20_EXECUTION_ENGINE
             or int(row.get("nprobe", "-1")) != arm["leaf_page_budget"]
             or int(row.get("max_candidates", "-1"))
-            != V12_COMPATIBILITY_CANDIDATES
+            != V20_COMPATIBILITY_CANDIDATES
         ):
             raise ValueError("query sample belongs to a different factor arm")
         sample_index = int(row["sample_index"])
@@ -870,9 +883,18 @@ def summarize_concurrency_artifacts(
     expected_workers: tuple[int, ...],
     expected_queries: int,
     minimum_recall_ppm: int,
+    expected_scan_codec: str,
+    expected_nprobe: int,
+    expected_max_candidates: int,
 ) -> list[dict[str, int]]:
     if expected_queries <= 0 or not expected_workers:
         raise ValueError("concurrency authority is empty")
+    if (
+        expected_scan_codec not in BORSUK_LEAF_CODECS
+        or expected_nprobe <= 0
+        or expected_max_candidates <= 0
+    ):
+        raise ValueError("concurrency scan-codec authority is invalid")
     expected = set(expected_workers)
     if len(expected) != len(expected_workers) or any(worker <= 0 for worker in expected):
         raise ValueError("concurrency worker authority is invalid")
@@ -880,7 +902,11 @@ def summarize_concurrency_artifacts(
     for row in summaries:
         worker = int(row.get("workers", "-1"))
         if (
-            row.get("schema_version") != "borsuk-production-bench-v14"
+            row.get("schema_version") != PRODUCTION_BENCH_SCHEMA_VERSION
+            or row.get("scan_codec") != expected_scan_codec
+            or row.get("execution_engine") != V20_EXECUTION_ENGINE
+            or int(row.get("nprobe", "-1")) != expected_nprobe
+            or int(row.get("max_candidates", "-1")) != expected_max_candidates
             or worker not in expected
             or worker in by_worker
             or int(row.get("total_queries", "-1")) != expected_queries
@@ -898,7 +924,14 @@ def summarize_concurrency_artifacts(
     recalls = {worker: [] for worker in expected_workers}
     for row in samples:
         worker = int(row.get("workers", "-1"))
-        if row.get("schema_version") != "borsuk-production-bench-v14" or worker not in expected:
+        if (
+            row.get("schema_version") != PRODUCTION_BENCH_SCHEMA_VERSION
+            or row.get("scan_codec") != expected_scan_codec
+            or row.get("execution_engine") != V20_EXECUTION_ENGINE
+            or int(row.get("nprobe", "-1")) != expected_nprobe
+            or int(row.get("max_candidates", "-1")) != expected_max_candidates
+            or worker not in expected
+        ):
             raise ValueError("concurrency sample differs from its authority")
         sample_index = int(row.get("sample_index", "-1"))
         if sample_index < 0 or sample_index in sample_indices[worker]:
@@ -1913,6 +1946,9 @@ def main() -> int:
                 expected_workers=workers,
                 expected_queries=int(plan["effective_queries"]),
                 minimum_recall_ppm=int(factors["minimum_recall_ppm"]),
+                expected_scan_codec=str(cell["index_profile"]["leaf_codec"]),
+                expected_nprobe=int(arm["leaf_page_budget"]),
+                expected_max_candidates=V20_COMPATIBILITY_CANDIDATES,
             )
             runtime_writes = summarize_runtime_write_trace(output / "storage-access.csv")
             report = {

@@ -377,8 +377,8 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
             else frozenset({"code_bytes"})
         )
         _exact_fields(profile, expected, "borsuk index profile")
-        if engine != "borsuk-v12":
-            raise ValueError("borsuk index engine must be borsuk-v12")
+        if engine != "borsuk-v20":
+            raise ValueError("borsuk index engine must be borsuk-v20")
         codec_parameters: dict[str, int]
         if turboquant:
             bits = _positive_int(profile["turboquant_bits"], "borsuk TurboQuant bits")
@@ -410,7 +410,7 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
                 raise ValueError("borsuk code bytes must be a power of two")
             codec_parameters = {"code_bytes": code_bytes}
         validated = {
-            "engine": "borsuk-v12",
+            "engine": "borsuk-v20",
             "logical_cells": _positive_int(profile["logical_cells"], "logical cells"),
             "minimum_rows_per_logical_cell": _positive_int(
                 profile["minimum_rows_per_logical_cell"],
@@ -503,7 +503,7 @@ def _effective_index_profile(
         )
     rows = int(scale["rows"])
     result = copy.deepcopy(profile)
-    if profile["engine"] == "borsuk-v12":
+    if profile["engine"] == "borsuk-v20":
         feasible = rows // int(profile["minimum_rows_per_logical_cell"])
         result["logical_cells"] = _largest_power_of_two_not_exceeding(
             min(int(profile["logical_cells"]), feasible)

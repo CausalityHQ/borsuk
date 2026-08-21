@@ -895,7 +895,11 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_concurrency_artifacts_require_complete_workers_queries_and_recall(self) -> None:
         summaries = [
             {
-                "schema_version": "borsuk-production-bench-v14",
+                "schema_version": "borsuk-production-bench-v15",
+                "scan_codec": "fast-turboquant-scan",
+                "execution_engine": "bounded-cell-card-v20",
+                "nprobe": "32",
+                "max_candidates": "512",
                 "workers": str(workers),
                 "total_queries": "2",
                 "qps": str(10 * workers),
@@ -909,7 +913,11 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         ]
         samples = [
             {
-                "schema_version": "borsuk-production-bench-v14",
+                "schema_version": "borsuk-production-bench-v15",
+                "scan_codec": "fast-turboquant-scan",
+                "execution_engine": "bounded-cell-card-v20",
+                "nprobe": "32",
+                "max_candidates": "512",
                 "workers": str(workers),
                 "sample_index": str(sample),
                 "latency_ms": "5",
@@ -924,6 +932,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             expected_workers=(1, 2, 4),
             expected_queries=2,
             minimum_recall_ppm=980_000,
+            expected_scan_codec="fast-turboquant-scan",
+            expected_nprobe=32,
+            expected_max_candidates=512,
         )
         self.assertEqual([row["workers"] for row in metrics], [1, 2, 4])
         self.assertEqual(metrics[-1]["qps_milli"], 40_000)
@@ -934,6 +945,48 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_workers=(1, 2, 4),
                 expected_queries=2,
                 minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+            )
+        wrong_codec = json.loads(json.dumps(samples))
+        wrong_codec[0]["scan_codec"] = "srht-pq-scan"
+        with self.assertRaisesRegex(ValueError, "concurrency sample differs"):
+            summarize_concurrency_artifacts(
+                summaries,
+                wrong_codec,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+            )
+        fallback = json.loads(json.dumps(samples))
+        fallback[0]["execution_engine"] = "fast-turboquant-scan"
+        with self.assertRaisesRegex(ValueError, "concurrency sample differs"):
+            summarize_concurrency_artifacts(
+                summaries,
+                fallback,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+            )
+        wrong_budget = json.loads(json.dumps(summaries))
+        wrong_budget[0]["nprobe"] = "64"
+        with self.assertRaisesRegex(ValueError, "concurrency summary differs"):
+            summarize_concurrency_artifacts(
+                wrong_budget,
+                samples,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
             )
 
     def test_unavailable_local_system_is_rejected_not_simulated(self) -> None:
@@ -977,7 +1030,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         for index, (latency, recall) in enumerate(((1.0, 0.96), (2.0, 0.95), (4.0, 0.99))):
             rows.append(
                 {
-                    "schema_version": "borsuk-production-bench-v14",
+                    "schema_version": "borsuk-production-bench-v15",
                     "sample_index": str(index),
                     "latency_ms": str(latency),
                     "recall_at_10": str(recall),
@@ -1000,6 +1053,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 {
                     "phase": "uncached",
                     "mode": "srht-pq-scan",
+                    "scan_codec": "srht-pq-scan",
+                    "execution_engine": "bounded-cell-card-v20",
                     "nprobe": "32",
                     "max_candidates": "512",
                 }
@@ -1034,6 +1089,46 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             enforce_quality=False,
         )
         self.assertEqual(smoke["correctness_ppm"], 940000)
+
+        turboquant_cell = json.loads(json.dumps(cell))
+        turboquant_cell["index_profile"].update(
+            {
+                "leaf_codec": "fast-turboquant-scan",
+                "turboquant_bits": 4,
+                "turboquant_qjl_bits": 0,
+                "turboquant_shards": 1,
+            }
+        )
+        turboquant_cell["index_profile"].pop("code_bytes")
+        turboquant_rows = json.loads(json.dumps(rows))
+        for row in turboquant_rows:
+            row["mode"] = "fast-turboquant-scan"
+            row["scan_codec"] = "fast-turboquant-scan"
+        turboquant = summarize_query_samples(
+            turboquant_rows,
+            cell=turboquant_cell,
+            arm=arm,
+            expected_queries=3,
+        )
+        self.assertEqual(turboquant["correctness_ppm"], 966667)
+        wrong_codec_rows = json.loads(json.dumps(turboquant_rows))
+        wrong_codec_rows[0]["scan_codec"] = "srht-pq-scan"
+        with self.assertRaisesRegex(ValueError, "different factor arm"):
+            summarize_query_samples(
+                wrong_codec_rows,
+                cell=turboquant_cell,
+                arm=arm,
+                expected_queries=3,
+            )
+        fallback_rows = json.loads(json.dumps(turboquant_rows))
+        fallback_rows[0]["execution_engine"] = "fast-turboquant-scan"
+        with self.assertRaisesRegex(ValueError, "different factor arm"):
+            summarize_query_samples(
+                fallback_rows,
+                cell=turboquant_cell,
+                arm=arm,
+                expected_queries=3,
+            )
 
     def test_read_arms_expand_one_declared_axis_without_cross_product_aliasing(self) -> None:
         cell = scheduled_cell()

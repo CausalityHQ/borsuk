@@ -83,7 +83,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
         },
         "index_profiles": {
             "borsuk": {
-                "engine": "borsuk-v12",
+                "engine": "borsuk-v20",
                 "logical_cells": 16384,
                 "minimum_rows_per_logical_cell": 256,
                 "training_rows_per_cell": 32,
@@ -217,7 +217,7 @@ def paid_v3_manifest() -> dict[str, object]:
 
 
 class PublicationV3ProtocolTests(unittest.TestCase):
-    def test_read_workload_rejects_non_v12_leaf_page_budget(self) -> None:
+    def test_read_workload_rejects_non_v20_leaf_page_budget(self) -> None:
         manifest = valid_v3_manifest()
         workload = next(
             item for item in manifest["workloads"] if item["kind"] == "read-recall"
@@ -645,6 +645,13 @@ class PublicationV3ProtocolTests(unittest.TestCase):
     def test_release_manifest_covers_realistic_standard_and_100m_datasets(self) -> None:
         path = Path("docs/research/publication-v3-manifest.json")
         manifest = validate_manifest(json.loads(path.read_text(encoding="utf-8")))
+        profile = manifest["index_profiles"]["borsuk"]
+        self.assertEqual(profile["engine"], "borsuk-v20")
+        self.assertEqual(profile["leaf_codec"], "fast-turboquant-scan")
+        self.assertEqual(profile["turboquant_bits"], 4)
+        self.assertEqual(profile["turboquant_qjl_bits"], 0)
+        self.assertEqual(profile["turboquant_shards"], 1)
+        self.assertNotIn("code_bytes", profile)
         dataset_ids = {dataset["id"] for dataset in manifest["datasets"]}
         self.assertTrue(
             {
