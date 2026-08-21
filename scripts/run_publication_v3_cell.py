@@ -34,7 +34,14 @@ try:
         read_protocol,
         validate_manifest,
     )
-    from scripts.production_bench_schema import PRODUCTION_BENCH_SCHEMA_VERSION
+    from scripts.production_bench_schema import (
+        PRODUCTION_BENCH_SCHEMA_VERSION,
+        QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE,
+        QUERY_STAGE_AGGREGATE_FIELDS,
+        QUERY_STAGE_MAX_FIELDS,
+        QUERY_STAGE_TIMING_FIELDS,
+        validate_query_stage_timings,
+    )
     from scripts.publication_v3_receipts import (
         build_index_receipt,
         receipt_document_sha256,
@@ -63,7 +70,14 @@ except ModuleNotFoundError:
         read_protocol,
         validate_manifest,
     )
-    from production_bench_schema import PRODUCTION_BENCH_SCHEMA_VERSION
+    from production_bench_schema import (  # type: ignore[no-redef]
+        PRODUCTION_BENCH_SCHEMA_VERSION,
+        QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE,
+        QUERY_STAGE_AGGREGATE_FIELDS,
+        QUERY_STAGE_MAX_FIELDS,
+        QUERY_STAGE_TIMING_FIELDS,
+        validate_query_stage_timings,
+    )
     from publication_v3_receipts import (
         build_index_receipt,
         receipt_document_sha256,
@@ -772,6 +786,23 @@ def _nearest_rank(values: list[int], quantile: float) -> int:
     return sorted(values)[max(0, math.ceil(quantile * len(values)) - 1)]
 
 
+def _validated_query_stage_timings(
+    row: dict[str, str], *, role: str
+) -> dict[str, int]:
+    return validate_query_stage_timings(row, role=role)
+
+
+def _accumulate_query_stage_timings(
+    totals: dict[str, int], sample: dict[str, int]
+) -> None:
+    for field, value in sample.items():
+        aggregate_field = QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE[field]
+        if field in QUERY_STAGE_MAX_FIELDS:
+            totals[aggregate_field] = max(totals[aggregate_field], value)
+        else:
+            totals[aggregate_field] += value
+
+
 def summarize_query_samples(
     rows: list[dict[str, str]],
     *,
@@ -793,6 +824,7 @@ def summarize_query_samples(
     sample_indices: set[int] = set()
     storage_gets = 0
     storage_bytes_read = 0
+    timing_totals = {field: 0 for field in QUERY_STAGE_AGGREGATE_FIELDS}
     diagnostic_values: dict[str, list[int]] = {
         "global_leaf_exact_scores": [],
         "global_leaf_code_pages_read": [],
@@ -830,6 +862,10 @@ def summarize_query_samples(
             raise ValueError("query sample storage telemetry is invalid")
         storage_gets += network_gets
         storage_bytes_read += bytes_read
+        _accumulate_query_stage_timings(
+            timing_totals,
+            _validated_query_stage_timings(row, role="query sample"),
+        )
         for field, values in diagnostic_values.items():
             value = row.get(field)
             if value is None:
@@ -873,6 +909,7 @@ def summarize_query_samples(
         "global_leaf_exact_requests": sum(
             diagnostic_values["global_leaf_exact_requests"]
         ),
+        **timing_totals,
         "query_elapsed_ns": sum(latencies_us) * 1_000,
     }
 
@@ -923,6 +960,10 @@ def summarize_concurrency_artifacts(
 
     sample_indices = {worker: set() for worker in expected_workers}
     recalls = {worker: [] for worker in expected_workers}
+    timing_totals = {
+        worker: {field: 0 for field in QUERY_STAGE_AGGREGATE_FIELDS}
+        for worker in expected_workers
+    }
     for row in samples:
         worker = int(row.get("workers", "-1"))
         if (
@@ -948,6 +989,10 @@ def summarize_concurrency_artifacts(
             raise ValueError("concurrency sample latency or recall is invalid")
         sample_indices[worker].add(sample_index)
         recalls[worker].append(round(recall * 1_000_000))
+        _accumulate_query_stage_timings(
+            timing_totals[worker],
+            _validated_query_stage_timings(row, role="concurrency sample"),
+        )
 
     result = []
     for worker in expected_workers:
@@ -966,6 +1011,7 @@ def summarize_concurrency_artifacts(
                 "p95_us": round(float(row["p95_ms"]) * 1_000),
                 "p99_us": round(float(row["p99_ms"]) * 1_000),
                 "recall_ppm": recall_ppm,
+                **timing_totals[worker],
             }
         )
     return result
@@ -1464,7 +1510,7 @@ def build_publication_report(
             "global_leaf_exact_requests",
             "query_elapsed_ns",
         }
-    )
+    ) | frozenset(QUERY_STAGE_AGGREGATE_FIELDS)
     expected_resource_fields = frozenset(
         {
             "cpu_ns",
@@ -1482,7 +1528,7 @@ def build_publication_report(
     ):
         raise ValueError("publication runtime write metric fields differ")
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "complete",
         "cell_id": cell.get("cell_id"),
         "manifest_sha256": cell.get("manifest_sha256"),

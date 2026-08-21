@@ -14,6 +14,7 @@ from scripts.publication_v3_protocol import (
 )
 from scripts.publication_v3_receipts import build_index_receipt, receipt_document_sha256
 from scripts.publication_v3_results import validate_cell_result
+from scripts.production_bench_schema import QUERY_STAGE_AGGREGATE_FIELDS
 from scripts.run_publication_v3_cell import (
     PRODUCTION_BUILD_FIELDS,
     authorize_publication_mutation_runtime,
@@ -560,6 +561,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "global_leaf_code_requests": 4,
                 "global_leaf_exact_requests": 6,
                 "query_elapsed_ns": 1_000_000_000,
+                **{field: 0 for field in QUERY_STAGE_AGGREGATE_FIELDS},
             },
             resource_metrics={
                 "cpu_ns": 1_500_000_000,
@@ -900,7 +902,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_concurrency_artifacts_require_complete_workers_queries_and_recall(self) -> None:
         summaries = [
             {
-                "schema_version": "borsuk-production-bench-v15",
+                "schema_version": "borsuk-production-bench-v16",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -918,7 +920,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         ]
         samples = [
             {
-                "schema_version": "borsuk-production-bench-v15",
+                "schema_version": "borsuk-production-bench-v16",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -927,6 +929,21 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "sample_index": str(sample),
                 "latency_ms": "5",
                 "recall_at_10": "0.99",
+                "global_base_approximate_us": "1",
+                "global_base_head_admission_us": "2",
+                "global_base_head_fetch_us": "3",
+                "global_base_head_decode_admission_us": "4",
+                "global_base_head_decode_us": "5",
+                "global_base_exact_admission_us": "6",
+                "global_base_exact_fetch_us": "10",
+                "global_base_exact_read_us_max": "8",
+                "global_base_exact_read_us_sum": "20",
+                "global_base_exact_reads_over_20ms": "2",
+                "global_base_exact_reads_over_30ms": "1",
+                "global_base_exact_reads_over_50ms": "0",
+                "global_base_exact_reads_over_100ms": "0",
+                "global_base_exact_cpu_us": "7",
+                "global_base_exact_rerank_us": "23",
             }
             for workers in (1, 2, 4)
             for sample in range(2)
@@ -943,6 +960,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         self.assertEqual([row["workers"] for row in metrics], [1, 2, 4])
         self.assertEqual(metrics[-1]["qps_milli"], 40_000)
+        self.assertEqual(metrics[-1]["global_base_exact_fetch_us_total"], 20)
+        self.assertEqual(metrics[-1]["global_base_exact_read_us_sum_total"], 40)
         with self.assertRaisesRegex(ValueError, "incomplete"):
             summarize_concurrency_artifacts(
                 summaries,
@@ -960,6 +979,19 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             summarize_concurrency_artifacts(
                 summaries,
                 wrong_codec,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+            )
+        missing_timing = json.loads(json.dumps(samples))
+        del missing_timing[0]["global_base_exact_fetch_us"]
+        with self.assertRaisesRegex(ValueError, "timing telemetry is missing"):
+            summarize_concurrency_artifacts(
+                summaries,
+                missing_timing,
                 expected_workers=(1, 2, 4),
                 expected_queries=2,
                 minimum_recall_ppm=980_000,
@@ -1031,11 +1063,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
     def test_query_summary_uses_every_real_sample_and_quality_floor(self) -> None:
         cell = scheduled_cell()
+        cell["queries_per_repetition"] = 3
         rows = []
         for index, (latency, recall) in enumerate(((1.0, 0.96), (2.0, 0.95), (4.0, 0.99))):
             rows.append(
                 {
-                    "schema_version": "borsuk-production-bench-v15",
+                    "schema_version": "borsuk-production-bench-v16",
                     "sample_index": str(index),
                     "latency_ms": str(latency),
                     "recall_at_10": str(recall),
@@ -1046,6 +1079,21 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "global_leaf_pages_read": str(30 + index),
                     "global_leaf_exact_requests": str(index + 3),
                     "global_leaf_exact_scores": str(960 + index * 32),
+                    "global_base_approximate_us": str(10 + index),
+                    "global_base_head_admission_us": "1",
+                    "global_base_head_fetch_us": "2",
+                    "global_base_head_decode_admission_us": "3",
+                    "global_base_head_decode_us": "4",
+                    "global_base_exact_admission_us": "5",
+                    "global_base_exact_fetch_us": str(20 + index),
+                    "global_base_exact_read_us_max": "10",
+                    "global_base_exact_read_us_sum": "30",
+                    "global_base_exact_reads_over_20ms": "2",
+                    "global_base_exact_reads_over_30ms": "1",
+                    "global_base_exact_reads_over_50ms": "0",
+                    "global_base_exact_reads_over_100ms": "0",
+                    "global_base_exact_cpu_us": "6",
+                    "global_base_exact_rerank_us": "31",
                 }
             )
         arm = {
@@ -1074,7 +1122,55 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(summary["storage_bytes_read"], 600)
         self.assertEqual(summary["global_leaf_code_requests"], 9)
         self.assertEqual(summary["global_leaf_exact_requests"], 12)
+        self.assertEqual(summary["global_base_exact_fetch_us_total"], 63)
+        self.assertEqual(summary["global_base_exact_read_us_sum_total"], 90)
+        self.assertEqual(summary["global_base_exact_reads_over_20ms_total"], 6)
         self.assertEqual(summary["query_elapsed_ns"], 7_000_000)
+
+        protocol = canonical_json_bytes(cell) + b"\n"
+        receipt = build_index_receipt(
+            cell=cell,
+            source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+            build_attempt_id="build-attempt-01",
+            builder_instance_identity="i-builder-01",
+            builder_instance_type=cell["environment_contract"]["build_workers"]["borsuk"]["instance_type"],
+            build_artifact=build_artifact(cell),
+            object_roster=data_roster(cell),
+            build_metrics=build_metrics(),
+        )
+        attestation = runtime_attestation_for(
+            cell, instance_id="i-0123456789abcdef0"
+        )
+        report = build_publication_report(
+            cell=cell,
+            arm=arm,
+            protocol_bytes=protocol,
+            source_archive_sha256="a" * 64,
+            dataset_materialization_sha256="d" * 64,
+            attempt_id="attempt-01",
+            instance_identity="i-0123456789abcdef0",
+            elapsed_ns=7_000_000,
+            query_metrics=summary,
+            resource_metrics={
+                "cpu_ns": 1_000_000,
+                "peak_rss_bytes": 1024,
+                "disk_read_bytes": 0,
+                "disk_write_bytes": 0,
+            },
+            runtime_write_metrics={"storage_puts": 0, "storage_bytes_written": 0},
+            index_receipt=receipt,
+            runtime_attestation=attestation,
+        )
+        self.assertTrue(report["publishable"])
+        self.assertEqual(report["result"]["schema_version"], 3)
+
+        missing_timing = json.loads(json.dumps(rows))
+        del missing_timing[0]["global_base_exact_fetch_us"]
+        with self.assertRaisesRegex(ValueError, "timing telemetry is missing"):
+            summarize_query_samples(
+                missing_timing, cell=cell, arm=arm, expected_queries=3
+            )
 
         bad = json.loads(json.dumps(rows))
         for row in bad:

@@ -11,15 +11,19 @@ from pathlib import Path
 
 try:
     from .production_bench_schema import (
-        V11_QUERY_TELEMETRY_FIELDS,
+        CURRENT_QUERY_TELEMETRY_FIELDS,
+        QUERY_STAGE_TIMING_FIELDS,
         validate_production_bench_schema_rows,
-        validate_v11_query_sample_rows,
+        validate_current_query_sample_rows,
+        validate_query_stage_timings,
     )
 except ImportError:
     from production_bench_schema import (  # type: ignore[no-redef]
-        V11_QUERY_TELEMETRY_FIELDS,
+        CURRENT_QUERY_TELEMETRY_FIELDS,
+        QUERY_STAGE_TIMING_FIELDS,
         validate_production_bench_schema_rows,
-        validate_v11_query_sample_rows,
+        validate_current_query_sample_rows,
+        validate_query_stage_timings,
     )
 
 DEFAULT_REQUIRED = (
@@ -88,7 +92,7 @@ REQUIRED_COLUMNS = {
         "transient_bytes",
         "transient_capacity_bytes",
         "transient_peak_bytes",
-        *V11_QUERY_TELEMETRY_FIELDS,
+        *CURRENT_QUERY_TELEMETRY_FIELDS,
     },
     "bench_concurrency.csv": {
         "schema_version",
@@ -125,6 +129,7 @@ REQUIRED_COLUMNS = {
         "transient_bytes",
         "transient_capacity_bytes",
         "transient_peak_bytes",
+        *QUERY_STAGE_TIMING_FIELDS,
     },
     "bench_write_costs.csv": {
         "op",
@@ -732,9 +737,12 @@ def validate_directory(
         with path.open(newline="") as handle:
             parsed[name] = list(csv.DictReader(handle))
         if name == "bench_query_samples.csv":
-            validate_v11_query_sample_rows(parsed[name], path)
+            validate_current_query_sample_rows(parsed[name], path)
         elif name in {"bench_concurrency.csv", "bench_concurrency_samples.csv"}:
             validate_production_bench_schema_rows(parsed[name], path)
+            if name == "bench_concurrency_samples.csv":
+                for line, row in enumerate(parsed[name], start=2):
+                    validate_query_stage_timings(row, role=f"{path}:{line}")
         _validate_distribution_rows(path, parsed[name])
 
     _validate_sample_reconciliation(

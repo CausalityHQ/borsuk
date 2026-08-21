@@ -20,12 +20,12 @@ except ModuleNotFoundError:
 try:
     from .production_bench_schema import (
         PRODUCTION_BENCH_SCHEMA_VERSION,
-        validate_v11_query_sample_rows,
+        validate_current_query_sample_rows,
     )
 except ImportError:
     from production_bench_schema import (
         PRODUCTION_BENCH_SCHEMA_VERSION,
-        validate_v11_query_sample_rows,  # type: ignore[no-redef]
+        validate_current_query_sample_rows,  # type: ignore[no-redef]
     )
 
 FIELDS = [
@@ -274,7 +274,7 @@ def _validate_segment_path(row: dict[str, str], case_id: str) -> None:
 def _validate_query_sample_schema_rows(
     rows: list[dict[str, str]], case_id: str
 ) -> None:
-    validate_v11_query_sample_rows(rows, f"{case_id}/bench_query_samples.csv")
+    validate_current_query_sample_rows(rows, f"{case_id}/bench_query_samples.csv")
 
 
 def _validate_sample_identity(

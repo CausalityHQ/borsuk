@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from scripts import assemble_storage_layout_qualification as assemble
+from scripts.production_bench_schema import QUERY_STAGE_TIMING_FIELDS
 
 
 class AssembleStorageLayoutQualificationTest(unittest.TestCase):
@@ -60,12 +61,17 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
             (case / "resources.csv").write_text(
                 "elapsed_ms,cpu_percent,rss_bytes\n0,0,100\n100,50,200\n300,25,150\n"
             )
+            timing_header = ",".join(QUERY_STAGE_TIMING_FIELDS)
+            timing_values = ",".join("0" for _ in QUERY_STAGE_TIMING_FIELDS)
             (case / "bench_query_samples.csv").write_text(
                 "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,latency_ms,"
                 "query_source_index,recall_at_10,network_gets,backing_reads,bytes_read,backing_bytes_read,segments_searched,"
-                "global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,execution_engine,query_seed,repetition_id,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes\n"
-                "borsuk-production-bench-v15,srht-pq-scan,scan,uncached,srht-pq-scan,8,320,0,1.5,17,0.99,3,7,2048,1024,8,0,0,0,0,0,0,0,0,0,srht-pq-scan,17,r01,0,0,0,0,0\n"
-                "borsuk-production-bench-v15,srht-pq-scan,scan,disk_cached,srht-pq-scan,8,320,0,0.5,17,0.99,0,0,128,0,8,0,0,0,0,0,0,0,0,0,srht-pq-scan,17,r01,0,0,0,0,0\n"
+                "global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,execution_engine,query_seed,repetition_id,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,"
+                f"{timing_header}\n"
+                "borsuk-production-bench-v16,srht-pq-scan,scan,uncached,srht-pq-scan,8,320,0,1.5,17,0.99,3,7,2048,1024,8,0,0,0,0,0,0,0,0,0,srht-pq-scan,17,r01,0,0,0,0,0,"
+                f"{timing_values}\n"
+                "borsuk-production-bench-v16,srht-pq-scan,scan,disk_cached,srht-pq-scan,8,320,0,0.5,17,0.99,0,0,128,0,8,0,0,0,0,0,0,0,0,0,srht-pq-scan,17,r01,0,0,0,0,0,"
+                f"{timing_values}\n"
             )
 
             rows = assemble.assemble_rows(root, minimum_samples=1)
@@ -92,7 +98,7 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
             "mode": "srht-pq-scan",
             "nprobe": "8",
             "max_candidates": "320",
-            "schema_version": "borsuk-production-bench-v15",
+            "schema_version": "borsuk-production-bench-v16",
             "segments_searched": "8",
             "global_leaf_directory_reads": "1",
             "global_leaf_directory_bytes": "1",
@@ -127,7 +133,7 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
 
     def test_rejects_off_cohort_or_mixed_schema_rows_before_selection(self) -> None:
         valid = {
-            "schema_version": "borsuk-production-bench-v15",
+            "schema_version": "borsuk-production-bench-v16",
             "global_leaf_directory_reads": "0",
             "global_leaf_directory_bytes": "0",
             "global_leaf_code_pages_read": "0",
@@ -144,6 +150,7 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
             "global_leaf_exact_groups": "0",
             "global_leaf_exact_selected_bytes": "0",
             "global_leaf_exact_speculative_bytes": "0",
+            **{field: "0" for field in QUERY_STAGE_TIMING_FIELDS},
         }
         off_cohort_v9 = {
             **valid,

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.production_bench_schema import QUERY_STAGE_TIMING_FIELDS
 from scripts.validate_benchmark_artifacts import validate_directory
 
 
@@ -38,7 +39,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v15",
+                    "borsuk-production-bench-v16",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -94,10 +95,11 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "global_leaf_exact_groups",
                 "global_leaf_exact_selected_bytes",
                 "global_leaf_exact_speculative_bytes",
+                *QUERY_STAGE_TIMING_FIELDS,
             ],
             [
                 [
-                    "borsuk-production-bench-v15",
+                    "borsuk-production-bench-v16",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -131,9 +133,24 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     1,
                     100,
                     0,
+                    1,
+                    0,
+                    2,
+                    0,
+                    1,
+                    0,
+                    10,
+                    8,
+                    20,
+                    0,
+                    0,
+                    0,
+                    0,
+                    2,
+                    12,
                 ],
                 [
-                    "borsuk-production-bench-v15",
+                    "borsuk-production-bench-v16",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -167,11 +184,26 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     1,
                     100,
                     0,
+                    1,
+                    0,
+                    2,
+                    0,
+                    1,
+                    0,
+                    10,
+                    8,
+                    20,
+                    0,
+                    0,
+                    0,
+                    0,
+                    2,
+                    12,
                 ],
             ],
         )
 
-    def test_query_samples_require_exact_v11_schema_and_telemetry(self) -> None:
+    def test_query_samples_require_exact_current_schema_and_telemetry(self) -> None:
         mutations = (
             ("missing", lambda rows: [row.pop("schema_version") for row in rows]),
             (
@@ -190,6 +222,24 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             (
                 "telemetry",
                 lambda rows: [row.pop("global_leaf_exact_scores") for row in rows],
+            ),
+            (
+                "empty timing",
+                lambda rows: [
+                    row.__setitem__("global_base_exact_fetch_us", "") for row in rows
+                ],
+            ),
+            (
+                "negative timing",
+                lambda rows: [
+                    row.__setitem__("global_base_exact_fetch_us", "-1") for row in rows
+                ],
+            ),
+            (
+                "nonnumeric timing",
+                lambda rows: [
+                    row.__setitem__("global_base_exact_fetch_us", "abc") for row in rows
+                ],
             ),
         )
         for label, mutate in mutations:
@@ -268,7 +318,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 ),
             )
 
-    def test_concurrency_requires_v15_authority_and_routing_identity(self) -> None:
+    def test_concurrency_requires_current_authority_and_routing_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             summary_header = [
@@ -307,9 +357,10 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "transient_bytes",
                 "transient_capacity_bytes",
                 "transient_peak_bytes",
+                *QUERY_STAGE_TIMING_FIELDS,
             ]
             summary = [
-                "borsuk-production-bench-v15",
+                "borsuk-production-bench-v16",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -326,7 +377,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 5,
             ]
             sample = [
-                "borsuk-production-bench-v15",
+                "borsuk-production-bench-v16",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -344,6 +395,21 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 50,
                 1024,
                 100,
+                1,
+                0,
+                2,
+                0,
+                1,
+                0,
+                10,
+                8,
+                20,
+                0,
+                0,
+                0,
+                0,
+                2,
+                12,
             ]
             self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
             self.write_csv(
@@ -351,6 +417,23 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             )
             required = ("bench_concurrency.csv", "bench_concurrency_samples.csv")
             validate_directory(root, "fast-turboquant-scan", required)
+
+            timing_index = sample_header.index("global_base_exact_read_us_sum")
+            for invalid in ("", -1, "abc"):
+                with self.subTest(invalid_timing=invalid):
+                    corrupted = list(sample)
+                    corrupted[timing_index] = invalid
+                    self.write_csv(
+                        root,
+                        "bench_concurrency_samples.csv",
+                        sample_header,
+                        [corrupted],
+                    )
+                    with self.assertRaisesRegex(ValueError, "timing telemetry"):
+                        validate_directory(root, "fast-turboquant-scan", required)
+            self.write_csv(
+                root, "bench_concurrency_samples.csv", sample_header, [sample]
+            )
 
             summary[0] = "borsuk-production-bench-v14"
             sample[0] = "borsuk-production-bench-v14"
@@ -361,8 +444,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "schema"):
                 validate_directory(root, "fast-turboquant-scan", required)
 
-            summary[0] = "borsuk-production-bench-v15"
-            sample[0] = "borsuk-production-bench-v15"
+            summary[0] = "borsuk-production-bench-v16"
+            sample[0] = "borsuk-production-bench-v16"
             sample[4] = 32
             self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
             self.write_csv(

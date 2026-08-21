@@ -8,8 +8,10 @@ import hashlib
 import re
 
 try:
+    from scripts.production_bench_schema import QUERY_STAGE_AGGREGATE_FIELDS
     from scripts.publication_v3_protocol import canonical_json_bytes
 except ModuleNotFoundError:
+    from production_bench_schema import QUERY_STAGE_AGGREGATE_FIELDS
     from publication_v3_protocol import canonical_json_bytes
 
 OBJECT_FIELDS = frozenset({"role", "path", "format", "bytes", "rows", "checksum", "etag"})
@@ -60,9 +62,10 @@ READ_METRIC_FIELDS_V1 = frozenset(
         "storage_bytes_written",
     }
 )
-READ_METRIC_FIELDS = READ_METRIC_FIELDS_V1 | frozenset(
+READ_METRIC_FIELDS_V2 = READ_METRIC_FIELDS_V1 | frozenset(
     {"global_leaf_code_requests", "global_leaf_exact_requests"}
 )
+READ_METRIC_FIELDS = READ_METRIC_FIELDS_V2 | frozenset(QUERY_STAGE_AGGREGATE_FIELDS)
 LIFECYCLE_METRIC_FIELDS = frozenset(
     {
         "insert_ops",
@@ -284,7 +287,7 @@ def validate_cell_result(
 ) -> dict[str, object]:
     if not isinstance(value, dict) or frozenset(value) != RESULT_FIELDS:
         raise ValueError("cell result fields differ")
-    if value["schema_version"] not in (1, 2) or value["status"] != "complete":
+    if value["schema_version"] not in (1, 2, 3) or value["status"] != "complete":
         raise ValueError("cell result schema or status is invalid")
     if value["cell_id"] != cell.get("cell_id"):
         raise ValueError("cell result identity differs from its protocol")
@@ -376,6 +379,8 @@ def validate_cell_result(
         if result_schema_version == 1:
             expected_metric_fields = READ_METRIC_FIELDS_V1
         elif result_schema_version == 2:
+            expected_metric_fields = READ_METRIC_FIELDS_V2
+        elif result_schema_version == 3:
             expected_metric_fields = READ_METRIC_FIELDS
         else:
             raise ValueError("cell result schema version is unsupported")
@@ -455,9 +460,29 @@ def validate_cell_result(
         "storage_bytes_written",
     ):
         _nonnegative_integer(metrics[field], field.replace("_", " "))
-    if workload_kind == "read-recall" and result_schema_version == 2:
+    if workload_kind == "read-recall" and result_schema_version >= 2:
         for field in ("global_leaf_code_requests", "global_leaf_exact_requests"):
             _nonnegative_integer(metrics[field], field.replace("_", " "))
+    if workload_kind == "read-recall" and result_schema_version == 3:
+        for field in QUERY_STAGE_AGGREGATE_FIELDS:
+            _nonnegative_integer(metrics[field], field.replace("_", " "))
+        if (
+            metrics["global_base_exact_read_us_max_across_queries"]
+            > metrics["global_base_exact_read_us_sum_total"]
+            or metrics["global_base_exact_read_us_max_across_queries"]
+            > metrics["global_base_exact_fetch_us_total"]
+            or metrics["global_base_exact_fetch_us_total"]
+            > metrics["global_base_exact_rerank_us_total"]
+        ):
+            raise ValueError("cell result timing aggregates are inconsistent")
+        timing_tails = [
+            metrics["global_base_exact_reads_over_20ms_total"],
+            metrics["global_base_exact_reads_over_30ms_total"],
+            metrics["global_base_exact_reads_over_50ms_total"],
+            metrics["global_base_exact_reads_over_100ms_total"],
+        ]
+        if timing_tails != sorted(timing_tails, reverse=True):
+            raise ValueError("cell result timing aggregates are inconsistent")
     if workload_kind == "read-recall" and (
         metrics["storage_puts"] != 0 or metrics["storage_bytes_written"] != 0
     ):
