@@ -21,9 +21,9 @@ use uuid::Uuid;
 
 use crate::{
     cell_wal::{
-        CellWalClaimCheckpoint, CellWalRunInput, CellWalRunKind, CellWalStore,
-        CommittedCellWalTransaction, LogicalCellId, PreparedCellWalRun, cell_wal_run_identity,
-        cell_wal_run_transaction_id,
+        ArtifactStagingLease, CellWalClaimCheckpoint, CellWalRunInput, CellWalRunKind,
+        CellWalStore, CommittedCellWalTransaction, LogicalCellId, PreparedCellWalRun,
+        cell_wal_run_identity, cell_wal_run_transaction_id,
     },
     centroid_hnsw::{CatalogRouter, CatalogRoutingStrategy, CentroidHnsw},
     collection_control::{
@@ -15610,6 +15610,19 @@ impl BorsukIndex {
         Ok(report)
     }
 
+    fn gc_protected_transaction_ids_snapshot(&self, read_only: bool) -> Result<BTreeSet<String>> {
+        let mut transaction_ids = self
+            .collection_storage
+            .collection_wal_authorized_transaction_ids_snapshot()?;
+        let cell_wal = self.cell_wal_store()?;
+        transaction_ids.extend(if read_only {
+            cell_wal.live_staging_transaction_ids_read_only()?
+        } else {
+            cell_wal.live_staging_transaction_ids()?
+        });
+        Ok(transaction_ids)
+    }
+
     fn gc_obsolete_segments_impl(
         &mut self,
         options: GarbageCollectionOptions,
@@ -15668,10 +15681,8 @@ impl BorsukIndex {
         active_paths
             .paths
             .extend(self.active_collection_wal_descriptor_paths()?);
-        let mut protected_transaction_ids = self
-            .collection_storage
-            .collection_wal_authorized_transaction_ids_snapshot()?;
-        protected_transaction_ids.extend(self.cell_wal_store()?.live_staging_transaction_ids()?);
+        let protected_transaction_ids =
+            self.gc_protected_transaction_ids_snapshot(options.dry_run)?;
         let mut objects_scanned = 0_usize;
         let mut candidates = Vec::new();
         {
@@ -15843,9 +15854,7 @@ impl BorsukIndex {
                 path: COLLECTION_CURRENT.to_string(),
             });
         }
-        let protected_transaction_ids_now = self
-            .collection_storage
-            .collection_wal_authorized_transaction_ids_snapshot()?;
+        let protected_transaction_ids_now = self.gc_protected_transaction_ids_snapshot(false)?;
         let candidates: Vec<GarbageCollectionCandidate> = candidates
             .into_iter()
             .filter(|candidate| {
@@ -19261,6 +19270,7 @@ impl BorsukIndex {
     fn persist_coarse_quantizer(
         &self,
         summaries: &[SegmentSummary],
+        lease: &ArtifactStagingLease,
     ) -> Result<Option<QuantizerRef>> {
         if !self.manifest.build_config.persist_coarse_quantizer {
             return Ok(None);
@@ -19275,8 +19285,18 @@ impl BorsukIndex {
         };
         let bytes = persisted.encode()?;
         let checksum = blake3::hash(&bytes).to_hex().to_string();
+        if let Some(reference) = self
+            .manifest
+            .quantizer_ref
+            .as_ref()
+            .filter(|reference| reference.checksum == checksum)
+            && self.storage.exists(&reference.path)?
+        {
+            return Ok(Some(reference.clone()));
+        }
+        lease.renew()?;
         let path = quantizer_relative_path(&checksum);
-        self.storage.write_bytes_content_addressed(&path, &bytes)?;
+        let path = lease.write_artifact(&path, &bytes)?.path;
         Ok(Some(QuantizerRef {
             path,
             checksum,
@@ -19307,7 +19327,7 @@ impl BorsukIndex {
         if !self.manifest.build_config.persist_coarse_quantizer {
             // Disabled: ensure no stale reference lingers.
             if self.manifest.quantizer_ref.is_some() {
-                self.republish_manifest_metadata_with_quantizer_ref(None)?;
+                self.republish_manifest_metadata_with_quantizer_ref(None, None)?;
             }
             return Ok(());
         }
@@ -19321,14 +19341,23 @@ impl BorsukIndex {
             Ok(summaries) => summaries,
             Err(_) => return Ok(()),
         };
-        let desired = match self.persist_coarse_quantizer(&summaries) {
+        let Ok(cell_wal) = self.cell_wal_store() else {
+            return Ok(());
+        };
+        let mut lease = match cell_wal.begin_artifact_staging() {
+            Ok(lease) => lease,
+            Err(_) => return Ok(()),
+        };
+        let desired = match self.persist_coarse_quantizer(&summaries, &lease) {
             Ok(desired) => desired,
             Err(_) => return Ok(()),
         };
         if desired == self.manifest.quantizer_ref {
+            let _ = lease.finish();
             return Ok(());
         }
-        self.republish_manifest_metadata_with_quantizer_ref(desired)?;
+        self.republish_manifest_metadata_with_quantizer_ref(desired, Some(&lease))?;
+        let _ = lease.finish();
         Ok(())
     }
 
@@ -19339,6 +19368,7 @@ impl BorsukIndex {
     fn republish_manifest_metadata_with_quantizer_ref(
         &mut self,
         quantizer_ref: Option<QuantizerRef>,
+        artifact_lease: Option<&ArtifactStagingLease>,
     ) -> Result<()> {
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
@@ -19356,6 +19386,12 @@ impl BorsukIndex {
                 previous.routing_max_level,
             )?;
             if !top_read.page_refs.is_empty() {
+                if let Some(lease) = artifact_lease {
+                    // Renew after the potentially slow routing read, immediately
+                    // before the manifest CAS. GC must either lose its exact
+                    // STATE CAS to this renewal or fence us before publication.
+                    lease.renew()?;
+                }
                 self.manifest = self.publish_manifest_with_top_routing_page_refs_with_recovery(
                     manifest,
                     previous.routing_max_level,
@@ -19363,6 +19399,9 @@ impl BorsukIndex {
                 )?;
                 return Ok(());
             }
+        }
+        if let Some(lease) = artifact_lease {
+            lease.renew()?;
         }
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
@@ -42109,6 +42148,132 @@ mod tests {
             lexical_shards: Vec::new(),
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn persisted_quantizer_publish_uses_a_closed_attempt_namespace() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index.manifest.build_config.persist_coarse_quantizer = true;
+        index.manifest.segments = (0..COARSE_QUANTIZER_MIN_CELLS)
+            .map(|ordinal| fake_segment_summary(format!("cell-{ordinal}"), 0, ordinal))
+            .collect();
+
+        index.refresh_persisted_quantizer().unwrap();
+
+        let reference = index.manifest.quantizer_ref.as_ref().unwrap();
+        let transaction_id = collection_transaction_id_from_immutable_path(&reference.path)
+            .expect("published quantizer must retain its staging-attempt namespace");
+        assert!(
+            index
+                .storage
+                .read_object_fresh(&reference.path)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            !index
+                .cell_wal_store()
+                .unwrap()
+                .live_staging_transaction_ids()
+                .unwrap()
+                .contains(transaction_id),
+            "the published manifest, not a lingering lease, must protect the quantizer"
+        );
+
+        let published_version = index.manifest.version;
+        let published_path = reference.path.clone();
+        index.refresh_persisted_quantizer().unwrap();
+        assert_eq!(index.manifest.version, published_version);
+        assert_eq!(
+            index.manifest.quantizer_ref.as_ref().unwrap().path,
+            published_path,
+            "unchanged quantizer bytes must structurally share the published object"
+        );
+
+        index.storage.delete_object(&published_path).unwrap();
+        index.refresh_persisted_quantizer().unwrap();
+        let repaired = index.manifest.quantizer_ref.as_ref().unwrap();
+        assert!(index.manifest.version > published_version);
+        assert_ne!(repaired.path, published_path);
+        assert!(
+            index
+                .storage
+                .read_object_fresh(&repaired.path)
+                .unwrap()
+                .is_some(),
+            "refresh must self-heal a missing referenced quantizer under a fresh lease"
+        );
+    }
+
+    #[test]
+    fn gc_revalidation_preserves_live_staging_artifact_then_reclaims_it_after_finish() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let mut lease = index
+            .cell_wal_store()
+            .unwrap()
+            .begin_artifact_staging()
+            .unwrap();
+        let staged = lease
+            .write_artifact("quantizer/ab/protected.parquet", b"protected")
+            .unwrap();
+        let transaction_id = collection_transaction_id_from_immutable_path(&staged.path).unwrap();
+
+        assert!(
+            index
+                .gc_protected_transaction_ids_snapshot(false)
+                .unwrap()
+                .contains(transaction_id)
+        );
+        index
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+        assert!(
+            index
+                .storage
+                .read_object_fresh(&staged.path)
+                .unwrap()
+                .is_some(),
+            "the post-reload GC protection snapshot must preserve live attempt artifacts"
+        );
+
+        lease.finish().unwrap();
+        index
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+        assert!(
+            index
+                .storage
+                .read_object_fresh(&staged.path)
+                .unwrap()
+                .is_none(),
+            "a closed, unpublished attempt must become reclaimable"
+        );
     }
 
     #[test]

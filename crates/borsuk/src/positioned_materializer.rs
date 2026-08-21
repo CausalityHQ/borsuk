@@ -23,6 +23,7 @@ impl RowBundleObjectSink for StorageRowBundleSink<'_> {
     fn emit(&mut self, artifact: &ArtifactRef, bytes: Bytes) -> Result<()> {
         self.storage
             .write_bytes_content_addressed(&artifact.path, &bytes)
+            .map(|_| ())
     }
 }
 

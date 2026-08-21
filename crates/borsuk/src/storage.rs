@@ -938,6 +938,18 @@ pub(crate) enum CreateOutcome {
     Existing,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContentAddressedWriteOutcome {
+    Written,
+    Existing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransactionScopedArtifactWrite {
+    pub(crate) path: String,
+    pub(crate) outcome: ContentAddressedWriteOutcome,
+}
+
 impl Storage {
     pub(crate) fn clone_with_independent_request_counters(&self) -> Self {
         self.isolated_read_scope()
@@ -1004,6 +1016,7 @@ struct ManifestTableChecksums {
 pub(crate) struct CoordinationObject {
     pub(crate) bytes: Vec<u8>,
     pub(crate) version: UpdateVersion,
+    pub(crate) last_modified: chrono::DateTime<chrono::Utc>,
 }
 
 /// Result of a projected, range-based Parquet read: the decoded batches for the
@@ -2735,15 +2748,56 @@ impl Storage {
     }
 
     /// (hence the bytes on disk) is identical.
-    pub(crate) fn write_bytes_content_addressed(&self, relative: &str, bytes: &[u8]) -> Result<()> {
+    pub(crate) fn write_bytes_content_addressed(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<ContentAddressedWriteOutcome> {
         if bytes.len() > MULTIPART_WRITE_THRESHOLD_BYTES {
             self.write_bytes_multipart(relative, bytes)?;
-            return Ok(());
+            return Ok(ContentAddressedWriteOutcome::Written);
         }
         match self.write_bytes_if_absent(relative, bytes) {
-            Ok(_) | Err(BorsukError::ConcurrentModification { .. }) => Ok(()),
+            Ok(_) => Ok(ContentAddressedWriteOutcome::Written),
+            Err(BorsukError::ConcurrentModification { .. }) => {
+                Ok(ContentAddressedWriteOutcome::Existing)
+            }
             Err(err) => Err(err),
         }
+    }
+
+    pub(crate) fn write_transaction_scoped_artifact(
+        &self,
+        relative: &str,
+        transaction_id: &str,
+        bytes: &[u8],
+    ) -> Result<TransactionScopedArtifactWrite> {
+        if transaction_id.is_empty()
+            || !transaction_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(BorsukError::InvalidStorage(
+                "staging transaction id must contain only ASCII letters, digits, '-' or '_'"
+                    .to_string(),
+            ));
+        }
+        let (parent, file_name) = relative.rsplit_once('/').ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "immutable artifact path must include a managed prefix".to_string(),
+            )
+        })?;
+        if parent.is_empty()
+            || file_name.is_empty()
+            || relative.split('/').any(|part| part == "transactions")
+        {
+            return Err(BorsukError::InvalidStorage(
+                "immutable artifact path cannot be transaction-scoped twice".to_string(),
+            ));
+        }
+        let path = format!("{parent}/transactions/{transaction_id}/{file_name}");
+        let outcome = self.write_bytes_content_addressed(&path, bytes)?;
+        Ok(TransactionScopedArtifactWrite { path, outcome })
     }
 
     #[cfg(test)]
@@ -2894,6 +2948,7 @@ impl Storage {
             e_tag: result.meta.e_tag.clone(),
             version: result.meta.version.clone(),
         };
+        let last_modified = result.meta.last_modified;
         let bytes = self
             .runtime
             .block_on(result.bytes())
@@ -2907,7 +2962,11 @@ impl Storage {
                 1,
                 bytes.len() as u64,
             ))?;
-        Ok(Some(CoordinationObject { bytes, version }))
+        Ok(Some(CoordinationObject {
+            bytes,
+            version,
+            last_modified,
+        }))
     }
 
     /// Create a coordination object or conditionally replace the exact version
@@ -4061,7 +4120,7 @@ impl Storage {
         self.immutable_object_sizes.remove(relative);
     }
 
-    fn exists(&self, relative: &str) -> Result<bool> {
+    pub(crate) fn exists(&self, relative: &str) -> Result<bool> {
         let location = self.resolve(relative)?;
         match self
             .runtime
@@ -4943,9 +5002,10 @@ mod tests {
     };
 
     use super::{
-        CacheReadCounters, CacheReadCounts, CreateOutcome, PrefetchedRead, RangedColumns,
-        ReadBytes, RequestCounters, SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES,
-        Storage, plan_bounded_ranges,
+        CacheReadCounters, CacheReadCounts, ContentAddressedWriteOutcome, CreateOutcome,
+        PrefetchedRead, RangedColumns, ReadBytes, RequestCounters,
+        SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
+        plan_bounded_ranges,
     };
     use crate::{
         centroid_hnsw::{CatalogRouter, CatalogRoutingStrategy},
@@ -5661,6 +5721,48 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn immutable_artifact_paths_are_unique_across_staging_transactions() {
+        let storage = Storage::from_uri("memory:///scoped-immutable-artifact").unwrap();
+        let bytes = b"immutable content";
+
+        let first = storage
+            .write_transaction_scoped_artifact("objects/ab/immutable.parquet", "build-a", bytes)
+            .unwrap();
+        let second = storage
+            .write_transaction_scoped_artifact("objects/ab/immutable.parquet", "build-b", bytes)
+            .unwrap();
+
+        assert_eq!(first.outcome, ContentAddressedWriteOutcome::Written);
+        assert_eq!(second.outcome, ContentAddressedWriteOutcome::Written);
+        assert_eq!(
+            first.path,
+            "objects/ab/transactions/build-a/immutable.parquet"
+        );
+        assert_eq!(
+            second.path,
+            "objects/ab/transactions/build-b/immutable.parquet"
+        );
+        assert_ne!(first.path, second.path);
+    }
+
+    #[test]
+    fn small_immutable_artifact_retry_deduplicates_within_one_staging_transaction() {
+        let storage = Storage::from_uri("memory:///scoped-immutable-retry").unwrap();
+        let bytes = b"immutable content";
+
+        let first = storage
+            .write_transaction_scoped_artifact("objects/ab/immutable.parquet", "build-a", bytes)
+            .unwrap();
+        let retry = storage
+            .write_transaction_scoped_artifact("objects/ab/immutable.parquet", "build-a", bytes)
+            .unwrap();
+
+        assert_eq!(first.path, retry.path);
+        assert_eq!(first.outcome, ContentAddressedWriteOutcome::Written);
+        assert_eq!(retry.outcome, ContentAddressedWriteOutcome::Existing);
     }
 
     #[test]

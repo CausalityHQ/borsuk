@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use crate::positioned_log::{
     CommitSourcePosition, authorized_transaction_receipt, validate_claim_authorization_envelope,
 };
-use crate::storage::{CoordinationObject, Storage};
+use crate::storage::{CoordinationObject, Storage, TransactionScopedArtifactWrite};
 use crate::{BorsukError, Result};
 
 /// Default number of independently published WAL lanes owned by each cell.
@@ -21,7 +21,7 @@ const CELL_WAL_HEAD_MAGIC: &[u8; 4] = b"BWH1";
 const CELL_WAL_NODE_MAGIC: &[u8; 4] = b"BWN1";
 const CELL_WAL_DESCRIPTOR_MAGIC: &[u8; 4] = b"BWD1";
 const CELL_WAL_COMMIT_MAGIC: &[u8; 4] = b"BWC1";
-const CELL_WAL_STATE_MAGIC: &[u8; 4] = b"BWS1";
+const CELL_WAL_STATE_MAGIC: &[u8; 4] = b"BWS2";
 const CELL_WAL_CLAIM_MAGIC: &[u8; 4] = b"BCL1";
 /// Routing-independent explicit-ID coordination shards.
 pub(crate) const CELL_WAL_CLAIM_SHARDS: u16 = 4_096;
@@ -220,9 +220,7 @@ struct CellWalCommitMarker {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CellWalTransactionState {
-    Prepared {
-        expires_at_ms: u64,
-    },
+    Prepared,
     Committing {
         descriptor_path: String,
         descriptor_checksum: String,
@@ -308,6 +306,48 @@ pub(crate) struct CellWalStore {
     storage: Storage,
     config: CellWalConfig,
     source_epoch: u64,
+}
+
+pub(crate) struct ArtifactStagingLease {
+    storage: Storage,
+    transaction_id: String,
+    active: bool,
+}
+
+impl ArtifactStagingLease {
+    pub(crate) fn write_artifact(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<TransactionScopedArtifactWrite> {
+        self.storage
+            .write_transaction_scoped_artifact(relative, &self.transaction_id, bytes)
+    }
+
+    pub(crate) fn renew(&self) -> Result<()> {
+        renew_prepared_transaction(&self.storage, &self.transaction_id)
+    }
+
+    pub(crate) fn finish(&mut self) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        if !abort_prepared_transaction(&self.storage, &self.transaction_id)? {
+            return Err(BorsukError::ConcurrentModification {
+                path: transaction_state_path(&self.transaction_id),
+            });
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for ArtifactStagingLease {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = abort_prepared_transaction(&self.storage, &self.transaction_id);
+        }
+    }
 }
 
 pub(crate) struct CellWalClaimGuard {
@@ -595,11 +635,42 @@ impl CellWalStore {
         Ok(guard)
     }
 
+    pub(crate) fn begin_artifact_staging(&self) -> Result<ArtifactStagingLease> {
+        let transaction_id = format!("build-{}", uuid::Uuid::new_v4().simple());
+        let path = transaction_state_path(&transaction_id);
+        if self
+            .storage
+            .try_create_coordination_object(
+                &path,
+                &transaction_state_bytes(&CellWalTransactionState::Prepared)?,
+            )?
+            .is_none()
+        {
+            return Err(BorsukError::ConcurrentModification { path });
+        }
+        Ok(ArtifactStagingLease {
+            storage: self.storage.clone(),
+            transaction_id,
+            active: true,
+        })
+    }
+
     pub(crate) fn live_staging_transaction_ids(&self) -> Result<BTreeSet<String>> {
         let store_now = self.storage.store_clock_now()?;
-        let ttl = chrono::TimeDelta::milliseconds(
-            i64::try_from(CELL_WAL_TRANSACTION_TTL_MS).unwrap_or(i64::MAX),
-        );
+        self.live_staging_transaction_ids_at(store_now, true)
+    }
+
+    pub(crate) fn live_staging_transaction_ids_read_only(&self) -> Result<BTreeSet<String>> {
+        // Read-only inspection conservatively protects every Prepared attempt;
+        // it must not create a server-clock probe or fence a writer.
+        self.live_staging_transaction_ids_at(chrono::Utc::now(), false)
+    }
+
+    fn live_staging_transaction_ids_at(
+        &self,
+        store_now: chrono::DateTime<chrono::Utc>,
+        fence_expired: bool,
+    ) -> Result<BTreeSet<String>> {
         let mut transaction_ids = BTreeSet::new();
         for object in self.storage.list_objects("transactions")? {
             let Some(transaction_id) = object
@@ -612,15 +683,43 @@ impl CellWalStore {
             let Some(state) = self.storage.read_coordination_object(&object.path)? else {
                 continue;
             };
-            if matches!(
+            if !matches!(
                 transaction_state_from_slice(&state.bytes, &object.path)?,
-                CellWalTransactionState::Prepared { .. }
-            ) && object
-                .last_modified
-                .checked_add_signed(ttl)
-                .is_some_and(|expires_at| expires_at >= store_now)
-            {
+                CellWalTransactionState::Prepared
+            ) {
+                continue;
+            }
+            if staging_transaction_is_live_at(state.last_modified, store_now) {
                 transaction_ids.insert(transaction_id.to_string());
+                continue;
+            }
+            if !fence_expired {
+                transaction_ids.insert(transaction_id.to_string());
+                continue;
+            }
+
+            // Excluding an expired namespace from GC protection must be an
+            // exact, one-way state transition. A renewal racing this CAS either
+            // loses to Aborted or changes the version; in the latter case keep
+            // the namespace protected for this sweep.
+            match self.storage.write_coordination_object(
+                &object.path,
+                &transaction_state_bytes(&CellWalTransactionState::Aborted)?,
+                Some(state.version),
+            ) {
+                Ok(_) => {}
+                Err(BorsukError::ConcurrentModification { .. }) => {
+                    let renewed = self.storage.read_coordination_object(&object.path)?;
+                    if renewed
+                        .as_ref()
+                        .map(|current| transaction_state_from_slice(&current.bytes, &object.path))
+                        .transpose()?
+                        .is_some_and(|state| matches!(state, CellWalTransactionState::Prepared))
+                    {
+                        transaction_ids.insert(transaction_id.to_string());
+                    }
+                }
+                Err(error) => return Err(error),
             }
         }
         Ok(transaction_ids)
@@ -1054,13 +1153,15 @@ impl CellWalStore {
     }
 }
 
-fn now_unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
+fn staging_transaction_is_live_at(
+    last_modified: chrono::DateTime<chrono::Utc>,
+    store_now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    last_modified
+        .checked_add_signed(chrono::TimeDelta::milliseconds(
+            i64::try_from(CELL_WAL_TRANSACTION_TTL_MS).unwrap_or(i64::MAX),
+        ))
+        .is_some_and(|expires_at| expires_at >= store_now)
 }
 
 fn transaction_state_path(transaction_id: &str) -> String {
@@ -1078,9 +1179,7 @@ pub(crate) fn id_claim_shard(id: &[u8]) -> u16 {
 
 fn ensure_prepared_transaction(storage: &Storage, transaction_id: &str) -> Result<()> {
     let path = transaction_state_path(transaction_id);
-    let prepared = CellWalTransactionState::Prepared {
-        expires_at_ms: now_unix_ms().saturating_add(CELL_WAL_TRANSACTION_TTL_MS),
-    };
+    let prepared = CellWalTransactionState::Prepared;
     match storage.try_create_coordination_object(&path, &transaction_state_bytes(&prepared)?)? {
         Some(_) => Ok(()),
         None => {
@@ -1088,7 +1187,7 @@ fn ensure_prepared_transaction(storage: &Storage, transaction_id: &str) -> Resul
                 .read_coordination_object(&path)?
                 .ok_or_else(|| BorsukError::ConcurrentModification { path: path.clone() })?;
             match transaction_state_from_slice(&current.bytes, &path)? {
-                CellWalTransactionState::Prepared { .. }
+                CellWalTransactionState::Prepared
                 | CellWalTransactionState::Committing { .. }
                 | CellWalTransactionState::Committed { .. } => Ok(()),
                 CellWalTransactionState::Aborted => {
@@ -1099,6 +1198,47 @@ fn ensure_prepared_transaction(storage: &Storage, transaction_id: &str) -> Resul
     }
 }
 
+fn renew_prepared_transaction(storage: &Storage, transaction_id: &str) -> Result<()> {
+    renew_prepared_transaction_at(storage, transaction_id, storage.store_clock_now()?)
+}
+
+fn renew_prepared_transaction_at(
+    storage: &Storage,
+    transaction_id: &str,
+    store_now: chrono::DateTime<chrono::Utc>,
+) -> Result<()> {
+    validate_transaction_id(transaction_id)?;
+    let path = transaction_state_path(transaction_id);
+    let current = storage.read_coordination_object(&path)?.ok_or_else(|| {
+        BorsukError::InvalidStorage(format!(
+            "staging transaction `{transaction_id}` is not prepared"
+        ))
+    })?;
+    let CellWalTransactionState::Prepared = transaction_state_from_slice(&current.bytes, &path)?
+    else {
+        return Err(BorsukError::InvalidStorage(format!(
+            "staging transaction `{transaction_id}` is not prepared"
+        )));
+    };
+    if !staging_transaction_is_live_at(current.last_modified, store_now) {
+        storage.write_coordination_object(
+            &path,
+            &transaction_state_bytes(&CellWalTransactionState::Aborted)?,
+            Some(current.version),
+        )?;
+        return Err(BorsukError::InvalidStorage(format!(
+            "staging transaction `{transaction_id}` expired and cannot be renewed"
+        )));
+    }
+    let renewed = CellWalTransactionState::Prepared;
+    storage.write_coordination_object(
+        &path,
+        &transaction_state_bytes(&renewed)?,
+        Some(current.version),
+    )?;
+    Ok(())
+}
+
 fn abort_prepared_transaction(storage: &Storage, transaction_id: &str) -> Result<bool> {
     let path = transaction_state_path(transaction_id);
     let Some(current) = storage.read_coordination_object(&path)? else {
@@ -1106,7 +1246,7 @@ fn abort_prepared_transaction(storage: &Storage, transaction_id: &str) -> Result
     };
     if !matches!(
         transaction_state_from_slice(&current.bytes, &path)?,
-        CellWalTransactionState::Prepared { .. }
+        CellWalTransactionState::Prepared
     ) {
         return Ok(false);
     }
@@ -1328,10 +1468,10 @@ fn reclaim_claim_owner(
         )));
     };
     match transaction_state_from_slice(&current.bytes, &state_path)? {
-        CellWalTransactionState::Prepared { expires_at_ms } if now_unix_ms() <= expires_at_ms => {
-            Ok(None)
-        }
-        CellWalTransactionState::Prepared { .. } => {
+        CellWalTransactionState::Prepared => {
+            if staging_transaction_is_live_at(current.last_modified, storage.store_clock_now()?) {
+                return Ok(None);
+            }
             match storage.write_coordination_object(
                 &state_path,
                 &transaction_state_bytes(&CellWalTransactionState::Aborted)?,
@@ -2127,10 +2267,7 @@ fn commit_marker_from_slice(bytes: &[u8], path: &str) -> Result<CellWalCommitMar
 fn transaction_state_bytes(state: &CellWalTransactionState) -> Result<Vec<u8>> {
     let mut writer = PackedWalWriter::new(CELL_WAL_STATE_MAGIC);
     match state {
-        CellWalTransactionState::Prepared { expires_at_ms } => {
-            writer.write_u8(0);
-            writer.write_u64(*expires_at_ms);
-        }
+        CellWalTransactionState::Prepared => writer.write_u8(0),
         CellWalTransactionState::Committing {
             descriptor_path,
             descriptor_checksum,
@@ -2155,9 +2292,7 @@ fn transaction_state_bytes(state: &CellWalTransactionState) -> Result<Vec<u8>> {
 fn transaction_state_from_slice(bytes: &[u8], path: &str) -> Result<CellWalTransactionState> {
     let mut reader = PackedWalReader::new(bytes, CELL_WAL_STATE_MAGIC, path)?;
     let state = match reader.read_u8()? {
-        0 => CellWalTransactionState::Prepared {
-            expires_at_ms: reader.read_u64()?,
-        },
+        0 => CellWalTransactionState::Prepared,
         tag @ (1 | 2) => {
             let descriptor_path = reader.read_string("descriptor path")?;
             let descriptor_checksum = reader.read_string("descriptor checksum")?;
@@ -2281,6 +2416,208 @@ mod tests {
     use crate::positioned_log::INITIAL_POSITIONED_SOURCE_EPOCH;
     use object_store::memory::InMemory;
     use std::sync::Arc;
+
+    #[test]
+    fn prepared_state_older_than_the_server_ttl_is_not_live() {
+        let last_modified = chrono::Utc::now();
+        let after_expiry = last_modified
+            + chrono::TimeDelta::milliseconds(i64::try_from(CELL_WAL_TRANSACTION_TTL_MS).unwrap())
+            + chrono::TimeDelta::milliseconds(1);
+
+        assert!(!staging_transaction_is_live_at(last_modified, after_expiry));
+    }
+
+    #[test]
+    fn expired_prepared_transaction_is_aborted_and_cannot_be_renewed() {
+        let storage = Storage::from_object_store(
+            "memory:///expired-prepared-renewal".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let transaction_id = "expired-renewal";
+        let path = transaction_state_path(transaction_id);
+        storage
+            .try_create_coordination_object(
+                &path,
+                &transaction_state_bytes(&CellWalTransactionState::Prepared).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        let prepared = storage.read_coordination_object(&path).unwrap().unwrap();
+        let after_expiry = prepared.last_modified
+            + chrono::TimeDelta::milliseconds(i64::try_from(CELL_WAL_TRANSACTION_TTL_MS).unwrap())
+            + chrono::TimeDelta::milliseconds(1);
+
+        let first = renew_prepared_transaction_at(&storage, transaction_id, after_expiry)
+            .unwrap_err()
+            .to_string();
+        assert!(first.contains("expired"), "{first}");
+        let state = storage.read_coordination_object(&path).unwrap().unwrap();
+        assert_eq!(
+            transaction_state_from_slice(&state.bytes, &path).unwrap(),
+            CellWalTransactionState::Aborted
+        );
+
+        let second = renew_prepared_transaction(&storage, transaction_id)
+            .unwrap_err()
+            .to_string();
+        assert!(second.contains("not prepared"), "{second}");
+    }
+
+    #[test]
+    fn gc_snapshot_atomically_aborts_an_expired_staging_transaction() {
+        let storage = Storage::from_object_store(
+            "memory:///expired-staging-gc-fence".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let store = CellWalStore::from_storage(
+            storage.clone(),
+            CellWalConfig::default(),
+            INITIAL_POSITIONED_SOURCE_EPOCH,
+        )
+        .unwrap();
+        let transaction_id = "expired-gc-fence";
+        let path = transaction_state_path(transaction_id);
+        storage
+            .try_create_coordination_object(
+                &path,
+                &transaction_state_bytes(&CellWalTransactionState::Prepared).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        let prepared = storage.read_coordination_object(&path).unwrap().unwrap();
+        let after_expiry = prepared.last_modified
+            + chrono::TimeDelta::milliseconds(i64::try_from(CELL_WAL_TRANSACTION_TTL_MS).unwrap())
+            + chrono::TimeDelta::milliseconds(1);
+
+        assert!(
+            store
+                .live_staging_transaction_ids_at(after_expiry, false)
+                .unwrap()
+                .contains(transaction_id),
+            "a read-only GC snapshot must conservatively retain expired attempts"
+        );
+        let still_prepared = storage.read_coordination_object(&path).unwrap().unwrap();
+        assert_eq!(
+            transaction_state_from_slice(&still_prepared.bytes, &path).unwrap(),
+            CellWalTransactionState::Prepared
+        );
+        assert!(
+            !store
+                .live_staging_transaction_ids_at(after_expiry, true)
+                .unwrap()
+                .contains(transaction_id)
+        );
+        let fenced = storage.read_coordination_object(&path).unwrap().unwrap();
+        assert_eq!(
+            transaction_state_from_slice(&fenced.bytes, &path).unwrap(),
+            CellWalTransactionState::Aborted,
+            "GC must win an exact STATE CAS before treating an expired namespace as deletable"
+        );
+    }
+
+    #[test]
+    fn live_prepared_transaction_renewal_replaces_the_exact_state_version() {
+        let storage = Storage::from_object_store(
+            "memory:///live-prepared-renewal".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let transaction_id = "live-renewal";
+        let path = transaction_state_path(transaction_id);
+        storage
+            .try_create_coordination_object(
+                &path,
+                &transaction_state_bytes(&CellWalTransactionState::Prepared).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        let initial = storage.read_coordination_object(&path).unwrap().unwrap();
+
+        renew_prepared_transaction(&storage, transaction_id).unwrap();
+
+        let state = storage.read_coordination_object(&path).unwrap().unwrap();
+        assert_eq!(
+            transaction_state_from_slice(&state.bytes, &path).unwrap(),
+            CellWalTransactionState::Prepared
+        );
+        assert_ne!(state.version, initial.version);
+    }
+
+    #[test]
+    fn preparing_an_aborted_transaction_cannot_revive_its_namespace() {
+        let storage = Storage::from_object_store(
+            "memory:///expired-prepared-reuse".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let transaction_id = "expired-reuse";
+        let path = transaction_state_path(transaction_id);
+        storage
+            .try_create_coordination_object(
+                &path,
+                &transaction_state_bytes(&CellWalTransactionState::Aborted).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+
+        let error = ensure_prepared_transaction(&storage, transaction_id)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("concurrent modification"), "{error}");
+        let state = storage.read_coordination_object(&path).unwrap().unwrap();
+        assert_eq!(
+            transaction_state_from_slice(&state.bytes, &path).unwrap(),
+            CellWalTransactionState::Aborted
+        );
+    }
+
+    #[test]
+    fn artifact_staging_lease_protects_writes_until_explicit_finish() {
+        let storage = Storage::from_object_store(
+            "memory:///artifact-staging-lease".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let store = CellWalStore::from_storage(
+            storage,
+            CellWalConfig::default(),
+            INITIAL_POSITIONED_SOURCE_EPOCH,
+        )
+        .unwrap();
+        let mut lease = store.begin_artifact_staging().unwrap();
+        let written = lease
+            .write_artifact("segments/ab/run.parquet", b"run bytes")
+            .unwrap();
+        assert_eq!(written.path.split('/').next_back(), Some("run.parquet"));
+        let transaction_id = written.path.split('/').nth(3).unwrap().to_string();
+        assert!(transaction_id.starts_with("build-"));
+        assert!(
+            store
+                .live_staging_transaction_ids()
+                .unwrap()
+                .contains(&transaction_id)
+        );
+
+        lease.finish().unwrap();
+
+        assert!(
+            !store
+                .live_staging_transaction_ids()
+                .unwrap()
+                .contains(&transaction_id)
+        );
+        assert_eq!(
+            store
+                .storage
+                .read_object_fresh(&written.path)
+                .unwrap()
+                .unwrap(),
+            b"run bytes"
+        );
+    }
 
     #[test]
     fn prepared_state_and_claim_page_reads_share_the_first_io_wave() {
@@ -2918,9 +3255,7 @@ mod tests {
             "ef".repeat(32)
         );
         let states = [
-            CellWalTransactionState::Prepared {
-                expires_at_ms: 123_456,
-            },
+            CellWalTransactionState::Prepared,
             CellWalTransactionState::Committing {
                 descriptor_path: descriptor_path.clone(),
                 descriptor_checksum: "ef".repeat(32),
@@ -3019,16 +3354,26 @@ mod tests {
 
     #[test]
     fn fenced_control_records_reject_corruption_and_trailing_bytes() {
-        let mut corrupted = transaction_state_bytes(&CellWalTransactionState::Prepared {
-            expires_at_ms: 123_456,
-        })
-        .unwrap();
+        let mut corrupted = transaction_state_bytes(&CellWalTransactionState::Prepared).unwrap();
         corrupted[5] ^= 1;
         assert!(
             transaction_state_from_slice(&corrupted, "STATE")
                 .unwrap_err()
                 .to_string()
                 .contains("checksum mismatch")
+        );
+
+        let mut old_state = transaction_state_bytes(&CellWalTransactionState::Prepared).unwrap();
+        old_state[..4].copy_from_slice(b"BWS1");
+        old_state.truncate(old_state.len() - CELL_WAL_CHECKSUM_LEN);
+        let old_checksum = blake3::hash(&old_state);
+        old_state.extend_from_slice(old_checksum.as_bytes());
+        let old_error = transaction_state_from_slice(&old_state, "STATE")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            old_error.contains("magic") || old_error.contains("unsupported"),
+            "{old_error}"
         );
 
         let mut trailing = claim_page_bytes(&CellWalClaimPage {
