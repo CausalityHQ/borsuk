@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.production_bench_schema import QUERY_STAGE_TIMING_FIELDS
+from scripts.production_bench_schema import (
+    PHYSICAL_EXACT_LAYOUT_FIELDS,
+    QUERY_STAGE_TIMING_FIELDS,
+)
 from scripts.validate_benchmark_artifacts import validate_directory
 
 
@@ -39,7 +42,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v16",
+                    "borsuk-production-bench-v17",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -90,16 +93,12 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "global_leaf_exact_scores",
                 "backing_reads",
                 "backing_bytes_read",
-                "global_leaf_exact_cells",
-                "global_leaf_exact_cards",
-                "global_leaf_exact_groups",
-                "global_leaf_exact_selected_bytes",
-                "global_leaf_exact_speculative_bytes",
+                *PHYSICAL_EXACT_LAYOUT_FIELDS,
                 *QUERY_STAGE_TIMING_FIELDS,
             ],
             [
                 [
-                    "borsuk-production-bench-v16",
+                    "borsuk-production-bench-v17",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -128,11 +127,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     2,
                     1,
                     100,
-                    1,
-                    1,
-                    1,
-                    100,
-                    0,
+                    *[1, 1, 1, 1, 1, 1, 100, 0],
                     1,
                     0,
                     2,
@@ -150,7 +145,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     12,
                 ],
                 [
-                    "borsuk-production-bench-v16",
+                    "borsuk-production-bench-v17",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -179,11 +174,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     2,
                     1,
                     100,
-                    1,
-                    1,
-                    1,
-                    100,
-                    0,
+                    *[1, 1, 1, 1, 1, 1, 100, 0],
                     1,
                     0,
                     2,
@@ -357,10 +348,11 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "transient_bytes",
                 "transient_capacity_bytes",
                 "transient_peak_bytes",
+                *PHYSICAL_EXACT_LAYOUT_FIELDS,
                 *QUERY_STAGE_TIMING_FIELDS,
             ]
             summary = [
-                "borsuk-production-bench-v16",
+                "borsuk-production-bench-v17",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -377,7 +369,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 5,
             ]
             sample = [
-                "borsuk-production-bench-v16",
+                "borsuk-production-bench-v17",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -395,6 +387,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 50,
                 1024,
                 100,
+                *([0] * len(PHYSICAL_EXACT_LAYOUT_FIELDS)),
                 1,
                 0,
                 2,
@@ -435,8 +428,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 root, "bench_concurrency_samples.csv", sample_header, [sample]
             )
 
-            summary[0] = "borsuk-production-bench-v14"
-            sample[0] = "borsuk-production-bench-v14"
+            summary[0] = "borsuk-production-bench-v16"
+            sample[0] = "borsuk-production-bench-v16"
             self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
             self.write_csv(
                 root, "bench_concurrency_samples.csv", sample_header, [sample]
@@ -444,8 +437,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "schema"):
                 validate_directory(root, "fast-turboquant-scan", required)
 
-            summary[0] = "borsuk-production-bench-v16"
-            sample[0] = "borsuk-production-bench-v16"
+            summary[0] = "borsuk-production-bench-v17"
+            sample[0] = "borsuk-production-bench-v17"
             sample[4] = 32
             self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
             self.write_csv(

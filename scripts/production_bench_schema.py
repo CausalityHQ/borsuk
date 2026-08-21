@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 V10_PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v10"
-PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v16"
+PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v17"
 V10_QUERY_TELEMETRY_FIELDS = (
     "global_leaf_directory_reads",
     "global_leaf_directory_bytes",
@@ -48,6 +48,16 @@ QUERY_STAGE_AGGREGATE_FIELDS = tuple(
     QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE[field]
     for field in QUERY_STAGE_TIMING_FIELDS
 )
+PHYSICAL_EXACT_LAYOUT_FIELDS = (
+    "global_leaf_code_requests",
+    "global_leaf_exact_requests",
+    "global_leaf_exact_cells",
+    "global_leaf_exact_cards",
+    "global_leaf_deepest_winning_card_rank",
+    "global_leaf_exact_groups",
+    "global_leaf_exact_selected_bytes",
+    "global_leaf_exact_speculative_bytes",
+)
 CURRENT_QUERY_TELEMETRY_FIELDS = (
     "global_leaf_directory_reads",
     "global_leaf_directory_bytes",
@@ -55,11 +65,7 @@ CURRENT_QUERY_TELEMETRY_FIELDS = (
     "global_leaf_code_bytes",
     "global_leaf_pages_read",
     "global_leaf_page_bytes",
-    "global_leaf_exact_cells",
-    "global_leaf_exact_cards",
-    "global_leaf_exact_groups",
-    "global_leaf_exact_selected_bytes",
-    "global_leaf_exact_speculative_bytes",
+    *PHYSICAL_EXACT_LAYOUT_FIELDS,
     "global_leaf_waves",
     "global_leaf_continuations",
     "global_leaf_exact_scores",

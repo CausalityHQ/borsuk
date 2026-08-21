@@ -920,7 +920,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_concurrency_artifacts_require_complete_workers_queries_and_recall(self) -> None:
         summaries = [
             {
-                "schema_version": "borsuk-production-bench-v16",
+                "schema_version": "borsuk-production-bench-v17",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -938,7 +938,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         ]
         samples = [
             {
-                "schema_version": "borsuk-production-bench-v16",
+                "schema_version": "borsuk-production-bench-v17",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -1086,7 +1086,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         for index, (latency, recall) in enumerate(((1.0, 0.96), (2.0, 0.95), (4.0, 0.99))):
             rows.append(
                 {
-                    "schema_version": "borsuk-production-bench-v16",
+                    "schema_version": "borsuk-production-bench-v17",
                     "sample_index": str(index),
                     "latency_ms": str(latency),
                     "recall_at_10": str(recall),

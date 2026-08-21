@@ -12,6 +12,7 @@ from pathlib import Path
 try:
     from .production_bench_schema import (
         CURRENT_QUERY_TELEMETRY_FIELDS,
+        PHYSICAL_EXACT_LAYOUT_FIELDS,
         QUERY_STAGE_TIMING_FIELDS,
         validate_production_bench_schema_rows,
         validate_current_query_sample_rows,
@@ -20,6 +21,7 @@ try:
 except ImportError:
     from production_bench_schema import (  # type: ignore[no-redef]
         CURRENT_QUERY_TELEMETRY_FIELDS,
+        PHYSICAL_EXACT_LAYOUT_FIELDS,
         QUERY_STAGE_TIMING_FIELDS,
         validate_production_bench_schema_rows,
         validate_current_query_sample_rows,
@@ -129,6 +131,7 @@ REQUIRED_COLUMNS = {
         "transient_bytes",
         "transient_capacity_bytes",
         "transient_peak_bytes",
+        *PHYSICAL_EXACT_LAYOUT_FIELDS,
         *QUERY_STAGE_TIMING_FIELDS,
     },
     "bench_write_costs.csv": {

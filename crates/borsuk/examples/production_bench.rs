@@ -62,12 +62,12 @@ const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
 const WRITE_FRACTION_DENOMINATOR: usize = 20;
 const CACHE_COVERAGE_COHORT_QUERIES: usize = 40;
 const CACHE_COVERAGE_REPETITIONS: usize = 4;
-const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v16";
+const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v17";
 const RECALL_LATENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,mode,nprobe,max_candidates,recall_at_10,samples,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries";
 const QUERY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
 const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,cache_profile,target_cache_coverage_percent,execution_engine,nprobe,max_candidates,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read";
-const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,nprobe,max_candidates,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
+const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,nprobe,max_candidates,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,network_gets";
 const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written";
 const WRITE_COST_HEADER: &str = "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
@@ -299,7 +299,23 @@ struct QuerySample {
     timings: QueryStageTimings,
 }
 
-#[derive(Clone, Copy)]
+impl ConcurrencyMeasurement {
+    fn physical_exact_csv_fields(&self) -> String {
+        format!(
+            "{},{},{},{},{},{},{},{}",
+            self.global_leaf_code_requests,
+            self.global_leaf_exact_requests,
+            self.global_leaf_exact_cells,
+            self.global_leaf_exact_cards,
+            self.global_leaf_deepest_winning_card_rank,
+            self.global_leaf_exact_groups,
+            self.global_leaf_exact_selected_bytes,
+            self.global_leaf_exact_speculative_bytes,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Default)]
 struct QueryStageTimings {
     approximate_us: u64,
     head_admission_us: u64,
@@ -361,6 +377,7 @@ impl QueryStageTimings {
     }
 }
 
+#[derive(Default)]
 struct ConcurrencyMeasurement {
     position: usize,
     query_source_index: usize,
@@ -384,6 +401,14 @@ struct ConcurrencyMeasurement {
     global_leaf_waves: usize,
     global_leaf_continuations: usize,
     global_leaf_exact_scores: usize,
+    global_leaf_code_requests: usize,
+    global_leaf_exact_requests: usize,
+    global_leaf_exact_cells: usize,
+    global_leaf_exact_cards: usize,
+    global_leaf_deepest_winning_card_rank: usize,
+    global_leaf_exact_groups: usize,
+    global_leaf_exact_selected_bytes: u64,
+    global_leaf_exact_speculative_bytes: u64,
     execution_engine: String,
     collection_resident_bytes: u64,
     retained_bytes: u64,
@@ -2876,6 +2901,17 @@ fn write_concurrency_csv(
                             global_leaf_waves: report.global_leaf_waves,
                             global_leaf_continuations: report.global_leaf_continuations,
                             global_leaf_exact_scores: report.global_leaf_exact_scores,
+                            global_leaf_code_requests: report.global_leaf_code_requests,
+                            global_leaf_exact_requests: report.global_leaf_exact_requests,
+                            global_leaf_exact_cells: report.global_leaf_exact_cells,
+                            global_leaf_exact_cards: report.global_leaf_exact_cards,
+                            global_leaf_deepest_winning_card_rank: report
+                                .global_leaf_deepest_winning_card_rank,
+                            global_leaf_exact_groups: report.global_leaf_exact_groups,
+                            global_leaf_exact_selected_bytes: report
+                                .global_leaf_exact_selected_bytes,
+                            global_leaf_exact_speculative_bytes: report
+                                .global_leaf_exact_speculative_bytes,
                             execution_engine: execution_engine_label(&report).to_string(),
                             collection_resident_bytes: report.collection_resident_bytes,
                             retained_bytes: report.retained_bytes,
@@ -2946,7 +2982,7 @@ fn write_concurrency_csv(
         for (sample_index, measurement) in measurements.iter().enumerate() {
             writeln!(
                 samples_writer,
-                "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{},{},{},{},{workers},{sample_index},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{},{},{},{},{workers},{sample_index},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 config.global_scan_codec,
                 config.cache_execution,
                 config.cache_profile.as_str(),
@@ -2967,6 +3003,7 @@ fn write_concurrency_csv(
                 measurement.global_leaf_waves,
                 measurement.global_leaf_continuations,
                 measurement.global_leaf_exact_scores,
+                measurement.physical_exact_csv_fields(),
                 measurement.bytes_read,
                 measurement.decoded_cache_hits,
                 measurement.disk_cache_reads,
@@ -4376,26 +4413,26 @@ mod tests {
     use super::{
         BUILD_HEADER, BenchmarkCacheProfile, BorsukIndex, CACHE_COVERAGE_HEADER,
         CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
-        DEFAULT_NPROBE_SWEEP, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
-        EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER,
-        LeafCapability, LeafMode, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER,
-        QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES,
-        ServingMode, VectorMetric, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
-        allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
-        cache_coverage_cohort_size, cache_coverage_enabled, cache_state_summary_enabled,
-        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
-        default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
-        ingest_batch_size, ingest_generated_batch, is_hot_workload_position,
-        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
-        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
-        parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
-        read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
-        rotated_workload_index, sample_mean, sample_stddev, serving_cache_dir,
-        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
-        validate_bounded_v20_execution, validate_build_only, validate_disk_cached_network,
-        validate_exact_read_max_physical_amplification, validate_generated_id_range,
-        validate_insert_only, validate_leaf_capability_modes,
+        ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES,
+        DEFAULT_RECALL_CANDIDATES, EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig,
+        LIFECYCLE_HEADER, LeafCapability, LeafMode, MUTATION_QUERY_HEADER,
+        MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary,
+        RECALL_LATENCY_HEADER, SERVING_CANDIDATES, ServingMode, VectorMetric, WRITE_COST_HEADER,
+        WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase, approximate_options,
+        benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
+        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
+        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
+        dollars_per_million_queries, ingest_batch_size, ingest_generated_batch,
+        is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
+        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
+        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
+        parse_positive_list, parse_serving_mode, percentage_operation_count, permuted_positions,
+        preload_query_count, read_logical_cell_catalog, recall_preloads_local_snapshot,
+        recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
+        serving_cache_dir, update_vector_reservoir, uses_bounded_decoded_cache_phases,
+        uses_memory_preloaded_phase, validate_bounded_v20_execution, validate_build_only,
+        validate_disk_cached_network, validate_exact_read_max_physical_amplification,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
         validate_max_parallel_decode_rank_tasks, validate_phase_selection,
         validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
         vector_row, write_batch_len, write_operation_count, write_runtime_flow_control_receipt,
@@ -4785,7 +4822,7 @@ mod tests {
     fn latency_artifact_schemas_include_the_worst_query() {
         assert_eq!(
             super::PRODUCTION_BENCH_SCHEMA_VERSION,
-            "borsuk-production-bench-v16"
+            "borsuk-production-bench-v17"
         );
         assert_eq!(RECALL_LATENCY_HEADER.split(',').count(), 33);
         assert_eq!(CACHE_STATE_HEADER.split(',').count(), 31);
@@ -4809,7 +4846,24 @@ mod tests {
                 "global_leaf_exact_speculative_bytes",
             ]
         );
-        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 54);
+        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 62);
+        assert_eq!(
+            CONCURRENCY_SAMPLE_HEADER
+                .split(',')
+                .skip(23)
+                .take(8)
+                .collect::<Vec<_>>(),
+            vec![
+                "global_leaf_code_requests",
+                "global_leaf_exact_requests",
+                "global_leaf_exact_cells",
+                "global_leaf_exact_cards",
+                "global_leaf_deepest_winning_card_rank",
+                "global_leaf_exact_groups",
+                "global_leaf_exact_selected_bytes",
+                "global_leaf_exact_speculative_bytes",
+            ]
+        );
         let timing_columns = vec![
             "global_base_approximate_us",
             "global_base_head_admission_us",
@@ -4834,7 +4888,7 @@ mod tests {
         assert_eq!(
             CONCURRENCY_SAMPLE_HEADER
                 .split(',')
-                .skip(39)
+                .skip(47)
                 .collect::<Vec<_>>(),
             timing_columns
         );
@@ -5035,6 +5089,22 @@ mod tests {
             )
         };
         let _ = projection;
+    }
+
+    #[test]
+    fn concurrency_samples_carry_physical_exact_layout_counters() {
+        let sample = ConcurrencyMeasurement {
+            global_leaf_code_requests: 1,
+            global_leaf_exact_requests: 2,
+            global_leaf_exact_cells: 3,
+            global_leaf_exact_cards: 4,
+            global_leaf_deepest_winning_card_rank: 5,
+            global_leaf_exact_groups: 6,
+            global_leaf_exact_selected_bytes: 7,
+            global_leaf_exact_speculative_bytes: 8,
+            ..ConcurrencyMeasurement::default()
+        };
+        assert_eq!(sample.physical_exact_csv_fields(), "1,2,3,4,5,6,7,8");
     }
 
     #[test]
