@@ -136,6 +136,9 @@ class PythonApiTests(unittest.TestCase):
         self.assertIn(borsuk.MinkowskiMetric, get_args(create_metric))
         self.assertIn(borsuk.MinkowskiMetric, get_args(vector_distance_metric))
 
+    def test_create_defaults_to_the_recall_qualified_turboquant_plane(self) -> None:
+        self.assertEqual(inspect.signature(borsuk.create).parameters["turboquant_bits"].default, 0)
+
     def test_runtime_config_type_aliases_are_exported(self) -> None:
         for name in [
             "CanonicalVectorMetric",

@@ -730,8 +730,8 @@ enum Commands {
         /// Fixed learned-PQ bytes per vector; omitted selects the adaptive width.
         #[arg(long)]
         global_pq_code_bytes: Option<usize>,
-        /// Packed coordinate bits for TurboQuant scan codecs.
-        #[arg(long, default_value_t = 4)]
+        /// Packed coordinate bits for TurboQuant scan codecs; zero selects the codec default.
+        #[arg(long, default_value_t = BuildConfig::default().global_turboquant_bits)]
         turboquant_bits: u8,
         /// Legacy experimental QJL residual direction count.
         #[arg(long, default_value_t = 0)]

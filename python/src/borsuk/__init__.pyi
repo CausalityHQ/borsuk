@@ -749,7 +749,8 @@ def create(
     global_scan_codec: GlobalScanCodec = "srht-pq-scan",
     global_pq_layout: str = "adaptive",
     global_pq_code_bytes: int | None = None,
-    turboquant_bits: int = 4,
+    # Zero selects the codec-specific qualified default and is resolved at create time.
+    turboquant_bits: int = 0,
     turboquant_qjl_bits: int = 0,
     turboquant_shards: int = 1,
     ram_budget: int | str | None = None,

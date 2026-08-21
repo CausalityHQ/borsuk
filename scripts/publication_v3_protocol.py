@@ -78,11 +78,11 @@ PREFIX_FIELDS = frozenset({"result", "index", "dataset", "cache"})
 S3_PREFIX = re.compile(r"s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/[^\s/](?:[^\s]*[^\s/])?")
 SYSTEMS = ("borsuk", "amazon-s3-vectors", "faiss")
 METRICS = frozenset({"cosine", "l2", "dot", "hamming", "jaccard"})
-BORSUK_PQ_LEAF_CODECS = frozenset({"pq-scan", "srht-pq-scan"})
-BORSUK_TURBOQUANT_LEAF_CODECS = frozenset(
+BORSUK_PQ_GLOBAL_SCAN_CODECS = frozenset({"pq-scan", "srht-pq-scan"})
+BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS = frozenset(
     {"fast-turboquant-mse-scan", "fast-turboquant-scan"}
 )
-BORSUK_LEAF_CODECS = BORSUK_PQ_LEAF_CODECS | BORSUK_TURBOQUANT_LEAF_CODECS
+BORSUK_GLOBAL_SCAN_CODECS = BORSUK_PQ_GLOBAL_SCAN_CODECS | BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS
 IDENTIFIER = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?")
 HEX_40 = re.compile(r"[0-9a-f]{40}")
 HEX_64 = re.compile(r"[0-9a-f]{64}")
@@ -355,16 +355,18 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
                 "routing",
                 "hnsw_m",
                 "hnsw_ef_construction",
-                "leaf_codec",
+                "global_scan_codec",
                 "bundle_target_mib",
                 "row_group_target_mib",
                 "max_active_levels",
             }
         )
-        leaf_codec = _identifier(profile.get("leaf_codec"), "borsuk leaf codec")
-        if leaf_codec not in BORSUK_LEAF_CODECS:
-            raise ValueError("borsuk leaf codec is unsupported")
-        turboquant = leaf_codec in BORSUK_TURBOQUANT_LEAF_CODECS
+        global_scan_codec = _identifier(
+            profile.get("global_scan_codec"), "borsuk global scan codec"
+        )
+        if global_scan_codec not in BORSUK_GLOBAL_SCAN_CODECS:
+            raise ValueError("borsuk global scan codec is unsupported")
+        turboquant = global_scan_codec in BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS
         expected = common_fields | (
             frozenset(
                 {
@@ -382,7 +384,7 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
         codec_parameters: dict[str, int]
         if turboquant:
             bits = _positive_int(profile["turboquant_bits"], "borsuk TurboQuant bits")
-            if bits > 8 or (leaf_codec == "fast-turboquant-scan" and bits < 2):
+            if bits > 8 or (global_scan_codec == "fast-turboquant-scan" and bits < 2):
                 raise ValueError("borsuk TurboQuant bits are invalid for the selected codec")
             qjl_bits = profile["turboquant_qjl_bits"]
             if (
@@ -397,7 +399,7 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
             )
             if qjl_bits != 0:
                 raise ValueError("borsuk TurboQuant codec does not accept a QJL override")
-            if leaf_codec == "fast-turboquant-scan" and shards != 1:
+            if global_scan_codec == "fast-turboquant-scan" and shards != 1:
                 raise ValueError("borsuk production TurboQuant codec requires one shard")
             codec_parameters = {
                 "turboquant_bits": bits,
@@ -427,7 +429,7 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
             "hnsw_ef_construction": _positive_int(
                 profile["hnsw_ef_construction"], "borsuk hnsw ef construction"
             ),
-            "leaf_codec": leaf_codec,
+            "global_scan_codec": global_scan_codec,
             "bundle_target_mib": _positive_int(
                 profile["bundle_target_mib"], "borsuk bundle target MiB"
             ),

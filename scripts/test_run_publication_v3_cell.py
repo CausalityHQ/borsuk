@@ -316,7 +316,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 {
                     "logical_cell_catalog_checksum": "3" * 64,
                     "logical_cells": str(cell["index_profile"]["logical_cells"]),
-                    "scan_codec": str(cell["index_profile"]["leaf_codec"]),
+                    "scan_codec": str(cell["index_profile"]["global_scan_codec"]),
                     "records": str(cell["dataset"]["scale"]["rows"]),
                     "total_active_index_bytes": str(123 * 1024 * 1024),
                     "ingest_ms": "1234.500",
@@ -389,7 +389,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "codec identity differs"):
                 read_build_artifact(output, cell=cell)
-            row["scan_codec"] = cell["index_profile"]["leaf_codec"]
+            row["scan_codec"] = cell["index_profile"]["global_scan_codec"]
             (output / "bench_build.csv").write_text(
                 ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
                 + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
@@ -401,7 +401,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 **cell,
                 "index_profile": {
                     **cell["index_profile"],
-                    "leaf_codec": "fast-turboquant-scan",
+                    "global_scan_codec": "fast-turboquant-scan",
                     "turboquant_bits": 3,
                     "turboquant_qjl_bits": 0,
                     "turboquant_shards": 1,
@@ -660,7 +660,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_borsuk_turboquant_plan_omits_incompatible_pq_width(self) -> None:
         manifest = paid_v3_manifest()
         profile = manifest["index_profiles"]["borsuk"]
-        profile["leaf_codec"] = "fast-turboquant-scan"
+        profile["global_scan_codec"] = "fast-turboquant-scan"
         profile.pop("code_bytes")
         profile.update(
             {
@@ -1093,7 +1093,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         turboquant_cell = json.loads(json.dumps(cell))
         turboquant_cell["index_profile"].update(
             {
-                "leaf_codec": "fast-turboquant-scan",
+                "global_scan_codec": "fast-turboquant-scan",
                 "turboquant_bits": 4,
                 "turboquant_qjl_bits": 0,
                 "turboquant_shards": 1,

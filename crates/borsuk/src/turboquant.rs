@@ -116,6 +116,19 @@ use crate::{BorsukError, Result};
 /// with 4 bits each coordinate is one of 16 buckets.
 pub(crate) const DEFAULT_TURBOQUANT_BITS: u8 = 4;
 
+/// Sentinel selecting the codec-specific global TurboQuant bit rate.
+pub(crate) const AUTO_GLOBAL_TURBOQUANT_BITS: u8 = 0;
+
+/// Qualified default for the production whole-index TurboQuant scan plane. A
+/// terminal AWS SIFT-128 diagnostic raised recall@10 from 0.714 to 0.989 with
+/// the exact-row budget explicitly pinned to 512; the frozen release campaign
+/// independently revalidates that point.
+pub(crate) const DEFAULT_GLOBAL_TURBOQUANT_PROD_BITS: u8 = 8;
+
+/// Existing default for the alternative MSE scan codec. Its eight-bit profile
+/// has not been qualified, so automatic configuration must not promote it.
+pub(crate) const DEFAULT_GLOBAL_TURBOQUANT_MSE_BITS: u8 = DEFAULT_TURBOQUANT_BITS;
+
 /// Default QJL residual bits. `0` = stage 2 disabled = the historical 1-stage
 /// dequantize-and-dot estimator, byte-identical to pre-existing indexes.
 pub(crate) const DEFAULT_QJL_BITS: u32 = 0;

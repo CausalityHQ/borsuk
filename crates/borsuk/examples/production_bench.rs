@@ -1010,7 +1010,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
                 .map_err(|error| Box::<dyn Error>::from(invalid_input(&error.to_string())))
         },
     )?;
-    let global_turboquant_bits = u8::try_from(env_usize("BORSUK_BENCH_TURBOQUANT_BITS", 4)?)
+    let global_turboquant_bits = u8::try_from(env_usize("BORSUK_BENCH_TURBOQUANT_BITS", 8)?)
         .map_err(|_| invalid_input("BORSUK_BENCH_TURBOQUANT_BITS must fit u8"))?;
     let global_turboquant_qjl_bits =
         u32::try_from(env_usize("BORSUK_BENCH_TURBOQUANT_QJL_BITS", 0)?)

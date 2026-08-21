@@ -4096,7 +4096,7 @@ impl BorsukIndex {
         graph_neighbors: usize,
         wal: WalConfig,
         leaf_capability: LeafCapability,
-        build_config: BuildConfig,
+        mut build_config: BuildConfig,
         modality: &str,
         collection_root: bool,
         creation_catalog_centroids: Option<Vec<Vec<f32>>>,
@@ -4131,6 +4131,7 @@ impl BorsukIndex {
                     .to_string(),
             ));
         }
+        resolve_global_turboquant_auto(&mut build_config);
         validate_build_config(&build_config, config.dimensions)?;
         validate_vector_element_metric(
             "primary vector",
@@ -19130,7 +19131,10 @@ impl BorsukIndex {
                 GlobalScanQuantizer::from(crate::turboquant::FastTurboQuantMseScanQuantizer::new(
                     crate::DEFAULT_TURBOQUANT_SEED,
                     dimensions,
-                    self.manifest.build_config.global_turboquant_bits,
+                    effective_global_turboquant_bits(
+                        GlobalScanCodec::FastTurboQuantMse,
+                        self.manifest.build_config.global_turboquant_bits,
+                    ),
                     self.manifest.build_config.global_turboquant_shards,
                 )?)
             }
@@ -19138,7 +19142,10 @@ impl BorsukIndex {
                 GlobalScanQuantizer::from(crate::turboquant::FastTurboQuantProdScanQuantizer::new(
                     crate::DEFAULT_TURBOQUANT_SEED,
                     dimensions,
-                    self.manifest.build_config.global_turboquant_bits,
+                    effective_global_turboquant_bits(
+                        GlobalScanCodec::FastTurboQuantProd,
+                        self.manifest.build_config.global_turboquant_bits,
+                    ),
                 )?)
             }
         };
@@ -19254,7 +19261,8 @@ impl BorsukIndex {
         let reconstruction_error_p95_micros =
             quantizer.reconstruction_error_p95_micros(&training_sample)?;
         let coarse_cell_count = coarse_quantizer.all_cells()?.len();
-        let candidates = resident_global_pq_candidates(
+        let candidates = resident_global_candidates_for_codec(
+            self.manifest.build_config.global_scan_codec,
             &self.manifest.config.metric,
             dimensions,
             global_code_width,
@@ -27238,6 +27246,48 @@ fn resident_global_pq_candidates(
     }
 }
 
+fn effective_global_turboquant_bits(codec: GlobalScanCodec, configured: u8) -> u8 {
+    if configured != crate::turboquant::AUTO_GLOBAL_TURBOQUANT_BITS {
+        return configured;
+    }
+    match codec {
+        GlobalScanCodec::FastTurboQuantProd => {
+            crate::turboquant::DEFAULT_GLOBAL_TURBOQUANT_PROD_BITS
+        }
+        GlobalScanCodec::FastTurboQuantMse => crate::turboquant::DEFAULT_GLOBAL_TURBOQUANT_MSE_BITS,
+        GlobalScanCodec::Pq | GlobalScanCodec::SrhtPq => crate::turboquant::DEFAULT_TURBOQUANT_BITS,
+    }
+}
+
+fn resident_global_candidates_for_codec(
+    codec: GlobalScanCodec,
+    metric: &VectorMetric,
+    dimensions: usize,
+    code_width: usize,
+    vectors: usize,
+) -> usize {
+    if codec == GlobalScanCodec::FastTurboQuantProd
+        && !metric.uses_normalized_euclidean_geometry()
+        && dimensions == 128
+        && vectors >= 100_000
+    {
+        // The terminal SIFT-128 diagnostic qualified the eight-bit production
+        // codec at exactly 512 lossless rows. Keep that I/O boundary independent
+        // of packed code width so a fidelity change cannot silently alter S3
+        // reads or exact ranking work.
+        512
+    } else {
+        resident_global_pq_candidates(metric, dimensions, code_width, vectors)
+    }
+}
+
+fn resolve_global_turboquant_auto(build: &mut BuildConfig) {
+    if build.global_turboquant_bits == crate::turboquant::AUTO_GLOBAL_TURBOQUANT_BITS {
+        build.global_turboquant_bits =
+            effective_global_turboquant_bits(build.global_scan_codec, build.global_turboquant_bits);
+    }
+}
+
 fn resident_global_pq_probes(metric: &VectorMetric, dimensions: usize, segments: usize) -> usize {
     if segments == 0 {
         return 0;
@@ -27816,7 +27866,7 @@ fn validate_build_config(build: &BuildConfig, dimensions: usize) -> Result<()> {
     }
     if !(1..=8).contains(&build.global_turboquant_bits) {
         return Err(BorsukError::InvalidMetricInput(format!(
-            "global_turboquant_bits must be in 1..=8, got {}",
+            "global_turboquant_bits must be in 1..=8 after automatic resolution, got {}",
             build.global_turboquant_bits
         )));
     }
@@ -27834,7 +27884,11 @@ fn validate_build_config(build: &BuildConfig, dimensions: usize) -> Result<()> {
         ));
     }
     if build.global_scan_codec == GlobalScanCodec::FastTurboQuantProd {
-        if build.global_turboquant_bits < 2 {
+        if effective_global_turboquant_bits(
+            GlobalScanCodec::FastTurboQuantProd,
+            build.global_turboquant_bits,
+        ) < 2
+        {
             return Err(BorsukError::InvalidMetricInput(
                 "fast-turboquant-scan requires at least two total bits".to_string(),
             ));
@@ -31473,6 +31527,7 @@ mod tests {
             kmeans_max_iterations: Some(7),
             persist_coarse_quantizer: false,
             global_pq_code_bytes: Some(2),
+            global_turboquant_bits: crate::turboquant::DEFAULT_TURBOQUANT_BITS,
             ..BuildConfig::default()
         };
         let index = BorsukIndex::create_with_logical_cell_catalog_and_build_config(
@@ -36504,6 +36559,7 @@ mod tests {
         let error = validate_build_config(
             &BuildConfig {
                 global_scan_codec: GlobalScanCodec::FastTurboQuantMse,
+                global_turboquant_bits: crate::turboquant::DEFAULT_GLOBAL_TURBOQUANT_MSE_BITS,
                 global_turboquant_qjl_bits: 16,
                 ..BuildConfig::default()
             },
@@ -36511,6 +36567,112 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("choose fast-turboquant-scan"));
+    }
+
+    #[test]
+    fn turboquant_auto_bits_are_codec_specific_and_explicit_values_win() {
+        assert_eq!(
+            effective_global_turboquant_bits(GlobalScanCodec::FastTurboQuantProd, 0),
+            8
+        );
+        assert_eq!(
+            effective_global_turboquant_bits(GlobalScanCodec::FastTurboQuantMse, 0),
+            4
+        );
+        assert_eq!(
+            effective_global_turboquant_bits(GlobalScanCodec::FastTurboQuantProd, 6),
+            6
+        );
+        assert_eq!(
+            effective_global_turboquant_bits(GlobalScanCodec::FastTurboQuantMse, 6),
+            6
+        );
+
+        let mut production = BuildConfig {
+            global_scan_codec: GlobalScanCodec::FastTurboQuantProd,
+            ..BuildConfig::default()
+        };
+        resolve_global_turboquant_auto(&mut production);
+        assert_eq!(production.global_turboquant_bits, 8);
+        validate_build_config(&production, 128).unwrap();
+
+        let mut mse = BuildConfig {
+            global_scan_codec: GlobalScanCodec::FastTurboQuantMse,
+            ..BuildConfig::default()
+        };
+        resolve_global_turboquant_auto(&mut mse);
+        assert_eq!(mse.global_turboquant_bits, 4);
+        validate_build_config(&mse, 128).unwrap();
+
+        for (configured, expected_fragment) in [
+            (0, "after automatic resolution"),
+            (9, "after automatic resolution"),
+        ] {
+            let error = validate_build_config(
+                &BuildConfig {
+                    global_turboquant_bits: configured,
+                    ..BuildConfig::default()
+                },
+                128,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(expected_fragment));
+        }
+        let error = validate_build_config(
+            &BuildConfig {
+                global_scan_codec: GlobalScanCodec::FastTurboQuantProd,
+                global_turboquant_bits: 1,
+                ..BuildConfig::default()
+            },
+            128,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("at least two total bits"));
+    }
+
+    #[test]
+    fn production_turboquant_uses_the_qualified_fixed_rerank_budget() {
+        assert_eq!(
+            resident_global_candidates_for_codec(
+                GlobalScanCodec::FastTurboQuantProd,
+                &VectorMetric::Euclidean,
+                128,
+                72,
+                1_000_000,
+            ),
+            512
+        );
+        assert_eq!(
+            resident_global_candidates_for_codec(
+                GlobalScanCodec::FastTurboQuantMse,
+                &VectorMetric::Euclidean,
+                128,
+                136,
+                1_000_000,
+            ),
+            resident_global_pq_candidates(&VectorMetric::Euclidean, 128, 136, 1_000_000,)
+        );
+        assert_eq!(
+            resident_global_candidates_for_codec(
+                GlobalScanCodec::FastTurboQuantProd,
+                &VectorMetric::Euclidean,
+                960,
+                1_028,
+                1_000_000,
+            ),
+            resident_global_pq_candidates(&VectorMetric::Euclidean, 960, 1_028, 1_000_000,),
+            "the SIFT qualification must not replace dimension-aware GIST sizing"
+        );
+        assert_eq!(
+            resident_global_candidates_for_codec(
+                GlobalScanCodec::FastTurboQuantProd,
+                &VectorMetric::Euclidean,
+                128,
+                136,
+                1_000_000,
+            ),
+            512
+        );
     }
 
     #[test]

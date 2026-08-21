@@ -91,7 +91,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                 "routing": "hnsw",
                 "hnsw_m": 32,
                 "hnsw_ef_construction": 200,
-                "leaf_codec": "srht-pq-scan",
+                "global_scan_codec": "srht-pq-scan",
                 "code_bytes": 128,
                 "bundle_target_mib": 64,
                 "row_group_target_mib": 8,
@@ -255,7 +255,7 @@ class PublicationV3ProtocolTests(unittest.TestCase):
     def test_borsuk_turboquant_profile_uses_typed_codec_parameters(self) -> None:
         manifest = paid_v3_manifest()
         profile = manifest["index_profiles"]["borsuk"]
-        profile["leaf_codec"] = "fast-turboquant-scan"
+        profile["global_scan_codec"] = "fast-turboquant-scan"
         profile.pop("code_bytes")
         profile.update(
             {
@@ -267,7 +267,7 @@ class PublicationV3ProtocolTests(unittest.TestCase):
 
         validated = validate_manifest(manifest)["index_profiles"]["borsuk"]
 
-        self.assertEqual(validated["leaf_codec"], "fast-turboquant-scan")
+        self.assertEqual(validated["global_scan_codec"], "fast-turboquant-scan")
         self.assertEqual(validated["turboquant_bits"], 3)
         self.assertEqual(validated["turboquant_qjl_bits"], 0)
         self.assertEqual(validated["turboquant_shards"], 1)
@@ -282,20 +282,20 @@ class PublicationV3ProtocolTests(unittest.TestCase):
             validate_manifest(manifest)
 
         profile["turboquant_qjl_bits"] = 0
-        profile["leaf_codec"] = "fast-turboquant-mse-scan"
+        profile["global_scan_codec"] = "fast-turboquant-mse-scan"
         profile["turboquant_bits"] = 1
         profile["turboquant_shards"] = 3
         validated_mse = validate_manifest(manifest)["index_profiles"]["borsuk"]
-        self.assertEqual(validated_mse["leaf_codec"], "fast-turboquant-mse-scan")
+        self.assertEqual(validated_mse["global_scan_codec"], "fast-turboquant-mse-scan")
         self.assertEqual(validated_mse["turboquant_bits"], 1)
         self.assertEqual(validated_mse["turboquant_shards"], 3)
 
-    def test_borsuk_profile_rejects_unknown_leaf_codec_before_scheduling(self) -> None:
+    def test_borsuk_profile_rejects_unknown_global_scan_codec_before_scheduling(self) -> None:
         manifest = paid_v3_manifest()
-        manifest["index_profiles"]["borsuk"]["leaf_codec"] = (
+        manifest["index_profiles"]["borsuk"]["global_scan_codec"] = (
             "fast-turboquant-prod-scan"
         )
-        with self.assertRaisesRegex(ValueError, "leaf codec is unsupported"):
+        with self.assertRaisesRegex(ValueError, "global scan codec is unsupported"):
             validate_manifest(manifest)
 
     def test_protocol_is_exact_scheduled_cell_without_reconstruction(self) -> None:
@@ -647,8 +647,8 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         manifest = validate_manifest(json.loads(path.read_text(encoding="utf-8")))
         profile = manifest["index_profiles"]["borsuk"]
         self.assertEqual(profile["engine"], "borsuk-v20")
-        self.assertEqual(profile["leaf_codec"], "fast-turboquant-scan")
-        self.assertEqual(profile["turboquant_bits"], 4)
+        self.assertEqual(profile["global_scan_codec"], "fast-turboquant-scan")
+        self.assertEqual(profile["turboquant_bits"], 8)
         self.assertEqual(profile["turboquant_qjl_bits"], 0)
         self.assertEqual(profile["turboquant_shards"], 1)
         self.assertNotIn("code_bytes", profile)

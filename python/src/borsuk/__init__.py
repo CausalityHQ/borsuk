@@ -797,7 +797,7 @@ def create(
     global_scan_codec: GlobalScanCodec = "srht-pq-scan",
     global_pq_layout: str = "adaptive",
     global_pq_code_bytes: int | None = None,
-    turboquant_bits: int = 4,
+    turboquant_bits: int = 0,
     turboquant_qjl_bits: int = 0,
     turboquant_shards: int = 1,
     ram_budget: int | str | None = None,
@@ -805,6 +805,12 @@ def create(
     text: bool = False,
     named_vectors: Mapping[str, NamedVectorSpecInput] | None = None,
 ) -> Index:
+    """Create an index.
+
+    ``turboquant_bits=0`` selects the codec-specific qualified default: eight
+    bits for ``fast-turboquant-scan`` and four for the MSE control codec. The
+    resolved concrete value is persisted in the index manifest.
+    """
     return _create(
         uri=uri,
         metric=_enum_value(metric),

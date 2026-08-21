@@ -375,7 +375,8 @@ export interface CreateOptions {
   globalPqLayout?: "adaptive" | "flat-256" | "product-2x64" | `hierarchical-${number}`;
   globalPqCodeBytes?: 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256;
   globalScanCodec?: GlobalScanCodec;
-  globalTurboquantBits?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  /** Zero or omitted selects the codec-specific qualified default. */
+  globalTurboquantBits?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   globalTurboquantQjlBits?: number;
   globalTurboquantShards?: number;
   ramBudget?: ByteSize;
@@ -675,6 +676,7 @@ interface NativeCreateOptions {
   globalPqLayout?: string;
   globalPqCodeBytes?: number;
   globalScanCodec?: string;
+  /** Zero or omitted selects the codec-specific qualified default. */
   globalTurboquantBits?: number;
   globalTurboquantQjlBits?: number;
   globalTurboquantShards?: number;
@@ -686,6 +688,7 @@ interface NativeCreateOptions {
   global_pq_layout?: string;
   global_pq_code_bytes?: number;
   global_scan_codec?: string;
+  /** Zero or omitted selects the codec-specific qualified default. */
   global_turboquant_bits?: number;
   global_turboquant_qjl_bits?: number;
   global_turboquant_shards?: number;

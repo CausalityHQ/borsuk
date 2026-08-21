@@ -187,6 +187,33 @@ fn cli_create_persists_the_selected_global_scan_codec() {
 }
 
 #[test]
+fn cli_turboquant_bits_default_to_codec_specific_auto_resolution() {
+    for (codec, expected_bits) in [("fast-turboquant-scan", 8), ("fast-turboquant-mse-scan", 4)] {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+
+        Command::cargo_bin("borsuk")
+            .unwrap()
+            .args([
+                "create",
+                "--uri",
+                &uri,
+                "--metric",
+                "euclidean",
+                "--dimensions",
+                "16",
+                "--global-scan-codec",
+                codec,
+            ])
+            .assert()
+            .success();
+
+        let index = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(index.build_config().global_turboquant_bits, expected_bits);
+    }
+}
+
+#[test]
 fn cli_create_rejects_the_removed_vortex_backend() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();

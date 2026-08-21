@@ -27,8 +27,8 @@ try:
         validate_clone_receipt,
     )
     from scripts.publication_v3_protocol import (
-        BORSUK_LEAF_CODECS,
-        BORSUK_TURBOQUANT_LEAF_CODECS,
+        BORSUK_GLOBAL_SCAN_CODECS,
+        BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS,
         build_schedule_document,
         canonical_json_bytes,
         read_protocol,
@@ -56,8 +56,8 @@ except ModuleNotFoundError:
         validate_clone_receipt,
     )
     from publication_v3_protocol import (
-        BORSUK_LEAF_CODECS,
-        BORSUK_TURBOQUANT_LEAF_CODECS,
+        BORSUK_GLOBAL_SCAN_CODECS,
+        BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS,
         build_schedule_document,
         canonical_json_bytes,
         read_protocol,
@@ -415,8 +415,8 @@ def build_execution_plan(
             disk_cache_limit_mib * 1024 * 1024
         ),
     }
-    leaf_codec = index_profile.get("leaf_codec")
-    turboquant = leaf_codec in BORSUK_TURBOQUANT_LEAF_CODECS
+    global_scan_codec = index_profile.get("global_scan_codec")
+    turboquant = global_scan_codec in BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS
     code_bytes = index_profile.get("code_bytes")
     turboquant_values = tuple(
         index_profile.get(field)
@@ -463,7 +463,7 @@ def build_execution_plan(
             "BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS": str(training_rows),
             "BORSUK_BENCH_LOGICAL_CELL_SEED": str(dataset_training_seed(dataset)),
             "BORSUK_BENCH_LOGICAL_CELL_ITERATIONS": str(training_iterations),
-            "BORSUK_BENCH_GLOBAL_SCAN_CODEC": str(leaf_codec),
+            "BORSUK_BENCH_GLOBAL_SCAN_CODEC": str(global_scan_codec),
         }
     )
     if turboquant:
@@ -476,8 +476,8 @@ def build_execution_plan(
                 "BORSUK_BENCH_TURBOQUANT_SHARDS": str(
                     index_profile["turboquant_shards"]
                 ),
-                "BORSUK_BENCH_RECALL_LEAF_MODE": str(leaf_codec),
-                "BORSUK_BENCH_SERVING_LEAF_MODE": str(leaf_codec),
+                "BORSUK_BENCH_RECALL_LEAF_MODE": str(global_scan_codec),
+                "BORSUK_BENCH_SERVING_LEAF_MODE": str(global_scan_codec),
             }
         )
     else:
@@ -783,9 +783,9 @@ def summarize_query_samples(
         raise ValueError("query sample artifact is incomplete for its arm")
     index_profile = cell.get("index_profile")
     expected_mode = (
-        index_profile.get("leaf_codec") if isinstance(index_profile, dict) else None
+        index_profile.get("global_scan_codec") if isinstance(index_profile, dict) else None
     )
-    if expected_mode not in BORSUK_LEAF_CODECS:
+    if expected_mode not in BORSUK_GLOBAL_SCAN_CODECS:
         raise ValueError("query sample has no scheduled leaf-codec authority")
     latencies_us: list[int] = []
     recalls_ppm: list[int] = []
@@ -890,7 +890,7 @@ def summarize_concurrency_artifacts(
     if expected_queries <= 0 or not expected_workers:
         raise ValueError("concurrency authority is empty")
     if (
-        expected_scan_codec not in BORSUK_LEAF_CODECS
+        expected_scan_codec not in BORSUK_GLOBAL_SCAN_CODECS
         or expected_nprobe <= 0
         or expected_max_candidates <= 0
     ):
@@ -1317,10 +1317,10 @@ def read_build_artifact(
     expected_cells = profile.get("logical_cells") if isinstance(profile, dict) else None
     if parsed["records"] != expected_rows or parsed["logical_cells"] != expected_cells:
         raise ValueError("publication build identity differs from its scheduled index")
-    expected_codec = profile.get("leaf_codec") if isinstance(profile, dict) else None
+    expected_codec = profile.get("global_scan_codec") if isinstance(profile, dict) else None
     if row.get("scan_codec") != expected_codec:
         raise ValueError("publication build codec identity differs from its scheduled index")
-    if expected_codec in BORSUK_TURBOQUANT_LEAF_CODECS:
+    if expected_codec in BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS:
         for artifact_field, profile_field in (
             ("turboquant_bits", "turboquant_bits"),
             ("turboquant_qjl_bits", "turboquant_qjl_bits"),
@@ -1946,7 +1946,7 @@ def main() -> int:
                 expected_workers=workers,
                 expected_queries=int(plan["effective_queries"]),
                 minimum_recall_ppm=int(factors["minimum_recall_ppm"]),
-                expected_scan_codec=str(cell["index_profile"]["leaf_codec"]),
+                expected_scan_codec=str(cell["index_profile"]["global_scan_codec"]),
                 expected_nprobe=int(arm["leaf_page_budget"]),
                 expected_max_candidates=V20_COMPATIBILITY_CANDIDATES,
             )

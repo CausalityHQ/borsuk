@@ -30,6 +30,7 @@ pub struct CreateOptions {
     pub global_pq_layout: Option<String>,
     pub global_pq_code_bytes: Option<u32>,
     pub global_scan_codec: Option<String>,
+    /// Zero or omitted selects the codec-specific qualified default.
     pub global_turboquant_bits: Option<u32>,
     pub global_turboquant_qjl_bits: Option<u32>,
     pub global_turboquant_shards: Option<u32>,
@@ -1490,8 +1491,12 @@ pub async fn create(options: CreateOptions) -> Result<JsIndex> {
         .unwrap_or("srht-pq-scan")
         .parse::<borsuk::GlobalScanCodec>()
         .map_err(to_js_error)?;
-    let global_turboquant_bits = u8::try_from(options.global_turboquant_bits.unwrap_or(4))
-        .map_err(|_| Error::new(Status::InvalidArg, "globalTurboquantBits must fit u8"))?;
+    let global_turboquant_bits = u8::try_from(
+        options
+            .global_turboquant_bits
+            .unwrap_or_else(|| u32::from(borsuk::BuildConfig::default().global_turboquant_bits)),
+    )
+    .map_err(|_| Error::new(Status::InvalidArg, "globalTurboquantBits must fit u8"))?;
     let index = BorsukIndex::create_with_cache_routing_page_fanout_graph_neighbors_leaf_capability_and_build_config(
             IndexConfig {
                 uri: options.uri,

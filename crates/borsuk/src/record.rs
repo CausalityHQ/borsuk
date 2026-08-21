@@ -1630,6 +1630,10 @@ fn default_turboquant_bits() -> u8 {
     crate::turboquant::DEFAULT_TURBOQUANT_BITS
 }
 
+fn default_persisted_global_turboquant_bits() -> u8 {
+    crate::turboquant::DEFAULT_TURBOQUANT_BITS
+}
+
 /// serde default for [`QuantizerKind::TurboQuant::qjl_bits`].
 fn default_qjl_bits() -> u32 {
     crate::turboquant::DEFAULT_QJL_BITS
@@ -1845,8 +1849,9 @@ pub struct BuildConfig {
     /// production path is explicitly named `srht-pq-scan`.
     #[serde(default)]
     pub global_scan_codec: GlobalScanCodec,
-    /// Packed bits per rotated coordinate for TurboQuant scan codecs.
-    #[serde(default = "default_turboquant_bits")]
+    /// Packed bits per rotated coordinate for TurboQuant scan codecs. Zero
+    /// selects the codec-specific qualified default.
+    #[serde(default = "default_persisted_global_turboquant_bits")]
     pub global_turboquant_bits: u8,
     /// Legacy experimental QJL residual direction count.
     #[serde(default = "default_qjl_bits")]
@@ -1883,7 +1888,7 @@ impl Default for BuildConfig {
             global_pq_layout: GlobalPqLayout::default(),
             global_pq_code_bytes: None,
             global_scan_codec: GlobalScanCodec::SrhtPq,
-            global_turboquant_bits: crate::turboquant::DEFAULT_TURBOQUANT_BITS,
+            global_turboquant_bits: crate::turboquant::AUTO_GLOBAL_TURBOQUANT_BITS,
             global_turboquant_qjl_bits: crate::turboquant::DEFAULT_QJL_BITS,
             global_turboquant_shards: crate::turboquant::DEFAULT_SHARDS,
         }
@@ -1896,6 +1901,7 @@ impl BuildConfig {
     pub(crate) fn legacy_default() -> Self {
         Self {
             normalized_angular_coarse_geometry: false,
+            global_turboquant_bits: crate::turboquant::DEFAULT_TURBOQUANT_BITS,
             ..Self::default()
         }
     }
@@ -2637,7 +2643,16 @@ pub struct RebuildReport {
 mod codec_name_tests {
     use std::str::FromStr;
 
-    use super::{GlobalScanCodec, LeafMode};
+    use super::{BuildConfig, GlobalScanCodec, LeafMode, QuantizerKind};
+
+    #[test]
+    fn global_turboquant_defaults_to_codec_specific_auto_while_segments_stay_four_bit() {
+        assert_eq!(BuildConfig::default().global_turboquant_bits, 0);
+        assert!(matches!(
+            QuantizerKind::default(),
+            QuantizerKind::TurboQuant { bits: 4, .. }
+        ));
+    }
 
     #[test]
     fn turboquant_codecs_have_unambiguous_breaking_names() {

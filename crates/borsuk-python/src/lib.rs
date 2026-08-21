@@ -2395,7 +2395,7 @@ fn tie_aware_recall_at_k(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, uri, metric, vector_element_type = "float32", dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, leaf_capability = "pq-scan-only", global_scan_codec = "srht-pq-scan", global_pq_layout = "adaptive", global_pq_code_bytes = None, turboquant_bits = 4, turboquant_qjl_bits = 0, turboquant_shards = 1, ram_budget = None, cache_dir = None, text = false, named_vectors = None))]
+#[pyo3(signature = (*, uri, metric, vector_element_type = "float32", dim = None, dimensions = None, segment_size = None, segment_max_vectors = None, routing_page_fanout = None, graph_neighbors = None, leaf_capability = "pq-scan-only", global_scan_codec = "srht-pq-scan", global_pq_layout = "adaptive", global_pq_code_bytes = None, turboquant_bits = 0, turboquant_qjl_bits = 0, turboquant_shards = 1, ram_budget = None, cache_dir = None, text = false, named_vectors = None))]
 fn create(
     py: Python<'_>,
     uri: String,
