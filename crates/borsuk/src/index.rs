@@ -11363,6 +11363,13 @@ impl BorsukIndex {
             global_leaf_continuations: 0,
             global_leaf_waves: 0,
             global_base_approximate_us: 0,
+            global_base_head_admission_us: 0,
+            global_base_head_fetch_us: 0,
+            global_base_head_decode_admission_us: 0,
+            global_base_head_decode_us: 0,
+            global_base_exact_admission_us: 0,
+            global_base_exact_fetch_us: 0,
+            global_base_exact_cpu_us: 0,
             global_base_exact_rerank_us: 0,
             resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
             prepared_positioned_bytes: 0,
@@ -18001,11 +18008,14 @@ impl BorsukIndex {
             },
         )?;
         let head_admission_bytes = head_plan.transient_admission_bytes();
+        let head_admission_started = Instant::now();
         let head_memory_permit = self
             .read_runtime
             .transient_admission
             .as_ref()
             .map(|gate| gate.acquire_owned(head_admission_bytes));
+        let global_base_head_admission_us =
+            u64::try_from(head_admission_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         // Cached slices are assembled into one physical-range buffer per read.
         // Acquire the transient permit before allocating those buffers so warm
         // concurrent queries obey the same peak-memory bound as cold reads.
@@ -18023,6 +18033,7 @@ impl BorsukIndex {
             }
         }
         let code_requests_before = self.storage.request_counts();
+        let head_io_started = Instant::now();
         let head_reads = bounded_io_map_with_gate(
             head_plan.reads(),
             self.leaf_read_width,
@@ -18034,6 +18045,8 @@ impl BorsukIndex {
                 )
             },
         );
+        let global_base_head_fetch_us =
+            u64::try_from(head_io_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let code_request_counts = self.storage.request_counts().delta(&code_requests_before);
         let code_storage_requests = usize::try_from(
             code_request_counts
@@ -18041,64 +18054,72 @@ impl BorsukIndex {
                 .saturating_add(code_request_counts.heads),
         )
         .unwrap_or(usize::MAX);
+        let (head_result, global_base_head_decode_admission_us) =
+            run_cell_card_post_io_with_admission(&self.decode_rank_admission, || {
+                let head_decode_started = Instant::now();
+                let finished_heads = head_plan
+                    .reads()
+                    .par_iter()
+                    .zip(head_reads.into_par_iter())
+                    .map(|(planned, fetched)| self.finish_cell_card_head_read(planned, fetched?))
+                    .collect::<Vec<_>>();
+                let mut fetched_heads = Vec::with_capacity(finished_heads.len());
+                let mut code_plane_cache_hits = 0_usize;
+                let mut code_plane_cache_bytes = 0_u64;
+                let mut code_plane_storage_bytes = 0_u64;
+                for finished in finished_heads {
+                    let (bytes, storage_bytes, cache_hit) = finished?;
+                    code_plane_storage_bytes =
+                        code_plane_storage_bytes.saturating_add(storage_bytes);
+                    if cache_hit {
+                        code_plane_cache_hits = code_plane_cache_hits.saturating_add(1);
+                        code_plane_cache_bytes =
+                            code_plane_cache_bytes.saturating_add(bytes.len() as u64);
+                    }
+                    fetched_heads.push(bytes);
+                }
+                let fetched_head_slices = fetched_heads
+                    .iter()
+                    .map(|bytes| bytes.as_slice())
+                    .collect::<Vec<_>>();
+                let heads = decode_verified_cell_card_head_wave(
+                    &head_plan,
+                    &fetched_head_slices,
+                    self.manifest.config.dimensions,
+                    self.manifest.build_config.vector_element_type,
+                )?;
+                let global_base_head_decode_us =
+                    u64::try_from(head_decode_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                let approximate_started = Instant::now();
+                let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
+                let ranked = rank_cell_card_exact_blocks(
+                    &heads,
+                    &distances,
+                    exact_fetch_rows,
+                    exact_candidate_rows,
+                    options.k,
+                )?;
+                let global_approximate_us =
+                    u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                Ok::<_, BorsukError>((
+                    heads,
+                    ranked,
+                    code_plane_cache_hits,
+                    code_plane_cache_bytes,
+                    code_plane_storage_bytes,
+                    global_base_head_decode_us,
+                    global_approximate_us,
+                ))
+            });
         let (
             heads,
             ranked,
             code_plane_cache_hits,
             code_plane_cache_bytes,
             code_plane_storage_bytes,
+            global_base_head_decode_us,
             global_approximate_us,
-        ) = run_cell_card_post_io(&self.decode_rank_admission, || {
-            let finished_heads = head_plan
-                .reads()
-                .par_iter()
-                .zip(head_reads.into_par_iter())
-                .map(|(planned, fetched)| self.finish_cell_card_head_read(planned, fetched?))
-                .collect::<Vec<_>>();
-            let mut fetched_heads = Vec::with_capacity(finished_heads.len());
-            let mut code_plane_cache_hits = 0_usize;
-            let mut code_plane_cache_bytes = 0_u64;
-            let mut code_plane_storage_bytes = 0_u64;
-            for finished in finished_heads {
-                let (bytes, storage_bytes, cache_hit) = finished?;
-                code_plane_storage_bytes = code_plane_storage_bytes.saturating_add(storage_bytes);
-                if cache_hit {
-                    code_plane_cache_hits = code_plane_cache_hits.saturating_add(1);
-                    code_plane_cache_bytes =
-                        code_plane_cache_bytes.saturating_add(bytes.len() as u64);
-                }
-                fetched_heads.push(bytes);
-            }
-            let fetched_head_slices = fetched_heads
-                .iter()
-                .map(|bytes| bytes.as_slice())
-                .collect::<Vec<_>>();
-            let heads = decode_verified_cell_card_head_wave(
-                &head_plan,
-                &fetched_head_slices,
-                self.manifest.config.dimensions,
-                self.manifest.build_config.vector_element_type,
-            )?;
-            let approximate_started = Instant::now();
-            let distances = score_loaded_cell_card_heads(&codebook, &pq_query, &heads)?;
-            let ranked = rank_cell_card_exact_blocks(
-                &heads,
-                &distances,
-                exact_fetch_rows,
-                exact_candidate_rows,
-                options.k,
-            )?;
-            let global_approximate_us =
-                u64::try_from(approximate_started.elapsed().as_micros()).unwrap_or(u64::MAX);
-            Ok::<_, BorsukError>((
-                heads,
-                ranked,
-                code_plane_cache_hits,
-                code_plane_cache_bytes,
-                code_plane_storage_bytes,
-                global_approximate_us,
-            ))
-        })?;
+        ) = head_result?;
         let declined_execution = |reason| {
             let segments_total =
                 usize::try_from(global_ref.source_segments()).unwrap_or(usize::MAX);
@@ -18150,6 +18171,13 @@ impl BorsukIndex {
                     global_leaf_continuations: 0,
                     global_leaf_waves: 1,
                     global_base_approximate_us: global_approximate_us,
+                    global_base_head_admission_us,
+                    global_base_head_fetch_us,
+                    global_base_head_decode_admission_us,
+                    global_base_head_decode_us,
+                    global_base_exact_admission_us: 0,
+                    global_base_exact_fetch_us: 0,
+                    global_base_exact_cpu_us: 0,
                     global_base_exact_rerank_us: 0,
                     resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
                     prepared_positioned_bytes: 0,
@@ -18216,22 +18244,28 @@ impl BorsukIndex {
         // The bounded search-slot gate limits compact decoded heads retained
         // during this permit handoff.
         drop(head_memory_permit);
+        let exact_admission_started = Instant::now();
         let _exact_memory_permit = self
             .read_runtime
             .transient_admission
             .as_ref()
             .map(|gate| gate.acquire_owned(exact_admission_bytes));
+        let global_base_exact_admission_us =
+            u64::try_from(exact_admission_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let exact_requests_before = self.storage.request_counts();
         let exact_range_requests = exact_plan
             .reads()
             .iter()
             .map(|read| (read.group.path.clone(), read.start..read.end))
             .collect::<Vec<_>>();
+        let exact_io_started = Instant::now();
         let exact_reads = self.storage.read_range_wave(
             &exact_range_requests,
             self.leaf_read_width,
             Some(&self.global_pq_rerank_admission),
         );
+        let global_base_exact_fetch_us =
+            u64::try_from(exact_io_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let exact_request_counts = self.storage.request_counts().delta(&exact_requests_before);
         let exact_storage_requests = usize::try_from(
             exact_request_counts
@@ -18246,7 +18280,9 @@ impl BorsukIndex {
             deepest_winning_card_rank,
             hits,
             vectors,
+            global_base_exact_cpu_us,
         ) = run_cell_card_exact_post_io(|| {
+            let exact_cpu_started = Instant::now();
             let mut fetched_exact = Vec::with_capacity(exact_reads.len());
             for read in exact_reads {
                 fetched_exact.push(read?);
@@ -18350,6 +18386,8 @@ impl BorsukIndex {
             } else {
                 Vec::new()
             };
+            let global_base_exact_cpu_us =
+                u64::try_from(exact_cpu_started.elapsed().as_micros()).unwrap_or(u64::MAX);
             Ok::<_, BorsukError>((
                 identity_rows,
                 records_considered,
@@ -18357,6 +18395,7 @@ impl BorsukIndex {
                 deepest_winning_card_rank,
                 hits,
                 vectors,
+                global_base_exact_cpu_us,
             ))
         })?;
         let bytes_read = code_plane_storage_bytes
@@ -18425,6 +18464,13 @@ impl BorsukIndex {
                 global_leaf_continuations: 1,
                 global_leaf_waves: 2,
                 global_base_approximate_us: global_approximate_us,
+                global_base_head_admission_us,
+                global_base_head_fetch_us,
+                global_base_head_decode_admission_us,
+                global_base_head_decode_us,
+                global_base_exact_admission_us,
+                global_base_exact_fetch_us,
+                global_base_exact_cpu_us,
                 global_base_exact_rerank_us: u64::try_from(exact_started.elapsed().as_micros())
                     .unwrap_or(u64::MAX),
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
@@ -18520,6 +18566,13 @@ impl BorsukIndex {
                     global_leaf_continuations: 0,
                     global_leaf_waves: 0,
                     global_base_approximate_us: 0,
+                    global_base_head_admission_us: 0,
+                    global_base_head_fetch_us: 0,
+                    global_base_head_decode_admission_us: 0,
+                    global_base_head_decode_us: 0,
+                    global_base_exact_admission_us: 0,
+                    global_base_exact_fetch_us: 0,
+                    global_base_exact_cpu_us: 0,
                     global_base_exact_rerank_us: 0,
                     resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
                     prepared_positioned_bytes: 0,
@@ -18979,6 +19032,13 @@ impl BorsukIndex {
                 global_leaf_continuations: continuations,
                 global_leaf_waves: waves,
                 global_base_approximate_us: global_approximate_us,
+                global_base_head_admission_us: 0,
+                global_base_head_fetch_us: 0,
+                global_base_head_decode_admission_us: 0,
+                global_base_head_decode_us: 0,
+                global_base_exact_admission_us: 0,
+                global_base_exact_fetch_us: 0,
+                global_base_exact_cpu_us: 0,
                 global_base_exact_rerank_us: u64::try_from(exact_started.elapsed().as_micros())
                     .unwrap_or(u64::MAX),
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
@@ -21450,6 +21510,34 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_base_approximate_us)
                 .sum(),
+            global_base_head_admission_us: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_admission_us)
+                .sum(),
+            global_base_head_fetch_us: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_fetch_us)
+                .sum(),
+            global_base_head_decode_admission_us: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_decode_admission_us)
+                .sum(),
+            global_base_head_decode_us: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_decode_us)
+                .sum(),
+            global_base_exact_admission_us: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_admission_us)
+                .sum(),
+            global_base_exact_fetch_us: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_fetch_us)
+                .sum(),
+            global_base_exact_cpu_us: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_cpu_us)
+                .sum(),
             global_base_exact_rerank_us: reports
                 .iter()
                 .map(|(_, report)| report.global_base_exact_rerank_us)
@@ -21622,6 +21710,13 @@ impl BorsukIndex {
                 global_leaf_continuations: 0,
                 global_leaf_waves: 0,
                 global_base_approximate_us: 0,
+                global_base_head_admission_us: 0,
+                global_base_head_fetch_us: 0,
+                global_base_head_decode_admission_us: 0,
+                global_base_head_decode_us: 0,
+                global_base_exact_admission_us: 0,
+                global_base_exact_fetch_us: 0,
+                global_base_exact_cpu_us: 0,
                 global_base_exact_rerank_us: 0,
                 resident_bytes_estimate,
                 prepared_positioned_bytes: 0,
@@ -21848,6 +21943,13 @@ impl BorsukIndex {
             global_leaf_continuations: 0,
             global_leaf_waves: 0,
             global_base_approximate_us: 0,
+            global_base_head_admission_us: 0,
+            global_base_head_fetch_us: 0,
+            global_base_head_decode_admission_us: 0,
+            global_base_head_decode_us: 0,
+            global_base_exact_admission_us: 0,
+            global_base_exact_fetch_us: 0,
+            global_base_exact_cpu_us: 0,
             global_base_exact_rerank_us: 0,
             resident_bytes_estimate,
             prepared_positioned_bytes: 0,
@@ -22210,6 +22312,13 @@ impl BorsukIndex {
                     global_leaf_continuations: 0,
                     global_leaf_waves: 0,
                     global_base_approximate_us: 0,
+                    global_base_head_admission_us: 0,
+                    global_base_head_fetch_us: 0,
+                    global_base_head_decode_admission_us: 0,
+                    global_base_head_decode_us: 0,
+                    global_base_exact_admission_us: 0,
+                    global_base_exact_fetch_us: 0,
+                    global_base_exact_cpu_us: 0,
                     global_base_exact_rerank_us: 0,
                     resident_bytes_estimate,
                     prepared_positioned_bytes: 0,
@@ -22981,6 +23090,13 @@ impl BorsukIndex {
                 global_leaf_continuations: 0,
                 global_leaf_waves: 0,
                 global_base_approximate_us: 0,
+                global_base_head_admission_us: 0,
+                global_base_head_fetch_us: 0,
+                global_base_head_decode_admission_us: 0,
+                global_base_head_decode_us: 0,
+                global_base_exact_admission_us: 0,
+                global_base_exact_fetch_us: 0,
+                global_base_exact_cpu_us: 0,
                 global_base_exact_rerank_us: 0,
                 resident_bytes_estimate,
                 prepared_positioned_bytes: 0,
@@ -23101,6 +23217,13 @@ impl BorsukIndex {
                 global_leaf_continuations: 0,
                 global_leaf_waves: 0,
                 global_base_approximate_us: 0,
+                global_base_head_admission_us: 0,
+                global_base_head_fetch_us: 0,
+                global_base_head_decode_admission_us: 0,
+                global_base_head_decode_us: 0,
+                global_base_exact_admission_us: 0,
+                global_base_exact_fetch_us: 0,
+                global_base_exact_cpu_us: 0,
                 global_base_exact_rerank_us: 0,
                 resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
                 prepared_positioned_bytes: 0,
@@ -28894,13 +29017,24 @@ where
 /// Object-store workers must remain blocking-I/O waiters: executing V17 CPU
 /// work on that wider pool would let concurrent searches oversubscribe the
 /// host and steal cores from the embedding application.
+#[cfg(test)]
 fn run_cell_card_post_io<R, F>(gate: &AdmissionGate, work: F) -> R
 where
     R: Send,
     F: FnOnce() -> R + Send,
 {
+    run_cell_card_post_io_with_admission(gate, work).0
+}
+
+fn run_cell_card_post_io_with_admission<R, F>(gate: &AdmissionGate, work: F) -> (R, u64)
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    let admission_started = Instant::now();
     let _permit = gate.acquire();
-    crate::parallel::install(work)
+    let admission_us = u64::try_from(admission_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    (crate::parallel::install(work), admission_us)
 }
 
 /// Run the serial exact decode/rerank stage on one query worker.
@@ -30035,6 +30169,34 @@ fn merge_search_execution_hits(
         .report
         .global_base_approximate_us
         .saturating_add(delta_report.global_base_approximate_us);
+    base.report.global_base_head_admission_us = base
+        .report
+        .global_base_head_admission_us
+        .saturating_add(delta_report.global_base_head_admission_us);
+    base.report.global_base_head_fetch_us = base
+        .report
+        .global_base_head_fetch_us
+        .saturating_add(delta_report.global_base_head_fetch_us);
+    base.report.global_base_head_decode_admission_us = base
+        .report
+        .global_base_head_decode_admission_us
+        .saturating_add(delta_report.global_base_head_decode_admission_us);
+    base.report.global_base_head_decode_us = base
+        .report
+        .global_base_head_decode_us
+        .saturating_add(delta_report.global_base_head_decode_us);
+    base.report.global_base_exact_admission_us = base
+        .report
+        .global_base_exact_admission_us
+        .saturating_add(delta_report.global_base_exact_admission_us);
+    base.report.global_base_exact_fetch_us = base
+        .report
+        .global_base_exact_fetch_us
+        .saturating_add(delta_report.global_base_exact_fetch_us);
+    base.report.global_base_exact_cpu_us = base
+        .report
+        .global_base_exact_cpu_us
+        .saturating_add(delta_report.global_base_exact_cpu_us);
     base.report.global_base_exact_rerank_us = base
         .report
         .global_base_exact_rerank_us
@@ -37824,6 +37986,24 @@ mod tests {
         assert_eq!(report.global_leaf_directory_reads, 0);
         assert_eq!(report.global_leaf_continuations, 1);
         assert_eq!(report.global_leaf_waves, 2);
+        assert!(
+            report
+                .global_base_exact_admission_us
+                .saturating_add(report.global_base_exact_fetch_us)
+                .saturating_add(report.global_base_exact_cpu_us)
+                <= report.global_base_exact_rerank_us,
+            "exact-stage components must fit inside the existing total: {report:?}"
+        );
+        assert!(
+            report
+                .global_base_head_admission_us
+                .saturating_add(report.global_base_head_fetch_us)
+                .saturating_add(report.global_base_head_decode_admission_us)
+                .saturating_add(report.global_base_head_decode_us)
+                .saturating_add(report.global_base_approximate_us)
+                <= report.elapsed_ms.saturating_add(1).saturating_mul(1_000),
+            "head CPU components must fit inside query wall time: {report:?}"
+        );
     }
 
     #[test]

@@ -286,6 +286,13 @@ class SearchReport:
     global_graph_chunks_searched: int
     global_scan_chunks_searched: int
     global_base_approximate_us: int
+    global_base_head_admission_us: int
+    global_base_head_fetch_us: int
+    global_base_head_decode_admission_us: int
+    global_base_head_decode_us: int
+    global_base_exact_admission_us: int
+    global_base_exact_fetch_us: int
+    global_base_exact_cpu_us: int
     global_base_exact_rerank_us: int
     resident_bytes_estimate: int
     prepared_positioned_bytes: int

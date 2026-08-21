@@ -225,6 +225,20 @@ export interface SearchReport {
   globalScanChunksSearched: number;
   /** Aggregate global routing/PQ candidate work across merged immutable runs. */
   globalBaseApproximateUs: number;
+  /** Time waiting for head-stage transient-memory admission. */
+  globalBaseHeadAdmissionUs: number;
+  /** Time completing authenticated head fetch waves, including leaf-read admission. */
+  globalBaseHeadFetchUs: number;
+  /** Time waiting for bounded head decode/rank admission. */
+  globalBaseHeadDecodeAdmissionUs: number;
+  /** Time decoding authenticated global routing heads. */
+  globalBaseHeadDecodeUs: number;
+  /** Time waiting for exact-wave transient-memory admission. */
+  globalBaseExactAdmissionUs: number;
+  /** Time fetching exact-vector ranges. */
+  globalBaseExactFetchUs: number;
+  /** Time decoding, resolving, and exact-scoring fetched candidates. */
+  globalBaseExactCpuUs: number;
   /** Aggregate global exact-fetch/rerank work across merged immutable runs. */
   globalBaseExactRerankUs: number;
   residentBytesEstimate: number;

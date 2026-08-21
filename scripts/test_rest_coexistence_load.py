@@ -136,7 +136,14 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 global_leaf_exact_speculative_bytes=720_000,
                 global_leaf_exact_scores=512,
                 global_leaf_waves=1,
+                global_base_head_admission_us=40,
+                global_base_head_fetch_us=1_800,
+                global_base_head_decode_admission_us=60,
+                global_base_head_decode_us=400,
                 global_base_approximate_us=800,
+                global_base_exact_admission_us=100,
+                global_base_exact_fetch_us=5_500,
+                global_base_exact_cpu_us=1_200,
                 global_base_exact_rerank_us=7_000,
             ),
             Sample(
@@ -159,7 +166,14 @@ class RestCoexistenceLoadTest(unittest.TestCase):
                 global_leaf_exact_speculative_bytes=690_000,
                 global_leaf_exact_scores=500,
                 global_leaf_waves=1,
+                global_base_head_admission_us=30,
+                global_base_head_fetch_us=1_600,
+                global_base_head_decode_admission_us=50,
+                global_base_head_decode_us=300,
                 global_base_approximate_us=700,
+                global_base_exact_admission_us=80,
+                global_base_exact_fetch_us=4_800,
+                global_base_exact_cpu_us=1_000,
                 global_base_exact_rerank_us=6_000,
             ),
         ]
@@ -179,7 +193,14 @@ class RestCoexistenceLoadTest(unittest.TestCase):
         self.assertEqual(search["global_leaf_exact_speculative_bytes"], 1_410_000)
         self.assertEqual(search["global_leaf_exact_scores"], 1_012)
         self.assertEqual(search["global_leaf_waves"], 2)
+        self.assertEqual(search["global_base_head_admission_us"], 70)
+        self.assertEqual(search["global_base_head_fetch_us"], 3_400)
+        self.assertEqual(search["global_base_head_decode_admission_us"], 110)
+        self.assertEqual(search["global_base_head_decode_us"], 700)
         self.assertEqual(search["global_base_approximate_us"], 1_500)
+        self.assertEqual(search["global_base_exact_admission_us"], 180)
+        self.assertEqual(search["global_base_exact_fetch_us"], 10_300)
+        self.assertEqual(search["global_base_exact_cpu_us"], 2_200)
         self.assertEqual(search["global_base_exact_rerank_us"], 13_000)
 
     def test_summary_accumulates_exact_blocks_and_query_bytes(self) -> None:

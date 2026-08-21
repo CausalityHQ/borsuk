@@ -41,6 +41,13 @@ class Sample:
     global_leaf_exact_scores: int = 0
     global_leaf_waves: int = 0
     global_base_approximate_us: int = 0
+    global_base_head_admission_us: int = 0
+    global_base_head_fetch_us: int = 0
+    global_base_head_decode_admission_us: int = 0
+    global_base_head_decode_us: int = 0
+    global_base_exact_admission_us: int = 0
+    global_base_exact_fetch_us: int = 0
+    global_base_exact_cpu_us: int = 0
     global_base_exact_rerank_us: int = 0
     global_leaf_pages_read: int = 0
     query_bytes_read: int = 0
@@ -78,6 +85,15 @@ class Sample:
             "global_leaf_exact_scores": self.global_leaf_exact_scores,
             "global_leaf_waves": self.global_leaf_waves,
             "global_base_approximate_us": self.global_base_approximate_us,
+            "global_base_head_admission_us": self.global_base_head_admission_us,
+            "global_base_head_fetch_us": self.global_base_head_fetch_us,
+            "global_base_head_decode_admission_us": (
+                self.global_base_head_decode_admission_us
+            ),
+            "global_base_head_decode_us": self.global_base_head_decode_us,
+            "global_base_exact_admission_us": self.global_base_exact_admission_us,
+            "global_base_exact_fetch_us": self.global_base_exact_fetch_us,
+            "global_base_exact_cpu_us": self.global_base_exact_cpu_us,
             "global_base_exact_rerank_us": self.global_base_exact_rerank_us,
             "global_leaf_pages_read": self.global_leaf_pages_read,
             "query_bytes_read": self.query_bytes_read,
@@ -180,6 +196,23 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "global_leaf_waves": sum(sample.global_leaf_waves for sample in samples),
         "global_base_approximate_us": sum(
             sample.global_base_approximate_us for sample in samples
+        ),
+        "global_base_head_admission_us": sum(
+            sample.global_base_head_admission_us for sample in samples
+        ),
+        "global_base_head_fetch_us": sum(sample.global_base_head_fetch_us for sample in samples),
+        "global_base_head_decode_admission_us": sum(
+            sample.global_base_head_decode_admission_us for sample in samples
+        ),
+        "global_base_head_decode_us": sum(
+            sample.global_base_head_decode_us for sample in samples
+        ),
+        "global_base_exact_admission_us": sum(
+            sample.global_base_exact_admission_us for sample in samples
+        ),
+        "global_base_exact_fetch_us": sum(sample.global_base_exact_fetch_us for sample in samples),
+        "global_base_exact_cpu_us": sum(
+            sample.global_base_exact_cpu_us for sample in samples
         ),
         "global_base_exact_rerank_us": sum(
             sample.global_base_exact_rerank_us for sample in samples
@@ -314,6 +347,13 @@ def _request(
     global_leaf_exact_scores = 0
     global_leaf_waves = 0
     global_base_approximate_us = 0
+    global_base_head_admission_us = 0
+    global_base_head_fetch_us = 0
+    global_base_head_decode_admission_us = 0
+    global_base_head_decode_us = 0
+    global_base_exact_admission_us = 0
+    global_base_exact_fetch_us = 0
+    global_base_exact_cpu_us = 0
     global_base_exact_rerank_us = 0
     global_leaf_pages_read = 0
     query_bytes_read = 0
@@ -372,6 +412,19 @@ def _request(
         global_leaf_exact_scores = int(payload.get("global_leaf_exact_scores", 0))
         global_leaf_waves = int(payload.get("global_leaf_waves", 0))
         global_base_approximate_us = int(payload.get("global_base_approximate_us", 0))
+        global_base_head_admission_us = int(
+            payload.get("global_base_head_admission_us", 0)
+        )
+        global_base_head_fetch_us = int(payload.get("global_base_head_fetch_us", 0))
+        global_base_head_decode_admission_us = int(
+            payload.get("global_base_head_decode_admission_us", 0)
+        )
+        global_base_head_decode_us = int(payload.get("global_base_head_decode_us", 0))
+        global_base_exact_admission_us = int(
+            payload.get("global_base_exact_admission_us", 0)
+        )
+        global_base_exact_fetch_us = int(payload.get("global_base_exact_fetch_us", 0))
+        global_base_exact_cpu_us = int(payload.get("global_base_exact_cpu_us", 0))
         global_base_exact_rerank_us = int(
             payload.get("global_base_exact_rerank_us", 0)
         )
@@ -406,6 +459,13 @@ def _request(
         global_leaf_exact_scores,
         global_leaf_waves,
         global_base_approximate_us,
+        global_base_head_admission_us,
+        global_base_head_fetch_us,
+        global_base_head_decode_admission_us,
+        global_base_head_decode_us,
+        global_base_exact_admission_us,
+        global_base_exact_fetch_us,
+        global_base_exact_cpu_us,
         global_base_exact_rerank_us,
         global_leaf_pages_read,
         query_bytes_read,

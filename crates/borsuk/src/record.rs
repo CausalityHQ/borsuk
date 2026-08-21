@@ -1167,6 +1167,29 @@ pub struct SearchReport {
     /// across every merged immutable global ANN execution.
     #[serde(default)]
     pub global_base_approximate_us: u64,
+    /// Aggregate microseconds spent waiting for head-stage transient-memory admission.
+    #[serde(default)]
+    pub global_base_head_admission_us: u64,
+    /// Aggregate microseconds spent completing global-base head fetch waves,
+    /// including collection-wide leaf-read admission.
+    #[serde(default)]
+    pub global_base_head_fetch_us: u64,
+    /// Aggregate microseconds spent waiting for head decode/rank admission.
+    #[serde(default)]
+    pub global_base_head_decode_admission_us: u64,
+    /// Aggregate microseconds spent checksumming and decoding global-base heads.
+    #[serde(default)]
+    pub global_base_head_decode_us: u64,
+    /// Aggregate microseconds spent waiting for exact-stage memory admission.
+    #[serde(default)]
+    pub global_base_exact_admission_us: u64,
+    /// Aggregate microseconds spent completing global-base exact fetch waves,
+    /// including collection-wide leaf-read admission.
+    #[serde(default)]
+    pub global_base_exact_fetch_us: u64,
+    /// Aggregate microseconds spent decoding, resolving, and scoring exact rows.
+    #[serde(default)]
+    pub global_base_exact_cpu_us: u64,
     /// Aggregate microseconds spent fetching and exact-scoring global shortlists
     /// across every merged immutable global ANN execution.
     #[serde(default)]

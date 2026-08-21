@@ -1496,6 +1496,13 @@ test("searchWithReport exposes query counters", async () => {
   assert.ok(report.residentBytesEstimate > 0);
   assert.ok(report.elapsedMs >= 0);
   assert.equal(report.globalBaseApproximateUs, 0);
+  assert.equal(report.globalBaseHeadAdmissionUs, 0);
+  assert.equal(report.globalBaseHeadFetchUs, 0);
+  assert.equal(report.globalBaseHeadDecodeAdmissionUs, 0);
+  assert.equal(report.globalBaseHeadDecodeUs, 0);
+  assert.equal(report.globalBaseExactAdmissionUs, 0);
+  assert.equal(report.globalBaseExactFetchUs, 0);
+  assert.equal(report.globalBaseExactCpuUs, 0);
   assert.equal(report.globalBaseExactRerankUs, 0);
 });
 

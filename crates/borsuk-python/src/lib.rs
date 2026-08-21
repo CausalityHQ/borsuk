@@ -648,6 +648,20 @@ struct PySearchReport {
     #[pyo3(get)]
     global_base_approximate_us: u64,
     #[pyo3(get)]
+    global_base_head_admission_us: u64,
+    #[pyo3(get)]
+    global_base_head_fetch_us: u64,
+    #[pyo3(get)]
+    global_base_head_decode_admission_us: u64,
+    #[pyo3(get)]
+    global_base_head_decode_us: u64,
+    #[pyo3(get)]
+    global_base_exact_admission_us: u64,
+    #[pyo3(get)]
+    global_base_exact_fetch_us: u64,
+    #[pyo3(get)]
+    global_base_exact_cpu_us: u64,
+    #[pyo3(get)]
     global_base_exact_rerank_us: u64,
     #[pyo3(get)]
     resident_bytes_estimate: u64,
@@ -683,7 +697,7 @@ struct PySearchReport {
 impl PySearchReport {
     fn __repr__(&self) -> String {
         format!(
-            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, decoded_cache_hits={}, decoded_cache_bytes_read={}, object_cache_hits={}, object_cache_misses={}, disk_cache_bytes_read={}, backing_bytes_read={}, disk_cache_reads={}, backing_reads={}, cache_repairs={}, records_considered={}, records_scored={}, graph_candidates_added={}, global_graph_chunks_searched={}, global_scan_chunks_searched={}, global_base_approximate_us={}, global_base_exact_rerank_us={}, resident_bytes_estimate={}, prepared_positioned_bytes={}, collection_resident_bytes={}, retained_bytes={}, retained_capacity_bytes={}, retained_peak_bytes={}, transient_bytes={}, transient_capacity_bytes={}, transient_peak_bytes={}, elapsed_ms={}, requests={})",
+            "SearchReport(hits={}, leaf_mode={:?}, termination_reason={:?}, recall_guarantee={:?}, segments_total={}, segments_searched={}, segments_skipped={}, routing_page_indexes_read={}, routing_pages_read={}, bytes_read={}, prefetched_bytes_unused={}, graph_bytes_read={}, decoded_cache_hits={}, decoded_cache_bytes_read={}, object_cache_hits={}, object_cache_misses={}, disk_cache_bytes_read={}, backing_bytes_read={}, disk_cache_reads={}, backing_reads={}, cache_repairs={}, records_considered={}, records_scored={}, graph_candidates_added={}, global_graph_chunks_searched={}, global_scan_chunks_searched={}, global_base_approximate_us={}, global_base_head_admission_us={}, global_base_head_fetch_us={}, global_base_head_decode_admission_us={}, global_base_head_decode_us={}, global_base_exact_admission_us={}, global_base_exact_fetch_us={}, global_base_exact_cpu_us={}, global_base_exact_rerank_us={}, resident_bytes_estimate={}, prepared_positioned_bytes={}, collection_resident_bytes={}, retained_bytes={}, retained_capacity_bytes={}, retained_peak_bytes={}, transient_bytes={}, transient_capacity_bytes={}, transient_peak_bytes={}, elapsed_ms={}, requests={})",
             self.hits.len(),
             self.leaf_mode,
             self.termination_reason,
@@ -711,6 +725,13 @@ impl PySearchReport {
             self.global_graph_chunks_searched,
             self.global_scan_chunks_searched,
             self.global_base_approximate_us,
+            self.global_base_head_admission_us,
+            self.global_base_head_fetch_us,
+            self.global_base_head_decode_admission_us,
+            self.global_base_head_decode_us,
+            self.global_base_exact_admission_us,
+            self.global_base_exact_fetch_us,
+            self.global_base_exact_cpu_us,
             self.global_base_exact_rerank_us,
             self.resident_bytes_estimate,
             self.prepared_positioned_bytes,
@@ -3169,6 +3190,13 @@ impl TryFrom<SearchReport> for PySearchReport {
             global_graph_chunks_searched: report.global_graph_chunks_searched,
             global_scan_chunks_searched: report.global_scan_chunks_searched,
             global_base_approximate_us: report.global_base_approximate_us,
+            global_base_head_admission_us: report.global_base_head_admission_us,
+            global_base_head_fetch_us: report.global_base_head_fetch_us,
+            global_base_head_decode_admission_us: report.global_base_head_decode_admission_us,
+            global_base_head_decode_us: report.global_base_head_decode_us,
+            global_base_exact_admission_us: report.global_base_exact_admission_us,
+            global_base_exact_fetch_us: report.global_base_exact_fetch_us,
+            global_base_exact_cpu_us: report.global_base_exact_cpu_us,
             global_base_exact_rerank_us: report.global_base_exact_rerank_us,
             resident_bytes_estimate: report.resident_bytes_estimate,
             prepared_positioned_bytes: report.prepared_positioned_bytes,

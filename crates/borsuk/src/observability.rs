@@ -215,6 +215,13 @@ pub(crate) fn search_span(
         records_scored = tracing::field::Empty,
         graph_candidates_added = tracing::field::Empty,
         global_base_approximate_us = tracing::field::Empty,
+        global_base_head_admission_us = tracing::field::Empty,
+        global_base_head_fetch_us = tracing::field::Empty,
+        global_base_head_decode_admission_us = tracing::field::Empty,
+        global_base_head_decode_us = tracing::field::Empty,
+        global_base_exact_admission_us = tracing::field::Empty,
+        global_base_exact_fetch_us = tracing::field::Empty,
+        global_base_exact_cpu_us = tracing::field::Empty,
         global_base_exact_rerank_us = tracing::field::Empty,
         global_identity_rows_resolved = tracing::field::Empty,
         global_exact_vectors_fetched = tracing::field::Empty
@@ -265,6 +272,41 @@ pub(crate) fn record_search_report(span: &Span, report: &SearchReport) {
         span,
         "global_base_approximate_us",
         report.global_base_approximate_us,
+    );
+    record_u64(
+        span,
+        "global_base_head_admission_us",
+        report.global_base_head_admission_us,
+    );
+    record_u64(
+        span,
+        "global_base_head_fetch_us",
+        report.global_base_head_fetch_us,
+    );
+    record_u64(
+        span,
+        "global_base_head_decode_admission_us",
+        report.global_base_head_decode_admission_us,
+    );
+    record_u64(
+        span,
+        "global_base_head_decode_us",
+        report.global_base_head_decode_us,
+    );
+    record_u64(
+        span,
+        "global_base_exact_admission_us",
+        report.global_base_exact_admission_us,
+    );
+    record_u64(
+        span,
+        "global_base_exact_fetch_us",
+        report.global_base_exact_fetch_us,
+    );
+    record_u64(
+        span,
+        "global_base_exact_cpu_us",
+        report.global_base_exact_cpu_us,
     );
     record_u64(
         span,
