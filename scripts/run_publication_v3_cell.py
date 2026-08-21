@@ -549,6 +549,7 @@ def build_execution_plan(
                     "BORSUK_BENCH_CONCURRENCY": "1,2,4,8,16",
                     "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": "16",
                     "BORSUK_BENCH_MAX_WAITING_SEARCHES": "32",
+                    "BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS": "2",
                     "BORSUK_BENCH_SERVING_NPROBE": str(routing_budget),
                     "BORSUK_BENCH_SERVING_CANDIDATES": str(
                         V20_COMPATIBILITY_CANDIDATES

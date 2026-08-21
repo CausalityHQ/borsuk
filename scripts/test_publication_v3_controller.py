@@ -209,6 +209,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(prepared.timeout_seconds, 7200)
         self.assertEqual(prepared.expected["binary_sha256"], "8" * 64)
         self.assertEqual(prepared.expected["purchase_option"], "on-demand")
+        self.assertEqual(prepared.expected["max_parallel_decode_rank_tasks"], 1)
 
         concurrency = prepare_qualification_execution(
             manifest,
@@ -239,6 +240,11 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(concurrency.expected["max_waiting_searches"], 32)
         self.assertEqual(concurrency.expected["leaf_read_width"], 32)
         self.assertEqual(concurrency.expected["max_inflight_leaf_reads"], 48)
+        self.assertEqual(concurrency.expected["max_parallel_decode_rank_tasks"], 2)
+        self.assertIn(
+            'test "$actual_max_parallel_decode_rank_tasks" = 2',
+            concurrency_worker,
+        )
         self.assertEqual(concurrency.expected["cpu_threads"], 3)
         self.assertEqual(concurrency.expected["io_threads"], 88)
         self.assertEqual(concurrency.expected["s3_get_concurrency"], 64)

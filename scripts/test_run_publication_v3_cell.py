@@ -794,6 +794,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(runtime_env["BORSUK_CPU_THREADS"], "3")
         self.assertEqual(runtime_env["BORSUK_IO_THREADS"], "88")
         self.assertEqual(runtime_env["BORSUK_BACKING_GET_CONCURRENCY"], "64")
+        self.assertEqual(
+            runtime_env["BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS"], "1"
+        )
         self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_BUILD_INDEX"], "0")
@@ -845,7 +848,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(runtime_env["BORSUK_BENCH_LEAF_READ_WIDTH"], "32")
         self.assertEqual(runtime_env["BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"], "48")
         self.assertEqual(
-            runtime_env["BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS"], "1"
+            runtime_env["BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS"], "2"
         )
         self.assertEqual(
             runtime_env["BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"], "3"
@@ -868,7 +871,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             "max_waiting_searches": 32,
             "leaf_read_width": 32,
             "max_inflight_leaf_reads": 48,
-            "max_parallel_decode_rank_tasks": 1,
+            "max_parallel_decode_rank_tasks": 2,
             "exact_read_max_physical_amplification": 3,
             "cpu_threads": 3,
             "io_threads": 88,
@@ -886,7 +889,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "max_waiting_searches": 32,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
-                "max_parallel_decode_rank_tasks": 1,
+                "max_parallel_decode_rank_tasks": 2,
                 "exact_read_max_physical_amplification": 3,
                 "cpu_threads": 3,
                 "io_threads": 88,

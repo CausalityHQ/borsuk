@@ -625,7 +625,7 @@ def prepare_qualification_execution(
         max_waiting_searches = 32
     leaf_read_width = 32
     max_inflight_leaf_reads = 48
-    max_parallel_decode_rank_tasks = 1
+    max_parallel_decode_rank_tasks = 2 if runtime_profile == "concurrency" else 1
     cpu_threads = max(1, min(runtime_vcpus - 1, 4))
     io_threads = 88
     s3_get_concurrency = 64
