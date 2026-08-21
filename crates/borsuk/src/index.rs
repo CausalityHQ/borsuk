@@ -18297,7 +18297,7 @@ impl BorsukIndex {
             let identity_rows = heads
                 .iter()
                 .try_fold(0_usize, |total, head| {
-                    total.checked_add(head.head.codes.len())
+                    total.checked_add(head.head.code_count())
                 })
                 .ok_or_else(|| {
                     BorsukError::InvalidStorage("V17 identity row count overflows".to_string())

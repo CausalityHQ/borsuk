@@ -308,7 +308,8 @@ pub(crate) struct VerifiedCellCardHead {
     pub(crate) cell_index: u32,
     pub(crate) card_ordinal: u32,
     pub(crate) leaf_ordinal: u32,
-    pub(crate) codes: Vec<Vec<u8>>,
+    codes: Vec<u8>,
+    code_width: usize,
     pub(crate) exact_blocks: Vec<CellCardExactBlockRef>,
 }
 
@@ -846,10 +847,8 @@ fn decode_cell_card_head_inner(
         cell_index: reference.cell_index,
         card_ordinal: reference.card_ordinal,
         leaf_ordinal: reference.leaf_ordinal,
-        codes: stored
-            .chunks_exact(reference.code_width as usize)
-            .map(<[u8]>::to_vec)
-            .collect(),
+        codes: stored.to_vec(),
+        code_width: reference.code_width as usize,
         exact_blocks: reference.exact_blocks.to_vec(),
     })
 }
@@ -940,6 +939,25 @@ fn validate_exact_block_refs(
 }
 
 impl VerifiedCellCardHead {
+    pub(crate) fn code_count(&self) -> usize {
+        self.codes.len() / self.code_width
+    }
+
+    #[cfg(test)]
+    pub(crate) fn code_width(&self) -> usize {
+        self.code_width
+    }
+
+    #[cfg(test)]
+    pub(crate) fn code(&self, index: usize) -> Option<&[u8]> {
+        let start = index.checked_mul(self.code_width)?;
+        self.codes.get(start..start.checked_add(self.code_width)?)
+    }
+
+    fn codes(&self) -> std::slice::ChunksExact<'_, u8> {
+        self.codes.chunks_exact(self.code_width)
+    }
+
     pub(crate) fn verify_block(
         &self,
         block_ordinal: u32,
@@ -989,7 +1007,6 @@ impl VerifiedCellCardHead {
                 "cell-card exact block checksum or bounds mismatch".to_string(),
             ));
         }
-        let code_width = self.codes.first().map_or(0, Vec::len);
         let batch = crate::global_leaf::decode_global_leaf_exact_block(
             &crate::global_leaf::GlobalLeafExactBlockRef {
                 first_row: block_ordinal
@@ -1002,7 +1019,7 @@ impl VerifiedCellCardHead {
                 checksum: *blake3::hash(stored).as_bytes(),
             },
             stored,
-            code_width,
+            self.code_width,
             dimensions,
             element_type,
         )?;
@@ -1752,7 +1769,7 @@ pub(crate) fn rank_cell_card_exact_blocks(
     }
     let mut blocks = Vec::<RankedCellCardExactBlock>::new();
     for (head_index, (loaded, distances)) in heads.iter().zip(row_distances).enumerate() {
-        if distances.len() != loaded.head.codes.len()
+        if distances.len() != loaded.head.code_count()
             || distances.iter().any(|distance| !distance.is_finite())
         {
             return Err(BorsukError::InvalidStorage(
@@ -1949,9 +1966,7 @@ pub(crate) fn score_loaded_cell_card_heads(
     heads: &[LoadedCellCardHead],
 ) -> Result<Vec<Vec<f32>>> {
     let prepared = codebook.prepare_cell_card_query(query)?;
-    map_cell_card_heads_in_bounded_pool(heads, |loaded| {
-        prepared.score_codes(loaded.head.codes.iter().map(Vec::as_slice))
-    })
+    map_cell_card_heads_in_bounded_pool(heads, |loaded| prepared.score_codes(loaded.head.codes()))
 }
 
 #[derive(Debug, Clone)]
@@ -3300,7 +3315,14 @@ mod tests {
         .unwrap();
         assert_eq!(head.cell_index, input.cell_index);
         assert_eq!(head.leaf_ordinal, input.leaf_ordinal);
-        assert_eq!(head.codes.len(), input.rows.len());
+        assert_eq!(head.code_count(), input.rows.len());
+        assert_eq!(head.code_width(), 2);
+        assert_eq!(head.code(0), Some(input.rows[0].code.as_slice()));
+        assert_eq!(
+            head.code(input.rows.len() - 1),
+            Some(input.rows.last().unwrap().code.as_slice())
+        );
+        assert_eq!(head.code(input.rows.len()), None);
         assert_eq!(head.exact_blocks.len(), 2);
 
         let mut decoded_ids = Vec::new();
