@@ -10,7 +10,7 @@ use std::{
 };
 
 use borsuk::{
-    BorsukError, BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, ObjectStore,
+    BorsukIndex, GroupCommitConfig, GroupCommitWriter, IndexConfig, ObjectStore,
     PositionedLogWriter, PositionedMutationModality, RequestCounts, SearchOptions,
     VectorElementType, VectorKind, VectorMetric, VectorRecord, VectorSpec,
 };
@@ -794,7 +794,7 @@ fn late_interaction_replacement_and_delete_reopen_from_one_positioned_log() {
 }
 
 #[test]
-fn committed_cleanup_failure_clears_transaction_and_reports_position() {
+fn committed_cleanup_failure_returns_success_and_next_mutation_drains_one_cleanup() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let auth_fault = common::FaultInjectingObjectStore::fail_nth_matching(
         Arc::clone(&inner),
@@ -816,30 +816,36 @@ fn committed_cleanup_failure_clears_transaction_and_reports_position() {
         },
     );
     let uri = "memory:///positioned-committed-cleanup-error";
+    let (release_fault, operations) = release_fault.with_operation_log();
     let mut index =
         BorsukIndex::create_with_object_store(Arc::new(release_fault), config(uri)).unwrap();
-
-    let error = index
-        .add(vec![VectorRecord::new("committed", vec![1.0, 0.0])])
-        .unwrap_err();
-    let BorsukError::PositionedCommitCleanupFailed {
-        source_epoch,
-        shard: _,
-        sequence,
-        envelope_checksum,
-        cleanup,
-    } = error
-    else {
-        panic!("unexpected error after positioned commit: {error}");
-    };
-    assert_eq!(source_epoch, 1);
-    assert!(sequence > 0);
-    assert_eq!(envelope_checksum.len(), 64);
-    assert!(!cleanup.is_empty());
+    operations.clear();
 
     index
-        .add(vec![VectorRecord::new("after", vec![0.0, 1.0])])
+        .add(vec![VectorRecord::new("committed", vec![1.0, 0.0])])
         .unwrap();
+    let first_authorizations = operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Put
+            && path.starts_with("positioned-log/claim-authorizations/")
+    });
+    assert_eq!(
+        first_authorizations, 1,
+        "the injected receipt write was attempted once"
+    );
+
+    operations.clear();
+    let (_, report) = index
+        .add_with_report(vec![vec![0.0, 1.0]], Some(vec!["after".to_string()]))
+        .unwrap();
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            operation == common::StoreOperation::Put
+                && path.starts_with("positioned-log/claim-authorizations/")
+        }),
+        1,
+        "the next mutation must drain exactly the one deferred authorization"
+    );
+    assert_eq!(report.requests, logged_request_counts(&operations));
     assert!(
         index
             .add(vec![VectorRecord::new("committed", vec![9.0, 0.0])])
@@ -855,6 +861,137 @@ fn committed_cleanup_failure_clears_transaction_and_reports_position() {
         Some(vec![1.0, 0.0])
     );
     assert_eq!(reopened.get_vector("after").unwrap(), Some(vec![0.0, 1.0]));
+}
+
+#[test]
+fn persistent_deferred_cleanup_blocks_the_next_mutation_before_any_new_write_wave() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let auth_fault = common::FaultInjectingObjectStore::fail_nth_matching(
+        Arc::clone(&inner),
+        1,
+        false,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path
+                    .as_ref()
+                    .contains("positioned-log/claim-authorizations/")
+        },
+    );
+    let release_fault = common::FaultInjectingObjectStore::accept_then_fail_nth_put(
+        Arc::new(auth_fault),
+        2,
+        |operation, path| {
+            operation == common::StoreOperation::Put
+                && path.as_ref().starts_with("id-directory/claim-pages/")
+        },
+    );
+    let (release_fault, operations) = release_fault.with_operation_log();
+    let uri = "memory:///positioned-bounded-deferred-cleanup";
+    let mut index =
+        BorsukIndex::create_with_object_store(Arc::new(release_fault), config(uri)).unwrap();
+
+    index
+        .add(vec![VectorRecord::new("committed", vec![1.0, 0.0])])
+        .unwrap();
+    operations.clear();
+    let error = index
+        .add(vec![VectorRecord::new("must-not-stage", vec![0.0, 1.0])])
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("deferred claim cleanup for positioned commit"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("injected Put failure"),
+        "{error}"
+    );
+    assert_eq!(
+        operations.count_matching(|operation, path| {
+            matches!(
+                operation,
+                common::StoreOperation::Put | common::StoreOperation::MultipartPut
+            ) && (path.starts_with("id-directory/claim-pages/")
+                || path.starts_with("positioned-log/payloads/")
+                || path.starts_with("positioned-log/envelopes/")
+                || path.starts_with("positioned-log/heads/"))
+        }),
+        0,
+        "a handle with one deferred cleanup must not start another mutation wave"
+    );
+    drop(index);
+
+    let mut reopened = BorsukIndex::open_with_object_store(Arc::clone(&inner), uri).unwrap();
+    assert_eq!(
+        reopened.get_vector("committed").unwrap(),
+        Some(vec![1.0, 0.0])
+    );
+    assert_eq!(reopened.get_vector("must-not-stage").unwrap(), None);
+    assert!(
+        reopened
+            .add(vec![VectorRecord::new("committed", vec![9.0, 0.0])])
+            .unwrap_err()
+            .to_string()
+            .contains("already exists")
+    );
+}
+
+#[test]
+fn strict_write_orders_claims_parallel_immutable_uploads_and_one_head_cas() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let uri = "memory:///positioned-four-write-waves";
+    BorsukIndex::create_with_object_store(Arc::clone(&inner), config(uri)).unwrap();
+    let traced =
+        common::FaultInjectingObjectStore::new(inner).with_latency(Duration::from_millis(10));
+    let (traced, overlap) = traced.with_put_concurrency_probe();
+    let (traced, operations) = traced.with_operation_log();
+    let mut index = BorsukIndex::open_with_object_store(Arc::new(traced), uri).unwrap();
+    operations.clear();
+
+    index
+        .add(vec![VectorRecord::new("four-wave", vec![1.0, 0.0])])
+        .unwrap();
+
+    let entries = operations.entries();
+    let claim_put = entries
+        .iter()
+        .position(|entry| {
+            entry.operation == common::StoreOperation::Put
+                && entry.path.starts_with("id-directory/claim-pages/")
+        })
+        .expect("strict add writes its ID claim");
+    let immutable = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            (entry.operation == common::StoreOperation::Put
+                && (entry.path.starts_with("positioned-log/payloads/")
+                    || entry.path.starts_with("positioned-log/envelopes/")))
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    assert!(immutable.len() >= 2, "expected payloads plus one envelope");
+    assert!(immutable.iter().all(|index| *index > claim_put));
+    let head_puts = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            (entry.operation == common::StoreOperation::Put
+                && entry.path.starts_with("positioned-log/heads/"))
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        head_puts.len(),
+        1,
+        "one transaction has one winning head CAS"
+    );
+    assert!(head_puts[0] > *immutable.iter().max().unwrap());
+    assert!(
+        overlap.peak() >= 2,
+        "payload and envelope PUTs must overlap in the immutable upload wave"
+    );
 }
 
 #[test]

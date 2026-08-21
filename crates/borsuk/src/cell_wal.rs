@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use crate::positioned_log::{
     CommitSourcePosition, authorized_transaction_receipt, validate_claim_authorization_envelope,
 };
-use crate::storage::Storage;
+use crate::storage::{CoordinationObject, Storage};
 use crate::{BorsukError, Result};
 
 /// Default number of independently published WAL lanes owned by each cell.
@@ -316,6 +316,16 @@ pub(crate) struct CellWalClaimGuard {
     locks: Vec<CellWalHeldClaim>,
     transaction_committed: bool,
     source_epoch: u64,
+    deferred_authorization: Option<DeferredClaimAuthorization>,
+}
+
+#[derive(Debug, Clone)]
+struct DeferredClaimAuthorization {
+    source_epoch: u64,
+    shard: u8,
+    sequence: u64,
+    envelope_checksum: String,
+    checkpoint: CellWalClaimCheckpoint,
 }
 
 #[derive(Debug)]
@@ -329,6 +339,10 @@ struct CellWalHeldClaim {
 pub(crate) type CellWalClaimCheckpoint = BTreeMap<u16, String>;
 
 impl CellWalClaimGuard {
+    pub(crate) fn rebind_storage_scope(&mut self, storage: Storage) {
+        self.storage = storage;
+    }
+
     pub(crate) fn matches_checkpoint(&self, checkpoint: &CellWalClaimCheckpoint) -> bool {
         self.locks.iter().all(|claim| {
             claim.previous_revisions.iter().all(|(shard, revision)| {
@@ -423,11 +437,25 @@ impl CellWalClaimGuard {
         // The positioned head CAS is irreversible: from this point Drop must
         // never abort STATE or restore the predecessor revisions.
         self.transaction_committed = true;
-        if source_epoch != self.source_epoch {
-            return Err(BorsukError::InvalidStorage(format!(
-                "positioned claim source epoch {source_epoch} differs from guard epoch {}",
-                self.source_epoch
-            )));
+        if self.deferred_authorization.is_some() {
+            let deferred = self
+                .deferred_authorization
+                .as_ref()
+                .expect("checked deferred claim authorization");
+            if deferred.source_epoch != source_epoch
+                || deferred.shard != shard
+                || deferred.sequence != sequence
+                || deferred.envelope_checksum != positioned_envelope_checksum
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "deferred claim authorization identity changed during retry".to_string(),
+                ));
+            }
+            return self.retry_deferred_authorization()?.ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "deferred claim authorization disappeared during retry".to_string(),
+                )
+            });
         }
         let claims = self.locks.drain(..).collect::<Vec<_>>();
         let expected = claims
@@ -443,18 +471,55 @@ impl CellWalClaimGuard {
         if released.len() == expected.len() {
             return Ok(released);
         }
-        write_claim_authorization_receipt(
+        let checkpoint = expected
+            .into_iter()
+            .map(|shard| (shard, positioned_envelope_checksum.to_string()))
+            .collect::<CellWalClaimCheckpoint>();
+        if let Err(error) = write_claim_authorization_receipt(
             &self.storage,
             source_epoch,
             shard,
             sequence,
             &self.transaction_id,
             positioned_envelope_checksum,
-        )?;
-        Ok(expected
-            .into_iter()
-            .map(|shard| (shard, positioned_envelope_checksum.to_string()))
-            .collect())
+        ) {
+            self.deferred_authorization = Some(DeferredClaimAuthorization {
+                source_epoch,
+                shard,
+                sequence,
+                envelope_checksum: positioned_envelope_checksum.to_string(),
+                checkpoint,
+            });
+            return Err(error);
+        }
+        Ok(checkpoint)
+    }
+
+    pub(crate) fn retry_deferred_authorization(
+        &mut self,
+    ) -> Result<Option<CellWalClaimCheckpoint>> {
+        let Some(deferred) = self.deferred_authorization.as_ref() else {
+            return Ok(None);
+        };
+        write_claim_authorization_receipt(
+            &self.storage,
+            deferred.source_epoch,
+            deferred.shard,
+            deferred.sequence,
+            &self.transaction_id,
+            &deferred.envelope_checksum,
+        )
+        .map_err(|error| BorsukError::DeferredClaimCleanupFailed {
+            source_epoch: deferred.source_epoch,
+            shard: deferred.shard,
+            sequence: deferred.sequence,
+            envelope_checksum: deferred.envelope_checksum.clone(),
+            cleanup: error.to_string(),
+        })?;
+        Ok(self
+            .deferred_authorization
+            .take()
+            .map(|deferred| deferred.checkpoint))
     }
 
     fn release(&mut self) -> CellWalClaimCheckpoint {
@@ -506,17 +571,27 @@ impl CellWalStore {
         I: IntoIterator<Item = &'a [u8]>,
     {
         validate_transaction_id(transaction_id)?;
-        ensure_prepared_transaction(&self.storage, transaction_id)?;
         let shards = ids.into_iter().map(id_claim_shard).collect::<BTreeSet<_>>();
+        let pages = claim_pages_for_shards(&shards);
+        let ((), initial_pages) = run_claim_prepare_wave(
+            || ensure_prepared_transaction(&self.storage, transaction_id),
+            || read_claim_page_wave(&self.storage, &pages),
+        )?;
         let mut guard = CellWalClaimGuard {
             storage: self.storage.clone(),
             transaction_id: transaction_id.to_string(),
             locks: Vec::with_capacity(shards.len()),
             transaction_committed: false,
             source_epoch: self.source_epoch,
+            deferred_authorization: None,
         };
-        guard.locks =
-            acquire_claim_shards(&self.storage, self.source_epoch, transaction_id, &shards)?;
+        guard.locks = acquire_claim_shards(
+            &self.storage,
+            self.source_epoch,
+            transaction_id,
+            &pages,
+            initial_pages,
+        )?;
         Ok(guard)
     }
 
@@ -1294,16 +1369,26 @@ enum ClaimAcquireAttempt {
     Contended,
 }
 
+struct ClaimPageAcquireInput<'a> {
+    page_index: u8,
+    path: &'a str,
+    shards: &'a [u16],
+    current: Option<CoordinationObject>,
+}
+
 fn try_acquire_claim_page(
     storage: &Storage,
     source_epoch: u64,
     owner_revisions: &std::sync::Mutex<BTreeMap<String, Option<String>>>,
     transaction_id: &str,
-    page_index: u8,
-    path: &str,
-    shards: &[u16],
+    input: ClaimPageAcquireInput<'_>,
 ) -> Result<ClaimAcquireAttempt> {
-    let current = storage.read_coordination_object(path)?;
+    let ClaimPageAcquireInput {
+        page_index,
+        path,
+        shards,
+        current,
+    } = input;
     let (mut page, expected) = match current {
         Some(current) => (
             claim_page_from_slice(&current.bytes, path, page_index)?,
@@ -1540,21 +1625,50 @@ fn run_claim_page_wave<T: Send>(
     outcomes
 }
 
-fn acquire_claim_shards(
-    storage: &Storage,
-    source_epoch: u64,
-    transaction_id: &str,
-    shards: &BTreeSet<u16>,
-) -> Result<Vec<CellWalHeldClaim>> {
-    const MAX_ATTEMPTS: usize = 10_000;
-    let pages = shards
+fn run_claim_prepare_wave<A: Send, B: Send>(
+    prepare_state: impl FnOnce() -> Result<A> + Send,
+    read_claim_pages: impl FnOnce() -> Result<B> + Send,
+) -> Result<(A, B)> {
+    let (prepared, pages) =
+        crate::parallel::install_io(|| rayon::join(prepare_state, read_claim_pages));
+    Ok((prepared?, pages?))
+}
+
+fn claim_pages_for_shards(shards: &BTreeSet<u16>) -> BTreeMap<u8, Vec<u16>> {
+    shards
         .iter()
         .fold(BTreeMap::<u8, Vec<u16>>::new(), |mut pages, &shard| {
             let page =
                 u8::try_from(shard / CELL_WAL_CLAIM_PAGE_SLOTS).expect("claim page index fits u8");
             pages.entry(page).or_default().push(shard);
             pages
-        });
+        })
+}
+
+fn read_claim_page_wave(
+    storage: &Storage,
+    pages: &BTreeMap<u8, Vec<u16>>,
+) -> Result<BTreeMap<u8, Option<CoordinationObject>>> {
+    pages
+        .par_iter()
+        .map(|(&page, _)| {
+            let path = claim_page_path(page);
+            storage
+                .read_coordination_object(&path)
+                .map(|current| (page, current))
+        })
+        .collect()
+}
+
+fn acquire_claim_shards(
+    storage: &Storage,
+    source_epoch: u64,
+    transaction_id: &str,
+    pages: &BTreeMap<u8, Vec<u16>>,
+    initial_pages: BTreeMap<u8, Option<CoordinationObject>>,
+) -> Result<Vec<CellWalHeldClaim>> {
+    const MAX_ATTEMPTS: usize = 10_000;
+    let initial_pages = std::sync::Mutex::new(initial_pages);
     let mut last_contended_path = pages
         .keys()
         .next()
@@ -1563,17 +1677,31 @@ fn acquire_claim_shards(
     for attempt in 0..MAX_ATTEMPTS {
         let mut acquired = Vec::with_capacity(pages.len());
         let owner_revisions = std::sync::Mutex::new(BTreeMap::new());
-        let attempts = run_claim_page_wave(&pages, |page, shards| {
+        let attempts = run_claim_page_wave(pages, |page, shards| {
             let path = claim_page_path(page);
-            let result = try_acquire_claim_page(
-                storage,
-                source_epoch,
-                &owner_revisions,
-                transaction_id,
-                page,
-                &path,
-                shards,
-            );
+            let result = (|| {
+                let current = if attempt == 0 {
+                    initial_pages
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .remove(&page)
+                        .flatten()
+                } else {
+                    storage.read_coordination_object(&path)?
+                };
+                try_acquire_claim_page(
+                    storage,
+                    source_epoch,
+                    &owner_revisions,
+                    transaction_id,
+                    ClaimPageAcquireInput {
+                        page_index: page,
+                        path: &path,
+                        shards,
+                        current,
+                    },
+                )
+            })();
             (path, result)
         });
         let mut first_contended_path = None;
@@ -2155,6 +2283,29 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn prepared_state_and_claim_page_reads_share_the_first_io_wave() {
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let operation = || {
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            move || -> Result<()> {
+                let current = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                peak.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        };
+
+        run_claim_prepare_wave(operation(), operation()).unwrap();
+
+        assert!(
+            peak.load(std::sync::atomic::Ordering::SeqCst) >= crate::configured_io_threads().min(2)
+        );
+    }
+
+    #[test]
     fn independent_claim_pages_execute_as_one_bounded_io_wave() {
         let pages = BTreeMap::from([(0_u8, vec![0_u16]), (1_u8, vec![CELL_WAL_CLAIM_PAGE_SLOTS])]);
         let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -2327,9 +2478,12 @@ mod tests {
             INITIAL_POSITIONED_SOURCE_EPOCH,
             &std::sync::Mutex::new(BTreeMap::new()),
             "first-attempt",
-            page,
-            &path,
-            &[shard],
+            ClaimPageAcquireInput {
+                page_index: page,
+                path: &path,
+                shards: &[shard],
+                current: storage.read_coordination_object(&path).unwrap(),
+            },
         )
         .unwrap()
         {
@@ -2366,9 +2520,12 @@ mod tests {
             INITIAL_POSITIONED_SOURCE_EPOCH,
             &std::sync::Mutex::new(BTreeMap::new()),
             "second-attempt",
-            page,
-            &path,
-            &[shard],
+            ClaimPageAcquireInput {
+                page_index: page,
+                path: &path,
+                shards: &[shard],
+                current: storage.read_coordination_object(&path).unwrap(),
+            },
         )
         .unwrap()
         {
@@ -2623,6 +2780,7 @@ mod tests {
             locks: Vec::new(),
             transaction_committed: true,
             source_epoch: 7,
+            deferred_authorization: None,
         };
         let before = storage.request_counts();
         let checkpoint = guard.synchronized_checkpoint().unwrap();

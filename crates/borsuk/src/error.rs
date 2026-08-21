@@ -89,13 +89,12 @@ pub enum BorsukError {
         max_records: u64,
     },
 
-    /// The positioned head CAS committed, but post-commit claim cleanup could
-    /// not be completed. The durable identity is returned so callers can
-    /// recover without retrying the mutation as though it were uncommitted.
+    /// A prior mutation is durable, but this handle could not finish its one
+    /// deferred claim-authorization cleanup before starting another mutation.
     #[error(
-        "positioned commit {source_epoch}/{shard}/{sequence} ({envelope_checksum}) is durable, but claim cleanup failed: {cleanup}"
+        "deferred claim cleanup for positioned commit {source_epoch}/{shard}/{sequence} ({envelope_checksum}) failed: {cleanup}"
     )]
-    PositionedCommitCleanupFailed {
+    DeferredClaimCleanupFailed {
         /// Durable source epoch containing the committed mutation.
         source_epoch: u64,
         /// Durable source shard containing the committed mutation.
@@ -104,7 +103,7 @@ pub enum BorsukError {
         sequence: u64,
         /// Checksum of the authoritative position-bearing envelope.
         envelope_checksum: String,
-        /// Post-commit cleanup error; durability is unaffected.
+        /// Cleanup failure from the backing coordination store.
         cleanup: String,
     },
 
@@ -209,7 +208,7 @@ impl BorsukError {
             Self::LeafModeNotConfigured { .. } => "leaf_mode_not_configured",
             Self::RamBudgetExceeded { .. } => "ram_budget_exceeded",
             Self::IngestBackpressure { .. } => "ingest_backpressure",
-            Self::PositionedCommitCleanupFailed { .. } => "positioned_commit_cleanup_failed",
+            Self::DeferredClaimCleanupFailed { .. } => "deferred_claim_cleanup_failed",
             Self::RecallGuaranteeViolated { .. } => "recall_guarantee_violated",
             Self::InvalidStorage(_) => "invalid_storage",
             Self::IndexNotFound(_) => "index_not_found",

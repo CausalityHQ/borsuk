@@ -3410,7 +3410,14 @@ impl BorsukIndex {
     }
 
     fn reset_operation_claim_state(&mut self) {
-        self.pending_collection_claim = Arc::new(Mutex::new(None));
+        let has_deferred_cleanup = self
+            .pending_collection_claim
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some();
+        if !has_deferred_cleanup {
+            self.pending_collection_claim = Arc::new(Mutex::new(None));
+        }
         for child in self.named.values_mut() {
             child.reset_operation_claim_state();
         }
@@ -5745,6 +5752,7 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return Ok(());
         }
+        self.finish_pending_collection_claims()?;
         // Enforce an already-reached memory-safety cap before starting the next
         // logical mutation. Maintenance can still fail here without creating
         // the ambiguous result of reporting failure after the new positioned
@@ -5778,7 +5786,7 @@ impl BorsukIndex {
             .map(|transaction| transaction.id.as_str())
     }
 
-    fn finish_pending_collection_claim(&mut self) {
+    fn finish_pending_collection_claim(&mut self) -> Result<()> {
         let claim = {
             self.pending_collection_claim
                 .lock()
@@ -5786,8 +5794,28 @@ impl BorsukIndex {
                 .take()
         };
         if let Some(mut claim) = claim {
-            self.cell_wal_claim_checkpoint.extend(claim.finish());
+            claim.rebind_storage_scope(self.storage.clone());
+            match claim.retry_deferred_authorization() {
+                Ok(Some(checkpoint)) => self.cell_wal_claim_checkpoint.extend(checkpoint),
+                Ok(None) => self.cell_wal_claim_checkpoint.extend(claim.finish()),
+                Err(error) => {
+                    *self
+                        .pending_collection_claim
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(claim);
+                    return Err(error);
+                }
+            }
         }
+        Ok(())
+    }
+
+    fn finish_pending_collection_claims(&mut self) -> Result<()> {
+        self.finish_pending_collection_claim()?;
+        for child in self.named.values_mut() {
+            child.finish_pending_collection_claim()?;
+        }
+        Ok(())
     }
 
     fn authorize_pending_collection_claim(
@@ -5803,13 +5831,16 @@ impl BorsukIndex {
             .unwrap_or_else(|error| error.into_inner())
             .take();
         if let Some(mut claim) = claim {
-            self.cell_wal_claim_checkpoint
-                .extend(claim.finish_authorized(
-                    source_epoch,
-                    shard,
-                    sequence,
-                    envelope_checksum,
-                )?);
+            match claim.finish_authorized(source_epoch, shard, sequence, envelope_checksum) {
+                Ok(checkpoint) => self.cell_wal_claim_checkpoint.extend(checkpoint),
+                Err(error) => {
+                    *self
+                        .pending_collection_claim
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(claim);
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }
@@ -5821,22 +5852,28 @@ impl BorsukIndex {
         sequence: u64,
         envelope_checksum: &str,
     ) -> Result<()> {
-        self.authorize_pending_collection_claim(source_epoch, shard, sequence, envelope_checksum)?;
+        let mut first_error = self
+            .authorize_pending_collection_claim(source_epoch, shard, sequence, envelope_checksum)
+            .err();
         for child in self.named.values_mut() {
-            child.authorize_pending_collection_claim(
+            if let Err(error) = child.authorize_pending_collection_claim(
                 source_epoch,
                 shard,
                 sequence,
                 envelope_checksum,
-            )?;
+            ) && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
         }
         Ok(())
     }
 
     fn clear_collection_transaction(&mut self, committed: bool) {
-        if committed {
-            self.finish_pending_collection_claim();
-        } else {
+        if !committed {
             let _ = self
                 .pending_collection_claim
                 .lock()
@@ -5845,9 +5882,7 @@ impl BorsukIndex {
         }
         self.active_collection_transaction = None;
         for child in self.named.values_mut() {
-            if committed {
-                child.finish_pending_collection_claim();
-            } else {
+            if !committed {
                 let _ = child
                     .pending_collection_claim
                     .lock()
@@ -8077,7 +8112,7 @@ impl BorsukIndex {
                 })?;
                 let authorization_span =
                     crate::build_timing::span(crate::build_timing::Phase::ClaimAuthorization);
-                let cleanup = self.authorize_collection_claims(
+                let _cleanup = self.authorize_collection_claims(
                     committed.source_epoch,
                     committed.shard,
                     committed.sequence,
@@ -8085,15 +8120,6 @@ impl BorsukIndex {
                 );
                 drop(authorization_span);
                 self.clear_collection_transaction(true);
-                if let Err(error) = cleanup {
-                    return Err(BorsukError::PositionedCommitCleanupFailed {
-                        source_epoch: committed.source_epoch,
-                        shard: committed.shard,
-                        sequence: committed.sequence,
-                        envelope_checksum: report.positioned_envelope_checksum.clone(),
-                        cleanup: error.to_string(),
-                    });
-                }
                 Ok((value, report))
             }
             Err(error) => {
@@ -11440,10 +11466,17 @@ impl BorsukIndex {
             )?;
             if let Some(mut claims) = write_claims.take() {
                 if self.active_collection_transaction.is_some() {
-                    *self
+                    let mut pending = self
                         .pending_collection_claim
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner()) = Some(claims);
+                        .unwrap_or_else(|error| error.into_inner());
+                    if pending.is_some() {
+                        return Err(BorsukError::InvalidStorage(
+                            "collection transaction attempted to overwrite pending claim cleanup"
+                                .to_string(),
+                        ));
+                    }
+                    *pending = Some(claims);
                 } else {
                     // The root-authorized WAL transaction now owns these ids.
                     // Any later flush error must not make them available to a
