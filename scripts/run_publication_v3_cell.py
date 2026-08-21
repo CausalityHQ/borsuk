@@ -422,7 +422,7 @@ def build_execution_plan(
         "BORSUK_BENCH_LEAF_READ_WIDTH": "32",
         "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS": "48",
         "BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS": "1",
-        "BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION": "1",
+        "BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION": "3",
         "BORSUK_CPU_THREADS": str(max(1, min(runtime_vcpus - 1, 4))),
         "BORSUK_IO_THREADS": "88",
         "BORSUK_BACKING_GET_CONCURRENCY": "64",
@@ -546,7 +546,9 @@ def build_execution_plan(
                 {
                     "BORSUK_BENCH_RECALL_ONLY": "0",
                     "BORSUK_BENCH_SKIP_RECALL": "1",
-                    "BORSUK_BENCH_CONCURRENCY": "1,2,4",
+                    "BORSUK_BENCH_CONCURRENCY": "1,2,4,8,16",
+                    "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": "16",
+                    "BORSUK_BENCH_MAX_WAITING_SEARCHES": "32",
                     "BORSUK_BENCH_SERVING_NPROBE": str(routing_budget),
                     "BORSUK_BENCH_SERVING_CANDIDATES": str(
                         V20_COMPATIBILITY_CANDIDATES

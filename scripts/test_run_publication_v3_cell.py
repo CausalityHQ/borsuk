@@ -834,21 +834,21 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         runtime_env = plan["runtime"]["steps"][-1]["env"]
         self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "0")
         self.assertEqual(runtime_env["BORSUK_BENCH_SKIP_RECALL"], "1")
-        self.assertEqual(runtime_env["BORSUK_BENCH_CONCURRENCY"], "1,2,4")
+        self.assertEqual(runtime_env["BORSUK_BENCH_CONCURRENCY"], "1,2,4,8,16")
         self.assertEqual(
             runtime_env["BORSUK_BENCH_SERVING_NPROBE"],
             str(plan_arms(cell)[0]["leaf_page_budget"]),
         )
         self.assertEqual(runtime_env["BORSUK_BENCH_SERVING_CANDIDATES"], "512")
-        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_ACTIVE_SEARCHES"], "4")
-        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_WAITING_SEARCHES"], "16")
+        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_ACTIVE_SEARCHES"], "16")
+        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_WAITING_SEARCHES"], "32")
         self.assertEqual(runtime_env["BORSUK_BENCH_LEAF_READ_WIDTH"], "32")
         self.assertEqual(runtime_env["BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"], "48")
         self.assertEqual(
             runtime_env["BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS"], "1"
         )
         self.assertEqual(
-            runtime_env["BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"], "1"
+            runtime_env["BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"], "3"
         )
         self.assertEqual(runtime_env["BORSUK_CPU_THREADS"], "3")
         self.assertEqual(runtime_env["BORSUK_IO_THREADS"], "88")
@@ -864,12 +864,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             "schema_version": 4,
             "disk_cache_max_bytes": 0,
             "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
-            "max_active_searches": 4,
-            "max_waiting_searches": 16,
+            "max_active_searches": 16,
+            "max_waiting_searches": 32,
             "leaf_read_width": 32,
             "max_inflight_leaf_reads": 48,
             "max_parallel_decode_rank_tasks": 1,
-            "exact_read_max_physical_amplification": 1,
+            "exact_read_max_physical_amplification": 3,
             "cpu_threads": 3,
             "io_threads": 88,
             "s3_get_concurrency": 64,
@@ -882,12 +882,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "runtime_profile": "concurrency",
                 "disk_cache_max_bytes": 0,
                 "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
-                "max_active_searches": 4,
-                "max_waiting_searches": 16,
+                "max_active_searches": 16,
+                "max_waiting_searches": 32,
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 48,
                 "max_parallel_decode_rank_tasks": 1,
-                "exact_read_max_physical_amplification": 1,
+                "exact_read_max_physical_amplification": 3,
                 "cpu_threads": 3,
                 "io_threads": 88,
                 "s3_get_concurrency": 64,
