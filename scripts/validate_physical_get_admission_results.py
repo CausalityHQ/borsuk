@@ -300,7 +300,12 @@ def validate(root: Path, *, verify_payload_hashes: bool = True) -> dict[str, obj
                 f"{repetition}/{arm} completion marker is missing",
             )
             try:
-                validate_directory(case_root, "srht-pq-scan", CASE_REQUIRED)
+                validate_directory(
+                    case_root,
+                    "srht-pq-scan",
+                    CASE_REQUIRED,
+                    historical_unversioned=True,
+                )
             except ValueError as error:
                 raise ValidationError(str(error)) from error
             summaries = read_csv(case_root / "bench_concurrency.csv")

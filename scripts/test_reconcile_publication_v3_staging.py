@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 
 from scripts.publication_v3_aws import build_staging_receipt, staging_jobs
+from scripts.test_publication_v3_controller import unstaged_sift_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "docs/research/publication-v3-manifest.json"
 SCRIPT = ROOT / "scripts/reconcile_publication_v3_staging.py"
 
 
@@ -17,6 +17,10 @@ class ReconcilePublicationV3StagingTests(unittest.TestCase):
     def test_stopped_attempt_is_observed_then_terminated_before_retry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
+            manifest_path = temp / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(unstaged_sift_manifest()), encoding="utf-8"
+            )
             log = temp / "aws.log"
             fake = temp / "aws"
             fake.write_text(
@@ -55,7 +59,7 @@ else:
                 [
                     sys.executable,
                     str(SCRIPT),
-                    str(MANIFEST),
+                    str(manifest_path),
                     "--dataset",
                     "sift-128",
                     "--attempt",
@@ -91,7 +95,7 @@ else:
                 [
                     sys.executable,
                     str(SCRIPT),
-                    str(MANIFEST),
+                    str(manifest_path),
                     "--dataset",
                     "sift-128",
                     "--attempt",
@@ -117,14 +121,16 @@ else:
             self.assertEqual(denied.returncode, 2)
             self.assertIn("AccessDenied", denied.stderr)
             denied_calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertFalse(any("terminate-instances" in call for call in denied_calls))
+            self.assertFalse(
+                any("terminate-instances" in call for call in denied_calls)
+            )
 
             log.write_text("")
             wrong_instance = subprocess.run(
                 [
                     sys.executable,
                     str(SCRIPT),
-                    str(MANIFEST),
+                    str(manifest_path),
                     "--dataset",
                     "sift-128",
                     "--attempt",
@@ -152,7 +158,7 @@ else:
             self.assertFalse(any("terminate-instances" in call for call in wrong_calls))
 
     def test_complete_attempt_downloads_validated_receipt_then_terminates(self) -> None:
-        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        manifest = unstaged_sift_manifest()
         job = next(
             job for job in staging_jobs(manifest) if job.dataset_id == "sift-128"
         )
@@ -194,6 +200,8 @@ else:
         )
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
+            manifest_path = temp / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             receipt_path = temp / "receipt.json"
             receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
             log = temp / "aws.log"
@@ -235,7 +243,7 @@ else: raise SystemExit(96)
                 [
                     sys.executable,
                     str(SCRIPT),
-                    str(MANIFEST),
+                    str(manifest_path),
                     "--dataset",
                     "sift-128",
                     "--attempt",
@@ -257,7 +265,9 @@ else: raise SystemExit(96)
                 text=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(json.loads(completed.stdout)["action"], "terminate-success")
+            self.assertEqual(
+                json.loads(completed.stdout)["action"], "terminate-success"
+            )
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             self.assertEqual(sum("get-object" in call for call in calls), 1)
             self.assertEqual(sum("terminate-instances" in call for call in calls), 1)

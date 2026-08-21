@@ -35,6 +35,12 @@ def frozen_manifest() -> dict[str, object]:
         "python_lock_sha256": "4" * 64,
         "node_lock_sha256": "5" * 64,
     }
+    sift = next(item for item in value["datasets"] if item["id"] == "sift-128")
+    sift["source"] = {
+        "state": "unstaged",
+        "expected_source": "https://ann-benchmarks.com/sift-128-euclidean.hdf5",
+        "license": "upstream-dataset-license",
+    }
     return value
 
 

@@ -14,8 +14,8 @@ try:
         CURRENT_QUERY_TELEMETRY_FIELDS,
         PHYSICAL_EXACT_LAYOUT_FIELDS,
         QUERY_STAGE_TIMING_FIELDS,
-        validate_production_bench_schema_rows,
         validate_current_query_sample_rows,
+        validate_production_bench_schema_rows,
         validate_query_stage_timings,
     )
 except ImportError:
@@ -23,8 +23,8 @@ except ImportError:
         CURRENT_QUERY_TELEMETRY_FIELDS,
         PHYSICAL_EXACT_LAYOUT_FIELDS,
         QUERY_STAGE_TIMING_FIELDS,
-        validate_production_bench_schema_rows,
         validate_current_query_sample_rows,
+        validate_production_bench_schema_rows,
         validate_query_stage_timings,
     )
 
@@ -703,7 +703,11 @@ def _validate_sample_reconciliation(
 
 
 def validate_directory(
-    directory: Path, expected_codec: str | None, required: tuple[str, ...]
+    directory: Path,
+    expected_codec: str | None,
+    required: tuple[str, ...],
+    *,
+    historical_unversioned: bool = False,
 ) -> None:
     parsed: dict[str, list[dict[str, str]]] = {}
     for name in required:
@@ -734,6 +738,21 @@ def validate_directory(
                     f"{path} codec mismatch: expected {expected_codec}, observed {sorted(set(mismatches))}"
                 )
         required_columns = REQUIRED_COLUMNS.get(name, set())
+        if historical_unversioned and name == "bench_concurrency.csv":
+            required_columns = required_columns - {
+                "schema_version",
+                "execution_engine",
+                "nprobe",
+                "max_candidates",
+            }
+        elif historical_unversioned and name == "bench_concurrency_samples.csv":
+            required_columns = required_columns - {
+                "schema_version",
+                "nprobe",
+                "max_candidates",
+                *PHYSICAL_EXACT_LAYOUT_FIELDS,
+                *QUERY_STAGE_TIMING_FIELDS,
+            }
         missing = sorted(required_columns.difference(rows[0]))
         if missing:
             raise ValueError(f"{path} missing required columns: {', '.join(missing)}")
@@ -741,7 +760,10 @@ def validate_directory(
             parsed[name] = list(csv.DictReader(handle))
         if name == "bench_query_samples.csv":
             validate_current_query_sample_rows(parsed[name], path)
-        elif name in {"bench_concurrency.csv", "bench_concurrency_samples.csv"}:
+        elif not historical_unversioned and name in {
+            "bench_concurrency.csv",
+            "bench_concurrency_samples.csv",
+        }:
             validate_production_bench_schema_rows(parsed[name], path)
             if name == "bench_concurrency_samples.csv":
                 for line, row in enumerate(parsed[name], start=2):
@@ -755,17 +777,22 @@ def validate_directory(
         ("scan_codec", "cache_execution", "phase", "mode", "nprobe", "max_candidates"),
         "samples",
     )
-    _validate_sample_reconciliation(
-        directory,
-        "bench_concurrency.csv",
-        "bench_concurrency_samples.csv",
-        (
+    concurrency_groups = (
+        ("scan_codec", "cache_execution", "workers")
+        if historical_unversioned
+        else (
             "scan_codec",
             "cache_execution",
             "nprobe",
             "max_candidates",
             "workers",
-        ),
+        )
+    )
+    _validate_sample_reconciliation(
+        directory,
+        "bench_concurrency.csv",
+        "bench_concurrency_samples.csv",
+        concurrency_groups,
         "total_queries",
     )
     _validate_sample_reconciliation(
