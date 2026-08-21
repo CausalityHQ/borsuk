@@ -44,9 +44,11 @@ const DEFAULT_WRITE_BATCH_SIZE: usize = 1_024;
 // silently measure the legacy segment path.
 const DEFAULT_NPROBE_SWEEP: &[usize] = &[4, 8, 16, 32];
 // V15 treats the public candidate knob as its whole-index exact-rerank row
-// budget. Publication pins the preregistered depth instead of silently falling
-// back to the persisted, corpus-size-aware serving default.
+// budget. Publication V3 pins the preregistered depth in
+// scripts/run_publication_v3_cell.py; this CLI also permits bounded, explicitly
+// labelled diagnostic sweeps.
 const DEFAULT_RECALL_CANDIDATES: &[usize] = &[512];
+const MAX_DIAGNOSTIC_RECALL_CANDIDATES: usize = 65_536;
 // Explicit pq-scan defaults for cache-state and concurrency measurements. Recall
 // is recorded against the shipped ground truth in every selected serving row.
 // Zero delegates to the persisted corpus-size-aware production default.
@@ -3900,10 +3902,21 @@ fn validate_v12_leaf_page_budgets(budgets: &[usize]) -> io::Result<()> {
 }
 
 fn validate_v12_candidate_budgets(budgets: &[usize]) -> io::Result<()> {
-    if budgets != DEFAULT_RECALL_CANDIDATES {
-        return Err(invalid_input(
-            "BORSUK_BENCH_CANDIDATES must keep the preregistered V17 exact-rerank budget 512",
-        ));
+    if budgets.is_empty() {
+        return Err(invalid_input("BORSUK_BENCH_CANDIDATES cannot be empty"));
+    }
+    for &budget in budgets {
+        if budget == 0 || budget > MAX_DIAGNOSTIC_RECALL_CANDIDATES {
+            return Err(invalid_input(&format!(
+                "BORSUK_BENCH_CANDIDATES entries must be within 1..={MAX_DIAGNOSTIC_RECALL_CANDIDATES}; received {budget}"
+            )));
+        }
+    }
+    if let Some(pair) = budgets.windows(2).find(|pair| pair[0] >= pair[1]) {
+        return Err(invalid_input(&format!(
+            "BORSUK_BENCH_CANDIDATES must be strictly increasing; received adjacent entries {} and {}",
+            pair[0], pair[1]
+        )));
     }
     Ok(())
 }
@@ -4465,18 +4478,19 @@ mod tests {
     }
 
     #[test]
-    fn production_v20_pins_the_preregistered_exact_rerank_budget() {
+    fn production_v20_defaults_to_the_preregistered_exact_rerank_budget() {
         validate_v12_candidate_budgets(DEFAULT_RECALL_CANDIDATES).unwrap();
         assert_eq!(SERVING_CANDIDATES, DEFAULT_RECALL_CANDIDATES[0]);
-        let error = validate_v12_candidate_budgets(&[128, 4_096])
-            .expect_err("an unqualified V17 exact-rerank sweep was accepted");
-        assert!(
-            error.to_string().contains("BORSUK_BENCH_CANDIDATES")
-                && error
-                    .to_string()
-                    .contains("preregistered V17 exact-rerank budget"),
-            "{error}"
-        );
+    }
+
+    #[test]
+    fn diagnostic_v20_candidate_sweep_accepts_bounded_positive_depths() {
+        validate_v12_candidate_budgets(&[512, 1_024, 2_048, 4_096]).unwrap();
+        assert!(validate_v12_candidate_budgets(&[]).is_err());
+        assert!(validate_v12_candidate_budgets(&[0, 512]).is_err());
+        assert!(validate_v12_candidate_budgets(&[65_537]).is_err());
+        assert!(validate_v12_candidate_budgets(&[1_024, 512]).is_err());
+        assert!(validate_v12_candidate_budgets(&[512, 512]).is_err());
     }
 
     #[test]
