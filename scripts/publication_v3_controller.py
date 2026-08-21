@@ -617,12 +617,16 @@ def prepare_qualification_execution(
         "concurrency" if operation == "read-concurrency-sift" else "recall"
     )
     runtime_client = normalized["environment_contract"]["runtime_clients"]["borsuk"]
-    max_active_searches = int(runtime_client["vcpus"])
+    runtime_vcpus = int(runtime_client["vcpus"])
+    max_active_searches = runtime_vcpus
     max_waiting_searches = 16
+    if runtime_profile == "concurrency":
+        max_active_searches = 16
+        max_waiting_searches = 32
     leaf_read_width = 32
     max_inflight_leaf_reads = 48
     max_parallel_decode_rank_tasks = 1
-    cpu_threads = max(1, min(max_active_searches - 1, 4))
+    cpu_threads = max(1, min(runtime_vcpus - 1, 4))
     io_threads = 88
     s3_get_concurrency = 64
     ram_budget_bytes = int(runtime_client["resident_limit_mib"]) * 1024 * 1024
