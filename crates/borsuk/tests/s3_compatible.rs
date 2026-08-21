@@ -678,7 +678,7 @@ fn expected_magic(path: &str, role: PhysicalObjectRole) -> &'static [u8] {
     } else if path.starts_with("id-directory/claim-pages/") && path.ends_with("/STATE") {
         b"BCL1"
     } else if path.ends_with("/STATE") {
-        b"BWS1"
+        b"BWS2"
     } else {
         panic!(
             "role {} has no S3-compatible format assertion for {path}",

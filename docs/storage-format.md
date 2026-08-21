@@ -929,7 +929,7 @@ than JSON:
   lane, linked-frontier reference, and run references in little-endian form.
 - `BWD1` transaction descriptors pin every prepared run plus an opaque
   caller-metadata byte string, and `BWC1` commit markers pin the descriptor.
-  `BWS1` transaction states fence prepared, committing, committed, and aborted
+  `BWS2` transaction states fence prepared, committing, committed, and aborted
   owners. The prepared-to-committing CAS prevents a failed writer from
   publishing after recovery has aborted it; a reclaimer can finish a fenced
   committing descriptor's marker after a crash. These remain the standalone
@@ -970,7 +970,7 @@ than JSON:
   The protocol performs at most one
   acquire and one release per touched shard rather than one PUT per record.
   Failure conditionally releases only exact versions it owns. A crashed
-  prepared owner is reclaimed only after its `BWS1` state is conditionally
+  prepared owner is reclaimed only after its `BWS2` state is conditionally
   fenced as aborted; a committing owner is completed, so recovery cannot create
   two successful inserts.
 

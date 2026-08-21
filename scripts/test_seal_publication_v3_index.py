@@ -3,6 +3,7 @@ import io
 import unittest
 
 from scripts.seal_publication_v3_index import (
+    _validate_physical_bytes,
     classify_index_object,
     seal_index_inventory,
     session_configuration,
@@ -48,6 +49,12 @@ class _FakeS3:
 
 
 class PublicationV3IndexSealTests(unittest.TestCase):
+    def test_transaction_state_requires_current_bws2_magic(self) -> None:
+        path = "transactions/abcd/STATE"
+        _validate_physical_bytes(path, "packed", b"BWS2state")
+        with self.assertRaisesRegex(ValueError, "invalid magic"):
+            _validate_physical_bytes(path, "packed", b"BWS1state")
+
     def test_worker_uses_instance_credentials_when_no_named_profile_is_supplied(self) -> None:
         self.assertEqual(
             session_configuration(None, "eu-central-1"),
@@ -106,7 +113,7 @@ class PublicationV3IndexSealTests(unittest.TestCase):
             prefix + "vectors/aa/a.arrow": b"ARROW1vector-aARROW1",
             prefix + "fidx/aa/a.fidx": b"a" * 96,
             prefix + "collection/CURRENT": b'{"schema_version":1}',
-            prefix + "transactions/abcd/STATE": b"BWS1state",
+            prefix + "transactions/abcd/STATE": b"BWS2state",
         }
         client = _FakeS3(objects)
 

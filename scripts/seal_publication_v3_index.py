@@ -110,7 +110,7 @@ def _validate_physical_bytes(path: str, physical_format: str, body: bytes) -> No
         raise ValueError(f"packed filter index is truncated: {path}")
     if physical_format == "packed" and path.endswith("/STATE") and body[:4] not in {
         b"BCL1",
-        b"BWS1",
+        b"BWS2",
     }:
         raise ValueError(f"packed control object has invalid magic: {path}")
 
