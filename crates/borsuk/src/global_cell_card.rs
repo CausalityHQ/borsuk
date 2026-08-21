@@ -22,6 +22,7 @@ use parquet::{
     basic::Compression,
     file::properties::WriterProperties,
 };
+use rayon::prelude::*;
 
 use crate::{
     BorsukError, Result,
@@ -1899,16 +1900,43 @@ pub(crate) fn rank_cell_card_exact_blocks(
     Ok(selected)
 }
 
+fn map_cell_card_heads_in_order<T, U, E, F>(heads: &[T], score: F) -> std::result::Result<Vec<U>, E>
+where
+    T: Sync,
+    U: Send,
+    E: Send,
+    F: Fn(&T) -> std::result::Result<U, E> + Send + Sync,
+{
+    heads
+        .par_iter()
+        .map(score)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn map_cell_card_heads_in_bounded_pool<T, U, E, F>(
+    heads: &[T],
+    score: F,
+) -> std::result::Result<Vec<U>, E>
+where
+    T: Sync,
+    U: Send,
+    E: Send,
+    F: Fn(&T) -> std::result::Result<U, E> + Send + Sync,
+{
+    crate::parallel::install(|| map_cell_card_heads_in_order(heads, score))
+}
+
 pub(crate) fn score_loaded_cell_card_heads(
     codebook: &ResidentGlobalCodebook,
     query: &[f32],
     heads: &[LoadedCellCardHead],
 ) -> Result<Vec<Vec<f32>>> {
     let prepared = codebook.prepare_cell_card_query(query)?;
-    heads
-        .iter()
-        .map(|loaded| prepared.score_codes(loaded.head.codes.iter().map(Vec::as_slice)))
-        .collect()
+    map_cell_card_heads_in_bounded_pool(heads, |loaded| {
+        prepared.score_codes(loaded.head.codes.iter().map(Vec::as_slice))
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -3107,7 +3135,15 @@ pub(crate) fn decode_cell_card_run_root(
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Cursor, sync::Arc};
+    use std::{
+        io::Cursor,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+        time::Duration,
+    };
 
     use arrow_ipc::reader::FileReader;
 
@@ -3139,6 +3175,74 @@ mod tests {
                 exact: vec![ordinal as u8; dimensions],
             })
             .collect()
+    }
+
+    #[test]
+    fn cell_card_head_scoring_uses_the_current_rayon_pool_and_preserves_order() {
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let input = [0_u32, 1, 2, 3, 4, 5, 6, 7];
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+
+        let output = pool
+            .install(|| {
+                super::map_cell_card_heads_in_order(&input, |value| {
+                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(20));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok::<_, crate::BorsukError>(value * 2)
+                })
+            })
+            .unwrap();
+
+        assert_eq!(output, [0, 2, 4, 6, 8, 10, 12, 14]);
+        assert!(
+            peak.load(Ordering::SeqCst) >= 2,
+            "independent head scores ran sequentially"
+        );
+    }
+
+    #[test]
+    fn cell_card_head_scoring_reports_the_lowest_index_error_deterministically() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let input = [0_u32, 1, 2, 3];
+
+        let error = pool
+            .install(|| {
+                super::map_cell_card_heads_in_order(&input, |value| match *value {
+                    0 => {
+                        thread::sleep(Duration::from_millis(40));
+                        Err("lowest-index")
+                    }
+                    3 => Err("later-index"),
+                    _ => Ok(value * 2),
+                })
+            })
+            .unwrap_err();
+
+        assert_eq!(error, "lowest-index");
+    }
+
+    #[test]
+    fn cell_card_head_scoring_owns_the_bounded_query_pool() {
+        let thread_names = super::map_cell_card_heads_in_bounded_pool(&[0_u32, 1], |_| {
+            Ok::<_, crate::BorsukError>(thread::current().name().unwrap_or_default().to_string())
+        })
+        .unwrap();
+
+        assert!(
+            thread_names
+                .iter()
+                .all(|name| name.starts_with("borsuk-query-")),
+            "cell-card SIMD scoring escaped the bounded query pool: {thread_names:?}"
+        );
     }
 
     #[test]
