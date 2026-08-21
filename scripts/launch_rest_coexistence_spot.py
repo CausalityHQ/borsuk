@@ -319,7 +319,7 @@ printf '%s\n' '{expected}' >"$work/runtime.json"
 cpu_before=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 started_ns=$(date +%s%N)
 PYTHONPATH="$work/scripts" python3 "$runner" --base-url "$BORSUK_SERVER_ENDPOINT" --queries "$queries" --output "$work/output" --expected-runtime "$work/runtime.json" --controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE" --expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT" --runtime-aws-account "$runtime_aws_account" --repetition {repetition}{smoke_flag}
-python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==10 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); (v.get("schema_version")==11 and v.get("repetition")==int(sys.argv[2]) and isinstance(v.get("phase_order"),list) and len(v["phase_order"])>0) or sys.exit("terminal repetition differs from launch authority")' "$work/output/REST_RESULT.json" {repetition}
 finished_ns=$(date +%s%N)
 cpu_after=$(awk '$1=="usage_usec" {{print $2}}' "$cg_root/cpu.stat")
 cp "$cg_root/memory.events" "$work/memory.events.after"
@@ -536,9 +536,10 @@ def _request(
     security_group_id: str,
     instance_profile_arn: str,
     user_data: str,
+    purchase_option: str,
 ) -> dict[str, object]:
     token_input = f"{campaign_id}\0{attempt}\0{role}".encode("utf-8")
-    return {
+    request: dict[str, object] = {
         "ImageId": image_id,
         "InstanceType": instance_type,
         "MinCount": 1,
@@ -548,13 +549,6 @@ def _request(
         "SecurityGroupIds": [security_group_id],
         "SubnetId": subnet_id,
         "IamInstanceProfile": {"Arn": instance_profile_arn},
-        "InstanceMarketOptions": {
-            "MarketType": "spot",
-            "SpotOptions": {
-                "SpotInstanceType": "one-time",
-                "InstanceInterruptionBehavior": "terminate",
-            },
-        },
         "InstanceInitiatedShutdownBehavior": "terminate",
         "MetadataOptions": {
             "HttpEndpoint": "enabled",
@@ -579,6 +573,15 @@ def _request(
             for resource_type in ("instance", "volume")
         ],
     }
+    if purchase_option == "spot":
+        request["InstanceMarketOptions"] = {
+            "MarketType": "spot",
+            "SpotOptions": {
+                "SpotInstanceType": "one-time",
+                "InstanceInterruptionBehavior": "terminate",
+            },
+        }
+    return request
 
 
 def build_launch_pair(
@@ -600,6 +603,7 @@ def build_launch_pair(
     output_uri: str,
     server_worker: str,
     generator_worker: str,
+    purchase_option: str = "spot",
 ) -> dict[str, Any]:
     if re.fullmatch(r"[A-Za-z0-9_.-]+", aws_profile) is None:
         raise ValueError("AWS profile must be a canonical profile name")
@@ -609,6 +613,8 @@ def build_launch_pair(
         )
     if not campaign_id or attempt <= 0:
         raise ValueError("campaign must be nonempty and attempt must be positive")
+    if purchase_option not in ("spot", "on-demand"):
+        raise ValueError("purchase option must be spot or on-demand")
     if (
         re.fullmatch(r"s3://[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+", output_uri) is None
         or output_uri.endswith("/")
@@ -686,7 +692,7 @@ def build_launch_pair(
     generator_worker_sha256 = hashlib.sha256(generator_worker.encode("utf-8")).hexdigest()
     workload_sha256 = hashlib.sha256(_canonical_bytes(workload)).hexdigest()
     authority = {
-        "schema_version": 3,
+        "schema_version": 4,
         "aws_profile": aws_profile,
         "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,
@@ -699,11 +705,12 @@ def build_launch_pair(
         "generator_worker_sha256": generator_worker_sha256,
         "workload_sha256": workload_sha256,
         "output_uri": output_uri,
+        "purchase_option": purchase_option,
         "runtime": runtime,
     }
     attempt_authority_sha256 = hashlib.sha256(_canonical_bytes(authority)).hexdigest()
     receipt = {
-        "schema_version": 3,
+        "schema_version": 4,
         "aws_profile": aws_profile,
         "aws_account_id": aws_account_id,
         "campaign_id": campaign_id,
@@ -717,6 +724,7 @@ def build_launch_pair(
         "workload_sha256": workload_sha256,
         "attempt_authority_sha256": attempt_authority_sha256,
         "output_uri": output_uri,
+        "purchase_option": purchase_option,
         "runtime": runtime,
         "complete_uri": f"{output_uri}/{COMPLETE_MARKER}",
         "failed_uri": f"{output_uri}/{FAILED_MARKER}",
@@ -764,12 +772,14 @@ def build_launch_pair(
         role="rest-server",
         instance_type="c7g.xlarge",
         user_data=server_user_data,
+        purchase_option=purchase_option,
     )
     generator_request = _request(
         **common,
         role="rest-generator",
         instance_type="c7g.large",
         user_data=generator_user_data,
+        purchase_option=purchase_option,
     )
     receipt["server_launch_sha256"] = hashlib.sha256(
         _canonical_bytes(server_request)

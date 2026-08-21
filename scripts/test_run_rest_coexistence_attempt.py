@@ -61,7 +61,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             flow_control_delta(before, after)
 
     def test_terminal_result_schema_cuts_with_effective_limit_shape(self) -> None:
-        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 10)
+        self.assertEqual(REST_RESULT_SCHEMA_VERSION, 11)
 
     def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
         self.assertEqual(
@@ -247,8 +247,8 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
         ]
         self.assertEqual(select_sustainable_search_qps(rows), 31.5)
 
-    def test_overload_rate_is_exactly_the_attested_sustainable_fraction(self) -> None:
-        self.assertEqual(overload_search_qps(16.0, [16, 32, 64, 96]), 24.0)
+    def test_overload_rate_reaches_the_attested_staircase_capacity_boundary(self) -> None:
+        self.assertEqual(overload_search_qps(16.0, [16, 32, 64, 96]), 96.0)
         self.assertEqual(overload_search_qps(96.0, [16, 32, 64, 96]), 144.0)
 
     def test_staircase_never_masks_server_errors_as_capacity(self) -> None:

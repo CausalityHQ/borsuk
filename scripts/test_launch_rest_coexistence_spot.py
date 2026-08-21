@@ -159,6 +159,45 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertEqual(server_tags["AutoTerminate"], "true")
         self.assertEqual(generator_tags["AutoTerminate"], "true")
 
+    def test_documented_on_demand_exception_is_explicit_and_receipt_bound(self) -> None:
+        config = {
+            "aws_profile": "causality",
+            "aws_account_id": "453182569524",
+            "campaign_id": "rest-coexistence-on-demand-exception",
+            "attempt": 2,
+            "image_id": "ami-0123456789abcdef0",
+            "subnet_id": "subnet-0123456789abcdef0",
+            "security_group_id": "sg-0123456789abcdef0",
+            "instance_profile_arn": (
+                "arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile"
+            ),
+            "source_sha256": "1" * 64,
+            "binary_sha256": "2" * 64,
+            "index_receipt_sha256": "3" * 64,
+            "dataset_receipt_sha256": "4" * 64,
+            "smoke": True,
+            "runtime": dict(self.pair["runtime"]),
+            "output_uri": (
+                "s3://borsuk-bench-453182569524-euc1/publication/v3/"
+                "20260812/rest-coexistence/attempts/0002"
+            ),
+            "server_worker": "echo server",
+            "generator_worker": (
+                "# borsuk-rest-mode=smoke\n"
+                "# borsuk-rest-repetition=1\n"
+                "python3 runner.py --repetition 1 --smoke\n"
+            ),
+            "purchase_option": "on-demand",
+        }
+        pair = build_launch_pair(**config)
+
+        self.assertEqual(pair["receipt"]["purchase_option"], "on-demand")
+        self.assertNotIn("InstanceMarketOptions", pair["server"])
+        self.assertNotIn("InstanceMarketOptions", pair["generator"])
+        config["purchase_option"] = "reserved"
+        with self.assertRaisesRegex(ValueError, "purchase option"):
+            build_launch_pair(**config)
+
     def test_server_user_data_enforces_small_runtime_and_no_swap(self) -> None:
         user_data = self.pair["server"]["UserData"]
         self.assertTrue(user_data.startswith("#!/usr/bin/env bash\n"))
@@ -241,7 +280,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
 
     def test_pair_binds_immutable_inputs_and_terminal_prefix(self) -> None:
         receipt = self.pair["receipt"]
-        self.assertEqual(receipt["schema_version"], 3)
+        self.assertEqual(receipt["schema_version"], 4)
         self.assertEqual(receipt["aws_profile"], "causality")
         self.assertEqual(receipt["aws_account_id"], "453182569524")
         self.assertEqual(receipt["runtime"], self.pair["runtime"])
@@ -788,7 +827,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn('--runtime-aws-account "$runtime_aws_account"', generator)
         self.assertIn("--repetition 2", generator)
         self.assertIn("terminal repetition differs", generator)
-        self.assertIn('v.get("schema_version")==10', generator)
+        self.assertIn('v.get("schema_version")==11', generator)
         self.assertTrue(
             generator.startswith(
                 "# borsuk-rest-mode=smoke\n# borsuk-rest-repetition=2\n"

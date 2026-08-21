@@ -17,7 +17,7 @@ except ImportError:
     from rest_coexistence_load import evaluate_phase, run_phase, summarize
 
 CAUSALITY_AWS_ACCOUNT = "453182569524"
-REST_RESULT_SCHEMA_VERSION = 10
+REST_RESULT_SCHEMA_VERSION = 11
 FLOW_CONTROL_COUNTERS = (
     "borsuk_leaf_read_wait_count",
     "borsuk_leaf_read_wait_micros",
@@ -101,7 +101,7 @@ def select_sustainable_search_qps(rows: list[dict[str, Any]]) -> float:
 def overload_search_qps(sustainable: float, rates: list[int]) -> float:
     if sustainable <= 0 or not rates:
         raise ValueError("overload rate requires positive sustainable and staircase rates")
-    return sustainable * 1.50
+    return max(sustainable * 1.50, float(max(rates)))
 
 
 def staircase_has_only_expected_capacity_failures(rows: list[dict[str, Any]]) -> bool:
