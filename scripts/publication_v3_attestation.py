@@ -36,7 +36,8 @@ FIELDS = frozenset(
         "swap_peak_bytes",
         "oom_events",
         "oom_kill_events",
-        "cache_limit_bytes",
+        "cache_capacity_bytes",
+        "effective_disk_cache_max_bytes",
         "cache_filesystem_bytes",
         "cache_device",
         "root_device",
@@ -236,6 +237,23 @@ def _runtime_cache_path(runtime: dict[str, object]) -> Path:
     return Path(value)
 
 
+def _runtime_disk_cache_max_bytes(runtime: dict[str, object]) -> int:
+    steps = runtime.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise ValueError("runtime plan has no disk-cache authority")
+    values = {
+        step.get("env", {}).get("BORSUK_BENCH_DISK_CACHE_MAX_BYTES")
+        for step in steps
+        if isinstance(step, dict) and isinstance(step.get("env"), dict)
+    }
+    if len(values) != 1:
+        raise ValueError("runtime plan disk-cache authority differs between steps")
+    value = values.pop()
+    if not isinstance(value, str) or re.fullmatch(r"[0-9]+", value) is None:
+        raise ValueError("runtime plan disk-cache authority is invalid")
+    return int(value)
+
+
 def collect_runtime_attestation(
     *,
     cell: dict[str, object],
@@ -275,7 +293,7 @@ def collect_runtime_attestation(
     device = os.stat(cache_path).st_dev
     root_device = os.stat("/").st_dev
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "cell_id": cell.get("cell_id"),
         "attempt_id": attempt_id,
         "instance_id": identity.get("instanceId"),
@@ -290,7 +308,8 @@ def collect_runtime_attestation(
         "swap_peak_bytes": swap_peak_bytes,
         "oom_events": oom_events,
         "oom_kill_events": oom_kill_events,
-        "cache_limit_bytes": client.get("disk_cache_limit_mib") * 1024 * 1024,
+        "cache_capacity_bytes": client.get("disk_cache_limit_mib") * 1024 * 1024,
+        "effective_disk_cache_max_bytes": _runtime_disk_cache_max_bytes(runtime),
         "cache_filesystem_bytes": filesystem.f_blocks * filesystem.f_frsize,
         "cache_device": f"{os.major(device)}:{os.minor(device)}",
         "root_device": f"{os.major(root_device)}:{os.minor(root_device)}",
@@ -310,7 +329,7 @@ def validate_runtime_attestation(
 ) -> dict[str, object]:
     if not isinstance(value, dict) or frozenset(value) != FIELDS:
         raise ValueError("runtime attestation fields differ")
-    if value["schema_version"] != 1:
+    if value["schema_version"] != 2:
         raise ValueError("runtime attestation schema differs")
     if value["cell_id"] != cell.get("cell_id") or value["attempt_id"] != attempt_id:
         raise ValueError("runtime attestation execution identity differs")
@@ -346,14 +365,21 @@ def validate_runtime_attestation(
         raise ValueError("runtime swap must be disabled and unused")
     if value["oom_events"] != 0 or value["oom_kill_events"] != 0:
         raise ValueError("runtime must not encounter an OOM event")
-    cache_limit = _positive(value["cache_limit_bytes"], "runtime cache limit")
-    if cache_limit != client.get("disk_cache_limit_mib") * 1024 * 1024:
-        raise ValueError("runtime cache limit differs from its contract")
+    cache_capacity = _positive(value["cache_capacity_bytes"], "runtime cache capacity")
+    if cache_capacity != client.get("disk_cache_limit_mib") * 1024 * 1024:
+        raise ValueError("runtime cache capacity differs from its contract")
+    effective_disk_cache_max = value["effective_disk_cache_max_bytes"]
+    if (
+        isinstance(effective_disk_cache_max, bool)
+        or not isinstance(effective_disk_cache_max, int)
+        or not 0 <= effective_disk_cache_max <= cache_capacity
+    ):
+        raise ValueError("effective runtime disk-cache limit is invalid")
     cache_filesystem_bytes = _positive(
         value["cache_filesystem_bytes"], "runtime cache filesystem"
     )
     if (
-        cache_filesystem_bytes < cache_limit
+        cache_filesystem_bytes < cache_capacity
         or cache_filesystem_bytes > storage.get("volume_size_gib") * 1024**3
     ):
         raise ValueError("runtime cache filesystem exceeds its contract")

@@ -164,6 +164,7 @@ struct ResolvedConfig {
 #[derive(Serialize)]
 struct EffectiveRuntimeFlowControl {
     schema_version: u8,
+    disk_cache_max_bytes: u64,
     ram_budget_bytes: Option<u64>,
     max_active_searches: usize,
     max_waiting_searches: usize,
@@ -886,7 +887,8 @@ fn write_effective_runtime_flow_control(config: &ResolvedConfig) -> BenchResult<
     write_runtime_flow_control_receipt(
         &path,
         &EffectiveRuntimeFlowControl {
-            schema_version: 3,
+            schema_version: 4,
+            disk_cache_max_bytes: config.disk_cache_max_bytes.unwrap_or(0),
             ram_budget_bytes: config.ram_budget_bytes,
             max_active_searches: config.max_active_searches,
             max_waiting_searches: config.max_waiting_searches,
@@ -980,11 +982,15 @@ fn effective_segment_cache_budget(config: &ResolvedConfig) -> Option<u64> {
     })
 }
 
+fn serving_cache_dir(cache_dir: &Path, disk_cache_max_bytes: Option<u64>) -> Option<PathBuf> {
+    disk_cache_max_bytes.map(|_| cache_dir.to_path_buf())
+}
+
 fn open_serving_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
     let index = BorsukIndex::open_with_options(
         &config.uri,
         OpenOptions {
-            cache_dir: Some(config.cache_dir.clone()),
+            cache_dir: serving_cache_dir(&config.cache_dir, config.disk_cache_max_bytes),
             cache_max_bytes: config.disk_cache_max_bytes,
             ram_budget_bytes: config.ram_budget_bytes,
             segment_cache_max_bytes: effective_segment_cache_budget(config),
@@ -1137,7 +1143,12 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     )?;
     let segment_cache_max_bytes =
         env_optional_byte_cap("BORSUK_BENCH_SEGMENT_CACHE_MAX_BYTES", None)?;
-    let disk_cache_max_bytes = env_optional_byte_cap("BORSUK_BENCH_DISK_CACHE_MAX_BYTES", None)?;
+    // Preserve the benchmark's historical 1 GiB default when the variable is
+    // absent, while making an explicit zero a real no-cache execution mode.
+    let disk_cache_max_bytes = env_optional_byte_cap(
+        "BORSUK_BENCH_DISK_CACHE_MAX_BYTES",
+        Some(1024 * 1024 * 1024),
+    )?;
     let recall_nprobes = env_positive_list("BORSUK_BENCH_NPROBES", DEFAULT_NPROBE_SWEEP)?;
     let recall_candidates =
         env_positive_list("BORSUK_BENCH_CANDIDATES", DEFAULT_RECALL_CANDIDATES)?;
@@ -1328,10 +1339,11 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} disk_cache_max_bytes={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
+        config.disk_cache_max_bytes.unwrap_or(0),
         config.limit,
         config.queries,
         config.write_batch_size,
@@ -4379,8 +4391,8 @@ mod tests {
         parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap, parse_positive_list,
         parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
         read_logical_cell_catalog, recall_preloads_local_snapshot, recall_row_count, reset_cache,
-        rotated_workload_index, sample_mean, sample_stddev, update_vector_reservoir,
-        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        rotated_workload_index, sample_mean, sample_stddev, serving_cache_dir,
+        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         validate_bounded_v20_execution, validate_build_only, validate_disk_cached_network,
         validate_exact_read_max_physical_amplification, validate_generated_id_range,
         validate_insert_only, validate_leaf_capability_modes,
@@ -4388,6 +4400,16 @@ mod tests {
         validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
         vector_row, write_batch_len, write_operation_count, write_runtime_flow_control_receipt,
     };
+
+    #[test]
+    fn zero_disk_cache_cap_removes_the_cache_directory_from_serving_storage() {
+        let cache = std::path::Path::new("/cache");
+        assert_eq!(serving_cache_dir(cache, None), None);
+        assert_eq!(
+            serving_cache_dir(cache, Some(1024)),
+            Some(cache.to_path_buf())
+        );
+    }
 
     #[test]
     fn cache_reset_preserves_the_dedicated_mount_point() {
@@ -5337,7 +5359,8 @@ mod tests {
     #[test]
     fn runtime_flow_receipt_attests_exact_read_physical_amplification() {
         let value = serde_json::to_value(EffectiveRuntimeFlowControl {
-            schema_version: 3,
+            schema_version: 4,
+            disk_cache_max_bytes: 0,
             ram_budget_bytes: Some(512 * 1024 * 1024),
             max_active_searches: 8,
             max_waiting_searches: 16,
@@ -5351,7 +5374,8 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 4);
+        assert_eq!(value["disk_cache_max_bytes"], 0);
         assert_eq!(value["max_parallel_decode_rank_tasks"], 1);
         assert_eq!(value["exact_read_max_physical_amplification"], 2);
     }
@@ -5359,7 +5383,8 @@ mod tests {
     #[test]
     fn runtime_flow_receipt_is_canonical_json_for_publication() {
         let receipt = EffectiveRuntimeFlowControl {
-            schema_version: 3,
+            schema_version: 4,
+            disk_cache_max_bytes: 0,
             ram_budget_bytes: Some(536_870_912),
             max_active_searches: 8,
             max_waiting_searches: 16,
@@ -5379,7 +5404,7 @@ mod tests {
 
         assert_eq!(
             bytes,
-            br#"{"cpu_threads":4,"exact_read_max_physical_amplification":2,"io_threads":88,"leaf_read_width":32,"max_active_searches":8,"max_inflight_leaf_reads":48,"max_parallel_decode_rank_tasks":1,"max_waiting_searches":16,"ram_budget_bytes":536870912,"s3_get_concurrency":64,"schema_version":3}
+            br#"{"cpu_threads":4,"disk_cache_max_bytes":0,"exact_read_max_physical_amplification":2,"io_threads":88,"leaf_read_width":32,"max_active_searches":8,"max_inflight_leaf_reads":48,"max_parallel_decode_rank_tasks":1,"max_waiting_searches":16,"ram_budget_bytes":536870912,"s3_get_concurrency":64,"schema_version":4}
 "#
         );
     }

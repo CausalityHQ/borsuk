@@ -655,7 +655,23 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_ITERATIONS"], "8")
         self.assertEqual(benchmark_env["BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES"], "128")
         self.assertEqual(benchmark_env["BORSUK_BENCH_RAM_BUDGET_BYTES"], str(2 * 1024**3))
-        self.assertEqual(benchmark_env["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"], str(1024**3))
+        self.assertEqual(benchmark_env["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"], "0")
+        warm_arm = next(
+            candidate for candidate in plan_arms(cell) if candidate["cache_state"] == "warm"
+        )
+        with tempfile.TemporaryDirectory() as root:
+            warm_plan = build_execution_plan(
+                cell,
+                arm=warm_arm,
+                workspace=Path(root),
+                generator=Path("/opt/borsuk/generate_synthetic_dataset"),
+                borsuk_bench=Path("/opt/borsuk/production_bench"),
+                mode="smoke",
+            )
+        self.assertEqual(
+            warm_plan["steps"][1]["env"]["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"],
+            str(1024**3),
+        )
         self.assertEqual(plan["runtime_client"]["instance_type"], "c7g.xlarge")
         self.assertEqual(plan["runtime_storage"]["volume_size_gib"], 32)
 
@@ -845,7 +861,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertNotIn("arm_id", concurrency_result_arm(arm))
 
         effective = {
-            "schema_version": 3,
+            "schema_version": 4,
+            "disk_cache_max_bytes": 0,
             "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
             "max_active_searches": 4,
             "max_waiting_searches": 16,
@@ -861,8 +878,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(
             contract,
             {
-                "schema_version": 4,
+                "schema_version": 5,
                 "runtime_profile": "concurrency",
+                "disk_cache_max_bytes": 0,
                 "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
                 "max_active_searches": 4,
                 "max_waiting_searches": 16,

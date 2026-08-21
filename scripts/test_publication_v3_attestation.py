@@ -82,7 +82,13 @@ class PublicationV3AttestationTests(unittest.TestCase):
             proc_cgroup.write_text(
                 "0::/runtime.slice/run-u12.service\n", encoding="utf-8"
             )
-            runtime = {"steps": [{"env": {"BORSUK_BENCH_CACHE": str(cache)}}]}
+            runtime = {
+                "steps":
+                [{"env": {
+                    "BORSUK_BENCH_CACHE": str(cache),
+                    "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": "0",
+                }}]
+            }
 
             def identity_after_transient_unit_cleanup() -> dict[str, object]:
                 shutil.rmtree(cgroup)
@@ -127,7 +133,8 @@ class PublicationV3AttestationTests(unittest.TestCase):
         self.assertEqual(observed["swap_max_bytes"], 0)
         self.assertEqual(observed["swap_peak_bytes"], 0)
         self.assertEqual(observed["purchase_option"], "on-demand")
-        self.assertEqual(observed["cache_limit_bytes"], 1024**3)
+        self.assertEqual(observed["cache_capacity_bytes"], 1024**3)
+        self.assertEqual(observed["effective_disk_cache_max_bytes"], 0)
         self.assertRegex(observed["cache_device"], r"^[0-9]+:[0-9]+$")
         self.assertRegex(observed["root_device"], r"^[0-9]+:[0-9]+$")
 
@@ -141,7 +148,7 @@ class PublicationV3AttestationTests(unittest.TestCase):
         )
         client = cell["environment_contract"]["runtime_clients"]["borsuk"]
         value = {
-            "schema_version": 1,
+            "schema_version": 2,
             "cell_id": cell["cell_id"],
             "attempt_id": "attempt-01",
             "instance_id": "i-runtime-01",
@@ -156,7 +163,8 @@ class PublicationV3AttestationTests(unittest.TestCase):
             "swap_peak_bytes": 0,
             "oom_events": 0,
             "oom_kill_events": 0,
-            "cache_limit_bytes": client["disk_cache_limit_mib"] * 1024 * 1024,
+            "cache_capacity_bytes": client["disk_cache_limit_mib"] * 1024 * 1024,
+            "effective_disk_cache_max_bytes": 0,
             "cache_filesystem_bytes": 32 * 1024 * 1024 * 1024,
             "cache_device": "259:1",
             "root_device": "259:0",
@@ -180,9 +188,13 @@ class PublicationV3AttestationTests(unittest.TestCase):
             {**value, "swap_peak_bytes": 1},
             {**value, "oom_events": 1},
             {**value, "oom_kill_events": 1},
-            {**value, "cache_limit_bytes": value["cache_limit_bytes"] + 1},
+            {**value, "cache_capacity_bytes": value["cache_capacity_bytes"] + 1},
+            {
+                **value,
+                "effective_disk_cache_max_bytes": value["cache_capacity_bytes"] + 1,
+            },
             {**value, "cache_filesystem_bytes": value["cache_filesystem_bytes"] + 1},
-            {**value, "cache_filesystem_bytes": value["cache_limit_bytes"] - 1},
+            {**value, "cache_filesystem_bytes": value["cache_capacity_bytes"] - 1},
             {**value, "source_revision": "2" * 40},
             {**value, "cache_is_mount": False},
             {**value, "cache_device": value["root_device"]},

@@ -427,7 +427,9 @@ def build_execution_plan(
         "BORSUK_IO_THREADS": "88",
         "BORSUK_BACKING_GET_CONCURRENCY": "64",
         "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": str(
-            disk_cache_limit_mib * 1024 * 1024
+            0
+            if arm.get("cache_state", "cold") == "cold"
+            else disk_cache_limit_mib * 1024 * 1024
         ),
     }
     global_scan_codec = index_profile.get("global_scan_codec")
@@ -1697,7 +1699,16 @@ def runtime_execution_contract(
             raise ValueError(f"runtime execution contract {name} is invalid")
         return parsed
 
+    def nonnegative_environment_integer(name: str) -> int:
+        value = environment.get(name)
+        if not isinstance(value, str) or not value.isascii() or not value.isdigit():
+            raise ValueError(f"runtime execution contract {name} is invalid")
+        return int(value)
+
     requested = {
+        "disk_cache_max_bytes": nonnegative_environment_integer(
+            "BORSUK_BENCH_DISK_CACHE_MAX_BYTES"
+        ),
         "ram_budget_bytes": positive_environment_integer(
             "BORSUK_BENCH_RAM_BUDGET_BYTES"
         ),
@@ -1730,12 +1741,12 @@ def runtime_execution_contract(
     if (
         not isinstance(effective_flow_control, dict)
         or frozenset(effective_flow_control) != {"schema_version", *requested}
-        or effective_flow_control.get("schema_version") != 3
+        or effective_flow_control.get("schema_version") != 4
         or any(effective_flow_control.get(key) != value for key, value in requested.items())
     ):
         raise ValueError("effective runtime flow control differs from its frozen request")
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "runtime_profile": runtime_profile,
         **requested,
     }

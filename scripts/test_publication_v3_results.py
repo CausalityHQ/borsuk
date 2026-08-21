@@ -15,6 +15,7 @@ from scripts.publication_v3_protocol import (
 )
 from scripts.publication_v3_receipts import build_index_receipt, receipt_document_sha256
 from scripts.publication_v3_results import validate_cell_result, validate_object_roster
+from scripts.production_bench_schema import QUERY_STAGE_AGGREGATE_FIELDS
 from scripts.test_publication_v3_protocol import paid_v3_manifest
 from scripts.test_publication_v3_receipts import (
     build_artifact,
@@ -75,7 +76,7 @@ def runtime_attestation_for(
 ) -> dict[str, object]:
     client = cell["environment_contract"]["runtime_clients"][cell["system"]]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "cell_id": cell["cell_id"],
         "attempt_id": "attempt-01",
         "instance_id": instance_id,
@@ -90,7 +91,8 @@ def runtime_attestation_for(
         "swap_peak_bytes": 0,
         "oom_events": 0,
         "oom_kill_events": 0,
-        "cache_limit_bytes": client["disk_cache_limit_mib"] * 1024 * 1024,
+        "cache_capacity_bytes": client["disk_cache_limit_mib"] * 1024 * 1024,
+        "effective_disk_cache_max_bytes": 0,
         "cache_filesystem_bytes": 32 * 1024 * 1024 * 1024,
         "cache_device": "259:1",
         "root_device": "259:0",
@@ -251,6 +253,37 @@ class PublicationV3ResultTests(unittest.TestCase):
             runtime_attestation=attestation,
         )
         self.assertEqual(validated, result)
+        current = copy.deepcopy(result)
+        current["schema_version"] = 3
+        current["metrics"].update(
+            {field: 0 for field in QUERY_STAGE_AGGREGATE_FIELDS}
+        )
+        self.assertEqual(
+            validate_cell_result(
+                current,
+                cell=cell,
+                protocol_bytes=protocol,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+                index_receipt=receipt,
+                runtime_attestation=attestation,
+            ),
+            current,
+        )
+        inconsistent = copy.deepcopy(current)
+        inconsistent["metrics"][
+            "global_base_exact_read_us_max_across_queries"
+        ] = 1
+        with self.assertRaisesRegex(ValueError, "timing aggregates"):
+            validate_cell_result(
+                inconsistent,
+                cell=cell,
+                protocol_bytes=protocol,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+                index_receipt=receipt,
+                runtime_attestation=attestation,
+            )
         legacy = copy.deepcopy(result)
         legacy["schema_version"] = 1
         legacy["metrics"].pop("global_leaf_code_requests")
