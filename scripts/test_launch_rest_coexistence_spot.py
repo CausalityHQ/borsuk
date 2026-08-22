@@ -785,17 +785,17 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
 
     def test_cold_s3_matrix_separates_search_wave_handle_and_process_caps(self) -> None:
         cells = cold_s3_cap_matrix()
-        self.assertEqual(len(cells), 18)
-        self.assertEqual(len({cell["cell_id"] for cell in cells}), 18)
+        self.assertEqual(len(cells), 24)
+        self.assertEqual(len({cell["cell_id"] for cell in cells}), 24)
         self.assertEqual(
-            {cell["search_admission"] for cell in cells}, {2, 4, 8}
+            {cell["search_admission"] for cell in cells}, {2, 4, 8, 16}
         )
         self.assertEqual(
             {
                 (cell["search_admission"], cell["max_waiting_searches"])
                 for cell in cells
             },
-            {(2, 8), (4, 16), (8, 32)},
+            {(2, 8), (4, 16), (8, 32), (16, 64)},
         )
         self.assertEqual(
             {

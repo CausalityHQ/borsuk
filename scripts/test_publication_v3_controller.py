@@ -237,17 +237,17 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(concurrency.expected["runtime_profile"], "concurrency")
         self.assertEqual(concurrency.expected["arm_index"], 1)
         self.assertEqual(concurrency.expected["max_active_searches"], 16)
-        self.assertEqual(concurrency.expected["max_waiting_searches"], 32)
+        self.assertEqual(concurrency.expected["max_waiting_searches"], 64)
         self.assertEqual(concurrency.expected["leaf_read_width"], 32)
-        self.assertEqual(concurrency.expected["max_inflight_leaf_reads"], 48)
-        self.assertEqual(concurrency.expected["max_parallel_decode_rank_tasks"], 2)
+        self.assertEqual(concurrency.expected["max_inflight_leaf_reads"], 96)
+        self.assertEqual(concurrency.expected["max_parallel_decode_rank_tasks"], 1)
         self.assertIn(
-            'test "$actual_max_parallel_decode_rank_tasks" = 2',
+            'test "$actual_max_parallel_decode_rank_tasks" = 1',
             concurrency_worker,
         )
         self.assertEqual(concurrency.expected["cpu_threads"], 3)
-        self.assertEqual(concurrency.expected["io_threads"], 88)
-        self.assertEqual(concurrency.expected["s3_get_concurrency"], 64)
+        self.assertEqual(concurrency.expected["io_threads"], 160)
+        self.assertEqual(concurrency.expected["s3_get_concurrency"], 128)
         self.assertIn("/runtime-concurrency/attempts/0003", concurrency.job.terminal_prefix)
         self.assertTrue(concurrency.job.cell_tag.startswith("runtime-concurrency-"))
 

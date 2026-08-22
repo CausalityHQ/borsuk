@@ -623,13 +623,13 @@ def prepare_qualification_execution(
     max_waiting_searches = 16
     if runtime_profile == "concurrency":
         max_active_searches = 16
-        max_waiting_searches = 32
+        max_waiting_searches = 64
     leaf_read_width = 32
-    max_inflight_leaf_reads = 48
-    max_parallel_decode_rank_tasks = 2 if runtime_profile == "concurrency" else 1
+    max_inflight_leaf_reads = 96 if runtime_profile == "concurrency" else 48
+    max_parallel_decode_rank_tasks = 1
     cpu_threads = max(1, min(runtime_vcpus - 1, 4))
-    io_threads = 88
-    s3_get_concurrency = 64
+    io_threads = 160 if runtime_profile == "concurrency" else 88
+    s3_get_concurrency = 128 if runtime_profile == "concurrency" else 64
     ram_budget_bytes = int(runtime_client["resident_limit_mib"]) * 1024 * 1024
     job = (
         ExecutionJob.build(cell, attempt=attempt)

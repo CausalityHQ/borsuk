@@ -141,7 +141,7 @@ def cold_s3_cap_matrix() -> list[dict[str, int | str]]:
     )
     cells: list[dict[str, int | str]] = []
     for decode_rank_tasks in (1, 3):
-        for search_admission in (2, 4, 8):
+        for search_admission in (2, 4, 8, 16):
             for name, leaf_width, inflight, get_cap, io_threads in read_planes:
                 runtime: dict[str, int] = {
                     "cpu_threads": 3,
