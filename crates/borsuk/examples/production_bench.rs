@@ -8,7 +8,7 @@ use std::{
     io::{self, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     thread,
     time::{Duration, Instant},
 };
@@ -622,6 +622,59 @@ struct WriteSample {
 struct PreparedRecordBatch {
     assignment: LifecycleBatchAssignment,
     records: Vec<VectorRecord>,
+}
+
+fn lifecycle_progress_line(stage: &str, status: &str, elapsed_ms: u128) -> String {
+    let valid_stage = !stage.is_empty()
+        && stage.len() <= 64
+        && stage
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if !valid_stage || !matches!(status, "start" | "complete") {
+        return String::new();
+    }
+    format!("BORSUK_LIFECYCLE_PROGRESS stage={stage} status={status} elapsed_ms={elapsed_ms}")
+}
+
+struct LifecycleProgress {
+    stage: &'static str,
+    started: Option<Instant>,
+}
+
+static LIFECYCLE_PROGRESS_ENABLED: OnceLock<bool> = OnceLock::new();
+
+impl LifecycleProgress {
+    fn start(stage: &'static str) -> Self {
+        let enabled = *LIFECYCLE_PROGRESS_ENABLED.get_or_init(|| {
+            env::var_os("BORSUK_LIFECYCLE_PROGRESS").is_some_and(|value| value == "1")
+        });
+        if enabled {
+            eprintln!("{}", lifecycle_progress_line(stage, "start", 0));
+        }
+        Self {
+            stage,
+            started: enabled.then(Instant::now),
+        }
+    }
+
+    fn complete(self) {
+        if let Some(started) = self.started {
+            eprintln!(
+                "{}",
+                lifecycle_progress_line(self.stage, "complete", started.elapsed().as_millis())
+            );
+        }
+    }
+}
+
+fn lifecycle_phase<T>(
+    stage: &'static str,
+    operation: impl FnOnce() -> BenchResult<T>,
+) -> BenchResult<T> {
+    let progress = LifecycleProgress::start(stage);
+    let result = operation()?;
+    progress.complete();
+    Ok(result)
 }
 
 fn open_lifecycle_writer_handles(config: &ResolvedConfig) -> BenchResult<Vec<BorsukIndex>> {
@@ -3680,20 +3733,29 @@ fn write_write_costs_csv(
     let mutation_queries = &dataset.queries[..dataset.queries.len().min(MUTATION_QUERY_SAMPLES)];
     let mut query_stages = vec![(
         "baseline",
-        run_queries(index, mutation_queries, None, serving_options(config))?,
+        lifecycle_phase("baseline-query", || {
+            run_queries(index, mutation_queries, None, serving_options(config))
+        })?,
     )];
-    let mut writers = open_lifecycle_writer_handles(config)?;
+    let mut writers = lifecycle_phase("open-writers", || open_lifecycle_writer_handles(config))?;
     let stats_before_insert = index.stats();
     let mut rows = Vec::with_capacity(7);
-    let insert = measure_inserts(config, dataset, &mut writers, write_ops)?;
+    let insert = lifecycle_phase("insert", || {
+        measure_inserts(config, dataset, &mut writers, write_ops)
+    })?;
+    let progress = LifecycleProgress::start("insert-refresh");
     let searchability_refresh_started = Instant::now();
     let _ = index.refresh()?;
     let searchability_refresh_ms = elapsed_ms(searchability_refresh_started);
+    progress.complete();
     let time_to_searchable_ms = insert.row.wall_ms + searchability_refresh_ms;
-    let observer = BorsukIndex::open(&config.uri)?;
     let (searchable_samples, searchable_hits) =
-        verify_insert_visibility(config, dataset, &observer, write_ops)?;
-    drop(observer);
+        lifecycle_phase("insert-verify", || -> BenchResult<(usize, usize)> {
+            let observer = BorsukIndex::open(&config.uri)?;
+            let result = verify_insert_visibility(config, dataset, &observer, write_ops)?;
+            drop(observer);
+            Ok(result)
+        })?;
     let searchable_fraction = mean(searchable_hits as f64, searchable_samples);
     let insert_wall_ms = insert.row.wall_ms;
     let foreground_bytes_written = insert.row.bytes_written;
@@ -3701,7 +3763,9 @@ fn write_write_costs_csv(
     rows.push(insert.row);
     query_stages.push((
         "after-insert-searchable",
-        run_queries(index, mutation_queries, None, serving_options(config))?,
+        lifecycle_phase("after-insert-query", || {
+            run_queries(index, mutation_queries, None, serving_options(config))
+        })?,
     ));
 
     // WAL publication makes rows durable/searchable. Flushing materializes
@@ -3710,9 +3774,11 @@ fn write_write_costs_csv(
     let requests_before = index.request_counts();
     let bytes_read_before = index.backing_bytes_read();
     let bytes_written_before = index.put_payload_bytes();
+    let progress = LifecycleProgress::start("flush");
     let delta_flush_started = Instant::now();
     index.flush()?;
     let delta_flush_ms = elapsed_ms(delta_flush_started);
+    progress.complete();
     let flush_requests = index.request_counts().delta(&requests_before);
     let stats_after_delta = index.stats();
     let indexed_delta_bytes = stats_after_delta
@@ -3750,7 +3816,9 @@ fn write_write_costs_csv(
     });
     query_stages.push((
         "after-fully-indexed-delta",
-        run_queries(index, mutation_queries, None, serving_options(config))?,
+        lifecycle_phase("after-flush-query", || {
+            run_queries(index, mutation_queries, None, serving_options(config))
+        })?,
     ));
 
     // Corpus-wide consolidation is a distinct maintenance metric. It must not
@@ -3758,9 +3826,11 @@ fn write_write_costs_csv(
     let requests_before = index.request_counts();
     let bytes_read_before = index.backing_bytes_read();
     let bytes_written_before = index.put_payload_bytes();
+    let progress = LifecycleProgress::start("consolidate");
     let consolidation_started = Instant::now();
     index.finish_bulk_load()?;
     let consolidation_ms = elapsed_ms(consolidation_started);
+    progress.complete();
     let consolidation_requests = index.request_counts().delta(&requests_before);
     let consolidated_global_bytes = index.stats().global_scan_bytes;
     rows.push(WriteRow {
@@ -3785,40 +3855,59 @@ fn write_write_costs_csv(
     });
     query_stages.push((
         "after-global-consolidation",
-        run_queries(index, mutation_queries, None, serving_options(config))?,
+        lifecycle_phase("after-consolidate-query", || {
+            run_queries(index, mutation_queries, None, serving_options(config))
+        })?,
     ));
-    let upsert = measure_upserts(config, dataset, &mut writers, update_ops)?;
-    let _ = index.refresh()?;
-    let observer = BorsukIndex::open(&config.uri)?;
+    let upsert = lifecycle_phase("upsert", || {
+        measure_upserts(config, dataset, &mut writers, update_ops)
+    })?;
+    lifecycle_phase("upsert-refresh", || -> BenchResult<()> {
+        let _ = index.refresh()?;
+        Ok(())
+    })?;
     let (upsert_samples, upsert_correct) =
-        verify_upsert_values(&observer, &upsert.expected_records)?;
-    drop(observer);
+        lifecycle_phase("upsert-verify", || -> BenchResult<(usize, usize)> {
+            let observer = BorsukIndex::open(&config.uri)?;
+            let result = verify_upsert_values(&observer, &upsert.expected_records)?;
+            drop(observer);
+            Ok(result)
+        })?;
     rows.push(upsert.row);
     query_stages.push((
         "after-upsert",
-        run_queries(index, mutation_queries, None, serving_options(config))?,
+        lifecycle_phase("after-upsert-query", || {
+            run_queries(index, mutation_queries, None, serving_options(config))
+        })?,
     ));
-    rows.push(measure_deletes(
-        config,
-        &mut writers,
-        update_ops,
-        delete_ops,
-    )?);
-    let _ = index.refresh()?;
-    let observer = BorsukIndex::open(&config.uri)?;
+    rows.push(lifecycle_phase("delete", || {
+        measure_deletes(config, &mut writers, update_ops, delete_ops)
+    })?);
+    lifecycle_phase("delete-refresh", || -> BenchResult<()> {
+        let _ = index.refresh()?;
+        Ok(())
+    })?;
     let (delete_samples, delete_absent) =
-        verify_delete_absence(config, &observer, update_ops, delete_ops)?;
-    drop(observer);
+        lifecycle_phase("delete-verify", || -> BenchResult<(usize, usize)> {
+            let observer = BorsukIndex::open(&config.uri)?;
+            let result = verify_delete_absence(config, &observer, update_ops, delete_ops)?;
+            drop(observer);
+            Ok(result)
+        })?;
     query_stages.push((
         "after-delete",
-        run_queries(index, mutation_queries, None, serving_options(config))?,
+        lifecycle_phase("after-delete-query", || {
+            run_queries(index, mutation_queries, None, serving_options(config))
+        })?,
     ));
 
     let requests_before = index.request_counts();
     let bytes_before = index.put_payload_bytes();
+    let progress = LifecycleProgress::start("compact");
     let compact_started = Instant::now();
     let compact = index.compact(CompactionOptions::default())?;
     let compact_wall_ms = elapsed_ms(compact_started);
+    progress.complete();
     let compact_requests = index.request_counts().delta(&requests_before);
     rows.push(WriteRow {
         op: "compact",
@@ -3838,26 +3927,32 @@ fn write_write_costs_csv(
         bytes_read: compact.bytes_read,
         bytes_written: index.put_payload_bytes().saturating_sub(bytes_before),
     });
-    let observer = BorsukIndex::open(&config.uri)?;
-    let (_, compact_delete_absent) =
-        verify_delete_absence(config, &observer, update_ops, delete_ops)?;
-    require_surviving_mutations(
-        "compaction",
-        verify_insert_visibility(config, dataset, &observer, write_ops)?,
-        verify_upsert_values(&observer, &upsert.expected_records)?,
-    )?;
-    drop(observer);
+    let compact_delete_absent = lifecycle_phase("compact-verify", || -> BenchResult<usize> {
+        let observer = BorsukIndex::open(&config.uri)?;
+        let (_, absent) = verify_delete_absence(config, &observer, update_ops, delete_ops)?;
+        require_surviving_mutations(
+            "compaction",
+            verify_insert_visibility(config, dataset, &observer, write_ops)?,
+            verify_upsert_values(&observer, &upsert.expected_records)?,
+        )?;
+        drop(observer);
+        Ok(absent)
+    })?;
     query_stages.push((
         "after-compact",
-        run_queries(index, mutation_queries, None, serving_options(config))?,
+        lifecycle_phase("after-compact-query", || {
+            run_queries(index, mutation_queries, None, serving_options(config))
+        })?,
     ));
 
     let requests_before = index.request_counts();
     let bytes_read_before = index.backing_bytes_read();
     let bytes_before = index.put_payload_bytes();
+    let progress = LifecycleProgress::start("purge");
     let purge_started = Instant::now();
     let purge = index.purge_with_report()?;
     let purge_wall_ms = elapsed_ms(purge_started);
+    progress.complete();
     let purge_requests = index.request_counts().delta(&requests_before);
     rows.push(WriteRow {
         op: "purge",
@@ -3877,18 +3972,22 @@ fn write_write_costs_csv(
         bytes_read: index.backing_bytes_read().saturating_sub(bytes_read_before),
         bytes_written: index.put_payload_bytes().saturating_sub(bytes_before),
     });
-    let observer = BorsukIndex::open(&config.uri)?;
-    let (_, purge_delete_absent) =
-        verify_delete_absence(config, &observer, update_ops, delete_ops)?;
-    require_surviving_mutations(
-        "purge",
-        verify_insert_visibility(config, dataset, &observer, write_ops)?,
-        verify_upsert_values(&observer, &upsert.expected_records)?,
-    )?;
-    drop(observer);
+    let purge_delete_absent = lifecycle_phase("purge-verify", || -> BenchResult<usize> {
+        let observer = BorsukIndex::open(&config.uri)?;
+        let (_, absent) = verify_delete_absence(config, &observer, update_ops, delete_ops)?;
+        require_surviving_mutations(
+            "purge",
+            verify_insert_visibility(config, dataset, &observer, write_ops)?,
+            verify_upsert_values(&observer, &upsert.expected_records)?,
+        )?;
+        drop(observer);
+        Ok(absent)
+    })?;
     query_stages.push((
         "after-purge",
-        run_queries(index, mutation_queries, None, serving_options(config))?,
+        lifecycle_phase("after-purge-query", || {
+            run_queries(index, mutation_queries, None, serving_options(config))
+        })?,
     ));
 
     write_lifecycle_csv(
@@ -5131,12 +5230,13 @@ mod tests {
         dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
         default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
         execute_put_wave, finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
-        ingest_generated_batch, is_hot_workload_position, lifecycle_write_operation_count,
-        lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
-        neighbor_row, normalized_cache_access_fractions, parquet_train_files_for_phase,
-        parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
-        parse_lifecycle_insert_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
+        ingest_generated_batch, is_hot_workload_position, lifecycle_progress_line,
+        lifecycle_write_operation_count, lifecycle_write_waves, lifecycle_writer_open_options,
+        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
+        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
+        parse_leaf_capability, parse_leaf_mode, parse_lifecycle_insert_mode,
+        parse_optional_byte_cap, parse_positive_list, parse_serving_mode,
+        percentage_operation_count, permuted_positions, preload_query_count,
         read_logical_cell_catalog, rebatch_mutation_vector_chunk, recall_preloads_local_snapshot,
         recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
         serving_cache_dir, update_vector_reservoir, uses_bounded_decoded_cache_phases,
@@ -5149,6 +5249,17 @@ mod tests {
         vector_row, verification_offsets, write_batch_len, write_operation_count,
         write_runtime_flow_control_receipt,
     };
+
+    #[test]
+    fn lifecycle_progress_line_is_bounded_and_machine_readable() {
+        assert_eq!(
+            lifecycle_progress_line("after-insert-query", "complete", 12_345),
+            "BORSUK_LIFECYCLE_PROGRESS stage=after-insert-query status=complete elapsed_ms=12345"
+        );
+        assert!(lifecycle_progress_line(&"x".repeat(65), "start", 0).is_empty());
+        assert!(lifecycle_progress_line("after insert", "start", 0).is_empty());
+        assert!(lifecycle_progress_line("insert", "unknown", 0).is_empty());
+    }
 
     #[test]
     fn lifecycle_writer_count_is_positive_and_bounded() {
