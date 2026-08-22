@@ -631,6 +631,21 @@ def prepare_qualification_execution(
     io_threads = 160 if runtime_profile == "concurrency" else 88
     s3_get_concurrency = 128 if runtime_profile == "concurrency" else 64
     ram_budget_bytes = int(runtime_client["resident_limit_mib"]) * 1024 * 1024
+    factors = cell["workload"]["factors"]
+    arms = [
+        (leaf_page_budget, cache_state)
+        for leaf_page_budget in factors["leaf_page_budgets"]
+        for cache_state in factors["cache_states"]
+    ]
+    if arm_index >= len(arms):
+        raise ValueError("qualification arm index is outside the factor matrix")
+    _, cache_state = arms[arm_index]
+    disk_cache_max_bytes = (
+        0
+        if cache_state == "cold"
+        else int(runtime_client["disk_cache_limit_mib"]) * 1024 * 1024
+    )
+    exact_read_max_physical_amplification = 3
     job = (
         ExecutionJob.build(cell, attempt=attempt)
         if operation == "build-sift"
@@ -684,6 +699,10 @@ def prepare_qualification_execution(
             purchase_option=purchase_option,
             runtime_profile=runtime_profile,
             arm_index=arm_index,
+            disk_cache_max_bytes=disk_cache_max_bytes,
+            exact_read_max_physical_amplification=(
+                exact_read_max_physical_amplification
+            ),
             max_active_searches=max_active_searches,
             max_waiting_searches=max_waiting_searches,
             leaf_read_width=leaf_read_width,
@@ -708,6 +727,10 @@ def prepare_qualification_execution(
         expected["io_threads"] = io_threads
         expected["s3_get_concurrency"] = s3_get_concurrency
         expected["ram_budget_bytes"] = ram_budget_bytes
+        expected["disk_cache_max_bytes"] = disk_cache_max_bytes
+        expected["exact_read_max_physical_amplification"] = (
+            exact_read_max_physical_amplification
+        )
     request = build_launch_request(
         normalized,
         role=role,

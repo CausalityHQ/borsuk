@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.production_bench_schema import QUERY_STAGE_AGGREGATE_FIELDS
 from scripts.publication_v3_clones import (
     build_clone_receipt,
     clone_receipt_document_sha256,
@@ -14,7 +15,6 @@ from scripts.publication_v3_protocol import (
 )
 from scripts.publication_v3_receipts import build_index_receipt, receipt_document_sha256
 from scripts.publication_v3_results import validate_cell_result
-from scripts.production_bench_schema import QUERY_STAGE_AGGREGATE_FIELDS
 from scripts.run_publication_v3_cell import (
     PRODUCTION_BUILD_FIELDS,
     authorize_publication_mutation_runtime,
@@ -31,6 +31,7 @@ from scripts.run_publication_v3_cell import (
     plan_arms,
     read_build_artifact,
     runtime_execution_contract,
+    runtime_flow_control_authority,
     summarize_concurrency_artifacts,
     summarize_lifecycle_artifacts,
     summarize_query_samples,
@@ -53,6 +54,33 @@ def scheduled_cell(*, system: str = "borsuk", kind: str = "read-recall") -> dict
         for cell in build_schedule_document(manifest)["cells"]
         if cell["system"] == system and cell["workload"]["kind"] == kind
     )
+
+
+def runtime_flow_control(profile: str = "recall") -> dict[str, int]:
+    values = {
+        "disk_cache_max_bytes": 0,
+        "exact_read_max_physical_amplification": 3,
+        "max_active_searches": 4,
+        "max_waiting_searches": 16,
+        "leaf_read_width": 32,
+        "max_inflight_leaf_reads": 48,
+        "max_parallel_decode_rank_tasks": 1,
+        "cpu_threads": 3,
+        "io_threads": 88,
+        "s3_get_concurrency": 64,
+        "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
+    }
+    if profile == "concurrency":
+        values.update(
+            {
+                "max_active_searches": 16,
+                "max_waiting_searches": 64,
+                "max_inflight_leaf_reads": 96,
+                "io_threads": 160,
+                "s3_get_concurrency": 128,
+            }
+        )
+    return values
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
@@ -148,7 +176,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 workspace=Path(root),
                 generator=Path("/bin/true"),
                 borsuk_bench=Path("/bin/true"),
-                mode="publication",
+                mode="runtime",
+                runtime_flow_control=runtime_flow_control(),
             )
         for phase in ("build", "runtime"):
             environment = plan[phase]["steps"][-1]["env"]
@@ -194,7 +223,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 workspace=Path(root),
                 generator=Path("/bin/true"),
                 borsuk_bench=Path("/bin/true"),
-                mode="publication",
+                mode="runtime",
+                runtime_flow_control=runtime_flow_control(),
             )
         base = build_index_receipt(
             cell=cell,
@@ -771,7 +801,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             workspace=Path(root),
             generator=Path("/bin/true"),
             borsuk_bench=Path("/bin/true"),
-            mode="publication",
+            mode="build",
         )
         self.assertTrue(publication["publishable"])
         self.assertEqual(publication["effective_rows"], cell["dataset"]["scale"]["rows"])
@@ -831,8 +861,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 workspace=Path(root),
                 generator=Path("/bin/true"),
                 borsuk_bench=Path("/bin/true"),
-                mode="publication",
+                mode="runtime",
                 runtime_profile="concurrency",
+                runtime_flow_control=runtime_flow_control("concurrency"),
             )
         runtime_env = plan["runtime"]["steps"][-1]["env"]
         self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "0")
@@ -844,18 +875,18 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         self.assertEqual(runtime_env["BORSUK_BENCH_SERVING_CANDIDATES"], "512")
         self.assertEqual(runtime_env["BORSUK_BENCH_MAX_ACTIVE_SEARCHES"], "16")
-        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_WAITING_SEARCHES"], "32")
+        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_WAITING_SEARCHES"], "64")
         self.assertEqual(runtime_env["BORSUK_BENCH_LEAF_READ_WIDTH"], "32")
-        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"], "48")
+        self.assertEqual(runtime_env["BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"], "96")
         self.assertEqual(
-            runtime_env["BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS"], "2"
+            runtime_env["BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS"], "1"
         )
         self.assertEqual(
             runtime_env["BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"], "3"
         )
         self.assertEqual(runtime_env["BORSUK_CPU_THREADS"], "3")
-        self.assertEqual(runtime_env["BORSUK_IO_THREADS"], "88")
-        self.assertEqual(runtime_env["BORSUK_BACKING_GET_CONCURRENCY"], "64")
+        self.assertEqual(runtime_env["BORSUK_IO_THREADS"], "160")
+        self.assertEqual(runtime_env["BORSUK_BACKING_GET_CONCURRENCY"], "128")
         self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_BUILD_INDEX"], "0")
 
@@ -868,14 +899,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             "disk_cache_max_bytes": 0,
             "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
             "max_active_searches": 16,
-            "max_waiting_searches": 32,
+            "max_waiting_searches": 64,
             "leaf_read_width": 32,
-            "max_inflight_leaf_reads": 48,
-            "max_parallel_decode_rank_tasks": 2,
+            "max_inflight_leaf_reads": 96,
+            "max_parallel_decode_rank_tasks": 1,
             "exact_read_max_physical_amplification": 3,
             "cpu_threads": 3,
-            "io_threads": 88,
-            "s3_get_concurrency": 64,
+            "io_threads": 160,
+            "s3_get_concurrency": 128,
         }
         contract = runtime_execution_contract(plan, "concurrency", effective)
         self.assertEqual(
@@ -886,14 +917,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "disk_cache_max_bytes": 0,
                 "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
                 "max_active_searches": 16,
-                "max_waiting_searches": 32,
+                "max_waiting_searches": 64,
                 "leaf_read_width": 32,
-                "max_inflight_leaf_reads": 48,
-                "max_parallel_decode_rank_tasks": 2,
+                "max_inflight_leaf_reads": 96,
+                "max_parallel_decode_rank_tasks": 1,
                 "exact_read_max_physical_amplification": 3,
                 "cpu_threads": 3,
-                "io_threads": 88,
-                "s3_get_concurrency": 64,
+                "io_threads": 160,
+                "s3_get_concurrency": 128,
             },
         )
         runtime_env["BORSUK_BENCH_RAM_BUDGET_BYTES"] = "1073741824"
@@ -919,6 +950,135 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "concurrency",
                 {**effective, "exact_read_max_physical_amplification": 6},
             )
+
+    def test_runtime_flow_control_is_mandatory_bounded_and_protocol_bound(self) -> None:
+        fields = {
+            "disk_cache_max_bytes": 0,
+            "exact_read_max_physical_amplification": 3,
+            "max_active_searches": 16,
+            "max_waiting_searches": 64,
+            "leaf_read_width": 32,
+            "max_inflight_leaf_reads": 96,
+            "max_parallel_decode_rank_tasks": 1,
+            "cpu_threads": 3,
+            "io_threads": 160,
+            "s3_get_concurrency": 128,
+            "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
+        }
+        with self.assertRaisesRegex(ValueError, "required"):
+            runtime_flow_control_authority("runtime", {key: None for key in fields})
+        with self.assertRaisesRegex(ValueError, "atomically"):
+            runtime_flow_control_authority("runtime", {**fields, "cpu_threads": None})
+        with self.assertRaisesRegex(ValueError, "runtime mode"):
+            runtime_flow_control_authority("smoke", fields)
+        self.assertEqual(runtime_flow_control_authority("runtime", fields), fields)
+        self.assertIsNone(
+            runtime_flow_control_authority("build", {key: None for key in fields})
+        )
+
+        cell = next(
+            cell
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))["cells"]
+            if cell["system"] == "borsuk"
+            and cell["workload"]["kind"] == "read-recall"
+            and cell["dataset"]["source"].get("generator") == "synthetic-clustered-v1"
+        )
+        cell["source"] = {"state": "frozen"}
+        arm = plan_arms(cell)[0]
+        for field, value in (
+            ("max_active_searches", 0),
+            ("max_active_searches", 17),
+            ("max_active_searches", 15),
+            ("max_waiting_searches", 65),
+            ("max_parallel_decode_rank_tasks", 4),
+            ("s3_get_concurrency", 129),
+            ("io_threads", 127),
+            ("leaf_read_width", 1025),
+            ("max_inflight_leaf_reads", 1025),
+            ("cpu_threads", 5),
+            ("ram_budget_bytes", 2 * 1024 * 1024 * 1024 + 1),
+            ("exact_read_max_physical_amplification", 6),
+            ("disk_cache_max_bytes", 1),
+            ("cpu_threads", True),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ValueError, "flow-control authority"
+            ), tempfile.TemporaryDirectory() as root:
+                build_execution_plan(
+                    cell,
+                    arm=arm,
+                    workspace=Path(root),
+                    generator=Path("/bin/true"),
+                    borsuk_bench=Path("/bin/true"),
+                    mode="runtime",
+                    runtime_profile="concurrency",
+                    runtime_flow_control={**fields, field: value},
+                )
+
+        with tempfile.TemporaryDirectory() as authority_root:
+            with self.assertRaisesRegex(ValueError, "runtime flow-control authority"):
+                build_execution_plan(
+                    cell,
+                    arm=arm,
+                    workspace=Path(authority_root),
+                    generator=Path("/bin/true"),
+                    borsuk_bench=Path("/bin/true"),
+                    mode="runtime",
+                    runtime_profile="recall",
+                )
+            recall_fields = {
+                **runtime_flow_control(),
+                "max_waiting_searches": 17,
+            }
+            authority_plan = build_execution_plan(
+                cell,
+                arm=arm,
+                workspace=Path(authority_root),
+                generator=Path("/bin/true"),
+                borsuk_bench=Path("/bin/true"),
+                mode="runtime",
+                runtime_profile="recall",
+                runtime_flow_control=recall_fields,
+            )
+        flow_names = (
+            "BORSUK_BENCH_DISK_CACHE_MAX_BYTES",
+            "BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION",
+            "BORSUK_BENCH_MAX_ACTIVE_SEARCHES",
+            "BORSUK_BENCH_MAX_WAITING_SEARCHES",
+            "BORSUK_BENCH_LEAF_READ_WIDTH",
+            "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS",
+            "BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS",
+            "BORSUK_CPU_THREADS",
+            "BORSUK_IO_THREADS",
+            "BORSUK_BACKING_GET_CONCURRENCY",
+            "BORSUK_BENCH_RAM_BUDGET_BYTES",
+        )
+        authority_env = authority_plan["runtime"]["steps"][0]["env"]
+        field_by_environment = {
+            "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": "disk_cache_max_bytes",
+            "BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION": (
+                "exact_read_max_physical_amplification"
+            ),
+            "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": "max_active_searches",
+            "BORSUK_BENCH_MAX_WAITING_SEARCHES": "max_waiting_searches",
+            "BORSUK_BENCH_LEAF_READ_WIDTH": "leaf_read_width",
+            "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS": "max_inflight_leaf_reads",
+            "BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS": (
+                "max_parallel_decode_rank_tasks"
+            ),
+            "BORSUK_CPU_THREADS": "cpu_threads",
+            "BORSUK_IO_THREADS": "io_threads",
+            "BORSUK_BACKING_GET_CONCURRENCY": "s3_get_concurrency",
+            "BORSUK_BENCH_RAM_BUDGET_BYTES": "ram_budget_bytes",
+        }
+        self.assertEqual(tuple(field_by_environment), flow_names)
+        self.assertEqual(
+            {name: authority_env[name] for name in flow_names},
+            {
+                name: str(recall_fields[field])
+                for name, field in field_by_environment.items()
+            },
+        )
 
     def test_concurrency_artifacts_require_complete_workers_queries_and_recall(self) -> None:
         summaries = [

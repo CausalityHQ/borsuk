@@ -16,6 +16,13 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 try:
+    from scripts.production_bench_schema import (
+        PRODUCTION_BENCH_SCHEMA_VERSION,
+        QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE,
+        QUERY_STAGE_AGGREGATE_FIELDS,
+        QUERY_STAGE_MAX_FIELDS,
+        validate_query_stage_timings,
+    )
     from scripts.publication_v3_attestation import (
         collect_runtime_attestation,
         runtime_attestation_sha256,
@@ -34,14 +41,6 @@ try:
         read_protocol,
         validate_manifest,
     )
-    from scripts.production_bench_schema import (
-        PRODUCTION_BENCH_SCHEMA_VERSION,
-        QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE,
-        QUERY_STAGE_AGGREGATE_FIELDS,
-        QUERY_STAGE_MAX_FIELDS,
-        QUERY_STAGE_TIMING_FIELDS,
-        validate_query_stage_timings,
-    )
     from scripts.publication_v3_receipts import (
         build_index_receipt,
         receipt_document_sha256,
@@ -52,6 +51,13 @@ try:
     )
     from scripts.publication_v3_results import validate_cell_result
 except ModuleNotFoundError:
+    from production_bench_schema import (  # type: ignore[no-redef]
+        PRODUCTION_BENCH_SCHEMA_VERSION,
+        QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE,
+        QUERY_STAGE_AGGREGATE_FIELDS,
+        QUERY_STAGE_MAX_FIELDS,
+        validate_query_stage_timings,
+    )
     from publication_v3_attestation import (
         collect_runtime_attestation,
         runtime_attestation_sha256,
@@ -70,14 +76,6 @@ except ModuleNotFoundError:
         read_protocol,
         validate_manifest,
     )
-    from production_bench_schema import (  # type: ignore[no-redef]
-        PRODUCTION_BENCH_SCHEMA_VERSION,
-        QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE,
-        QUERY_STAGE_AGGREGATE_FIELDS,
-        QUERY_STAGE_MAX_FIELDS,
-        QUERY_STAGE_TIMING_FIELDS,
-        validate_query_stage_timings,
-    )
     from publication_v3_receipts import (
         build_index_receipt,
         receipt_document_sha256,
@@ -92,6 +90,22 @@ except ModuleNotFoundError:
 SUPPORTED_LOCAL_KINDS = frozenset({"read-recall", "write-update-delete-compact"})
 V20_COMPATIBILITY_CANDIDATES = 512
 V20_EXECUTION_ENGINE = "bounded-cell-card-v20"
+CONCURRENCY_SWEEP = (1, 2, 4, 8, 16)
+RUNTIME_FLOW_CONTROL_FIELDS = frozenset(
+    {
+        "disk_cache_max_bytes",
+        "exact_read_max_physical_amplification",
+        "max_active_searches",
+        "max_waiting_searches",
+        "leaf_read_width",
+        "max_inflight_leaf_reads",
+        "max_parallel_decode_rank_tasks",
+        "cpu_threads",
+        "io_threads",
+        "s3_get_concurrency",
+        "ram_budget_bytes",
+    }
+)
 PRODUCTION_BUILD_FIELDS = tuple(
     "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
 )
@@ -261,6 +275,23 @@ def concurrency_result_arm(arm: dict[str, object]) -> dict[str, object]:
     return copy.deepcopy(arm)
 
 
+def runtime_flow_control_authority(
+    mode: str, values: dict[str, int | None]
+) -> dict[str, int] | None:
+    if frozenset(values) != RUNTIME_FLOW_CONTROL_FIELDS:
+        raise ValueError("runtime flow-control authority fields differ")
+    supplied = sum(value is not None for value in values.values())
+    if mode == "runtime" and supplied == 0:
+        raise ValueError("runtime flow-control authority is required")
+    if supplied not in {0, len(values)}:
+        raise ValueError("runtime flow-control authority must be supplied atomically")
+    if supplied != 0 and mode != "runtime":
+        raise ValueError("runtime flow-control authority requires runtime mode")
+    if supplied == 0:
+        return None
+    return {key: int(value) for key, value in values.items() if value is not None}
+
+
 def build_execution_plan(
     cell: dict[str, object],
     *,
@@ -270,13 +301,31 @@ def build_execution_plan(
     borsuk_bench: Path,
     mode: str,
     runtime_profile: str = "recall",
+    runtime_flow_control: dict[str, int] | None = None,
 ) -> dict[str, object]:
-    if mode not in {"publication", "smoke"}:
-        raise ValueError("execution mode must be publication or smoke")
+    if mode not in {"build", "runtime", "smoke"}:
+        raise ValueError("execution mode must be build, runtime, or smoke")
     if runtime_profile not in {"recall", "concurrency"}:
         raise ValueError("runtime profile must be recall or concurrency")
-    if mode != "publication" and runtime_profile != "recall":
-        raise ValueError("concurrency runtime profile requires publication mode")
+    if mode != "runtime" and runtime_profile != "recall":
+        raise ValueError("concurrency runtime profile requires runtime mode")
+    if mode == "runtime" and runtime_flow_control is None:
+        raise ValueError("runtime flow-control authority is required")
+    if mode != "runtime" and runtime_flow_control is not None:
+        raise ValueError("runtime flow-control authority requires runtime mode")
+    if runtime_flow_control is not None and (
+        frozenset(runtime_flow_control) != RUNTIME_FLOW_CONTROL_FIELDS
+        or any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in runtime_flow_control.values()
+        )
+        or runtime_flow_control["disk_cache_max_bytes"] < 0
+        or any(
+            runtime_flow_control[field] <= 0
+            for field in RUNTIME_FLOW_CONTROL_FIELDS - {"disk_cache_max_bytes"}
+        )
+    ):
+        raise ValueError("runtime flow-control authority is invalid")
     if cell.get("system") != "borsuk":
         raise ValueError(f"system {cell.get('system')!r} is not available in local execution")
     workload = cell.get("workload")
@@ -286,7 +335,8 @@ def build_execution_plan(
         raise ValueError("workload is not supported by the local read runner")
     if not isinstance(dataset, dict) or not isinstance(dataset.get("source"), dict):
         raise ValueError("cell dataset is invalid")
-    if mode == "publication" and (not isinstance(source, dict) or source.get("state") != "frozen"):
+    publication = mode != "smoke"
+    if publication and (not isinstance(source, dict) or source.get("state") != "frozen"):
         raise ValueError("publication execution requires a frozen source archive")
     environment = cell.get("environment_contract")
     if not isinstance(environment, dict):
@@ -361,14 +411,49 @@ def build_execution_plan(
     smoke_rows = max(1_000, smoke_cells * minimum_rows_per_cell)
     if mode == "smoke" and dataset["source"].get("generator") == "synthetic-clustered-v1":
         smoke_rows = ((smoke_rows + 99) // 100) * 100
-    effective_rows = scheduled_rows if mode == "publication" else min(scheduled_rows, smoke_rows)
-    effective_queries = queries_per_repetition if mode == "publication" else min(queries_per_repetition, 10)
+    effective_rows = scheduled_rows if publication else min(scheduled_rows, smoke_rows)
+    effective_queries = queries_per_repetition if publication else min(queries_per_repetition, 10)
     dataset_dir = workspace / "dataset"
     output_dir = workspace / "output"
     index_dir = workspace / "index"
     cache_dir = workspace / "cache"
     if arm not in plan_arms(cell):
         raise ValueError("execution arm is not authorized by the scheduled cell")
+    if runtime_flow_control is not None:
+        expected_disk_cache_bytes = (
+            0
+            if arm.get("cache_state", "cold") == "cold"
+            else disk_cache_limit_mib * 1024 * 1024
+        )
+        if (
+            runtime_flow_control["ram_budget_bytes"]
+            != resident_limit_mib * 1024 * 1024
+            or runtime_flow_control["disk_cache_max_bytes"]
+            != expected_disk_cache_bytes
+            or runtime_flow_control["cpu_threads"] > runtime_vcpus
+            or runtime_flow_control["cpu_threads"] > 64
+            or runtime_flow_control["max_active_searches"] > runtime_vcpus * 4
+            or runtime_flow_control["max_waiting_searches"] > runtime_vcpus * 16
+            or runtime_flow_control["max_parallel_decode_rank_tasks"]
+            > runtime_flow_control["cpu_threads"]
+            or runtime_flow_control["s3_get_concurrency"] > 128
+            or not (
+                runtime_flow_control["s3_get_concurrency"]
+                <= runtime_flow_control["io_threads"]
+                <= 256
+            )
+            or runtime_flow_control["leaf_read_width"] > 1_024
+            or runtime_flow_control["max_inflight_leaf_reads"] > 1_024
+            or not 1
+            <= runtime_flow_control["exact_read_max_physical_amplification"]
+            <= 5
+            or (
+                runtime_profile == "concurrency"
+                and runtime_flow_control["max_active_searches"]
+                < max(CONCURRENCY_SWEEP)
+            )
+        ):
+            raise ValueError("runtime flow-control authority violates runtime bounds")
 
     steps: list[dict[str, object]] = []
     dataset_source = dataset["source"]
@@ -468,7 +553,7 @@ def build_execution_plan(
         raise ValueError("BORSUK index profile is not executable")
     effective_cells = (
         profile_cells
-        if mode == "publication"
+        if publication
         else min(profile_cells, max(1, effective_rows // minimum_rows_per_cell))
     )
     training_rows = min(effective_rows, effective_cells * training_rows_per_cell)
@@ -499,7 +584,7 @@ def build_execution_plan(
         )
     else:
         benchmark_env["BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES"] = str(code_bytes)
-    if mode == "publication":
+    if publication:
         index_uri = str(cell.get("index_prefix"))
         runtime_dataset_dir = workspace / "runtime-dataset"
         build_output_dir = workspace / "build-output"
@@ -546,13 +631,46 @@ def build_execution_plan(
                 {
                     "BORSUK_BENCH_RECALL_ONLY": "0",
                     "BORSUK_BENCH_SKIP_RECALL": "1",
-                    "BORSUK_BENCH_CONCURRENCY": "1,2,4,8,16",
-                    "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": "16",
-                    "BORSUK_BENCH_MAX_WAITING_SEARCHES": "32",
-                    "BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS": "2",
+                    "BORSUK_BENCH_CONCURRENCY": ",".join(
+                        str(value) for value in CONCURRENCY_SWEEP
+                    ),
                     "BORSUK_BENCH_SERVING_NPROBE": str(routing_budget),
                     "BORSUK_BENCH_SERVING_CANDIDATES": str(
                         V20_COMPATIBILITY_CANDIDATES
+                    ),
+                }
+            )
+        if runtime_flow_control is not None:
+            runtime_env.update(
+                {
+                    "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": str(
+                        runtime_flow_control["max_active_searches"]
+                    ),
+                    "BORSUK_BENCH_MAX_WAITING_SEARCHES": str(
+                        runtime_flow_control["max_waiting_searches"]
+                    ),
+                    "BORSUK_BENCH_LEAF_READ_WIDTH": str(
+                        runtime_flow_control["leaf_read_width"]
+                    ),
+                    "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS": str(
+                        runtime_flow_control["max_inflight_leaf_reads"]
+                    ),
+                    "BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS": str(
+                        runtime_flow_control["max_parallel_decode_rank_tasks"]
+                    ),
+                    "BORSUK_CPU_THREADS": str(runtime_flow_control["cpu_threads"]),
+                    "BORSUK_IO_THREADS": str(runtime_flow_control["io_threads"]),
+                    "BORSUK_BACKING_GET_CONCURRENCY": str(
+                        runtime_flow_control["s3_get_concurrency"]
+                    ),
+                    "BORSUK_BENCH_RAM_BUDGET_BYTES": str(
+                        runtime_flow_control["ram_budget_bytes"]
+                    ),
+                    "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": str(
+                        runtime_flow_control["disk_cache_max_bytes"]
+                    ),
+                    "BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION": str(
+                        runtime_flow_control["exact_read_max_physical_amplification"]
                     ),
                 }
             )
@@ -570,7 +688,7 @@ def build_execution_plan(
         return {
             "schema_version": 1,
             "cell_id": cell.get("cell_id"),
-            "mode": mode,
+            "mode": "publication",
             "publishable": True,
             "effective_rows": effective_rows,
             "effective_queries": effective_queries,
@@ -594,7 +712,7 @@ def build_execution_plan(
     return {
         "schema_version": 1,
         "cell_id": cell.get("cell_id"),
-        "mode": mode,
+        "mode": "smoke",
         "publishable": False,
         "effective_rows": effective_rows,
         "effective_queries": effective_queries,
@@ -1780,7 +1898,37 @@ def main() -> int:
     parser.add_argument("--clone-receipt", type=Path)
     parser.add_argument("--clone-inventory", type=Path)
     parser.add_argument("--build-complete", type=Path)
+    parser.add_argument("--max-active-searches", type=int)
+    parser.add_argument("--max-waiting-searches", type=int)
+    parser.add_argument("--leaf-read-width", type=int)
+    parser.add_argument("--max-inflight-leaf-reads", type=int)
+    parser.add_argument("--max-parallel-decode-rank-tasks", type=int)
+    parser.add_argument("--cpu-threads", type=int)
+    parser.add_argument("--io-threads", type=int)
+    parser.add_argument("--s3-get-concurrency", type=int)
+    parser.add_argument("--ram-budget-bytes", type=int)
+    parser.add_argument("--disk-cache-max-bytes", type=int)
+    parser.add_argument("--exact-read-max-physical-amplification", type=int)
     args = parser.parse_args()
+
+    runtime_flow_control = runtime_flow_control_authority(
+        args.mode,
+        {
+            "disk_cache_max_bytes": args.disk_cache_max_bytes,
+            "exact_read_max_physical_amplification": (
+                args.exact_read_max_physical_amplification
+            ),
+            "max_active_searches": args.max_active_searches,
+            "max_waiting_searches": args.max_waiting_searches,
+            "leaf_read_width": args.leaf_read_width,
+            "max_inflight_leaf_reads": args.max_inflight_leaf_reads,
+            "max_parallel_decode_rank_tasks": args.max_parallel_decode_rank_tasks,
+            "cpu_threads": args.cpu_threads,
+            "io_threads": args.io_threads,
+            "s3_get_concurrency": args.s3_get_concurrency,
+            "ram_budget_bytes": args.ram_budget_bytes,
+        },
+    )
 
     cell = read_protocol(args.protocol)
     protocol_bytes = args.protocol.read_bytes()
@@ -1863,8 +2011,9 @@ def main() -> int:
         workspace=args.workspace,
         generator=args.generator or Path("/bin/false"),
         borsuk_bench=args.borsuk_bench,
-        mode="publication" if publication else "smoke",
+        mode=args.mode,
         runtime_profile=args.runtime_profile,
+        runtime_flow_control=runtime_flow_control,
     )
     if args.mode == "build":
         output, resources, elapsed_ns = execute_publication_phase(plan, "build")

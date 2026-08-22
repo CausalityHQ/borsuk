@@ -323,6 +323,8 @@ def runtime_worker_script(
     purchase_option: str = "spot",
     runtime_profile: str = "recall",
     arm_index: int = 0,
+    disk_cache_max_bytes: int,
+    exact_read_max_physical_amplification: int,
     max_active_searches: int,
     max_waiting_searches: int,
     leaf_read_width: int,
@@ -341,7 +343,8 @@ def runtime_worker_script(
         raise ValueError("runtime profile must be recall or concurrency")
     if arm_index < 0:
         raise ValueError("runtime arm index must be nonnegative")
-    if min(
+    if disk_cache_max_bytes < 0 or min(
+        exact_read_max_physical_amplification,
         max_active_searches,
         max_waiting_searches,
         leaf_read_width,
@@ -353,6 +356,19 @@ def runtime_worker_script(
         ram_budget_bytes,
     ) <= 0:
         raise ValueError("runtime resource authority must be positive")
+    if (
+        exact_read_max_physical_amplification > 5
+        or max_active_searches > 64
+        or max_waiting_searches > 256
+        or leaf_read_width > 1_024
+        or max_inflight_leaf_reads > 1_024
+        or max_parallel_decode_rank_tasks > cpu_threads
+        or cpu_threads > 64
+        or s3_get_concurrency > 128
+        or not s3_get_concurrency <= io_threads <= 256
+        or (runtime_profile == "concurrency" and max_active_searches < 16)
+    ):
+        raise ValueError("runtime resource authority violates safety bounds")
     profile_mismatch = (
         runtime_profile == "concurrency"
         and not job.cell_tag.startswith("runtime-concurrency-")
@@ -430,6 +446,17 @@ def runtime_worker_script(
           --mode runtime --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
           --runtime-profile {_q(runtime_profile)} \
           --arm-index {_q(arm_index)} \
+          --disk-cache-max-bytes {_q(disk_cache_max_bytes)} \
+          --exact-read-max-physical-amplification {_q(exact_read_max_physical_amplification)} \
+          --max-active-searches {_q(max_active_searches)} \
+          --max-waiting-searches {_q(max_waiting_searches)} \
+          --leaf-read-width {_q(leaf_read_width)} \
+          --max-inflight-leaf-reads {_q(max_inflight_leaf_reads)} \
+          --max-parallel-decode-rank-tasks {_q(max_parallel_decode_rank_tasks)} \
+          --cpu-threads {_q(cpu_threads)} \
+          --io-threads {_q(io_threads)} \
+          --s3-get-concurrency {_q(s3_get_concurrency)} \
+          --ram-budget-bytes {_q(ram_budget_bytes)} \
           --dataset-materialization-sha256 {_q(source["sha256"])} --attempt-id {_q(attempt_id)} \
           --instance-identity "$instance_id" --purchase-option "$instance_purchase_option" \
           --borsuk-bench "$work/production_bench" \
@@ -449,6 +476,8 @@ def runtime_worker_script(
         actual_io_threads=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["io_threads"])' "$execution_contract")
         actual_s3_gets=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["s3_get_concurrency"])' "$execution_contract")
         actual_ram_budget=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["ram_budget_bytes"])' "$execution_contract")
+        actual_disk_cache=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["disk_cache_max_bytes"])' "$execution_contract")
+        actual_exact_amplification=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["exact_read_max_physical_amplification"])' "$execution_contract")
         actual_runtime_profile=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime_profile"])' "$execution_contract")
         test "$actual_max_active" = {_q(max_active_searches)}
         test "$actual_max_waiting" = {_q(max_waiting_searches)}
@@ -459,6 +488,8 @@ def runtime_worker_script(
         test "$actual_io_threads" = {_q(io_threads)}
         test "$actual_s3_gets" = {_q(s3_get_concurrency)}
         test "$actual_ram_budget" = {_q(ram_budget_bytes)}
+        test "$actual_disk_cache" = {_q(disk_cache_max_bytes)}
+        test "$actual_exact_amplification" = {_q(exact_read_max_physical_amplification)}
         test "$actual_runtime_profile" = {_q(runtime_profile)}
         execution_contract_sha=$(sha256sum "$execution_contract" | awk '{{print $1}}')
         concurrency_fields=''
@@ -470,7 +501,7 @@ def runtime_worker_script(
           concurrency_samples_sha=$(sha256sum "$work/cell/runtime-output/bench_concurrency_samples.csv" | awk '{{print $1}}')
           concurrency_fields=$(printf ',"concurrency_summary_sha256":"%s","concurrency_samples_sha256":"%s"' "$concurrency_summary_sha" "$concurrency_samples_sha")
         fi
-        printf '{{"schema_version":3,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"execution_contract_sha256":"%s"%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$execution_contract_sha" "$concurrency_fields" >"$work/complete.json"
+        printf '{{"schema_version":3,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"disk_cache_max_bytes":%s,"exact_read_max_physical_amplification":%s,"execution_contract_sha256":"%s"%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$actual_disk_cache" "$actual_exact_amplification" "$execution_contract_sha" "$concurrency_fields" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/RUNTIME_TERMINAL_COMPLETE.json")}
         complete=1
         """

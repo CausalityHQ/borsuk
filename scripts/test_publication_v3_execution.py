@@ -179,6 +179,8 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             attempt_id="runtime-0001",
             terminal_prefix="s3://bucket/results/cell/runtime/attempts/0001",
             purchase_option="on-demand",
+            disk_cache_max_bytes=0,
+            exact_read_max_physical_amplification=3,
             max_active_searches=4,
             max_waiting_searches=16,
             leaf_read_width=32,
@@ -209,6 +211,17 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn('test "$instance_purchase_option" = on-demand', script)
         self.assertIn('"purchase_option":"%s"', script)
         self.assertIn('--purchase-option "$instance_purchase_option"', script)
+        self.assertIn("--max-active-searches 4", script)
+        self.assertIn("--max-waiting-searches 16", script)
+        self.assertIn("--leaf-read-width 32", script)
+        self.assertIn("--max-inflight-leaf-reads 48", script)
+        self.assertIn("--max-parallel-decode-rank-tasks 1", script)
+        self.assertIn("--cpu-threads 3", script)
+        self.assertIn("--io-threads 88", script)
+        self.assertIn("--s3-get-concurrency 64", script)
+        self.assertIn("--ram-budget-bytes 2147483648", script)
+        self.assertIn("--disk-cache-max-bytes 0", script)
+        self.assertIn("--exact-read-max-physical-amplification 3", script)
         self.assertIn('test "$actual_max_parallel_decode_rank_tasks" = 1', script)
         self.assertLess(script.index("stage=attest-purchase"), script.index("stage=provision"))
         self.assertIn("stage=mount-cache", script)
@@ -249,14 +262,16 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             terminal_prefix="s3://bucket/results/cell/runtime/attempts/0002",
             runtime_profile="concurrency",
             arm_index=1,
-            max_active_searches=4,
-            max_waiting_searches=16,
+            disk_cache_max_bytes=1024 * 1024 * 1024,
+            exact_read_max_physical_amplification=3,
+            max_active_searches=16,
+            max_waiting_searches=64,
             leaf_read_width=32,
-            max_inflight_leaf_reads=48,
+            max_inflight_leaf_reads=96,
             max_parallel_decode_rank_tasks=1,
             cpu_threads=3,
-            io_threads=88,
-            s3_get_concurrency=64,
+            io_threads=160,
+            s3_get_concurrency=128,
             ram_budget_bytes=2 * 1024 * 1024 * 1024,
         )
         self.assertIn("--runtime-profile concurrency", script)
@@ -266,13 +281,13 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn('test "$actual_runtime_profile" = concurrency', script)
         self.assertIn('"concurrency_summary_sha256"', script)
         self.assertIn('"concurrency_samples_sha256"', script)
-        self.assertIn('test "$actual_max_active" = 4', script)
-        self.assertIn('test "$actual_max_waiting" = 16', script)
+        self.assertIn('test "$actual_max_active" = 16', script)
+        self.assertIn('test "$actual_max_waiting" = 64', script)
         self.assertIn('test "$actual_leaf_width" = 32', script)
-        self.assertIn('test "$actual_max_leaf_reads" = 48', script)
+        self.assertIn('test "$actual_max_leaf_reads" = 96', script)
         self.assertIn('test "$actual_cpu_threads" = 3', script)
-        self.assertIn('test "$actual_io_threads" = 88', script)
-        self.assertIn('test "$actual_s3_gets" = 64', script)
+        self.assertIn('test "$actual_io_threads" = 160', script)
+        self.assertIn('test "$actual_s3_gets" = 128', script)
         self.assertIn('test "$actual_ram_budget" = 2147483648', script)
         self.assertIn("RUNTIME_EXECUTION_CONTRACT.json", script)
         self.assertEqual(
