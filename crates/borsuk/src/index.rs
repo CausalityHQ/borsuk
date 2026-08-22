@@ -7941,6 +7941,13 @@ impl BorsukIndex {
         retained_run_identities: &BTreeSet<String>,
         quiescent: bool,
     ) -> Result<BTreeSet<String>> {
+        // Current-format collection mutations publish only through the
+        // positioned log. `cell_wal_snapshot` is its decoded projection, not a
+        // legacy `cells/*/wal/*` frontier, so probing every logical-cell lane
+        // cannot discover a live object and scales GC with catalog cardinality.
+        if self.uses_positioned_mutation_authority() {
+            return Ok(BTreeSet::new());
+        }
         let cell_wal = self.cell_wal_store()?;
         if quiescent {
             let (authorized, _) = self.gc_quiescent_protected_transaction_ids_snapshot()?;
@@ -7987,6 +7994,11 @@ impl BorsukIndex {
         retained_run_identities: &BTreeSet<String>,
         quiescent: bool,
     ) -> Result<()> {
+        // Positioned publication never attaches a legacy lane frontier, so
+        // neither its reservation grid nor its cell heads can require pruning.
+        if self.uses_positioned_mutation_authority() {
+            return Ok(());
+        }
         self.collection_storage
             .prune_expired_collection_wal_reservations()?;
         let unrooted = self.cell_wal_run_identities_without_root_authorization(
@@ -13051,6 +13063,9 @@ impl BorsukIndex {
         };
         self.manifest = published;
         self.install_resident_global_ann_pins(None);
+        // Positioned payloads/envelopes were retained from the authenticated
+        // positioned snapshot above. Only an actual legacy-authority handle
+        // needs the retired per-cell frontier walk and consumed-run recovery.
         if !self.uses_positioned_mutation_authority() {
             self.prune_consumed_cell_wal()?;
         }
@@ -16239,12 +16254,14 @@ impl BorsukIndex {
                 objects_scanned: &mut objects_scanned,
                 candidates: &mut candidates,
             };
-            self.collect_gc_candidates(
-                "cells",
-                is_cell_wal_immutable_path,
-                GarbageCollectionObjectKind::SegmentOrGraph,
-                &mut scan,
-            )?;
+            if !self.uses_positioned_mutation_authority() {
+                self.collect_gc_candidates(
+                    "cells",
+                    is_cell_wal_immutable_path,
+                    GarbageCollectionObjectKind::SegmentOrGraph,
+                    &mut scan,
+                )?;
+            }
             self.collect_gc_candidates(
                 "transactions",
                 is_cell_wal_transaction_path,
@@ -16772,24 +16789,26 @@ impl BorsukIndex {
                 );
             }
         }
-        let cell_wal = self.cell_wal_store()?;
-        paths.extend(cell_wal.active_object_paths(self.manifest.logical_cells())?);
-        let legacy_consumed_runs = self
-            .manifest
-            .cell_wal_consumed_runs
-            .iter()
-            .filter(|identity| {
-                !self.positioned_run_identities.contains(*identity)
-                    && cell_wal_run_transaction_id(identity).is_ok_and(|transaction_id| {
-                        !positioned_retained_transaction_ids.contains(transaction_id)
-                    })
-            })
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let (retained_paths, retained_transactions) =
-            cell_wal.retained_consumed_objects(&legacy_consumed_runs)?;
-        paths.extend(retained_paths);
-        Self::extend_cell_wal_metadata_object_paths(&mut paths, &retained_transactions)?;
+        if !self.uses_positioned_mutation_authority() {
+            let cell_wal = self.cell_wal_store()?;
+            paths.extend(cell_wal.active_object_paths(self.manifest.logical_cells())?);
+            let legacy_consumed_runs = self
+                .manifest
+                .cell_wal_consumed_runs
+                .iter()
+                .filter(|identity| {
+                    !self.positioned_run_identities.contains(*identity)
+                        && cell_wal_run_transaction_id(identity).is_ok_and(|transaction_id| {
+                            !positioned_retained_transaction_ids.contains(transaction_id)
+                        })
+                })
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let (retained_paths, retained_transactions) =
+                cell_wal.retained_consumed_objects(&legacy_consumed_runs)?;
+            paths.extend(retained_paths);
+            Self::extend_cell_wal_metadata_object_paths(&mut paths, &retained_transactions)?;
+        }
 
         for routing_level in 0..=self.manifest.routing_max_level {
             let index_path =
@@ -42885,6 +42904,85 @@ mod tests {
         assert!(
             state_reads_or_writes.is_empty(),
             "quiescent cleanup performed per-state I/O before delete: {state_reads_or_writes:?}"
+        );
+    }
+
+    #[test]
+    fn positioned_gc_does_not_probe_legacy_cell_wal_heads() {
+        let gc_gets = |cell_count| {
+            let directory = tempfile::tempdir().unwrap();
+            let mut index = BorsukIndex::create_with_logical_cell_catalog(
+                IndexConfig {
+                    uri: directory.path().to_string_lossy().into_owned(),
+                    metric: VectorMetric::Euclidean,
+                    dimensions: 2,
+                    segment_max_vectors: 4,
+                    ram_budget_bytes: None,
+                    text: false,
+                    named_vectors: BTreeMap::new(),
+                },
+                (0..cell_count)
+                    .map(|ordinal| vec![ordinal as f32, 0.0])
+                    .collect(),
+            )
+            .unwrap();
+            let requests_before = index.storage.request_counts();
+            let report = index
+                .gc_obsolete_segments_quiescent(GarbageCollectionOptions {
+                    dry_run: false,
+                    min_age: Duration::ZERO,
+                })
+                .unwrap();
+            assert_eq!(report.objects_deleted, 0);
+            index.storage.request_counts().delta(&requests_before).gets
+        };
+
+        let small_gets = gc_gets(16);
+        let large_gets = gc_gets(128);
+        assert_eq!(large_gets, small_gets);
+        assert!(
+            large_gets <= 280,
+            "positioned GC issued {} GETs for an empty 128-cell collection; positioned-log coordination is bounded independently of logical-cell count",
+            large_gets,
+        );
+    }
+
+    #[test]
+    fn positioned_gc_does_not_delete_unowned_legacy_cell_wal_debris() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let baseline_scanned = index
+            .gc_obsolete_segments_quiescent(GarbageCollectionOptions {
+                dry_run: true,
+                min_age: Duration::ZERO,
+            })
+            .unwrap()
+            .objects_scanned;
+        let legacy_path = "cells/1/0/wal/0/runs/legacy/orphan.parquet";
+        index.storage.write_bytes(legacy_path, b"legacy").unwrap();
+
+        let report = index
+            .gc_obsolete_segments_quiescent(GarbageCollectionOptions {
+                dry_run: true,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+
+        assert_eq!(report.objects_scanned, baseline_scanned);
+        assert!(!report.candidates.iter().any(|path| path == legacy_path));
+        assert_eq!(
+            index.storage.read_object_fresh(legacy_path).unwrap(),
+            Some(b"legacy".to_vec()),
+            "positioned authority must not interpret unowned legacy debris as deletable state"
         );
     }
 
