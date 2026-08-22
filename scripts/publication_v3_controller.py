@@ -645,7 +645,11 @@ def prepare_qualification_execution(
         if cache_state == "cold"
         else int(runtime_client["disk_cache_limit_mib"]) * 1024 * 1024
     )
-    exact_read_max_physical_amplification = 3
+    # The uncached SIFT qualification measured amplification 2 as the best
+    # throughput/latency balance: it coalesces adjacent authenticated ranges
+    # without the byte overhead observed at amplification 3. Frozen evidence:
+    # rest-amp2-wide-a16-sift-51f6fa1/attempts/0001.
+    exact_read_max_physical_amplification = 2
     job = (
         ExecutionJob.build(cell, attempt=attempt)
         if operation == "build-sift"

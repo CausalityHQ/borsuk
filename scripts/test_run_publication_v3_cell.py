@@ -59,7 +59,7 @@ def scheduled_cell(*, system: str = "borsuk", kind: str = "read-recall") -> dict
 def runtime_flow_control(profile: str = "recall") -> dict[str, int]:
     values = {
         "disk_cache_max_bytes": 0,
-        "exact_read_max_physical_amplification": 3,
+        "exact_read_max_physical_amplification": 2,
         "max_active_searches": 4,
         "max_waiting_searches": 16,
         "leaf_read_width": 32,
@@ -882,7 +882,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             runtime_env["BORSUK_BENCH_MAX_PARALLEL_DECODE_RANK_TASKS"], "1"
         )
         self.assertEqual(
-            runtime_env["BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"], "3"
+            runtime_env["BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"], "2"
         )
         self.assertEqual(runtime_env["BORSUK_CPU_THREADS"], "3")
         self.assertEqual(runtime_env["BORSUK_IO_THREADS"], "160")
@@ -903,7 +903,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             "leaf_read_width": 32,
             "max_inflight_leaf_reads": 96,
             "max_parallel_decode_rank_tasks": 1,
-            "exact_read_max_physical_amplification": 3,
+            "exact_read_max_physical_amplification": 2,
             "cpu_threads": 3,
             "io_threads": 160,
             "s3_get_concurrency": 128,
@@ -921,7 +921,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "leaf_read_width": 32,
                 "max_inflight_leaf_reads": 96,
                 "max_parallel_decode_rank_tasks": 1,
-                "exact_read_max_physical_amplification": 3,
+                "exact_read_max_physical_amplification": 2,
                 "cpu_threads": 3,
                 "io_threads": 160,
                 "s3_get_concurrency": 128,
@@ -954,7 +954,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_runtime_flow_control_is_mandatory_bounded_and_protocol_bound(self) -> None:
         fields = {
             "disk_cache_max_bytes": 0,
-            "exact_read_max_physical_amplification": 3,
+            "exact_read_max_physical_amplification": 2,
             "max_active_searches": 16,
             "max_waiting_searches": 64,
             "leaf_read_width": 32,

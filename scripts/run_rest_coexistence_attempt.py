@@ -41,9 +41,9 @@ def accepted_search_qps(summary: dict[str, Any]) -> float:
 
 def staircase_rates(smoke: bool) -> list[int]:
     return (
-        [32, 64, 96, 128, 160, 192, 256]
+        [32, 64, 96, 128, 160, 192, 224, 256]
         if smoke
-        else [8, 16, 32, 64, 96, 128, 160, 192, 256]
+        else [8, 16, 32, 64, 96, 128, 160, 192, 224, 256]
     )
 
 

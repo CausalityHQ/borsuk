@@ -243,11 +243,11 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(concurrency.expected["max_parallel_decode_rank_tasks"], 1)
         self.assertEqual(concurrency.expected["disk_cache_max_bytes"], 1073741824)
         self.assertEqual(
-            concurrency.expected["exact_read_max_physical_amplification"], 3
+            concurrency.expected["exact_read_max_physical_amplification"], 2
         )
         for argument in (
             "--disk-cache-max-bytes 1073741824",
-            "--exact-read-max-physical-amplification 3",
+            "--exact-read-max-physical-amplification 2",
             "--max-active-searches 16",
             "--max-waiting-searches 64",
             "--leaf-read-width 32",
@@ -557,7 +557,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             "s3_get_concurrency": 64,
             "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
             "disk_cache_max_bytes": 0,
-            "exact_read_max_physical_amplification": 3,
+            "exact_read_max_physical_amplification": 2,
         }
 
         class RuntimeReceiptAws:

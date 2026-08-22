@@ -313,7 +313,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 "repetition": 1,
                 "repetitions": 1,
                 "schema_version": 4,
-                "search_staircase_qps": [32, 64, 96, 128, 160, 192, 256],
+                "search_staircase_qps": [32, 64, 96, 128, 160, 192, 224, 256],
                 "separate_generator": True,
                 "smoke": True,
                 "vector_p99_ms": 100.0,
@@ -322,7 +322,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         )
         self.assertEqual(
             receipt["workload_sha256"],
-            "1e4a04c414110c1eba9bf4f3e40ef3679c678ab70bb887c79aad91e00417f7c1",
+            "fe854043953bae5266a9669d56695e4ae26818f3f95da656f6d68907aacea602",
         )
         self.assertEqual(
             receipt["server_worker_sha256"],

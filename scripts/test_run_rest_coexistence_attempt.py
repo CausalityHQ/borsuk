@@ -89,30 +89,32 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
             )
 
     def test_smoke_staircase_crosses_the_expected_small_runtime_knee(self) -> None:
-        self.assertEqual(staircase_rates(True), [32, 64, 96, 128, 160, 192, 256])
         self.assertEqual(
-            staircase_rates(False), [8, 16, 32, 64, 96, 128, 160, 192, 256]
+            staircase_rates(True), [32, 64, 96, 128, 160, 192, 224, 256]
+        )
+        self.assertEqual(
+            staircase_rates(False), [8, 16, 32, 64, 96, 128, 160, 192, 224, 256]
         )
 
     def test_three_repetitions_rotate_independent_measurement_order(self) -> None:
         self.assertEqual(
             phase_schedule(False, 1),
             {
-                "staircase_rates": [8, 16, 32, 64, 96, 128, 160, 192, 256],
+                "staircase_rates": [8, 16, 32, 64, 96, 128, 160, 192, 224, 256],
                 "mixed_phases": ["mixed-normal", "mixed-overload"],
             },
         )
         self.assertEqual(
             phase_schedule(False, 2),
             {
-                "staircase_rates": [64, 96, 128, 160, 192, 256, 8, 16, 32],
+                "staircase_rates": [64, 96, 128, 160, 192, 224, 256, 8, 16, 32],
                 "mixed_phases": ["mixed-overload", "mixed-normal"],
             },
         )
         self.assertEqual(
             phase_schedule(False, 3),
             {
-                "staircase_rates": [160, 192, 256, 8, 16, 32, 64, 96, 128],
+                "staircase_rates": [160, 192, 224, 256, 8, 16, 32, 64, 96, 128],
                 "mixed_phases": ["mixed-normal", "mixed-overload"],
             },
         )
@@ -220,6 +222,7 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
                     "staircase-128",
                     "staircase-160",
                     "staircase-192",
+                    "staircase-224",
                     "staircase-256",
                     "staircase-32",
                     "staircase-64",

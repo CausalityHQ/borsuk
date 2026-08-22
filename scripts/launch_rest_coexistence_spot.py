@@ -700,9 +700,9 @@ def build_launch_pair(
         "repetitions": 1,
         "separate_generator": True,
         "schema_version": 4,
-        "search_staircase_qps": [32, 64, 96, 128, 160, 192, 256]
+        "search_staircase_qps": [32, 64, 96, 128, 160, 192, 224, 256]
         if smoke
-        else [8, 16, 32, 64, 96, 128, 160, 192, 256],
+        else [8, 16, 32, 64, 96, 128, 160, 192, 224, 256],
         "smoke": smoke,
         "vector_p99_ms": 100.0,
         "warmup_seconds": 5 if smoke else 30,
