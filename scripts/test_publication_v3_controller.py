@@ -218,6 +218,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertIn("--arm-index 4", worker)
         self.assertIn('"writers":4', worker)
         self.assertIn('"batch_size":64', worker)
+        self.assertIn('"insert_mode":"general-upsert"', worker)
         self.assertLess(
             worker.index('put_immutable "$work/CLONE_COMPLETE.json"'),
             worker.index("stage=execute-runtime"),
@@ -225,12 +226,38 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertIn("bench_lifecycle.csv", worker)
         self.assertIn("bench_write_costs.csv", worker)
         self.assertIn("bench_write_samples.csv", worker)
+        self.assertIn("bench_mutation_queries.csv", worker)
+        self.assertIn("bench_mutation_query_samples.csv", worker)
+        self.assertIn("storage-access.csv", worker)
         self.assertIn('"lifecycle_summary_sha256"', worker)
         self.assertIn('"lifecycle_costs_sha256"', worker)
         self.assertIn('"lifecycle_samples_sha256"', worker)
+        self.assertIn('"lifecycle_query_summary_sha256"', worker)
+        self.assertIn('"lifecycle_query_samples_sha256"', worker)
+        self.assertIn('"lifecycle_storage_trace_sha256"', worker)
         self.assertEqual(runtime.expected["runtime_profile"], "lifecycle")
         self.assertEqual(runtime.expected["arm_index"], 4)
         self.assertEqual(runtime.expected["purchase_option"], "spot")
+
+        candidate = prepare_qualification_execution(
+            **common,
+            operation="run-lifecycle",
+            attempt=1,
+            build_attempt=1,
+            arm_index=13,
+        )
+        self.assertTrue(
+            candidate.job.terminal_prefix.endswith(
+                "/runtime-lifecycle/arms/0013/attempts/0001"
+            )
+        )
+        candidate_user_data = base64.b64decode(candidate.request["UserData"]).decode()
+        candidate_payload = candidate_user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        candidate_worker = gzip.decompress(base64.b64decode(candidate_payload)).decode()
+        self.assertIn('"writers":4', candidate_worker)
+        self.assertIn('"batch_size":64', candidate_worker)
+        self.assertIn('"insert_mode":"claim-free-put"', candidate_worker)
+        self.assertEqual(candidate.expected["runtime_profile"], "lifecycle")
 
         class IncompleteLifecycleReceiptAws:
             def find_execution_instance(
@@ -244,12 +271,15 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 3,
+                    "schema_version": 4,
                     "status": "complete",
                     "role": "runtime",
                     "attempt": 1,
                     **runtime.expected,
                     "execution_contract_sha256": "9" * 64,
+                    "lifecycle_summary_sha256": "8" * 64,
+                    "lifecycle_costs_sha256": "7" * 64,
+                    "lifecycle_samples_sha256": "6" * 64,
                 }
 
             def terminate(self, _instance: str) -> None:
@@ -704,7 +734,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 3,
+                    "schema_version": 4,
                     "status": "complete",
                     "role": "runtime",
                     "attempt": 1,
@@ -724,7 +754,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             poll_seconds=0.01,
             purchase_option="spot",
         )
-        self.assertEqual(receipt["schema_version"], 3)
+        self.assertEqual(receipt["schema_version"], 4)
 
     def test_execution_instance_identity_is_role_cell_and_attempt_bound(self) -> None:
         manifest = unstaged_sift_manifest()

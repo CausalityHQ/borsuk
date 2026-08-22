@@ -169,6 +169,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                 "factors": {
                     "writers": [1, 4, 16],
                     "batch_sizes": [1, 64, 1024],
+                    "insert_modes": ["general-upsert", "claim-free-put"],
                     "update_percent": [10],
                     "delete_percent": [10],
                     "minimum_lifecycle_accuracy_ppm": 1_000_000,
@@ -709,6 +710,10 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         self.assertEqual(
             by_kind["write-update-delete-compact"]["factors"]["writers"],
             [1, 4, 16],
+        )
+        self.assertEqual(
+            by_kind["write-update-delete-compact"]["factors"]["insert_modes"],
+            ["general-upsert", "claim-free-put"],
         )
         self.assertEqual(
             by_kind["write-update-delete-compact"]["factors"]["update_percent"],

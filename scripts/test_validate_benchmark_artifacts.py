@@ -42,7 +42,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v17",
+                    "borsuk-production-bench-v18",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -98,7 +98,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v17",
+                    "borsuk-production-bench-v18",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -145,7 +145,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     12,
                 ],
                 [
-                    "borsuk-production-bench-v17",
+                    "borsuk-production-bench-v18",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -352,7 +352,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 *QUERY_STAGE_TIMING_FIELDS,
             ]
             summary = [
-                "borsuk-production-bench-v17",
+                "borsuk-production-bench-v18",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -369,7 +369,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 5,
             ]
             sample = [
-                "borsuk-production-bench-v17",
+                "borsuk-production-bench-v18",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -428,8 +428,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 root, "bench_concurrency_samples.csv", sample_header, [sample]
             )
 
-            summary[0] = "borsuk-production-bench-v16"
-            sample[0] = "borsuk-production-bench-v16"
+            summary[0] = "borsuk-production-bench-v17"
+            sample[0] = "borsuk-production-bench-v17"
             self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
             self.write_csv(
                 root, "bench_concurrency_samples.csv", sample_header, [sample]
@@ -437,8 +437,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "schema"):
                 validate_directory(root, "fast-turboquant-scan", required)
 
-            summary[0] = "borsuk-production-bench-v17"
-            sample[0] = "borsuk-production-bench-v17"
+            summary[0] = "borsuk-production-bench-v18"
+            sample[0] = "borsuk-production-bench-v18"
             sample[4] = 32
             self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
             self.write_csv(

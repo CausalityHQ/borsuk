@@ -294,7 +294,7 @@
       "kind": "write-update-delete-compact",
       "dataset_ids": ["sift-128", "cohere-medium-1m-768", "cohere-large-10m-768", "synthetic-clustered-1m-768", "synthetic-clustered-100m-768"],
       "systems": ["borsuk", "amazon-s3-vectors"],
-      "factors": {"writers": [1, 4, 16], "batch_sizes": [1, 64, 1024], "update_percent": [10], "delete_percent": [10], "minimum_lifecycle_accuracy_ppm": 1000000}
+      "factors": {"writers": [1, 4, 16], "batch_sizes": [1, 64, 1024], "insert_modes": ["general-upsert", "claim-free-put"], "update_percent": [10], "delete_percent": [10], "minimum_lifecycle_accuracy_ppm": 1000000}
     },
     {
       "id": "hybrid-read",

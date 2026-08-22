@@ -100,6 +100,7 @@ WORKLOAD_FACTOR_FIELDS = {
         {
             "writers",
             "batch_sizes",
+            "insert_modes",
             "update_percent",
             "delete_percent",
             "minimum_lifecycle_accuracy_ppm",
@@ -251,11 +252,15 @@ def _validate_workload_factors(kind: str, value: object) -> dict[str, object]:
             ),
         }
     if kind == "write-update-delete-compact":
+        insert_modes = _unique_strings(factors["insert_modes"], "insert modes")
+        if insert_modes != ["general-upsert", "claim-free-put"]:
+            raise ValueError("lifecycle insert modes must pin the paired control and candidate")
         return {
             "writers": _positive_int_list(factors["writers"], "writers"),
             "batch_sizes": _positive_int_list(
                 factors["batch_sizes"], "batch sizes"
             ),
+            "insert_modes": insert_modes,
             "update_percent": _bounded_int_list(
                 factors["update_percent"], "update percent", minimum=1, maximum=100
             ),

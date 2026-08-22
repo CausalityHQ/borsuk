@@ -145,6 +145,8 @@ class PublicationV3ResultTests(unittest.TestCase):
             "arm": arm,
             "metrics": {
                 "insert_ops": 1000,
+                "flush_ops": 1,
+                "consolidate_ops": 1,
                 "upsert_ops": 100,
                 "delete_ops": 100,
                 "compact_ops": 1,
@@ -167,6 +169,8 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "storage_puts": 20,
                 "storage_bytes_read": 4096,
                 "storage_bytes_written": 8192,
+                "storage_distinct_data_objects": 20,
+                "storage_max_data_object_bytes": 1024,
             },
             "index_receipt_sha256": receipt_document_sha256(receipt),
             "clone_receipt_sha256": clone_receipt_document_sha256(clone),
@@ -199,6 +203,60 @@ class PublicationV3ResultTests(unittest.TestCase):
                 clone_receipt=clone,
                 runtime_attestation=attestation,
             )
+        with self.assertRaisesRegex(ValueError, "flush and consolidate exactly once"):
+            validate_cell_result(
+                {
+                    **result,
+                    "metrics": {**result["metrics"], "flush_ops": 0},
+                },
+                cell=cell,
+                protocol_bytes=protocol,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+                index_receipt=receipt,
+                clone_receipt=clone,
+                runtime_attestation=attestation,
+            )
+        with self.assertRaisesRegex(ValueError, "storage topology"):
+            validate_cell_result(
+                {
+                    **result,
+                    "metrics": {
+                        **result["metrics"],
+                        "storage_distinct_data_objects": 0,
+                    },
+                },
+                cell=cell,
+                protocol_bytes=protocol,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+                index_receipt=receipt,
+                clone_receipt=clone,
+                runtime_attestation=attestation,
+            )
+        for topology in (
+            {"storage_distinct_data_objects": 1},
+            {
+                "storage_bytes_written": 128 * 1024 * 1024 + 1,
+                "storage_max_data_object_bytes": 128 * 1024 * 1024 + 1,
+            },
+        ):
+            with self.subTest(topology=topology), self.assertRaisesRegex(
+                ValueError, "bounded multi-object"
+            ):
+                validate_cell_result(
+                    {
+                        **result,
+                        "metrics": {**result["metrics"], **topology},
+                    },
+                    cell=cell,
+                    protocol_bytes=protocol,
+                    source_archive_sha256="a" * 64,
+                    dataset_materialization_sha256="d" * 64,
+                    index_receipt=receipt,
+                    clone_receipt=clone,
+                    runtime_attestation=attestation,
+                )
 
     def test_cell_result_binds_protocol_source_quality_latency_and_resources(self) -> None:
         manifest = validate_manifest(paid_v3_manifest())

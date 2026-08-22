@@ -62,7 +62,7 @@ const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
 const WRITE_FRACTION_DENOMINATOR: usize = 20;
 const CACHE_COVERAGE_COHORT_QUERIES: usize = 40;
 const CACHE_COVERAGE_REPETITIONS: usize = 4;
-const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v17";
+const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v18";
 const RECALL_LATENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,mode,nprobe,max_candidates,recall_at_10,samples,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries";
 const QUERY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
@@ -72,7 +72,7 @@ const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,t
 const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written";
 const WRITE_COST_HEADER: &str = "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
 const WRITE_SAMPLE_HEADER: &str = "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
-const LIFECYCLE_HEADER: &str = "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
+const LIFECYCLE_HEADER: &str = "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,searchability_refresh_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
 const MUTATION_QUERY_HEADER: &str =
     "stage,queries,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_bytes_read,avg_network_gets";
 const MUTATION_QUERY_SAMPLE_HEADER: &str =
@@ -104,6 +104,7 @@ struct ResolvedConfig {
     limit: usize,
     queries: usize,
     lifecycle_writers: usize,
+    lifecycle_insert_mode: LifecycleInsertMode,
     write_batch_size: usize,
     write_ops: Option<usize>,
     update_percent: usize,
@@ -666,6 +667,21 @@ fn validate_claim_free_lifecycle_insert(index: &BorsukIndex) -> BenchResult<()> 
 enum LifecycleRecordMutation {
     Put,
     Upsert,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleInsertMode {
+    GeneralUpsert,
+    ClaimFreePut,
+}
+
+impl LifecycleInsertMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::GeneralUpsert => "general-upsert",
+            Self::ClaimFreePut => "claim-free-put",
+        }
+    }
 }
 
 fn execute_put_wave(
@@ -1273,6 +1289,11 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let queries = env_usize("BORSUK_BENCH_QUERIES", DEFAULT_QUERIES)?;
     let lifecycle_writers =
         validate_lifecycle_writers(env_usize("BORSUK_BENCH_LIFECYCLE_WRITERS", 1)?)?;
+    let lifecycle_insert_mode = parse_lifecycle_insert_mode(
+        non_empty_env("BORSUK_BENCH_LIFECYCLE_INSERT_MODE")
+            .as_deref()
+            .unwrap_or("claim-free-put"),
+    )?;
     let write_batch_size = env_usize("BORSUK_BENCH_WRITE_BATCH_SIZE", DEFAULT_WRITE_BATCH_SIZE)?;
     let write_ops = env_optional_cap("BORSUK_BENCH_WRITE_OPS", None)?;
     let update_percent = env_percentage("BORSUK_BENCH_UPDATE_PERCENT", 100)?;
@@ -1515,6 +1536,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         limit,
         queries,
         lifecycle_writers,
+        lifecycle_insert_mode,
         write_batch_size,
         write_ops,
         update_percent,
@@ -1584,7 +1606,7 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} disk_cache_max_bytes={} limit={} queries={} lifecycle_writers={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} lifecycle_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} disk_cache_max_bytes={} limit={} queries={} lifecycle_writers={} lifecycle_insert_mode={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} lifecycle_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
@@ -1592,6 +1614,7 @@ fn print_config(config: &ResolvedConfig) {
         config.limit,
         config.queries,
         config.lifecycle_writers,
+        config.lifecycle_insert_mode.as_str(),
         config.write_batch_size,
         config
             .write_ops
@@ -3582,6 +3605,11 @@ fn write_write_costs_csv(
     )?;
     let update_ops = percentage_operation_count(write_ops, config.update_percent)?;
     let delete_ops = percentage_operation_count(write_ops, config.delete_percent)?;
+    if update_ops.saturating_add(delete_ops) > dataset.train_count {
+        return Err(
+            invalid_input("lifecycle update and delete cohorts exceed the base corpus").into(),
+        );
+    }
     let mutation_queries = &dataset.queries[..dataset.queries.len().min(MUTATION_QUERY_SAMPLES)];
     let mut query_stages = vec![(
         "baseline",
@@ -3589,9 +3617,12 @@ fn write_write_costs_csv(
     )];
     let mut writers = open_lifecycle_writer_handles(config)?;
     let stats_before_insert = index.stats();
-    let mut rows = Vec::with_capacity(5);
+    let mut rows = Vec::with_capacity(7);
     let insert = measure_inserts(config, dataset, &mut writers, write_ops)?;
+    let searchability_refresh_started = Instant::now();
     let _ = index.refresh()?;
+    let searchability_refresh_ms = elapsed_ms(searchability_refresh_started);
+    let time_to_searchable_ms = insert.row.wall_ms + searchability_refresh_ms;
     let observer = BorsukIndex::open(&config.uri)?;
     let (searchable_samples, searchable_hits) =
         verify_insert_visibility(config, dataset, &observer, write_ops)?;
@@ -3609,9 +3640,13 @@ fn write_write_costs_csv(
     // WAL publication makes rows durable/searchable. Flushing materializes
     // only the bounded tail into immutable segment-local indexes; it does not
     // rebuild the corpus-wide base.
+    let requests_before = index.request_counts();
+    let bytes_read_before = index.backing_bytes_read();
+    let bytes_written_before = index.put_payload_bytes();
     let delta_flush_started = Instant::now();
     index.flush()?;
     let delta_flush_ms = elapsed_ms(delta_flush_started);
+    let flush_requests = index.request_counts().delta(&requests_before);
     let stats_after_delta = index.stats();
     let indexed_delta_bytes = stats_after_delta
         .segment_bytes
@@ -3626,6 +3661,26 @@ fn write_write_costs_csv(
                 .graph_bytes
                 .saturating_sub(stats_before_insert.graph_bytes),
         );
+    rows.push(WriteRow {
+        op: "flush",
+        ops: 1,
+        wall_ms: delta_flush_ms,
+        latencies_ms: vec![delta_flush_ms],
+        samples: vec![WriteSample {
+            op: "flush",
+            writer_index: 0,
+            wave_index: 0,
+            batch_index: 0,
+            batch_records: write_ops,
+            batch_latency_ms: delta_flush_ms,
+            requests: flush_requests,
+        }],
+        requests: flush_requests,
+        bytes_read: index.backing_bytes_read().saturating_sub(bytes_read_before),
+        bytes_written: index
+            .put_payload_bytes()
+            .saturating_sub(bytes_written_before),
+    });
     query_stages.push((
         "after-fully-indexed-delta",
         run_queries(index, mutation_queries, None, serving_options(config))?,
@@ -3633,10 +3688,34 @@ fn write_write_costs_csv(
 
     // Corpus-wide consolidation is a distinct maintenance metric. It must not
     // be mislabeled as time-to-indexed for the newly inserted rows.
+    let requests_before = index.request_counts();
+    let bytes_read_before = index.backing_bytes_read();
+    let bytes_written_before = index.put_payload_bytes();
     let consolidation_started = Instant::now();
     index.finish_bulk_load()?;
     let consolidation_ms = elapsed_ms(consolidation_started);
+    let consolidation_requests = index.request_counts().delta(&requests_before);
     let consolidated_global_bytes = index.stats().global_scan_bytes;
+    rows.push(WriteRow {
+        op: "consolidate",
+        ops: 1,
+        wall_ms: consolidation_ms,
+        latencies_ms: vec![consolidation_ms],
+        samples: vec![WriteSample {
+            op: "consolidate",
+            writer_index: 0,
+            wave_index: 0,
+            batch_index: 0,
+            batch_records: index.stats().records,
+            batch_latency_ms: consolidation_ms,
+            requests: consolidation_requests,
+        }],
+        requests: consolidation_requests,
+        bytes_read: index.backing_bytes_read().saturating_sub(bytes_read_before),
+        bytes_written: index
+            .put_payload_bytes()
+            .saturating_sub(bytes_written_before),
+    });
     query_stages.push((
         "after-global-consolidation",
         run_queries(index, mutation_queries, None, serving_options(config))?,
@@ -3652,10 +3731,16 @@ fn write_write_costs_csv(
         "after-upsert",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
-    rows.push(measure_deletes(config, &mut writers, delete_ops)?);
+    rows.push(measure_deletes(
+        config,
+        &mut writers,
+        update_ops,
+        delete_ops,
+    )?);
     let _ = index.refresh()?;
     let observer = BorsukIndex::open(&config.uri)?;
-    let (delete_samples, delete_absent) = verify_delete_absence(config, &observer, delete_ops)?;
+    let (delete_samples, delete_absent) =
+        verify_delete_absence(config, &observer, update_ops, delete_ops)?;
     drop(observer);
     query_stages.push((
         "after-delete",
@@ -3686,13 +3771,22 @@ fn write_write_costs_csv(
         bytes_read: compact.bytes_read,
         bytes_written: index.put_payload_bytes().saturating_sub(bytes_before),
     });
-    let (_, compact_delete_absent) = verify_delete_absence(config, index, delete_ops)?;
+    let observer = BorsukIndex::open(&config.uri)?;
+    let (_, compact_delete_absent) =
+        verify_delete_absence(config, &observer, update_ops, delete_ops)?;
+    require_surviving_mutations(
+        "compaction",
+        verify_insert_visibility(config, dataset, &observer, write_ops)?,
+        verify_upsert_values(&observer, &upsert.expected_records)?,
+    )?;
+    drop(observer);
     query_stages.push((
         "after-compact",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
 
     let requests_before = index.request_counts();
+    let bytes_read_before = index.backing_bytes_read();
     let bytes_before = index.put_payload_bytes();
     let purge_started = Instant::now();
     let purge = index.purge_with_report()?;
@@ -3713,10 +3807,18 @@ fn write_write_costs_csv(
             requests: purge_requests,
         }],
         requests: purge_requests,
-        bytes_read: 0,
+        bytes_read: index.backing_bytes_read().saturating_sub(bytes_read_before),
         bytes_written: index.put_payload_bytes().saturating_sub(bytes_before),
     });
-    let (_, purge_delete_absent) = verify_delete_absence(config, index, delete_ops)?;
+    let observer = BorsukIndex::open(&config.uri)?;
+    let (_, purge_delete_absent) =
+        verify_delete_absence(config, &observer, update_ops, delete_ops)?;
+    require_surviving_mutations(
+        "purge",
+        verify_insert_visibility(config, dataset, &observer, write_ops)?,
+        verify_upsert_values(&observer, &upsert.expected_records)?,
+    )?;
+    drop(observer);
     query_stages.push((
         "after-purge",
         run_queries(index, mutation_queries, None, serving_options(config))?,
@@ -3728,6 +3830,8 @@ fn write_write_costs_csv(
         write_ops,
         insert_wall_ms,
         first_batch_publish_ms,
+        searchability_refresh_ms,
+        time_to_searchable_ms,
         searchable_samples,
         searchable_fraction,
         upsert_samples,
@@ -3822,6 +3926,8 @@ fn write_lifecycle_csv(
     inserted_vectors: usize,
     insert_wall_ms: f64,
     first_batch_publish_ms: f64,
+    searchability_refresh_ms: f64,
+    time_to_searchable_ms: f64,
     searchable_samples: usize,
     searchable_fraction: f64,
     upsert_samples: usize,
@@ -3855,14 +3961,14 @@ fn write_lifecycle_csv(
     } else {
         inserted_vectors as f64 / (insert_wall_ms / 1_000.0)
     };
-    let time_to_fully_indexed_ms = insert_wall_ms + delta_flush_ms;
+    let time_to_fully_indexed_ms = time_to_searchable_ms + delta_flush_ms;
     let time_to_consolidated_ms = time_to_fully_indexed_ms + consolidation_ms;
     let path = config.output_dir.join("bench_lifecycle.csv");
     let mut writer = csv_writer(&path)?;
     writeln!(writer, "{LIFECYCLE_HEADER}")?;
     writeln!(
         writer,
-        "{},{},{inserted_vectors},{logical_vector_bytes},{insert_wall_ms:.3},{insert_vectors_per_s:.3},{first_batch_publish_ms:.3},{first_batch_publish_ms:.3},{searchable_samples},{searchable_fraction:.6},{upsert_samples},{upsert_correct_fraction:.6},{delete_samples},{delete_absent_fraction:.6},{compact_delete_absent_fraction:.6},{purge_delete_absent_fraction:.6},{delta_flush_ms:.3},{time_to_fully_indexed_ms:.3},{wal_publish_bytes},{indexed_delta_bytes},{total_indexing_bytes},{write_amplification:.6},true,{consolidation_ms:.3},{time_to_consolidated_ms:.3},{consolidated_global_bytes},{consolidation_amplification:.6}",
+        "{},{},{inserted_vectors},{logical_vector_bytes},{insert_wall_ms:.3},{insert_vectors_per_s:.3},{first_batch_publish_ms:.3},{searchability_refresh_ms:.3},{time_to_searchable_ms:.3},{searchable_samples},{searchable_fraction:.6},{upsert_samples},{upsert_correct_fraction:.6},{delete_samples},{delete_absent_fraction:.6},{compact_delete_absent_fraction:.6},{purge_delete_absent_fraction:.6},{delta_flush_ms:.3},{time_to_fully_indexed_ms:.3},{wal_publish_bytes},{indexed_delta_bytes},{total_indexing_bytes},{write_amplification:.6},true,{consolidation_ms:.3},{time_to_consolidated_ms:.3},{consolidated_global_bytes},{consolidation_amplification:.6}",
         config.lifecycle_writers, config.write_batch_size,
     )?;
     writer.flush()?;
@@ -3929,12 +4035,10 @@ fn measure_inserts(
     writers: &mut [BorsukIndex],
     count: usize,
 ) -> BenchResult<InsertMeasurement> {
-    // Concurrent lifecycle ingestion uses the claim-free last-write-wins path.
-    // The ids are absent in the cloned base, so these last-write-wins puts are
-    // logical inserts while remaining comparable to object-store vector APIs
-    // whose write primitive is also upsert. Insert-only `add` has a separate global
-    // uniqueness-claim protocol and is intentionally not conflated with this
-    // scalable writer measurement.
+    // The paired lifecycle factor deliberately compares the general upsert
+    // control with the claim-free last-write-wins insert path from one binary.
+    // All generated ids are absent in the cloned base, so both modes perform
+    // equivalent logical inserts.
     let started = Instant::now();
     let mut samples = Vec::new();
     let mut bytes_written = 0_u64;
@@ -3968,9 +4072,18 @@ fn measure_inserts(
             || assignments[assignment_cursor].writer_index == 0;
         if wave_complete {
             let wave_index = assignment.batch_index / writers.len();
-            for (sample, written) in
-                execute_put_wave("insert", wave_index, writers, std::mem::take(&mut pending))?
-            {
+            let completed = match config.lifecycle_insert_mode {
+                LifecycleInsertMode::GeneralUpsert => execute_upsert_wave(
+                    "insert",
+                    wave_index,
+                    writers,
+                    std::mem::take(&mut pending),
+                )?,
+                LifecycleInsertMode::ClaimFreePut => {
+                    execute_put_wave("insert", wave_index, writers, std::mem::take(&mut pending))?
+                }
+            };
+            for (sample, written) in completed {
                 bytes_written = bytes_written.saturating_add(written);
                 samples.push(sample);
             }
@@ -4021,6 +4134,20 @@ fn verify_insert_visibility(
         .filter(Option::is_some)
         .count();
     Ok((offsets.len(), visible))
+}
+
+fn require_surviving_mutations(
+    phase: &str,
+    inserts: (usize, usize),
+    upserts: (usize, usize),
+) -> BenchResult<()> {
+    if inserts.0 == 0 || upserts.0 == 0 || inserts.0 != inserts.1 || upserts.0 != upserts.1 {
+        return Err(invalid_input(&format!(
+            "lifecycle {phase} lost an inserted or updated record"
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn measure_upserts(
@@ -4118,11 +4245,15 @@ fn verify_upsert_values(
 fn verify_delete_absence(
     config: &ResolvedConfig,
     index: &BorsukIndex,
+    base_offset: usize,
     count: usize,
 ) -> BenchResult<(usize, usize)> {
     let offsets =
         verification_offsets(count, 16, config.lifecycle_writers, config.write_batch_size)?;
-    let ids = offsets.iter().map(usize::to_string).collect::<Vec<_>>();
+    let ids = offsets
+        .iter()
+        .map(|offset| base_offset.saturating_add(*offset).to_string())
+        .collect::<Vec<_>>();
     let absent = index
         .get_records(&ids)?
         .into_iter()
@@ -4413,6 +4544,7 @@ fn deterministic_mutation_vector(row: usize, dimensions: usize) -> Vec<f32> {
 fn measure_deletes(
     config: &ResolvedConfig,
     writers: &mut [BorsukIndex],
+    base_offset: usize,
     count: usize,
 ) -> BenchResult<WriteRow> {
     let started = Instant::now();
@@ -4427,7 +4559,7 @@ fn measure_deletes(
             .into_iter()
             .map(|assignment| {
                 let ids = (assignment.offset..assignment.offset.saturating_add(assignment.len))
-                    .map(|id| id.to_string())
+                    .map(|id| base_offset.saturating_add(id).to_string())
                     .collect();
                 (assignment, ids)
             })
@@ -4873,6 +5005,17 @@ fn parse_concurrency(value: &str) -> BenchResult<Vec<usize>> {
     })
 }
 
+fn parse_lifecycle_insert_mode(value: &str) -> BenchResult<LifecycleInsertMode> {
+    match value {
+        "general-upsert" => Ok(LifecycleInsertMode::GeneralUpsert),
+        "claim-free-put" => Ok(LifecycleInsertMode::ClaimFreePut),
+        _ => Err(invalid_input(
+            "BORSUK_BENCH_LIFECYCLE_INSERT_MODE must be general-upsert or claim-free-put",
+        )
+        .into()),
+    }
+}
+
 fn non_empty_env(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
@@ -4912,7 +5055,7 @@ mod tests {
         CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
         ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES,
         DEFAULT_RECALL_CANDIDATES, EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig,
-        LIFECYCLE_HEADER, LeafCapability, LeafMode, LifecycleBatchAssignment,
+        LIFECYCLE_HEADER, LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleInsertMode,
         MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, PreparedRecordBatch,
         QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES,
         ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
@@ -4925,8 +5068,8 @@ mod tests {
         lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
         neighbor_row, normalized_cache_access_fractions, parquet_train_files_for_phase,
         parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
-        parse_optional_byte_cap, parse_positive_list, parse_serving_mode,
-        percentage_operation_count, permuted_positions, preload_query_count,
+        parse_lifecycle_insert_mode, parse_optional_byte_cap, parse_positive_list,
+        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
         read_logical_cell_catalog, rebatch_mutation_vector_chunk, recall_preloads_local_snapshot,
         recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
         serving_cache_dir, update_vector_reservoir, uses_bounded_decoded_cache_phases,
@@ -4947,6 +5090,19 @@ mod tests {
         assert_eq!(validate_lifecycle_writers(16).unwrap(), 16);
         assert!(validate_lifecycle_writers(0).is_err());
         assert!(validate_lifecycle_writers(65).is_err());
+    }
+
+    #[test]
+    fn lifecycle_insert_mode_pins_general_control_and_claim_free_candidate() {
+        assert_eq!(
+            parse_lifecycle_insert_mode("general-upsert").unwrap(),
+            LifecycleInsertMode::GeneralUpsert
+        );
+        assert_eq!(
+            parse_lifecycle_insert_mode("claim-free-put").unwrap(),
+            LifecycleInsertMode::ClaimFreePut
+        );
+        assert!(parse_lifecycle_insert_mode("silent-fallback").is_err());
     }
 
     #[test]
@@ -5619,7 +5775,7 @@ mod tests {
     fn latency_artifact_schemas_include_the_worst_query() {
         assert_eq!(
             super::PRODUCTION_BENCH_SCHEMA_VERSION,
-            "borsuk-production-bench-v17"
+            "borsuk-production-bench-v18"
         );
         assert_eq!(RECALL_LATENCY_HEADER.split(',').count(), 33);
         assert_eq!(CACHE_STATE_HEADER.split(',').count(), 31);
@@ -6068,6 +6224,7 @@ mod tests {
     fn write_artifacts_preserve_batch_distributions_and_request_counts() {
         for column in [
             "configured_batch_records",
+            "searchability_refresh_ms",
             "time_to_searchable_ms",
             "searchable_fraction",
             "upsert_samples",

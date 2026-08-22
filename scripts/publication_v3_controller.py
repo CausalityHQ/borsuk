@@ -484,7 +484,7 @@ def run_execution_job(
             if "complete" in markers:
                 value = aws.read_receipt(job)
                 required = {
-                    "schema_version": 3 if job.role == "runtime" else 1,
+                    "schema_version": 4 if job.role == "runtime" else 1,
                     "status": "complete",
                     "role": job.role,
                     "attempt": job.attempt,
@@ -510,6 +510,9 @@ def run_execution_job(
                                 "lifecycle_summary_sha256",
                                 "lifecycle_costs_sha256",
                                 "lifecycle_samples_sha256",
+                                "lifecycle_query_summary_sha256",
+                                "lifecycle_query_samples_sha256",
+                                "lifecycle_storage_trace_sha256",
                             )
                         )
                     if any(
@@ -673,9 +676,11 @@ def prepare_qualification_execution(
             {
                 "writers": writers,
                 "batch_size": batch_size,
+                "insert_mode": insert_mode,
                 "update_percent": update_percent,
                 "delete_percent": delete_percent,
             }
+            for insert_mode in factors["insert_modes"]
             for writers in factors["writers"]
             for batch_size in factors["batch_sizes"]
             for update_percent in factors["update_percent"]

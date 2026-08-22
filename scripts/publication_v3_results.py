@@ -24,6 +24,7 @@ FORMATS = {
     "control": frozenset({"json", "packed"}),
 }
 MAX_DATA_OBJECT_BYTES = 128 * 1024 * 1024
+MAX_LIFECYCLE_DATA_OBJECT_BYTES = 128 * 1024 * 1024
 MAX_CONTROL_OBJECT_BYTES = 256 * 1024
 MAX_CONTROL_OBJECTS = 512
 MAX_DATA_OBJECTS = 8192
@@ -69,6 +70,8 @@ READ_METRIC_FIELDS = READ_METRIC_FIELDS_V2 | frozenset(QUERY_STAGE_AGGREGATE_FIE
 LIFECYCLE_METRIC_FIELDS = frozenset(
     {
         "insert_ops",
+        "flush_ops",
+        "consolidate_ops",
         "upsert_ops",
         "delete_ops",
         "compact_ops",
@@ -91,6 +94,8 @@ LIFECYCLE_METRIC_FIELDS = frozenset(
         "storage_puts",
         "storage_bytes_read",
         "storage_bytes_written",
+        "storage_distinct_data_objects",
+        "storage_max_data_object_bytes",
     }
 )
 
@@ -176,6 +181,7 @@ def _validate_result_arm(value: object, cell: dict[str, object]) -> dict[str, ob
         {
             "writers",
             "batch_size",
+            "insert_mode",
             "update_percent",
             "delete_percent",
         }
@@ -189,9 +195,11 @@ def _validate_result_arm(value: object, cell: dict[str, object]) -> dict[str, ob
         "delete_percent",
     ):
         _positive_integer(arm[field], f"cell result arm {field}")
+    _bounded_identity(arm["insert_mode"], "cell result arm insert mode")
     if (
         arm["writers"] not in factors.get("writers", [])
         or arm["batch_size"] not in factors.get("batch_sizes", [])
+        or arm["insert_mode"] not in factors.get("insert_modes", [])
         or arm["update_percent"] not in factors.get("update_percent", [])
         or arm["delete_percent"] not in factors.get("delete_percent", [])
     ):
@@ -404,7 +412,11 @@ def validate_cell_result(
             raise ValueError("cell result query count differs from its protocol")
         latency_prefix = "latency"
     else:
-        for field in ("insert_ops", "upsert_ops", "delete_ops"):
+        for field in (
+            "insert_ops",
+            "upsert_ops",
+            "delete_ops",
+        ):
             _positive_integer(metrics[field], field.replace("_", " "))
         expected_upserts = (
             metrics["insert_ops"] * arm["update_percent"] + 99
@@ -419,6 +431,11 @@ def validate_cell_result(
             raise ValueError("lifecycle result differs from its scheduled mutation mix")
         if metrics["compact_ops"] != 1 or metrics["purge_ops"] != 1:
             raise ValueError("lifecycle result must compact and purge exactly once")
+        if any(
+            isinstance(metrics[field], bool) or metrics[field] != 1
+            for field in ("flush_ops", "consolidate_ops")
+        ):
+            raise ValueError("lifecycle result must flush and consolidate exactly once")
         lifecycle_times = [
             _positive_integer(metrics[field], field.replace("_", " "))
             for field in (
@@ -460,6 +477,24 @@ def validate_cell_result(
         "storage_bytes_written",
     ):
         _nonnegative_integer(metrics[field], field.replace("_", " "))
+    if workload_kind != "read-recall":
+        write_objects = _nonnegative_integer(
+            metrics["storage_distinct_data_objects"], "storage distinct data objects"
+        )
+        max_object_bytes = _nonnegative_integer(
+            metrics["storage_max_data_object_bytes"], "storage max data object bytes"
+        )
+        if (
+            write_objects == 0
+            or max_object_bytes == 0
+            or write_objects > metrics["storage_puts"]
+            or max_object_bytes > metrics["storage_bytes_written"]
+        ):
+            raise ValueError("lifecycle storage topology is inconsistent")
+        if write_objects < 2 or max_object_bytes > MAX_LIFECYCLE_DATA_OBJECT_BYTES:
+            raise ValueError(
+                "lifecycle writes must use a bounded multi-object storage topology"
+            )
     if workload_kind == "read-recall" and result_schema_version >= 2:
         for field in ("global_leaf_code_requests", "global_leaf_exact_requests"):
             _nonnegative_integer(metrics[field], field.replace("_", " "))

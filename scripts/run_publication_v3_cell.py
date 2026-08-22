@@ -150,9 +150,17 @@ WRITE_SAMPLE_FIELDS = tuple(
     "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists".split(",")
 )
 LIFECYCLE_FIELDS = tuple(
-    "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification".split(",")
+    "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,searchability_refresh_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification".split(",")
 )
-LIFECYCLE_OPERATIONS = ("insert", "upsert", "delete", "compact", "purge")
+LIFECYCLE_OPERATIONS = (
+    "insert",
+    "flush",
+    "consolidate",
+    "upsert",
+    "delete",
+    "compact",
+    "purge",
+)
 
 
 def validate_publication_cell_authority(
@@ -223,6 +231,7 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
         axes = {
             "writers": factors.get("writers"),
             "batch_size": factors.get("batch_sizes"),
+            "insert_mode": factors.get("insert_modes"),
             "update_percent": factors.get("update_percent"),
             "delete_percent": factors.get("delete_percent"),
         }
@@ -232,9 +241,11 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
             {
                 "writers": writers,
                 "batch_size": batch_size,
+                "insert_mode": insert_mode,
                 "update_percent": update_percent,
                 "delete_percent": delete_percent,
             }
+            for insert_mode in axes["insert_mode"]
             for writers in axes["writers"]
             for batch_size in axes["batch_size"]
             for update_percent in axes["update_percent"]
@@ -683,6 +694,7 @@ def build_execution_plan(
                     "BORSUK_BENCH_LIFECYCLE_ONLY": "1",
                     "BORSUK_BENCH_WRITE_BATCH_SIZE": str(arm["batch_size"]),
                     "BORSUK_BENCH_LIFECYCLE_WRITERS": str(arm["writers"]),
+                    "BORSUK_BENCH_LIFECYCLE_INSERT_MODE": str(arm["insert_mode"]),
                     "BORSUK_BENCH_UPDATE_PERCENT": str(arm["update_percent"]),
                     "BORSUK_BENCH_DELETE_PERCENT": str(arm["delete_percent"]),
                 }
@@ -809,6 +821,10 @@ def authorize_publication_mutation_runtime(
         environment["BORSUK_BENCH_URI"] = clone["clone_index_uri"]
         if environment.get("BORSUK_BENCH_LIFECYCLE_WRITERS") != str(writers):
             raise ValueError("mutation plan writer count differs from its lifecycle arm")
+        if environment.get("BORSUK_BENCH_LIFECYCLE_INSERT_MODE") != arm.get(
+            "insert_mode"
+        ):
+            raise ValueError("mutation plan insert mode differs from its lifecycle arm")
         if (
             environment.get("BORSUK_BENCH_BUILD_INDEX") != "0"
             or environment.get("BORSUK_BENCH_READ_ONLY") != "0"
@@ -1156,22 +1172,75 @@ def summarize_runtime_write_trace(path: Path) -> dict[str, int]:
     with path.open(newline="") as source:
         rows = list(csv.DictReader(source))
     storage_puts = 0
+    storage_gets = 0
+    storage_bytes_read = 0
     storage_bytes_written = 0
+    data_paths: set[str] = set()
+    storage_max_data_object_bytes = 0
+    control_roles = {
+        "catalog",
+        "lane_head",
+        "writer_directory",
+        "commit_marker",
+        "id_directory_control",
+        "positioned_head",
+    }
     for row in rows:
-        if row.get("operation") != "write":
+        operation = row.get("operation")
+        if operation not in {"read", "write"}:
             continue
         try:
             requests = int(row["request_count"])
             byte_count = int(row["object_bytes"])
+            bytes_fetched = int(row["bytes_fetched"])
         except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("publication runtime write trace is invalid") from error
-        if requests < 0 or byte_count < 0:
-            raise ValueError("publication runtime write trace is negative")
+            raise ValueError("publication runtime storage trace is invalid") from error
+        if requests < 0 or byte_count < 0 or bytes_fetched < 0 or row.get("status") != "ok":
+            raise ValueError("publication runtime storage trace is invalid")
+        if operation == "read":
+            storage_gets += requests
+            storage_bytes_read += bytes_fetched
+            continue
+        if requests <= 0:
+            raise ValueError("publication runtime storage trace is invalid")
         storage_puts += requests
         storage_bytes_written += byte_count
+        if row.get("object_role") not in control_roles:
+            path_value = row.get("path")
+            if not isinstance(path_value, str) or not path_value:
+                raise ValueError("publication runtime storage trace is invalid")
+            data_paths.add(path_value)
+            storage_max_data_object_bytes = max(
+                storage_max_data_object_bytes, byte_count
+            )
     return {
+        "storage_gets": storage_gets,
         "storage_puts": storage_puts,
+        "storage_bytes_read": storage_bytes_read,
         "storage_bytes_written": storage_bytes_written,
+        "storage_distinct_data_objects": len(data_paths),
+        "storage_max_data_object_bytes": storage_max_data_object_bytes,
+    }
+
+
+def reconcile_lifecycle_storage_trace(
+    lifecycle: dict[str, int], trace: dict[str, int]
+) -> dict[str, int]:
+    if (
+        lifecycle.get("storage_bytes_written")
+        != trace.get("storage_bytes_written")
+        or lifecycle.get("storage_puts", -1) < trace.get("storage_puts", 0)
+    ):
+        raise ValueError(
+            "publication lifecycle storage accounting omits work outside a measured phase"
+        )
+    return {
+        # Reads also happen in verification and query stages, outside the
+        # mutation rows. The complete storage trace is their authority.
+        "storage_gets": trace["storage_gets"],
+        "storage_bytes_read": trace["storage_bytes_read"],
+        "storage_distinct_data_objects": trace["storage_distinct_data_objects"],
+        "storage_max_data_object_bytes": trace["storage_max_data_object_bytes"],
     }
 
 
@@ -1259,7 +1328,7 @@ def summarize_lifecycle_artifacts(
             or wave_index != index // expected_writers
         ):
             raise ValueError("publication lifecycle writer wave is not canonical")
-        if operation in {"compact", "purge"} and (
+        if operation in {"flush", "consolidate", "compact", "purge"} and (
             writer_index != 0 or wave_index != 0 or index != 0
         ):
             raise ValueError("publication lifecycle maintenance writer wave is invalid")
@@ -1269,7 +1338,8 @@ def summarize_lifecycle_artifacts(
         latency_ms = _finite_nonnegative_float(
             row.get("batch_latency_ms"), "publication lifecycle sample latency"
         )
-        latencies_us.append(round(latency_ms * 1_000))
+        if operation in {"insert", "upsert", "delete"}:
+            latencies_us.append(round(latency_ms * 1_000))
     for operation, row in by_operation.items():
         try:
             expected_batches = int(row["batches"])
@@ -1410,6 +1480,9 @@ def summarize_lifecycle_artifacts(
     insert_wall_ms = _finite_nonnegative_float(
         lifecycle.get("insert_wall_ms"), "insert wall time"
     )
+    searchability_refresh_ms = _finite_nonnegative_float(
+        lifecycle.get("searchability_refresh_ms"), "searchability refresh time"
+    )
     delta_flush_ms = _finite_nonnegative_float(
         lifecycle.get("delta_flush_ms"), "delta flush time"
     )
@@ -1421,14 +1494,28 @@ def summarize_lifecycle_artifacts(
     )
     if (
         abs(insert_wall_ms - cost_insert_wall_ms) > 0.001
-        or abs(fully_indexed_us / 1_000 - (insert_wall_ms + delta_flush_ms)) > 0.002
+        or abs(searchable_us / 1_000 - (insert_wall_ms + searchability_refresh_ms))
+        > 0.002
+        or abs(fully_indexed_us / 1_000 - (searchable_us / 1_000 + delta_flush_ms))
+        > 0.002
         or abs(consolidated_us / 1_000 - (fully_indexed_us / 1_000 + consolidation_ms))
         > 0.002
     ):
         raise ValueError("publication lifecycle milestone totals differ")
-    total_operations = sum(operation_counts.values())
+    mutation_operations = sum(
+        operation_counts[operation] for operation in ("insert", "upsert", "delete")
+    )
+    mutation_wall_ms = sum(
+        _finite_nonnegative_float(
+            by_operation[operation].get("wall_ms"),
+            "publication lifecycle mutation wall time",
+        )
+        for operation in ("insert", "upsert", "delete")
+    )
     return {
         "insert_ops": operation_counts["insert"],
+        "flush_ops": operation_counts["flush"],
+        "consolidate_ops": operation_counts["consolidate"],
         "upsert_ops": operation_counts["upsert"],
         "delete_ops": operation_counts["delete"],
         "compact_ops": operation_counts["compact"],
@@ -1437,7 +1524,9 @@ def summarize_lifecycle_artifacts(
         "batch_latency_p50_us": _nearest_rank(latencies_us, 0.50),
         "batch_latency_p95_us": _nearest_rank(latencies_us, 0.95),
         "batch_latency_p99_us": _nearest_rank(latencies_us, 0.99),
-        "throughput_milli_per_second": max(1, round(total_operations * 1_000_000 / wall_ms)),
+        "throughput_milli_per_second": max(
+            1, round(mutation_operations * 1_000_000 / mutation_wall_ms)
+        ),
         "first_publish_us": first_publish_us,
         "time_to_searchable_us": searchable_us,
         "time_to_fully_indexed_us": fully_indexed_us,
@@ -1775,6 +1864,8 @@ def build_lifecycle_publication_report(
     expected_lifecycle_fields = frozenset(
         {
             "insert_ops",
+            "flush_ops",
+            "consolidate_ops",
             "upsert_ops",
             "delete_ops",
             "compact_ops",
@@ -1800,6 +1891,8 @@ def build_lifecycle_publication_report(
             "storage_puts",
             "storage_bytes_read",
             "storage_bytes_written",
+            "storage_distinct_data_objects",
+            "storage_max_data_object_bytes",
         }
     )
     if frozenset(lifecycle_metrics) != expected_lifecycle_fields:
@@ -2219,7 +2312,11 @@ def main() -> int:
                 expected_nprobe=int(arm["leaf_page_budget"]),
                 expected_max_candidates=V20_COMPATIBILITY_CANDIDATES,
             )
-            runtime_writes = summarize_runtime_write_trace(output / "storage-access.csv")
+            trace_writes = summarize_runtime_write_trace(output / "storage-access.csv")
+            runtime_writes = {
+                field: trace_writes[field]
+                for field in ("storage_puts", "storage_bytes_written")
+            }
             report = {
                 "publishable": True,
                 "runtime_profile": "concurrency",
@@ -2250,7 +2347,11 @@ def main() -> int:
                 arm=arm,
                 expected_queries=int(plan["effective_queries"]),
             )
-            runtime_writes = summarize_runtime_write_trace(output / "storage-access.csv")
+            trace_writes = summarize_runtime_write_trace(output / "storage-access.csv")
+            runtime_writes = {
+                field: trace_writes[field]
+                for field in ("storage_puts", "storage_bytes_written")
+            }
             report = build_publication_report(
                 cell=cell,
                 arm=arm,
@@ -2273,6 +2374,12 @@ def main() -> int:
                 expected_batch_size=int(arm["batch_size"]),
                 expected_writers=int(arm["writers"]),
             )
+            lifecycle.update(
+                reconcile_lifecycle_storage_trace(
+                    lifecycle,
+                    summarize_runtime_write_trace(output / "storage-access.csv"),
+                )
+            )
             storage_metrics = {
                 field: lifecycle.pop(field)
                 for field in (
@@ -2280,6 +2387,8 @@ def main() -> int:
                     "storage_puts",
                     "storage_bytes_read",
                     "storage_bytes_written",
+                    "storage_distinct_data_objects",
+                    "storage_max_data_object_bytes",
                 )
             }
             if clone_receipt is None:

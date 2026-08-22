@@ -31,6 +31,7 @@ from scripts.run_publication_v3_cell import (
     execute_publication_phase,
     plan_arms,
     read_build_artifact,
+    reconcile_lifecycle_storage_trace,
     runtime_execution_contract,
     runtime_flow_control_authority,
     summarize_concurrency_artifacts,
@@ -91,6 +92,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             (output / "bench_write_costs.csv").write_text(
                 "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written\n"
                 "insert,1,64,100,2,20,5000,10,1,8,12,14,15,0.2,1,10,0,2,0,100,2000\n"
+                "flush,1,64,1,1,3,0.333,3,0,3,3,3,3,3,2,3,0,1,0,400,500\n"
+                "consolidate,1,64,1,1,6,0.167,6,0,6,6,6,6,6,4,5,0,1,0,600,700\n"
                 "upsert,1,64,100,2,10,10000,5,1,4,6,7,8,0.1,1,8,0,2,0,100,1000\n"
                 "delete,1,64,100,2,8,12500,4,1,3,5,6,7,0.08,1,8,0,2,0,100,1000\n"
                 "compact,1,64,1,1,9,0.111,9,0,9,9,9,9,9,1,2,0,1,0,1000,3000\n"
@@ -101,6 +104,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists\n"
                 "insert,0,0,0,64,8,0.125,0,1,0,0,0\n"
                 "insert,0,1,1,36,15,0.417,1,9,0,2,0\n"
+                "flush,0,0,0,100,3,0.03,2,3,0,1,0\n"
+                "consolidate,0,0,0,100,6,0.06,4,5,0,1,0\n"
                 "upsert,0,0,0,64,4,0.063,0,4,0,1,0\n"
                 "upsert,0,1,1,36,8,0.222,1,4,0,1,0\n"
                 "delete,0,0,0,64,3,0.047,0,4,0,1,0\n"
@@ -110,8 +115,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (output / "bench_lifecycle.csv").write_text(
-                "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification\n"
-                "1,64,100,200,20,5000,8,8,16,1,16,1,16,1,1,1,3,23,2000,1000,3000,15,true,6,29,4000,20\n",
+                "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,searchability_refresh_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification\n"
+                "1,64,100,200,20,5000,8,1,21,16,1,16,1,16,1,1,1,3,24,2000,1000,3000,15,true,6,30,4000,20\n",
                 encoding="utf-8",
             )
 
@@ -168,16 +173,19 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 )
 
         self.assertEqual(summary["insert_ops"], 100)
+        self.assertEqual(summary["flush_ops"], 1)
+        self.assertEqual(summary["consolidate_ops"], 1)
         self.assertEqual(summary["upsert_ops"], 100)
         self.assertEqual(summary["delete_ops"], 100)
         self.assertEqual(summary["lifecycle_accuracy_ppm"], 1_000_000)
         self.assertEqual(summary["batch_latency_p50_us"], 7_000)
         self.assertEqual(summary["batch_latency_p95_us"], 15_000)
-        self.assertEqual(summary["time_to_consolidated_us"], 29_000)
-        self.assertEqual(summary["storage_gets"], 5)
-        self.assertEqual(summary["storage_puts"], 30)
-        self.assertEqual(summary["storage_bytes_read"], 1300)
-        self.assertEqual(summary["storage_bytes_written"], 7000)
+        self.assertEqual(summary["throughput_milli_per_second"], 7_894_737)
+        self.assertEqual(summary["time_to_consolidated_us"], 30_000)
+        self.assertEqual(summary["storage_gets"], 11)
+        self.assertEqual(summary["storage_puts"], 38)
+        self.assertEqual(summary["storage_bytes_read"], 2300)
+        self.assertEqual(summary["storage_bytes_written"], 8200)
 
     def test_publication_cell_must_match_the_frozen_manifest_prefix_authority(self) -> None:
         cell = scheduled_cell()
@@ -332,6 +340,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             instance_identity="local-test",
             lifecycle_metrics={
                 "insert_ops": 1000,
+                "flush_ops": 1,
+                "consolidate_ops": 1,
                 "upsert_ops": 100,
                 "delete_ops": 100,
                 "compact_ops": 1,
@@ -358,6 +368,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "storage_puts": 20,
                 "storage_bytes_read": 4096,
                 "storage_bytes_written": 8192,
+                "storage_distinct_data_objects": 20,
+                "storage_max_data_object_bytes": 1024,
             },
             index_receipt=base,
             clone_receipt=clone,
@@ -690,14 +702,79 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             trace = Path(root) / "storage-access.csv"
             trace.write_text(
                 "operation,object_role,path,physical_format,object_bytes,request_count,bytes_fetched,logical_projection,row_selection,logical_rows_requested,logical_rows_decoded,decode_cpu_ns,cache_state,status\n"
-                "write,catalog,collection/CURRENT,json,4096,1,4096,,,,,,,write,ok\n",
+                "write,catalog,collection/CURRENT,json,4096,1,4096,,,,,,write,ok\n"
+                "write,normal_segment,segments/a.parquet,parquet,8192,2,8192,,,,,,write,ok\n"
+                "write,catalog,collection/CURRENT,json,4096,1,4096,,,,,,write,ok\n"
+                "write,normal_segment,segments/b.parquet,parquet,2048,1,2048,,,,,,write,ok\n"
+                "read,catalog,collection/CURRENT,json,4096,2,1024,,,,,,backing,ok\n",
                 encoding="utf-8",
             )
             observed = summarize_runtime_write_trace(trace)
-        self.assertEqual(observed, {"storage_puts": 1, "storage_bytes_written": 4096})
+        self.assertEqual(
+            observed,
+            {
+                "storage_gets": 2,
+                "storage_puts": 5,
+                "storage_bytes_read": 1024,
+                "storage_bytes_written": 18_432,
+                "storage_distinct_data_objects": 2,
+                "storage_max_data_object_bytes": 8192,
+            },
+        )
+        self.assertEqual(
+            reconcile_lifecycle_storage_trace(
+                {
+                    "storage_gets": 2,
+                    "storage_puts": 5,
+                    "storage_bytes_read": 1024,
+                    "storage_bytes_written": 18_432,
+                },
+                observed,
+            ),
+            {
+                "storage_gets": 2,
+                "storage_bytes_read": 1024,
+                "storage_distinct_data_objects": 2,
+                "storage_max_data_object_bytes": 8192,
+            },
+        )
+        self.assertEqual(
+            reconcile_lifecycle_storage_trace(
+                {
+                    "storage_gets": 2,
+                    "storage_puts": 6,
+                    "storage_bytes_read": 1024,
+                    "storage_bytes_written": 18_432,
+                },
+                observed,
+            ),
+            {
+                "storage_gets": 2,
+                "storage_bytes_read": 1024,
+                "storage_distinct_data_objects": 2,
+                "storage_max_data_object_bytes": 8192,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "omits work outside"):
+            reconcile_lifecycle_storage_trace(
+                {
+                    "storage_gets": 1,
+                    "storage_puts": 4,
+                    "storage_bytes_read": 512,
+                    "storage_bytes_written": 4096,
+                },
+                observed,
+            )
         with self.assertRaisesRegex(ValueError, "cannot write"):
             validate_cell_result(
-                {**report["result"], "metrics": {**report["result"]["metrics"], **observed}},
+                {
+                    **report["result"],
+                    "metrics": {
+                        **report["result"]["metrics"],
+                        "storage_puts": observed["storage_puts"],
+                        "storage_bytes_written": observed["storage_bytes_written"],
+                    },
+                },
                 cell=cell,
                 protocol_bytes=protocol,
                 source_archive_sha256="a" * 64,
@@ -1148,7 +1225,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_concurrency_artifacts_require_complete_workers_queries_and_recall(self) -> None:
         summaries = [
             {
-                "schema_version": "borsuk-production-bench-v17",
+                "schema_version": "borsuk-production-bench-v18",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -1166,7 +1243,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         ]
         samples = [
             {
-                "schema_version": "borsuk-production-bench-v17",
+                "schema_version": "borsuk-production-bench-v18",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -1314,7 +1391,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         for index, (latency, recall) in enumerate(((1.0, 0.96), (2.0, 0.95), (4.0, 0.99))):
             rows.append(
                 {
-                    "schema_version": "borsuk-production-bench-v17",
+                    "schema_version": "borsuk-production-bench-v18",
                     "sample_index": str(index),
                     "latency_ms": str(latency),
                     "recall_at_10": str(recall),
@@ -1504,16 +1581,18 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_lifecycle_arms_expand_every_frozen_mutation_factor(self) -> None:
         cell = scheduled_cell(kind="write-update-delete-compact")
         arms = plan_arms(cell)
-        self.assertEqual(len(arms), 9)
+        self.assertEqual(len(arms), 18)
         self.assertEqual(
             arms[0],
             {
                 "writers": 1,
                 "batch_size": 1,
+                "insert_mode": "general-upsert",
                 "update_percent": 10,
                 "delete_percent": 10,
             },
         )
+        self.assertEqual(arms[9]["insert_mode"], "claim-free-put")
         self.assertEqual(arms[-1]["writers"], 16)
         self.assertEqual(arms[-1]["batch_size"], 1024)
 
