@@ -4479,7 +4479,9 @@ impl BorsukIndex {
 
     fn open_with_storage(storage: Storage, options: OpenOptions) -> Result<Self> {
         let resident_routing = options.resident_routing || options.preload;
+        let progress = observability::OpenProgress::start("collection-snapshot");
         let loaded_snapshot = storage.load_collection_snapshot()?;
+        progress.complete();
         let collection_wal_snapshot_retries = 0;
         let primary_reference = loaded_snapshot
             .snapshot
@@ -4492,7 +4494,9 @@ impl BorsukIndex {
                 )
             })?
             .clone();
+        let progress = observability::OpenProgress::start("primary-manifest");
         let manifest = storage.load_manifest_ref(&primary_reference, resident_routing)?;
+        progress.complete();
         validate_routed_manifest_catalog(&manifest)?;
         validate_reference_resident_bytes(&primary_reference, &manifest, resident_routing)?;
         let schema_fingerprint = collection_schema_fingerprint(&manifest);
@@ -4530,6 +4534,7 @@ impl BorsukIndex {
             &loaded_snapshot.snapshot.modalities,
             resident_routing,
         )?;
+        let progress = observability::OpenProgress::start("named-manifests");
         for (name, spec) in &named_specs {
             if spec.kind == VectorKind::Sparse {
                 continue;
@@ -4551,6 +4556,7 @@ impl BorsukIndex {
             validate_loaded_named_manifest(name, spec, &manifest, &child_manifest)?;
             loaded_named.insert(name.clone(), (child_manifest, reference));
         }
+        progress.complete();
         if let Some(budget_bytes) =
             effective_ram_budget_bytes(manifest.config.ram_budget_bytes, options.ram_budget_bytes)
             && collection_resident_bytes > budget_bytes
@@ -4564,6 +4570,7 @@ impl BorsukIndex {
             effective_ram_budget_bytes(manifest.config.ram_budget_bytes, options.ram_budget_bytes);
         let read_runtime =
             CollectionReadRuntime::new(&options, effective_ram_budget, collection_resident_bytes);
+        let progress = observability::OpenProgress::start("primary-runtime");
         let mut index = Self::open_with_loaded_manifest(
             storage.clone(),
             storage,
@@ -4574,6 +4581,8 @@ impl BorsukIndex {
             options.clone(),
             Arc::clone(&read_runtime),
         )?;
+        progress.complete();
+        let progress = observability::OpenProgress::start("positioned-log");
         index.positioned_log = Some(PositionedLogWriter::open_from_storage(
             index
                 .collection_storage
@@ -4581,6 +4590,8 @@ impl BorsukIndex {
             POSITIONED_SOURCE_EPOCH,
             &schema_fingerprint,
         )?);
+        progress.complete();
+        let progress = observability::OpenProgress::start("named-runtime");
         index.named = index.open_named_indexes(
             &primary_uri,
             &named_specs,
@@ -4590,7 +4601,10 @@ impl BorsukIndex {
             options,
             read_runtime,
         )?;
+        progress.complete();
+        let progress = observability::OpenProgress::start("positioned-snapshot");
         index.reload_positioned_snapshot()?;
+        progress.complete();
         Ok(index)
     }
 
@@ -4696,6 +4710,7 @@ impl BorsukIndex {
         index.lane_log_snapshot.clear();
         index.lane_log_committed_sequences.clear();
         index.lane_log_head_checksums.clear();
+        let progress = observability::OpenProgress::start("lane-log-snapshot");
         if let Some(lane_log_snapshot) =
             index.read_lane_log_snapshot_if_changed(index.manifest.version)?
         {
@@ -4703,9 +4718,11 @@ impl BorsukIndex {
             index.lane_log_committed_sequences = lane_log_snapshot.committed_sequences;
             index.lane_log_head_checksums = lane_log_snapshot.head_checksums;
         }
+        progress.complete();
         index.manifest.cell_wal_visible_runs = cell_wal_run_count(&index.cell_wal_snapshot);
         index.manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&index.cell_wal_snapshot);
+        let progress = observability::OpenProgress::start("resident-routing");
         if options.resident_routing {
             // Modern manifests page routing summaries outside the manifest
             // table. Resolve the complete active set before marking it
@@ -4721,16 +4738,25 @@ impl BorsukIndex {
             // query hides neither metadata I/O nor one-time construction.
             let _ = index.coarse_quantizer()?;
         }
+        progress.complete();
         // The global PQ fast path defines uncached query latency after open:
         // load its compact codes and exact-sidecar metadata here, never on the
         // first measured request.
+        let progress = observability::OpenProgress::start("global-ann-preload");
         let manifest = index.manifest.clone();
         let pins = index.preload_resident_global_ann_for_manifest(&manifest)?;
         index.install_resident_global_ann_pins(pins);
+        progress.complete();
+        let progress = observability::OpenProgress::start("lexical-roots");
         let _ = index.load_resident_lexical_roots()?;
+        progress.complete();
+        let progress = observability::OpenProgress::start("mutation-frontier");
         index.prepare_manifest_mutation_frontier(&index.manifest)?;
+        progress.complete();
         if options.preload {
+            let progress = observability::OpenProgress::start("warm-preload");
             index.warm()?;
+            progress.complete();
         }
         Ok(index)
     }

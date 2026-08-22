@@ -1,3 +1,5 @@
+use std::{sync::OnceLock, time::Instant};
+
 #[cfg(feature = "tracing")]
 use std::time::Duration;
 
@@ -60,6 +62,49 @@ pub(crate) fn record_open(span: &Span, manifest: &Manifest) {
 
 #[cfg(not(feature = "tracing"))]
 pub(crate) fn record_open(_span: &Span, _manifest: &Manifest) {}
+
+pub(crate) fn open_progress_line(stage: &str, status: &str, elapsed_ms: u128) -> String {
+    let valid_stage = !stage.is_empty()
+        && stage.len() <= 64
+        && stage
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if !valid_stage || !matches!(status, "start" | "complete") {
+        return String::new();
+    }
+    format!("BORSUK_OPEN_PROGRESS stage={stage} status={status} elapsed_ms={elapsed_ms}")
+}
+
+pub(crate) struct OpenProgress {
+    stage: &'static str,
+    started: Option<Instant>,
+}
+
+static OPEN_PROGRESS_ENABLED: OnceLock<bool> = OnceLock::new();
+
+impl OpenProgress {
+    pub(crate) fn start(stage: &'static str) -> Self {
+        let enabled = *OPEN_PROGRESS_ENABLED.get_or_init(|| {
+            std::env::var_os("BORSUK_OPEN_PROGRESS").is_some_and(|value| value == "1")
+        });
+        if enabled {
+            eprintln!("{}", open_progress_line(stage, "start", 0));
+        }
+        Self {
+            stage,
+            started: enabled.then(Instant::now),
+        }
+    }
+
+    pub(crate) fn complete(self) {
+        if let Some(started) = self.started {
+            eprintln!(
+                "{}",
+                open_progress_line(self.stage, "complete", started.elapsed().as_millis())
+            );
+        }
+    }
+}
 
 #[cfg(feature = "tracing")]
 pub(crate) fn add_span(vectors_added: usize, base_manifest_version: u64) -> Span {
@@ -403,4 +448,20 @@ fn record_usize(span: &Span, field: &'static str, value: usize) {
 #[cfg(feature = "tracing")]
 fn record_u64(span: &Span, field: &'static str, value: u64) {
     span.record(field, value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_progress_line;
+
+    #[test]
+    fn open_progress_line_is_bounded_and_machine_readable() {
+        assert_eq!(
+            open_progress_line("primary-manifest", "complete", 12_345),
+            "BORSUK_OPEN_PROGRESS stage=primary-manifest status=complete elapsed_ms=12345"
+        );
+        assert!(open_progress_line(&"x".repeat(65), "start", 0).is_empty());
+        assert!(open_progress_line("primary manifest", "start", 0).is_empty());
+        assert!(open_progress_line("primary-manifest", "unknown", 0).is_empty());
+    }
 }

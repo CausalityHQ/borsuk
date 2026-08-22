@@ -2703,6 +2703,7 @@ impl Storage {
         manifest.cell_wal_visible_runs = 0;
         manifest.cell_wal_visible_tombstone_runs = 0;
         if let Some(catalog_reference) = manifest.logical_cell_catalog_ref.as_ref() {
+            let progress = observability::OpenProgress::start("catalog-load");
             let reusable = reusable_manifest.filter(|existing| {
                 existing.logical_cell_catalog_ref.as_ref() == Some(catalog_reference)
                     && existing.config.dimensions == manifest.config.dimensions
@@ -2717,6 +2718,7 @@ impl Storage {
                     &format!("{}{}", reference.prefix, catalog_reference.path),
                 )?,
             };
+            progress.complete();
             if catalog_reference.routing_epoch != manifest.routing_epoch {
                 return Err(BorsukError::InvalidStorage(format!(
                     "logical-cell catalog epoch {} does not match manifest epoch {}",
@@ -2732,6 +2734,7 @@ impl Storage {
                 )));
             }
             manifest.logical_cell_catalog = Some(catalog);
+            let progress = observability::OpenProgress::start("catalog-router-build");
             let router = match reusable.and_then(|existing| {
                 existing.logical_cell_router.as_ref().filter(|router| {
                     Arc::ptr_eq(
@@ -2748,6 +2751,7 @@ impl Storage {
                 )?),
             };
             manifest.logical_cell_router = Some(router);
+            progress.complete();
         }
         Ok(manifest)
     }
