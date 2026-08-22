@@ -156,6 +156,7 @@ struct ResolvedConfig {
     recluster_build: bool,
     read_only: bool,
     insert_only: bool,
+    lifecycle_only: bool,
     preload_serving: bool,
     _uri_temp: Option<tempfile::TempDir>,
     _cache_temp: Option<tempfile::TempDir>,
@@ -987,6 +988,13 @@ fn run() -> BenchResult<()> {
         return Ok(());
     }
 
+    if config.lifecycle_only {
+        reset_cache(&config.cache_dir)?;
+        let mut write_index = open_serving_index(&config)?;
+        write_write_costs_csv(&config, &dataset, &mut write_index)?;
+        return Ok(());
+    }
+
     if !config.skip_recall && config.cache_profile != BenchmarkCacheProfile::MixedCoverage {
         let reader = Arc::new(open_serving_index(&config)?);
         eprintln!("index build_config={:?}", reader.build_config());
@@ -1433,6 +1441,16 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let read_only = env_flag("BORSUK_BENCH_READ_ONLY")?;
     let insert_only = env_flag("BORSUK_BENCH_INSERT_ONLY")?;
     validate_insert_only(insert_only, build_only, read_only)?;
+    let lifecycle_only = env_flag("BORSUK_BENCH_LIFECYCLE_ONLY")?;
+    validate_lifecycle_only(
+        lifecycle_only,
+        build_index,
+        build_only,
+        recall_only,
+        skip_recall,
+        read_only,
+        insert_only,
+    )?;
     let preload_serving = env_flag("BORSUK_BENCH_PRELOAD_SERVING")?;
     let recluster_build = env_flag("BORSUK_BENCH_RECLUSTER_BUILD")?;
 
@@ -1495,6 +1513,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         recluster_build,
         read_only,
         insert_only,
+        lifecycle_only,
         preload_serving,
         _uri_temp: uri_temp,
         _cache_temp: cache_temp,
@@ -1511,7 +1530,7 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} disk_cache_max_bytes={} limit={} queries={} lifecycle_writers={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} disk_cache_max_bytes={} limit={} queries={} lifecycle_writers={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} lifecycle_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
@@ -1569,6 +1588,7 @@ fn print_config(config: &ResolvedConfig) {
         config.recluster_build,
         config.read_only,
         config.insert_only,
+        config.lifecycle_only,
         config.preload_serving,
     );
 }
@@ -2961,6 +2981,26 @@ fn validate_insert_only(insert_only: bool, build_only: bool, read_only: bool) ->
     if insert_only && (build_only || read_only) {
         return Err(invalid_input(
             "BORSUK_BENCH_INSERT_ONLY cannot be combined with build-only or read-only",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_lifecycle_only(
+    lifecycle_only: bool,
+    build_index: bool,
+    build_only: bool,
+    recall_only: bool,
+    skip_recall: bool,
+    read_only: bool,
+    insert_only: bool,
+) -> BenchResult<()> {
+    if lifecycle_only
+        && (build_index || build_only || recall_only || !skip_recall || read_only || insert_only)
+    {
+        return Err(invalid_input(
+            "BORSUK_BENCH_LIFECYCLE_ONLY requires an existing index and skip-recall, and cannot be combined with build-only, recall-only, read-only, or insert-only",
         )
         .into());
     }
@@ -4839,10 +4879,11 @@ mod tests {
         uses_memory_preloaded_phase, validate_bounded_v20_execution, validate_build_only,
         validate_disk_cached_network, validate_exact_read_max_physical_amplification,
         validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
-        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
-        validate_v12_leaf_page_budgets, vector_row, verification_offsets, write_batch_len,
-        write_operation_count, write_runtime_flow_control_receipt,
+        validate_lifecycle_only, validate_lifecycle_writers,
+        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
+        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
+        vector_row, verification_offsets, write_batch_len, write_operation_count,
+        write_runtime_flow_control_receipt,
     };
 
     #[test]
@@ -6213,6 +6254,18 @@ mod tests {
         assert!(validate_phase_selection(true, true).is_err());
         assert!(validate_phase_selection(true, false).is_ok());
         assert!(validate_phase_selection(false, true).is_ok());
+    }
+
+    #[test]
+    fn lifecycle_only_is_a_distinct_mutation_profile() {
+        assert!(validate_lifecycle_only(false, true, true, true, false, true, true).is_ok());
+        assert!(validate_lifecycle_only(true, false, false, false, true, false, false).is_ok());
+        assert!(validate_lifecycle_only(true, true, false, false, true, false, false).is_err());
+        assert!(validate_lifecycle_only(true, false, true, false, true, false, false).is_err());
+        assert!(validate_lifecycle_only(true, false, false, true, true, false, false).is_err());
+        assert!(validate_lifecycle_only(true, false, false, false, false, false, false).is_err());
+        assert!(validate_lifecycle_only(true, false, false, false, true, true, false).is_err());
+        assert!(validate_lifecycle_only(true, false, false, false, true, false, true).is_err());
     }
 
     #[test]

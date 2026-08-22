@@ -1,3 +1,4 @@
+import copy
 import json
 import tempfile
 import unittest
@@ -315,6 +316,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(environment["BORSUK_BENCH_URI"], clone["clone_index_uri"])
         self.assertNotEqual(environment["BORSUK_BENCH_URI"], base["index_uri"])
         self.assertEqual(environment["BORSUK_BENCH_READ_ONLY"], "0")
+        self.assertEqual(environment["BORSUK_BENCH_LIFECYCLE_ONLY"], "1")
+        self.assertEqual(environment["BORSUK_BENCH_SKIP_RECALL"], "1")
         self.assertEqual(environment["BORSUK_BENCH_WRITE_BATCH_SIZE"], "1")
         self.assertEqual(environment["BORSUK_BENCH_LIFECYCLE_WRITERS"], "4")
 
@@ -372,6 +375,27 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 attempt_id="attempt-01",
                 cell=cell,
             )
+
+        for flag in ("BORSUK_BENCH_LIFECYCLE_ONLY", "BORSUK_BENCH_SKIP_RECALL"):
+            for invalid in (None, "0"):
+                malformed = copy.deepcopy(plan)
+                environment = malformed["runtime"]["steps"][-1]["env"]
+                if invalid is None:
+                    environment.pop(flag)
+                else:
+                    environment[flag] = invalid
+                with self.subTest(flag=flag, invalid=invalid), self.assertRaisesRegex(
+                    ValueError, "mutation runtime flags"
+                ):
+                    authorize_publication_mutation_runtime(
+                        malformed,
+                        clone_receipt=clone,
+                        base_receipt=base,
+                        arm=arm,
+                        attempt_id="attempt-01",
+                        cell=cell,
+                    )
+
     def test_build_identity_and_storage_are_read_from_the_real_benchmark_artifact(self) -> None:
         cell = scheduled_cell()
         with tempfile.TemporaryDirectory() as root:

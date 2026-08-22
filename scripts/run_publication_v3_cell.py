@@ -679,6 +679,8 @@ def build_execution_plan(
                 {
                     "BORSUK_BENCH_RECALL_ONLY": "0",
                     "BORSUK_BENCH_READ_ONLY": "0",
+                    "BORSUK_BENCH_SKIP_RECALL": "1",
+                    "BORSUK_BENCH_LIFECYCLE_ONLY": "1",
                     "BORSUK_BENCH_WRITE_BATCH_SIZE": str(arm["batch_size"]),
                     "BORSUK_BENCH_LIFECYCLE_WRITERS": str(arm["writers"]),
                     "BORSUK_BENCH_UPDATE_PERCENT": str(arm["update_percent"]),
@@ -762,6 +764,7 @@ def authorize_publication_runtime(
             "BORSUK_BENCH_INSERT_ONLY",
             "BORSUK_BENCH_RECLUSTER_BUILD",
             "BORSUK_BENCH_PRELOAD_SERVING",
+            "BORSUK_BENCH_LIFECYCLE_ONLY",
         ):
             if forbidden in environment:
                 raise ValueError("publication runtime step contains a build-only flag")
@@ -810,6 +813,8 @@ def authorize_publication_mutation_runtime(
             environment.get("BORSUK_BENCH_BUILD_INDEX") != "0"
             or environment.get("BORSUK_BENCH_READ_ONLY") != "0"
             or environment.get("BORSUK_BENCH_RECALL_ONLY") != "0"
+            or environment.get("BORSUK_BENCH_SKIP_RECALL") != "1"
+            or environment.get("BORSUK_BENCH_LIFECYCLE_ONLY") != "1"
         ):
             raise ValueError("mutation runtime flags are invalid")
     authorized["base_index_receipt_sha256"] = receipt_document_sha256(base_receipt)
