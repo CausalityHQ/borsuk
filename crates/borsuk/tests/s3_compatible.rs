@@ -331,7 +331,7 @@ fn assert_s3_compatible_standard_layout(uri: &str) {
     let document =
         serde_json::from_slice::<LaneCoordinationDocument<CollectionCurrentDocument>>(&current)
             .expect("collection/CURRENT must be a checked JSON pointer");
-    assert_eq!(document.schema_version, 1);
+    assert_eq!(document.schema_version, 2);
     assert_eq!(document.object_role, "collection_current");
     assert_lane_coordination_checksum("collection/CURRENT", &document);
 }
@@ -384,7 +384,16 @@ struct CollectionSnapshotDocument {
     previous_snapshot_checksum: Option<String>,
     positioned_source_epoch: u64,
     positioned_materialized_watermarks: Vec<CollectionMaterializationWatermarkDocument>,
+    gc_delete_intent: Option<CollectionGcDeleteIntentDocument>,
     modalities: Vec<CollectionManifestReferenceDocument>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CollectionGcDeleteIntentDocument {
+    owner_id: String,
+    modality: String,
+    path_hashes: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -476,7 +485,7 @@ fn assert_checked_json_coordination(
         let document =
             serde_json::from_slice::<LaneCoordinationDocument<CollectionCurrentDocument>>(&bytes)
                 .unwrap_or_else(|error| panic!("{path} is not checked collection JSON: {error}"));
-        assert_eq!(document.schema_version, 1, "{path} schema marker");
+        assert_eq!(document.schema_version, 2, "{path} schema marker");
         assert_eq!(document.object_role, "collection_current", "{path} role");
         assert_hex_checksum(
             path,
@@ -506,7 +515,7 @@ fn assert_checked_json_coordination(
         let document =
             serde_json::from_slice::<LaneCoordinationDocument<CollectionSnapshotDocument>>(&bytes)
                 .unwrap_or_else(|error| panic!("{path} is not checked collection JSON: {error}"));
-        assert_eq!(document.schema_version, 1, "{path} schema marker");
+        assert_eq!(document.schema_version, 2, "{path} schema marker");
         assert_eq!(document.object_role, "collection_snapshot", "{path} role");
         assert_eq!(
             document.payload.positioned_materialized_watermarks.len(),

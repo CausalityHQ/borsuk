@@ -27,8 +27,11 @@ use crate::{
     },
     centroid_hnsw::{CatalogRouter, CatalogRoutingStrategy, CentroidHnsw},
     collection_control::{
-        COLLECTION_CURRENT, CollectionCommit, CollectionManifestRef, CollectionSnapshot,
-        PRIMARY_MODALITY, collection_schema_fingerprint, pending_collection_commit_path,
+        COLLECTION_CURRENT, COLLECTION_GC_DELETE_INTENT_CONFLICT,
+        COLLECTION_GC_DELETE_INTENT_MAX_PATHS, CollectionCommit, CollectionGcDeleteIntent,
+        CollectionManifestRef, CollectionSnapshot, PRIMARY_MODALITY,
+        collection_gc_delete_path_hash, collection_schema_fingerprint,
+        pending_collection_commit_path,
     },
     error::{BorsukError, Result},
     format::{
@@ -4366,6 +4369,7 @@ impl BorsukIndex {
                 positioned_materialized_watermarks: std::array::from_fn(|_| {
                     crate::positioned_log::PositionedMaterializationWatermark::empty()
                 }),
+                gc_delete_intent: None,
                 modalities,
             };
             let positioned_log = PositionedLogWriter::create_from_storage(
@@ -13610,6 +13614,24 @@ impl BorsukIndex {
         }
         for _ in 0..MAX_COLLECTION_CAS_ATTEMPTS {
             let current = self.collection_storage.load_collection_snapshot()?;
+            if current
+                .snapshot
+                .gc_delete_intent
+                .as_ref()
+                .is_some_and(|intent| {
+                    intent.modality == modality
+                        && self.storage.publication_write_paths_intersect(|path| {
+                            intent
+                                .path_hashes
+                                .binary_search(&collection_gc_delete_path_hash(&modality, path))
+                                .is_ok()
+                        })
+                })
+            {
+                return Err(BorsukError::ConcurrentModification {
+                    path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+                });
+            }
             if modality == PRIMARY_MODALITY
                 && collection_schema_fingerprint(&staged.manifest)
                     != current.snapshot.schema_fingerprint
@@ -13665,6 +13687,7 @@ impl BorsukIndex {
                     report,
                 ) {
                 Ok(loaded) => {
+                    self.storage.clear_publication_write_paths();
                     self.manifest_reference = staged.reference;
                     self.collection_snapshot = Some(loaded.clone());
                     for child in self.named.values_mut() {
@@ -13691,6 +13714,11 @@ impl BorsukIndex {
             BorsukError::ConcurrentModification { path } => path,
             err => return Err(err),
         };
+        if conflict_path == COLLECTION_GC_DELETE_INTENT_CONFLICT {
+            return Err(BorsukError::ConcurrentModification {
+                path: conflict_path,
+            });
+        }
         let (refreshed_collection, refreshed_reference, refreshed) =
             self.load_latest_own_manifest()?;
         if refreshed.version != base_version {
@@ -15596,6 +15624,21 @@ impl BorsukIndex {
         &mut self,
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
+        if !options.dry_run
+            && let Some(intent) = self
+                .collection_storage
+                .load_collection_snapshot()?
+                .snapshot
+                .gc_delete_intent
+            && intent.modality != self.manifest_reference.modality
+        {
+            let child = self.named.get_mut(&intent.modality).ok_or_else(|| {
+                BorsukError::ConcurrentModification {
+                    path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+                }
+            })?;
+            child.gc_obsolete_segments_primary(options.clone())?;
+        }
         let report = self.gc_obsolete_segments_primary(options.clone())?;
         for child in self.named.values_mut() {
             child.gc_obsolete_segments(options.clone())?;
@@ -15607,9 +15650,50 @@ impl BorsukIndex {
         &mut self,
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
+        const MAX_GC_BATCHES_PER_CALL: usize = 16;
         let span = observability::gc_span(&options, self.manifest.version);
         let _entered = span.enter();
-        let report = self.gc_obsolete_segments_impl(options)?;
+        let mut aggregate: Option<GarbageCollectionReport> = None;
+        for _ in 0..MAX_GC_BATCHES_PER_CALL {
+            let report = self.gc_obsolete_segments_impl(options.clone())?;
+            let more_work = !options.dry_run
+                && report.candidates.len() == COLLECTION_GC_DELETE_INTENT_MAX_PATHS;
+            if let Some(total) = aggregate.as_mut() {
+                total.objects_scanned =
+                    total.objects_scanned.saturating_add(report.objects_scanned);
+                total.objects_deleted =
+                    total.objects_deleted.saturating_add(report.objects_deleted);
+                total.routing_objects_deleted = total
+                    .routing_objects_deleted
+                    .saturating_add(report.routing_objects_deleted);
+                total.tables_deleted = total.tables_deleted.saturating_add(report.tables_deleted);
+                total.routing_page_indexes_read = total
+                    .routing_page_indexes_read
+                    .saturating_add(report.routing_page_indexes_read);
+                total.routing_pages_read = total
+                    .routing_pages_read
+                    .saturating_add(report.routing_pages_read);
+                total.bytes_read = total.bytes_read.saturating_add(report.bytes_read);
+                total.bytes_reclaimable = total
+                    .bytes_reclaimable
+                    .saturating_add(report.bytes_reclaimable);
+                total.bytes_reclaimed =
+                    total.bytes_reclaimed.saturating_add(report.bytes_reclaimed);
+                total.object_cache_hits = total
+                    .object_cache_hits
+                    .saturating_add(report.object_cache_hits);
+                total.object_cache_misses = total
+                    .object_cache_misses
+                    .saturating_add(report.object_cache_misses);
+                total.candidates.extend(report.candidates);
+            } else {
+                aggregate = Some(report);
+            }
+            if !more_work {
+                break;
+            }
+        }
+        let report = aggregate.expect("GC always executes at least one bounded pass");
         observability::record_gc_report(&span, &report);
         Ok(report)
     }
@@ -15627,9 +15711,155 @@ impl BorsukIndex {
         Ok(transaction_ids)
     }
 
+    fn install_loaded_collection_snapshot(&mut self, loaded: LoadedCollectionSnapshot) {
+        self.collection_snapshot = Some(loaded.clone());
+        for child in self.named.values_mut() {
+            child.collection_snapshot = Some(loaded.clone());
+        }
+    }
+
+    fn publish_gc_delete_intent(
+        &mut self,
+        path_hashes: Vec<String>,
+    ) -> Result<CollectionGcDeleteIntent> {
+        const MAX_ATTEMPTS: usize = 128;
+        let intent = CollectionGcDeleteIntent {
+            owner_id: self.storage.gc_owner_id().to_string(),
+            modality: self.manifest_reference.modality.clone(),
+            path_hashes,
+        };
+        for _ in 0..MAX_ATTEMPTS {
+            let current = self.collection_storage.load_collection_snapshot()?;
+            if current.snapshot.gc_delete_intent.is_some() {
+                return Err(BorsukError::ConcurrentModification {
+                    path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+                });
+            }
+            let current_reference = current
+                .snapshot
+                .modalities
+                .iter()
+                .find(|reference| reference.modality == intent.modality)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!(
+                        "collection snapshot is missing GC modality `{}`",
+                        intent.modality
+                    ))
+                })?;
+            if current_reference != &self.manifest_reference {
+                return Err(BorsukError::ConcurrentModification {
+                    path: COLLECTION_CURRENT.to_string(),
+                });
+            }
+            let mut next = current.snapshot.clone();
+            next.generation = next.generation.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "collection snapshot generation exceeds u64".to_string(),
+                )
+            })?;
+            next.previous_snapshot_checksum = Some(current.checksum.clone());
+            next.gc_delete_intent = Some(intent.clone());
+            let mut report = StorageWriteReport::default();
+            match self
+                .collection_storage
+                .compare_and_swap_collection_snapshot_with_report(
+                    current.current_version,
+                    &next,
+                    &mut report,
+                ) {
+                Ok(loaded) => {
+                    self.install_loaded_collection_snapshot(loaded);
+                    return Ok(intent);
+                }
+                Err(BorsukError::ConcurrentModification { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: COLLECTION_CURRENT.to_string(),
+        })
+    }
+
+    fn clear_gc_delete_intent(&mut self, intent: &CollectionGcDeleteIntent) -> Result<()> {
+        const MAX_ATTEMPTS: usize = 128;
+        for _ in 0..MAX_ATTEMPTS {
+            let current = self.collection_storage.load_collection_snapshot()?;
+            match current.snapshot.gc_delete_intent.as_ref() {
+                None => {
+                    return Err(BorsukError::ConcurrentModification {
+                        path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+                    });
+                }
+                Some(active) if active == intent => {}
+                Some(_) => {
+                    return Err(BorsukError::ConcurrentModification {
+                        path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+                    });
+                }
+            }
+            let mut next = current.snapshot.clone();
+            next.generation = next.generation.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "collection snapshot generation exceeds u64".to_string(),
+                )
+            })?;
+            next.previous_snapshot_checksum = Some(current.checksum.clone());
+            next.gc_delete_intent = None;
+            let mut report = StorageWriteReport::default();
+            match self
+                .collection_storage
+                .compare_and_swap_collection_snapshot_with_report(
+                    current.current_version,
+                    &next,
+                    &mut report,
+                ) {
+                Ok(loaded) => {
+                    self.install_loaded_collection_snapshot(loaded);
+                    return Ok(());
+                }
+                Err(BorsukError::ConcurrentModification { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(BorsukError::ConcurrentModification {
+            path: COLLECTION_CURRENT.to_string(),
+        })
+    }
+
+    fn verify_gc_delete_intent_owner(&self, intent: &CollectionGcDeleteIntent) -> Result<()> {
+        let current = self.collection_storage.load_collection_snapshot()?;
+        if current.snapshot.gc_delete_intent.as_ref() == Some(intent)
+            && intent.owner_id == self.storage.gc_owner_id()
+        {
+            Ok(())
+        } else {
+            Err(BorsukError::ConcurrentModification {
+                path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+            })
+        }
+    }
+
     fn gc_obsolete_segments_impl(
         &mut self,
         options: GarbageCollectionOptions,
+    ) -> Result<GarbageCollectionReport> {
+        self.gc_obsolete_segments_impl_with_hooks(options, || Ok(()), |_| Ok(()))
+    }
+
+    #[cfg(test)]
+    fn gc_obsolete_segments_impl_with_before_delete(
+        &mut self,
+        options: GarbageCollectionOptions,
+        before_delete: impl FnMut(&[GarbageCollectionCandidate]) -> Result<()>,
+    ) -> Result<GarbageCollectionReport> {
+        self.gc_obsolete_segments_impl_with_hooks(options, || Ok(()), before_delete)
+    }
+
+    fn gc_obsolete_segments_impl_with_hooks(
+        &mut self,
+        options: GarbageCollectionOptions,
+        mut before_intent: impl FnMut() -> Result<()>,
+        mut before_delete: impl FnMut(&[GarbageCollectionCandidate]) -> Result<()>,
     ) -> Result<GarbageCollectionReport> {
         // The collection root refreshes every modality and reconstructs named
         // positioned projections before dispatching child GC. Named children
@@ -15859,18 +16089,15 @@ impl BorsukIndex {
             });
         }
         let protected_transaction_ids_now = self.gc_protected_transaction_ids_snapshot(false)?;
-        let candidates: Vec<GarbageCollectionCandidate> = candidates
+        let mut candidates: Vec<GarbageCollectionCandidate> = candidates
             .into_iter()
             .filter(|candidate| {
                 // Not referenced by the freshly re-loaded latest manifest, AND not
-                // newer than that manifest. A content-addressed object a concurrent
-                // writer PUT just before its CAS-publish (a tombstone, quantizer,
-                // segment, or sidecar) exists on the store before the manifest that
-                // references it is committed; such an object is strictly newer than
-                // the latest committed manifest, so fencing on the manifest's own
-                // commit time keeps GC from deleting an object whose referencing
-                // publish is still in flight — closing the write-then-commit race
-                // for every object kind, at any `min_age`.
+                // newer than that manifest. This timestamp comparison is only an
+                // eligibility filter for ordinary abandoned objects; clocks can
+                // differ across writers and S3. The checked collection delete intent
+                // published below is the actual linearization fence against an
+                // in-flight writer that intends to publish this exact path.
                 if live_now.contains(&candidate.path) {
                     return false;
                 }
@@ -15878,16 +16105,76 @@ impl BorsukIndex {
                     collection_transaction_id_from_immutable_path(&candidate.path)
                 {
                     // Transaction-scoped paths cannot be reused by a different
-                    // mutation. Fresh root truth is their publication fence,
-                    // so an object that is still unauthorized is abandoned and
-                    // may be reclaimed even when it is newer than the stable
-                    // manifest. This is what prevents failed writes from
-                    // accumulating until an unrelated manifest publish.
+                    // mutation. Fresh root truth establishes their eligibility;
+                    // the checked delete intent still orders the later delete
+                    // against publication. An object that remains unauthorized can
+                    // therefore be reclaimed without waiting for an unrelated
+                    // manifest publish.
                     return !protected_transaction_ids_now.contains(transaction_id);
                 }
                 candidate.last_modified <= latest_manifest_created_at
             })
             .collect();
+        let existing_intent = self
+            .collection_storage
+            .load_collection_snapshot()?
+            .snapshot
+            .gc_delete_intent;
+        let intent = match existing_intent {
+            Some(intent)
+                if intent.modality == self.manifest_reference.modality
+                    && intent.owner_id == self.storage.gc_owner_id() =>
+            {
+                candidates.retain(|candidate| {
+                    intent
+                        .path_hashes
+                        .binary_search(&collection_gc_delete_path_hash(
+                            &intent.modality,
+                            &candidate.path,
+                        ))
+                        .is_ok()
+                });
+                intent
+            }
+            Some(_) => {
+                return Err(BorsukError::ConcurrentModification {
+                    path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+                });
+            }
+            None => {
+                candidates.truncate(COLLECTION_GC_DELETE_INTENT_MAX_PATHS);
+                if candidates.is_empty() {
+                    return Ok(GarbageCollectionReport {
+                        dry_run: false,
+                        objects_scanned,
+                        objects_deleted: 0,
+                        routing_objects_deleted: 0,
+                        tables_deleted: 0,
+                        routing_page_indexes_read: active_paths.routing_page_indexes_read,
+                        routing_pages_read: active_paths.routing_pages_read,
+                        bytes_read: active_paths.bytes_read,
+                        bytes_reclaimable: 0,
+                        bytes_reclaimed: 0,
+                        object_cache_hits: active_paths.object_cache_hits,
+                        object_cache_misses: active_paths.object_cache_misses,
+                        candidates: Vec::new(),
+                    });
+                }
+                let mut path_hashes = candidates
+                    .iter()
+                    .map(|candidate| {
+                        collection_gc_delete_path_hash(
+                            &self.manifest_reference.modality,
+                            &candidate.path,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                path_hashes.sort();
+                path_hashes.dedup();
+                before_intent()?;
+                self.publish_gc_delete_intent(path_hashes)?
+            }
+        };
         let bytes_reclaimable = candidates.iter().map(|object| object.size).sum::<u64>();
         let candidate_paths = candidates
             .iter()
@@ -15898,6 +16185,8 @@ impl BorsukIndex {
         let mut routing_objects_deleted = 0_usize;
         let mut tables_deleted = 0_usize;
         let mut bytes_reclaimed = 0_u64;
+        before_delete(&candidates)?;
+        self.verify_gc_delete_intent_owner(&intent)?;
         for object in &candidates {
             if self.storage.delete_object(&object.path)? {
                 objects_deleted += 1;
@@ -15909,6 +16198,7 @@ impl BorsukIndex {
                 bytes_reclaimed += object.size;
             }
         }
+        self.clear_gc_delete_intent(&intent)?;
 
         Ok(GarbageCollectionReport {
             dry_run: false,
@@ -42277,6 +42567,523 @@ mod tests {
                 .unwrap()
                 .is_none(),
             "a closed, unpublished attempt must become reclaimable"
+        );
+    }
+
+    #[test]
+    fn gc_never_deletes_a_deduplicated_artifact_published_after_candidate_scan() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut setup = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let summaries = vec![
+            fake_segment_summary("quantizer-a", 0, 1),
+            fake_segment_summary("quantizer-b", 0, 2),
+        ];
+        let centroids = summaries
+            .iter()
+            .map(|summary| summary.centroid.clone())
+            .collect::<Vec<_>>();
+        let bytes = PersistedQuantizer {
+            summaries,
+            graph: CentroidHnsw::build(&centroids).unwrap(),
+        }
+        .encode()
+        .unwrap();
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = quantizer_relative_path(&checksum);
+        assert_eq!(
+            setup
+                .storage
+                .write_bytes_content_addressed(&path, &bytes)
+                .unwrap(),
+            crate::storage::ContentAddressedWriteOutcome::Written
+        );
+        let reference = QuantizerRef {
+            path: path.clone(),
+            checksum,
+            cells: centroids.len(),
+        };
+
+        // The object is deliberately not referenced by this later CURRENT, so
+        // zero-retention GC must select it as a genuine aged orphan.
+        let previous = setup.manifest.clone();
+        let mut next = previous.next_version();
+        next.created_at += chrono::Duration::seconds(1);
+        setup.manifest = setup
+            .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(next, &previous)
+            .unwrap();
+
+        let mut collector = BorsukIndex::open(&uri).unwrap();
+        let mut writer = BorsukIndex::open(&uri).unwrap();
+        let mut unrelated_writer = BorsukIndex::open(&uri).unwrap();
+        let mut publish_result = None;
+        let mut unrelated_publish_result = None;
+        let expected_path = path.clone();
+        let unrelated_path = "quantizer/ff/unrelated.parquet".to_string();
+        collector
+            .gc_obsolete_segments_impl_with_before_delete(
+                GarbageCollectionOptions {
+                    dry_run: false,
+                    min_age: Duration::ZERO,
+                },
+                |candidates| {
+                    assert!(
+                        candidates
+                            .iter()
+                            .any(|candidate| candidate.path == expected_path),
+                        "the deterministic orphan must reach the real delete set"
+                    );
+                    let mut competing_collector = BorsukIndex::open(&uri).unwrap();
+                    let competing_blocked =
+                        match competing_collector.gc_obsolete_segments(GarbageCollectionOptions {
+                            dry_run: false,
+                            min_age: Duration::ZERO,
+                        }) {
+                            Ok(_) => false,
+                            Err(BorsukError::ConcurrentModification {
+                                path: conflict_path,
+                            }) => {
+                                assert_eq!(conflict_path, COLLECTION_GC_DELETE_INTENT_CONFLICT);
+                                true
+                            }
+                            Err(error) => panic!("unexpected competing GC failure: {error}"),
+                        };
+                    writer = BorsukIndex::open(&uri).unwrap();
+                    writer
+                        .storage
+                        .write_bytes_content_addressed(&expected_path, &bytes)
+                        .unwrap();
+                    let previous = writer.manifest.clone();
+                    let mut next = previous.next_version();
+                    next.quantizer_ref = Some(reference.clone());
+                    publish_result = Some(
+                        writer.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+                            next, &previous,
+                        ),
+                    );
+                    if competing_blocked {
+                        unrelated_writer = BorsukIndex::open(&uri).unwrap();
+                        assert_eq!(
+                            unrelated_writer
+                                .storage
+                                .write_bytes_content_addressed(&unrelated_path, &bytes)
+                                .unwrap(),
+                            crate::storage::ContentAddressedWriteOutcome::Written
+                        );
+                        let previous = unrelated_writer.manifest.clone();
+                        let mut next = previous.next_version();
+                        next.quantizer_ref = Some(QuantizerRef {
+                            path: unrelated_path.clone(),
+                            checksum: reference.checksum.clone(),
+                            cells: reference.cells,
+                        });
+                        unrelated_publish_result = Some(
+                            unrelated_writer
+                                .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+                                    next, &previous,
+                                ),
+                        );
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
+        if let Some(result) = unrelated_publish_result {
+            result.unwrap();
+            assert!(
+                unrelated_writer
+                    .storage
+                    .read_object_fresh(&unrelated_path)
+                    .unwrap()
+                    .is_some(),
+                "GC intent must not serialize an unrelated publisher"
+            );
+        }
+
+        match publish_result.unwrap() {
+            Ok(_) => {}
+            Err(BorsukError::ConcurrentModification {
+                path: conflict_path,
+            }) => {
+                assert_eq!(conflict_path, COLLECTION_GC_DELETE_INTENT_CONFLICT);
+                // A GC delete intent may win the shared CAS. Once GC clears it,
+                // the unchanged bytes can be staged and published safely.
+                writer = BorsukIndex::open(&uri).unwrap();
+                writer
+                    .storage
+                    .write_bytes_content_addressed(&path, &bytes)
+                    .unwrap();
+                let previous = writer.manifest.clone();
+                let mut next = previous.next_version();
+                next.quantizer_ref = Some(reference.clone());
+                writer.manifest = writer
+                    .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+                        next, &previous,
+                    )
+                    .unwrap();
+            }
+            Err(error) => panic!("unexpected concurrent publish failure: {error}"),
+        }
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(reopened.manifest.quantizer_ref, Some(reference));
+        assert!(
+            reopened.storage.read_object_fresh(&path).unwrap().is_some(),
+            "GC deleted an immutable object after a concurrent writer published its reference"
+        );
+    }
+
+    #[test]
+    fn gc_aborts_when_writer_publishes_between_scan_and_delete_intent() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut setup = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let summaries = vec![
+            fake_segment_summary("pre-intent-a", 0, 1),
+            fake_segment_summary("pre-intent-b", 0, 2),
+        ];
+        let centroids = summaries
+            .iter()
+            .map(|summary| summary.centroid.clone())
+            .collect::<Vec<_>>();
+        let bytes = PersistedQuantizer {
+            summaries,
+            graph: CentroidHnsw::build(&centroids).unwrap(),
+        }
+        .encode()
+        .unwrap();
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let path = quantizer_relative_path(&checksum);
+        setup
+            .storage
+            .write_bytes_content_addressed(&path, &bytes)
+            .unwrap();
+        let reference = QuantizerRef {
+            path: path.clone(),
+            checksum,
+            cells: centroids.len(),
+        };
+        let previous = setup.manifest.clone();
+        let mut next = previous.next_version();
+        next.created_at += chrono::Duration::seconds(1);
+        setup.manifest = setup
+            .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(next, &previous)
+            .unwrap();
+
+        let mut collector = BorsukIndex::open(&uri).unwrap();
+        let mut writer = BorsukIndex::open(&uri).unwrap();
+        let error = collector
+            .gc_obsolete_segments_impl_with_hooks(
+                GarbageCollectionOptions {
+                    dry_run: false,
+                    min_age: Duration::ZERO,
+                },
+                || {
+                    assert_eq!(
+                        writer
+                            .storage
+                            .write_bytes_content_addressed(&path, &bytes)
+                            .unwrap(),
+                        crate::storage::ContentAddressedWriteOutcome::Existing
+                    );
+                    let previous = writer.manifest.clone();
+                    let mut next = previous.next_version();
+                    next.quantizer_ref = Some(reference.clone());
+                    writer.manifest = writer
+                        .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+                            next, &previous,
+                        )
+                        .unwrap();
+                    Ok(())
+                },
+                |_| panic!("GC must not reach deletion after losing the pre-intent CAS"),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            BorsukError::ConcurrentModification { ref path } if path == COLLECTION_CURRENT
+        ));
+
+        let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(reopened.manifest.quantizer_ref, Some(reference));
+        assert!(reopened.storage.read_object_fresh(&path).unwrap().is_some());
+    }
+
+    #[test]
+    fn gc_owner_resumes_a_persisted_delete_intent_after_interruption() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut setup = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let bytes = b"interrupted-gc";
+        let checksum = blake3::hash(bytes).to_hex().to_string();
+        let path = quantizer_relative_path(&checksum);
+        setup
+            .storage
+            .write_bytes_content_addressed(&path, bytes)
+            .unwrap();
+        let previous = setup.manifest.clone();
+        let mut next = previous.next_version();
+        next.created_at += chrono::Duration::seconds(1);
+        setup.manifest = setup
+            .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(next, &previous)
+            .unwrap();
+
+        let mut interrupted = BorsukIndex::open(&uri).unwrap();
+        let error = interrupted
+            .gc_obsolete_segments_impl_with_before_delete(
+                GarbageCollectionOptions {
+                    dry_run: false,
+                    min_age: Duration::ZERO,
+                },
+                |candidates| {
+                    assert!(candidates.iter().any(|candidate| candidate.path == path));
+                    Err(BorsukError::InvalidStorage(
+                        "simulated process interruption".to_string(),
+                    ))
+                },
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("simulated process interruption"));
+        assert!(
+            interrupted
+                .collection_storage
+                .load_collection_snapshot()
+                .unwrap()
+                .snapshot
+                .gc_delete_intent
+                .is_some()
+        );
+
+        interrupted
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+        assert!(
+            interrupted
+                .storage
+                .read_object_fresh(&path)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            interrupted
+                .collection_storage
+                .load_collection_snapshot()
+                .unwrap()
+                .snapshot
+                .gc_delete_intent
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn root_gc_resumes_its_named_modality_delete_intent() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut setup = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "image".to_string(),
+                VectorSpec {
+                    dimensions: 2,
+                    metric: VectorMetric::Euclidean,
+                    kind: VectorKind::Dense,
+                    element_type: crate::VectorElementType::Float32,
+                },
+            )]),
+        })
+        .unwrap();
+        let bytes = b"interrupted-named-gc";
+        let checksum = blake3::hash(bytes).to_hex().to_string();
+        let path = quantizer_relative_path(&checksum);
+        {
+            let child = setup.named.get_mut("image").unwrap();
+            child
+                .storage
+                .write_bytes_content_addressed(&path, bytes)
+                .unwrap();
+            let previous = child.manifest.clone();
+            let mut next = previous.next_version();
+            next.created_at += chrono::Duration::seconds(1);
+            child.manifest = child
+                .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(next, &previous)
+                .unwrap();
+            child
+                .gc_obsolete_segments_impl_with_before_delete(
+                    GarbageCollectionOptions {
+                        dry_run: false,
+                        min_age: Duration::ZERO,
+                    },
+                    |_| {
+                        Err(BorsukError::InvalidStorage(
+                            "simulated named GC interruption".to_string(),
+                        ))
+                    },
+                )
+                .unwrap_err();
+        }
+        assert_eq!(
+            setup
+                .collection_storage
+                .load_collection_snapshot()
+                .unwrap()
+                .snapshot
+                .gc_delete_intent
+                .as_ref()
+                .unwrap()
+                .modality,
+            "image"
+        );
+
+        setup
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+        assert!(
+            setup.named["image"]
+                .storage
+                .read_object_fresh(&path)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            setup
+                .collection_storage
+                .load_collection_snapshot()
+                .unwrap()
+                .snapshot
+                .gc_delete_intent
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn named_child_reports_foreign_gc_intent_as_retryable_contention() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::from([(
+                "image".to_string(),
+                VectorSpec {
+                    dimensions: 2,
+                    metric: VectorMetric::Euclidean,
+                    kind: VectorKind::Dense,
+                    element_type: crate::VectorElementType::Float32,
+                },
+            )]),
+        })
+        .unwrap();
+        let intent = index
+            .publish_gc_delete_intent(vec![collection_gc_delete_path_hash(
+                PRIMARY_MODALITY,
+                "quantizer/aa/foreign.parquet",
+            )])
+            .unwrap();
+
+        let error = index
+            .named
+            .get_mut("image")
+            .unwrap()
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            BorsukError::ConcurrentModification { ref path }
+                if path == COLLECTION_GC_DELETE_INTENT_CONFLICT
+        ));
+        index.clear_gc_delete_intent(&intent).unwrap();
+    }
+
+    #[test]
+    fn gc_drains_more_than_one_bounded_delete_intent_batch() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let paths = (0..=COLLECTION_GC_DELETE_INTENT_MAX_PATHS)
+            .map(|ordinal| format!("quantizer/aa/orphan-{ordinal:04}.parquet"))
+            .collect::<Vec<_>>();
+        for (ordinal, path) in paths.iter().enumerate() {
+            index
+                .storage
+                .write_bytes_content_addressed(path, &ordinal.to_le_bytes())
+                .unwrap();
+        }
+        let previous = index.manifest.clone();
+        let mut next = previous.next_version();
+        next.created_at += chrono::Duration::seconds(1);
+        index.manifest = index
+            .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(next, &previous)
+            .unwrap();
+
+        let report = index
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+        assert!(report.objects_deleted >= paths.len());
+        assert!(
+            paths
+                .iter()
+                .all(|path| report.candidates.iter().any(|candidate| candidate == path))
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| index.storage.read_object_fresh(path).unwrap().is_none())
         );
     }
 

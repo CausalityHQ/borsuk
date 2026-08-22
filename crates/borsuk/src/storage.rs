@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     env, fmt,
     fs::{self, File, OpenOptions},
     future::Future,
@@ -917,6 +917,14 @@ fn process_backing_get_admission() -> Arc<Semaphore> {
     )
 }
 
+fn fresh_gc_owner_id() -> Arc<str> {
+    Arc::from(
+        blake3::hash(uuid::Uuid::new_v4().as_bytes())
+            .to_hex()
+            .to_string(),
+    )
+}
+
 #[derive(Clone)]
 pub(crate) struct Storage {
     uri: String,
@@ -930,6 +938,16 @@ pub(crate) struct Storage {
     cache_read_counters: Arc<CacheReadCounters>,
     storage_trace: StorageAccessTrace,
     immutable_object_sizes: Arc<DecodedObjectCache<u64>>,
+    publication_writes: Arc<Mutex<PublicationWrites>>,
+    gc_owner_id: Arc<str>,
+}
+
+const MAX_TRACKED_PUBLICATION_WRITE_PATHS: usize = 16_384;
+
+#[derive(Default)]
+struct PublicationWrites {
+    paths: HashSet<String>,
+    overflowed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1616,6 +1634,8 @@ impl Storage {
             cache_read_counters: Arc::clone(&self.cache_read_counters),
             storage_trace: self.storage_trace.clone(),
             immutable_object_sizes: Arc::clone(&self.immutable_object_sizes),
+            publication_writes: Arc::new(Mutex::new(PublicationWrites::default())),
+            gc_owner_id: fresh_gc_owner_id(),
         })
     }
 
@@ -1673,6 +1693,8 @@ impl Storage {
             cache_read_counters,
             storage_trace: self.storage_trace.clone(),
             immutable_object_sizes: Arc::clone(&self.immutable_object_sizes),
+            publication_writes: Arc::clone(&self.publication_writes),
+            gc_owner_id: Arc::clone(&self.gc_owner_id),
         }
     }
 
@@ -1738,6 +1760,8 @@ impl Storage {
             cache_read_counters,
             storage_trace: configured_storage_access_trace()?,
             immutable_object_sizes: Arc::new(DecodedObjectCache::new(1 << 20)),
+            publication_writes: Arc::new(Mutex::new(PublicationWrites::default())),
+            gc_owner_id: fresh_gc_owner_id(),
         })
     }
 
@@ -1753,6 +1777,40 @@ impl Storage {
     /// delta is exact and includes retries.
     pub(crate) fn put_payload_bytes(&self) -> u64 {
         self.request_counters.put_payload_bytes()
+    }
+
+    pub(crate) fn publication_write_paths_intersect(
+        &self,
+        mut predicate: impl FnMut(&str) -> bool,
+    ) -> bool {
+        let writes = self
+            .publication_writes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        writes.overflowed || writes.paths.iter().any(|path| predicate(path))
+    }
+
+    pub(crate) fn clear_publication_write_paths(&self) {
+        *self
+            .publication_writes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = PublicationWrites::default();
+    }
+
+    pub(crate) fn gc_owner_id(&self) -> &str {
+        &self.gc_owner_id
+    }
+
+    fn record_publication_write_path(&self, relative: &str) {
+        let mut writes = self
+            .publication_writes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if writes.paths.len() < MAX_TRACKED_PUBLICATION_WRITE_PATHS {
+            writes.paths.insert(relative.to_string());
+        } else if !writes.paths.contains(relative) {
+            writes.overflowed = true;
+        }
     }
 
     pub(crate) fn cache_read_counts(&self) -> CacheReadCounts {
@@ -2740,6 +2798,7 @@ impl Storage {
         } else {
             self.write_bytes_with_mode(relative, bytes, PutMode::Overwrite)?;
         }
+        self.record_publication_write_path(relative);
         Ok(())
     }
 
@@ -2755,15 +2814,18 @@ impl Storage {
     ) -> Result<ContentAddressedWriteOutcome> {
         if bytes.len() > MULTIPART_WRITE_THRESHOLD_BYTES {
             self.write_bytes_multipart(relative, bytes)?;
+            self.record_publication_write_path(relative);
             return Ok(ContentAddressedWriteOutcome::Written);
         }
-        match self.write_bytes_if_absent(relative, bytes) {
+        let outcome = match self.write_bytes_if_absent(relative, bytes) {
             Ok(_) => Ok(ContentAddressedWriteOutcome::Written),
             Err(BorsukError::ConcurrentModification { .. }) => {
                 Ok(ContentAddressedWriteOutcome::Existing)
             }
             Err(err) => Err(err),
-        }
+        }?;
+        self.record_publication_write_path(relative);
+        Ok(outcome)
     }
 
     pub(crate) fn write_transaction_scoped_artifact(
@@ -7238,5 +7300,20 @@ mod tests {
             .downcast_ref::<arrow_array::Int64Array>()
             .unwrap();
         assert_eq!(id_column.value(0), 0);
+    }
+
+    #[test]
+    fn publication_write_tracking_is_bounded_and_overflow_fails_safe() {
+        let storage = Storage::from_uri("memory:///bounded-publication-writes").unwrap();
+        for ordinal in 0..=super::MAX_TRACKED_PUBLICATION_WRITE_PATHS {
+            storage.record_publication_write_path(&format!("segments/{ordinal}.parquet"));
+        }
+        assert!(
+            storage.publication_write_paths_intersect(|_| false),
+            "an overflowed tracker must conservatively intersect every active GC intent"
+        );
+
+        storage.clear_publication_write_paths();
+        assert!(!storage.publication_write_paths_intersect(|_| true));
     }
 }

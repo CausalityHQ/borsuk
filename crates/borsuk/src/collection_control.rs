@@ -12,7 +12,7 @@ const COLLECTION_CHECKSUM_LEN: usize = 32;
 const COLLECTION_HEADER_LEN: usize = 4 + 1 + 4;
 const COLLECTION_WAL_FRONTIER_HEAD_MAGIC: &[u8; 4] = b"BCWH";
 const PENDING_COLLECTION_COMMIT_MAGIC: &[u8; 4] = b"BCPC";
-const COLLECTION_CONTROL_SCHEMA_VERSION: u8 = 1;
+const COLLECTION_CONTROL_SCHEMA_VERSION: u8 = 2;
 const COLLECTION_CONTROL_MAX_BYTES: usize = 256 * 1024;
 const COLLECTION_MAX_MODALITIES: usize = 64;
 const COLLECTION_MAX_MODALITY_NAME_BYTES: usize = 128;
@@ -23,6 +23,8 @@ const COLLECTION_SNAPSHOT_ROLE: &str = "collection_snapshot";
 pub(crate) const PRIMARY_MODALITY: &str = "@primary";
 pub(crate) const COLLECTION_CURRENT: &str = "collection/CURRENT";
 pub(crate) const COLLECTION_WAL_FRONTIER_SHARDS: u8 = 64;
+pub(crate) const COLLECTION_GC_DELETE_INTENT_MAX_PATHS: usize = 512;
+pub(crate) const COLLECTION_GC_DELETE_INTENT_CONFLICT: &str = "collection/GC_DELETE_INTENT";
 /// Hard admission bound for one root shard. A stalled maintenance subsystem
 /// cannot make reader traversal grow without limit.
 pub(crate) const COLLECTION_WAL_FRONTIER_HARD_TRANSACTIONS_PER_SHARD: u32 = 64;
@@ -62,7 +64,25 @@ pub(crate) struct CollectionSnapshot {
     #[serde(with = "positioned_materialization_watermarks_json")]
     pub positioned_materialized_watermarks:
         [PositionedMaterializationWatermark; COLLECTION_WAL_FRONTIER_SHARDS as usize],
+    pub gc_delete_intent: Option<CollectionGcDeleteIntent>,
     pub modalities: Vec<CollectionManifestRef>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CollectionGcDeleteIntent {
+    pub owner_id: String,
+    pub modality: String,
+    pub path_hashes: Vec<String>,
+}
+
+pub(crate) fn collection_gc_delete_path_hash(modality: &str, path: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"borsuk-collection-gc-delete-v1\0");
+    hasher.update(modality.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(path.as_bytes());
+    hasher.finalize().to_hex().to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -499,6 +519,36 @@ fn validate_collection_snapshot(snapshot: &CollectionSnapshot) -> Result<()> {
     )?;
     for reference in &snapshot.modalities {
         validate_collection_manifest_ref(reference)?;
+    }
+    if let Some(intent) = &snapshot.gc_delete_intent {
+        validate_checksum(&intent.owner_id, "collection GC delete owner id")?;
+        if !snapshot
+            .modalities
+            .iter()
+            .any(|reference| reference.modality == intent.modality)
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection GC delete intent names missing modality `{}`",
+                intent.modality
+            )));
+        }
+        if intent.path_hashes.is_empty()
+            || intent.path_hashes.len() > COLLECTION_GC_DELETE_INTENT_MAX_PATHS
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "collection GC delete intent must contain 1..={COLLECTION_GC_DELETE_INTENT_MAX_PATHS} path hashes"
+            )));
+        }
+        let mut previous = None;
+        for hash in &intent.path_hashes {
+            validate_checksum(hash, "GC delete path hash")?;
+            if previous.is_some_and(|previous: &String| previous >= hash) {
+                return Err(BorsukError::InvalidStorage(
+                    "collection GC delete path hashes must be strictly ordered".to_string(),
+                ));
+            }
+            previous = Some(hash);
+        }
     }
     Ok(())
 }
@@ -1003,6 +1053,7 @@ mod tests {
             positioned_materialized_watermarks: std::array::from_fn(|_| {
                 PositionedMaterializationWatermark::empty()
             }),
+            gc_delete_intent: None,
             modalities: vec![
                 manifest_ref(PRIMARY_MODALITY, "", 3),
                 manifest_ref("dense", "vectors/dense/", 4),
@@ -1128,7 +1179,7 @@ mod tests {
         let typed: CollectionControlDocument<T> = serde_json::from_slice(bytes)
             .unwrap_or_else(|error| panic!("{role} is not stock UTF-8 JSON: {error}"));
         assert_eq!(typed.object_role, role);
-        assert_eq!(typed.schema_version, 1);
+        assert_eq!(typed.schema_version, 2);
         let payload = serde_json::to_vec(&typed.payload).unwrap();
         assert_eq!(
             typed.payload_checksum_blake3,
@@ -1136,7 +1187,7 @@ mod tests {
         );
         let mut document: serde_json::Value = serde_json::from_slice(bytes).unwrap();
         assert_eq!(document["object_role"], role);
-        assert_eq!(document["schema_version"], 1);
+        assert_eq!(document["schema_version"], 2);
         document
             .as_object_mut()
             .unwrap()
@@ -1170,7 +1221,7 @@ mod tests {
         );
         let payload_checksum = blake3::hash(payload.as_bytes()).to_hex().to_string();
         let expected = format!(
-            "{{\"schema_version\":1,\"object_role\":\"collection_current\",\"payload_checksum_blake3\":\"{payload_checksum}\",\"payload\":{payload}}}"
+            "{{\"schema_version\":2,\"object_role\":\"collection_current\",\"payload_checksum_blake3\":\"{payload_checksum}\",\"payload\":{payload}}}"
         );
 
         assert_eq!(
@@ -1181,6 +1232,20 @@ mod tests {
             collection_current_bytes(&current).unwrap(),
             expected.as_bytes()
         );
+    }
+
+    #[test]
+    fn collection_controls_reject_pre_gc_intent_schema() {
+        let bytes = collection_snapshot_bytes(&sample_snapshot()).unwrap();
+        let legacy = String::from_utf8(bytes)
+            .unwrap()
+            .replacen("\"schema_version\":2", "\"schema_version\":1", 1)
+            .into_bytes();
+        let error =
+            collection_snapshot_from_slice(&legacy, "collection/snapshots/pre-gc-intent.json")
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("unsupported"), "{error}");
     }
 
     #[test]
@@ -1230,6 +1295,7 @@ mod tests {
             previous_snapshot_checksum: Some(checksum('f')),
             positioned_source_epoch: 3,
             positioned_materialized_watermarks: watermarks.clone(),
+            gc_delete_intent: None,
             modalities: vec![manifest_ref(PRIMARY_MODALITY, "", 3)],
         };
 
@@ -1285,6 +1351,13 @@ mod tests {
             }))
             .collect();
         snapshot.previous_snapshot_checksum = Some(checksum('f'));
+        snapshot.gc_delete_intent = Some(CollectionGcDeleteIntent {
+            owner_id: checksum('a'),
+            modality: PRIMARY_MODALITY.to_string(),
+            path_hashes: (0..COLLECTION_GC_DELETE_INTENT_MAX_PATHS)
+                .map(|ordinal| format!("{ordinal:064x}"))
+                .collect(),
+        });
 
         let bytes = collection_snapshot_bytes(&snapshot).unwrap();
         assert!(
