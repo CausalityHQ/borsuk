@@ -8278,13 +8278,34 @@ impl BorsukIndex {
         if self.active_collection_transaction.is_some() {
             return self.put_primary_records(records);
         }
-        self.with_mutation_report_scope(move |scoped| scoped.put_in_scope(records))
+        self.put_with_report(records).map(|_| ())
     }
 
-    fn put_in_scope(&mut self, records: Vec<VectorRecord>) -> Result<()> {
+    /// Insert or replace primary dense records through the low-amplification
+    /// last-write-wins path and return the positioned commit report.
+    /// Collections with text or named modalities use the fully general upsert
+    /// path so their derived lexical and token state is corrected atomically.
+    pub fn put_with_report(&mut self, records: Vec<VectorRecord>) -> Result<AddReport> {
+        if self.manifest.config.text || !self.manifest.config.named_vectors.is_empty() {
+            return self.upsert_with_report(records);
+        }
+        if self.active_collection_transaction.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "positioned put report requires the collection transaction boundary".to_string(),
+            ));
+        }
+        self.with_mutation_report_scope(move |scoped| scoped.put_with_report_in_scope(records))
+    }
+
+    fn put_with_report_in_scope(&mut self, records: Vec<VectorRecord>) -> Result<AddReport> {
         self.begin_collection_transaction()?;
         let result = self.put_primary_records(records);
-        self.finish_collection_transaction(result)
+        self.finish_collection_transaction_value(result)
+            .map(|((), mut report)| {
+                report.requests = self.storage.request_counts();
+                report.total_bytes_written = self.storage.put_payload_bytes();
+                report
+            })
     }
 
     fn put_primary_records(&mut self, mut records: Vec<VectorRecord>) -> Result<()> {

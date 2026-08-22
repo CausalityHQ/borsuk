@@ -1046,6 +1046,12 @@ fn mutation_facades_report_each_physical_request_exactly_once() {
     assert_eq!(upsert.requests, logged_request_counts(&operations));
 
     operations.clear();
+    let put = index
+        .put_with_report(vec![VectorRecord::new("ordinary", vec![3.0, 0.0])])
+        .unwrap();
+    assert_eq!(put.requests, logged_request_counts(&operations));
+
+    operations.clear();
     let deleted = index.delete(["ordinary"]).unwrap();
     assert_eq!(deleted.requests, logged_request_counts(&operations));
 

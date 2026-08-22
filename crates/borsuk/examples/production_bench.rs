@@ -651,11 +651,62 @@ fn lifecycle_writer_open_options(ram_budget_bytes: Option<u64>) -> OpenOptions {
     }
 }
 
+fn validate_claim_free_lifecycle_insert(index: &BorsukIndex) -> BenchResult<()> {
+    let collection = &index.manifest().config;
+    if collection.text || !collection.named_vectors.is_empty() {
+        return Err(invalid_input(
+            "claim-free lifecycle inserts require a primary-dense-only collection; multimodal inserts must use a separately labelled upsert profile",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum LifecycleRecordMutation {
+    Put,
+    Upsert,
+}
+
+fn execute_put_wave(
+    op: &'static str,
+    wave_index: usize,
+    writers: &mut [BorsukIndex],
+    batches: Vec<PreparedRecordBatch>,
+) -> BenchResult<Vec<(WriteSample, u64)>> {
+    for writer in writers.iter() {
+        validate_claim_free_lifecycle_insert(writer)?;
+    }
+    execute_record_wave(
+        op,
+        wave_index,
+        writers,
+        batches,
+        LifecycleRecordMutation::Put,
+    )
+}
+
 fn execute_upsert_wave(
     op: &'static str,
     wave_index: usize,
     writers: &mut [BorsukIndex],
     batches: Vec<PreparedRecordBatch>,
+) -> BenchResult<Vec<(WriteSample, u64)>> {
+    execute_record_wave(
+        op,
+        wave_index,
+        writers,
+        batches,
+        LifecycleRecordMutation::Upsert,
+    )
+}
+
+fn execute_record_wave(
+    op: &'static str,
+    wave_index: usize,
+    writers: &mut [BorsukIndex],
+    batches: Vec<PreparedRecordBatch>,
+    mutation: LifecycleRecordMutation,
 ) -> BenchResult<Vec<(WriteSample, u64)>> {
     if batches.len() > writers.len()
         || batches
@@ -672,7 +723,10 @@ fn execute_upsert_wave(
                 let requests_before = writer.request_counts();
                 let bytes_before = writer.put_payload_bytes();
                 let batch_started = Instant::now();
-                let _ = writer.upsert_with_report(prepared.records)?;
+                let _ = match mutation {
+                    LifecycleRecordMutation::Put => writer.put_with_report(prepared.records),
+                    LifecycleRecordMutation::Upsert => writer.upsert_with_report(prepared.records),
+                }?;
                 Ok((
                     WriteSample {
                         op,
@@ -3876,9 +3930,9 @@ fn measure_inserts(
     count: usize,
 ) -> BenchResult<InsertMeasurement> {
     // Concurrent lifecycle ingestion uses the claim-free last-write-wins path.
-    // The ids are absent in the cloned base, so these upserts are logical
-    // inserts while remaining comparable to object-store vector APIs whose
-    // write primitive is also upsert. Insert-only `add` has a separate global
+    // The ids are absent in the cloned base, so these last-write-wins puts are
+    // logical inserts while remaining comparable to object-store vector APIs
+    // whose write primitive is also upsert. Insert-only `add` has a separate global
     // uniqueness-claim protocol and is intentionally not conflated with this
     // scalable writer measurement.
     let started = Instant::now();
@@ -3915,7 +3969,7 @@ fn measure_inserts(
         if wave_complete {
             let wave_index = assignment.batch_index / writers.len();
             for (sample, written) in
-                execute_upsert_wave("insert", wave_index, writers, std::mem::take(&mut pending))?
+                execute_put_wave("insert", wave_index, writers, std::mem::take(&mut pending))?
             {
                 bytes_written = bytes_written.saturating_add(written);
                 samples.push(sample);
@@ -4866,7 +4920,7 @@ mod tests {
         cache_coverage_cohort_size, cache_coverage_enabled, cache_state_summary_enabled,
         dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
         default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
-        execute_upsert_wave, first_logical_batch_publish_ms, ingest_batch_size,
+        execute_put_wave, first_logical_batch_publish_ms, ingest_batch_size,
         ingest_generated_batch, is_hot_workload_position, lifecycle_write_operation_count,
         lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
         neighbor_row, normalized_cache_access_fractions, parquet_train_files_for_phase,
@@ -5052,7 +5106,7 @@ mod tests {
             })
             .collect();
 
-        let completed = execute_upsert_wave("insert", 0, &mut writers, batches).unwrap();
+        let completed = execute_put_wave("insert", 0, &mut writers, batches).unwrap();
         assert_eq!(completed.len(), 4);
         assert_eq!(
             completed
@@ -5079,7 +5133,7 @@ mod tests {
                 )],
             })
             .collect();
-        let completed = execute_upsert_wave("insert", 1, &mut writers, second).unwrap();
+        let completed = execute_put_wave("insert", 1, &mut writers, second).unwrap();
         assert_eq!(
             completed.iter().map(|(_, bytes)| bytes).sum::<u64>(),
             writers
@@ -5131,6 +5185,54 @@ mod tests {
                 .saturating_sub(bytes_before),
             "delete samples must account physical PUT payload bytes"
         );
+    }
+
+    #[test]
+    fn lifecycle_insert_profile_rejects_a_general_upsert_fallback() {
+        let named = tempfile::tempdir().unwrap();
+        let uri = named.path().to_string_lossy().into_owned();
+        let mut named_vectors = std::collections::BTreeMap::new();
+        named_vectors.insert(
+            "image".to_string(),
+            borsuk::VectorSpec {
+                dimensions: 2,
+                metric: VectorMetric::Euclidean,
+                kind: Default::default(),
+                element_type: Default::default(),
+            },
+        );
+        BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors,
+        })
+        .unwrap();
+        let mut writers = vec![BorsukIndex::open(&uri).unwrap()];
+        let error = match execute_put_wave(
+            "insert",
+            0,
+            &mut writers,
+            vec![PreparedRecordBatch {
+                assignment: LifecycleBatchAssignment {
+                    writer_index: 0,
+                    batch_index: 0,
+                    offset: 0,
+                    len: 1,
+                },
+                records: vec![
+                    VectorRecord::new("row", vec![1.0, 0.0])
+                        .with_named_vector("image", vec![0.0, 1.0]),
+                ],
+            }],
+        ) {
+            Ok(_) => panic!("named lifecycle insert silently used the general upsert path"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("primary-dense-only"));
     }
 
     #[test]
