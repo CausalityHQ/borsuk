@@ -79,6 +79,11 @@ class PublicationV3IndexSealTests(unittest.TestCase):
             ),
             "fidx/aa/filter.fidx": ("query-page", "packed"),
             "id-directory/runs/run.parquet": ("directory", "parquet"),
+            "quantizer/1f/transactions/build-abc/quant-deadbeef.parquet": (
+                "query-page",
+                "parquet",
+            ),
+            "quantizer/ab/quant-deadbeef.parquet": ("query-page", "parquet"),
             "collection/CURRENT": ("control", "json"),
             "lane-log/ACTIVE": ("control", "json"),
             "positioned-log/heads/00.json": ("control", "json"),
@@ -91,6 +96,7 @@ class PublicationV3IndexSealTests(unittest.TestCase):
         for path in (
             "unknown/blob",
             "segments/L0/segment.bin",
+            "quantizer/ab/quant-deadbeef.arrow",
             "fidx/x.parquet",
             "global-cell-cards/v15/groups/card.arrow",
             "global-cell-cards/v15/roots/aa/root-card.parquet",

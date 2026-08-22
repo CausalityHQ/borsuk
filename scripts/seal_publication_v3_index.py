@@ -66,6 +66,7 @@ def classify_index_object(path: str) -> tuple[str, str]:
             "logical-cell-catalogs/",
             "manifests/",
             "positioned-log/",
+            "quantizer/",
             "routing/",
             "lexical/",
             "tombstones/",
