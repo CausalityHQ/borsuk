@@ -626,7 +626,13 @@ def prepare_qualification_execution(
         max_waiting_searches = 64
     leaf_read_width = 32
     max_inflight_leaf_reads = 96 if runtime_profile == "concurrency" else 48
-    max_parallel_decode_rank_tasks = 1
+    # Frozen c7g.xlarge uncached REST qualification found two decode/rank
+    # slots to be the best small-runtime boundary: it sustained 224 QPS at
+    # p99=74.31 ms and 97.705% recall. Three slots did not raise capacity and
+    # regressed the same boundary to p99=89.18 ms, so do not simply match CPU
+    # count here. Evidence: rest-amp2-wide-a16-d2-q224-sift-51f6fa1/attempts/0002
+    # and rest-amp2-wide-a16-d3-q224-sift-51f6fa1/attempts/0001.
+    max_parallel_decode_rank_tasks = 2
     cpu_threads = max(1, min(runtime_vcpus - 1, 4))
     io_threads = 160 if runtime_profile == "concurrency" else 88
     s3_get_concurrency = 128 if runtime_profile == "concurrency" else 64
