@@ -77,24 +77,32 @@ class ExecutionJob:
         attempt: int,
         profile: str = "recall",
         arm_index: int = 0,
+        diagnostic: bool = False,
     ) -> "ExecutionJob":
         if profile not in {"recall", "concurrency", "lifecycle"}:
             raise ValueError("runtime execution profile is invalid")
-        if arm_index < 0 or (profile != "lifecycle" and arm_index != 0):
+        if (
+            arm_index < 0
+            or (profile != "lifecycle" and arm_index != 0)
+            or (diagnostic and profile != "lifecycle")
+        ):
             raise ValueError("runtime execution arm identity is invalid")
         job = cls._new(cell, role="runtime", attempt=attempt)
         if profile == "recall":
             return job
         if profile == "lifecycle":
+            namespace = (
+                "runtime-lifecycle-diagnostic" if diagnostic else "runtime-lifecycle"
+            )
             terminal_prefix = (
-                f"{str(cell['result_prefix']).rstrip('/')}/runtime-lifecycle/"
+                f"{str(cell['result_prefix']).rstrip('/')}/{namespace}/"
                 f"arms/{arm_index:04d}/attempts/{attempt:04d}"
             )
             return cls(
                 cell=job.cell,
                 role=job.role,
                 attempt=job.attempt,
-                cell_tag=f"runtime-lifecycle-{cell['cell_id']}-arm-{arm_index:04d}",
+                cell_tag=f"{namespace}-{cell['cell_id']}-arm-{arm_index:04d}",
                 terminal_prefix=terminal_prefix,
                 complete_uri=f"{terminal_prefix}/RUNTIME_TERMINAL_COMPLETE.json",
                 failed_uri=f"{terminal_prefix}/RUNTIME_TERMINAL_FAILED.json",
@@ -337,6 +345,8 @@ def runtime_worker_script(
     io_threads: int,
     s3_get_concurrency: int,
     ram_budget_bytes: int,
+    diagnostic_write_ops: int | None = None,
+    diagnostic_timeout_seconds: int | None = None,
 ) -> str:
     if job.role != "runtime":
         raise ValueError("runtime worker requires a runtime job")
@@ -429,6 +439,31 @@ def runtime_worker_script(
             ' --clone-receipt "$work/CLONE_COMPLETE.json"'
             ' --clone-inventory "$work/CLONE_OBJECTS.json"'
         )
+    diagnostic_arguments = ""
+    diagnostic_validation = ""
+    diagnostic_receipt_fields = ""
+    if (diagnostic_write_ops is None) != (diagnostic_timeout_seconds is None):
+        raise ValueError("lifecycle diagnostic authority must be supplied atomically")
+    if diagnostic_write_ops is not None:
+        if (
+            runtime_profile != "lifecycle"
+            or not 1 <= diagnostic_write_ops <= 50_000
+            or diagnostic_timeout_seconds is None
+            or diagnostic_timeout_seconds <= 0
+        ):
+            raise ValueError("lifecycle diagnostic write count is invalid")
+        diagnostic_arguments = f" --diagnostic-write-ops {_q(diagnostic_write_ops)}"
+        diagnostic_validation = f"""actual_diagnostic_write_ops=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"diagnostic_write_ops\"])' \"$work/cell/RESULT_COMPLETE.json\")
+actual_claim_eligible=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"claim_eligible\"]))' \"$work/cell/RESULT_COMPLETE.json\")
+test \"$actual_diagnostic_write_ops\" = {diagnostic_write_ops}
+test \"$actual_claim_eligible\" = false
+diagnostic_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{{print $1}}')"""
+        diagnostic_receipt_fields = (
+            "diagnostic_fields=$(printf ',"
+            f'\"claim_eligible\":false,\"diagnostic_write_ops\":{diagnostic_write_ops},'
+            f'\"diagnostic_timeout_seconds\":{diagnostic_timeout_seconds},'
+            '\"diagnostic_result_sha256\":\"%s\"\' "$diagnostic_result_sha")'
+        )
     return prelude + textwrap.dedent(
         f"""\
         stage=attest-purchase
@@ -494,7 +529,8 @@ def runtime_worker_script(
           --instance-identity "$instance_id" --purchase-option "$instance_purchase_option" \
           --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
-          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}
+          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}
+        {diagnostic_validation}
         stage=publish-receipts
         put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
         put_immutable "$work/cell/RUNTIME_ATTESTATION.json" {_q(terminal_prefix + "/RUNTIME_ATTESTATION.json")}
@@ -525,6 +561,8 @@ def runtime_worker_script(
         test "$actual_exact_amplification" = {_q(exact_read_max_physical_amplification)}
         test "$actual_runtime_profile" = {_q(runtime_profile)}
         execution_contract_sha=$(sha256sum "$execution_contract" | awk '{{print $1}}')
+        diagnostic_fields=''
+        {diagnostic_receipt_fields}
         concurrency_fields=''
         lifecycle_fields=''
         if [[ {_q(runtime_profile)} == concurrency ]]; then
@@ -546,7 +584,7 @@ def runtime_worker_script(
           lifecycle_storage_trace_sha=$(sha256sum "$work/cell/runtime-output/storage-access.csv" | awk '{{print $1}}')
           lifecycle_fields=$(printf ',"lifecycle_summary_sha256":"%s","lifecycle_costs_sha256":"%s","lifecycle_samples_sha256":"%s","lifecycle_query_summary_sha256":"%s","lifecycle_query_samples_sha256":"%s","lifecycle_storage_trace_sha256":"%s"' "$lifecycle_summary_sha" "$lifecycle_costs_sha" "$lifecycle_samples_sha" "$lifecycle_query_summary_sha" "$lifecycle_query_samples_sha" "$lifecycle_storage_trace_sha")
         fi
-        printf '{{"schema_version":4,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"disk_cache_max_bytes":%s,"exact_read_max_physical_amplification":%s,"execution_contract_sha256":"%s"%s%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$actual_disk_cache" "$actual_exact_amplification" "$execution_contract_sha" "$concurrency_fields" "$lifecycle_fields" >"$work/complete.json"
+        printf '{{"schema_version":4,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"disk_cache_max_bytes":%s,"exact_read_max_physical_amplification":%s,"execution_contract_sha256":"%s"%s%s%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$actual_disk_cache" "$actual_exact_amplification" "$execution_contract_sha" "$diagnostic_fields" "$concurrency_fields" "$lifecycle_fields" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/RUNTIME_TERMINAL_COMPLETE.json")}
         complete=1
         """

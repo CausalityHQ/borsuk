@@ -15,6 +15,7 @@ from scripts.publication_v3_aws import build_staging_receipt, staging_jobs
 from scripts.publication_v3_controller import (
     AwsCli,
     LaunchEnvironment,
+    _minimum_lifecycle_write_ops,
     completed_build_authority,
     prepare_qualification_execution,
     run_execution_job,
@@ -133,6 +134,186 @@ class FakeAws:
 
 
 class PublicationV3ControllerTests(unittest.TestCase):
+    def test_lifecycle_diagnostic_minimum_matches_runtime_integer_ceiling(self) -> None:
+        self.assertEqual(
+            _minimum_lifecycle_write_ops(
+                writers=3,
+                batch_size=64,
+                update_percent=30,
+                delete_percent=60,
+            ),
+            640,
+        )
+
+    def test_lifecycle_diagnostic_is_bounded_claim_ineligible_and_namespaced(
+        self,
+    ) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        cell = qualification_cell(
+            manifest,
+            dataset_id="sift-128",
+            workload_kind="write-update-delete-compact",
+            build_attempt=1,
+        )
+        build_job = ExecutionJob.build(cell, attempt=1)
+
+        class LifecycleDiagnosticAws:
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "role": "build",
+                    "attempt": 1,
+                    "attempt_id": f"{build_job.cell_tag}-a0001",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": "6" * 64,
+                    "protocol_sha256": "7" * 64,
+                    "index_uri": build_job.index_uri,
+                    "binary_sha256": "8" * 64,
+                    "purchase_option": "spot",
+                }
+
+        diagnostic = prepare_qualification_execution(
+            manifest,
+            operation="diagnose-lifecycle",
+            dataset_id="sift-128",
+            source_uri="s3://bucket/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocol.json",
+            protocol_sha256="7" * 64,
+            launch=LaunchEnvironment(
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "aarch64",
+                "eu-central-1",
+            ),
+            aws=LifecycleDiagnosticAws(),
+            attempt=2,
+            build_attempt=1,
+        )
+
+        self.assertTrue(
+            diagnostic.job.terminal_prefix.endswith(
+                "/runtime-lifecycle-diagnostic/arms/0013/attempts/0002"
+            )
+        )
+        self.assertEqual(diagnostic.timeout_seconds, 1_200)
+        self.assertEqual(diagnostic.expected["claim_eligible"], False)
+        self.assertEqual(diagnostic.expected["diagnostic_write_ops"], 2_560)
+        self.assertEqual(diagnostic.expected["diagnostic_timeout_seconds"], 1_200)
+        user_data = base64.b64decode(diagnostic.request["UserData"]).decode()
+        worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        worker = gzip.decompress(base64.b64decode(worker_payload)).decode()
+        self.assertIn("--runtime-profile lifecycle", worker)
+        self.assertIn("--diagnostic-write-ops 2560", worker)
+        self.assertIn('"claim_eligible":false', worker)
+        self.assertIn('"diagnostic_write_ops":2560', worker)
+        self.assertIn('"diagnostic_timeout_seconds":1200', worker)
+        self.assertIn('["diagnostic_write_ops"]', worker)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "lifecycle diagnostic write count must exercise every writer",
+        ):
+            prepare_qualification_execution(
+                manifest,
+                operation="diagnose-lifecycle",
+                dataset_id="sift-128",
+                source_uri="s3://bucket/source.tar.gz",
+                source_sha256="2" * 64,
+                manifest_uri="s3://bucket/manifest.json",
+                manifest_sha256="6" * 64,
+                protocol_uri="s3://bucket/protocol.json",
+                protocol_sha256="7" * 64,
+                launch=LaunchEnvironment(
+                    "ami-x",
+                    "subnet-x",
+                    "sg-x",
+                    "arn:aws:iam::453182569524:instance-profile/x",
+                    "aarch64",
+                    "eu-central-1",
+                ),
+                aws=LifecycleDiagnosticAws(),
+                attempt=2,
+                build_attempt=1,
+                diagnostic_write_ops=2_559,
+            )
+        self.assertIn('["claim_eligible"]', worker)
+        self.assertIn('"diagnostic_result_sha256":"%s"', worker)
+        self.assertEqual(
+            subprocess.run(["bash", "-n"], input=worker, text=True).returncode, 0
+        )
+
+        class DiagnosticReceiptAws:
+            def __init__(self, *, include_result_digest: bool) -> None:
+                self.include_result_digest = include_result_digest
+
+            def find_execution_instance(
+                self, _job: object, *, purchase_option: str
+            ) -> None:
+                return None
+
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                receipt = {
+                    "schema_version": 4,
+                    "status": "complete",
+                    "role": "runtime",
+                    "attempt": 2,
+                    **diagnostic.expected,
+                    "execution_contract_sha256": "9" * 64,
+                    "lifecycle_summary_sha256": "8" * 64,
+                    "lifecycle_costs_sha256": "7" * 64,
+                    "lifecycle_samples_sha256": "6" * 64,
+                    "lifecycle_query_summary_sha256": "5" * 64,
+                    "lifecycle_query_samples_sha256": "4" * 64,
+                    "lifecycle_storage_trace_sha256": "3" * 64,
+                }
+                if self.include_result_digest:
+                    receipt["diagnostic_result_sha256"] = "1" * 64
+                return receipt
+
+            def terminate(self, _instance: str) -> None:
+                raise AssertionError("completed observation has no active instance")
+
+        with self.assertRaisesRegex(ValueError, "artifact digest"):
+            run_execution_job(
+                diagnostic.job,
+                request=diagnostic.request,
+                expected=diagnostic.expected,
+                aws=DiagnosticReceiptAws(include_result_digest=False),
+                timeout_seconds=60,
+                poll_seconds=0.01,
+                purchase_option="spot",
+            )
+        completed = run_execution_job(
+            diagnostic.job,
+            request=diagnostic.request,
+            expected=diagnostic.expected,
+            aws=DiagnosticReceiptAws(include_result_digest=True),
+            timeout_seconds=60,
+            poll_seconds=0.01,
+            purchase_option="spot",
+        )
+        self.assertEqual(completed["diagnostic_result_sha256"], "1" * 64)
+
     def test_lifecycle_build_and_mutation_runtime_are_immutable_clone_bound(
         self,
     ) -> None:
@@ -870,7 +1051,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn(
-            "{stage,build-sift,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle}",
+            "{stage,build-sift,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
             completed.stdout,
         )
 

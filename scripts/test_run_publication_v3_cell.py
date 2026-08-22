@@ -25,6 +25,7 @@ from scripts.run_publication_v3_cell import (
     build_publication_report,
     build_receipt_metrics,
     build_smoke_report,
+    claim_ineligible_lifecycle_diagnostic,
     concurrency_result_arm,
     execute_plan,
     execute_plan_with_resources,
@@ -133,6 +134,19 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "batch schedule"):
+                summarize_lifecycle_artifacts(
+                    output, expected_batch_size=64, expected_writers=1
+                )
+            sample_path.write_text(canonical_samples, encoding="utf-8")
+
+            sample_path.write_text(
+                canonical_samples.replace(
+                    "insert,0,0,0,64,8,0.125,0,1,0,0,0",
+                    "insert,0,0,0,64,8,0.125,9,1,0,0,0",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "sample request totals"):
                 summarize_lifecycle_artifacts(
                     output, expected_batch_size=64, expected_writers=1
                 )
@@ -1616,6 +1630,63 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(arms[9]["insert_mode"], "claim-free-put")
         self.assertEqual(arms[-1]["writers"], 16)
         self.assertEqual(arms[-1]["batch_size"], 1024)
+
+    def test_lifecycle_diagnostic_write_count_is_explicit_and_runtime_only(self) -> None:
+        cell = scheduled_cell(kind="write-update-delete-compact")
+        cell["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        arm = plan_arms(cell)[13]
+        with tempfile.TemporaryDirectory() as root:
+            plan = build_execution_plan(
+                cell,
+                arm=arm,
+                workspace=Path(root),
+                generator=Path("/bin/false"),
+                borsuk_bench=Path("/bin/true"),
+                mode="runtime",
+                runtime_profile="lifecycle",
+                runtime_flow_control=runtime_flow_control("lifecycle"),
+                diagnostic_write_ops=2_560,
+            )
+            environment = plan["runtime"]["steps"][0]["env"]
+            self.assertEqual(environment["BORSUK_BENCH_WRITE_OPS"], "2560")
+
+            with self.assertRaisesRegex(ValueError, "diagnostic write count"):
+                build_execution_plan(
+                    cell,
+                    arm=arm,
+                    workspace=Path(root),
+                    generator=Path("/bin/false"),
+                    borsuk_bench=Path("/bin/true"),
+                    mode="build",
+                    diagnostic_write_ops=2_560,
+                )
+
+    def test_lifecycle_diagnostic_cannot_be_mistaken_for_publishable_evidence(self) -> None:
+        diagnostic = claim_ineligible_lifecycle_diagnostic(
+            {"publishable": True, "result": {"status": "complete"}},
+            write_ops=2_560,
+        )
+
+        self.assertEqual(
+            diagnostic,
+            {
+                "publishable": False,
+                "claim_eligible": False,
+                "diagnostic_write_ops": 2_560,
+                "result": {"status": "complete"},
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "write count"):
+            claim_ineligible_lifecycle_diagnostic(
+                {"publishable": True, "result": {}}, write_ops=0
+            )
 
     def test_smoke_report_is_distinct_from_a_publishable_cell_result(self) -> None:
         cell = scheduled_cell()

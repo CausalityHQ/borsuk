@@ -313,6 +313,7 @@ def build_execution_plan(
     mode: str,
     runtime_profile: str = "recall",
     runtime_flow_control: dict[str, int] | None = None,
+    diagnostic_write_ops: int | None = None,
 ) -> dict[str, object]:
     if mode not in {"build", "runtime", "smoke"}:
         raise ValueError("execution mode must be build, runtime, or smoke")
@@ -324,6 +325,13 @@ def build_execution_plan(
         raise ValueError("runtime flow-control authority is required")
     if mode != "runtime" and runtime_flow_control is not None:
         raise ValueError("runtime flow-control authority requires runtime mode")
+    if diagnostic_write_ops is not None and (
+        mode != "runtime"
+        or runtime_profile != "lifecycle"
+        or isinstance(diagnostic_write_ops, bool)
+        or not 1 <= diagnostic_write_ops <= 50_000
+    ):
+        raise ValueError("lifecycle diagnostic write count is invalid")
     if runtime_flow_control is not None and (
         frozenset(runtime_flow_control) != RUNTIME_FLOW_CONTROL_FIELDS
         or any(
@@ -699,6 +707,8 @@ def build_execution_plan(
                     "BORSUK_BENCH_DELETE_PERCENT": str(arm["delete_percent"]),
                 }
             )
+            if diagnostic_write_ops is not None:
+                runtime_env["BORSUK_BENCH_WRITE_OPS"] = str(diagnostic_write_ops)
         return {
             "schema_version": 1,
             "cell_id": cell.get("cell_id"),
@@ -1304,6 +1314,10 @@ def summarize_lifecycle_artifacts(
         operation: {} for operation in LIFECYCLE_OPERATIONS
     }
     sample_records = {operation: 0 for operation in LIFECYCLE_OPERATIONS}
+    sample_request_totals = {
+        operation: {field: 0 for field in ("gets", "puts", "deletes", "heads", "lists")}
+        for operation in LIFECYCLE_OPERATIONS
+    }
     for row in samples:
         operation = row.get("op", "")
         if operation not in sample_indices:
@@ -1335,6 +1349,14 @@ def summarize_lifecycle_artifacts(
         sample_indices[operation].add(index)
         sample_batch_records[operation][index] = batch_records
         sample_records[operation] += batch_records
+        for field in sample_request_totals[operation]:
+            try:
+                observed = int(row[field])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError("publication lifecycle sample request is invalid") from error
+            if observed < 0:
+                raise ValueError("publication lifecycle sample request is invalid")
+            sample_request_totals[operation][field] += observed
         latency_ms = _finite_nonnegative_float(
             row.get("batch_latency_ms"), "publication lifecycle sample latency"
         )
@@ -1409,6 +1431,17 @@ def summarize_lifecycle_artifacts(
                 or sample_batch_records[operation] != expected_records
             ):
                 raise ValueError("publication lifecycle batch schedule differs")
+        try:
+            declared_requests = {
+                field: int(row[field]) for field in sample_request_totals[operation]
+            }
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("publication lifecycle operation request is invalid") from error
+        if (
+            any(value < 0 for value in declared_requests.values())
+            or declared_requests != sample_request_totals[operation]
+        ):
+            raise ValueError("publication lifecycle sample request totals differ")
         wall_ms += _finite_nonnegative_float(
             row.get("wall_ms"), "publication lifecycle operation wall time"
         )
@@ -1943,6 +1976,26 @@ def build_lifecycle_publication_report(
     return {"publishable": True, "result": validated}
 
 
+def claim_ineligible_lifecycle_diagnostic(
+    report: dict[str, object], *, write_ops: int
+) -> dict[str, object]:
+    """Label a bounded lifecycle diagnosis so it can never become release evidence."""
+
+    if (
+        isinstance(write_ops, bool)
+        or not 1 <= write_ops <= 50_000
+        or report.get("publishable") is not True
+        or not isinstance(report.get("result"), dict)
+    ):
+        raise ValueError("lifecycle diagnostic write count or report is invalid")
+    return {
+        **report,
+        "publishable": False,
+        "claim_eligible": False,
+        "diagnostic_write_ops": write_ops,
+    }
+
+
 def _read_canonical_value(path: Path, maximum_bytes: int) -> object:
     payload = path.read_bytes()
     if not payload or len(payload) > maximum_bytes or not payload.endswith(b"\n"):
@@ -2072,6 +2125,7 @@ def main() -> int:
     parser.add_argument("--ram-budget-bytes", type=int)
     parser.add_argument("--disk-cache-max-bytes", type=int)
     parser.add_argument("--exact-read-max-physical-amplification", type=int)
+    parser.add_argument("--diagnostic-write-ops", type=int)
     args = parser.parse_args()
 
     runtime_flow_control = runtime_flow_control_authority(
@@ -2177,6 +2231,7 @@ def main() -> int:
         mode=args.mode,
         runtime_profile=args.runtime_profile,
         runtime_flow_control=runtime_flow_control,
+        diagnostic_write_ops=args.diagnostic_write_ops,
     )
     if args.mode == "build":
         output, resources, elapsed_ns = execute_publication_phase(plan, "build")
@@ -2422,6 +2477,10 @@ def main() -> int:
                 clone_receipt=clone_receipt,
                 runtime_attestation=runtime_attestation,
             )
+            if args.diagnostic_write_ops is not None:
+                report = claim_ineligible_lifecycle_diagnostic(
+                    report, write_ops=args.diagnostic_write_ops
+                )
         destination = args.workspace / "RESULT_COMPLETE.json"
         destination.write_bytes(canonical_json_bytes(report) + b"\n")
         print(json.dumps(report, sort_keys=True))

@@ -266,6 +266,11 @@ assert sys.argv[sys.argv.index('--dataset') + 1] == 'sift-128'
 if operation == 'run-lifecycle':
     assert sys.argv[sys.argv.index('--arm-index') + 1] == '4'
     assert sys.argv[sys.argv.index('--build-attempt') + 1] == '2'
+if operation == 'diagnose-lifecycle':
+    assert '--arm-index' not in sys.argv
+    assert sys.argv[sys.argv.index('--write-ops') + 1] == '2560'
+    assert sys.argv[sys.argv.index('--timeout-seconds') + 1] == '1200'
+    assert sys.argv[sys.argv.index('--build-attempt') + 1] == '2'
 print(json.dumps({'operation': operation}, sort_keys=True))
 """,
                 encoding="utf-8",
@@ -306,6 +311,22 @@ print(json.dumps({'operation': operation}, sort_keys=True))
             )
             self.assertEqual(runtime.returncode, 0, runtime.stderr)
             self.assertEqual(json.loads(runtime.stdout)["operation"], "run-lifecycle")
+            diagnostic = subprocess.run(
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--diagnose-lifecycle",
+                    "sift-128",
+                ],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(diagnostic.returncode, 0, diagnostic.stderr)
+            self.assertEqual(
+                json.loads(diagnostic.stdout)["operation"], "diagnose-lifecycle"
+            )
 
     def test_stage_dataset_requires_one_nonempty_id(self) -> None:
         for arguments in (["--stage-dataset"], ["--stage-dataset", ""]):

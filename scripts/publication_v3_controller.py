@@ -64,6 +64,16 @@ class PreparedExecution:
     timeout_seconds: int
 
 
+def _minimum_lifecycle_write_ops(
+    *, writers: int, batch_size: int, update_percent: int, delete_percent: int
+) -> int:
+    minimum_mutation_percent = min(update_percent, delete_percent)
+    mutation_wave = writers * batch_size
+    return (
+        mutation_wave * 100 + minimum_mutation_percent - 1
+    ) // minimum_mutation_percent
+
+
 def _s3_location(uri: str) -> tuple[str, str]:
     parsed = urlparse(uri)
     key = parsed.path.lstrip("/")
@@ -520,6 +530,8 @@ def run_execution_job(
                                 "lifecycle_storage_trace_sha256",
                             )
                         )
+                        if expected.get("claim_eligible") is False:
+                            digest_fields.append("diagnostic_result_sha256")
                     if any(
                         not isinstance(value.get(field), str)
                         or re.fullmatch(r"[0-9a-f]{64}", value[field]) is None
@@ -610,7 +622,9 @@ def prepare_qualification_execution(
     attempt: int = 1,
     build_attempt: int = 1,
     purchase_option: str = "spot",
-    arm_index: int = 0,
+    arm_index: int | None = None,
+    diagnostic_write_ops: int = 2_560,
+    diagnostic_timeout_seconds: int = 1_200,
 ) -> PreparedExecution:
     """Prepare one immutable build or small-runtime qualification execution."""
 
@@ -621,10 +635,28 @@ def prepare_qualification_execution(
         "read-concurrency-sift",
         "build-lifecycle",
         "run-lifecycle",
+        "diagnose-lifecycle",
     }
     if operation not in supported:
         raise ValueError("unsupported qualification execution")
-    lifecycle = operation in {"build-lifecycle", "run-lifecycle"}
+    lifecycle = operation in {
+        "build-lifecycle",
+        "run-lifecycle",
+        "diagnose-lifecycle",
+    }
+    diagnostic = operation == "diagnose-lifecycle"
+    effective_arm_index = (
+        13 if diagnostic and arm_index is None else 0 if arm_index is None else arm_index
+    )
+    if diagnostic and (
+        isinstance(diagnostic_write_ops, bool)
+        or not 1 <= diagnostic_write_ops <= 50_000
+        or isinstance(diagnostic_timeout_seconds, bool)
+        or diagnostic_timeout_seconds <= 0
+        or diagnostic_timeout_seconds
+        > int(normalized["budget_contract"]["max_cell_seconds"])
+    ):
+        raise ValueError("lifecycle diagnostic bounds are invalid")
     if lifecycle:
         if not dataset_id:
             raise ValueError("lifecycle qualification requires a dataset")
@@ -632,9 +664,9 @@ def prepare_qualification_execution(
         raise ValueError("SIFT qualification dataset differs")
     selected_dataset = dataset_id or "sift-128"
     build_operation = operation in {"build-sift", "build-lifecycle"}
-    if attempt <= 0 or build_attempt <= 0 or arm_index < 0:
+    if attempt <= 0 or build_attempt <= 0 or effective_arm_index < 0:
         raise ValueError("qualification attempts must be positive")
-    if build_operation and arm_index != 0:
+    if build_operation and effective_arm_index != 0:
         raise ValueError("build execution must use the canonical first arm")
     if purchase_option not in {"spot", "on-demand"}:
         raise ValueError("purchase option must be spot or on-demand")
@@ -700,9 +732,21 @@ def prepare_qualification_execution(
             for leaf_page_budget in factors["leaf_page_budgets"]
             for cache_state in factors["cache_states"]
         ]
-    if arm_index >= len(arms):
+    if effective_arm_index >= len(arms):
         raise ValueError("qualification arm index is outside the factor matrix")
-    arm = arms[arm_index]
+    arm = arms[effective_arm_index]
+    if diagnostic:
+        minimum_diagnostic_write_ops = _minimum_lifecycle_write_ops(
+            writers=int(arm["writers"]),
+            batch_size=int(arm["batch_size"]),
+            update_percent=int(arm["update_percent"]),
+            delete_percent=int(arm["delete_percent"]),
+        )
+        if diagnostic_write_ops < minimum_diagnostic_write_ops:
+            raise ValueError(
+                "lifecycle diagnostic write count must exercise every writer; "
+                f"require at least {minimum_diagnostic_write_ops} operations"
+            )
     cache_state = arm.get("cache_state", "cold")
     disk_cache_max_bytes = (
         0
@@ -721,7 +765,8 @@ def prepare_qualification_execution(
             cell,
             attempt=attempt,
             profile=runtime_profile,
-            arm_index=arm_index if lifecycle else 0,
+            arm_index=effective_arm_index if lifecycle else 0,
+            diagnostic=diagnostic,
         )
     )
     attempt_id = f"{job.cell_tag}-a{job.attempt:04d}"
@@ -771,7 +816,7 @@ def prepare_qualification_execution(
             terminal_prefix=job.terminal_prefix,
             purchase_option=purchase_option,
             runtime_profile=runtime_profile,
-            arm_index=arm_index,
+            arm_index=effective_arm_index,
             arm=arm if lifecycle else None,
             disk_cache_max_bytes=disk_cache_max_bytes,
             exact_read_max_physical_amplification=(
@@ -786,12 +831,20 @@ def prepare_qualification_execution(
             io_threads=io_threads,
             s3_get_concurrency=s3_get_concurrency,
             ram_budget_bytes=ram_budget_bytes,
+            diagnostic_write_ops=diagnostic_write_ops if diagnostic else None,
+            diagnostic_timeout_seconds=(
+                diagnostic_timeout_seconds if diagnostic else None
+            ),
         )
-        maximum = int(normalized["budget_contract"]["max_cell_seconds"])
+        maximum = (
+            diagnostic_timeout_seconds
+            if diagnostic
+            else int(normalized["budget_contract"]["max_cell_seconds"])
+        )
         role = "runtime"
         expected["binary_sha256"] = authority["binary_sha256"]
         expected["runtime_profile"] = runtime_profile
-        expected["arm_index"] = arm_index
+        expected["arm_index"] = effective_arm_index
         expected["max_active_searches"] = max_active_searches
         expected["max_waiting_searches"] = max_waiting_searches
         expected["leaf_read_width"] = leaf_read_width
@@ -805,6 +858,10 @@ def prepare_qualification_execution(
         expected["exact_read_max_physical_amplification"] = (
             exact_read_max_physical_amplification
         )
+        if diagnostic:
+            expected["claim_eligible"] = False
+            expected["diagnostic_write_ops"] = diagnostic_write_ops
+            expected["diagnostic_timeout_seconds"] = maximum
     request = build_launch_request(
         normalized,
         role=role,
@@ -903,6 +960,23 @@ def main() -> int:
     lifecycle_runtime.add_argument(
         "--purchase-option", choices=("spot", "on-demand"), default="spot"
     )
+    lifecycle_diagnostic = subparsers.add_parser("diagnose-lifecycle")
+    lifecycle_diagnostic.add_argument("--manifest", type=Path, required=True)
+    lifecycle_diagnostic.add_argument("--source-archive", type=Path, required=True)
+    lifecycle_diagnostic.add_argument("--dataset", required=True)
+    lifecycle_diagnostic.add_argument("--profile", default="causality")
+    lifecycle_diagnostic.add_argument("--image-id", required=True)
+    lifecycle_diagnostic.add_argument("--subnet-id", required=True)
+    lifecycle_diagnostic.add_argument("--security-group-id", required=True)
+    lifecycle_diagnostic.add_argument("--instance-profile-arn", required=True)
+    lifecycle_diagnostic.add_argument("--attempt", type=int, default=1)
+    lifecycle_diagnostic.add_argument("--build-attempt", type=int, default=1)
+    lifecycle_diagnostic.add_argument("--arm-index", type=int, default=13)
+    lifecycle_diagnostic.add_argument("--write-ops", type=int, default=2_560)
+    lifecycle_diagnostic.add_argument("--timeout-seconds", type=int, default=1_200)
+    lifecycle_diagnostic.add_argument(
+        "--purchase-option", choices=("spot", "on-demand"), default="spot"
+    )
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -948,7 +1022,11 @@ def main() -> int:
             max_attempts=args.max_attempts,
         )
     else:
-        lifecycle = args.operation in {"build-lifecycle", "run-lifecycle"}
+        lifecycle = args.operation in {
+            "build-lifecycle",
+            "run-lifecycle",
+            "diagnose-lifecycle",
+        }
         build_operation = args.operation in {"build-sift", "build-lifecycle"}
         build_attempt = (
             args.attempt if build_operation else args.build_attempt
@@ -986,6 +1064,8 @@ def main() -> int:
             build_attempt=getattr(args, "build_attempt", 1),
             purchase_option=getattr(args, "purchase_option", "spot"),
             arm_index=getattr(args, "arm_index", 0),
+            diagnostic_write_ops=getattr(args, "write_ops", 2_560),
+            diagnostic_timeout_seconds=getattr(args, "timeout_seconds", 1_200),
         )
         receipt = run_execution_job(
             prepared.job,
