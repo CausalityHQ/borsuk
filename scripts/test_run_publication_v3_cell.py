@@ -431,6 +431,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "compaction_ms": "67.250",
                     "compaction_bytes_read": "7654321",
                     "compaction_bytes_written": "2345678",
+                    "gc_ms": "12.125",
+                    "gc_objects_scanned": "2879",
+                    "gc_objects_deleted": "275",
+                    "gc_transaction_states_remaining": "0",
+                    "gc_bytes_read": "345678",
+                    "gc_bytes_reclaimed": "456789",
                     "storage_gets": "7",
                     "storage_puts": "11",
                     "storage_deletes": "0",
@@ -498,6 +504,15 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "codec identity differs"):
                 read_build_artifact(output, cell=cell)
             row["scan_codec"] = cell["index_profile"]["global_scan_codec"]
+            row["gc_transaction_states_remaining"] = "1"
+            (output / "bench_build.csv").write_text(
+                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "transaction states remain"):
+                read_build_artifact(output, cell=cell)
+            row["gc_transaction_states_remaining"] = "0"
             (output / "bench_build.csv").write_text(
                 ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
                 + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
@@ -547,6 +562,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "compaction_ns": 67_250_000,
                 "compaction_bytes_read": 7_654_321,
                 "compaction_bytes_written": 2_345_678,
+                "gc_ns": 12_125_000,
+                "gc_objects_scanned": 2_879,
+                "gc_objects_deleted": 275,
+                "gc_transaction_states_remaining": 0,
+                "gc_bytes_read": 345_678,
+                "gc_bytes_reclaimed": 456_789,
             },
         )
         self.assertEqual(metrics["storage_puts"], 11)

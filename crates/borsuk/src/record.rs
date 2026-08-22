@@ -2620,6 +2620,11 @@ pub struct GarbageCollectionReport {
     pub objects_scanned: usize,
     /// Number of obsolete objects deleted.
     pub objects_deleted: usize,
+    /// Transaction-state controls remaining after mutating quiescent GC.
+    ///
+    /// Ordinary and dry-run reports leave this diagnostic at zero. A root report aggregates its
+    /// named modalities.
+    pub transaction_states_remaining: usize,
     /// Number of obsolete routing page/index objects deleted.
     pub routing_objects_deleted: usize,
     /// Number of obsolete manifest/routing/pivot table objects deleted.

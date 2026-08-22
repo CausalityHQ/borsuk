@@ -107,7 +107,7 @@ RUNTIME_FLOW_CONTROL_FIELDS = frozenset(
     }
 )
 PRODUCTION_BUILD_FIELDS = tuple(
-    "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
+    "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
 )
 BUILD_PHASE_FIELDS = ("schema_version", "group", "phase", "nanos", "calls")
 BUILD_PHASE_NAMES = (
@@ -1607,6 +1607,11 @@ def read_build_artifact(
         "total_active_index_bytes",
         "compaction_bytes_read",
         "compaction_bytes_written",
+        "gc_objects_scanned",
+        "gc_objects_deleted",
+        "gc_transaction_states_remaining",
+        "gc_bytes_read",
+        "gc_bytes_reclaimed",
         "storage_gets",
         "storage_puts",
         "storage_deletes",
@@ -1648,8 +1653,10 @@ def read_build_artifact(
         raise ValueError("publication build catalog checksum is invalid")
     if parsed["total_active_index_bytes"] <= 0:
         raise ValueError("publication build active index bytes must be positive")
+    if parsed["gc_transaction_states_remaining"] != 0:
+        raise ValueError("publication build transaction states remain after finalization")
     build_timings: dict[str, int] = {}
-    for field in ("ingest_ms", "compaction_ms"):
+    for field in ("ingest_ms", "compaction_ms", "gc_ms"):
         try:
             nanos = Decimal(row[field]) * 1_000_000
         except (KeyError, InvalidOperation) as error:
@@ -1661,6 +1668,13 @@ def read_build_artifact(
         {
             "compaction_bytes_read": parsed["compaction_bytes_read"],
             "compaction_bytes_written": parsed["compaction_bytes_written"],
+            "gc_objects_scanned": parsed["gc_objects_scanned"],
+            "gc_objects_deleted": parsed["gc_objects_deleted"],
+            "gc_transaction_states_remaining": parsed[
+                "gc_transaction_states_remaining"
+            ],
+            "gc_bytes_read": parsed["gc_bytes_read"],
+            "gc_bytes_reclaimed": parsed["gc_bytes_reclaimed"],
         }
     )
     return {

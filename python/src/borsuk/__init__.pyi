@@ -340,6 +340,7 @@ class GarbageCollectionReport:
     dry_run: bool
     objects_scanned: int
     objects_deleted: int
+    transaction_states_remaining: int
     routing_objects_deleted: int
     tables_deleted: int
     routing_page_indexes_read: int

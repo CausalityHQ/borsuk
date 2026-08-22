@@ -666,6 +666,64 @@ impl CellWalStore {
         self.live_staging_transaction_ids_at(chrono::Utc::now(), false)
     }
 
+    pub(crate) fn live_staging_transaction_ids_for_gc(&self) -> Result<BTreeSet<String>> {
+        let mut transaction_ids = self.live_staging_transaction_ids_with_claim_owners()?;
+        let mut durable_authorizations = BTreeSet::new();
+        let mut positioned_authorizations = BTreeSet::new();
+        for transaction_id in &transaction_ids {
+            if read_claim_authorization_receipt(&self.storage, self.source_epoch, transaction_id)?
+                .is_some()
+            {
+                durable_authorizations.insert(transaction_id.clone());
+            } else if authorized_transaction_receipt(
+                &self.storage,
+                self.source_epoch,
+                transaction_id,
+            )?
+            .is_some()
+            {
+                positioned_authorizations.insert(transaction_id.clone());
+            }
+        }
+        if durable_authorizations.is_empty() && positioned_authorizations.is_empty() {
+            return Ok(transaction_ids);
+        }
+
+        // Read claim ownership after resolving positioned receipts. A writer
+        // must acquire its claims before publishing that receipt, so this order
+        // cannot mistake an in-flight owner for a completed release. Durable
+        // authorization remains sufficient recovery authority even if a
+        // partially released page still names the transaction.
+        let claim_owners = claim_owner_transaction_ids(&self.storage)?;
+        transaction_ids.retain(|transaction_id| {
+            !durable_authorizations.contains(transaction_id)
+                && (!positioned_authorizations.contains(transaction_id)
+                    || claim_owners.contains(transaction_id))
+        });
+        Ok(transaction_ids)
+    }
+
+    pub(crate) fn live_staging_transaction_ids_with_claim_owners(
+        &self,
+    ) -> Result<BTreeSet<String>> {
+        let store_now = self.storage.store_clock_now()?;
+        self.live_staging_transaction_ids_with_claim_owners_at(store_now)
+    }
+
+    fn live_staging_transaction_ids_with_claim_owners_at(
+        &self,
+        store_now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<BTreeSet<String>> {
+        let mut transaction_ids = self.live_staging_transaction_ids_at(store_now, true)?;
+        // Aborting an expired Prepared state prevents the old writer from
+        // publishing, but it does not release that transaction's claim pages.
+        // GC needs the wider snapshot until no claim page names the owner;
+        // ordinary transaction-state snapshots deliberately avoid this
+        // high-churn coordination view.
+        transaction_ids.extend(claim_owner_transaction_ids(&self.storage)?);
+        Ok(transaction_ids)
+    }
+
     fn live_staging_transaction_ids_at(
         &self,
         store_now: chrono::DateTime<chrono::Utc>,
@@ -1800,6 +1858,32 @@ fn read_claim_page_wave(
         .collect()
 }
 
+fn claim_owner_transaction_ids(storage: &Storage) -> Result<BTreeSet<String>> {
+    let page_count = CELL_WAL_CLAIM_SHARDS.div_ceil(CELL_WAL_CLAIM_PAGE_SLOTS);
+    let pages = (0..page_count)
+        .map(|page| {
+            (
+                u8::try_from(page).expect("claim page index fits u8"),
+                Vec::new(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let pages = read_claim_page_wave(storage, &pages)?;
+    let mut owners = BTreeSet::new();
+    for (page, current) in pages {
+        let Some(current) = current else {
+            continue;
+        };
+        let path = claim_page_path(page);
+        let decoded = claim_page_from_slice(&current.bytes, &path, page)?;
+        owners.extend(decoded.slots.into_values().filter_map(|lock| match lock {
+            CellWalClaimLock::Owned { transaction_id } => Some(transaction_id),
+            CellWalClaimLock::Available { .. } => None,
+        }));
+    }
+    Ok(owners)
+}
+
 fn acquire_claim_shards(
     storage: &Storage,
     source_epoch: u64,
@@ -2518,6 +2602,51 @@ mod tests {
     }
 
     #[test]
+    fn gc_keeps_an_expired_state_while_a_claim_page_still_names_its_owner() {
+        let storage = Storage::from_object_store(
+            "memory:///expired-owned-state-gc".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let store = CellWalStore::from_storage(
+            storage.clone(),
+            CellWalConfig::default(),
+            INITIAL_POSITIONED_SOURCE_EPOCH,
+        )
+        .unwrap();
+        let transaction_id = "expired-owned-state";
+        let guard = store
+            .claim_ids(transaction_id, [b"owned-id".as_slice()])
+            .unwrap();
+        let path = transaction_state_path(transaction_id);
+        let prepared = storage.read_coordination_object(&path).unwrap().unwrap();
+        let after_expiry = prepared.last_modified
+            + chrono::TimeDelta::milliseconds(i64::try_from(CELL_WAL_TRANSACTION_TTL_MS).unwrap())
+            + chrono::TimeDelta::milliseconds(1);
+
+        assert!(
+            store
+                .live_staging_transaction_ids_with_claim_owners_at(after_expiry)
+                .unwrap()
+                .contains(transaction_id),
+            "GC must retain recovery state until no claim page names the transaction"
+        );
+        assert!(
+            !store
+                .live_staging_transaction_ids_at(after_expiry, true)
+                .unwrap()
+                .contains(transaction_id),
+            "ordinary transaction-state snapshots must not churn with claim ownership"
+        );
+        let fenced = storage.read_coordination_object(&path).unwrap().unwrap();
+        assert_eq!(
+            transaction_state_from_slice(&fenced.bytes, &path).unwrap(),
+            CellWalTransactionState::Aborted
+        );
+        std::mem::forget(guard);
+    }
+
+    #[test]
     fn live_prepared_transaction_renewal_replaces_the_exact_state_version() {
         let storage = Storage::from_object_store(
             "memory:///live-prepared-renewal".to_string(),
@@ -3183,6 +3312,72 @@ mod tests {
                 .is_some()
         );
         std::mem::forget(recovered);
+    }
+
+    #[test]
+    fn gc_keeps_head_authorized_state_until_its_claim_page_is_released() {
+        let storage = Storage::from_object_store(
+            "memory:///gc-authorized-claim-release".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        let store =
+            CellWalStore::from_storage(storage.clone(), CellWalConfig::default(), 7).unwrap();
+        let owner = "gc-authorized-owner";
+        let mut guard = store.claim_ids(owner, [b"owned-id".as_slice()]).unwrap();
+        let stamp = crate::mutation::MutationStamp::new(
+            crate::mutation::MutationVersion::from_parts(1, [1; 16]),
+            [2; 32],
+        );
+        let bytes = crate::format::tombstone_ids_to_parquet(&[(
+            b"owned-id".to_vec(),
+            crate::mutation::MutationState::new(stamp, crate::mutation::MutationOperation::Put),
+        )])
+        .unwrap();
+        let committed = crate::positioned_log::PositionedLogWriter::create_from_storage(
+            storage,
+            7,
+            &"ab".repeat(32),
+        )
+        .unwrap()
+        .append(
+            owner,
+            &"ab".repeat(32),
+            vec![crate::positioned_log::PositionedMutationPayloadInput {
+                modality: crate::positioned_log::PositionedMutationModality::Tombstone,
+                role: "gc-authorized-owner".to_string(),
+                id_bloom: Vec::new(),
+                format: crate::positioned_log::PositionedPayloadFormat::Parquet,
+                rows: 1,
+                bytes,
+            }],
+        )
+        .unwrap();
+
+        assert!(
+            store
+                .live_staging_transaction_ids_for_gc()
+                .unwrap()
+                .contains(owner),
+            "a bounded positioned receipt cannot replace recovery state while a claim is owned"
+        );
+
+        guard
+            .finish_authorized(
+                committed.position.source_epoch,
+                committed.position.shard,
+                committed.position.sequence,
+                &committed.envelope_checksum,
+            )
+            .unwrap();
+
+        assert!(
+            !store
+                .live_staging_transaction_ids_for_gc()
+                .unwrap()
+                .contains(owner),
+            "released claims no longer need their prepared-state recovery marker"
+        );
     }
 
     #[test]

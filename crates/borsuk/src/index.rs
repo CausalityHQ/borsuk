@@ -310,6 +310,7 @@ struct GarbageCollectionCandidate {
 struct GarbageCollectionCandidateScan<'a> {
     active_paths: &'a HashSet<String>,
     protected_transaction_ids: &'a BTreeSet<String>,
+    state_protected_transaction_ids: &'a BTreeSet<String>,
     min_age: Duration,
     now: DateTime<Utc>,
     objects_scanned: &'a mut usize,
@@ -9113,10 +9114,13 @@ impl BorsukIndex {
         }
         if config.garbage_collection && maintenance::owns_shard("gc", rank, count) {
             let collected = self.run_leased_unit(config, "gc", ttl_ms, &mut report, |index| {
-                let gc = index.gc_obsolete_segments_primary(GarbageCollectionOptions {
-                    dry_run: false,
-                    min_age: config.lease_ttl,
-                })?;
+                let gc = index.gc_obsolete_segments_primary(
+                    GarbageCollectionOptions {
+                        dry_run: false,
+                        min_age: config.lease_ttl,
+                    },
+                    false,
+                )?;
                 Ok(!gc.dry_run)
             })?;
             report.garbage_collected = collected;
@@ -15661,6 +15665,28 @@ impl BorsukIndex {
         &mut self,
         options: GarbageCollectionOptions,
     ) -> Result<GarbageCollectionReport> {
+        self.gc_obsolete_segments_with_mode(options, false)
+    }
+
+    /// Delete inactive objects after callers have stopped every concurrent writer.
+    ///
+    /// In addition to ordinary GC, this may reclaim recent transaction-state controls whose
+    /// positioned commit is durable and whose claim pages have already been released. The
+    /// quiescence requirement is essential: an idempotent writer retry can otherwise reacquire a
+    /// claim after the ownership snapshot and lose its crash-recovery marker.
+    /// A dry run remains non-mutating and therefore conservatively retains those controls.
+    pub fn gc_obsolete_segments_quiescent(
+        &mut self,
+        options: GarbageCollectionOptions,
+    ) -> Result<GarbageCollectionReport> {
+        self.gc_obsolete_segments_with_mode(options, true)
+    }
+
+    fn gc_obsolete_segments_with_mode(
+        &mut self,
+        options: GarbageCollectionOptions,
+        reclaim_authorized_prepared: bool,
+    ) -> Result<GarbageCollectionReport> {
         if !options.dry_run
             && let Some(intent) = self
                 .collection_storage
@@ -15674,11 +15700,16 @@ impl BorsukIndex {
                     path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
                 }
             })?;
-            child.gc_obsolete_segments_primary(options.clone())?;
+            child.gc_obsolete_segments_primary(options.clone(), reclaim_authorized_prepared)?;
         }
-        let report = self.gc_obsolete_segments_primary(options.clone())?;
+        let mut report =
+            self.gc_obsolete_segments_primary(options.clone(), reclaim_authorized_prepared)?;
         for child in self.named.values_mut() {
-            child.gc_obsolete_segments(options.clone())?;
+            let child_report = child
+                .gc_obsolete_segments_with_mode(options.clone(), reclaim_authorized_prepared)?;
+            report.transaction_states_remaining = report
+                .transaction_states_remaining
+                .saturating_add(child_report.transaction_states_remaining);
         }
         Ok(report)
     }
@@ -15686,13 +15717,17 @@ impl BorsukIndex {
     fn gc_obsolete_segments_primary(
         &mut self,
         options: GarbageCollectionOptions,
+        reclaim_authorized_prepared: bool,
     ) -> Result<GarbageCollectionReport> {
         const MAX_GC_BATCHES_PER_CALL: usize = 16;
         let span = observability::gc_span(&options, self.manifest.version);
         let _entered = span.enter();
         let mut aggregate: Option<GarbageCollectionReport> = None;
         for _ in 0..MAX_GC_BATCHES_PER_CALL {
-            let report = self.gc_obsolete_segments_impl(options.clone())?;
+            let report = self.gc_obsolete_segments_impl_with_mode(
+                options.clone(),
+                reclaim_authorized_prepared,
+            )?;
             let more_work = !options.dry_run
                 && report.candidates.len() == COLLECTION_GC_DELETE_INTENT_MAX_PATHS;
             if let Some(total) = aggregate.as_mut() {
@@ -15730,7 +15765,17 @@ impl BorsukIndex {
                 break;
             }
         }
-        let report = aggregate.expect("GC always executes at least one bounded pass");
+        let mut report = aggregate.expect("GC always executes at least one bounded pass");
+        if reclaim_authorized_prepared && !options.dry_run {
+            let mut transaction_states_remaining = 0_usize;
+            self.storage.for_each_object("transactions", |object| {
+                if is_cell_wal_transaction_state_path(&object.path) {
+                    transaction_states_remaining += 1;
+                }
+                Ok(())
+            })?;
+            report.transaction_states_remaining = transaction_states_remaining;
+        }
         observability::record_gc_report(&span, &report);
         Ok(report)
     }
@@ -15743,7 +15788,7 @@ impl BorsukIndex {
         transaction_ids.extend(if read_only {
             cell_wal.live_staging_transaction_ids_read_only()?
         } else {
-            cell_wal.live_staging_transaction_ids()?
+            cell_wal.live_staging_transaction_ids_with_claim_owners()?
         });
         Ok(transaction_ids)
     }
@@ -15946,11 +15991,17 @@ impl BorsukIndex {
             })
     }
 
-    fn gc_obsolete_segments_impl(
+    fn gc_obsolete_segments_impl_with_mode(
         &mut self,
         options: GarbageCollectionOptions,
+        reclaim_authorized_prepared: bool,
     ) -> Result<GarbageCollectionReport> {
-        self.gc_obsolete_segments_impl_with_hooks(options, || Ok(()), |_| Ok(()))
+        self.gc_obsolete_segments_impl_with_hooks_and_mode(
+            options,
+            reclaim_authorized_prepared,
+            || Ok(()),
+            |_| Ok(()),
+        )
     }
 
     #[cfg(test)]
@@ -15962,9 +16013,25 @@ impl BorsukIndex {
         self.gc_obsolete_segments_impl_with_hooks(options, || Ok(()), before_delete)
     }
 
+    #[cfg(test)]
     fn gc_obsolete_segments_impl_with_hooks(
         &mut self,
         options: GarbageCollectionOptions,
+        before_intent: impl FnMut() -> Result<()>,
+        before_delete: impl FnMut(&[GarbageCollectionCandidate]) -> Result<()>,
+    ) -> Result<GarbageCollectionReport> {
+        self.gc_obsolete_segments_impl_with_hooks_and_mode(
+            options,
+            false,
+            before_intent,
+            before_delete,
+        )
+    }
+
+    fn gc_obsolete_segments_impl_with_hooks_and_mode(
+        &mut self,
+        options: GarbageCollectionOptions,
+        reclaim_authorized_prepared: bool,
         mut before_intent: impl FnMut() -> Result<()>,
         mut before_delete: impl FnMut(&[GarbageCollectionCandidate]) -> Result<()>,
     ) -> Result<GarbageCollectionReport> {
@@ -16024,12 +16091,19 @@ impl BorsukIndex {
             .extend(self.active_collection_wal_descriptor_paths()?);
         let protected_transaction_ids =
             self.gc_protected_transaction_ids_snapshot(options.dry_run)?;
+        let state_protected_transaction_ids = if reclaim_authorized_prepared && !options.dry_run {
+            self.cell_wal_store()?
+                .live_staging_transaction_ids_for_gc()?
+        } else {
+            protected_transaction_ids.clone()
+        };
         let mut objects_scanned = 0_usize;
         let mut candidates = Vec::new();
         {
             let mut scan = GarbageCollectionCandidateScan {
                 active_paths: &active_paths.paths,
                 protected_transaction_ids: &protected_transaction_ids,
+                state_protected_transaction_ids: &state_protected_transaction_ids,
                 min_age: options.min_age,
                 now,
                 objects_scanned: &mut objects_scanned,
@@ -16129,6 +16203,7 @@ impl BorsukIndex {
             let mut scan = GarbageCollectionCandidateScan {
                 active_paths: &active_paths.paths,
                 protected_transaction_ids: &protected_transaction_ids,
+                state_protected_transaction_ids: &state_protected_transaction_ids,
                 min_age: options.min_age,
                 now,
                 objects_scanned: &mut objects_scanned,
@@ -16159,6 +16234,7 @@ impl BorsukIndex {
                 dry_run: true,
                 objects_scanned,
                 objects_deleted: 0,
+                transaction_states_remaining: 0,
                 routing_objects_deleted: 0,
                 tables_deleted: 0,
                 routing_page_indexes_read: active_paths.routing_page_indexes_read,
@@ -16196,6 +16272,12 @@ impl BorsukIndex {
             });
         }
         let protected_transaction_ids_now = self.gc_protected_transaction_ids_snapshot(false)?;
+        let state_protected_transaction_ids_now = if reclaim_authorized_prepared {
+            self.cell_wal_store()?
+                .live_staging_transaction_ids_for_gc()?
+        } else {
+            protected_transaction_ids_now.clone()
+        };
         let mut candidates: Vec<GarbageCollectionCandidate> = candidates
             .into_iter()
             .filter(|candidate| {
@@ -16208,16 +16290,18 @@ impl BorsukIndex {
                 if live_now.contains(&candidate.path) {
                     return false;
                 }
-                if let Some(transaction_id) =
-                    collection_transaction_id_from_immutable_path(&candidate.path)
-                {
+                if collection_transaction_id_from_immutable_path(&candidate.path).is_some() {
                     // Transaction-scoped paths cannot be reused by a different
                     // mutation. Fresh root truth establishes their eligibility;
                     // the checked delete intent still orders the later delete
                     // against publication. An object that remains unauthorized can
                     // therefore be reclaimed without waiting for an unrelated
                     // manifest publish.
-                    return !protected_transaction_ids_now.contains(transaction_id);
+                    return !transaction_path_is_gc_protected(
+                        &candidate.path,
+                        &protected_transaction_ids_now,
+                        &state_protected_transaction_ids_now,
+                    );
                 }
                 candidate.last_modified <= latest_manifest_created_at
             })
@@ -16276,6 +16360,7 @@ impl BorsukIndex {
                         dry_run: false,
                         objects_scanned,
                         objects_deleted: 0,
+                        transaction_states_remaining: 0,
                         routing_objects_deleted: 0,
                         tables_deleted: 0,
                         routing_page_indexes_read: active_paths.routing_page_indexes_read,
@@ -16337,6 +16422,7 @@ impl BorsukIndex {
             dry_run: false,
             objects_scanned,
             objects_deleted,
+            transaction_states_remaining: 0,
             routing_objects_deleted,
             tables_deleted,
             routing_page_indexes_read: active_paths.routing_page_indexes_read,
@@ -16830,10 +16916,11 @@ impl BorsukIndex {
                 return Ok(());
             }
             *scan.objects_scanned += 1;
-            let transaction_is_protected = collection_transaction_id_from_immutable_path(
+            let transaction_is_protected = transaction_path_is_gc_protected(
                 &object.path,
-            )
-            .is_some_and(|transaction_id| scan.protected_transaction_ids.contains(transaction_id));
+                scan.protected_transaction_ids,
+                scan.state_protected_transaction_ids,
+            );
             if !transaction_is_protected
                 && !scan.active_paths.contains(&object.path)
                 && object_is_at_least_min_age(&object, scan.min_age, scan.now)
@@ -28909,6 +28996,32 @@ fn is_cell_wal_transaction_path(path: &str) -> bool {
         && (path.ends_with("/STATE")
             || path.ends_with("/COMMIT")
             || (path.contains("/descriptors/") && path.ends_with(".bin")))
+}
+
+fn is_cell_wal_transaction_state_path(path: &str) -> bool {
+    path.strip_prefix("transactions/")
+        .and_then(|path| path.strip_suffix("/STATE"))
+        .is_some_and(|transaction_id| {
+            !transaction_id.is_empty()
+                && !transaction_id.contains('/')
+                && transaction_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+}
+
+fn transaction_path_is_gc_protected(
+    path: &str,
+    protected_transaction_ids: &BTreeSet<String>,
+    state_protected_transaction_ids: &BTreeSet<String>,
+) -> bool {
+    collection_transaction_id_from_immutable_path(path).is_some_and(|transaction_id| {
+        if is_cell_wal_transaction_state_path(path) {
+            state_protected_transaction_ids.contains(transaction_id)
+        } else {
+            protected_transaction_ids.contains(transaction_id)
+        }
+    })
 }
 
 /// Return the root transaction encoded in an immutable object's namespace.
@@ -42575,6 +42688,28 @@ mod tests {
             lexical_shards: Vec::new(),
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn quiescent_state_reclaim_never_exposes_same_transaction_immutable_objects() {
+        let protected = BTreeSet::from(["authorized".to_string()]);
+        let state_protected = BTreeSet::new();
+
+        assert!(!transaction_path_is_gc_protected(
+            "transactions/authorized/STATE",
+            &protected,
+            &state_protected,
+        ));
+        assert!(transaction_path_is_gc_protected(
+            "transactions/authorized/descriptors/primary.bin",
+            &protected,
+            &state_protected,
+        ));
+        assert!(transaction_path_is_gc_protected(
+            "cells/0/wal/runs/transactions/authorized/run.parquet",
+            &protected,
+            &state_protected,
+        ));
     }
 
     #[test]

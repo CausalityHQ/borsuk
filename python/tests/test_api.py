@@ -273,6 +273,7 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(add_report_hints["segments_written"], int)
         self.assertEqual(add_report_hints["graph_payloads_written"], int)
         self.assertEqual(add_report_hints["manifest_tables_written"], int)
+        self.assertEqual(gc_hints["transaction_states_remaining"], int)
         self.assertEqual(add_report_hints["routing_pages_written"], int)
         self.assertEqual(add_report_hints["total_bytes_written"], int)
         self.assertEqual(add_report_hints["bytes_per_vector"], float)

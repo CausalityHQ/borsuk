@@ -10,7 +10,7 @@ use std::{
     str::FromStr,
     sync::Arc,
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use arrow_array::{
@@ -21,11 +21,12 @@ use borsuk::{
     BACKING_GET_CONCURRENCY_ENV, BorsukIndex, BuildConfig, CPU_THREADS_ENV, CacheExecutionPolicy,
     CompactionOptions, DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION, DEFAULT_LEAF_READ_WIDTH,
     DEFAULT_MAX_ACTIVE_SEARCHES, DEFAULT_MAX_INFLIGHT_LEAF_READS,
-    DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS, DEFAULT_MAX_WAITING_SEARCHES, GlobalPqLayout,
-    GlobalScanCodec, IO_THREADS_ENV, IndexConfig, LeafCapability, LeafMode, OpenOptions,
-    ProcessLimits, RequestCounts, SearchOptions, SearchReport, VectorElementType, VectorMetric,
-    VectorRecord, WalConfig, WarmReport, configure_process, configured_backing_get_concurrency,
-    configured_cpu_threads, configured_io_threads, recall_at_k, recommended_segment_max_vectors,
+    DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS, DEFAULT_MAX_WAITING_SEARCHES, GarbageCollectionOptions,
+    GarbageCollectionReport, GlobalPqLayout, GlobalScanCodec, IO_THREADS_ENV, IndexConfig,
+    LeafCapability, LeafMode, OpenOptions, ProcessLimits, RequestCounts, SearchOptions,
+    SearchReport, VectorElementType, VectorMetric, VectorRecord, WalConfig, WarmReport,
+    configure_process, configured_backing_get_concurrency, configured_cpu_threads,
+    configured_io_threads, recall_at_k, recommended_segment_max_vectors,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,7 @@ const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turb
 const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,cache_profile,target_cache_coverage_percent,execution_engine,nprobe,max_candidates,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read";
 const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,nprobe,max_candidates,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,network_gets";
-const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written";
+const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written";
 const WRITE_COST_HEADER: &str = "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
 const WRITE_SAMPLE_HEADER: &str = "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
 const LIFECYCLE_HEADER: &str = "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,searchability_refresh_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
@@ -847,6 +848,12 @@ struct BuildMeasurement {
     compaction_ms: f64,
     compaction_bytes_read: u64,
     compaction_bytes_written: u64,
+    gc_ms: f64,
+    gc_objects_scanned: usize,
+    gc_objects_deleted: usize,
+    gc_transaction_states_remaining: usize,
+    gc_bytes_read: u64,
+    gc_bytes_reclaimed: u64,
     storage_requests: RequestCounts,
     storage_bytes_read: u64,
     storage_bytes_written: u64,
@@ -863,6 +870,54 @@ struct BuildMeasurement {
     transient_bytes: u64,
     transient_capacity_bytes: u64,
     transient_peak_bytes: u64,
+}
+
+struct BuildFinalization {
+    layout: &'static str,
+    compaction_ms: f64,
+    compaction_bytes_read: u64,
+    compaction_bytes_written: u64,
+    gc_ms: f64,
+    garbage_collection: GarbageCollectionReport,
+}
+
+fn finalize_fresh_build(
+    index: &mut BorsukIndex,
+    recluster_build: bool,
+) -> BenchResult<BuildFinalization> {
+    let compaction_started = Instant::now();
+    let (layout, compaction_bytes_read, compaction_bytes_written) = if recluster_build {
+        let report = index.compact(CompactionOptions {
+            max_segments: None,
+            ..CompactionOptions::default()
+        })?;
+        ("reclustered", report.bytes_read, report.bytes_written)
+    } else {
+        index.finish_bulk_load()?;
+        ("ingest-preserving", 0, 0)
+    };
+    let compaction_ms = elapsed_ms(compaction_started);
+    borsuk::report_build_timing("compaction")?;
+
+    // The build prefix is quiescent and owned by this one builder. Reclaim
+    // committed transaction controls and superseded immutable artifacts before
+    // it becomes the frozen runtime base, so time-to-ready and S3 footprint are
+    // both measured rather than hidden behind a looser evidence cap.
+    let gc_started = Instant::now();
+    let garbage_collection = index.gc_obsolete_segments_quiescent(GarbageCollectionOptions {
+        dry_run: false,
+        min_age: Duration::ZERO,
+    })?;
+    let gc_ms = elapsed_ms(gc_started);
+
+    Ok(BuildFinalization {
+        layout,
+        compaction_ms,
+        compaction_bytes_read,
+        compaction_bytes_written,
+        gc_ms,
+        garbage_collection,
+    })
 }
 
 fn main() {
@@ -981,22 +1036,20 @@ fn run() -> BenchResult<()> {
         // Compare the low-memory ingest layout against an explicitly reclustered
         // layout. Both produce the same global product-PQ shortlist and recall;
         // reclustering may reduce exact-rerank GETs by colocating candidates.
-        let compaction_started = Instant::now();
-        let (layout, compaction_bytes_read, compaction_bytes_written) = if config.recluster_build {
-            let report = index.compact(CompactionOptions {
-                max_segments: None,
-                ..CompactionOptions::default()
-            })?;
-            ("reclustered", report.bytes_read, report.bytes_written)
-        } else {
-            index.finish_bulk_load()?;
-            ("ingest-preserving", 0, 0)
-        };
-        let compaction_ms = elapsed_ms(compaction_started);
-        borsuk::report_build_timing("compaction")?;
+        let finalization = finalize_fresh_build(&mut index, config.recluster_build)?;
         eprintln!(
-            "build dataset={} records={} ingest_ms={ingest_ms:.3} compaction_ms={compaction_ms:.3} compaction_bytes_read={} compaction_bytes_written={}",
-            dataset.meta.name, dataset.train_count, compaction_bytes_read, compaction_bytes_written
+            "build dataset={} records={} ingest_ms={ingest_ms:.3} compaction_ms={:.3} compaction_bytes_read={} compaction_bytes_written={} gc_ms={:.3} gc_objects_scanned={} gc_objects_deleted={} gc_transaction_states_remaining={} gc_bytes_read={} gc_bytes_reclaimed={}",
+            dataset.meta.name,
+            dataset.train_count,
+            finalization.compaction_ms,
+            finalization.compaction_bytes_read,
+            finalization.compaction_bytes_written,
+            finalization.gc_ms,
+            finalization.garbage_collection.objects_scanned,
+            finalization.garbage_collection.objects_deleted,
+            finalization.garbage_collection.transaction_states_remaining,
+            finalization.garbage_collection.bytes_read,
+            finalization.garbage_collection.bytes_reclaimed,
         );
         let stats = index.stats();
         let storage_requests = index.request_counts();
@@ -1007,11 +1060,19 @@ fn run() -> BenchResult<()> {
             logical_cells: catalog_evidence.1,
             logical_cell_dimensions: catalog_evidence.2,
             logical_cell_catalog_bytes: catalog_evidence.3,
-            layout,
+            layout: finalization.layout,
             ingest_ms,
-            compaction_ms,
-            compaction_bytes_read,
-            compaction_bytes_written,
+            compaction_ms: finalization.compaction_ms,
+            compaction_bytes_read: finalization.compaction_bytes_read,
+            compaction_bytes_written: finalization.compaction_bytes_written,
+            gc_ms: finalization.gc_ms,
+            gc_objects_scanned: finalization.garbage_collection.objects_scanned,
+            gc_objects_deleted: finalization.garbage_collection.objects_deleted,
+            gc_transaction_states_remaining: finalization
+                .garbage_collection
+                .transaction_states_remaining,
+            gc_bytes_read: finalization.garbage_collection.bytes_read,
+            gc_bytes_reclaimed: finalization.garbage_collection.bytes_reclaimed,
             storage_requests,
             storage_bytes_read,
             storage_bytes_written,
@@ -2416,7 +2477,7 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
     };
     writeln!(
         writer,
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{},{},{},{},{},{},{},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{},{:.3},{},{},{},{},{},{},{},{},{},{},{},{}",
         build.logical_cell_catalog_checksum,
         build.logical_cells,
         build.logical_cell_dimensions,
@@ -2448,6 +2509,12 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
         build.compaction_ms,
         build.compaction_bytes_read,
         build.compaction_bytes_written,
+        build.gc_ms,
+        build.gc_objects_scanned,
+        build.gc_objects_deleted,
+        build.gc_transaction_states_remaining,
+        build.gc_bytes_read,
+        build.gc_bytes_reclaimed,
         build.storage_requests.gets,
         build.storage_requests.puts,
         build.storage_requests.deletes,
@@ -5063,7 +5130,7 @@ mod tests {
         cache_coverage_cohort_size, cache_coverage_enabled, cache_state_summary_enabled,
         dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
         default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
-        execute_put_wave, first_logical_batch_publish_ms, ingest_batch_size,
+        execute_put_wave, finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
         ingest_generated_batch, is_hot_workload_position, lifecycle_write_operation_count,
         lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
         neighbor_row, normalized_cache_access_fractions, parquet_train_files_for_phase,
@@ -5460,6 +5527,58 @@ mod tests {
         assert_eq!(index.manifest().tombstone_page_count(), 0);
         assert_eq!(index.get_vector("0").unwrap(), Some(vec![1.0, 0.0]));
         assert_eq!(index.get_vector("1").unwrap(), Some(vec![0.0, 1.0]));
+    }
+
+    #[test]
+    fn fresh_build_finalization_reclaims_committed_transaction_controls() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        for batch in 0..8 {
+            let start = batch * 2;
+            ingest_generated_batch(
+                &mut index,
+                start,
+                vec![vec![start as f32, 0.0], vec![(start + 1) as f32, 0.0]],
+            )
+            .unwrap();
+        }
+        let transaction_states = || {
+            std::fs::read_dir(directory.path().join("transactions"))
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().join("STATE").is_file())
+                .count()
+        };
+        let before = transaction_states();
+        assert!(
+            before >= 8,
+            "expected one authorized prepared-state control per batch"
+        );
+
+        let finalized = finalize_fresh_build(&mut index, false).unwrap();
+
+        assert_eq!(finalized.layout, "ingest-preserving");
+        assert!(finalized.garbage_collection.objects_deleted >= before);
+        assert_eq!(finalized.garbage_collection.transaction_states_remaining, 0);
+        let after = transaction_states();
+        assert_eq!(
+            after, 0,
+            "authorized prepared-state controls were not fully reclaimed: before={before} report={:?}",
+            finalized.garbage_collection,
+        );
+        for id in 0..16 {
+            assert!(index.get_vector(&id.to_string()).unwrap().is_some());
+        }
     }
 
     #[test]
@@ -6208,6 +6327,12 @@ mod tests {
             "compaction_ms",
             "compaction_bytes_read",
             "compaction_bytes_written",
+            "gc_ms",
+            "gc_objects_scanned",
+            "gc_objects_deleted",
+            "gc_transaction_states_remaining",
+            "gc_bytes_read",
+            "gc_bytes_reclaimed",
             "storage_gets",
             "storage_puts",
             "storage_deletes",
