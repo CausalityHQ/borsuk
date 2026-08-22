@@ -133,6 +133,139 @@ class FakeAws:
 
 
 class PublicationV3ControllerTests(unittest.TestCase):
+    def test_lifecycle_build_and_mutation_runtime_are_immutable_clone_bound(
+        self,
+    ) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        cell = qualification_cell(
+            manifest,
+            dataset_id="sift-128",
+            workload_kind="write-update-delete-compact",
+            build_attempt=1,
+        )
+        build_job = ExecutionJob.build(cell, attempt=1)
+
+        class LifecycleAws:
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "role": "build",
+                    "attempt": 1,
+                    "attempt_id": f"{build_job.cell_tag}-a0001",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": "6" * 64,
+                    "protocol_sha256": "7" * 64,
+                    "index_uri": build_job.index_uri,
+                    "binary_sha256": "8" * 64,
+                    "purchase_option": "spot",
+                }
+
+        common = {
+            "manifest": manifest,
+            "source_uri": "s3://bucket/source.tar.gz",
+            "source_sha256": "2" * 64,
+            "manifest_uri": "s3://bucket/manifest.json",
+            "manifest_sha256": "6" * 64,
+            "protocol_uri": "s3://bucket/protocol.json",
+            "protocol_sha256": "7" * 64,
+            "launch": LaunchEnvironment(
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "aarch64",
+                "eu-central-1",
+            ),
+            "aws": LifecycleAws(),
+            "dataset_id": "sift-128",
+        }
+        build = prepare_qualification_execution(
+            **common, operation="build-lifecycle", attempt=1
+        )
+        self.assertEqual(build.job.index_uri, build_job.index_uri)
+        self.assertEqual(build.job.cell["workload"]["kind"], "write-update-delete-compact")
+        runtime = prepare_qualification_execution(
+            **common,
+            operation="run-lifecycle",
+            attempt=1,
+            build_attempt=1,
+            arm_index=4,
+        )
+        self.assertTrue(
+            runtime.job.terminal_prefix.endswith(
+                "/runtime-lifecycle/arms/0004/attempts/0001"
+            )
+        )
+        user_data = base64.b64decode(runtime.request["UserData"]).decode()
+        worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        worker = gzip.decompress(base64.b64decode(worker_payload)).decode()
+        self.assertIn("clone_publication_v3_index.py", worker)
+        self.assertIn("--clone-receipt", worker)
+        self.assertIn("--clone-inventory", worker)
+        self.assertIn("--runtime-profile lifecycle", worker)
+        self.assertIn("--arm-index 4", worker)
+        self.assertIn('"writers":4', worker)
+        self.assertIn('"batch_size":64', worker)
+        self.assertLess(
+            worker.index('put_immutable "$work/CLONE_COMPLETE.json"'),
+            worker.index("stage=execute-runtime"),
+        )
+        self.assertIn("bench_lifecycle.csv", worker)
+        self.assertIn("bench_write_costs.csv", worker)
+        self.assertIn("bench_write_samples.csv", worker)
+        self.assertIn('"lifecycle_summary_sha256"', worker)
+        self.assertIn('"lifecycle_costs_sha256"', worker)
+        self.assertIn('"lifecycle_samples_sha256"', worker)
+        self.assertEqual(runtime.expected["runtime_profile"], "lifecycle")
+        self.assertEqual(runtime.expected["arm_index"], 4)
+        self.assertEqual(runtime.expected["purchase_option"], "spot")
+
+        class IncompleteLifecycleReceiptAws:
+            def find_execution_instance(
+                self, _job: object, *, purchase_option: str
+            ) -> None:
+                self.purchase_option = purchase_option
+                return None
+
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 3,
+                    "status": "complete",
+                    "role": "runtime",
+                    "attempt": 1,
+                    **runtime.expected,
+                    "execution_contract_sha256": "9" * 64,
+                }
+
+            def terminate(self, _instance: str) -> None:
+                raise AssertionError("completed observation has no active instance")
+
+        with self.assertRaisesRegex(ValueError, "artifact digest"):
+            run_execution_job(
+                runtime.job,
+                request=runtime.request,
+                expected=runtime.expected,
+                aws=IncompleteLifecycleReceiptAws(),
+                timeout_seconds=60,
+                poll_seconds=0.01,
+                purchase_option="spot",
+            )
+
     def test_runtime_plan_uses_small_host_exact_build_and_distinct_retry_attempt(self) -> None:
         manifest = json.loads(MANIFEST.read_text())
         manifest["source"] = {
@@ -707,7 +840,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn(
-            "{stage,build-sift,read-recall-sift,read-concurrency-sift}",
+            "{stage,build-sift,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle}",
             completed.stdout,
         )
 

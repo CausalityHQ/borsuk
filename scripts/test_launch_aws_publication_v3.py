@@ -233,6 +233,80 @@ print(json.dumps({'dataset_id':'cohere-large-10m-768','attempt':1}, sort_keys=Tr
             self.assertIn("not an unstaged manifest dataset", completed.stderr)
             self.assertNotIn("CONTROLLER_WAS_CALLED", completed.stderr)
 
+    def test_lifecycle_build_and_runtime_forward_dataset_arm_and_frozen_inputs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            repository = temp / "repository"
+            repository.mkdir()
+            make_clean_repository(repository)
+            updater = temp / "updater"
+            run(
+                ["git", "clone", "--branch", "main", str(temp / "origin.git"), str(updater)],
+                temp,
+            )
+            run(["git", "config", "user.email", "publication-v3@example.invalid"], updater)
+            run(["git", "config", "user.name", "Publication V3 Test"], updater)
+            (updater / "later-main-change").write_text("later\n", encoding="utf-8")
+            run(["git", "add", "later-main-change"], updater)
+            run(["git", "commit", "-m", "advance origin"], updater)
+            run(["git", "push", "origin", "main"], updater)
+            fake = temp / "controller.py"
+            fake.write_text(
+                """#!/usr/bin/env python3
+import hashlib, json, pathlib, sys
+operation = sys.argv[1]
+manifest_path = pathlib.Path(sys.argv[sys.argv.index('--manifest') + 1])
+archive_path = pathlib.Path(sys.argv[sys.argv.index('--source-archive') + 1])
+manifest = json.loads(manifest_path.read_text())
+assert manifest['source']['state'] == 'frozen'
+assert manifest['source']['archive_sha256'] == hashlib.sha256(archive_path.read_bytes()).hexdigest()
+assert sys.argv[sys.argv.index('--dataset') + 1] == 'sift-128'
+if operation == 'run-lifecycle':
+    assert sys.argv[sys.argv.index('--arm-index') + 1] == '4'
+    assert sys.argv[sys.argv.index('--build-attempt') + 1] == '2'
+print(json.dumps({'operation': operation}, sort_keys=True))
+""",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            environment = {
+                **os.environ,
+                "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                "BORSUK_PUBLICATION_V3_BUILD_ATTEMPT": "2",
+                "BORSUK_PUBLICATION_V3_RUNTIME_ATTEMPT": "3",
+            }
+            build = subprocess.run(
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--build-lifecycle",
+                    "sift-128",
+                ],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(build.returncode, 0, build.stderr)
+            self.assertEqual(json.loads(build.stdout)["operation"], "build-lifecycle")
+            runtime = subprocess.run(
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--run-lifecycle",
+                    "sift-128",
+                    "4",
+                ],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(runtime.returncode, 0, runtime.stderr)
+            self.assertEqual(json.loads(runtime.stdout)["operation"], "run-lifecycle")
+
     def test_stage_dataset_requires_one_nonempty_id(self) -> None:
         for arguments in (["--stage-dataset"], ["--stage-dataset", ""]):
             with self.subTest(arguments=arguments):

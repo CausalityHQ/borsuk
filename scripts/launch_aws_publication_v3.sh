@@ -5,11 +5,18 @@ export PYTHONDONTWRITEBYTECODE=1
 if [[ "$#" -eq 2 && "$1" == "--stage-dataset" && -n "$2" ]]; then
   mode="$1"
   stage_dataset="$2"
+elif [[ "$#" -eq 2 && "$1" == "--build-lifecycle" && -n "$2" ]]; then
+  mode="$1"
+  lifecycle_dataset="$2"
+elif [[ "$#" -eq 3 && "$1" == "--run-lifecycle" && -n "$2" && "$3" =~ ^[0-9]+$ ]]; then
+  mode="$1"
+  lifecycle_dataset="$2"
+  lifecycle_arm_index="$3"
 elif [[ "$#" -eq 1 && ( "$1" == "--dry-run" || "$1" == "--build-sift" || "$1" == "--read-recall-sift" || "$1" == "--read-concurrency-sift" ) ]]; then
   mode="$1"
 else
   printf 'Publication V3 paid launch is unavailable until the AWS execution plan is implemented and reviewed\n' >&2
-  printf 'usage: %s --dry-run|--build-sift|--read-recall-sift|--read-concurrency-sift|--stage-dataset <manifest-dataset-id>\n' "$0" >&2
+  printf 'usage: %s --dry-run|--build-sift|--read-recall-sift|--read-concurrency-sift|--stage-dataset <manifest-dataset-id>|--build-lifecycle <manifest-dataset-id>|--run-lifecycle <manifest-dataset-id> <arm-index>\n' "$0" >&2
   exit 2
 fi
 
@@ -21,7 +28,7 @@ if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --
 fi
 
 git fetch --quiet origin main
-if [[ "$mode" == "--build-sift" || "$mode" == "--read-recall-sift" || "$mode" == "--read-concurrency-sift" ]]; then
+if [[ "$mode" == "--build-sift" || "$mode" == "--build-lifecycle" || "$mode" == "--run-lifecycle" || "$mode" == "--read-recall-sift" || "$mode" == "--read-concurrency-sift" ]]; then
   if ! git merge-base --is-ancestor HEAD origin/main; then
     printf 'Publication V3 frozen source commit must be contained in origin/main\n' >&2
     exit 2
@@ -133,6 +140,21 @@ if [[ "$mode" == "--build-sift" ]]; then
   exit 0
 fi
 
+if [[ "$mode" == "--build-lifecycle" ]]; then
+  controller="${BORSUK_PUBLICATION_V3_CONTROLLER:-scripts/publication_v3_controller.py}"
+  python3 "$controller" build-lifecycle \
+    --manifest "$manifest" \
+    --source-archive "$archive" \
+    --dataset "$lifecycle_dataset" \
+    --profile "${AWS_PROFILE:-causality}" \
+    --image-id "${BORSUK_PUBLICATION_V3_AMI_ID:-ami-07bcecd13a160173f}" \
+    --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
+    --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
+    --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
+    --attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-1}"
+  exit 0
+fi
+
 if [[ "$mode" == "--read-recall-sift" ]]; then
   controller="${BORSUK_PUBLICATION_V3_CONTROLLER:-scripts/publication_v3_controller.py}"
   python3 "$controller" read-recall-sift \
@@ -163,6 +185,24 @@ if [[ "$mode" == "--read-concurrency-sift" ]]; then
     --attempt "${BORSUK_PUBLICATION_V3_CONCURRENCY_ATTEMPT:-1}" \
     --build-attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-1}" \
     --arm-index "${BORSUK_PUBLICATION_V3_ARM_INDEX:-0}" \
+    --purchase-option "${BORSUK_PUBLICATION_V3_PURCHASE_OPTION:-spot}"
+  exit 0
+fi
+
+if [[ "$mode" == "--run-lifecycle" ]]; then
+  controller="${BORSUK_PUBLICATION_V3_CONTROLLER:-scripts/publication_v3_controller.py}"
+  python3 "$controller" run-lifecycle \
+    --manifest "$manifest" \
+    --source-archive "$archive" \
+    --dataset "$lifecycle_dataset" \
+    --profile "${AWS_PROFILE:-causality}" \
+    --image-id "${BORSUK_PUBLICATION_V3_AMI_ID:-ami-07bcecd13a160173f}" \
+    --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
+    --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
+    --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
+    --attempt "${BORSUK_PUBLICATION_V3_RUNTIME_ATTEMPT:-1}" \
+    --build-attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-1}" \
+    --arm-index "$lifecycle_arm_index" \
     --purchase-option "${BORSUK_PUBLICATION_V3_PURCHASE_OPTION:-spot}"
   exit 0
 fi

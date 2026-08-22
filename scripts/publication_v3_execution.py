@@ -12,11 +12,13 @@ from dataclasses import dataclass
 try:
     from scripts.publication_v3_protocol import (
         build_schedule_document,
+        canonical_json_bytes,
         validate_manifest,
     )
 except ModuleNotFoundError:
     from publication_v3_protocol import (
         build_schedule_document,
+        canonical_json_bytes,
         validate_manifest,
     )
 
@@ -67,13 +69,35 @@ class ExecutionJob:
 
     @classmethod
     def runtime(
-        cls, cell: dict[str, object], *, attempt: int, profile: str = "recall"
+        cls,
+        cell: dict[str, object],
+        *,
+        attempt: int,
+        profile: str = "recall",
+        arm_index: int = 0,
     ) -> "ExecutionJob":
-        if profile not in {"recall", "concurrency"}:
+        if profile not in {"recall", "concurrency", "lifecycle"}:
             raise ValueError("runtime execution profile is invalid")
+        if arm_index < 0 or (profile != "lifecycle" and arm_index != 0):
+            raise ValueError("runtime execution arm identity is invalid")
         job = cls._new(cell, role="runtime", attempt=attempt)
         if profile == "recall":
             return job
+        if profile == "lifecycle":
+            terminal_prefix = (
+                f"{str(cell['result_prefix']).rstrip('/')}/runtime-lifecycle/"
+                f"arms/{arm_index:04d}/attempts/{attempt:04d}"
+            )
+            return cls(
+                cell=job.cell,
+                role=job.role,
+                attempt=job.attempt,
+                cell_tag=f"runtime-lifecycle-{cell['cell_id']}-arm-{arm_index:04d}",
+                terminal_prefix=terminal_prefix,
+                complete_uri=f"{terminal_prefix}/RUNTIME_TERMINAL_COMPLETE.json",
+                failed_uri=f"{terminal_prefix}/RUNTIME_TERMINAL_FAILED.json",
+                index_uri=job.index_uri,
+            )
         terminal_prefix = (
             f"{str(cell['result_prefix']).rstrip('/')}/runtime-concurrency/"
             f"attempts/{attempt:04d}"
@@ -323,6 +347,7 @@ def runtime_worker_script(
     purchase_option: str = "spot",
     runtime_profile: str = "recall",
     arm_index: int = 0,
+    arm: dict[str, object] | None = None,
     disk_cache_max_bytes: int,
     exact_read_max_physical_amplification: int,
     max_active_searches: int,
@@ -339,8 +364,8 @@ def runtime_worker_script(
         raise ValueError("runtime worker requires a runtime job")
     if purchase_option not in {"spot", "on-demand"}:
         raise ValueError("runtime purchase option must be spot or on-demand")
-    if runtime_profile not in {"recall", "concurrency"}:
-        raise ValueError("runtime profile must be recall or concurrency")
+    if runtime_profile not in {"recall", "concurrency", "lifecycle"}:
+        raise ValueError("runtime profile must be recall, concurrency, or lifecycle")
     if arm_index < 0:
         raise ValueError("runtime arm index must be nonnegative")
     if disk_cache_max_bytes < 0 or min(
@@ -369,6 +394,8 @@ def runtime_worker_script(
         or (runtime_profile == "concurrency" and max_active_searches < 16)
     ):
         raise ValueError("runtime resource authority violates safety bounds")
+    workload = job.cell.get("workload")
+    workload_kind = workload.get("kind") if isinstance(workload, dict) else None
     profile_mismatch = (
         runtime_profile == "concurrency"
         and not job.cell_tag.startswith("runtime-concurrency-")
@@ -377,14 +404,23 @@ def runtime_worker_script(
         and (
             not job.cell_tag.startswith("runtime-")
             or job.cell_tag.startswith("runtime-concurrency-")
+            or job.cell_tag.startswith("runtime-lifecycle-")
         )
+    ) or (
+        runtime_profile == "lifecycle"
+        and not job.cell_tag.startswith("runtime-lifecycle-")
     )
     if profile_mismatch:
         raise ValueError("runtime job identity differs from its execution profile")
+    if runtime_profile == "lifecycle":
+        if workload_kind != "write-update-delete-compact" or not isinstance(arm, dict):
+            raise ValueError("lifecycle runtime requires an exact mutation arm")
+    elif workload_kind != "read-recall" or arm is not None:
+        raise ValueError("read runtime cannot carry lifecycle authority")
     cell = job.cell
     source = cell["dataset"]["source"]
     if source.get("state") != "staged":
-        raise ValueError("read qualification runtime requires a staged dataset")
+        raise ValueError("publication runtime requires a staged dataset")
     prelude = _common_prelude(
         source_revision=str(cell["source"]["git_commit"]),
         source_uri=source_uri,
@@ -397,6 +433,27 @@ def runtime_worker_script(
         complete_marker="RUNTIME_TERMINAL_COMPLETE.json",
         failed_marker="RUNTIME_TERMINAL_FAILED.json",
     )
+    clone_step = ""
+    clone_arguments = ""
+    if runtime_profile == "lifecycle":
+        clone_step = textwrap.dedent(
+            f"""\
+            stage=clone-index
+            printf '%s' {_q(canonical_json_bytes(arm).decode('utf-8'))} >"$work/arm.json"
+            "$work/venv/bin/python" "$work/source/scripts/clone_publication_v3_index.py" \
+              --cell "$work/protocol.json" --arm "$work/arm.json" \
+              --attempt-id {_q(attempt_id)} --base-receipt "$work/INDEX_COMPLETE.json" \
+              --base-roster "$work/INDEX_OBJECTS.json" \
+              --receipt-output "$work/CLONE_COMPLETE.json" \
+              --inventory-output "$work/CLONE_OBJECTS.json" --workers 32
+            put_immutable "$work/CLONE_COMPLETE.json" {_q(terminal_prefix + "/CLONE_COMPLETE.json")}
+            put_immutable "$work/CLONE_OBJECTS.json" {_q(terminal_prefix + "/CLONE_OBJECTS.json")}
+            """
+        )
+        clone_arguments = (
+            ' --clone-receipt "$work/CLONE_COMPLETE.json"'
+            ' --clone-inventory "$work/CLONE_OBJECTS.json"'
+        )
     return prelude + textwrap.dedent(
         f"""\
         stage=attest-purchase
@@ -432,6 +489,7 @@ def runtime_worker_script(
         "$work/venv/bin/python" "$work/source/scripts/observe_publication_v3_index.py" \
           --index-uri {_q(job.index_uri)} --roster "$work/INDEX_OBJECTS.json" \
           --output "$work/INDEX_INVENTORY.json" --region eu-central-1
+        {clone_step}
         mkdir -p "$work/cell/runtime-dataset"
         for name in meta.json test.parquet neighbors.parquet; do
           aws s3 cp {_q(source["url"])}/$name "$work/cell/runtime-dataset/$name" --only-show-errors
@@ -461,7 +519,7 @@ def runtime_worker_script(
           --instance-identity "$instance_id" --purchase-option "$instance_purchase_option" \
           --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
-          --index-inventory "$work/INDEX_INVENTORY.json"
+          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}
         stage=publish-receipts
         put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
         put_immutable "$work/cell/RUNTIME_ATTESTATION.json" {_q(terminal_prefix + "/RUNTIME_ATTESTATION.json")}
@@ -493,6 +551,7 @@ def runtime_worker_script(
         test "$actual_runtime_profile" = {_q(runtime_profile)}
         execution_contract_sha=$(sha256sum "$execution_contract" | awk '{{print $1}}')
         concurrency_fields=''
+        lifecycle_fields=''
         if [[ {_q(runtime_profile)} == concurrency ]]; then
           for name in bench_concurrency.csv bench_concurrency_samples.csv; do
             put_immutable "$work/cell/runtime-output/$name" {_q(terminal_prefix)}/$name
@@ -500,8 +559,16 @@ def runtime_worker_script(
           concurrency_summary_sha=$(sha256sum "$work/cell/runtime-output/bench_concurrency.csv" | awk '{{print $1}}')
           concurrency_samples_sha=$(sha256sum "$work/cell/runtime-output/bench_concurrency_samples.csv" | awk '{{print $1}}')
           concurrency_fields=$(printf ',"concurrency_summary_sha256":"%s","concurrency_samples_sha256":"%s"' "$concurrency_summary_sha" "$concurrency_samples_sha")
+        elif [[ {_q(runtime_profile)} == lifecycle ]]; then
+          for name in bench_lifecycle.csv bench_write_costs.csv bench_write_samples.csv; do
+            put_immutable "$work/cell/runtime-output/$name" {_q(terminal_prefix)}/$name
+          done
+          lifecycle_summary_sha=$(sha256sum "$work/cell/runtime-output/bench_lifecycle.csv" | awk '{{print $1}}')
+          lifecycle_costs_sha=$(sha256sum "$work/cell/runtime-output/bench_write_costs.csv" | awk '{{print $1}}')
+          lifecycle_samples_sha=$(sha256sum "$work/cell/runtime-output/bench_write_samples.csv" | awk '{{print $1}}')
+          lifecycle_fields=$(printf ',"lifecycle_summary_sha256":"%s","lifecycle_costs_sha256":"%s","lifecycle_samples_sha256":"%s"' "$lifecycle_summary_sha" "$lifecycle_costs_sha" "$lifecycle_samples_sha")
         fi
-        printf '{{"schema_version":3,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"disk_cache_max_bytes":%s,"exact_read_max_physical_amplification":%s,"execution_contract_sha256":"%s"%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$actual_disk_cache" "$actual_exact_amplification" "$execution_contract_sha" "$concurrency_fields" >"$work/complete.json"
+        printf '{{"schema_version":3,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"disk_cache_max_bytes":%s,"exact_read_max_physical_amplification":%s,"execution_contract_sha256":"%s"%s%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$actual_disk_cache" "$actual_exact_amplification" "$execution_contract_sha" "$concurrency_fields" "$lifecycle_fields" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/RUNTIME_TERMINAL_COMPLETE.json")}
         complete=1
         """

@@ -305,10 +305,10 @@ def build_execution_plan(
 ) -> dict[str, object]:
     if mode not in {"build", "runtime", "smoke"}:
         raise ValueError("execution mode must be build, runtime, or smoke")
-    if runtime_profile not in {"recall", "concurrency"}:
-        raise ValueError("runtime profile must be recall or concurrency")
+    if runtime_profile not in {"recall", "concurrency", "lifecycle"}:
+        raise ValueError("runtime profile must be recall, concurrency, or lifecycle")
     if mode != "runtime" and runtime_profile != "recall":
-        raise ValueError("concurrency runtime profile requires runtime mode")
+        raise ValueError("non-default runtime profile requires runtime mode")
     if mode == "runtime" and runtime_flow_control is None:
         raise ValueError("runtime flow-control authority is required")
     if mode != "runtime" and runtime_flow_control is not None:
@@ -1849,7 +1849,7 @@ def runtime_execution_contract(
     runtime_profile: str,
     effective_flow_control: dict[str, object],
 ) -> dict[str, object]:
-    if runtime_profile not in {"recall", "concurrency"}:
+    if runtime_profile not in {"recall", "concurrency", "lifecycle"}:
         raise ValueError("runtime execution contract profile is invalid")
     runtime = plan.get("runtime")
     steps = runtime.get("steps") if isinstance(runtime, dict) else None
@@ -1933,7 +1933,9 @@ def main() -> int:
         "--mode", choices=("smoke", "build", "seal", "runtime"), default="smoke"
     )
     parser.add_argument(
-        "--runtime-profile", choices=("recall", "concurrency"), default="recall"
+        "--runtime-profile",
+        choices=("recall", "concurrency", "lifecycle"),
+        default="recall",
     )
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--source-archive-sha256")

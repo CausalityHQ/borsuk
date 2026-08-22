@@ -504,6 +504,14 @@ def run_execution_job(
                                 "concurrency_samples_sha256",
                             )
                         )
+                    elif expected["runtime_profile"] == "lifecycle":
+                        digest_fields.extend(
+                            (
+                                "lifecycle_summary_sha256",
+                                "lifecycle_costs_sha256",
+                                "lifecycle_samples_sha256",
+                            )
+                        )
                     if any(
                         not isinstance(value.get(field), str)
                         or re.fullmatch(r"[0-9a-f]{64}", value[field]) is None
@@ -582,6 +590,7 @@ def prepare_qualification_execution(
     manifest: dict[str, object],
     *,
     operation: str,
+    dataset_id: str | None = None,
     source_uri: str,
     source_sha256: str,
     manifest_uri: str,
@@ -595,27 +604,48 @@ def prepare_qualification_execution(
     purchase_option: str = "spot",
     arm_index: int = 0,
 ) -> PreparedExecution:
-    """Prepare one immutable SIFT qualification execution."""
+    """Prepare one immutable build or small-runtime qualification execution."""
 
     normalized = validate_manifest(manifest)
-    if operation not in {"build-sift", "read-recall-sift", "read-concurrency-sift"}:
+    supported = {
+        "build-sift",
+        "read-recall-sift",
+        "read-concurrency-sift",
+        "build-lifecycle",
+        "run-lifecycle",
+    }
+    if operation not in supported:
         raise ValueError("unsupported qualification execution")
+    lifecycle = operation in {"build-lifecycle", "run-lifecycle"}
+    if lifecycle:
+        if not dataset_id:
+            raise ValueError("lifecycle qualification requires a dataset")
+    elif dataset_id not in {None, "sift-128"}:
+        raise ValueError("SIFT qualification dataset differs")
+    selected_dataset = dataset_id or "sift-128"
+    build_operation = operation in {"build-sift", "build-lifecycle"}
     if attempt <= 0 or build_attempt <= 0 or arm_index < 0:
         raise ValueError("qualification attempts must be positive")
-    if operation == "build-sift" and arm_index != 0:
+    if build_operation and arm_index != 0:
         raise ValueError("build execution must use the canonical first arm")
     if purchase_option not in {"spot", "on-demand"}:
         raise ValueError("purchase option must be spot or on-demand")
-    if operation == "build-sift" and purchase_option != "spot":
+    if build_operation and purchase_option != "spot":
         raise ValueError("build execution must use Spot")
     cell = qualification_cell(
         normalized,
-        dataset_id="sift-128",
-        workload_kind="read-recall",
-        build_attempt=attempt if operation == "build-sift" else build_attempt,
+        dataset_id=selected_dataset,
+        workload_kind=(
+            "write-update-delete-compact" if lifecycle else "read-recall"
+        ),
+        build_attempt=attempt if build_operation else build_attempt,
     )
     runtime_profile = (
-        "concurrency" if operation == "read-concurrency-sift" else "recall"
+        "lifecycle"
+        if lifecycle
+        else "concurrency"
+        if operation == "read-concurrency-sift"
+        else "recall"
     )
     runtime_client = normalized["environment_contract"]["runtime_clients"]["borsuk"]
     runtime_vcpus = int(runtime_client["vcpus"])
@@ -638,14 +668,32 @@ def prepare_qualification_execution(
     s3_get_concurrency = 128 if runtime_profile == "concurrency" else 64
     ram_budget_bytes = int(runtime_client["resident_limit_mib"]) * 1024 * 1024
     factors = cell["workload"]["factors"]
-    arms = [
-        (leaf_page_budget, cache_state)
-        for leaf_page_budget in factors["leaf_page_budgets"]
-        for cache_state in factors["cache_states"]
-    ]
+    if lifecycle:
+        arms = [
+            {
+                "writers": writers,
+                "batch_size": batch_size,
+                "update_percent": update_percent,
+                "delete_percent": delete_percent,
+            }
+            for writers in factors["writers"]
+            for batch_size in factors["batch_sizes"]
+            for update_percent in factors["update_percent"]
+            for delete_percent in factors["delete_percent"]
+        ]
+    else:
+        arms = [
+            {
+                "leaf_page_budget": leaf_page_budget,
+                "cache_state": cache_state,
+            }
+            for leaf_page_budget in factors["leaf_page_budgets"]
+            for cache_state in factors["cache_states"]
+        ]
     if arm_index >= len(arms):
         raise ValueError("qualification arm index is outside the factor matrix")
-    _, cache_state = arms[arm_index]
+    arm = arms[arm_index]
+    cache_state = arm.get("cache_state", "cold")
     disk_cache_max_bytes = (
         0
         if cache_state == "cold"
@@ -658,8 +706,13 @@ def prepare_qualification_execution(
     exact_read_max_physical_amplification = 2
     job = (
         ExecutionJob.build(cell, attempt=attempt)
-        if operation == "build-sift"
-        else ExecutionJob.runtime(cell, attempt=attempt, profile=runtime_profile)
+        if build_operation
+        else ExecutionJob.runtime(
+            cell,
+            attempt=attempt,
+            profile=runtime_profile,
+            arm_index=arm_index if lifecycle else 0,
+        )
     )
     attempt_id = f"{job.cell_tag}-a{job.attempt:04d}"
     expected = {
@@ -709,6 +762,7 @@ def prepare_qualification_execution(
             purchase_option=purchase_option,
             runtime_profile=runtime_profile,
             arm_index=arm_index,
+            arm=arm if lifecycle else None,
             disk_cache_max_bytes=disk_cache_max_bytes,
             exact_read_max_physical_amplification=(
                 exact_read_max_physical_amplification
@@ -812,6 +866,31 @@ def main() -> int:
     concurrency.add_argument(
         "--purchase-option", choices=("spot", "on-demand"), default="spot"
     )
+    lifecycle_build = subparsers.add_parser("build-lifecycle")
+    lifecycle_build.add_argument("--manifest", type=Path, required=True)
+    lifecycle_build.add_argument("--source-archive", type=Path, required=True)
+    lifecycle_build.add_argument("--dataset", required=True)
+    lifecycle_build.add_argument("--profile", default="causality")
+    lifecycle_build.add_argument("--image-id", required=True)
+    lifecycle_build.add_argument("--subnet-id", required=True)
+    lifecycle_build.add_argument("--security-group-id", required=True)
+    lifecycle_build.add_argument("--instance-profile-arn", required=True)
+    lifecycle_build.add_argument("--attempt", type=int, default=1)
+    lifecycle_runtime = subparsers.add_parser("run-lifecycle")
+    lifecycle_runtime.add_argument("--manifest", type=Path, required=True)
+    lifecycle_runtime.add_argument("--source-archive", type=Path, required=True)
+    lifecycle_runtime.add_argument("--dataset", required=True)
+    lifecycle_runtime.add_argument("--profile", default="causality")
+    lifecycle_runtime.add_argument("--image-id", required=True)
+    lifecycle_runtime.add_argument("--subnet-id", required=True)
+    lifecycle_runtime.add_argument("--security-group-id", required=True)
+    lifecycle_runtime.add_argument("--instance-profile-arn", required=True)
+    lifecycle_runtime.add_argument("--attempt", type=int, default=1)
+    lifecycle_runtime.add_argument("--build-attempt", type=int, default=1)
+    lifecycle_runtime.add_argument("--arm-index", type=int, required=True)
+    lifecycle_runtime.add_argument(
+        "--purchase-option", choices=("spot", "on-demand"), default="spot"
+    )
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -857,13 +936,17 @@ def main() -> int:
             max_attempts=args.max_attempts,
         )
     else:
+        lifecycle = args.operation in {"build-lifecycle", "run-lifecycle"}
+        build_operation = args.operation in {"build-sift", "build-lifecycle"}
         build_attempt = (
-            args.attempt if args.operation == "build-sift" else args.build_attempt
+            args.attempt if build_operation else args.build_attempt
         )
         cell = qualification_cell(
             normalized,
-            dataset_id="sift-128",
-            workload_kind="read-recall",
+            dataset_id=args.dataset if lifecycle else "sift-128",
+            workload_kind=(
+                "write-update-delete-compact" if lifecycle else "read-recall"
+            ),
             build_attempt=build_attempt,
         )
         protocol_bytes = canonical_json_bytes(cell) + b"\n"
@@ -878,6 +961,7 @@ def main() -> int:
         prepared = prepare_qualification_execution(
             normalized,
             operation=args.operation,
+            dataset_id=args.dataset if lifecycle else None,
             source_uri=source_uri,
             source_sha256=source_sha,
             manifest_uri=manifest_uri,
