@@ -19,7 +19,9 @@ def run(command: list[str], cwd: Path) -> None:
         raise AssertionError(completed.stderr or completed.stdout)
 
 
-def make_clean_repository(root: Path) -> None:
+def make_clean_repository(
+    root: Path, *, unstaged_dataset_id: str | None = None
+) -> None:
     copied = (
         "Cargo.toml",
         "Cargo.lock",
@@ -37,6 +39,18 @@ def make_clean_repository(root: Path) -> None:
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
+    if unstaged_dataset_id is not None:
+        manifest_path = root / "docs/research/publication-v3-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        dataset = next(
+            item for item in manifest["datasets"] if item["id"] == unstaged_dataset_id
+        )
+        dataset["source"] = {
+            "state": "unstaged",
+            "expected_source": "s3://assets.zilliz.com/benchmark/cohere_large_10m",
+            "license": dataset["source"]["license"],
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     run(["git", "init", "-b", "main"], root)
     run(["git", "config", "user.email", "publication-v3@example.invalid"], root)
     run(["git", "config", "user.name", "Publication V3 Test"], root)
@@ -74,15 +88,12 @@ class LaunchAwsPublicationV3Tests(unittest.TestCase):
                 self.assertNotIn("AWS_WAS_CALLED", completed.stderr)
                 reports.append(json.loads(completed.stdout))
             self.assertEqual(reports[0], reports[1])
-            self.assertFalse(reports[0]["paid_ready"])
-            self.assertEqual(reports[0]["unstaged_datasets"], 11)
-            self.assertEqual(reports[0]["staging_jobs"], 11)
+            self.assertTrue(reports[0]["paid_ready"])
+            self.assertEqual(reports[0]["unstaged_datasets"], 0)
+            self.assertEqual(reports[0]["staging_jobs"], 0)
             self.assertRegex(reports[0]["staging_plan_sha256"], r"^[0-9a-f]{64}$")
-            self.assertEqual(reports[0]["staging_plan"]["job_count"], 11)
-            self.assertNotIn(
-                "sift-128",
-                {job["dataset_id"] for job in reports[0]["staging_plan"]["jobs"]},
-            )
+            self.assertEqual(reports[0]["staging_plan"]["job_count"], 0)
+            self.assertEqual(reports[0]["staging_plan"]["jobs"], [])
             self.assertEqual(
                 reports[0]["staging_plan_sha256"],
                 hashlib.sha256(
@@ -93,9 +104,7 @@ class LaunchAwsPublicationV3Tests(unittest.TestCase):
                 reports[0]["staging_plan"]["manifest_sha256"],
                 reports[0]["manifest_sha256"],
             )
-            self.assertEqual(
-                reports[0]["structural_replay"], "blocked-until-paid-ready"
-            )
+            self.assertEqual(reports[0]["structural_replay"], "structurally-valid")
             materialized = json.loads(
                 (repository / "docs/research/publication-v3-manifest.json").read_text()
             )
@@ -151,7 +160,9 @@ class LaunchAwsPublicationV3Tests(unittest.TestCase):
             temp = Path(directory)
             repository = temp / "repository"
             repository.mkdir()
-            make_clean_repository(repository)
+            make_clean_repository(
+                repository, unstaged_dataset_id="cohere-large-10m-768"
+            )
             fake = temp / "controller.py"
             fake.write_text(
                 """#!/usr/bin/env python3

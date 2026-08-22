@@ -88,7 +88,7 @@
       "scale": {"state": "exact", "rows": 9990000},
       "dimensions": 96,
       "metric": "cosine",
-      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/deep-image-96-angular.hdf5", "license": "upstream-dataset-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/deep-image-96/attempts/0001/materialized", "sha256": "02eec37494dce759433fef0983c871856b4bf445b4c93e35abceb430b7109408", "license": "upstream-dataset-license"}
     },
     {
       "id": "fashion-mnist-784",
@@ -96,7 +96,7 @@
       "scale": {"state": "exact", "rows": 60000},
       "dimensions": 784,
       "metric": "l2",
-      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/fashion-mnist-784-euclidean.hdf5", "license": "upstream-dataset-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/fashion-mnist-784/attempts/0002/materialized", "sha256": "925102a96bea4fd23c68c3ca812f49e449adbee807483ad327a59988193a72ac", "license": "upstream-dataset-license"}
     },
     {
       "id": "gist-960",
@@ -104,7 +104,7 @@
       "scale": {"state": "exact", "rows": 1000000},
       "dimensions": 960,
       "metric": "l2",
-      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/gist-960-euclidean.hdf5", "license": "upstream-dataset-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/gist-960/attempts/0002/materialized", "sha256": "866f013ae3962f3eeff841100c3b3d04792601cfefb6634e3ea70a765c361f57", "license": "upstream-dataset-license"}
     },
     {
       "id": "glove-100",
@@ -112,7 +112,7 @@
       "scale": {"state": "exact", "rows": 1183514},
       "dimensions": 100,
       "metric": "cosine",
-      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/glove-100-angular.hdf5", "license": "upstream-dataset-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/glove-100/attempts/0002/materialized", "sha256": "6c8c8bcd49aea2dac0343943d77f77c11a422be2c6b30cb1150228782ed87c2a", "license": "upstream-dataset-license"}
     },
     {
       "id": "nytimes-256",
@@ -120,7 +120,7 @@
       "scale": {"state": "exact", "rows": 290000},
       "dimensions": 256,
       "metric": "cosine",
-      "source": {"state": "unstaged", "expected_source": "https://ann-benchmarks.com/nytimes-256-angular.hdf5", "license": "upstream-dataset-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/nytimes-256/attempts/0002/materialized", "sha256": "c016bfdd9e5fb36c69f3c64a07906887001c4cb5d9c1510f2ef1f527d0c12d15", "license": "upstream-dataset-license"}
     },
     {
       "id": "sift-128",
@@ -136,7 +136,7 @@
       "scale": {"state": "exact", "rows": 1000000},
       "dimensions": 768,
       "metric": "cosine",
-      "source": {"state": "unstaged", "expected_source": "s3://assets.zilliz.com/benchmark/cohere_medium_1m", "license": "cohere-wikipedia-benchmark-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/cohere-medium-1m-768/attempts/0001/materialized", "sha256": "3294f12075221177ae89bed67ff30ab890e7231d692ce27a2212c4012e856eab", "license": "cohere-wikipedia-benchmark-license"}
     },
     {
       "id": "cohere-large-10m-768",
@@ -144,7 +144,7 @@
       "scale": {"state": "exact", "rows": 10000000},
       "dimensions": 768,
       "metric": "cosine",
-      "source": {"state": "unstaged", "expected_source": "s3://assets.zilliz.com/benchmark/cohere_large_10m", "license": "cohere-wikipedia-benchmark-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/cohere-large-10m-768/attempts/0001/materialized", "sha256": "fa8ccb38e5c761388e0c2ac211cc219438cd79e802e69debd6197d74f83f11ad", "license": "cohere-wikipedia-benchmark-license"}
     },
     {
       "id": "laion-100m-768",
@@ -152,7 +152,7 @@
       "scale": {"state": "exact", "rows": 100000000},
       "dimensions": 768,
       "metric": "l2",
-      "source": {"state": "unstaged", "expected_source": "s3://assets.zilliz.com/benchmark/laion_large_100m", "license": "laion-dataset-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/laion-100m-768/attempts/0001/materialized", "sha256": "649fdaff2a60e27322796f146049237caeee4bb363dd4efc18fbdc15dddefe3d", "license": "laion-dataset-license"}
     },
     {
       "id": "synthetic-clustered-1m-384",
@@ -248,7 +248,7 @@
       "scale": {"state": "exact", "rows": 5183},
       "dimensions": 384,
       "metric": "cosine",
-      "source": {"state": "unstaged", "expected_source": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip", "license": "beir-upstream-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/scifact/attempts/0005/materialized", "sha256": "d3c83a7eff0f8bd67f0b3b3901dd12d9b73daba4a9536ada21943f136c66df08", "license": "beir-upstream-license"}
     },
     {
       "id": "nfcorpus",
@@ -256,7 +256,7 @@
       "scale": {"state": "exact", "rows": 3633},
       "dimensions": 384,
       "metric": "cosine",
-      "source": {"state": "unstaged", "expected_source": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip", "license": "beir-upstream-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/nfcorpus/attempts/0001/materialized", "sha256": "815ccbe49947a1289c070fae8ccf6f5f3e84588564a6ba491103fe2efb826b82", "license": "beir-upstream-license"}
     },
     {
       "id": "fiqa",
@@ -264,7 +264,7 @@
       "scale": {"state": "exact", "rows": 57638},
       "dimensions": 384,
       "metric": "cosine",
-      "source": {"state": "unstaged", "expected_source": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip", "license": "beir-upstream-license"}
+      "source": {"state": "staged", "url": "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/fiqa/attempts/0001/materialized", "sha256": "4ae0b0ffa367cbcffe493fc1a5f4a24b067f4e13f0c6b6067096e1820d3ff10f", "license": "beir-upstream-license"}
     }
   ],
   "workloads": [

@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from scripts.publication_v3_aws import (
     staging_jobs,
     validate_staging_receipt,
 )
+from scripts.publication_v3_protocol import validate_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs/research/publication-v3-manifest.json"
@@ -26,14 +28,54 @@ MANIFEST = ROOT / "docs/research/publication-v3-manifest.json"
 class PublicationV3AwsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        sift = next(
-            item for item in self.manifest["datasets"] if item["id"] == "sift-128"
-        )
-        sift["source"] = {
-            "state": "unstaged",
-            "expected_source": "https://ann-benchmarks.com/sift-128-euclidean.hdf5",
-            "license": "upstream-dataset-license",
+        upstream_sources = {
+            "deep-image-96": "https://ann-benchmarks.com/deep-image-96-angular.hdf5",
+            "fashion-mnist-784": "https://ann-benchmarks.com/fashion-mnist-784-euclidean.hdf5",
+            "gist-960": "https://ann-benchmarks.com/gist-960-euclidean.hdf5",
+            "glove-100": "https://ann-benchmarks.com/glove-100-angular.hdf5",
+            "nytimes-256": "https://ann-benchmarks.com/nytimes-256-angular.hdf5",
+            "sift-128": "https://ann-benchmarks.com/sift-128-euclidean.hdf5",
+            "cohere-medium-1m-768": "s3://assets.zilliz.com/benchmark/cohere_medium_1m",
+            "cohere-large-10m-768": "s3://assets.zilliz.com/benchmark/cohere_large_10m",
+            "laion-100m-768": "s3://assets.zilliz.com/benchmark/laion_large_100m",
+            "scifact": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
+            "nfcorpus": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip",
+            "fiqa": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip",
         }
+        for dataset in self.manifest["datasets"]:
+            expected_source = upstream_sources.get(dataset["id"])
+            if expected_source is None:
+                continue
+            dataset["source"] = {
+                "state": "unstaged",
+                "expected_source": expected_source,
+                "license": dataset["source"]["license"],
+            }
+        directory = tempfile.TemporaryDirectory(prefix="borsuk-v3-unstaged-")
+        self.addCleanup(directory.cleanup)
+        self.unstaged_manifest = Path(directory.name) / "manifest.json"
+        self.unstaged_manifest.write_text(
+            json.dumps(self.manifest, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+    def test_committed_manifest_has_no_jobs_after_receipt_promotion(self) -> None:
+        manifest = validate_manifest(json.loads(MANIFEST.read_text(encoding="utf-8")))
+        self.assertEqual(staging_jobs(manifest), ())
+        external = [
+            dataset
+            for dataset in manifest["datasets"]
+            if dataset["kind"] in {"standard-ann", "realistic-dense", "beir-hybrid"}
+        ]
+        self.assertEqual(len(external), 12)
+        for dataset in external:
+            source = dataset["source"]
+            self.assertEqual(source["state"], "staged")
+            self.assertEqual(
+                source["url"].rsplit("/attempts/", 1)[0],
+                f"{manifest['prefixes']['dataset']}/{dataset['id']}",
+            )
+            self.assertRegex(source["sha256"], r"^[0-9a-f]{64}$")
 
     def test_staging_jobs_cover_only_external_datasets_with_exact_adapters(
         self,
@@ -242,7 +284,7 @@ class PublicationV3AwsTests(unittest.TestCase):
             sys.executable,
             "scripts/publication_v3_aws.py",
             "plan-staging",
-            str(MANIFEST),
+            str(self.unstaged_manifest),
         ]
         first = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
         second = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
@@ -252,9 +294,9 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertEqual(value["schema_version"], 1)
         self.assertEqual(value["campaign_id"], "publication-v3-20260812")
         self.assertRegex(value["manifest_sha256"], r"^[0-9a-f]{64}$")
-        self.assertEqual(value["job_count"], 11)
-        self.assertEqual(len(value["jobs"]), 11)
-        self.assertNotIn("sift-128", {job["dataset_id"] for job in value["jobs"]})
+        self.assertEqual(value["job_count"], 12)
+        self.assertEqual(len(value["jobs"]), 12)
+        self.assertIn("sift-128", {job["dataset_id"] for job in value["jobs"]})
         self.assertNotIn("instance_id", first.stdout)
 
     def test_reconcile_staging_cli_emits_a_fresh_attempt_without_aws(self) -> None:
@@ -262,7 +304,7 @@ class PublicationV3AwsTests(unittest.TestCase):
             sys.executable,
             "scripts/publication_v3_aws.py",
             "reconcile-staging",
-            str(MANIFEST),
+            str(self.unstaged_manifest),
             "--dataset",
             "gist-960",
             "--attempt",
@@ -537,9 +579,7 @@ class PublicationV3AwsTests(unittest.TestCase):
             promote_staging_receipts(
                 current,
                 [receipt],
-                historical_manifests={
-                    receipt["manifest_sha256"]: corrupt_authority
-                },
+                historical_manifests={receipt["manifest_sha256"]: corrupt_authority},
             )
 
     def test_reconciler_validates_success_and_bounds_fresh_attempts(self) -> None:

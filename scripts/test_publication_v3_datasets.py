@@ -82,12 +82,15 @@ class PublicationV3DatasetTests(unittest.TestCase):
                 dataset_materialization_sha256(Path(directory))
 
     def test_external_descriptor_requires_exact_staged_parquet_bytes(self) -> None:
-        dataset = next(
-            item
-            for item in self.manifest["datasets"]
-            if item["source"]["state"] == "unstaged"
+        dataset = json.loads(
+            json.dumps(
+                next(
+                    item
+                    for item in self.manifest["datasets"]
+                    if item["id"] == "deep-image-96"
+                )
+            )
         )
-        dataset = json.loads(json.dumps(dataset))
         dataset["scale"]["rows"] = 4
         dataset["metric"] = "l2"
         with tempfile.TemporaryDirectory() as directory:
@@ -167,12 +170,15 @@ class PublicationV3DatasetTests(unittest.TestCase):
     def test_descriptor_rejects_manifest_row_claim_above_physical_parquet_rows(
         self,
     ) -> None:
-        dataset = next(
-            item
-            for item in self.manifest["datasets"]
-            if item["source"]["state"] == "unstaged"
+        dataset = json.loads(
+            json.dumps(
+                next(
+                    item
+                    for item in self.manifest["datasets"]
+                    if item["id"] == "deep-image-96"
+                )
+            )
         )
-        dataset = json.loads(json.dumps(dataset))
         dataset["scale"]["rows"] = 4
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
