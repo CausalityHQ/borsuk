@@ -2067,7 +2067,7 @@ fn local_index_uses_checked_json_collection_current_and_parquet_tables() {
 
     let current = fs::read(dir.path().join("collection/CURRENT")).unwrap();
     let current: CheckedCollectionCurrent = serde_json::from_slice(&current).unwrap();
-    assert_eq!(current.schema_version, 2);
+    assert_eq!(current.schema_version, 3);
     assert_eq!(current.object_role, "collection_current");
     assert_eq!(
         current.payload_checksum_blake3,

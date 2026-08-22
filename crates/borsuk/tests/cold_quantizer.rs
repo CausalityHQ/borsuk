@@ -263,16 +263,21 @@ fn garbage_collection_keeps_live_quantizer_and_reclaims_orphan() {
     let mut index = build_index(&uri);
 
     let quantizer_dir = dir.path().join("quantizer");
-    let count_objects = || -> usize {
-        std::fs::read_dir(&quantizer_dir)
-            .map(|prefixes| {
-                prefixes
-                    .flatten()
-                    .flat_map(|prefix| std::fs::read_dir(prefix.path()).unwrap())
-                    .count()
+    fn count_files(path: &std::path::Path) -> usize {
+        std::fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| {
+                if entry.path().is_dir() {
+                    count_files(&entry.path())
+                } else {
+                    1
+                }
             })
-            .unwrap_or(0)
-    };
+            .sum()
+    }
+    let count_objects = || count_files(&quantizer_dir);
     // build_index flushes then compacts; each refreshes the persisted quantizer,
     // so one or more objects exist and at least one is already orphaned.
     let objects_after_build = count_objects();
