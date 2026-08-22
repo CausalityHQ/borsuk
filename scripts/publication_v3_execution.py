@@ -10,12 +10,14 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 try:
+    from scripts.publication_v3_aws import worker_failure_trap_script
     from scripts.publication_v3_protocol import (
         build_schedule_document,
         canonical_json_bytes,
         validate_manifest,
     )
 except ModuleNotFoundError:
+    from publication_v3_aws import worker_failure_trap_script
     from publication_v3_protocol import (
         build_schedule_document,
         canonical_json_bytes,
@@ -164,10 +166,8 @@ def _common_prelude(
     manifest_sha256: str,
     protocol_uri: str,
     protocol_sha256: str,
-    terminal_prefix: str,
-    complete_marker: str,
-    failed_marker: str,
 ) -> str:
+    failure_trap = worker_failure_trap_script()
     return textwrap.dedent(
         f"""\
         set -euo pipefail
@@ -187,26 +187,7 @@ def _common_prelude(
             --checksum-algorithm SHA256 --checksum-sha256 "$checksum" \
             --metadata "borsuk-sha256=$digest" --if-none-match '*' >/dev/null
         }}
-        fail() {{
-          status=$?
-          trap - EXIT
-          if [[ $complete -eq 0 ]]; then
-            printf '{{"schema_version":1,"status":"failed","exit_code":%d,"stage":"%s"}}\n' "$status" "$stage" >"$work/failed.json" || true
-            put_immutable "$work/failed.json" {_q(terminal_prefix + "/" + failed_marker)} || true
-            failure_source="$detail_log"
-            if [[ ! -s "$failure_source" ]]; then
-              failure_source="$work/worker.log"
-            fi
-            if [[ -f "$failure_source" ]]; then
-              tail -c 65536 "$failure_source" >"$work/FAILURE.log" || true
-              if [[ -s "$work/FAILURE.log" ]]; then
-                put_immutable "$work/FAILURE.log" {_q(terminal_prefix + "/FAILURE.log")} || true
-              fi
-            fi
-          fi
-          exit "$status"
-        }}
-        trap fail EXIT
+        {failure_trap}
         exec > >(tee -a "$work/worker.log") 2>&1
         source_uri={_q(source_uri)}
         manifest_uri={_q(manifest_uri)}
@@ -254,9 +235,6 @@ def build_worker_script(
         manifest_sha256=manifest_sha256,
         protocol_uri=protocol_uri,
         protocol_sha256=protocol_sha256,
-        terminal_prefix=terminal_prefix,
-        complete_marker="BUILD_TERMINAL_COMPLETE.json",
-        failed_marker="BUILD_TERMINAL_FAILED.json",
     )
     dataset_step = ""
     if source["state"] == "staged":
@@ -429,9 +407,6 @@ def runtime_worker_script(
         manifest_sha256=manifest_sha256,
         protocol_uri=protocol_uri,
         protocol_sha256=protocol_sha256,
-        terminal_prefix=terminal_prefix,
-        complete_marker="RUNTIME_TERMINAL_COMPLETE.json",
-        failed_marker="RUNTIME_TERMINAL_FAILED.json",
     )
     clone_step = ""
     clone_arguments = ""

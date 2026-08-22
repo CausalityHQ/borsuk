@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from scripts.publication_v3_execution import (
     build_worker_script,
     qualification_cell,
     runtime_worker_script,
+    worker_failure_trap_script,
 )
 from scripts.publication_v3_protocol import validate_schedule_cell
 
@@ -32,6 +34,37 @@ def frozen_manifest() -> dict[str, object]:
 
 
 class PublicationV3ExecutionTests(unittest.TestCase):
+    def test_worker_signal_trap_delegates_to_preinstalled_reporter(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="borsuk-v3-worker-trap-") as directory:
+            root = Path(directory)
+            reporter = root / "reporter.sh"
+            receipt = root / "receipt.txt"
+            detail_log = root / "runtime.log"
+            detail_log.write_text("runtime failed\n", encoding="utf-8")
+            reporter.write_text(
+                "#!/usr/bin/env bash\n"
+                f"printf '%s\\n%s\\n%s\\n' \"$1\" \"$2\" \"$3\" >{receipt!s}\n",
+                encoding="utf-8",
+            )
+            reporter.chmod(0o700)
+            script = (
+                "complete=0\n"
+                "stage=execute-runtime\n"
+                f"detail_log={detail_log!s}\n"
+                f"{worker_failure_trap_script(reporter)}\n"
+                "kill -TERM $$\n"
+            )
+
+            result = subprocess.run(
+                ["bash", "-c", script], capture_output=True, text=True, check=False
+            )
+
+            self.assertEqual(result.returncode, 143)
+            self.assertEqual(
+                receipt.read_text(encoding="utf-8").splitlines(),
+                ["143", "execute-runtime", str(detail_log)],
+            )
+
     def test_build_attempts_use_distinct_index_authority_and_runtime_pins_one(self) -> None:
         manifest = frozen_manifest()
         first_cell = qualification_cell(
@@ -131,25 +164,12 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             script,
         )
         self.assertIn("BUILD_TERMINAL_COMPLETE.json", script)
-        self.assertIn("BUILD_TERMINAL_FAILED.json", script)
         self.assertIn("instance-life-cycle", script)
         self.assertIn('test "$instance_purchase_option" = spot', script)
         self.assertIn('"purchase_option":"%s"', script)
-        self.assertIn('"stage":"%s"', script)
         self.assertIn('exec > >(tee -a "$work/worker.log") 2>&1', script)
         self.assertIn('detail_log="$work/cell/build/step-00.log"', script)
-        self.assertIn('failure_source="$detail_log"', script)
-        self.assertIn('tail -c 65536 "$failure_source"', script)
-        self.assertIn("FAILURE.log", script)
         self.assertNotIn('find "$work"', script)
-        self.assertLess(
-            script.index('put_immutable "$work/failed.json"'),
-            script.index('tail -c 65536 "$failure_source"'),
-        )
-        self.assertIn(
-            'tail -c 65536 "$failure_source" >"$work/FAILURE.log" || true',
-            script,
-        )
         self.assertIn("stage=build-index", script)
         self.assertLess(len(script.encode("utf-8")), 16 * 1024)
         self.assertEqual(
@@ -206,7 +226,6 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("observe_publication_v3_index.py", script)
         self.assertIn("RESULT_COMPLETE.json", script)
         self.assertIn("RUNTIME_TERMINAL_COMPLETE.json", script)
-        self.assertIn("RUNTIME_TERMINAL_FAILED.json", script)
         self.assertIn("instance-life-cycle", script)
         self.assertIn('test "$instance_purchase_option" = on-demand', script)
         self.assertIn('"purchase_option":"%s"', script)

@@ -2,6 +2,7 @@ import base64
 import gzip
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,7 +18,9 @@ from scripts.publication_v3_aws import (
     promote_staging_receipts,
     reconcile_staging_attempt,
     staging_jobs,
+    terminal_failure_reporter_script,
     validate_staging_receipt,
+    worker_supervisor_script,
 )
 from scripts.publication_v3_protocol import validate_manifest
 
@@ -117,6 +120,12 @@ class PublicationV3AwsTests(unittest.TestCase):
             cell_id="read-sift-r01",
             attempt=2,
             worker_script="echo run-cell",
+            terminal_failure_uri=(
+                "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/"
+                "results/read-sift-r01/runtime/attempts/0002/"
+                "RUNTIME_TERMINAL_FAILED.json"
+            ),
+            terminal_detail_log_path="/var/lib/borsuk-publication/cell/runtime.log",
             max_seconds=7200,
         )
         self.assertEqual(request["InstanceType"], "c7g.xlarge")
@@ -137,6 +146,10 @@ class PublicationV3AwsTests(unittest.TestCase):
         user_data = base64.b64decode(request["UserData"]).decode("utf-8")
         self.assertIn("timeout --signal=TERM --kill-after=60 7200", user_data)
         self.assertIn("shutdown -h now", user_data)
+        self.assertIn("/var/lib/borsuk-publication-failure-reporter.sh", user_data)
+        self.assertIn("controller-timeout", user_data)
+        self.assertIn("--canary", user_data)
+        self.assertIn("/var/lib/borsuk-publication/cell/runtime.log", user_data)
         payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
         self.assertEqual(gzip.decompress(base64.b64decode(payload)), b"echo run-cell")
         self.assertIn("base64 -d | gzip -d", user_data)
@@ -157,6 +170,7 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertEqual(volume["Throughput"], 125)
         self.assertTrue(volume["Encrypted"])
         self.assertTrue(volume["DeleteOnTermination"])
+
         tags = {
             item["Key"]: item["Value"]
             for item in request["TagSpecifications"][0]["Tags"]
@@ -186,8 +200,171 @@ class PublicationV3AwsTests(unittest.TestCase):
                 cell_id="read-sift-r01",
                 attempt=2,
                 worker_script="echo run-cell",
+                terminal_failure_uri=(
+                    "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/"
+                    "results/read-sift-r01/runtime/attempts/0002/"
+                    "RUNTIME_TERMINAL_FAILED.json"
+                ),
+                terminal_detail_log_path=(
+                    "/var/lib/borsuk-publication/cell/runtime.log"
+                ),
                 max_seconds=7200,
             )
+
+    def test_worker_supervisor_reports_failure_after_timeout_kills_worker(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="borsuk-v3-supervisor-") as directory:
+            root = Path(directory)
+            worker = root / "worker.sh"
+            reporter = root / "reporter.sh"
+            receipt = root / "receipt.txt"
+            detail_log = root / "worker.log"
+            detail_log.write_text("bounded diagnostic\n", encoding="utf-8")
+            worker.write_text(
+                "#!/usr/bin/env bash\n"
+                "trap '' TERM\n"
+                "while :; do sleep 10; done\n",
+                encoding="utf-8",
+            )
+            reporter.write_text(
+                "#!/usr/bin/env bash\n"
+                f"printf '%s\\n%s\\n%s\\n' \"$1\" \"$2\" \"$3\" >{receipt!s}\n",
+                encoding="utf-8",
+            )
+            worker.chmod(0o700)
+            reporter.chmod(0o700)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    worker_supervisor_script(worker, reporter, 1, 1, detail_log),
+                ],
+                text=True,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            status, stage, reported_log = receipt.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            self.assertGreater(int(status), 0)
+            self.assertEqual(stage, "controller-timeout")
+            self.assertEqual(reported_log, str(detail_log))
+
+    def test_terminal_failure_reporter_publishes_receipt_and_bounded_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="borsuk-v3-reporter-") as directory:
+            root = Path(directory)
+            binaries = root / "bin"
+            captured = root / "captured"
+            work = root / "work"
+            binaries.mkdir()
+            captured.mkdir()
+            fake_aws = binaries / "aws"
+            fake_aws.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "operation=${2:-}\n"
+                "body= key= query=\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case $1 in\n"
+                "    --body) body=$2; shift 2;;\n"
+                "    --key) key=$2; shift 2;;\n"
+                "    --query) query=$2; shift 2;;\n"
+                "    *) shift;;\n"
+                "  esac\n"
+                "done\n"
+                "target=\"$CAPTURE_DIR/${key##*/}\"\n"
+                "if [[ $operation = head-object ]]; then\n"
+                "  [[ $query = 'Metadata.\"borsuk-sha256\"' ]]\n"
+                "  test -f \"$target\"\n"
+                "  sha256sum \"$target\" | awk '{print $1}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ ${AWS_SKIP_PUT_COPY:-0} != 1 ]]; then cp \"$body\" \"$target\"; fi\n"
+                "if [[ ${AWS_PRECONDITION_AFTER_PUT:-0} = 1 ]]; then\n"
+                "  echo 'PreconditionFailed (412)' >&2\n"
+                "  exit 255\n"
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_aws.chmod(0o700)
+            detail_log = root / "worker.log"
+            detail_log.write_bytes(b"x" * 70_000)
+            reporter = root / "reporter.sh"
+            reporter.write_text(
+                terminal_failure_reporter_script(
+                    "s3://bucket/results/runtime/attempts/0001/"
+                    "RUNTIME_TERMINAL_FAILED.json"
+                ),
+                encoding="utf-8",
+            )
+            reporter.chmod(0o700)
+            environment = {
+                **dict(os.environ),
+                "PATH": f"{binaries}:{os.environ['PATH']}",
+                "CAPTURE_DIR": str(captured),
+                "BORSUK_FAILURE_WORK": str(work),
+                "AWS_PRECONDITION_AFTER_PUT": "1",
+            }
+
+            canary = subprocess.run(
+                [str(reporter), "--canary"],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+            )
+            self.assertEqual(canary.returncode, 0, canary.stderr)
+            self.assertEqual(
+                json.loads(
+                    (captured / "RECEIPT_CANARY.json").read_text(encoding="utf-8")
+                ),
+                {"schema_version": 1, "status": "receipt-channel-ready"},
+            )
+
+            result = subprocess.run(
+                [str(reporter), "0", "Bad Stage!", str(detail_log)],
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(
+                    (captured / "RUNTIME_TERMINAL_FAILED.json").read_text(
+                        encoding="utf-8"
+                    )
+                ),
+                {
+                    "schema_version": 1,
+                    "status": "failed",
+                    "exit_code": 1,
+                    "stage": "bad-stage-",
+                },
+            )
+            failure_log = (captured / "FAILURE.log").read_bytes()
+            self.assertEqual(len(failure_log), 65_536)
+            self.assertEqual(failure_log, detail_log.read_bytes()[-65_536:])
+
+            (captured / "RECEIPT_CANARY.json").write_text(
+                '{"foreign":true}\n', encoding="utf-8"
+            )
+            foreign = subprocess.run(
+                [str(reporter), "--canary"],
+                text=True,
+                capture_output=True,
+                env={**environment, "AWS_SKIP_PUT_COPY": "1"},
+                check=False,
+            )
+            self.assertNotEqual(foreign.returncode, 0)
 
     def test_runtime_on_demand_exception_is_explicit_tagged_and_idempotently_distinct(
         self,
@@ -206,6 +383,14 @@ class PublicationV3AwsTests(unittest.TestCase):
             "cell_id": "read-sift-r01",
             "attempt": 2,
             "worker_script": "echo run-cell",
+            "terminal_failure_uri": (
+                "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/"
+                "results/read-sift-r01/runtime/attempts/0002/"
+                "RUNTIME_TERMINAL_FAILED.json"
+            ),
+            "terminal_detail_log_path": (
+                "/var/lib/borsuk-publication/cell/runtime.log"
+            ),
             "max_seconds": 7200,
         }
         spot = build_launch_request(**common, purchase_option="spot")
@@ -449,12 +634,11 @@ class PublicationV3AwsTests(unittest.TestCase):
         )
         self.assertIn("dnf install -y python3.12 python3.12-pip", script)
         self.assertIn("python3.12 -m venv", script)
-        self.assertIn("WORKER_DIAGNOSTIC.log", script)
-        self.assertIn("bucket=borsuk-bench-453182569524-euc1", script)
-        self.assertIn(
-            "failure_key=publication/v3/20260812/datasets/sift-128/attempts/0004/STAGING_FAILED.json",
-            script,
-        )
+        self.assertIn("region=eu-central-1", script)
+        self.assertIn("trap 'fail 143' TERM", script)
+        self.assertIn("/var/lib/borsuk-publication-failure-reporter.sh", script)
+        self.assertIn("complete=1", script)
+        self.assertNotIn("failed()", script)
         self.assertIn("--attempt 4", script)
         self.assertIn("--dataset sift-128", script)
         self.assertNotIn("python3 -m venv", script)

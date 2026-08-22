@@ -444,6 +444,11 @@ def stage_dataset(
                         cell_id=f"stage-{dataset_id}",
                         attempt=attempt,
                         worker_script=worker,
+                        terminal_failure_uri=job.failure_uri,
+                        terminal_detail_log_path=(
+                            "/var/lib/borsuk-publication-v3/"
+                            f"{job.dataset_id}-a{attempt:04d}/worker.log"
+                        ),
                         max_seconds=max_seconds,
                     )
                     instance = (aws.launch(job, request), "pending")
@@ -814,6 +819,8 @@ def prepare_qualification_execution(
         cell_id=job.cell_tag,
         attempt=job.attempt,
         worker_script=worker,
+        terminal_failure_uri=job.failed_uri,
+        terminal_detail_log_path="/var/lib/borsuk-publication/worker.log",
         max_seconds=maximum,
         purchase_option=purchase_option,
     )

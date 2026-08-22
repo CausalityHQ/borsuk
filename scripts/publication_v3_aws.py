@@ -149,20 +149,13 @@ def build_staging_worker_script(
         raise ValueError("worker source checksums must be lowercase SHA-256")
     source_bucket, _ = _s3_parts(source_uri)
     manifest_bucket, _ = _s3_parts(manifest_uri)
-    failure_bucket, failure_key = _s3_parts(job.failure_uri)
+    failure_bucket, _ = _s3_parts(job.failure_uri)
     if len({source_bucket, manifest_bucket, failure_bucket}) != 1:
         raise ValueError("worker inputs and outputs must share the publication bucket")
-    attempt_root = job.failure_uri.rsplit("/", 1)[0]
-    diagnostic_uri = f"{attempt_root}/WORKER_DIAGNOSTIC.log"
-    _, diagnostic_key = _s3_parts(diagnostic_uri)
     environment = normalized["environment_contract"]
-    region = str(environment["region"])
     instance_type = str(environment["build_workers"]["borsuk"]["instance_type"])
     values = {
-        "region": region,
-        "bucket": failure_bucket,
-        "failure_key": failure_key,
-        "diagnostic_key": diagnostic_key,
+        "region": str(environment["region"]),
         "source_uri": source_uri,
         "source_sha": source_archive_sha256,
         "manifest_uri": manifest_uri,
@@ -180,24 +173,17 @@ def build_staging_worker_script(
         ),
     }
     quoted = {key: shlex.quote(value) for key, value in values.items()}
+    failure_trap = worker_failure_trap_script(stage_variable="phase")
     return f"""set -euo pipefail
 export AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=12 PYTHONDONTWRITEBYTECODE=1
-region={quoted["region"]}; bucket={quoted["bucket"]}
-failure_key={quoted["failure_key"]}; diagnostic_key={quoted["diagnostic_key"]}
+region={quoted["region"]}
 work=/var/lib/borsuk-publication-v3/{job.dataset_id}-a{job.attempt:04d}
 mkdir -p "$work/source" "$work/dataset"
+complete=0
 phase=bootstrap
+detail_log="$work/worker.log"
+{failure_trap}
 exec > >(tee -a "$work/worker.log") 2>&1
-failed() {{
-  status=$?
-  if [[ "$status" -ne 0 ]]; then
-    aws --region "$region" s3api put-object --bucket "$bucket" --key "$diagnostic_key" --body "$work/worker.log" --content-type text/plain --server-side-encryption AES256 --if-none-match '*' >/dev/null 2>&1 || true
-    printf '{{"schema_version":1,"dataset_id":"%s","attempt":%s,"exit_code":%s,"phase":"%s","diagnostic_uri":"s3://%s/%s"}}\n' {quoted["dataset"]} {quoted["attempt"]} "$status" "$phase" "$bucket" "$diagnostic_key" >"$work/failure.json"
-    aws --region "$region" s3api put-object --bucket "$bucket" --key "$failure_key" --body "$work/failure.json" --content-type application/json --server-side-encryption AES256 --if-none-match '*' >/dev/null 2>&1 || true
-  fi
-  exit "$status"
-}}
-trap failed EXIT
 phase=identity; aws sts get-caller-identity
 phase=python-runtime; dnf install -y python3.12 python3.12-pip
 phase=source-fetch
@@ -215,6 +201,7 @@ az=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/late
 phase=promotion; cd "$work/source"
 "$work/venv/bin/python" scripts/promote_publication_v3_dataset.py --manifest "$work/manifest.json" --dataset {quoted["dataset"]} --attempt {quoted["attempt"]} --work-root "$work/dataset" --source-archive-sha256 {quoted["source_sha"]} --instance-id "$instance_id" --instance-type {quoted["instance_type"]} --availability-zone "$az" --upload-workers 16 >"$work/receipt.json"
 phase=complete
+complete=1
 """
 
 
@@ -267,6 +254,123 @@ def _tags(
     return [{"Key": key, "Value": values[key]} for key in sorted(values)]
 
 
+def worker_failure_trap_script(
+    reporter_path: str | Path = "/var/lib/borsuk-publication-failure-reporter.sh",
+    *,
+    stage_variable: str = "stage",
+) -> str:
+    """Delegate worker EXIT/signals to the preinstalled bounded reporter."""
+
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stage_variable) is None:
+        raise ValueError("worker failure stage variable is invalid")
+    reporter = shlex.quote(str(reporter_path))
+    return f"""fail() {{
+  status=$1
+  trap - EXIT TERM INT
+  trap '' TERM INT
+  if [[ $complete -eq 0 ]]; then
+    if [[ "$status" -eq 0 ]]; then status=1; fi
+    timeout 45 /bin/bash {reporter} "$status" "${stage_variable}" "$detail_log" || true
+  fi
+  exit "$status"
+}}
+trap 'fail $?' EXIT
+trap 'fail 143' TERM
+trap 'fail 130' INT"""
+
+
+def worker_supervisor_script(
+    worker_path: str | Path,
+    failure_reporter_path: str | Path,
+    max_seconds: int,
+    kill_after_seconds: int = 60,
+    detail_log_path: str | Path = "/var/lib/borsuk-publication/worker.log",
+) -> str:
+    """Run one bounded worker and report every nonzero terminal outcome."""
+
+    if max_seconds <= 0 or kill_after_seconds <= 0:
+        raise ValueError("worker timeout and kill grace must be positive")
+    worker = shlex.quote(str(worker_path))
+    reporter = shlex.quote(str(failure_reporter_path))
+    detail_log = shlex.quote(str(detail_log_path))
+    return f"""status=0
+if timeout --signal=TERM --kill-after={kill_after_seconds} {max_seconds} /bin/bash {worker}; then
+  status=0
+else
+  status=$?
+fi
+if [[ "$status" -ne 0 ]]; then
+  failure_stage=worker-failed
+  if [[ "$status" -eq 124 || "$status" -eq 137 ]]; then
+    failure_stage=controller-timeout
+  fi
+  /bin/bash {reporter} "$status" "$failure_stage" {detail_log} || true
+fi
+exit "$status"
+"""
+
+
+def terminal_failure_reporter_script(failure_uri: str) -> str:
+    """Build the bounded reporter installed outside the timed worker."""
+
+    bucket, failure_key = _s3_parts(failure_uri)
+    failure_root = failure_key.rsplit("/", 1)[0]
+    log_key = f"{failure_root}/FAILURE.log"
+    canary_key = f"{failure_root}/RECEIPT_CANARY.json"
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+work=${{BORSUK_FAILURE_WORK:-/dev/shm/borsuk-publication-failure-$$}}
+mkdir -p "$work"
+put_immutable() {{
+  local path=$1 key=$2 digest checksum attempt error_log remote_digest
+  digest=$(sha256sum "$path" | awk '{{print $1}}')
+  checksum=$(openssl dgst -sha256 -binary "$path" | base64 -w0)
+  error_log="$work/aws-error.log"
+  for attempt in 1 2 3; do
+    if timeout 5 aws s3api put-object --bucket {shlex.quote(bucket)} --key "$key" --body "$path" \
+      --expected-bucket-owner 453182569524 --server-side-encryption AES256 \
+      --checksum-algorithm SHA256 --checksum-sha256 "$checksum" \
+      --metadata "borsuk-sha256=$digest" --if-none-match '*' >/dev/null 2>"$error_log"; then
+      return 0
+    fi
+    if grep -Eq 'PreconditionFailed|(^|[^0-9])412([^0-9]|$)' "$error_log"; then
+      remote_digest=$(timeout 5 aws s3api head-object --bucket {shlex.quote(bucket)} \
+        --key "$key" --expected-bucket-owner 453182569524 \
+        --query 'Metadata."borsuk-sha256"' --output text 2>>"$error_log" || true)
+      if [[ "$remote_digest" = "$digest" ]]; then return 0; fi
+    fi
+    cat "$error_log" >&2 || true
+    sleep 1
+  done
+  return 1
+}}
+if [[ ${{1:-}} = --canary ]]; then
+  printf '{{"schema_version":1,"status":"receipt-channel-ready"}}\n' >"$work/canary.json"
+  put_immutable "$work/canary.json" {shlex.quote(canary_key)}
+  exit 0
+fi
+status=${{1:?missing failure status}}
+stage=${{2:?missing failure stage}}
+detail_log=${{3:-}}
+if [[ ! "$status" =~ ^[1-9][0-9]*$ ]]; then status=1; fi
+stage=${{stage,,}}
+stage=${{stage//[^a-z0-9-]/-}}
+stage=${{stage:0:64}}
+if [[ -z "$stage" ]]; then stage=unknown; fi
+printf '{{"schema_version":1,"status":"failed","exit_code":%d,"stage":"%s"}}\n' \
+  "$status" "$stage" >"$work/failed.json"
+receipt_status=0
+put_immutable "$work/failed.json" {shlex.quote(failure_key)} || receipt_status=$?
+if [[ -n "$detail_log" && -f "$detail_log" ]]; then
+  tail -c 65536 "$detail_log" >"$work/FAILURE.log" || true
+  if [[ -s "$work/FAILURE.log" ]]; then
+    put_immutable "$work/FAILURE.log" {shlex.quote(log_key)} || true
+  fi
+fi
+exit "$receipt_status"
+"""
+
+
 def build_launch_request(
     manifest: dict[str, object],
     *,
@@ -282,6 +386,8 @@ def build_launch_request(
     cell_id: str,
     attempt: int,
     worker_script: str,
+    terminal_failure_uri: str,
+    terminal_detail_log_path: str,
     max_seconds: int,
     purchase_option: str = "spot",
 ) -> dict[str, object]:
@@ -315,9 +421,28 @@ def build_launch_request(
         raise ValueError("worker timeout exceeds the manifest budget")
     if not worker_script or "\x00" in worker_script:
         raise ValueError("worker script must be nonempty UTF-8 text")
+    allowed_failure_root = str(
+        normalized["prefixes"]["dataset" if role == "staging" else "result"]
+    ).rstrip("/")
+    if not terminal_failure_uri.startswith(f"{allowed_failure_root}/"):
+        raise ValueError("terminal failure URI escapes its publication prefix")
+    _s3_parts(terminal_failure_uri)
+    if not Path(terminal_detail_log_path).is_absolute() or "\x00" in terminal_detail_log_path:
+        raise ValueError("terminal detail log path must be absolute UTF-8 text")
     worker_payload = base64.b64encode(
         gzip.compress(worker_script.encode("utf-8"), mtime=0)
     ).decode("ascii")
+    reporter_payload = base64.b64encode(
+        gzip.compress(
+            terminal_failure_reporter_script(terminal_failure_uri).encode("utf-8"),
+            mtime=0,
+        )
+    ).decode("ascii")
+    worker_path = "/var/lib/borsuk-publication-worker.sh"
+    reporter_path = "/var/lib/borsuk-publication-failure-reporter.sh"
+    supervisor = worker_supervisor_script(
+        worker_path, reporter_path, max_seconds, 60, terminal_detail_log_path
+    )
     user_data = f"""#!/usr/bin/env bash
 set -euo pipefail
 export HOME=/root
@@ -328,9 +453,14 @@ finish() {{
   exit "$status"
 }}
 trap finish EXIT
-printf '%s' '{worker_payload}' | base64 -d | gzip -d >/var/lib/borsuk-publication-worker.sh
-chmod 700 /var/lib/borsuk-publication-worker.sh
-timeout --signal=TERM --kill-after=60 {max_seconds} /bin/bash /var/lib/borsuk-publication-worker.sh
+printf '%s' '{worker_payload}' | base64 -d | gzip -d >{worker_path}
+printf '%s' '{reporter_payload}' | base64 -d | gzip -d >{reporter_path}
+chmod 700 {worker_path} {reporter_path}
+if ! /bin/bash {reporter_path} --canary; then
+  /bin/bash {reporter_path} 2 receipt-preflight-failed || true
+  exit 2
+fi
+{supervisor}
 """
     encoded_user_data = base64.b64encode(user_data.encode("utf-8")).decode("ascii")
     if len(user_data.encode("utf-8")) > 16 * 1024:
