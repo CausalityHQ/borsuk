@@ -133,7 +133,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         server = self.pair["server"]
         generator = self.pair["generator"]
         self.assertEqual(server["InstanceType"], "c7g.xlarge")
-        self.assertEqual(generator["InstanceType"], "c7g.large")
+        self.assertEqual(generator["InstanceType"], "c7g.xlarge")
         self.assertNotEqual(server["ClientToken"], generator["ClientToken"])
         for request in (server, generator):
             self.assertEqual(request["MinCount"], 1)

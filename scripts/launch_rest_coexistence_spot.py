@@ -796,7 +796,7 @@ def build_launch_pair(
     generator_request = _request(
         **common,
         role="rest-generator",
-        instance_type="c7g.large",
+        instance_type="c7g.xlarge",
         user_data=generator_user_data,
         purchase_option=purchase_option,
     )
