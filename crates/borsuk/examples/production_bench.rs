@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     env,
     error::Error,
     fs::{self, File},
@@ -70,10 +70,9 @@ const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turb
 const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,nprobe,max_candidates,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,network_gets";
 const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written";
-const WRITE_COST_HEADER: &str = "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
-const WRITE_SAMPLE_HEADER: &str =
-    "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
-const LIFECYCLE_HEADER: &str = "configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
+const WRITE_COST_HEADER: &str = "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
+const WRITE_SAMPLE_HEADER: &str = "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
+const LIFECYCLE_HEADER: &str = "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
 const MUTATION_QUERY_HEADER: &str =
     "stage,queries,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_bytes_read,avg_network_gets";
 const MUTATION_QUERY_SAMPLE_HEADER: &str =
@@ -104,6 +103,7 @@ struct ResolvedConfig {
     cache_dir: PathBuf,
     limit: usize,
     queries: usize,
+    lifecycle_writers: usize,
     write_batch_size: usize,
     write_ops: Option<usize>,
     update_percent: usize,
@@ -608,10 +608,152 @@ struct WriteRow {
 
 struct WriteSample {
     op: &'static str,
+    writer_index: usize,
+    wave_index: usize,
     batch_index: usize,
     batch_records: usize,
     batch_latency_ms: f64,
     requests: RequestCounts,
+}
+
+struct PreparedRecordBatch {
+    assignment: LifecycleBatchAssignment,
+    records: Vec<VectorRecord>,
+}
+
+fn open_lifecycle_writer_handles(config: &ResolvedConfig) -> BenchResult<Vec<BorsukIndex>> {
+    (0..config.lifecycle_writers)
+        .map(|_| {
+            BorsukIndex::open_with_options(
+                &config.uri,
+                lifecycle_writer_open_options(config.ram_budget_bytes),
+            )
+            .map_err(Into::into)
+        })
+        .collect()
+}
+
+fn lifecycle_writer_open_options(ram_budget_bytes: Option<u64>) -> OpenOptions {
+    OpenOptions {
+        ram_budget_bytes,
+        // Writer handles are long-lived metadata/WAL clients, not serving
+        // caches. Retaining an independent copy of every read cache per
+        // concurrent writer would make process memory scale with W.
+        routing_page_cache_max_bytes: 0,
+        tombstone_page_cache_max_bytes: 0,
+        bm25_stats_page_cache_max_bytes: 0,
+        lexical_run_cache_max_bytes: 0,
+        lexical_term_page_cache_max_bytes: 0,
+        late_interaction_batch_cache_max_bytes: 0,
+        wal_tail_cache_max_bytes: 0,
+        ..OpenOptions::default()
+    }
+}
+
+fn execute_upsert_wave(
+    op: &'static str,
+    wave_index: usize,
+    writers: &mut [BorsukIndex],
+    batches: Vec<PreparedRecordBatch>,
+) -> BenchResult<Vec<(WriteSample, u64)>> {
+    if batches.len() > writers.len()
+        || batches
+            .iter()
+            .enumerate()
+            .any(|(writer_index, batch)| batch.assignment.writer_index != writer_index)
+    {
+        return Err(invalid_input("lifecycle write wave is not canonically assigned").into());
+    }
+    std::thread::scope(|scope| -> BenchResult<Vec<(WriteSample, u64)>> {
+        let mut joins = Vec::with_capacity(batches.len());
+        for (writer, prepared) in writers.iter_mut().zip(batches) {
+            joins.push(scope.spawn(move || -> borsuk::Result<(WriteSample, u64)> {
+                let requests_before = writer.request_counts();
+                let bytes_before = writer.put_payload_bytes();
+                let batch_started = Instant::now();
+                let _ = writer.upsert_with_report(prepared.records)?;
+                Ok((
+                    WriteSample {
+                        op,
+                        writer_index: prepared.assignment.writer_index,
+                        wave_index,
+                        batch_index: prepared.assignment.batch_index,
+                        batch_records: prepared.assignment.len,
+                        batch_latency_ms: elapsed_ms(batch_started),
+                        requests: writer.request_counts().delta(&requests_before),
+                    },
+                    writer.put_payload_bytes().saturating_sub(bytes_before),
+                ))
+            }));
+        }
+        joins
+            .into_iter()
+            .map(|join| {
+                join.join()
+                    .map_err(|_| io::Error::other("lifecycle writer thread panicked"))?
+                    .map_err(Into::into)
+            })
+            .collect()
+    })
+}
+
+fn execute_delete_wave(
+    wave_index: usize,
+    writers: &mut [BorsukIndex],
+    batches: Vec<(LifecycleBatchAssignment, Vec<String>)>,
+) -> BenchResult<Vec<(WriteSample, u64)>> {
+    if batches.len() > writers.len()
+        || batches
+            .iter()
+            .enumerate()
+            .any(|(writer_index, (assignment, _))| assignment.writer_index != writer_index)
+    {
+        return Err(invalid_input("lifecycle delete wave is not canonically assigned").into());
+    }
+    std::thread::scope(|scope| -> BenchResult<Vec<(WriteSample, u64)>> {
+        let mut joins = Vec::with_capacity(batches.len());
+        for (writer, (assignment, ids)) in writers.iter_mut().zip(batches) {
+            joins.push(scope.spawn(move || -> borsuk::Result<(WriteSample, u64)> {
+                let requests_before = writer.request_counts();
+                let bytes_before = writer.put_payload_bytes();
+                let batch_started = Instant::now();
+                let report = writer.delete(ids)?;
+                Ok((
+                    WriteSample {
+                        op: "delete",
+                        writer_index: assignment.writer_index,
+                        wave_index,
+                        batch_index: assignment.batch_index,
+                        batch_records: report.ids_submitted,
+                        batch_latency_ms: elapsed_ms(batch_started),
+                        requests: writer.request_counts().delta(&requests_before),
+                    },
+                    writer.put_payload_bytes().saturating_sub(bytes_before),
+                ))
+            }));
+        }
+        joins
+            .into_iter()
+            .map(|join| {
+                join.join()
+                    .map_err(|_| io::Error::other("lifecycle writer thread panicked"))?
+                    .map_err(Into::into)
+            })
+            .collect()
+    })
+}
+
+fn request_counts_from_samples(samples: &[WriteSample]) -> RequestCounts {
+    samples
+        .iter()
+        .fold(RequestCounts::default(), |mut total, sample| {
+            total.gets = total.gets.saturating_add(sample.requests.gets);
+            total.puts = total.puts.saturating_add(sample.requests.puts);
+            total.deletes = total.deletes.saturating_add(sample.requests.deletes);
+            total.heads = total.heads.saturating_add(sample.requests.heads);
+            total.lists = total.lists.saturating_add(sample.requests.lists);
+            total
+        })
 }
 
 struct InsertMeasurement {
@@ -825,10 +967,12 @@ fn run() -> BenchResult<()> {
     }
 
     if config.insert_only {
-        let mut index = open_serving_index(&config)?;
         let write_ops = write_operation_count(dataset.train_count, config.write_ops)?;
-        let insert = measure_inserts(&config, &dataset, &mut index, write_ops)?;
-        let (samples, visible) = verify_insert_visibility(&dataset, &index, write_ops)?;
+        let mut writers = open_lifecycle_writer_handles(&config)?;
+        let insert = measure_inserts(&config, &dataset, &mut writers, write_ops)?;
+        let observer = BorsukIndex::open(&config.uri)?;
+        let (samples, visible) = verify_insert_visibility(&config, &dataset, &observer, write_ops)?;
+        drop(observer);
         if visible != samples {
             return Err(invalid_input(&format!(
                 "durable insert visibility failed: {visible}/{samples} sampled records visible"
@@ -1065,6 +1209,8 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
 
     let limit = env_usize("BORSUK_BENCH_LIMIT", 0)?;
     let queries = env_usize("BORSUK_BENCH_QUERIES", DEFAULT_QUERIES)?;
+    let lifecycle_writers =
+        validate_lifecycle_writers(env_usize("BORSUK_BENCH_LIFECYCLE_WRITERS", 1)?)?;
     let write_batch_size = env_usize("BORSUK_BENCH_WRITE_BATCH_SIZE", DEFAULT_WRITE_BATCH_SIZE)?;
     let write_ops = env_optional_cap("BORSUK_BENCH_WRITE_OPS", None)?;
     let update_percent = env_percentage("BORSUK_BENCH_UPDATE_PERCENT", 100)?;
@@ -1296,6 +1442,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         cache_dir,
         limit,
         queries,
+        lifecycle_writers,
         write_batch_size,
         write_ops,
         update_percent,
@@ -1364,13 +1511,14 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} disk_cache_max_bytes={} limit={} queries={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} disk_cache_max_bytes={} limit={} queries={} lifecycle_writers={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
         config.disk_cache_max_bytes.unwrap_or(0),
         config.limit,
         config.queries,
+        config.lifecycle_writers,
         config.write_batch_size,
         config
             .write_ops
@@ -3334,7 +3482,14 @@ fn write_write_costs_csv(
     dataset: &Dataset,
     index: &mut BorsukIndex,
 ) -> BenchResult<()> {
-    let write_ops = write_operation_count(dataset.train_count, config.write_ops)?;
+    let write_ops = lifecycle_write_operation_count(
+        dataset.train_count,
+        config.write_ops,
+        config.lifecycle_writers,
+        config.write_batch_size,
+        config.update_percent,
+        config.delete_percent,
+    )?;
     let update_ops = percentage_operation_count(write_ops, config.update_percent)?;
     let delete_ops = percentage_operation_count(write_ops, config.delete_percent)?;
     let mutation_queries = &dataset.queries[..dataset.queries.len().min(MUTATION_QUERY_SAMPLES)];
@@ -3342,11 +3497,15 @@ fn write_write_costs_csv(
         "baseline",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     )];
+    let mut writers = open_lifecycle_writer_handles(config)?;
     let stats_before_insert = index.stats();
     let mut rows = Vec::with_capacity(5);
-    let insert = measure_inserts(config, dataset, index, write_ops)?;
+    let insert = measure_inserts(config, dataset, &mut writers, write_ops)?;
+    let _ = index.refresh()?;
+    let observer = BorsukIndex::open(&config.uri)?;
     let (searchable_samples, searchable_hits) =
-        verify_insert_visibility(dataset, index, write_ops)?;
+        verify_insert_visibility(config, dataset, &observer, write_ops)?;
+    drop(observer);
     let searchable_fraction = mean(searchable_hits as f64, searchable_samples);
     let insert_wall_ms = insert.row.wall_ms;
     let foreground_bytes_written = insert.row.bytes_written;
@@ -3392,21 +3551,29 @@ fn write_write_costs_csv(
         "after-global-consolidation",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
-    let upsert = measure_upserts(config, dataset, index, update_ops)?;
-    let (upsert_samples, upsert_correct) = verify_upsert_values(index, &upsert.expected_records)?;
+    let upsert = measure_upserts(config, dataset, &mut writers, update_ops)?;
+    let _ = index.refresh()?;
+    let observer = BorsukIndex::open(&config.uri)?;
+    let (upsert_samples, upsert_correct) =
+        verify_upsert_values(&observer, &upsert.expected_records)?;
+    drop(observer);
     rows.push(upsert.row);
     query_stages.push((
         "after-upsert",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
-    rows.push(measure_deletes(index, delete_ops, config.write_batch_size)?);
-    let (delete_samples, delete_absent) = verify_delete_absence(index, delete_ops)?;
+    rows.push(measure_deletes(config, &mut writers, delete_ops)?);
+    let _ = index.refresh()?;
+    let observer = BorsukIndex::open(&config.uri)?;
+    let (delete_samples, delete_absent) = verify_delete_absence(config, &observer, delete_ops)?;
+    drop(observer);
     query_stages.push((
         "after-delete",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
 
     let requests_before = index.request_counts();
+    let bytes_before = index.put_payload_bytes();
     let compact_started = Instant::now();
     let compact = index.compact(CompactionOptions::default())?;
     let compact_wall_ms = elapsed_ms(compact_started);
@@ -3418,6 +3585,8 @@ fn write_write_costs_csv(
         latencies_ms: vec![compact_wall_ms],
         samples: vec![WriteSample {
             op: "compact",
+            writer_index: 0,
+            wave_index: 0,
             batch_index: 0,
             batch_records: compact.records_rewritten,
             batch_latency_ms: compact_wall_ms,
@@ -3425,21 +3594,20 @@ fn write_write_costs_csv(
         }],
         requests: compact_requests,
         bytes_read: compact.bytes_read,
-        bytes_written: compact.bytes_written,
+        bytes_written: index.put_payload_bytes().saturating_sub(bytes_before),
     });
-    let (_, compact_delete_absent) = verify_delete_absence(index, delete_ops)?;
+    let (_, compact_delete_absent) = verify_delete_absence(config, index, delete_ops)?;
     query_stages.push((
         "after-compact",
         run_queries(index, mutation_queries, None, serving_options(config))?,
     ));
 
     let requests_before = index.request_counts();
+    let bytes_before = index.put_payload_bytes();
     let purge_started = Instant::now();
     let purge = index.purge_with_report()?;
     let purge_wall_ms = elapsed_ms(purge_started);
     let purge_requests = index.request_counts().delta(&requests_before);
-    // PurgeReport exposes request counts and row/segment counts, but no byte
-    // counters. The closest honest representation for this CSV is zero bytes.
     rows.push(WriteRow {
         op: "purge",
         ops: 1,
@@ -3447,6 +3615,8 @@ fn write_write_costs_csv(
         latencies_ms: vec![purge_wall_ms],
         samples: vec![WriteSample {
             op: "purge",
+            writer_index: 0,
+            wave_index: 0,
             batch_index: 0,
             batch_records: purge.records_purged,
             batch_latency_ms: purge_wall_ms,
@@ -3454,9 +3624,9 @@ fn write_write_costs_csv(
         }],
         requests: purge_requests,
         bytes_read: 0,
-        bytes_written: 0,
+        bytes_written: index.put_payload_bytes().saturating_sub(bytes_before),
     });
-    let (_, purge_delete_absent) = verify_delete_absence(index, delete_ops)?;
+    let (_, purge_delete_absent) = verify_delete_absence(config, index, delete_ops)?;
     query_stages.push((
         "after-purge",
         run_queries(index, mutation_queries, None, serving_options(config))?,
@@ -3500,8 +3670,9 @@ fn write_cost_artifacts(config: &ResolvedConfig, rows: &[WriteRow]) -> BenchResu
         };
         writeln!(
             writer,
-            "{},{},{},{},{:.3},{ops_per_second:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{:.3},{ops_per_second:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{},{},{},{},{},{},{}",
             row.op,
+            config.lifecycle_writers,
             config.write_batch_size,
             row.ops,
             row.samples.len(),
@@ -3529,8 +3700,10 @@ fn write_cost_artifacts(config: &ResolvedConfig, rows: &[WriteRow]) -> BenchResu
     for sample in rows.iter().flat_map(|row| &row.samples) {
         writeln!(
             sample_writer,
-            "{},{},{},{:.3},{:.6},{},{},{},{},{}",
+            "{},{},{},{},{},{:.3},{:.6},{},{},{},{},{}",
             sample.op,
+            sample.writer_index,
+            sample.wave_index,
             sample.batch_index,
             sample.batch_records,
             sample.batch_latency_ms,
@@ -3599,8 +3772,8 @@ fn write_lifecycle_csv(
     writeln!(writer, "{LIFECYCLE_HEADER}")?;
     writeln!(
         writer,
-        "{},{inserted_vectors},{logical_vector_bytes},{insert_wall_ms:.3},{insert_vectors_per_s:.3},{first_batch_publish_ms:.3},{first_batch_publish_ms:.3},{searchable_samples},{searchable_fraction:.6},{upsert_samples},{upsert_correct_fraction:.6},{delete_samples},{delete_absent_fraction:.6},{compact_delete_absent_fraction:.6},{purge_delete_absent_fraction:.6},{delta_flush_ms:.3},{time_to_fully_indexed_ms:.3},{wal_publish_bytes},{indexed_delta_bytes},{total_indexing_bytes},{write_amplification:.6},true,{consolidation_ms:.3},{time_to_consolidated_ms:.3},{consolidated_global_bytes},{consolidation_amplification:.6}",
-        config.write_batch_size,
+        "{},{},{inserted_vectors},{logical_vector_bytes},{insert_wall_ms:.3},{insert_vectors_per_s:.3},{first_batch_publish_ms:.3},{first_batch_publish_ms:.3},{searchable_samples},{searchable_fraction:.6},{upsert_samples},{upsert_correct_fraction:.6},{delete_samples},{delete_absent_fraction:.6},{compact_delete_absent_fraction:.6},{purge_delete_absent_fraction:.6},{delta_flush_ms:.3},{time_to_fully_indexed_ms:.3},{wal_publish_bytes},{indexed_delta_bytes},{total_indexing_bytes},{write_amplification:.6},true,{consolidation_ms:.3},{time_to_consolidated_ms:.3},{consolidated_global_bytes},{consolidation_amplification:.6}",
+        config.lifecycle_writers, config.write_batch_size,
     )?;
     writer.flush()?;
     eprintln!("wrote {} rows=1", path.display());
@@ -3663,42 +3836,64 @@ fn mean_amortized_ms(row: &WriteRow) -> f64 {
 fn measure_inserts(
     config: &ResolvedConfig,
     dataset: &Dataset,
-    index: &mut BorsukIndex,
+    writers: &mut [BorsukIndex],
     count: usize,
 ) -> BenchResult<InsertMeasurement> {
-    let requests_before = index.request_counts();
+    // Concurrent lifecycle ingestion uses the claim-free last-write-wins path.
+    // The ids are absent in the cloned base, so these upserts are logical
+    // inserts while remaining comparable to object-store vector APIs whose
+    // write primitive is also upsert. Insert-only `add` has a separate global
+    // uniqueness-claim protocol and is intentionally not conflated with this
+    // scalable writer measurement.
     let started = Instant::now();
     let mut samples = Vec::new();
     let mut bytes_written = 0_u64;
+    let assignments = lifecycle_write_waves(count, config.write_batch_size, writers.len())?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut assignment_cursor = 0_usize;
+    let mut pending = Vec::with_capacity(writers.len());
     stream_dataset_batches(config, dataset, count, |offset, vectors| {
-        let batch_records = vectors.len();
+        let assignment = assignments
+            .get(assignment_cursor)
+            .copied()
+            .ok_or_else(|| invalid_input("lifecycle insert source exceeded its schedule"))?;
+        if assignment.offset != offset || assignment.len != vectors.len() {
+            return Err(invalid_input("lifecycle insert source differs from its schedule").into());
+        }
         let ids = (offset..offset.saturating_add(vectors.len()))
             .map(|id| format!("bench-insert-{}", dataset.train_count.saturating_add(id)))
             .collect::<Vec<_>>();
-        let batch_requests_before = index.request_counts();
-        let batch_started = Instant::now();
-        let (_, report) = index.add_with_report(vectors, Some(ids))?;
-        bytes_written = bytes_written.saturating_add(report.total_bytes_written);
-        let batch_latency_ms = elapsed_ms(batch_started);
-        samples.push(WriteSample {
-            op: "insert",
-            batch_index: samples.len(),
-            batch_records,
-            batch_latency_ms,
-            requests: index.request_counts().delta(&batch_requests_before),
+        pending.push(PreparedRecordBatch {
+            assignment,
+            records: ids
+                .into_iter()
+                .zip(vectors)
+                .map(|(id, vector)| VectorRecord::new(id, vector))
+                .collect(),
         });
+        assignment_cursor = assignment_cursor.saturating_add(1);
+        let wave_complete = assignment_cursor == assignments.len()
+            || assignments[assignment_cursor].writer_index == 0;
+        if wave_complete {
+            let wave_index = assignment.batch_index / writers.len();
+            for (sample, written) in
+                execute_upsert_wave("insert", wave_index, writers, std::mem::take(&mut pending))?
+            {
+                bytes_written = bytes_written.saturating_add(written);
+                samples.push(sample);
+            }
+        }
         Ok(())
     })?;
-    let first_batch_publish_ms = samples
-        .first()
-        .map_or(0.0, |sample| sample.batch_latency_ms);
-    let mut row = write_row_from_samples(
-        "insert",
-        count,
-        elapsed_ms(started),
-        samples,
-        index.request_counts().delta(&requests_before),
-    );
+    if assignment_cursor != assignments.len() || !pending.is_empty() {
+        return Err(invalid_input("lifecycle insert schedule is incomplete").into());
+    }
+    samples.sort_by_key(|sample| sample.batch_index);
+    let first_batch_publish_ms = first_logical_batch_publish_ms(&samples);
+    let requests = request_counts_from_samples(&samples);
+    let mut row = write_row_from_samples("insert", count, elapsed_ms(started), samples, requests);
     row.bytes_written = bytes_written;
     Ok(InsertMeasurement {
         row,
@@ -3706,19 +3901,24 @@ fn measure_inserts(
     })
 }
 
+fn first_logical_batch_publish_ms(samples: &[WriteSample]) -> f64 {
+    samples
+        .iter()
+        .find(|sample| sample.batch_index == 0)
+        .map_or(0.0, |sample| sample.batch_latency_ms)
+}
+
 fn verify_insert_visibility(
+    config: &ResolvedConfig,
     dataset: &Dataset,
     index: &BorsukIndex,
     count: usize,
 ) -> BenchResult<(usize, usize)> {
-    let samples = count.min(16);
-    let ids = (0..samples)
-        .map(|sample| {
-            let offset = if samples <= 1 {
-                0
-            } else {
-                sample.saturating_mul(count.saturating_sub(1)) / samples.saturating_sub(1)
-            };
+    let offsets =
+        verification_offsets(count, 16, config.lifecycle_writers, config.write_batch_size)?;
+    let ids = offsets
+        .iter()
+        .map(|&offset| {
             format!(
                 "bench-insert-{}",
                 dataset.train_count.saturating_add(offset)
@@ -3730,53 +3930,76 @@ fn verify_insert_visibility(
         .into_iter()
         .filter(Option::is_some)
         .count();
-    Ok((samples, visible))
+    Ok((offsets.len(), visible))
 }
 
 fn measure_upserts(
     config: &ResolvedConfig,
     dataset: &Dataset,
-    index: &mut BorsukIndex,
+    writers: &mut [BorsukIndex],
     count: usize,
 ) -> BenchResult<UpsertMeasurement> {
     // Re-upsert the first `count` train vectors (nudged so it is a real MVCC
     // upsert), streaming from the selected standard source. Zero-norm vectors
     // are accepted like any other.
-    let requests_before = index.request_counts();
     let started = Instant::now();
     let mut samples = Vec::new();
-    let mut expected_records = Vec::with_capacity(count.min(16));
+    let mut bytes_written = 0_u64;
+    let verification_offsets =
+        verification_offsets(count, 16, config.lifecycle_writers, config.write_batch_size)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+    let mut expected_records = Vec::with_capacity(verification_offsets.len());
+    let assignments = lifecycle_write_waves(count, config.write_batch_size, writers.len())?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut assignment_cursor = 0_usize;
+    let mut pending = Vec::with_capacity(writers.len());
     stream_dataset_batches(config, dataset, count, |offset, vectors| {
-        let batch_records = vectors.len();
+        let assignment = assignments
+            .get(assignment_cursor)
+            .copied()
+            .ok_or_else(|| invalid_input("lifecycle upsert source exceeded its schedule"))?;
+        if assignment.offset != offset || assignment.len != vectors.len() {
+            return Err(invalid_input("lifecycle upsert source differs from its schedule").into());
+        }
         let mut records = Vec::with_capacity(vectors.len());
         for (position, mut vector) in vectors.into_iter().enumerate() {
             vector[0] += 1.0e-4;
             let id = offset.saturating_add(position).to_string();
-            if expected_records.len() < 16 {
+            if verification_offsets.contains(&offset.saturating_add(position)) {
                 expected_records.push((id.clone(), vector.clone()));
             }
             records.push(VectorRecord::new(id, vector));
         }
-        let batch_requests_before = index.request_counts();
-        let batch_started = Instant::now();
-        index.upsert(records)?;
-        samples.push(WriteSample {
-            op: "upsert",
-            batch_index: samples.len(),
-            batch_records,
-            batch_latency_ms: elapsed_ms(batch_started),
-            requests: index.request_counts().delta(&batch_requests_before),
+        pending.push(PreparedRecordBatch {
+            assignment,
+            records,
         });
+        assignment_cursor = assignment_cursor.saturating_add(1);
+        let wave_complete = assignment_cursor == assignments.len()
+            || assignments[assignment_cursor].writer_index == 0;
+        if wave_complete {
+            let wave_index = assignment.batch_index / writers.len();
+            for (sample, written) in
+                execute_upsert_wave("upsert", wave_index, writers, std::mem::take(&mut pending))?
+            {
+                bytes_written = bytes_written.saturating_add(written);
+                samples.push(sample);
+            }
+        }
         Ok(())
     })?;
+    if assignment_cursor != assignments.len() || !pending.is_empty() {
+        return Err(invalid_input("lifecycle upsert schedule is incomplete").into());
+    }
+    samples.sort_by_key(|sample| sample.batch_index);
+    let requests = request_counts_from_samples(&samples);
+    let mut row = write_row_from_samples("upsert", count, elapsed_ms(started), samples, requests);
+    row.bytes_written = bytes_written;
     Ok(UpsertMeasurement {
-        row: write_row_from_samples(
-            "upsert",
-            count,
-            elapsed_ms(started),
-            samples,
-            index.request_counts().delta(&requests_before),
-        ),
+        row,
         expected_records,
     })
 }
@@ -3802,15 +4025,69 @@ fn verify_upsert_values(
     Ok((expected.len(), correct))
 }
 
-fn verify_delete_absence(index: &BorsukIndex, count: usize) -> BenchResult<(usize, usize)> {
-    let samples = count.min(16);
-    let ids = (0..samples).map(|id| id.to_string()).collect::<Vec<_>>();
+fn verify_delete_absence(
+    config: &ResolvedConfig,
+    index: &BorsukIndex,
+    count: usize,
+) -> BenchResult<(usize, usize)> {
+    let offsets =
+        verification_offsets(count, 16, config.lifecycle_writers, config.write_batch_size)?;
+    let ids = offsets.iter().map(usize::to_string).collect::<Vec<_>>();
     let absent = index
         .get_records(&ids)?
         .into_iter()
         .filter(Option::is_none)
         .count();
-    Ok((samples, absent))
+    Ok((offsets.len(), absent))
+}
+
+fn verification_offsets(
+    count: usize,
+    maximum_samples: usize,
+    writers: usize,
+    batch_size: usize,
+) -> io::Result<Vec<usize>> {
+    let writers = validate_lifecycle_writers(writers)?;
+    if batch_size == 0 {
+        return Err(invalid_input("lifecycle verification batch size is zero"));
+    }
+    let samples = count.min(maximum_samples.max(writers.saturating_mul(2)));
+    if samples == 0 {
+        return Ok(Vec::new());
+    }
+    let mut offsets = BTreeSet::new();
+    let batch_count = count.div_ceil(batch_size);
+    for writer_index in 0..writers {
+        let offset = writer_index.saturating_mul(batch_size);
+        if offset < count {
+            offsets.insert(offset);
+            let last_batch = writer_index.saturating_add(
+                batch_count.saturating_sub(1).saturating_sub(writer_index) / writers * writers,
+            );
+            offsets.insert(
+                last_batch
+                    .saturating_mul(batch_size)
+                    .min(count.saturating_sub(1)),
+            );
+        }
+    }
+    for sample in 0..samples {
+        let offset = if samples <= 1 {
+            0
+        } else {
+            sample.saturating_mul(count.saturating_sub(1)) / samples.saturating_sub(1)
+        };
+        offsets.insert(offset);
+        if offsets.len() == samples {
+            break;
+        }
+    }
+    let mut fallback = 0_usize;
+    while offsets.len() < samples {
+        offsets.insert(fallback);
+        fallback = fallback.saturating_add(1);
+    }
+    Ok(offsets.into_iter().collect())
 }
 
 fn write_batch_len(count: usize, offset: usize, batch_size: usize) -> usize {
@@ -3828,6 +4105,40 @@ fn write_operation_count(train_count: usize, configured: Option<usize>) -> Bench
     Ok(count)
 }
 
+fn lifecycle_write_operation_count(
+    train_count: usize,
+    configured: Option<usize>,
+    writers: usize,
+    batch_size: usize,
+    update_percent: usize,
+    delete_percent: usize,
+) -> BenchResult<usize> {
+    let writers = validate_lifecycle_writers(writers)?;
+    if batch_size == 0
+        || !(1..=100).contains(&update_percent)
+        || !(1..=100).contains(&delete_percent)
+    {
+        return Err(invalid_input("lifecycle concurrency inputs are invalid").into());
+    }
+    let minimum_mutation_ops = writers.saturating_mul(batch_size);
+    let minimum_percent = update_percent.min(delete_percent);
+    let minimum_write_ops = minimum_mutation_ops
+        .saturating_mul(100)
+        .div_ceil(minimum_percent);
+    let count = configured.unwrap_or_else(|| {
+        (train_count / WRITE_FRACTION_DENOMINATOR)
+            .max(1)
+            .max(minimum_write_ops)
+    });
+    if count < minimum_write_ops {
+        return Err(invalid_input(&format!(
+            "BORSUK_BENCH_WRITE_OPS={count} cannot exercise all {writers} lifecycle writers with batch size {batch_size} and {minimum_percent}% mutations; require at least {minimum_write_ops}"
+        ))
+        .into());
+    }
+    write_operation_count(train_count, Some(count))
+}
+
 fn percentage_operation_count(base: usize, percent: usize) -> BenchResult<usize> {
     if base == 0 || !(1..=100).contains(&percent) {
         return Err(
@@ -3835,6 +4146,74 @@ fn percentage_operation_count(base: usize, percent: usize) -> BenchResult<usize>
         );
     }
     Ok(base.saturating_mul(percent).saturating_add(99) / 100)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LifecycleBatchAssignment {
+    writer_index: usize,
+    batch_index: usize,
+    offset: usize,
+    len: usize,
+}
+
+fn validate_lifecycle_writers(writers: usize) -> io::Result<usize> {
+    if !(1..=64).contains(&writers) {
+        return Err(invalid_input(
+            "BORSUK_BENCH_LIFECYCLE_WRITERS must be in 1..=64",
+        ));
+    }
+    Ok(writers)
+}
+
+fn lifecycle_write_waves(
+    count: usize,
+    batch_size: usize,
+    writers: usize,
+) -> io::Result<Vec<Vec<LifecycleBatchAssignment>>> {
+    let writers = validate_lifecycle_writers(writers)?;
+    if batch_size == 0 {
+        return Err(invalid_input(
+            "lifecycle batch size must be greater than zero",
+        ));
+    }
+    let batch_count = count.div_ceil(batch_size);
+    let mut waves = Vec::with_capacity(batch_count.div_ceil(writers));
+    for batch_index in 0..batch_count {
+        let wave_index = batch_index / writers;
+        if wave_index == waves.len() {
+            waves.push(Vec::with_capacity(writers));
+        }
+        let offset = batch_index.saturating_mul(batch_size);
+        waves[wave_index].push(LifecycleBatchAssignment {
+            writer_index: batch_index % writers,
+            batch_index,
+            offset,
+            len: write_batch_len(count, offset, batch_size),
+        });
+    }
+    Ok(waves)
+}
+
+fn rebatch_mutation_vector_chunk(
+    pending: &mut VecDeque<Vec<f32>>,
+    chunk: Vec<Vec<f32>>,
+    batch_size: usize,
+    finished: bool,
+) -> io::Result<Vec<Vec<Vec<f32>>>> {
+    if batch_size == 0 {
+        return Err(invalid_input(
+            "lifecycle mutation batch size must be greater than zero",
+        ));
+    }
+    pending.extend(chunk);
+    let mut batches = Vec::new();
+    while pending.len() >= batch_size {
+        batches.push(pending.drain(..batch_size).collect());
+    }
+    if finished && !pending.is_empty() {
+        batches.push(pending.drain(..).collect());
+    }
+    Ok(batches)
 }
 
 fn stream_dataset_batches(
@@ -3868,26 +4247,53 @@ fn stream_dataset_batches(
             }
         }
         DatasetVectorSource::Parquet { train_files } => {
+            let mut decoded = 0_usize;
+            let mut pending = VecDeque::with_capacity(config.write_batch_size);
             'files: for path in train_files {
                 let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?
                     .with_batch_size(config.write_batch_size)
                     .build()?;
                 for batch in reader {
-                    if offset == count {
+                    if decoded == count {
                         break 'files;
                     }
                     let batch = batch?;
                     let column = batch.column_by_name("emb").ok_or_else(|| {
                         invalid_input(&format!("{} has no `emb` vector column", path.display()))
                     })?;
-                    let batch_rows = batch.num_rows().min(count.saturating_sub(offset));
+                    let batch_rows = batch.num_rows().min(count.saturating_sub(decoded));
                     let mut vectors = Vec::with_capacity(batch_rows);
                     for row in 0..batch_rows {
                         vectors.push(vector_row(column.as_ref(), row, dataset.meta.dim, "emb")?);
                     }
-                    consume(offset, vectors)?;
-                    offset = offset.saturating_add(batch_rows);
+                    decoded = decoded.saturating_add(batch_rows);
+                    for vectors in rebatch_mutation_vector_chunk(
+                        &mut pending,
+                        vectors,
+                        config.write_batch_size,
+                        false,
+                    )? {
+                        let batch_rows = vectors.len();
+                        consume(offset, vectors)?;
+                        offset = offset.saturating_add(batch_rows);
+                    }
                 }
+            }
+            for vectors in rebatch_mutation_vector_chunk(
+                &mut pending,
+                Vec::new(),
+                config.write_batch_size,
+                true,
+            )? {
+                let batch_rows = vectors.len();
+                consume(offset, vectors)?;
+                offset = offset.saturating_add(batch_rows);
+            }
+            if decoded != count {
+                return Err(invalid_input(&format!(
+                    "mutation source decoded {decoded} vectors; expected {count}"
+                ))
+                .into());
             }
         }
     }
@@ -3915,36 +4321,37 @@ fn deterministic_mutation_vector(row: usize, dimensions: usize) -> Vec<f32> {
 }
 
 fn measure_deletes(
-    index: &mut BorsukIndex,
+    config: &ResolvedConfig,
+    writers: &mut [BorsukIndex],
     count: usize,
-    write_batch_size: usize,
 ) -> BenchResult<WriteRow> {
-    let requests_before = index.request_counts();
     let started = Instant::now();
     let mut samples = Vec::new();
-    let mut offset = 0_usize;
-    while offset < count {
-        let end = offset.saturating_add(write_batch_size).min(count);
-        let ids = (offset..end).map(|id| id.to_string()).collect::<Vec<_>>();
-        let batch_requests_before = index.request_counts();
-        let batch_started = Instant::now();
-        let report = index.delete(ids)?;
-        samples.push(WriteSample {
-            op: "delete",
-            batch_index: samples.len(),
-            batch_records: report.ids_submitted,
-            batch_latency_ms: elapsed_ms(batch_started),
-            requests: index.request_counts().delta(&batch_requests_before),
-        });
-        offset = end;
+    let mut bytes_written = 0_u64;
+    for (wave_index, assignments) in
+        lifecycle_write_waves(count, config.write_batch_size, writers.len())?
+            .into_iter()
+            .enumerate()
+    {
+        let batches = assignments
+            .into_iter()
+            .map(|assignment| {
+                let ids = (assignment.offset..assignment.offset.saturating_add(assignment.len))
+                    .map(|id| id.to_string())
+                    .collect();
+                (assignment, ids)
+            })
+            .collect();
+        for (sample, written) in execute_delete_wave(wave_index, writers, batches)? {
+            samples.push(sample);
+            bytes_written = bytes_written.saturating_add(written);
+        }
     }
-    Ok(write_row_from_samples(
-        "delete",
-        count,
-        elapsed_ms(started),
-        samples,
-        index.request_counts().delta(&requests_before),
-    ))
+    samples.sort_by_key(|sample| sample.batch_index);
+    let requests = request_counts_from_samples(&samples);
+    let mut row = write_row_from_samples("delete", count, elapsed_ms(started), samples, requests);
+    row.bytes_written = bytes_written;
+    Ok(row)
 }
 
 fn write_row_from_samples(
@@ -4415,28 +4822,279 @@ mod tests {
         CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
         ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES,
         DEFAULT_RECALL_CANDIDATES, EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig,
-        LIFECYCLE_HEADER, LeafCapability, LeafMode, MUTATION_QUERY_HEADER,
-        MUTATION_QUERY_SAMPLE_HEADER, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary,
-        RECALL_LATENCY_HEADER, SERVING_CANDIDATES, ServingMode, VectorMetric, WRITE_COST_HEADER,
-        WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase, approximate_options,
-        benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
-        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
-        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
-        dollars_per_million_queries, ingest_batch_size, ingest_generated_batch,
-        is_hot_workload_position, mixed_concurrency_query_indices, neighbor_row,
-        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
-        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode, parse_optional_byte_cap,
-        parse_positive_list, parse_serving_mode, percentage_operation_count, permuted_positions,
-        preload_query_count, read_logical_cell_catalog, recall_preloads_local_snapshot,
+        LIFECYCLE_HEADER, LeafCapability, LeafMode, LifecycleBatchAssignment,
+        MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, PreparedRecordBatch,
+        QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES,
+        ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
+        allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
+        cache_coverage_cohort_size, cache_coverage_enabled, cache_state_summary_enabled,
+        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
+        default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
+        execute_upsert_wave, first_logical_batch_publish_ms, ingest_batch_size,
+        ingest_generated_batch, is_hot_workload_position, lifecycle_write_operation_count,
+        lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
+        neighbor_row, normalized_cache_access_fractions, parquet_train_files_for_phase,
+        parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
+        parse_optional_byte_cap, parse_positive_list, parse_serving_mode,
+        percentage_operation_count, permuted_positions, preload_query_count,
+        read_logical_cell_catalog, rebatch_mutation_vector_chunk, recall_preloads_local_snapshot,
         recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
         serving_cache_dir, update_vector_reservoir, uses_bounded_decoded_cache_phases,
         uses_memory_preloaded_phase, validate_bounded_v20_execution, validate_build_only,
         validate_disk_cached_network, validate_exact_read_max_physical_amplification,
         validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
-        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
-        vector_row, write_batch_len, write_operation_count, write_runtime_flow_control_receipt,
+        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
+        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
+        validate_v12_leaf_page_budgets, vector_row, verification_offsets, write_batch_len,
+        write_operation_count, write_runtime_flow_control_receipt,
     };
+
+    #[test]
+    fn lifecycle_writer_count_is_positive_and_bounded() {
+        assert_eq!(validate_lifecycle_writers(1).unwrap(), 1);
+        assert_eq!(validate_lifecycle_writers(4).unwrap(), 4);
+        assert_eq!(validate_lifecycle_writers(16).unwrap(), 16);
+        assert!(validate_lifecycle_writers(0).is_err());
+        assert!(validate_lifecycle_writers(65).is_err());
+    }
+
+    #[test]
+    fn lifecycle_waves_assign_every_record_once_across_writers() {
+        let waves = lifecycle_write_waves(19, 3, 4).unwrap();
+        assert_eq!(waves.len(), 2);
+        assert_eq!(
+            waves
+                .iter()
+                .flatten()
+                .map(|batch| (
+                    batch.writer_index,
+                    batch.batch_index,
+                    batch.offset,
+                    batch.len
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, 0, 0, 3),
+                (1, 1, 3, 3),
+                (2, 2, 6, 3),
+                (3, 3, 9, 3),
+                (0, 4, 12, 3),
+                (1, 5, 15, 3),
+                (2, 6, 18, 1),
+            ]
+        );
+        assert!(lifecycle_write_waves(1, 0, 1).is_err());
+        assert!(lifecycle_write_waves(1, 1, 0).is_err());
+    }
+
+    #[test]
+    fn lifecycle_default_write_count_exercises_every_writer_in_mutation_phases() {
+        assert_eq!(
+            lifecycle_write_operation_count(1_000_000, None, 16, 1024, 10, 10).unwrap(),
+            163_840
+        );
+        assert!(
+            lifecycle_write_operation_count(1_000_000, Some(50_000), 16, 1024, 10, 10).is_err()
+        );
+    }
+
+    #[test]
+    fn lifecycle_verification_samples_span_every_writer() {
+        let offsets = verification_offsets(500_000, 16, 16, 1024).unwrap();
+        assert_eq!(offsets.len(), 32);
+        assert_eq!(
+            offsets
+                .iter()
+                .map(|offset| (offset / 1024) % 16)
+                .collect::<std::collections::BTreeSet<_>>(),
+            (0..16).collect()
+        );
+        assert!(offsets.iter().any(|offset| *offset > 400_000));
+    }
+
+    #[test]
+    fn lifecycle_samples_bind_writer_and_wave_identity() {
+        assert!(WRITE_COST_HEADER.starts_with("op,configured_writers,configured_batch_records"));
+        assert_eq!(
+            WRITE_SAMPLE_HEADER,
+            "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists"
+        );
+        assert!(LIFECYCLE_HEADER.starts_with("configured_writers,configured_batch_records"));
+    }
+
+    #[test]
+    fn parquet_row_group_chunks_are_rebatched_to_the_configured_write_size() {
+        let mut pending = std::collections::VecDeque::new();
+        let mut batches = Vec::new();
+        for (chunk, finished) in [
+            (vec![vec![0.0]; 3], false),
+            (vec![vec![1.0]; 3], false),
+            (vec![vec![2.0]; 3], true),
+        ] {
+            batches
+                .extend(rebatch_mutation_vector_chunk(&mut pending, chunk, 4, finished).unwrap());
+        }
+        assert_eq!(
+            batches.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![4, 4, 1]
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn lifecycle_writer_options_inherit_the_runtime_budget_without_retained_caches() {
+        let options = lifecycle_writer_open_options(Some(96 * 1024 * 1024));
+        assert_eq!(options.ram_budget_bytes, Some(96 * 1024 * 1024));
+        assert_eq!(options.cache_dir, None);
+        assert_eq!(options.cache_max_bytes, None);
+        assert!(!options.resident_routing);
+        assert_eq!(options.segment_cache_max_bytes, None);
+        assert_eq!(options.routing_page_cache_max_bytes, 0);
+        assert_eq!(options.tombstone_page_cache_max_bytes, 0);
+        assert_eq!(options.bm25_stats_page_cache_max_bytes, 0);
+        assert_eq!(options.lexical_run_cache_max_bytes, 0);
+        assert_eq!(options.lexical_term_page_cache_max_bytes, 0);
+        assert_eq!(options.late_interaction_batch_cache_max_bytes, 0);
+        assert_eq!(options.wal_tail_cache_max_bytes, 0);
+    }
+
+    #[test]
+    fn first_batch_publish_is_batch_zero_not_the_fastest_concurrent_writer() {
+        let samples = [
+            super::WriteSample {
+                op: "insert",
+                writer_index: 0,
+                wave_index: 0,
+                batch_index: 0,
+                batch_records: 64,
+                batch_latency_ms: 12.0,
+                requests: Default::default(),
+            },
+            super::WriteSample {
+                op: "insert",
+                writer_index: 1,
+                wave_index: 0,
+                batch_index: 1,
+                batch_records: 64,
+                batch_latency_ms: 1.0,
+                requests: Default::default(),
+            },
+        ];
+        assert_eq!(first_logical_batch_publish_ms(&samples), 12.0);
+    }
+
+    #[test]
+    fn independent_lifecycle_writer_handles_publish_visible_waves_with_delta_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let mut writers = (0..4)
+            .map(|_| BorsukIndex::open(&uri).unwrap())
+            .collect::<Vec<_>>();
+        let batches = (0..4)
+            .map(|writer_index| PreparedRecordBatch {
+                assignment: LifecycleBatchAssignment {
+                    writer_index,
+                    batch_index: writer_index,
+                    offset: writer_index,
+                    len: 1,
+                },
+                records: vec![VectorRecord::new(
+                    format!("writer-{writer_index}"),
+                    vec![writer_index as f32, 1.0],
+                )],
+            })
+            .collect();
+
+        let completed = execute_upsert_wave("insert", 0, &mut writers, batches).unwrap();
+        assert_eq!(completed.len(), 4);
+        assert_eq!(
+            completed
+                .iter()
+                .map(|(sample, _)| (sample.writer_index, sample.wave_index))
+                .collect::<Vec<_>>(),
+            vec![(0, 0), (1, 0), (2, 0), (3, 0)]
+        );
+        let bytes_before = writers
+            .iter()
+            .map(BorsukIndex::put_payload_bytes)
+            .sum::<u64>();
+        let second = (0..4)
+            .map(|writer_index| PreparedRecordBatch {
+                assignment: LifecycleBatchAssignment {
+                    writer_index,
+                    batch_index: writer_index + 4,
+                    offset: writer_index + 4,
+                    len: 1,
+                },
+                records: vec![VectorRecord::new(
+                    format!("writer-{}", writer_index + 4),
+                    vec![writer_index as f32, 2.0],
+                )],
+            })
+            .collect();
+        let completed = execute_upsert_wave("insert", 1, &mut writers, second).unwrap();
+        assert_eq!(
+            completed.iter().map(|(_, bytes)| bytes).sum::<u64>(),
+            writers
+                .iter()
+                .map(BorsukIndex::put_payload_bytes)
+                .sum::<u64>()
+                .saturating_sub(bytes_before),
+            "each batch must report its own physical PUT bytes, not the handle's cumulative total"
+        );
+        let observer = BorsukIndex::open(&uri).unwrap();
+        let ids = (0..8)
+            .map(|writer_index| format!("writer-{writer_index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observer
+                .get_records(&ids)
+                .unwrap()
+                .into_iter()
+                .filter(Option::is_some)
+                .count(),
+            8
+        );
+        drop(observer);
+
+        let bytes_before = writers
+            .iter()
+            .map(BorsukIndex::put_payload_bytes)
+            .sum::<u64>();
+        let deletes = (0..4)
+            .map(|writer_index| {
+                (
+                    LifecycleBatchAssignment {
+                        writer_index,
+                        batch_index: writer_index,
+                        offset: writer_index,
+                        len: 1,
+                    },
+                    vec![format!("writer-{writer_index}")],
+                )
+            })
+            .collect();
+        let completed = super::execute_delete_wave(0, &mut writers, deletes).unwrap();
+        assert_eq!(
+            completed.iter().map(|(_, bytes)| bytes).sum::<u64>(),
+            writers
+                .iter()
+                .map(BorsukIndex::put_payload_bytes)
+                .sum::<u64>()
+                .saturating_sub(bytes_before),
+            "delete samples must account physical PUT payload bytes"
+        );
+    }
 
     #[test]
     fn zero_disk_cache_cap_removes_the_cache_directory_from_serving_storage() {

@@ -88,44 +88,85 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             output = Path(root)
             (output / "bench_write_costs.csv").write_text(
-                "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written\n"
-                "insert,64,1000,2,20,50000,10,1,8,12,14,15,0.02,1,10,0,2,0,100,2000\n"
-                "upsert,64,100,2,10,10000,5,1,4,6,7,8,0.1,1,8,0,2,0,100,1000\n"
-                "delete,64,100,2,8,12500,4,1,3,5,6,7,0.08,1,8,0,2,0,100,1000\n"
-                "compact,64,1,1,9,0.111,9,0,9,9,9,9,9,1,2,0,1,0,1000,3000\n"
-                "purge,64,1,1,4,0.25,4,0,4,4,4,4,4,1,2,3,1,0,0,0\n",
+                "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written\n"
+                "insert,1,64,100,2,20,5000,10,1,8,12,14,15,0.2,1,10,0,2,0,100,2000\n"
+                "upsert,1,64,100,2,10,10000,5,1,4,6,7,8,0.1,1,8,0,2,0,100,1000\n"
+                "delete,1,64,100,2,8,12500,4,1,3,5,6,7,0.08,1,8,0,2,0,100,1000\n"
+                "compact,1,64,1,1,9,0.111,9,0,9,9,9,9,9,1,2,0,1,0,1000,3000\n"
+                "purge,1,64,1,1,4,0.25,4,0,4,4,4,4,4,1,2,3,1,0,0,0\n",
                 encoding="utf-8",
             )
             (output / "bench_write_samples.csv").write_text(
-                "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists\n"
-                "insert,0,64,8,0.125,0,1,0,0,0\n"
-                "insert,1,936,15,0.016,1,9,0,2,0\n"
-                "upsert,0,64,4,0.063,0,4,0,1,0\n"
-                "upsert,1,36,8,0.222,1,4,0,1,0\n"
-                "delete,0,64,3,0.047,0,4,0,1,0\n"
-                "delete,1,36,7,0.194,1,4,0,1,0\n"
-                "compact,0,100,9,0.09,1,2,0,1,0\n"
-                "purge,0,100,4,0.04,1,2,3,1,0\n",
+                "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists\n"
+                "insert,0,0,0,64,8,0.125,0,1,0,0,0\n"
+                "insert,0,1,1,36,15,0.417,1,9,0,2,0\n"
+                "upsert,0,0,0,64,4,0.063,0,4,0,1,0\n"
+                "upsert,0,1,1,36,8,0.222,1,4,0,1,0\n"
+                "delete,0,0,0,64,3,0.047,0,4,0,1,0\n"
+                "delete,0,1,1,36,7,0.194,1,4,0,1,0\n"
+                "compact,0,0,0,100,9,0.09,1,2,0,1,0\n"
+                "purge,0,0,0,100,4,0.04,1,2,3,1,0\n",
                 encoding="utf-8",
             )
             (output / "bench_lifecycle.csv").write_text(
-                "configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification\n"
-                "64,1000,2000,20,50000,8,8,16,1,16,1,16,1,1,1,3,23,2000,1000,3000,1.5,true,6,29,4000,2\n",
+                "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification\n"
+                "1,64,100,200,20,5000,8,8,16,1,16,1,16,1,1,1,3,23,2000,1000,3000,15,true,6,29,4000,20\n",
                 encoding="utf-8",
             )
 
-            summary = summarize_lifecycle_artifacts(output, expected_batch_size=64)
+            summary = summarize_lifecycle_artifacts(
+                output, expected_batch_size=64, expected_writers=1
+            )
 
+            sample_path = output / "bench_write_samples.csv"
+            canonical_samples = sample_path.read_text(encoding="utf-8")
+            sample_path.write_text(
+                canonical_samples
+                .replace("insert,0,0,0,64,8", "insert,0,0,0,50,8")
+                .replace("insert,0,1,1,36,15", "insert,0,1,1,50,15"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "batch schedule"):
+                summarize_lifecycle_artifacts(
+                    output, expected_batch_size=64, expected_writers=1
+                )
+            sample_path.write_text(canonical_samples, encoding="utf-8")
+
+            # Merely labeling a serial artifact as writers=4 must not satisfy
+            # the concurrency arm. Batch 1 belongs to writer 1 in wave 0, but
+            # every sample below still claims writer 0.
+            costs_path = output / "bench_write_costs.csv"
+            costs_path.write_text(
+                costs_path.read_text(encoding="utf-8").replace(",1,64,", ",4,64,"),
+                encoding="utf-8",
+            )
             lifecycle_path = output / "bench_lifecycle.csv"
+            serial_lifecycle = lifecycle_path.read_text(encoding="utf-8")
+            lifecycle_path.write_text(
+                serial_lifecycle.replace("1,64,100,200", "4,64,100,200"),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "writer wave"):
+                summarize_lifecycle_artifacts(
+                    output, expected_batch_size=64, expected_writers=4
+                )
+            costs_path.write_text(
+                costs_path.read_text(encoding="utf-8").replace(",4,64,", ",1,64,"),
+                encoding="utf-8",
+            )
+            lifecycle_path.write_text(serial_lifecycle, encoding="utf-8")
+
             valid_lifecycle = lifecycle_path.read_text(encoding="utf-8")
             lifecycle_path.write_text(
-                valid_lifecycle.replace("64,1000,2000", "64,999,2000"),
+                valid_lifecycle.replace("1,64,100,200", "1,64,99,200"),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "operation totals"):
-                summarize_lifecycle_artifacts(output, expected_batch_size=64)
+                summarize_lifecycle_artifacts(
+                    output, expected_batch_size=64, expected_writers=1
+                )
 
-        self.assertEqual(summary["insert_ops"], 1000)
+        self.assertEqual(summary["insert_ops"], 100)
         self.assertEqual(summary["upsert_ops"], 100)
         self.assertEqual(summary["delete_ops"], 100)
         self.assertEqual(summary["lifecycle_accuracy_ppm"], 1_000_000)
@@ -215,7 +256,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
     def test_lifecycle_runtime_requires_a_fresh_verified_clone_and_never_mutates_base(self) -> None:
         cell = scheduled_cell(kind="write-update-delete-compact")
-        arm = next(arm for arm in plan_arms(cell) if arm["writers"] == 1)
+        arm = next(arm for arm in plan_arms(cell) if arm["writers"] == 4)
         with tempfile.TemporaryDirectory() as root:
             plan = build_execution_plan(
                 cell,
@@ -275,7 +316,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertNotEqual(environment["BORSUK_BENCH_URI"], base["index_uri"])
         self.assertEqual(environment["BORSUK_BENCH_READ_ONLY"], "0")
         self.assertEqual(environment["BORSUK_BENCH_WRITE_BATCH_SIZE"], "1")
-        self.assertEqual(environment["BORSUK_BENCH_LIFECYCLE_WRITERS"], "1")
+        self.assertEqual(environment["BORSUK_BENCH_LIFECYCLE_WRITERS"], "4")
 
         attestation = runtime_attestation_for(cell)
         report = build_lifecycle_publication_report(
@@ -322,12 +363,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertTrue(report["publishable"])
         self.assertEqual(report["result"]["clone_receipt_sha256"], clone_receipt_document_sha256(clone))
 
-        with self.assertRaisesRegex(ValueError, "writers=1"):
+        with self.assertRaisesRegex(ValueError, "writers must be in"):
             authorize_publication_mutation_runtime(
                 plan,
                 clone_receipt=clone,
                 base_receipt=base,
-                arm={**arm, "writers": 8},
+                arm={**arm, "writers": 0},
                 attempt_id="attempt-01",
                 cell=cell,
             )
@@ -1439,7 +1480,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_lifecycle_arms_expand_every_frozen_mutation_factor(self) -> None:
         cell = scheduled_cell(kind="write-update-delete-compact")
         arms = plan_arms(cell)
-        self.assertEqual(len(arms), 3)
+        self.assertEqual(len(arms), 9)
         self.assertEqual(
             arms[0],
             {
@@ -1449,7 +1490,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "delete_percent": 10,
             },
         )
-        self.assertEqual(arms[-1]["writers"], 1)
+        self.assertEqual(arms[-1]["writers"], 16)
         self.assertEqual(arms[-1]["batch_size"], 1024)
 
     def test_smoke_report_is_distinct_from_a_publishable_cell_result(self) -> None:

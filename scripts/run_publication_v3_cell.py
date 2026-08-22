@@ -144,13 +144,13 @@ BUILD_PHASE_NAMES = (
     "locality_sort",
 )
 WRITE_COST_FIELDS = tuple(
-    "op,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written".split(",")
+    "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written".split(",")
 )
 WRITE_SAMPLE_FIELDS = tuple(
-    "op,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists".split(",")
+    "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists".split(",")
 )
 LIFECYCLE_FIELDS = tuple(
-    "configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification".split(",")
+    "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification".split(",")
 )
 LIFECYCLE_OPERATIONS = ("insert", "upsert", "delete", "compact", "purge")
 
@@ -781,8 +781,9 @@ def authorize_publication_mutation_runtime(
     workload = cell.get("workload")
     if not isinstance(workload, dict) or workload.get("kind") != "write-update-delete-compact":
         raise ValueError("mutation runtime requires a lifecycle cell")
-    if arm.get("writers") != 1:
-        raise ValueError("Publication V3 MVP supports lifecycle writers=1 only")
+    writers = arm.get("writers")
+    if isinstance(writers, bool) or not isinstance(writers, int) or not 1 <= writers <= 64:
+        raise ValueError("publication lifecycle writers must be in 1..=64")
     clone = validate_clone_receipt(
         clone_receipt,
         cell=cell,
@@ -803,6 +804,8 @@ def authorize_publication_mutation_runtime(
         if environment.get("BORSUK_BENCH_URI") != base_receipt.get("index_uri"):
             raise ValueError("mutation plan does not originate from its immutable base")
         environment["BORSUK_BENCH_URI"] = clone["clone_index_uri"]
+        if environment.get("BORSUK_BENCH_LIFECYCLE_WRITERS") != str(writers):
+            raise ValueError("mutation plan writer count differs from its lifecycle arm")
         if (
             environment.get("BORSUK_BENCH_BUILD_INDEX") != "0"
             or environment.get("BORSUK_BENCH_READ_ONLY") != "0"
@@ -1191,10 +1194,12 @@ def _finite_nonnegative_float(value: object, role: str) -> float:
 
 
 def summarize_lifecycle_artifacts(
-    output_dir: Path, *, expected_batch_size: int
+    output_dir: Path, *, expected_batch_size: int, expected_writers: int
 ) -> dict[str, int]:
     if isinstance(expected_batch_size, bool) or expected_batch_size <= 0:
         raise ValueError("publication lifecycle batch size is invalid")
+    if isinstance(expected_writers, bool) or not 1 <= expected_writers <= 64:
+        raise ValueError("publication lifecycle writer count is invalid")
     costs = _read_exact_csv(output_dir / "bench_write_costs.csv", WRITE_COST_FIELDS)
     samples = _read_exact_csv(output_dir / "bench_write_samples.csv", WRITE_SAMPLE_FIELDS)
     lifecycle_rows = _read_exact_csv(output_dir / "bench_lifecycle.csv", LIFECYCLE_FIELDS)
@@ -1207,29 +1212,54 @@ def summarize_lifecycle_artifacts(
             raise ValueError("publication lifecycle operations differ")
         by_operation[operation] = row
         try:
+            configured_writers = int(row["configured_writers"])
             configured_batch = int(row["configured_batch_records"])
         except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("publication lifecycle batch size is invalid") from error
-        if configured_batch != expected_batch_size:
+            raise ValueError("publication lifecycle configuration is invalid") from error
+        if (
+            configured_writers != expected_writers
+            or configured_batch != expected_batch_size
+        ):
             raise ValueError("publication lifecycle artifact belongs to another batch arm")
     if tuple(sorted(by_operation)) != tuple(sorted(LIFECYCLE_OPERATIONS)):
         raise ValueError("publication lifecycle operations differ")
 
     latencies_us: list[int] = []
     sample_indices: dict[str, set[int]] = {operation: set() for operation in LIFECYCLE_OPERATIONS}
+    sample_batch_records: dict[str, dict[int, int]] = {
+        operation: {} for operation in LIFECYCLE_OPERATIONS
+    }
     sample_records = {operation: 0 for operation in LIFECYCLE_OPERATIONS}
     for row in samples:
         operation = row.get("op", "")
         if operation not in sample_indices:
             raise ValueError("publication lifecycle sample operation differs")
         try:
+            writer_index = int(row["writer_index"])
+            wave_index = int(row["wave_index"])
             index = int(row["batch_index"])
             batch_records = int(row["batch_records"])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("publication lifecycle sample is invalid") from error
-        if index < 0 or index in sample_indices[operation] or batch_records < 0:
+        if (
+            not 0 <= writer_index < expected_writers
+            or wave_index < 0
+            or index < 0
+            or index in sample_indices[operation]
+            or batch_records < 0
+        ):
             raise ValueError("publication lifecycle sample identity is invalid")
+        if operation in {"insert", "upsert", "delete"} and (
+            writer_index != index % expected_writers
+            or wave_index != index // expected_writers
+        ):
+            raise ValueError("publication lifecycle writer wave is not canonical")
+        if operation in {"compact", "purge"} and (
+            writer_index != 0 or wave_index != 0 or index != 0
+        ):
+            raise ValueError("publication lifecycle maintenance writer wave is invalid")
         sample_indices[operation].add(index)
+        sample_batch_records[operation][index] = batch_records
         sample_records[operation] += batch_records
         latency_ms = _finite_nonnegative_float(
             row.get("batch_latency_ms"), "publication lifecycle sample latency"
@@ -1245,10 +1275,14 @@ def summarize_lifecycle_artifacts(
 
     lifecycle = lifecycle_rows[0]
     try:
+        lifecycle_writers = int(lifecycle["configured_writers"])
         lifecycle_batch = int(lifecycle["configured_batch_records"])
     except (KeyError, TypeError, ValueError) as error:
-        raise ValueError("publication lifecycle batch size is invalid") from error
-    if lifecycle_batch != expected_batch_size:
+        raise ValueError("publication lifecycle configuration is invalid") from error
+    if (
+        lifecycle_writers != expected_writers
+        or lifecycle_batch != expected_batch_size
+    ):
         raise ValueError("publication lifecycle artifact belongs to another batch arm")
     fractions = []
     for sample_field, fraction_field in (
@@ -1285,6 +1319,21 @@ def summarize_lifecycle_artifacts(
         if operations <= 0:
             raise ValueError("publication lifecycle operation count is invalid")
         operation_counts[operation] = operations
+        if operation in {"insert", "upsert", "delete"}:
+            expected_batches = (operations + expected_batch_size - 1) // expected_batch_size
+            try:
+                declared_batches = int(row["batches"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError("publication lifecycle batch schedule is invalid") from error
+            expected_records = {
+                index: min(expected_batch_size, operations - index * expected_batch_size)
+                for index in range(expected_batches)
+            }
+            if (
+                declared_batches != expected_batches
+                or sample_batch_records[operation] != expected_records
+            ):
+                raise ValueError("publication lifecycle batch schedule differs")
         wall_ms += _finite_nonnegative_float(
             row.get("wall_ms"), "publication lifecycle operation wall time"
         )
@@ -2213,7 +2262,9 @@ def main() -> int:
             )
         else:
             lifecycle = summarize_lifecycle_artifacts(
-                output, expected_batch_size=int(arm["batch_size"])
+                output,
+                expected_batch_size=int(arm["batch_size"]),
+                expected_writers=int(arm["writers"]),
             )
             storage_metrics = {
                 field: lifecycle.pop(field)
