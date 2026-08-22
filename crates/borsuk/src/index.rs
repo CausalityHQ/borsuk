@@ -316,6 +316,22 @@ struct GarbageCollectionCandidateScan<'a> {
     candidates: &'a mut Vec<GarbageCollectionCandidate>,
 }
 
+/// One GC owner has five minutes to finish a bounded 512-object delete batch.
+/// A replacement also waits four minutes beyond that lease so an object-store
+/// request issued immediately before expiry can drain before ownership moves.
+/// This exceeds object_store 0.14's three-minute retry window plus its final
+/// default 30-second request timeout.
+const GC_DELETE_INTENT_TTL_MS: i64 = 5 * 60 * 1_000;
+const GC_DELETE_INTENT_REQUEST_DRAIN_MS: i64 = 4 * 60 * 1_000;
+
+fn gc_delete_intent_is_reclaimable(store_now_ms: i64, expires_at_ms: i64) -> bool {
+    let remaining_ms = expires_at_ms.saturating_sub(store_now_ms);
+    if remaining_ms > GC_DELETE_INTENT_TTL_MS.saturating_add(GC_DELETE_INTENT_REQUEST_DRAIN_MS) {
+        return true;
+    }
+    store_now_ms > expires_at_ms.saturating_add(GC_DELETE_INTENT_REQUEST_DRAIN_MS)
+}
+
 #[derive(Debug, Default)]
 struct RoutingPageRefsRead {
     page_refs: Vec<RoutingLayerPageRef>,
@@ -15744,12 +15760,14 @@ impl BorsukIndex {
         path_hashes: Vec<String>,
     ) -> Result<CollectionGcDeleteIntent> {
         const MAX_ATTEMPTS: usize = 128;
-        let intent = CollectionGcDeleteIntent {
-            owner_id: self.storage.gc_owner_id().to_string(),
-            modality: self.manifest_reference.modality.clone(),
-            path_hashes,
-        };
         for _ in 0..MAX_ATTEMPTS {
+            let store_now_ms = self.storage.store_clock_now()?.timestamp_millis();
+            let intent = CollectionGcDeleteIntent {
+                owner_id: self.storage.gc_owner_id().to_string(),
+                modality: self.manifest_reference.modality.clone(),
+                path_hashes: path_hashes.clone(),
+                expires_at_ms: store_now_ms.saturating_add(GC_DELETE_INTENT_TTL_MS),
+            };
             let current = self.collection_storage.load_collection_snapshot()?;
             if current.snapshot.gc_delete_intent.is_some() {
                 return Err(BorsukError::ConcurrentModification {
@@ -15801,6 +15819,62 @@ impl BorsukIndex {
         })
     }
 
+    fn adopt_expired_gc_delete_intent(
+        &mut self,
+        expired: &CollectionGcDeleteIntent,
+        store_now_ms: i64,
+    ) -> Result<CollectionGcDeleteIntent> {
+        if !gc_delete_intent_is_reclaimable(store_now_ms, expired.expires_at_ms) {
+            return Err(BorsukError::ConcurrentModification {
+                path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+            });
+        }
+        let current = self.collection_storage.load_collection_snapshot()?;
+        if current.snapshot.gc_delete_intent.as_ref() != Some(expired) {
+            return Err(BorsukError::ConcurrentModification {
+                path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+            });
+        }
+        let current_reference = current
+            .snapshot
+            .modalities
+            .iter()
+            .find(|reference| reference.modality == expired.modality)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(format!(
+                    "collection snapshot is missing GC modality `{}`",
+                    expired.modality
+                ))
+            })?;
+        if current_reference != &self.manifest_reference {
+            return Err(BorsukError::ConcurrentModification {
+                path: COLLECTION_CURRENT.to_string(),
+            });
+        }
+        let adopted = CollectionGcDeleteIntent {
+            owner_id: self.storage.gc_owner_id().to_string(),
+            modality: expired.modality.clone(),
+            path_hashes: expired.path_hashes.clone(),
+            expires_at_ms: store_now_ms.saturating_add(GC_DELETE_INTENT_TTL_MS),
+        };
+        let mut next = current.snapshot.clone();
+        next.generation = next.generation.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("collection snapshot generation exceeds u64".to_string())
+        })?;
+        next.previous_snapshot_checksum = Some(current.checksum);
+        next.gc_delete_intent = Some(adopted.clone());
+        let mut report = StorageWriteReport::default();
+        let loaded = self
+            .collection_storage
+            .compare_and_swap_collection_snapshot_with_report(
+                current.current_version,
+                &next,
+                &mut report,
+            )?;
+        self.install_loaded_collection_snapshot(loaded);
+        Ok(adopted)
+    }
+
     fn clear_gc_delete_intent(&mut self, intent: &CollectionGcDeleteIntent) -> Result<()> {
         const MAX_ATTEMPTS: usize = 128;
         for _ in 0..MAX_ATTEMPTS {
@@ -15847,17 +15921,29 @@ impl BorsukIndex {
         })
     }
 
-    fn verify_gc_delete_intent_owner(&self, intent: &CollectionGcDeleteIntent) -> Result<()> {
+    fn verify_gc_delete_intent_owner(&self, intent: &CollectionGcDeleteIntent) -> Result<Instant> {
+        // Anchor before any storage work so HEAD/DELETE retries inside the
+        // store-clock probe consume, rather than extend, the remaining lease.
+        let delete_started = Instant::now();
         let current = self.collection_storage.load_collection_snapshot()?;
-        if current.snapshot.gc_delete_intent.as_ref() == Some(intent)
-            && intent.owner_id == self.storage.gc_owner_id()
+        if current.snapshot.gc_delete_intent.as_ref() != Some(intent)
+            || intent.owner_id != self.storage.gc_owner_id()
         {
-            Ok(())
-        } else {
-            Err(BorsukError::ConcurrentModification {
+            return Err(BorsukError::ConcurrentModification {
+                path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+            });
+        }
+        let store_now_ms = self.storage.store_clock_now()?.timestamp_millis();
+        let remaining_ms = intent.expires_at_ms.saturating_sub(store_now_ms);
+        let remaining_ms =
+            u64::try_from(remaining_ms).map_err(|_| BorsukError::ConcurrentModification {
+                path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+            })?;
+        delete_started
+            .checked_add(Duration::from_millis(remaining_ms))
+            .ok_or_else(|| BorsukError::ConcurrentModification {
                 path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
             })
-        }
     }
 
     fn gc_obsolete_segments_impl(
@@ -16141,10 +16227,16 @@ impl BorsukIndex {
             .load_collection_snapshot()?
             .snapshot
             .gc_delete_intent;
+        let store_now_ms = existing_intent
+            .as_ref()
+            .map(|_| self.storage.store_clock_now())
+            .transpose()?
+            .map(|now| now.timestamp_millis());
         let intent = match existing_intent {
             Some(intent)
                 if intent.modality == self.manifest_reference.modality
-                    && intent.owner_id == self.storage.gc_owner_id() =>
+                    && intent.owner_id == self.storage.gc_owner_id()
+                    && store_now_ms.is_some_and(|now| now <= intent.expires_at_ms) =>
             {
                 candidates.retain(|candidate| {
                     intent
@@ -16156,6 +16248,21 @@ impl BorsukIndex {
                         .is_ok()
                 });
                 intent
+            }
+            Some(intent) if intent.modality == self.manifest_reference.modality => {
+                candidates.retain(|candidate| {
+                    intent
+                        .path_hashes
+                        .binary_search(&collection_gc_delete_path_hash(
+                            &intent.modality,
+                            &candidate.path,
+                        ))
+                        .is_ok()
+                });
+                self.adopt_expired_gc_delete_intent(
+                    &intent,
+                    store_now_ms.expect("existing GC intent has a store-clock sample"),
+                )?
             }
             Some(_) => {
                 return Err(BorsukError::ConcurrentModification {
@@ -16207,8 +16314,13 @@ impl BorsukIndex {
         let mut tables_deleted = 0_usize;
         let mut bytes_reclaimed = 0_u64;
         before_delete(&candidates)?;
-        self.verify_gc_delete_intent_owner(&intent)?;
+        let lease_deadline = self.verify_gc_delete_intent_owner(&intent)?;
         for object in &candidates {
+            if Instant::now() > lease_deadline {
+                return Err(BorsukError::ConcurrentModification {
+                    path: COLLECTION_GC_DELETE_INTENT_CONFLICT.to_string(),
+                });
+            }
             if self.storage.delete_object(&object.path)? {
                 objects_deleted += 1;
                 match object.kind {
@@ -42849,7 +42961,7 @@ mod tests {
     }
 
     #[test]
-    fn gc_owner_resumes_a_persisted_delete_intent_after_interruption() {
+    fn gc_new_process_resumes_a_persisted_delete_intent_after_interruption() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut setup = BorsukIndex::create(IndexConfig {
@@ -42862,13 +42974,21 @@ mod tests {
             named_vectors: BTreeMap::new(),
         })
         .unwrap();
-        let bytes = b"interrupted-gc";
-        let checksum = blake3::hash(bytes).to_hex().to_string();
-        let path = quantizer_relative_path(&checksum);
-        setup
-            .storage
-            .write_bytes_content_addressed(&path, bytes)
-            .unwrap();
+        let paths = [
+            b"interrupted-gc-a".as_slice(),
+            b"interrupted-gc-b".as_slice(),
+        ]
+        .into_iter()
+        .map(|bytes| {
+            let checksum = blake3::hash(bytes).to_hex().to_string();
+            let path = quantizer_relative_path(&checksum);
+            setup
+                .storage
+                .write_bytes_content_addressed(&path, bytes)
+                .unwrap();
+            path
+        })
+        .collect::<Vec<_>>();
         let previous = setup.manifest.clone();
         let mut next = previous.next_version();
         next.created_at += chrono::Duration::seconds(1);
@@ -42884,7 +43004,9 @@ mod tests {
                     min_age: Duration::ZERO,
                 },
                 |candidates| {
-                    assert!(candidates.iter().any(|candidate| candidate.path == path));
+                    assert!(paths.iter().all(|path| {
+                        candidates.iter().any(|candidate| &candidate.path == path)
+                    }));
                     Err(BorsukError::InvalidStorage(
                         "simulated process interruption".to_string(),
                     ))
@@ -42902,21 +43024,113 @@ mod tests {
                 .is_some()
         );
 
-        interrupted
+        drop(interrupted);
+        let mut premature = BorsukIndex::open(&uri).unwrap();
+        let error = premature
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            BorsukError::ConcurrentModification { ref path }
+                if path == COLLECTION_GC_DELETE_INTENT_CONFLICT
+        ));
+
+        // Model a crash after one delete succeeded but before the owner could
+        // clear its persisted intent. Replay must treat the absent object as
+        // already complete and still delete the remaining member.
+        assert!(premature.storage.delete_object(&paths[0]).unwrap());
+
+        // Expiry alone is not enough to transfer ownership: a retried S3
+        // DELETE started by the old owner can still be in flight.
+        let current = premature
+            .collection_storage
+            .load_collection_snapshot()
+            .unwrap();
+        let mut recently_expired = current.snapshot.clone();
+        recently_expired.generation += 1;
+        recently_expired.previous_snapshot_checksum = Some(current.checksum);
+        recently_expired
+            .gc_delete_intent
+            .as_mut()
+            .unwrap()
+            .expires_at_ms = premature
+            .storage
+            .store_clock_now()
+            .unwrap()
+            .timestamp_millis()
+            .saturating_sub(2 * 60 * 1_000);
+        let mut report = StorageWriteReport::default();
+        let recently_expired = premature
+            .collection_storage
+            .compare_and_swap_collection_snapshot_with_report(
+                current.current_version,
+                &recently_expired,
+                &mut report,
+            )
+            .unwrap();
+        premature.install_loaded_collection_snapshot(recently_expired);
+        let error = premature
+            .gc_obsolete_segments(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            BorsukError::ConcurrentModification { ref path }
+                if path == COLLECTION_GC_DELETE_INTENT_CONFLICT
+        ));
+
+        // Advance the persisted store-clock fence without sleeping. This
+        // models a process that crashed long enough ago for its final S3
+        // request to have drained, while retaining the exact authenticated
+        // path-hash set.
+        let current = premature
+            .collection_storage
+            .load_collection_snapshot()
+            .unwrap();
+        let mut drained = current.snapshot.clone();
+        drained.generation += 1;
+        drained.previous_snapshot_checksum = Some(current.checksum);
+        drained.gc_delete_intent.as_mut().unwrap().expires_at_ms = premature
+            .storage
+            .store_clock_now()
+            .unwrap()
+            .timestamp_millis()
+            .saturating_sub(GC_DELETE_INTENT_REQUEST_DRAIN_MS)
+            .saturating_sub(1);
+        let mut report = StorageWriteReport::default();
+        premature
+            .collection_storage
+            .compare_and_swap_collection_snapshot_with_report(
+                current.current_version,
+                &drained,
+                &mut report,
+            )
+            .unwrap();
+        drop(premature);
+
+        let mut replacement = BorsukIndex::open(&uri).unwrap();
+        let report = replacement
             .gc_obsolete_segments(GarbageCollectionOptions {
                 dry_run: false,
                 min_age: Duration::ZERO,
             })
             .unwrap();
-        assert!(
-            interrupted
+        assert!(!report.candidates.contains(&paths[0]));
+        assert!(report.candidates.contains(&paths[1]));
+        assert!(paths.iter().all(|path| {
+            replacement
                 .storage
-                .read_object_fresh(&path)
+                .read_object_fresh(path)
                 .unwrap()
                 .is_none()
-        );
+        }));
         assert!(
-            interrupted
+            replacement
                 .collection_storage
                 .load_collection_snapshot()
                 .unwrap()
@@ -42924,6 +43138,34 @@ mod tests {
                 .gc_delete_intent
                 .is_none()
         );
+    }
+
+    #[test]
+    fn gc_delete_intent_handoff_waits_for_drain_and_self_heals_overlong_lease() {
+        let store_now_ms = 1_000_000_i64;
+        assert!(!gc_delete_intent_is_reclaimable(
+            store_now_ms,
+            store_now_ms.saturating_sub(2 * 60 * 1_000),
+        ));
+        assert!(gc_delete_intent_is_reclaimable(
+            store_now_ms,
+            store_now_ms
+                .saturating_sub(GC_DELETE_INTENT_REQUEST_DRAIN_MS)
+                .saturating_sub(1),
+        ));
+        assert!(!gc_delete_intent_is_reclaimable(
+            store_now_ms,
+            store_now_ms
+                .saturating_add(GC_DELETE_INTENT_TTL_MS)
+                .saturating_add(1),
+        ));
+        assert!(gc_delete_intent_is_reclaimable(
+            store_now_ms,
+            store_now_ms
+                .saturating_add(GC_DELETE_INTENT_TTL_MS)
+                .saturating_add(GC_DELETE_INTENT_REQUEST_DRAIN_MS)
+                .saturating_add(1),
+        ));
     }
 
     #[test]

@@ -12,7 +12,7 @@ const COLLECTION_CHECKSUM_LEN: usize = 32;
 const COLLECTION_HEADER_LEN: usize = 4 + 1 + 4;
 const COLLECTION_WAL_FRONTIER_HEAD_MAGIC: &[u8; 4] = b"BCWH";
 const PENDING_COLLECTION_COMMIT_MAGIC: &[u8; 4] = b"BCPC";
-const COLLECTION_CONTROL_SCHEMA_VERSION: u8 = 2;
+const COLLECTION_CONTROL_SCHEMA_VERSION: u8 = 3;
 const COLLECTION_CONTROL_MAX_BYTES: usize = 256 * 1024;
 const COLLECTION_MAX_MODALITIES: usize = 64;
 const COLLECTION_MAX_MODALITY_NAME_BYTES: usize = 128;
@@ -74,6 +74,10 @@ pub(crate) struct CollectionGcDeleteIntent {
     pub owner_id: String,
     pub modality: String,
     pub path_hashes: Vec<String>,
+    /// Wall-clock lease fence for the destructive work. A replacement owner
+    /// may adopt the exact path set only after this deadline plus the bounded
+    /// request-drain grace enforced by the GC implementation.
+    pub expires_at_ms: i64,
 }
 
 pub(crate) fn collection_gc_delete_path_hash(modality: &str, path: &str) -> String {
@@ -522,6 +526,11 @@ fn validate_collection_snapshot(snapshot: &CollectionSnapshot) -> Result<()> {
     }
     if let Some(intent) = &snapshot.gc_delete_intent {
         validate_checksum(&intent.owner_id, "collection GC delete owner id")?;
+        if intent.expires_at_ms <= 0 {
+            return Err(BorsukError::InvalidStorage(
+                "collection GC delete intent expiry must be positive".to_string(),
+            ));
+        }
         if !snapshot
             .modalities
             .iter()
@@ -1179,7 +1188,7 @@ mod tests {
         let typed: CollectionControlDocument<T> = serde_json::from_slice(bytes)
             .unwrap_or_else(|error| panic!("{role} is not stock UTF-8 JSON: {error}"));
         assert_eq!(typed.object_role, role);
-        assert_eq!(typed.schema_version, 2);
+        assert_eq!(typed.schema_version, 3);
         let payload = serde_json::to_vec(&typed.payload).unwrap();
         assert_eq!(
             typed.payload_checksum_blake3,
@@ -1187,7 +1196,7 @@ mod tests {
         );
         let mut document: serde_json::Value = serde_json::from_slice(bytes).unwrap();
         assert_eq!(document["object_role"], role);
-        assert_eq!(document["schema_version"], 2);
+        assert_eq!(document["schema_version"], 3);
         document
             .as_object_mut()
             .unwrap()
@@ -1221,7 +1230,7 @@ mod tests {
         );
         let payload_checksum = blake3::hash(payload.as_bytes()).to_hex().to_string();
         let expected = format!(
-            "{{\"schema_version\":2,\"object_role\":\"collection_current\",\"payload_checksum_blake3\":\"{payload_checksum}\",\"payload\":{payload}}}"
+            "{{\"schema_version\":3,\"object_role\":\"collection_current\",\"payload_checksum_blake3\":\"{payload_checksum}\",\"payload\":{payload}}}"
         );
 
         assert_eq!(
@@ -1239,7 +1248,7 @@ mod tests {
         let bytes = collection_snapshot_bytes(&sample_snapshot()).unwrap();
         let legacy = String::from_utf8(bytes)
             .unwrap()
-            .replacen("\"schema_version\":2", "\"schema_version\":1", 1)
+            .replacen("\"schema_version\":3", "\"schema_version\":2", 1)
             .into_bytes();
         let error =
             collection_snapshot_from_slice(&legacy, "collection/snapshots/pre-gc-intent.json")
@@ -1357,6 +1366,7 @@ mod tests {
             path_hashes: (0..COLLECTION_GC_DELETE_INTENT_MAX_PATHS)
                 .map(|ordinal| format!("{ordinal:064x}"))
                 .collect(),
+            expires_at_ms: i64::MAX,
         });
 
         let bytes = collection_snapshot_bytes(&snapshot).unwrap();
