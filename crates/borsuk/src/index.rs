@@ -7939,9 +7939,22 @@ impl BorsukIndex {
     fn cell_wal_run_identities_without_root_authorization(
         &self,
         retained_run_identities: &BTreeSet<String>,
+        quiescent: bool,
     ) -> Result<BTreeSet<String>> {
-        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
         let cell_wal = self.cell_wal_store()?;
+        if quiescent {
+            let (authorized, _) = self.gc_quiescent_protected_transaction_ids_snapshot()?;
+            return Ok(cell_wal
+                .run_identities_without_root_authorization(
+                    self.manifest.logical_cells(),
+                    &authorized,
+                )?
+                .difference(retained_run_identities)
+                .cloned()
+                .collect());
+        }
+
+        const MAX_SNAPSHOT_ATTEMPTS: usize = 32;
         for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
             let before = self
                 .collection_storage
@@ -7972,11 +7985,14 @@ impl BorsukIndex {
     fn prune_cell_wal_runs_without_root_authorization(
         &mut self,
         retained_run_identities: &BTreeSet<String>,
+        quiescent: bool,
     ) -> Result<()> {
         self.collection_storage
             .prune_expired_collection_wal_reservations()?;
-        let unrooted =
-            self.cell_wal_run_identities_without_root_authorization(retained_run_identities)?;
+        let unrooted = self.cell_wal_run_identities_without_root_authorization(
+            retained_run_identities,
+            quiescent,
+        )?;
         self.cell_wal_store()?
             .prune_consumed_runs(self.manifest.logical_cells(), &unrooted)
     }
@@ -7985,8 +8001,8 @@ impl BorsukIndex {
         &self,
         retained_run_identities: &BTreeSet<String>,
     ) -> Result<BTreeSet<String>> {
-        let unrooted =
-            self.cell_wal_run_identities_without_root_authorization(retained_run_identities)?;
+        let unrooted = self
+            .cell_wal_run_identities_without_root_authorization(retained_run_identities, false)?;
         self.cell_wal_store()?
             .object_paths_detached_by_pruning(self.manifest.logical_cells(), &unrooted)
     }
@@ -15672,7 +15688,8 @@ impl BorsukIndex {
     ///
     /// In addition to ordinary GC, this may reclaim recent transaction-state controls whose
     /// positioned commit is durable and whose claim pages have already been released. The
-    /// quiescence requirement is essential: an idempotent writer retry can otherwise reacquire a
+    /// quiescence requirement is essential: callers must have no active staging leases or writers
+    /// and must not later resume or retry those exact attempts. Otherwise a writer can acquire a
     /// claim after the ownership snapshot and lose its crash-recovery marker.
     /// A dry run remains non-mutating and therefore conservatively retains those controls.
     pub fn gc_obsolete_segments_quiescent(
@@ -15791,6 +15808,17 @@ impl BorsukIndex {
             cell_wal.live_staging_transaction_ids_with_claim_owners()?
         });
         Ok(transaction_ids)
+    }
+
+    fn gc_quiescent_protected_transaction_ids_snapshot(
+        &self,
+    ) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+        let claim_owners = self.cell_wal_store()?.claim_owner_transaction_ids()?;
+        let mut protected_transaction_ids = self
+            .collection_storage
+            .collection_wal_authorized_transaction_ids_snapshot()?;
+        protected_transaction_ids.extend(claim_owners.iter().cloned());
+        Ok((protected_transaction_ids, claim_owners))
     }
 
     fn install_loaded_collection_snapshot(&mut self, loaded: LoadedCollectionSnapshot) {
@@ -16066,7 +16094,10 @@ impl BorsukIndex {
                 &retained_run_identities,
             )?
         } else {
-            self.prune_cell_wal_runs_without_root_authorization(&retained_run_identities)?;
+            self.prune_cell_wal_runs_without_root_authorization(
+                &retained_run_identities,
+                reclaim_authorized_prepared,
+            )?;
             BTreeSet::new()
         };
         let mut active_paths = self.active_segment_object_paths()?;
@@ -16089,14 +16120,13 @@ impl BorsukIndex {
         active_paths
             .paths
             .extend(self.active_collection_wal_descriptor_paths()?);
-        let protected_transaction_ids =
-            self.gc_protected_transaction_ids_snapshot(options.dry_run)?;
-        let state_protected_transaction_ids = if reclaim_authorized_prepared && !options.dry_run {
-            self.cell_wal_store()?
-                .live_staging_transaction_ids_for_gc()?
-        } else {
-            protected_transaction_ids.clone()
-        };
+        let (protected_transaction_ids, state_protected_transaction_ids) =
+            if reclaim_authorized_prepared && !options.dry_run {
+                self.gc_quiescent_protected_transaction_ids_snapshot()?
+            } else {
+                let protected = self.gc_protected_transaction_ids_snapshot(options.dry_run)?;
+                (protected.clone(), protected)
+            };
         let mut objects_scanned = 0_usize;
         let mut candidates = Vec::new();
         {
@@ -16271,13 +16301,13 @@ impl BorsukIndex {
                 path: COLLECTION_CURRENT.to_string(),
             });
         }
-        let protected_transaction_ids_now = self.gc_protected_transaction_ids_snapshot(false)?;
-        let state_protected_transaction_ids_now = if reclaim_authorized_prepared {
-            self.cell_wal_store()?
-                .live_staging_transaction_ids_for_gc()?
-        } else {
-            protected_transaction_ids_now.clone()
-        };
+        let (protected_transaction_ids_now, state_protected_transaction_ids_now) =
+            if reclaim_authorized_prepared {
+                self.gc_quiescent_protected_transaction_ids_snapshot()?
+            } else {
+                let protected = self.gc_protected_transaction_ids_snapshot(false)?;
+                (protected.clone(), protected)
+            };
         let mut candidates: Vec<GarbageCollectionCandidate> = candidates
             .into_iter()
             .filter(|candidate| {
@@ -42710,6 +42740,152 @@ mod tests {
             &protected,
             &state_protected,
         ));
+    }
+
+    #[test]
+    fn quiescent_gc_reclaims_fresh_released_transaction_state_in_one_pass() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let transaction_id = "fresh-released-state";
+        let state_path = format!("transactions/{transaction_id}/STATE");
+        let mut claims = index
+            .cell_wal_store()
+            .unwrap()
+            .claim_ids(transaction_id, [b"released-id".as_slice()])
+            .unwrap();
+        claims.finish();
+        assert!(
+            index
+                .storage
+                .read_coordination_object(&state_path)
+                .unwrap()
+                .is_some(),
+            "the fresh Prepared control must exist before quiescent cleanup"
+        );
+
+        let report = index
+            .gc_obsolete_segments_quiescent(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+
+        assert_eq!(report.transaction_states_remaining, 0);
+        assert!(
+            index
+                .storage
+                .read_coordination_object(&state_path)
+                .unwrap()
+                .is_none(),
+            "a released transaction must not wait for TTL fencing or a second GC pass"
+        );
+    }
+
+    #[test]
+    fn quiescent_gc_keeps_transaction_state_while_claim_is_owned() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let transaction_id = "actively-owned-state";
+        let state_path = format!("transactions/{transaction_id}/STATE");
+        let claims = index
+            .cell_wal_store()
+            .unwrap()
+            .claim_ids(transaction_id, [b"owned-id".as_slice()])
+            .unwrap();
+
+        let report = index
+            .gc_obsolete_segments_quiescent(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+
+        assert_eq!(report.transaction_states_remaining, 1);
+        assert!(
+            index
+                .storage
+                .read_coordination_object(&state_path)
+                .unwrap()
+                .is_some(),
+            "claim ownership remains the fail-closed recovery authority"
+        );
+        drop(claims);
+    }
+
+    #[test]
+    fn quiescent_gc_does_not_read_or_rewrite_each_released_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        for ordinal in 0..32 {
+            let transaction_id = format!("released-state-{ordinal:04}");
+            let id = format!("released-id-{ordinal:04}");
+            let mut claims = index
+                .cell_wal_store()
+                .unwrap()
+                .claim_ids(&transaction_id, [id.as_bytes()])
+                .unwrap();
+            claims.finish();
+        }
+        let trace_directory = tempfile::tempdir().unwrap();
+        let trace_path = trace_directory.path().join("quiescent-gc.csv");
+        let trace = crate::storage_trace::StorageAccessTrace::create(&trace_path).unwrap();
+        index.storage.set_access_trace_for_test(trace.clone());
+        index
+            .collection_storage
+            .set_access_trace_for_test(trace.clone());
+        trace.reset().unwrap();
+
+        let report = index
+            .gc_obsolete_segments_quiescent(GarbageCollectionOptions {
+                dry_run: false,
+                min_age: Duration::ZERO,
+            })
+            .unwrap();
+
+        assert_eq!(report.transaction_states_remaining, 0);
+        let traced = std::fs::read_to_string(trace_path).unwrap();
+        let state_reads_or_writes = traced
+            .lines()
+            .skip(1)
+            .filter(|line| {
+                let columns = line.split(',').collect::<Vec<_>>();
+                matches!(columns.first(), Some(&"read" | &"write"))
+                    && columns.get(2).is_some_and(|path| {
+                        path.starts_with("transactions/") && path.ends_with("/STATE")
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            state_reads_or_writes.is_empty(),
+            "quiescent cleanup performed per-state I/O before delete: {state_reads_or_writes:?}"
+        );
     }
 
     #[test]

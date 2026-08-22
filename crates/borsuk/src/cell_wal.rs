@@ -666,6 +666,7 @@ impl CellWalStore {
         self.live_staging_transaction_ids_at(chrono::Utc::now(), false)
     }
 
+    #[cfg(test)]
     pub(crate) fn live_staging_transaction_ids_for_gc(&self) -> Result<BTreeSet<String>> {
         let mut transaction_ids = self.live_staging_transaction_ids_with_claim_owners()?;
         let mut durable_authorizations = BTreeSet::new();
@@ -708,6 +709,15 @@ impl CellWalStore {
     ) -> Result<BTreeSet<String>> {
         let store_now = self.storage.store_clock_now()?;
         self.live_staging_transaction_ids_with_claim_owners_at(store_now)
+    }
+
+    /// Snapshot only transactions that still own an ID-claim slot.
+    ///
+    /// Externally quiescent maintenance uses this narrower authority: no writer
+    /// can be between preparing its STATE and acquiring a claim, while a claim
+    /// owner still needs its complete recovery namespace protected.
+    pub(crate) fn claim_owner_transaction_ids(&self) -> Result<BTreeSet<String>> {
+        claim_owner_transaction_ids(&self.storage)
     }
 
     fn live_staging_transaction_ids_with_claim_owners_at(
