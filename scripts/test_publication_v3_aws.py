@@ -502,6 +502,46 @@ class PublicationV3AwsTests(unittest.TestCase):
                 self.manifest, {**receipt, "dataset_content_sha256": "0" * 64}
             )
 
+        current = json.loads(json.dumps(self.manifest))
+        current["master_seed"] += 1
+        with self.assertRaisesRegex(ValueError, "exact manifest authority"):
+            promote_staging_receipts(current, [receipt])
+        promoted_historical = promote_staging_receipts(
+            current,
+            [receipt],
+            historical_manifests={receipt["manifest_sha256"]: self.manifest},
+        )
+        self.assertEqual(
+            next(
+                dataset
+                for dataset in promoted_historical["datasets"]
+                if dataset["id"] == "sift-128"
+            )["source"]["state"],
+            "staged",
+        )
+        incompatible = json.loads(json.dumps(current))
+        next(
+            dataset
+            for dataset in incompatible["datasets"]
+            if dataset["id"] == "sift-128"
+        )["dimensions"] += 1
+        with self.assertRaisesRegex(ValueError, "dataset contract"):
+            promote_staging_receipts(
+                incompatible,
+                [receipt],
+                historical_manifests={receipt["manifest_sha256"]: self.manifest},
+            )
+        corrupt_authority = json.loads(json.dumps(self.manifest))
+        corrupt_authority["master_seed"] += 1
+        with self.assertRaisesRegex(ValueError, "checksum differs"):
+            promote_staging_receipts(
+                current,
+                [receipt],
+                historical_manifests={
+                    receipt["manifest_sha256"]: corrupt_authority
+                },
+            )
+
     def test_reconciler_validates_success_and_bounds_fresh_attempts(self) -> None:
         job = next(
             job

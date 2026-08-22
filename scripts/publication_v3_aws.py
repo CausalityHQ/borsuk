@@ -769,14 +769,55 @@ def validate_staging_receipt(
 
 
 def promote_staging_receipts(
-    manifest: dict[str, object], receipts: list[dict[str, object]]
+    manifest: dict[str, object],
+    receipts: list[dict[str, object]],
+    *,
+    historical_manifests: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Fold immutable staging receipts into one partially staged manifest."""
 
     normalized = validate_manifest(manifest)
     if not receipts:
         raise ValueError("manifest promotion requires at least one staging receipt")
-    validated = [validate_staging_receipt(normalized, receipt) for receipt in receipts]
+    current_manifest_sha256 = hashlib.sha256(
+        canonical_json_bytes(normalized)
+    ).hexdigest()
+    historical_manifests = historical_manifests or {}
+    current_datasets = {
+        str(dataset["id"]): dataset for dataset in normalized["datasets"]
+    }
+    validated: list[dict[str, object]] = []
+    for receipt in receipts:
+        receipt_manifest_sha256 = str(receipt.get("manifest_sha256", ""))
+        if receipt_manifest_sha256 == current_manifest_sha256:
+            validated.append(validate_staging_receipt(normalized, receipt))
+            continue
+        historical_value = historical_manifests.get(receipt_manifest_sha256)
+        if historical_value is None:
+            raise ValueError(
+                "historical staging receipt requires its exact manifest authority"
+            )
+        historical = validate_manifest(historical_value)
+        if (
+            hashlib.sha256(canonical_json_bytes(historical)).hexdigest()
+            != receipt_manifest_sha256
+        ):
+            raise ValueError("historical staging manifest checksum differs")
+        validated_receipt = validate_staging_receipt(historical, receipt)
+        dataset_id = str(validated_receipt["dataset_id"])
+        historical_dataset = next(
+            (dataset for dataset in historical["datasets"] if dataset["id"] == dataset_id),
+            None,
+        )
+        if historical_dataset != current_datasets.get(dataset_id):
+            raise ValueError("historical staging dataset contract differs")
+        if (
+            historical["campaign_id"] != normalized["campaign_id"]
+            or historical["prefixes"]["dataset"]
+            != normalized["prefixes"]["dataset"]
+        ):
+            raise ValueError("historical staging campaign authority differs")
+        validated.append(validated_receipt)
     by_dataset: dict[str, dict[str, object]] = {}
     for receipt in validated:
         dataset_id = str(receipt["dataset_id"])
