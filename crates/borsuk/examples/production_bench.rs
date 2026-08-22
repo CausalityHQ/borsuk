@@ -1610,11 +1610,7 @@ fn load_dataset(config: &ResolvedConfig) -> BenchResult<Dataset> {
         let train_files = parquet_train_files_for_phase(
             &config.dataset_dir,
             meta.n_train,
-            allow_missing_corpus_for_phase(
-                config.build_index,
-                config.insert_only,
-                config.recall_only || config.read_only,
-            ),
+            allow_missing_corpus_for_phase(config.build_index, config.insert_only),
         )?;
         let test_path = config.dataset_dir.join("test.parquet");
         let neighbors_path = config.dataset_dir.join("neighbors.parquet");
@@ -1824,8 +1820,8 @@ fn parquet_train_files_for_phase(
     Ok(Some(train_files))
 }
 
-fn allow_missing_corpus_for_phase(build_index: bool, insert_only: bool, query_only: bool) -> bool {
-    !build_index && !insert_only && query_only
+fn allow_missing_corpus_for_phase(build_index: bool, insert_only: bool) -> bool {
+    !build_index && !insert_only
 }
 
 fn validate_parquet_row_count(
@@ -6026,7 +6022,7 @@ mod tests {
             parquet_train_files_for_phase(
                 directory.path(),
                 100_000_000,
-                allow_missing_corpus_for_phase(false, false, true),
+                allow_missing_corpus_for_phase(false, false),
             )
             .unwrap(),
             None
@@ -6035,9 +6031,23 @@ mod tests {
             parquet_train_files_for_phase(
                 directory.path(),
                 100_000_000,
-                allow_missing_corpus_for_phase(true, false, true),
+                allow_missing_corpus_for_phase(true, false),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn lifecycle_runtime_dataset_does_not_require_local_corpus_shards() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(
+            parquet_train_files_for_phase(
+                directory.path(),
+                100_000_000,
+                allow_missing_corpus_for_phase(false, false),
+            )
+            .unwrap(),
+            None
         );
     }
 
