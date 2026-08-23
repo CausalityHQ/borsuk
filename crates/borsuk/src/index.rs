@@ -19,6 +19,23 @@ use tokio::sync::Semaphore;
 use url::Url;
 use uuid::Uuid;
 
+macro_rules! v20_progress {
+    ($stage:literal $(, $key:literal = $value:expr)* $(,)?) => {
+        if v20_progress_enabled() {
+            eprintln!(
+                concat!("BORSUK_V20_PROGRESS stage=", $stage $(, " ", $key, "={}")*),
+                $($value),*
+            );
+        }
+    };
+}
+
+fn v20_progress_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED
+        .get_or_init(|| std::env::var_os("BORSUK_V20_PROGRESS").is_some_and(|value| value == "1"))
+}
+
 use crate::{
     cell_wal::{
         ArtifactStagingLease, CellWalClaimCheckpoint, CellWalRunInput, CellWalRunKind,
@@ -440,6 +457,22 @@ struct HybridCandidate {
 struct SearchExecution {
     report: SearchReport,
     vectors: Vec<Vec<f32>>,
+}
+
+#[derive(Default)]
+struct CellCardDeclineTelemetry {
+    code_plane_storage_bytes: u64,
+    speculative_bytes: u64,
+    code_plane_cache_hits: usize,
+    code_plane_cache_bytes: u64,
+    code_pages_read: usize,
+    code_storage_requests: usize,
+    global_base_approximate_us: u64,
+    global_base_head_admission_us: u64,
+    global_base_head_fetch_us: u64,
+    global_base_head_decode_admission_us: u64,
+    global_base_head_decode_us: u64,
+    global_leaf_waves: usize,
 }
 
 #[derive(Debug)]
@@ -18477,6 +18510,7 @@ impl BorsukIndex {
             && (self.manifest.global_ann_ref.is_some()
                 ^ self.manifest.global_cell_card_ann_ref.is_some());
         if !eligible {
+            v20_progress!("ineligible");
             return Ok(None);
         }
         if let Some(reference) = self.manifest.global_ann_ref.as_ref() {
@@ -18495,7 +18529,24 @@ impl BorsukIndex {
             },
             SearchMode::Exact => return Ok(None),
         };
+        if v20_progress_enabled() {
+            let mutation_required = self.global_leaf_mutation_state_required();
+            let mutation_key =
+                Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
+            let mutation_resident = self.resident_global_mutations.is_some();
+            let mutation_key_matches = self
+                .resident_global_mutations
+                .as_ref()
+                .is_some_and(|overlay| overlay.snapshot_key == mutation_key);
+            v20_progress!(
+                "context",
+                "mutation_required" = mutation_required,
+                "mutation_resident" = mutation_resident,
+                "mutation_key_matches" = mutation_key_matches,
+            );
+        }
         let Some(mutation_states) = self.resident_global_mutations_for_current_snapshot() else {
+            v20_progress!("mutation-fallback");
             return Ok(None);
         };
         Ok(Some(ResidentGlobalV12Context {
@@ -18792,6 +18843,102 @@ impl BorsukIndex {
         Ok(Arc::new(bytes))
     }
 
+    fn bounded_cell_card_declined_execution(
+        &self,
+        global_ref: &GlobalCellCardAnnRef,
+        started: Instant,
+        requests_before: &RequestCounts,
+        reason: SearchTerminationReason,
+        telemetry: CellCardDeclineTelemetry,
+    ) -> SearchExecution {
+        let segments_total = usize::try_from(global_ref.source_segments()).unwrap_or(usize::MAX);
+        SearchExecution {
+            report: SearchReport {
+                hits: Vec::new(),
+                leaf_mode: "bounded-cell-card-v20".to_string(),
+                termination_reason: reason,
+                recall_guarantee: RecallGuarantee::Degraded,
+                segments_total,
+                segments_searched: 0,
+                segments_skipped: segments_total,
+                routing_page_indexes_read: 0,
+                routing_pages_read: 0,
+                bytes_read: telemetry.code_plane_storage_bytes,
+                prefetched_bytes_unused: telemetry.speculative_bytes,
+                graph_bytes_read: 0,
+                decoded_cache_hits: telemetry.code_plane_cache_hits,
+                decoded_cache_bytes_read: telemetry.code_plane_cache_bytes,
+                object_cache_hits: 0,
+                object_cache_misses: 0,
+                disk_cache_bytes_read: 0,
+                backing_bytes_read: 0,
+                disk_cache_reads: 0,
+                backing_reads: 0,
+                cache_repairs: 0,
+                records_considered: 0,
+                records_scored: 0,
+                graph_candidates_added: 0,
+                global_graph_chunks_searched: 0,
+                global_scan_chunks_searched: 0,
+                global_identity_rows_resolved: 0,
+                global_exact_vectors_fetched: 0,
+                global_leaf_directory_reads: 0,
+                global_leaf_directory_bytes: 0,
+                global_leaf_code_pages_read: telemetry.code_pages_read,
+                global_leaf_code_requests: telemetry.code_storage_requests,
+                global_leaf_code_bytes: telemetry.code_plane_storage_bytes,
+                global_leaf_pages_read: 0,
+                global_leaf_exact_requests: 0,
+                global_leaf_exact_cells: 0,
+                global_leaf_exact_cards: 0,
+                global_leaf_deepest_winning_card_rank: 0,
+                global_leaf_exact_groups: 0,
+                global_leaf_exact_selected_bytes: 0,
+                global_leaf_exact_speculative_bytes: 0,
+                global_leaf_page_bytes: 0,
+                global_leaf_exact_scores: 0,
+                global_leaf_continuations: 0,
+                global_leaf_waves: telemetry.global_leaf_waves,
+                global_base_approximate_us: telemetry.global_base_approximate_us,
+                global_base_head_admission_us: telemetry.global_base_head_admission_us,
+                global_base_head_fetch_us: telemetry.global_base_head_fetch_us,
+                global_base_head_decode_admission_us: telemetry
+                    .global_base_head_decode_admission_us,
+                global_base_head_decode_us: telemetry.global_base_head_decode_us,
+                global_base_exact_admission_us: 0,
+                global_base_exact_fetch_us: 0,
+                global_base_exact_read_us_max: 0,
+                global_base_exact_read_us_sum: 0,
+                global_base_exact_reads_over_20ms: 0,
+                global_base_exact_reads_over_30ms: 0,
+                global_base_exact_reads_over_50ms: 0,
+                global_base_exact_reads_over_100ms: 0,
+                global_base_exact_cpu_us: 0,
+                global_base_exact_rerank_us: 0,
+                resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
+                prepared_positioned_bytes: 0,
+                collection_resident_bytes: 0,
+                retained_bytes: 0,
+                retained_capacity_bytes: 0,
+                retained_peak_bytes: 0,
+                transient_bytes: 0,
+                transient_capacity_bytes: 0,
+                transient_peak_bytes: 0,
+                elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                requests: self.storage.request_counts().delta(requests_before),
+                rows_evaluated: 0,
+                rows_passed_filter: 0,
+                segments_pruned_by_filter: 0,
+                wal_cells_examined: 0,
+                wal_lanes_examined: 0,
+                wal_runs_examined: 0,
+                wal_records_examined: 0,
+                wal_snapshot_retries: 0,
+            },
+            vectors: Vec::new(),
+        }
+    }
+
     fn search_resident_global_cell_cards(
         &self,
         query: &[f32],
@@ -18801,6 +18948,7 @@ impl BorsukIndex {
         requests_before: &RequestCounts,
         context: ResidentGlobalV12Context<'_>,
     ) -> Result<Option<SearchExecution>> {
+        v20_progress!("start");
         let Some(global_ref) = self.manifest.global_cell_card_ann_ref.as_ref() else {
             return Ok(None);
         };
@@ -18871,6 +19019,11 @@ impl BorsukIndex {
             &centroid_distances,
             head_card_budget,
         )?;
+        v20_progress!(
+            "ranked",
+            "cells" = selected_cells.len(),
+            "cards" = ranked_card_indexes.len(),
+        );
         let card_rank_by_root_index = one_based_cell_card_ranks(&ranked_card_indexes)?;
         // Code ranges only choose the lossless blocks. Reserve the largest
         // authenticated block among the selected cards rather than the global
@@ -18896,7 +19049,17 @@ impl BorsukIndex {
         let head_byte_ceiling =
             global_leaf_code_byte_ceiling(max_bytes, 0, selected_exact_block_ceiling);
         if head_byte_ceiling == 0 {
-            return Ok(None);
+            v20_progress!(
+                "head-declined",
+                "reason" = SearchTerminationReason::MaxBytes
+            );
+            return Ok(Some(self.bounded_cell_card_declined_execution(
+                global_ref,
+                started,
+                requests_before,
+                SearchTerminationReason::MaxBytes,
+                CellCardDeclineTelemetry::default(),
+            )));
         }
         let (selected_head_plan, head_limited) = match plan_ranked_cell_card_head_wave(
             root,
@@ -18905,9 +19068,24 @@ impl BorsukIndex {
             global_cell_card_head_request_budget(context.page_budget),
         ) {
             Ok(plan) => plan,
-            Err(BorsukError::RecallGuaranteeViolated { .. }) => return Ok(None),
+            Err(BorsukError::RecallGuaranteeViolated { reason }) => {
+                v20_progress!("head-declined", "reason" = reason);
+                return Ok(Some(self.bounded_cell_card_declined_execution(
+                    global_ref,
+                    started,
+                    requests_before,
+                    reason,
+                    CellCardDeclineTelemetry::default(),
+                )));
+            }
             Err(error) => return Err(error),
         };
+        v20_progress!(
+            "head-plan",
+            "reads" = selected_head_plan.reads().len(),
+            "cards" = selected_head_plan.cards(),
+            "bytes" = selected_head_plan.physical_bytes(),
+        );
         let exact_reserve = u64::try_from(requested_exact_block_budget)
             .unwrap_or(u64::MAX)
             .saturating_mul(selected_exact_block_ceiling)
@@ -18957,6 +19135,7 @@ impl BorsukIndex {
             .transient_admission
             .as_ref()
             .map(|gate| gate.acquire_owned(head_admission_bytes));
+        v20_progress!("head-admitted", "bytes" = head_admission_bytes);
         let global_base_head_admission_us =
             u64::try_from(head_admission_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         // Cached slices are assembled into one physical-range buffer per read.
@@ -18988,6 +19167,7 @@ impl BorsukIndex {
                 )
             },
         );
+        v20_progress!("head-fetched", "reads" = head_plan.reads().len());
         let global_base_head_fetch_us =
             u64::try_from(head_io_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let code_request_counts = self.storage.request_counts().delta(&code_requests_before);
@@ -19070,93 +19250,32 @@ impl BorsukIndex {
             global_base_head_decode_us,
             global_approximate_us,
         ) = head_result?;
+        v20_progress!(
+            "head-decoded",
+            "heads" = heads.len(),
+            "ranked" = ranked.len()
+        );
         let declined_execution = |reason| {
-            let segments_total =
-                usize::try_from(global_ref.source_segments()).unwrap_or(usize::MAX);
-            SearchExecution {
-                report: SearchReport {
-                    hits: Vec::new(),
-                    leaf_mode: "bounded-cell-card-v20".to_string(),
-                    termination_reason: reason,
-                    recall_guarantee: RecallGuarantee::Degraded,
-                    segments_total,
-                    segments_searched: 0,
-                    segments_skipped: segments_total,
-                    routing_page_indexes_read: 0,
-                    routing_pages_read: 0,
-                    bytes_read: code_plane_storage_bytes,
-                    prefetched_bytes_unused: head_plan.speculative_bytes(),
-                    graph_bytes_read: 0,
-                    decoded_cache_hits: code_plane_cache_hits,
-                    decoded_cache_bytes_read: code_plane_cache_bytes,
-                    object_cache_hits: 0,
-                    object_cache_misses: 0,
-                    disk_cache_bytes_read: 0,
-                    backing_bytes_read: 0,
-                    disk_cache_reads: 0,
-                    backing_reads: 0,
-                    cache_repairs: 0,
-                    records_considered: 0,
-                    records_scored: 0,
-                    graph_candidates_added: 0,
-                    global_graph_chunks_searched: 0,
-                    global_scan_chunks_searched: 0,
-                    global_identity_rows_resolved: 0,
-                    global_exact_vectors_fetched: 0,
-                    global_leaf_directory_reads: 0,
-                    global_leaf_directory_bytes: 0,
-                    global_leaf_code_pages_read: head_plan.cards(),
-                    global_leaf_code_requests: code_storage_requests,
-                    global_leaf_code_bytes: code_plane_storage_bytes,
-                    global_leaf_pages_read: 0,
-                    global_leaf_exact_requests: 0,
-                    global_leaf_exact_cells: 0,
-                    global_leaf_exact_cards: 0,
-                    global_leaf_deepest_winning_card_rank: 0,
-                    global_leaf_exact_groups: 0,
-                    global_leaf_exact_selected_bytes: 0,
-                    global_leaf_exact_speculative_bytes: 0,
-                    global_leaf_page_bytes: 0,
-                    global_leaf_exact_scores: 0,
-                    global_leaf_continuations: 0,
-                    global_leaf_waves: 1,
+            self.bounded_cell_card_declined_execution(
+                global_ref,
+                started,
+                requests_before,
+                reason,
+                CellCardDeclineTelemetry {
+                    code_plane_storage_bytes,
+                    speculative_bytes: head_plan.speculative_bytes(),
+                    code_plane_cache_hits,
+                    code_plane_cache_bytes,
+                    code_pages_read: head_plan.cards(),
+                    code_storage_requests,
                     global_base_approximate_us: global_approximate_us,
                     global_base_head_admission_us,
                     global_base_head_fetch_us,
                     global_base_head_decode_admission_us,
                     global_base_head_decode_us,
-                    global_base_exact_admission_us: 0,
-                    global_base_exact_fetch_us: 0,
-                    global_base_exact_read_us_max: 0,
-                    global_base_exact_read_us_sum: 0,
-                    global_base_exact_reads_over_20ms: 0,
-                    global_base_exact_reads_over_30ms: 0,
-                    global_base_exact_reads_over_50ms: 0,
-                    global_base_exact_reads_over_100ms: 0,
-                    global_base_exact_cpu_us: 0,
-                    global_base_exact_rerank_us: 0,
-                    resident_bytes_estimate: self.manifest.resident_bytes_estimate(),
-                    prepared_positioned_bytes: 0,
-                    collection_resident_bytes: 0,
-                    retained_bytes: 0,
-                    retained_capacity_bytes: 0,
-                    retained_peak_bytes: 0,
-                    transient_bytes: 0,
-                    transient_capacity_bytes: 0,
-                    transient_peak_bytes: 0,
-                    elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                    requests: self.storage.request_counts().delta(requests_before),
-                    rows_evaluated: 0,
-                    rows_passed_filter: 0,
-                    segments_pruned_by_filter: 0,
-                    wal_cells_examined: 0,
-                    wal_lanes_examined: 0,
-                    wal_runs_examined: 0,
-                    wal_records_examined: 0,
-                    wal_snapshot_retries: 0,
+                    global_leaf_waves: 1,
                 },
-                vectors: Vec::new(),
-            }
+            )
         };
         // The caller's algorithmic byte budget is independent of cache state:
         // warm and cold queries select and rerank the same exact blocks. Actual
@@ -19190,6 +19309,15 @@ impl BorsukIndex {
             exact_plan.rows(),
             self.manifest.config.dimensions,
         );
+        v20_progress!(
+            "exact-plan",
+            "reads" = exact_plan.requests(),
+            "blocks" = exact_plan.blocks(),
+            "rows" = exact_plan.rows(),
+            "physical_bytes" = exact_plan.physical_bytes(),
+            "selected_bytes" = exact_plan.selected_bytes(),
+            "admission_bytes" = exact_admission_bytes,
+        );
         let exact_started = Instant::now();
         release_loaded_cell_card_codes(&mut heads);
         // Only compact authenticated decoded heads cross this boundary. Drop
@@ -19208,6 +19336,7 @@ impl BorsukIndex {
             .transient_admission
             .as_ref()
             .map(|gate| gate.acquire_owned(exact_admission_bytes));
+        v20_progress!("exact-admitted", "bytes" = exact_admission_bytes);
         let global_base_exact_admission_us =
             u64::try_from(exact_admission_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let heads = Arc::new(heads);
@@ -19257,6 +19386,7 @@ impl BorsukIndex {
                 }
             },
         );
+        v20_progress!("exact-fetched", "reads" = exact_plan.requests());
         drop(decoded_tx);
         let global_base_exact_fetch_us =
             u64::try_from(exact_io_started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -19297,6 +19427,7 @@ impl BorsukIndex {
         if let Some(error) = decode_protocol_error {
             return Err(error);
         }
+        v20_progress!("exact-decoded", "reads" = exact_plan.requests());
         let mut streamed_exact_blocks = Vec::with_capacity(exact_plan.blocks());
         for decoded in streamed_exact_blocks_by_read {
             streamed_exact_blocks.extend(decoded.ok_or_else(|| {
@@ -39827,7 +39958,7 @@ mod tests {
             named_vectors: Default::default(),
         })
         .unwrap();
-        let vectors = (0..80)
+        let vectors = (0..320)
             .map(|row| {
                 (0..8)
                     .map(|dimension| {
@@ -39854,7 +39985,7 @@ mod tests {
             &uri,
             OpenOptions {
                 cache_max_bytes: Some(0),
-                ram_budget_bytes: Some(64 * 1024 * 1024),
+                ram_budget_bytes: Some(512 * 1024 * 1024),
                 ..OpenOptions::default()
             },
         )
@@ -39867,21 +39998,41 @@ mod tests {
             .unwrap()
             .root_checksum();
 
-        index
-            .add(
-                vectors[64..]
-                    .iter()
-                    .enumerate()
-                    .map(|(offset, vector)| {
-                        VectorRecord::new(
-                            format!("replacement-plane-{}", 64 + offset),
-                            vector.clone(),
-                        )
-                    })
-                    .collect(),
-            )
-            .unwrap();
+        let mut writers = (0..4)
+            .map(|_| BorsukIndex::open(&uri).unwrap())
+            .collect::<Vec<_>>();
+        for (writer_index, writer) in writers.iter_mut().enumerate() {
+            let start = 64 + writer_index * 64;
+            let end = start + 64;
+            writer
+                .put(
+                    vectors[start..end]
+                        .iter()
+                        .enumerate()
+                        .map(|(offset, vector)| {
+                            VectorRecord::new(
+                                format!("replacement-plane-{}", start + offset),
+                                vector.clone(),
+                            )
+                        })
+                        .collect(),
+                )
+                .unwrap();
+        }
+        drop(writers);
+        assert!(index.refresh().unwrap());
+        assert!(index.global_leaf_mutation_state_required());
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some()
+        );
         index.flush().unwrap();
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some()
+        );
         index.finish_bulk_load().unwrap();
 
         let reference = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
@@ -39913,7 +40064,7 @@ mod tests {
 
         let report = index
             .search_with_report(
-                &vectors[70],
+                &vectors[270],
                 SearchOptions::approx(10, LeafMode::SrhtPqScan)
                     .with_max_segments(64)
                     .with_max_candidates_per_segment(128),
@@ -41924,6 +42075,25 @@ mod tests {
                 .is_some(),
             "open must prepare the resident MVCC overlay after positioned tombstones"
         );
+        let head_exhausted = reopened
+            .search_with_report(
+                &[0.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_bytes(1),
+            )
+            .unwrap();
+        assert_eq!(
+            head_exhausted.leaf_mode, "bounded-cell-card-v20",
+            "an unaffordable authenticated head wave must not fall through to the unbounded segment engine: {head_exhausted:?}"
+        );
+        assert_eq!(
+            head_exhausted.termination_reason,
+            SearchTerminationReason::MaxBytes
+        );
+        assert_eq!(head_exhausted.segments_searched, 0);
+        assert_eq!(head_exhausted.routing_pages_read, 0);
+        assert_eq!(head_exhausted.backing_reads, 0);
         let report = reopened
             .search_with_report(
                 &[0.0; 8],
