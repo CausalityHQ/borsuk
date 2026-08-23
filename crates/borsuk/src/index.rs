@@ -5377,6 +5377,14 @@ impl BorsukIndex {
         {
             return Ok(None);
         }
+        let snapshot_key = Self::mutation_snapshot_key_for(manifest.version, cell_wal_snapshot);
+        if let Some(current) = self
+            .resident_global_mutations
+            .as_ref()
+            .filter(|overlay| overlay.snapshot_key == snapshot_key)
+        {
+            return Ok(Some(Arc::clone(current)));
+        }
         let visible_ids = Self::visible_tombstone_id_count_for(manifest, cell_wal_snapshot)?;
         let referenced_ids = manifest
             .tombstone
@@ -5417,7 +5425,7 @@ impl BorsukIndex {
             return Ok(None);
         }
         Ok(Some(Arc::new(ResidentGlobalMutationOverlay {
-            snapshot_key: Self::mutation_snapshot_key_for(manifest.version, cell_wal_snapshot),
+            snapshot_key,
             states: Arc::new(states),
             _retained: Arc::new(retained),
         })))
@@ -40868,9 +40876,42 @@ mod tests {
                 .is_some(),
             "flush must prepare the externally-authored mutation overlay"
         );
+        let before = index
+            .resident_global_mutations
+            .as_ref()
+            .expect("flush must retain the bounded mutation view");
+        let before_entries = before.states.entries.as_ptr();
+        let pool = Arc::clone(
+            index
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .expect("bounded handle must own a retained pool"),
+        );
+        let remaining = pool.capacity_bytes().saturating_sub(pool.used_bytes());
+        let pressure = (remaining > 0).then(|| {
+            pool.try_reserve(remaining)
+                .expect("fixture must consume the available retained capacity")
+        });
+        let used_before = pool.used_bytes();
 
         index.finish_bulk_load().unwrap();
 
+        let after = index
+            .resident_global_mutations
+            .as_ref()
+            .expect("global consolidation must retain a mutation overlay under memory pressure");
+        assert_eq!(
+            after.states.entries.as_ptr(),
+            before_entries,
+            "an unchanged positioned snapshot must share its admitted immutable mutation view"
+        );
+        assert_eq!(
+            pool.used_bytes(),
+            used_before,
+            "an unchanged positioned snapshot must not acquire a second memory reservation"
+        );
+        drop(pressure);
         assert!(
             index
                 .resident_global_mutations_for_current_snapshot()
