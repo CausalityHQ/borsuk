@@ -357,6 +357,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-ipc",
  "arrow-schema",
+ "async-trait",
  "axum",
  "blake3",
  "bytes",

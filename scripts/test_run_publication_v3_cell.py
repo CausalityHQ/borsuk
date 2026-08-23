@@ -739,6 +739,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "operation,object_role,path,physical_format,object_bytes,request_count,bytes_fetched,logical_projection,row_selection,logical_rows_requested,logical_rows_decoded,decode_cpu_ns,cache_state,status\n"
                 "write,catalog,collection/CURRENT,json,4096,1,4096,,,,,,write,ok\n"
                 "write,normal_segment,segments/a.parquet,parquet,8192,2,8192,,,,,,write,ok\n"
+                "write,normal_segment,segments/a.parquet,parquet,8192,1,8192,,,,,,write,conflict\n"
+                "write,normal_segment,segments/failed.parquet,parquet,16384,1,16384,,,,,,write,error\n"
                 "write,catalog,collection/CURRENT,json,4096,1,4096,,,,,,write,ok\n"
                 "write,normal_segment,segments/b.parquet,parquet,2048,1,2048,,,,,,write,ok\n"
                 "read,catalog,collection/CURRENT,json,4096,2,1024,,,,,,backing,ok\n",
@@ -749,9 +751,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             observed,
             {
                 "storage_gets": 2,
-                "storage_puts": 5,
+                "storage_puts": 7,
                 "storage_bytes_read": 1024,
-                "storage_bytes_written": 18_432,
+                "storage_bytes_written": 43_008,
                 "storage_distinct_data_objects": 2,
                 "storage_max_data_object_bytes": 8192,
             },
@@ -760,9 +762,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             reconcile_lifecycle_storage_trace(
                 {
                     "storage_gets": 2,
-                    "storage_puts": 5,
+                    "storage_puts": 7,
                     "storage_bytes_read": 1024,
-                    "storage_bytes_written": 18_432,
+                    "storage_bytes_written": 43_008,
                 },
                 observed,
             ),
@@ -773,30 +775,27 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "storage_max_data_object_bytes": 8192,
             },
         )
-        self.assertEqual(
-            reconcile_lifecycle_storage_trace(
-                {
-                    "storage_gets": 2,
-                    "storage_puts": 6,
-                    "storage_bytes_read": 1024,
-                    "storage_bytes_written": 18_432,
-                },
-                observed,
-            ),
-            {
-                "storage_gets": 2,
-                "storage_bytes_read": 1024,
-                "storage_distinct_data_objects": 2,
-                "storage_max_data_object_bytes": 8192,
-            },
-        )
-        with self.assertRaisesRegex(ValueError, "omits work outside"):
+        with self.assertRaisesRegex(ValueError, "differs from the complete trace") as mismatch:
             reconcile_lifecycle_storage_trace(
                 {
                     "storage_gets": 1,
                     "storage_puts": 4,
                     "storage_bytes_read": 512,
                     "storage_bytes_written": 4096,
+                },
+                observed,
+            )
+        self.assertIn("lifecycle_puts=4", str(mismatch.exception))
+        self.assertIn("trace_puts=7", str(mismatch.exception))
+        self.assertIn("lifecycle_bytes=4096", str(mismatch.exception))
+        self.assertIn("trace_bytes=43008", str(mismatch.exception))
+        with self.assertRaisesRegex(ValueError, "differs from the complete trace"):
+            reconcile_lifecycle_storage_trace(
+                {
+                    "storage_gets": 2,
+                    "storage_puts": 8,
+                    "storage_bytes_read": 1024,
+                    "storage_bytes_written": 43_008,
                 },
                 observed,
             )

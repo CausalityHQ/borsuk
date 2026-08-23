@@ -882,17 +882,19 @@ pub struct IndexStats {
 
 /// Object-store requests issued while executing an operation.
 ///
-/// Counts every request the storage layer sent to the backing object store,
-/// including retries, so soak tests and production monitors can derive request
-/// rate (requests per query, per add) independently of bytes transferred.
-/// Multipart uploads count as a single put per initiation. A batched range read
-/// counts the physical GET spans left after the object-store coalescing policy,
-/// not the number of logical row ranges requested by the caller.
+/// Counts every call the storage layer sent through the backing object-store
+/// API, so soak tests and production monitors can derive call rate (calls per
+/// query, per add) independently of bytes transferred. Retries internal to a
+/// concrete backend are below this accounting boundary.
+/// Multipart uploads count initiation, every uploaded part, and completion as
+/// separate PUT-class requests. A batched range read counts the physical GET
+/// spans left after the object-store coalescing policy, not the number of
+/// logical row ranges requested by the caller.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RequestCounts {
     /// GET requests (full object, ranged, and batched range reads).
     pub gets: u64,
-    /// PUT requests, counting each multipart upload initiation as one put.
+    /// PUT requests, including multipart initiation, parts, and completion.
     pub puts: u64,
     /// DELETE requests.
     pub deletes: u64,

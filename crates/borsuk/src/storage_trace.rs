@@ -208,6 +208,23 @@ pub struct StorageAccessEvent {
     status: &'static str,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum WriteOutcome {
+    Ok,
+    Conflict,
+    Error,
+}
+
+impl WriteOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Conflict => "conflict",
+            Self::Error => "error",
+        }
+    }
+}
+
 impl StorageAccessEvent {
     /// Construct one object read sample.
     #[must_use]
@@ -288,6 +305,26 @@ impl StorageAccessEvent {
         object_bytes: u64,
         request_count: u64,
     ) -> Self {
+        Self::observed_write_outcome(
+            path,
+            physical_format,
+            object_bytes,
+            request_count,
+            WriteOutcome::Ok,
+        )
+    }
+
+    /// Construct a write-attempt sample with its terminal storage outcome.
+    /// Expected conditional conflicts are physical write attempts too: they
+    /// consume request and payload bandwidth even though they create no object.
+    #[must_use]
+    pub(crate) fn observed_write_outcome(
+        path: impl Into<String>,
+        physical_format: impl Into<String>,
+        object_bytes: u64,
+        request_count: u64,
+        outcome: WriteOutcome,
+    ) -> Self {
         Self {
             operation: "write",
             path: path.into(),
@@ -301,7 +338,7 @@ impl StorageAccessEvent {
             logical_rows_decoded: None,
             decode_cpu_ns: None,
             cache_state: "write",
-            status: "ok",
+            status: outcome.as_str(),
         }
     }
 

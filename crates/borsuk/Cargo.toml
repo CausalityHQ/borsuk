@@ -26,6 +26,7 @@ arrow-array = "58.3"
 arrow-buffer = "58.3"
 arrow-ipc = { version = "58.3", features = ["zstd"] }
 arrow-schema = "58.3"
+async-trait = "0.1"
 blake3 = "1.8"
 bytes = "1.11"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }

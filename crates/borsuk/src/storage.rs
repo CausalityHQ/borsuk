@@ -23,7 +23,7 @@ use futures_util::{
 use object_store::{
     CopyOptions, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, ObjectStoreExt, PutMode, PutMultipartOptions, PutOptions, PutPayload,
-    PutResult, RenameOptions, UpdateVersion, parse_url_opts, path::Path as ObjectPath,
+    PutResult, RenameOptions, UpdateVersion, UploadPart, parse_url_opts, path::Path as ObjectPath,
 };
 use parquet::{
     arrow::{
@@ -70,7 +70,7 @@ use crate::{
     record::RequestCounts,
     segment_cache::{AdmissionGate, DecodedObjectCache, OwnedAdmissionPermit},
     storage_trace::{
-        StorageAccessEvent, StorageAccessTrace, configured_storage_access_trace,
+        StorageAccessEvent, StorageAccessTrace, WriteOutcome, configured_storage_access_trace,
         physical_format_for_path,
     },
 };
@@ -383,10 +383,10 @@ impl RequestCounters {
     }
 }
 
-/// Object-store decorator that tallies every request it forwards to the inner
-/// store. Counting at the store boundary captures all reads, writes, and retries
-/// regardless of which higher-level storage helper issued them. HEAD probes ride
-/// on `get_opts` with `options.head`; deletes flow through `delete_stream`.
+/// Object-store decorator that tallies every call it forwards to the inner
+/// store. Retries internal to a concrete backend remain below this decorator
+/// and are intentionally not observable here. HEAD probes ride on `get_opts`
+/// with `options.head`; deletes flow through `delete_stream`.
 struct CountingObjectStore {
     inner: Arc<dyn ObjectStore>,
     counters: Arc<RequestCounters>,
@@ -500,6 +500,44 @@ impl fmt::Display for CountingObjectStore {
     }
 }
 
+#[derive(Debug)]
+struct CountingMultipartUpload {
+    inner: Box<dyn MultipartUpload>,
+    counters: Arc<RequestCounters>,
+}
+
+#[async_trait::async_trait]
+impl MultipartUpload for CountingMultipartUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        if self
+            .counters
+            .record_put_payload(data.content_length())
+            .is_err()
+        {
+            return Box::pin(async {
+                Err(object_store::Error::Generic {
+                    store: "borsuk",
+                    source: Box::new(io::Error::other(
+                        "multipart PUT payload byte counter overflow",
+                    )),
+                })
+            });
+        }
+        self.counters.puts.fetch_add(1, Ordering::Relaxed);
+        self.inner.put_part(data)
+    }
+
+    async fn complete(&mut self) -> object_store::Result<PutResult> {
+        self.counters.puts.fetch_add(1, Ordering::Relaxed);
+        self.inner.complete().await
+    }
+
+    async fn abort(&mut self) -> object_store::Result<()> {
+        self.counters.deletes.fetch_add(1, Ordering::Relaxed);
+        self.inner.abort().await
+    }
+}
+
 impl ObjectStore for CountingObjectStore {
     fn put_opts<'life0, 'life1, 'async_trait>(
         &'life0 self,
@@ -536,7 +574,11 @@ impl ObjectStore for CountingObjectStore {
     {
         Box::pin(async move {
             self.counters.puts.fetch_add(1, Ordering::Relaxed);
-            self.inner.put_multipart_opts(location, opts).await
+            let inner = self.inner.put_multipart_opts(location, opts).await?;
+            Ok(Box::new(CountingMultipartUpload {
+                inner,
+                counters: Arc::clone(&self.counters),
+            }) as Box<dyn MultipartUpload>)
         })
     }
 
@@ -1162,7 +1204,6 @@ struct PrefetchReadContext {
     cache_dir: Option<PathBuf>,
     cache_max_bytes: Option<u64>,
     cache_budget: Option<Arc<DiskCacheBudget>>,
-    request_counters: Arc<RequestCounters>,
     cache_read_counters: Arc<CacheReadCounters>,
     storage_trace: StorageAccessTrace,
     immutable_object_sizes: Arc<DecodedObjectCache<u64>>,
@@ -1176,7 +1217,6 @@ impl PrefetchReadContext {
             cache_dir: storage.cache_dir.clone(),
             cache_max_bytes: storage.cache_max_bytes,
             cache_budget: storage.cache_budget.clone(),
-            request_counters: Arc::clone(&storage.request_counters),
             cache_read_counters: Arc::clone(&storage.cache_read_counters),
             storage_trace: storage.storage_trace.clone(),
             immutable_object_sizes: Arc::clone(&storage.immutable_object_sizes),
@@ -1202,8 +1242,7 @@ impl PrefetchReadContext {
         }
 
         self.delete_cache_file(relative)?;
-        let requests_before = self.request_counters.snapshot();
-        let size = self.object_size(relative).await?;
+        let (size, backing_head) = self.object_size(relative).await?;
         let (bytes, _) = self.read_range_uncached(relative, 0..size).await?;
         let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
         if actual_checksum != expected_checksum {
@@ -1219,10 +1258,7 @@ impl PrefetchReadContext {
                 relative,
                 physical_format_for_path(relative),
                 size,
-                self.request_counters
-                    .snapshot()
-                    .delta(&requests_before)
-                    .total(),
+                1 + u64::from(backing_head),
                 bytes.len() as u64,
             ))?;
         Ok(ReadBytes {
@@ -1246,7 +1282,6 @@ impl PrefetchReadContext {
             });
         }
 
-        let requests_before = self.request_counters.snapshot();
         let location = self.resolve(relative)?;
         let result = self
             .store
@@ -1265,10 +1300,7 @@ impl PrefetchReadContext {
                 relative,
                 physical_format_for_path(relative),
                 size,
-                self.request_counters
-                    .snapshot()
-                    .delta(&requests_before)
-                    .total(),
+                1,
                 bytes.len() as u64,
             ))?;
         Ok(ReadBytes {
@@ -1278,11 +1310,11 @@ impl PrefetchReadContext {
         })
     }
 
-    async fn object_size(&self, relative: &str) -> Result<u64> {
+    async fn object_size(&self, relative: &str) -> Result<(u64, bool)> {
         if !is_mutable_lane_head(relative)
             && let Some(size) = self.immutable_object_sizes.get(relative)
         {
-            return Ok(*size);
+            return Ok((*size, false));
         }
         let location = self.resolve(relative)?;
         let meta = self
@@ -1297,7 +1329,7 @@ impl PrefetchReadContext {
                 std::mem::size_of::<u64>() as u64,
             );
         }
-        Ok(meta.size)
+        Ok((meta.size, true))
     }
 
     async fn read_range_uncached(
@@ -3191,65 +3223,125 @@ impl Storage {
         self.invalidate_cached_object_size(relative);
         let location = self.resolve(relative)?;
         let payload = PutPayload::from(Bytes::copy_from_slice(bytes));
-        let requests_before = self.request_counts();
-        let result = self
-            .runtime
-            .block_on(async {
-                self.store
-                    .put_opts(
-                        &location,
-                        payload,
-                        PutOptions {
-                            mode,
-                            ..Default::default()
-                        },
-                    )
-                    .await
-            })
-            .map_err(|err| map_conditional_put_error(relative, err))?;
-        self.write_cache_file(relative, bytes)?;
-        self.storage_trace
-            .record(StorageAccessEvent::observed_write(
-                relative,
-                physical_format_for_path(relative),
-                bytes.len() as u64,
-                self.request_counts().delta(&requests_before).total(),
-            ))?;
-        Ok(result)
+        let result = self.runtime.block_on(async {
+            self.store
+                .put_opts(
+                    &location,
+                    payload,
+                    PutOptions {
+                        mode,
+                        ..Default::default()
+                    },
+                )
+                .await
+        });
+        // This trace row describes this logical write attempt.  A delta of the
+        // process-shared counters also includes overlapping writers and makes
+        // the per-object trace non-additive under concurrency.
+        let request_count = 1;
+        match result {
+            Ok(result) => {
+                // Diagnostics must not turn an already durable object into an
+                // application-level failure and ambiguous retry.
+                let _ = self
+                    .storage_trace
+                    .record(StorageAccessEvent::observed_write_outcome(
+                        relative,
+                        physical_format_for_path(relative),
+                        bytes.len() as u64,
+                        request_count,
+                        WriteOutcome::Ok,
+                    ));
+                self.write_cache_file(relative, bytes)?;
+                Ok(result)
+            }
+            Err(error) => {
+                let error = map_conditional_put_error(relative, error);
+                let outcome = if matches!(error, BorsukError::ConcurrentModification { .. }) {
+                    WriteOutcome::Conflict
+                } else {
+                    WriteOutcome::Error
+                };
+                // Never replace the storage error that drives CAS retry
+                // classification with a diagnostic sink failure.
+                let _ = self
+                    .storage_trace
+                    .record(StorageAccessEvent::observed_write_outcome(
+                        relative,
+                        physical_format_for_path(relative),
+                        bytes.len() as u64,
+                        request_count,
+                        outcome,
+                    ));
+                Err(error)
+            }
+        }
     }
 
     fn write_bytes_multipart(&self, relative: &str, bytes: &[u8]) -> Result<PutResult> {
         let location = self.resolve(relative)?;
-        let requests_before = self.request_counts();
-        let result = self
-            .runtime
-            .block_on(async {
-                let mut upload = self.store.put_multipart(&location).await?;
-                for chunk in bytes.chunks(MULTIPART_PART_BYTES) {
-                    if let Err(err) = upload
-                        .put_part(PutPayload::from(Bytes::copy_from_slice(chunk)))
-                        .await
-                    {
-                        let _ = upload.abort().await;
-                        return Err(err);
-                    }
+        let attempted_puts = AtomicU64::new(0);
+        let attempted_bytes = AtomicU64::new(0);
+        let result = self.runtime.block_on(async {
+            attempted_puts.fetch_add(1, Ordering::Relaxed);
+            let mut upload = self.store.put_multipart(&location).await?;
+            for chunk in bytes.chunks(MULTIPART_PART_BYTES) {
+                attempted_puts.fetch_add(1, Ordering::Relaxed);
+                attempted_bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                if let Err(err) = upload
+                    .put_part(PutPayload::from(Bytes::copy_from_slice(chunk)))
+                    .await
+                {
+                    let _ = upload.abort().await;
+                    return Err(err);
                 }
-                upload.complete().await
-            })
-            .map_err(|err| map_object_store_error(relative, err))?;
-        self.write_cache_file(relative, bytes)?;
-        self.storage_trace
-            .record(StorageAccessEvent::observed_write(
-                relative,
-                physical_format_for_path(relative),
-                bytes.len() as u64,
-                self.request_counts().delta(&requests_before).total(),
-            ))?;
-        Ok(result)
+            }
+            attempted_puts.fetch_add(1, Ordering::Relaxed);
+            match upload.complete().await {
+                Ok(result) => Ok(result),
+                Err(error) => {
+                    let _ = upload.abort().await;
+                    Err(error)
+                }
+            }
+        });
+        let request_count = attempted_puts.load(Ordering::Relaxed);
+        let submitted_bytes = attempted_bytes.load(Ordering::Relaxed);
+        match result {
+            Ok(result) => {
+                // Diagnostics must not turn an already durable object into an
+                // application-level failure and ambiguous retry.
+                let _ = self
+                    .storage_trace
+                    .record(StorageAccessEvent::observed_write_outcome(
+                        relative,
+                        physical_format_for_path(relative),
+                        submitted_bytes,
+                        request_count,
+                        WriteOutcome::Ok,
+                    ));
+                self.write_cache_file(relative, bytes)?;
+                Ok(result)
+            }
+            Err(error) => {
+                // Preserve the storage failure for retry classification.  A
+                // trace sink failure is still detected later by exact
+                // lifecycle reconciliation, but must not mask a CAS conflict.
+                let _ = self
+                    .storage_trace
+                    .record(StorageAccessEvent::observed_write_outcome(
+                        relative,
+                        physical_format_for_path(relative),
+                        submitted_bytes,
+                        request_count,
+                        WriteOutcome::Error,
+                    ));
+                Err(map_object_store_error(relative, error))
+            }
+        }
     }
 
     fn read_bytes_uncached(&self, relative: &str) -> Result<Vec<u8>> {
-        let requests_before = self.request_counts();
         let location = self.resolve(relative)?;
         let result = self
             .runtime
@@ -3267,7 +3359,7 @@ impl Storage {
                 relative,
                 physical_format_for_path(relative),
                 size,
-                self.request_counts().delta(&requests_before).total(),
+                1,
                 bytes.len() as u64,
             ))?;
         Ok(bytes)
@@ -5115,7 +5207,7 @@ mod tests {
 
     use super::{
         CacheReadCounters, CacheReadCounts, ContentAddressedWriteOutcome, CreateOutcome,
-        PrefetchedRead, RangedColumns, ReadBytes, RequestCounters,
+        MULTIPART_PART_BYTES, PrefetchedRead, RangedColumns, ReadBytes, RequestCounters,
         SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
         plan_bounded_ranges,
     };
@@ -6498,6 +6590,192 @@ mod tests {
                 .all(|read| read.backing_reads == 1 && read.backing_bytes == 4),
             "each operation must report only its own backing I/O: {reads:?}"
         );
+    }
+
+    #[test]
+    fn storage_trace_accounts_for_conflicting_content_addressed_write_attempts() {
+        let trace_dir = tempfile::tempdir().unwrap();
+        let trace_path = trace_dir.path().join("storage-access.csv");
+        let mut storage = Storage::from_object_store(
+            "memory:///conflicting-write-trace".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
+
+        assert_eq!(
+            storage
+                .write_bytes_content_addressed("segments/a.parquet", b"payload")
+                .unwrap(),
+            ContentAddressedWriteOutcome::Written
+        );
+        assert_eq!(
+            storage
+                .write_bytes_content_addressed("segments/a.parquet", b"payload")
+                .unwrap(),
+            ContentAddressedWriteOutcome::Existing
+        );
+
+        let rows = fs::read_to_string(trace_path)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .map(|line| line.split(',').map(str::to_string).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows.len(),
+            2,
+            "every submitted write attempt must be traced"
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row[4].parse::<u64>().unwrap())
+                .sum::<u64>(),
+            14
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row[5].parse::<u64>().unwrap())
+                .sum::<u64>(),
+            2
+        );
+        assert_eq!(
+            rows.iter().map(|row| row[13].as_str()).collect::<Vec<_>>(),
+            ["ok", "conflict"]
+        );
+        assert_eq!(storage.request_counts().puts, 2);
+        assert_eq!(storage.put_payload_bytes(), 14);
+    }
+
+    #[test]
+    fn multipart_trace_and_counters_account_for_parts_and_completion() {
+        let trace_dir = tempfile::tempdir().unwrap();
+        let trace_path = trace_dir.path().join("storage-access.csv");
+        let mut storage = Storage::from_object_store(
+            "memory:///multipart-write-trace".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
+
+        let payload = vec![7_u8; MULTIPART_PART_BYTES + 1];
+        storage
+            .write_bytes_multipart("segments/multipart.parquet", &payload)
+            .unwrap();
+
+        assert_eq!(storage.put_payload_bytes(), payload.len() as u64);
+        assert_eq!(storage.request_counts().puts, 4);
+        let row = fs::read_to_string(trace_path)
+            .unwrap()
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(row[4], payload.len().to_string());
+        assert_eq!(row[5], "4");
+        assert_eq!(row[13], "ok");
+    }
+
+    #[test]
+    fn concurrent_write_trace_rows_do_not_diff_shared_request_counters() {
+        let trace_dir = tempfile::tempdir().unwrap();
+        let trace_path = trace_dir.path().join("storage-access.csv");
+        let throttled = ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_put_per_call: Duration::from_millis(100),
+                ..ThrottleConfig::default()
+            },
+        );
+        let mut storage = Storage::from_object_store(
+            "memory:///concurrent-write-trace".to_string(),
+            Arc::new(throttled),
+        )
+        .unwrap();
+        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
+        let barrier = Arc::new(Barrier::new(4));
+
+        std::thread::scope(|scope| {
+            (0..4)
+                .map(|ordinal| {
+                    let storage = storage.clone();
+                    let barrier = Arc::clone(&barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        storage
+                            .write_bytes(&format!("segments/{ordinal}.parquet"), b"x")
+                            .unwrap();
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .for_each(|thread| thread.join().unwrap());
+        });
+
+        let traced_puts = fs::read_to_string(trace_path)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .map(|line| line.split(',').nth(5).unwrap().parse::<u64>().unwrap())
+            .sum::<u64>();
+        assert_eq!(storage.request_counts().puts, 4);
+        assert_eq!(traced_puts, 4);
+    }
+
+    #[test]
+    fn concurrent_read_trace_does_not_diff_shared_request_counters() {
+        let trace_dir = tempfile::tempdir().unwrap();
+        let trace_path = trace_dir.path().join("storage-access.csv");
+        let throttled = ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(100),
+                wait_put_per_call: Duration::from_millis(100),
+                ..ThrottleConfig::default()
+            },
+        );
+        let mut storage = Storage::from_object_store(
+            "memory:///concurrent-read-trace".to_string(),
+            Arc::new(throttled),
+        )
+        .unwrap();
+        storage
+            .write_bytes("segments/read.parquet", b"read")
+            .unwrap();
+        storage.storage_trace = StorageAccessTrace::create(&trace_path).unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+
+        std::thread::scope(|scope| {
+            let reader = storage.clone();
+            let reader_barrier = Arc::clone(&barrier);
+            let read = scope.spawn(move || {
+                reader_barrier.wait();
+                reader.read_bytes_uncached("segments/read.parquet").unwrap()
+            });
+            let writer = storage.clone();
+            let writer_barrier = Arc::clone(&barrier);
+            let write = scope.spawn(move || {
+                writer_barrier.wait();
+                writer
+                    .write_bytes("segments/write.parquet", b"write")
+                    .unwrap();
+            });
+            assert_eq!(read.join().unwrap(), b"read");
+            write.join().unwrap();
+        });
+
+        let traced_reads = fs::read_to_string(trace_path)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let columns = line.split(',').collect::<Vec<_>>();
+                (columns[0] == "read").then(|| columns[5].parse::<u64>().unwrap())
+            })
+            .sum::<u64>();
+        assert_eq!(traced_reads, 1);
     }
 
     #[test]

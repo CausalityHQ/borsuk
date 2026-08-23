@@ -1208,17 +1208,23 @@ def summarize_runtime_write_trace(path: Path) -> dict[str, int]:
             bytes_fetched = int(row["bytes_fetched"])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("publication runtime storage trace is invalid") from error
-        if requests < 0 or byte_count < 0 or bytes_fetched < 0 or row.get("status") != "ok":
+        status = row.get("status")
+        if requests < 0 or byte_count < 0 or bytes_fetched < 0:
             raise ValueError("publication runtime storage trace is invalid")
         if operation == "read":
+            if status != "ok":
+                raise ValueError("publication runtime storage trace is invalid")
             storage_gets += requests
             storage_bytes_read += bytes_fetched
             continue
-        if requests <= 0:
+        # The trace is an attempt ledger. A higher layer may recover a failed
+        # immutable write, so all terminal attempts remain billable even when
+        # only successful paths contribute to the live object topology.
+        if status not in {"ok", "conflict", "error"} or requests <= 0:
             raise ValueError("publication runtime storage trace is invalid")
         storage_puts += requests
         storage_bytes_written += byte_count
-        if row.get("object_role") not in control_roles:
+        if status == "ok" and row.get("object_role") not in control_roles:
             path_value = row.get("path")
             if not isinstance(path_value, str) or not path_value:
                 raise ValueError("publication runtime storage trace is invalid")
@@ -1239,13 +1245,18 @@ def summarize_runtime_write_trace(path: Path) -> dict[str, int]:
 def reconcile_lifecycle_storage_trace(
     lifecycle: dict[str, int], trace: dict[str, int]
 ) -> dict[str, int]:
+    lifecycle_bytes = lifecycle.get("storage_bytes_written")
+    trace_bytes = trace.get("storage_bytes_written")
+    lifecycle_puts = lifecycle.get("storage_puts")
+    trace_puts = trace.get("storage_puts")
     if (
-        lifecycle.get("storage_bytes_written")
-        != trace.get("storage_bytes_written")
-        or lifecycle.get("storage_puts", -1) < trace.get("storage_puts", 0)
+        lifecycle_bytes != trace_bytes
+        or lifecycle_puts != trace_puts
     ):
         raise ValueError(
-            "publication lifecycle storage accounting omits work outside a measured phase"
+            "publication lifecycle storage accounting differs from the complete trace: "
+            f"lifecycle_puts={lifecycle_puts} trace_puts={trace_puts} "
+            f"lifecycle_bytes={lifecycle_bytes} trace_bytes={trace_bytes}"
         )
     return {
         # Reads also happen in verification and query stages, outside the
