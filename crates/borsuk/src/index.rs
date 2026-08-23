@@ -3778,7 +3778,37 @@ impl BorsukIndex {
     /// Use full compaction instead when reclustering the exact-vector sidecars
     /// is worth a larger build working set in exchange for fewer rerank GETs.
     pub fn finish_bulk_load(&mut self) -> Result<()> {
+        if v20_progress_enabled() {
+            let current_key =
+                Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
+            v20_progress!(
+                "finish-bulk-start",
+                "manifest_version" = self.manifest.version,
+                "wal_transactions" = self.cell_wal_snapshot.len(),
+                "mutation_required" = self.global_leaf_mutation_state_required(),
+                "mutation_resident" = self.resident_global_mutations.is_some(),
+                "mutation_key_matches" = self
+                    .resident_global_mutations
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.snapshot_key == current_key),
+            );
+        }
         self.flush()?;
+        if v20_progress_enabled() {
+            let current_key =
+                Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
+            v20_progress!(
+                "finish-bulk-after-flush",
+                "manifest_version" = self.manifest.version,
+                "wal_transactions" = self.cell_wal_snapshot.len(),
+                "mutation_required" = self.global_leaf_mutation_state_required(),
+                "mutation_resident" = self.resident_global_mutations.is_some(),
+                "mutation_key_matches" = self
+                    .resident_global_mutations
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.snapshot_key == current_key),
+            );
+        }
         let summaries = self.active_segment_summaries()?;
         self.refresh_resident_global_ann_from_summaries(&summaries, 0)
     }
@@ -5236,6 +5266,25 @@ impl BorsukIndex {
         covered_snapshot_key: [u8; 32],
     ) {
         self.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
+        if v20_progress_enabled() {
+            let current_key =
+                Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
+            v20_progress!(
+                "mutation-rekey",
+                "manifest_version" = self.manifest.version,
+                "wal_transactions" = self.cell_wal_snapshot.len(),
+                "mutation_required" = self.global_leaf_mutation_state_required(),
+                "mutation_resident" = self.resident_global_mutations.is_some(),
+                "previous_matches_current" = self
+                    .resident_global_mutations
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.snapshot_key == current_key),
+                "previous_matches_covered" = self
+                    .resident_global_mutations
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.snapshot_key == covered_snapshot_key),
+            );
+        }
         if !self.global_leaf_mutation_state_required() {
             self.resident_global_mutations = None;
             return;
@@ -40780,6 +40829,64 @@ mod tests {
             .unwrap();
         assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
         assert_eq!(report.hits[0].id, RecordId::from("rekey-global-mutation-0"));
+    }
+
+    #[test]
+    fn finish_bulk_load_preserves_a_refreshed_external_writer_mutation_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 32,
+            ram_budget_bytes: Some(512 * 1024 * 1024),
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(format!("external-finish-{row}"), vec![row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let mut writer = BorsukIndex::open(&uri).unwrap();
+        writer
+            .upsert(vec![VectorRecord::new("external-finish-0", vec![0.25; 8])])
+            .unwrap();
+        assert!(index.refresh().unwrap());
+        index.flush().unwrap();
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some(),
+            "flush must prepare the externally-authored mutation overlay"
+        );
+
+        index.finish_bulk_load().unwrap();
+
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some(),
+            "global consolidation must preserve the refreshed external-writer overlay"
+        );
+        let report = index
+            .search_with_report(
+                &[0.25; 8],
+                SearchOptions::approx(4, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
+        assert_eq!(report.hits[0].id, RecordId::from("external-finish-0"));
     }
 
     #[test]
