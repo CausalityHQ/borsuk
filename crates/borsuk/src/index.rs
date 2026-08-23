@@ -405,8 +405,14 @@ struct CompactionRoutingPatch {
 
 #[derive(Debug)]
 struct CompactionRoutingPageUpdate {
-    page_ref: RoutingLayerPageRef,
+    page_ref: Option<RoutingLayerPageRef>,
     patch: CompactionRoutingPatch,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompactionRoutingLeafChanges<'a> {
+    updated: &'a [RoutingLayerPageRef],
+    removed_ordinals: &'a HashSet<usize>,
 }
 
 #[derive(Debug)]
@@ -14326,7 +14332,10 @@ impl BorsukIndex {
             &manifest,
             top_routing_level,
             &top_page_refs,
-            &new_leaf_page_refs,
+            CompactionRoutingLeafChanges {
+                updated: &new_leaf_page_refs,
+                removed_ordinals: &HashSet::new(),
+            },
             &mut decoded_parent_pages,
             Some(&mut storage_report),
         )?;
@@ -15359,7 +15368,27 @@ impl BorsukIndex {
     ) -> Result<CompactionReport> {
         let mutation_snapshot_key_before_compaction =
             Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
-        let global_base_segments = HashSet::<String>::new();
+        let bounded_global_compaction = options.max_segments.is_some()
+            && (self.manifest.global_ann_ref.is_some()
+                || self.manifest.global_cell_card_ann_ref.is_some());
+        let preserve_global_base =
+            bounded_global_compaction && self.manifest.segments_are_global_delta;
+        // The global base is self-contained immutable query storage. A bounded
+        // compaction may rewrite only the explicit online delta roster; selecting
+        // a base-owned segment would publish its replacement beside the still-
+        // visible base copy. An empty delta roster therefore makes bounded
+        // compaction a no-op instead of discarding the fast global authority.
+        let eligible_delta_ids = bounded_global_compaction.then(|| {
+            if self.manifest.segments_are_global_delta {
+                self.manifest
+                    .segments
+                    .iter()
+                    .map(|summary| summary.id.clone())
+                    .collect::<HashSet<_>>()
+            } else {
+                HashSet::new()
+            }
+        });
         let top_routing_level = page_index_read
             .page_refs
             .first()
@@ -15375,7 +15404,7 @@ impl BorsukIndex {
             options.source_level,
             max_segments,
             page_index_read,
-            &global_base_segments,
+            eligible_delta_ids.as_ref(),
         )?;
         let selected = source_selection.selected;
         let dirty_pages = source_selection.dirty_pages;
@@ -15476,12 +15505,21 @@ impl BorsukIndex {
             .filter(|summary| !selected_ids.contains(summary.id.as_str()))
             .collect::<Vec<_>>();
 
+        let mut next_delta_summaries = if preserve_global_base {
+            self.manifest.segments.clone()
+        } else {
+            Vec::new()
+        };
+        next_delta_summaries.retain(|summary| !selected_ids.contains(summary.id.as_str()));
+
         let mut manifest = self.manifest.next_version();
         manifest.segments.clear();
         manifest.segments_are_global_delta = false;
         manifest.pivots.clear();
-        manifest.global_ann_ref = None;
-        manifest.global_cell_card_ann_ref = None;
+        if !preserve_global_base {
+            manifest.global_ann_ref = None;
+            manifest.global_cell_card_ann_ref = None;
+        }
 
         let mut segments_written = 0_usize;
         let mut bytes_written = 0_u64;
@@ -15507,6 +15545,34 @@ impl BorsukIndex {
                 &kmeans_params,
             )
         })?;
+        if preserve_global_base {
+            let retained_rows =
+                next_delta_summaries
+                    .iter()
+                    .try_fold(0_usize, |total, summary| {
+                        total.checked_add(summary.object_count).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "compacted global delta row count overflows".to_string(),
+                            )
+                        })
+                    })?;
+            let output_rows = chunks.iter().try_fold(0_usize, |total, chunk| {
+                total.checked_add(chunk.len()).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "compacted global delta output row count overflows".to_string(),
+                    )
+                })
+            })?;
+            ensure_global_delta_capacity(
+                self.manifest.config.dimensions,
+                next_delta_summaries.len().saturating_add(chunks.len()),
+                retained_rows.checked_add(output_rows).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "compacted global delta total row count overflows".to_string(),
+                    )
+                })?,
+            )?;
+        }
         for chunk in chunks {
             let segment_id = Uuid::new_v4().to_string();
             let segment = Segment::from_records_with_quantizer_and_geometry(
@@ -15526,6 +15592,12 @@ impl BorsukIndex {
             segments_written += 1;
             new_lexical_summaries.push(summary.clone());
             replacement_summaries.push(summary);
+        }
+
+        if preserve_global_base {
+            next_delta_summaries.extend(new_lexical_summaries.iter().cloned());
+            manifest.segments = next_delta_summaries.clone();
+            manifest.segments_are_global_delta = !manifest.segments.is_empty();
         }
 
         if options.max_segments.is_none() {
@@ -15549,7 +15621,12 @@ impl BorsukIndex {
             self.rebuild_lexical_roots(&mut manifest)?;
             // Paged manifests route segment summaries through the immutable
             // routing tree; only the compact global lexical roots stay here.
-            manifest.segments.clear();
+            if preserve_global_base {
+                manifest.segments = next_delta_summaries;
+                manifest.segments_are_global_delta = !manifest.segments.is_empty();
+            } else {
+                manifest.segments.clear();
+            }
         }
 
         let replacement_pages = split_summaries_for_routing_pages(
@@ -15557,6 +15634,15 @@ impl BorsukIndex {
             dirty_page_count,
             manifest.routing_page_fanout,
         );
+        // Parquet routing leaves cannot be empty. When MVCC suppression leaves
+        // fewer non-empty replacement pages than the selected source touched,
+        // remove the surplus leaf ordinals from the authenticated tree instead
+        // of leaving their obsolete segment summaries reachable.
+        let removed_dirty_page_ordinals = dirty_page_ordinals
+            .iter()
+            .skip(replacement_pages.len())
+            .copied()
+            .collect::<HashSet<_>>();
         // Fail the candidate manifest's resident admission before authenticating
         // and decoding its codebook/root. Otherwise a compaction that already
         // exceeds the configured budget can transiently allocate the very
@@ -15592,6 +15678,8 @@ impl BorsukIndex {
                 routing_pages_written += 1;
                 upsert_leaf_page_ref_by_ordinal(&mut page_refs, page_ref)?;
             }
+            page_refs
+                .retain(|page_ref| !removed_dirty_page_ordinals.contains(&page_ref.page_ordinal));
             let promoted_top_refs =
                 self.promote_top_routing_page_refs_if_needed(&manifest, 0, page_refs)?;
             routing_pages_written += promoted_top_refs.routing_pages_written;
@@ -15634,6 +15722,7 @@ impl BorsukIndex {
                 top_routing_level,
                 &top_page_refs,
                 &updated_leaf_page_refs,
+                &removed_dirty_page_ordinals,
                 &mut decoded_parent_pages,
             )?;
             bytes_read += patch.bytes_read;
@@ -15671,6 +15760,7 @@ impl BorsukIndex {
                 top_routing_level,
                 &top_page_refs,
                 &replacement_leaf_page_refs,
+                &removed_dirty_page_ordinals,
                 &mut decoded_parent_pages,
             )?;
             bytes_read += patch.bytes_read;
@@ -15753,6 +15843,14 @@ impl BorsukIndex {
     ) -> Result<CompactionTopRoutingPageRefs> {
         let mut routing_pages_written = 0_usize;
 
+        if page_refs.is_empty() {
+            return Ok(CompactionTopRoutingPageRefs {
+                routing_level: 0,
+                page_refs,
+                routing_pages_written,
+            });
+        }
+
         while page_refs.len() > manifest.routing_page_fanout {
             if page_refs
                 .iter()
@@ -15805,13 +15903,17 @@ impl BorsukIndex {
         top_routing_level: u8,
         top_page_refs: &[RoutingLayerPageRef],
         updated_leaf_page_refs: &[RoutingLayerPageRef],
+        removed_leaf_page_ordinals: &HashSet<usize>,
         decoded_parent_pages: &mut HashMap<String, Vec<RoutingLayerPageRef>>,
     ) -> Result<CompactionRoutingPatch> {
         self.routing_top_page_refs_with_leaf_updates_report(
             manifest,
             top_routing_level,
             top_page_refs,
-            updated_leaf_page_refs,
+            CompactionRoutingLeafChanges {
+                updated: updated_leaf_page_refs,
+                removed_ordinals: removed_leaf_page_ordinals,
+            },
             decoded_parent_pages,
             None,
         )
@@ -15822,7 +15924,7 @@ impl BorsukIndex {
         manifest: &Manifest,
         top_routing_level: u8,
         top_page_refs: &[RoutingLayerPageRef],
-        updated_leaf_page_refs: &[RoutingLayerPageRef],
+        changes: CompactionRoutingLeafChanges<'_>,
         decoded_parent_pages: &mut HashMap<String, Vec<RoutingLayerPageRef>>,
         mut storage_report: Option<&mut StorageWriteReport>,
     ) -> Result<CompactionRoutingPatch> {
@@ -15831,7 +15933,7 @@ impl BorsukIndex {
                 "top routing update without L0 page refs".to_string(),
             ));
         }
-        let updates = leaf_page_ref_updates_by_ordinal(updated_leaf_page_refs)?;
+        let updates = leaf_page_ref_updates_by_ordinal(changes.updated)?;
         let mut rewritten_top_refs = Vec::with_capacity(top_page_refs.len());
         let mut patch = CompactionRoutingPatch::default();
         for page_ref in top_page_refs {
@@ -15839,11 +15941,18 @@ impl BorsukIndex {
                 page_ref,
                 &updates,
                 manifest.routing_page_fanout,
-            ) {
+            ) || changes.removed_ordinals.iter().any(|leaf_ordinal| {
+                routing_subtree_contains_leaf_ordinal(
+                    page_ref,
+                    *leaf_ordinal,
+                    manifest.routing_page_fanout,
+                )
+            }) {
                 let update = self.routing_parent_page_ref_with_leaf_updates_report(
                     manifest,
                     page_ref,
                     &updates,
+                    changes.removed_ordinals,
                     decoded_parent_pages,
                     storage_report.as_deref_mut(),
                 )?;
@@ -15852,7 +15961,9 @@ impl BorsukIndex {
                 patch.routing_pages_written += update.patch.routing_pages_written;
                 patch.object_cache_hits += update.patch.object_cache_hits;
                 patch.object_cache_misses += update.patch.object_cache_misses;
-                rewritten_top_refs.push(update.page_ref);
+                if let Some(page_ref) = update.page_ref {
+                    rewritten_top_refs.push(page_ref);
+                }
             } else {
                 rewritten_top_refs.push(page_ref.clone());
             }
@@ -15864,7 +15975,7 @@ impl BorsukIndex {
             .collect::<HashSet<_>>();
         let new_top_leaf_updates = leaf_page_ref_updates_by_parent_ordinal(
             top_routing_level,
-            updated_leaf_page_refs.iter().filter(|page_ref| {
+            changes.updated.iter().filter(|page_ref| {
                 !top_page_refs.iter().any(|top_page_ref| {
                     routing_subtree_contains_leaf_ordinal(
                         top_page_ref,
@@ -15887,7 +15998,11 @@ impl BorsukIndex {
                 storage_report.as_deref_mut(),
             )?;
             patch.routing_pages_written += update.patch.routing_pages_written;
-            rewritten_top_refs.push(update.page_ref);
+            rewritten_top_refs.push(update.page_ref.ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "new top routing subtree unexpectedly produced no page".to_string(),
+                )
+            })?);
         }
         rewritten_top_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
         patch.page_refs = rewritten_top_refs;
@@ -15899,6 +16014,7 @@ impl BorsukIndex {
         manifest: &Manifest,
         parent_ref: &RoutingLayerPageRef,
         updates: &HashMap<usize, RoutingLayerPageRef>,
+        removed_leaf_page_ordinals: &HashSet<usize>,
         decoded_parent_pages: &mut HashMap<String, Vec<RoutingLayerPageRef>>,
         mut storage_report: Option<&mut StorageWriteReport>,
     ) -> Result<CompactionRoutingPageUpdate> {
@@ -15917,23 +16033,33 @@ impl BorsukIndex {
             object_cache_misses: child_read.object_cache_misses,
             ..Default::default()
         };
-        let mut child_refs = child_read.page_refs;
-        let mut existing_child_ordinals = HashSet::with_capacity(child_refs.len());
-        for child_ref in &mut child_refs {
+        let mut child_refs = Vec::with_capacity(child_read.page_refs.len());
+        let mut existing_child_ordinals = HashSet::with_capacity(child_read.page_refs.len());
+        for mut child_ref in child_read.page_refs {
             existing_child_ordinals.insert(child_ref.page_ordinal);
             if child_routing_level == 0 {
+                if removed_leaf_page_ordinals.contains(&child_ref.page_ordinal) {
+                    continue;
+                }
                 if let Some(update) = updates.get(&child_ref.page_ordinal) {
-                    *child_ref = update.clone();
+                    child_ref = update.clone();
                 }
             } else if routing_subtree_contains_leaf_update(
-                child_ref,
+                &child_ref,
                 updates,
                 manifest.routing_page_fanout,
-            ) {
+            ) || removed_leaf_page_ordinals.iter().any(|leaf_ordinal| {
+                routing_subtree_contains_leaf_ordinal(
+                    &child_ref,
+                    *leaf_ordinal,
+                    manifest.routing_page_fanout,
+                )
+            }) {
                 let update = self.routing_parent_page_ref_with_leaf_updates_report(
                     manifest,
-                    child_ref,
+                    &child_ref,
                     updates,
+                    removed_leaf_page_ordinals,
                     decoded_parent_pages,
                     storage_report.as_deref_mut(),
                 );
@@ -15943,8 +16069,12 @@ impl BorsukIndex {
                 patch.routing_pages_written += update.patch.routing_pages_written;
                 patch.object_cache_hits += update.patch.object_cache_hits;
                 patch.object_cache_misses += update.patch.object_cache_misses;
-                *child_ref = update.page_ref;
+                let Some(page_ref) = update.page_ref else {
+                    continue;
+                };
+                child_ref = page_ref;
             }
+            child_refs.push(child_ref);
         }
 
         let new_child_updates = leaf_page_ref_updates_by_parent_ordinal(
@@ -15981,11 +16111,21 @@ impl BorsukIndex {
                     storage_report.as_deref_mut(),
                 )?;
                 patch.routing_pages_written += update.patch.routing_pages_written;
-                child_refs.push(update.page_ref);
+                child_refs.push(update.page_ref.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "new routing subtree unexpectedly produced no page".to_string(),
+                    )
+                })?);
             }
         }
         child_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
 
+        if child_refs.is_empty() {
+            return Ok(CompactionRoutingPageUpdate {
+                page_ref: None,
+                patch,
+            });
+        }
         let page_ref = if let Some(report) = storage_report {
             self.storage.write_parent_routing_layer_page_with_report(
                 manifest,
@@ -16003,7 +16143,10 @@ impl BorsukIndex {
             )?
         };
         patch.routing_pages_written += 1;
-        Ok(CompactionRoutingPageUpdate { page_ref, patch })
+        Ok(CompactionRoutingPageUpdate {
+            page_ref: Some(page_ref),
+            patch,
+        })
     }
 
     fn routing_parent_page_ref_from_leaf_updates_report(
@@ -16054,7 +16197,11 @@ impl BorsukIndex {
                     storage_report.as_deref_mut(),
                 )?;
                 patch.routing_pages_written += update.patch.routing_pages_written;
-                child_refs.push(update.page_ref);
+                child_refs.push(update.page_ref.ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "new routing subtree unexpectedly produced no page".to_string(),
+                    )
+                })?);
             }
         }
         child_refs.sort_by_key(|page_ref| page_ref.page_ordinal);
@@ -16076,7 +16223,10 @@ impl BorsukIndex {
             )?
         };
         patch.routing_pages_written += 1;
-        Ok(CompactionRoutingPageUpdate { page_ref, patch })
+        Ok(CompactionRoutingPageUpdate {
+            page_ref: Some(page_ref),
+            patch,
+        })
     }
 
     /// Rebuild a full source level into a target level, then report or delete obsolete objects.
@@ -23569,9 +23719,10 @@ impl BorsukIndex {
         let zero_distance_wal_eligible = matches!(options.mode, SearchMode::Approx { .. })
             && self.manifest.config.metric.supports_centroid_lower_bound();
         let global_eligible = resident_global_v12_context.is_some();
-        // Online segment-changing publishes clear the Task 3 base. Presence of
-        // a V12 reference therefore certifies the active immutable set without
-        // a routing-tree walk or a dual-format fallback.
+        // Presence of a global reference certifies the immutable base. Online
+        // writes and bounded compaction retain it only while `manifest.segments`
+        // remains the exact disjoint delta roster searched beside that base, so
+        // eligibility needs no routing-tree coverage walk.
         let global_available = global_eligible;
         let global_active_segment_count = global_eligible.then(|| {
             let base = self
@@ -25073,7 +25224,7 @@ impl BorsukIndex {
         source_level: u8,
         max_segments: usize,
         page_index_read: RoutingLayerPageIndexRead,
-        excluded_checksums: &HashSet<String>,
+        eligible_segment_ids: Option<&HashSet<String>>,
     ) -> Result<CompactionSourceSelectionRead> {
         let mut read_result = CompactionSourceSelectionRead {
             bytes_read: page_index_read.bytes_read,
@@ -25109,7 +25260,9 @@ impl BorsukIndex {
                 for summary in page_summaries
                     .iter()
                     .filter(|summary| summary.level == source_level)
-                    .filter(|summary| !excluded_checksums.contains(&summary.checksum))
+                    .filter(|summary| {
+                        eligible_segment_ids.is_none_or(|eligible| eligible.contains(&summary.id))
+                    })
                 {
                     if read_result.selected.len() >= max_segments {
                         break;
@@ -40642,6 +40795,10 @@ mod tests {
                     .with_max_candidates_per_segment(64),
             )
             .unwrap();
+        assert_eq!(
+            after_compaction.leaf_mode, "bounded-cell-card-v20",
+            "full compaction must keep the rebuilt global authority eligible: {after_compaction:?}"
+        );
         assert!(
             after_compaction
                 .hits
@@ -40650,7 +40807,8 @@ mod tests {
             "{after_compaction:?}"
         );
 
-        index
+        let rebuilt_authority = serde_json::to_vec(rebuilt).unwrap();
+        let base_only_partial = index
             .compact(CompactionOptions {
                 source_level: 1,
                 target_level: 2,
@@ -40661,11 +40819,104 @@ mod tests {
             })
             .unwrap();
         assert!(
-            index.manifest.global_cell_card_ann_ref.is_none(),
-            "a partial compaction must clear an authority that no longer covers every segment"
+            !base_only_partial.compacted,
+            "bounded compaction must not rewrite immutable global-base segments"
+        );
+        assert_eq!(
+            serde_json::to_vec(
+                index
+                    .manifest
+                    .global_cell_card_ann_ref
+                    .as_ref()
+                    .expect("the base-only no-op must retain V20 authority")
+            )
+            .unwrap(),
+            rebuilt_authority,
+            "a base-only no-op must preserve the global authority"
+        );
+
+        for row in 0..2 {
+            index
+                .add(vec![VectorRecord::new(
+                    format!("v14-life-post-compact-{row}"),
+                    vec![-100.0 - row as f32; 8],
+                )])
+                .unwrap();
+            index.flush().unwrap();
+        }
+        assert!(
+            index.manifest.segments_are_global_delta,
+            "online flushes must publish a bounded delta over the immutable global base"
+        );
+        let delta_compaction = index.compact(CompactionOptions::default()).unwrap();
+        assert!(delta_compaction.compacted, "two L0 deltas must compact");
+        assert_eq!(delta_compaction.segments_read, 2);
+        assert_eq!(
+            serde_json::to_vec(
+                index
+                    .manifest
+                    .global_cell_card_ann_ref
+                    .as_ref()
+                    .expect("bounded delta compaction must retain V20 authority")
+            )
+            .unwrap(),
+            rebuilt_authority,
+            "bounded delta compaction must preserve the immutable global authority"
+        );
+        assert!(index.manifest.segments_are_global_delta);
+        assert!(
+            index
+                .manifest
+                .segments
+                .iter()
+                .all(|summary| summary.level == 1),
+            "the compacted delta roster must contain only L1 output"
+        );
+        let after_delta_compaction = index
+            .search_with_report(
+                &[-100.0; 8],
+                SearchOptions::approx(2, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(
+            after_delta_compaction.leaf_mode, "bounded-cell-card-v20",
+            "{after_delta_compaction:?}"
+        );
+        assert_eq!(
+            after_delta_compaction.hits[0].id,
+            RecordId::from("v14-life-post-compact-0"),
+            "{after_delta_compaction:?}"
+        );
+        assert_eq!(
+            after_delta_compaction.segments_total,
+            index.active_segment_summaries().unwrap().len(),
+            "the retained base plus compacted delta roster must cover every routed segment"
         );
         drop(index);
         let reopened = BorsukIndex::open(&uri).unwrap();
+        let reopened_delta = reopened
+            .search_with_report(
+                &[-100.0; 8],
+                SearchOptions::approx(2, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(
+            reopened_delta.leaf_mode, "bounded-cell-card-v20",
+            "cold reopen must retain the global-base plus compacted-delta plan: {reopened_delta:?}"
+        );
+        assert_eq!(
+            reopened_delta.hits[0].id,
+            RecordId::from("v14-life-post-compact-0"),
+            "{reopened_delta:?}"
+        );
+        assert_eq!(
+            reopened_delta.segments_total,
+            reopened.active_segment_summaries().unwrap().len()
+        );
         assert_eq!(reopened.get_vector("v14-life-0").unwrap(), None);
         assert_eq!(
             reopened.get_vector("v14-life-fresh").unwrap(),
@@ -41155,14 +41406,33 @@ mod tests {
             .compact(CompactionOptions {
                 source_level: 0,
                 target_level: 1,
-                max_segments: None,
-                min_segments: 1,
+                max_segments: Some(2),
+                min_segments: 2,
                 target_segment_max_vectors: Some(32),
                 target_segment_max_radius: None,
             })
             .unwrap();
         assert!(index.manifest.segments_are_global_delta);
-        assert_eq!(index.manifest.segments.len(), 1);
+        assert_eq!(index.manifest.segments.len(), MAX_GLOBAL_DELTA_SEGMENTS);
+        assert_eq!(
+            index
+                .manifest
+                .segments
+                .iter()
+                .filter(|summary| summary.level == 1)
+                .count(),
+            1,
+            "bounded compaction must merge two deltas and open one foreground slot"
+        );
+        assert_eq!(
+            index
+                .manifest
+                .global_cell_card_ann_ref
+                .as_ref()
+                .expect("bounded compaction must preserve the immutable global base")
+                .root_checksum(),
+            base_root
+        );
         assert_eq!(
             index.get_vector("bounded-delta-overflow").unwrap(),
             Some(vec![-1_000.0; 8])
@@ -44087,6 +44357,130 @@ mod tests {
         assert_eq!(page_refs.len(), 1);
         assert_eq!(page_refs[0].page_ordinal, sparse_leaf_ordinal);
         assert_eq!(index.get_vector("selected").unwrap(), Some(vec![0.0, 0.0]));
+    }
+
+    #[test]
+    fn compact_removes_a_surplus_dirty_leaf_after_tombstone_suppression() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_routing_page_fanout(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 1,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            2,
+        )
+        .unwrap();
+
+        index
+            .add(vec![
+                VectorRecord::new("kept", vec![0.0, 0.0]),
+                VectorRecord::new("removed-a", vec![1.0, 1.0]),
+                VectorRecord::new("removed-b", vec![2.0, 2.0]),
+            ])
+            .unwrap();
+        index.flush().unwrap();
+        index
+            .compact(CompactionOptions {
+                source_level: 0,
+                target_level: 1,
+                max_segments: Some(3),
+                min_segments: 3,
+                target_segment_max_vectors: Some(1),
+                target_segment_max_radius: None,
+            })
+            .unwrap();
+        assert_eq!(index.manifest.routing_max_level, 1);
+
+        index.delete(["removed-a", "removed-b"]).unwrap();
+        index.flush().unwrap();
+        let report = index
+            .compact(CompactionOptions {
+                source_level: 1,
+                target_level: 2,
+                max_segments: Some(3),
+                min_segments: 3,
+                target_segment_max_vectors: Some(1),
+                target_segment_max_radius: None,
+            })
+            .unwrap();
+
+        assert!(report.compacted);
+        assert_eq!(report.segments_read, 3);
+        assert_eq!(report.records_rewritten, 1);
+        let active = index.active_segment_summaries().unwrap();
+        assert_eq!(active.len(), 1, "surplus dirty leaf must be unreachable");
+        assert_eq!(active[0].level, 2);
+        assert_eq!(index.get_vector("kept").unwrap(), Some(vec![0.0, 0.0]));
+        assert_eq!(index.get_vector("removed-a").unwrap(), None);
+        assert_eq!(index.get_vector("removed-b").unwrap(), None);
+    }
+
+    #[test]
+    fn compact_normalizes_an_empty_hierarchical_routing_tree_to_level_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_routing_page_fanout(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 1,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: Default::default(),
+            },
+            2,
+        )
+        .unwrap();
+
+        index
+            .add(vec![
+                VectorRecord::new("removed-a", vec![0.0, 0.0]),
+                VectorRecord::new("removed-b", vec![1.0, 1.0]),
+                VectorRecord::new("removed-c", vec![2.0, 2.0]),
+            ])
+            .unwrap();
+        index.flush().unwrap();
+        index
+            .compact(CompactionOptions {
+                source_level: 0,
+                target_level: 1,
+                max_segments: Some(3),
+                min_segments: 3,
+                target_segment_max_vectors: Some(1),
+                target_segment_max_radius: None,
+            })
+            .unwrap();
+        assert_eq!(index.manifest.routing_max_level, 1);
+
+        index
+            .delete(["removed-a", "removed-b", "removed-c"])
+            .unwrap();
+        index.flush().unwrap();
+        let report = index
+            .compact(CompactionOptions {
+                source_level: 1,
+                target_level: 2,
+                max_segments: Some(3),
+                min_segments: 3,
+                target_segment_max_vectors: Some(1),
+                target_segment_max_radius: None,
+            })
+            .unwrap();
+
+        assert!(report.compacted);
+        assert_eq!(report.records_rewritten, 0);
+        assert_eq!(index.manifest.routing_max_level, 0);
+        assert!(index.active_segment_summaries().unwrap().is_empty());
+        assert_eq!(index.get_vector("removed-a").unwrap(), None);
+        assert_eq!(index.get_vector("removed-b").unwrap(), None);
+        assert_eq!(index.get_vector("removed-c").unwrap(), None);
     }
 
     #[test]
