@@ -711,6 +711,7 @@ def build_execution_plan(
                 runtime_env["BORSUK_BENCH_WRITE_OPS"] = str(diagnostic_write_ops)
                 runtime_env["BORSUK_OPEN_PROGRESS"] = "1"
                 runtime_env["BORSUK_LIFECYCLE_PROGRESS"] = "1"
+                runtime_env["BORSUK_V20_PROGRESS"] = "1"
         return {
             "schema_version": 1,
             "cell_id": cell.get("cell_id"),

@@ -1658,6 +1658,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             self.assertEqual(environment["BORSUK_BENCH_WRITE_OPS"], "2560")
             self.assertEqual(environment["BORSUK_OPEN_PROGRESS"], "1")
             self.assertEqual(environment["BORSUK_LIFECYCLE_PROGRESS"], "1")
+            self.assertEqual(environment["BORSUK_V20_PROGRESS"], "1")
 
             with self.assertRaisesRegex(ValueError, "diagnostic write count"):
                 build_execution_plan(
