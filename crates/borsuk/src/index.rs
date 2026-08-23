@@ -15215,6 +15215,14 @@ impl BorsukIndex {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
         self.install_staged_cell_card_code_planes(prepared_cell_card_code_planes);
+        // Publication is durable now. Rebind immediately while the local WAL
+        // snapshot still names the pre-clear frontier, so a best-effort pruning
+        // failure cannot leave this serving handle on the old manifest key.
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            mutation_snapshot_key_before_compaction,
+        );
+        let mutation_snapshot_key_before_frontier_clear =
+            Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
         // Frontier just changed (tail folded in and cleared). Immutable decoded
         // runs can remain in the bounded collection cache and age out by LRU.
         if clear_frontier {
@@ -15227,6 +15235,14 @@ impl BorsukIndex {
             self.resident_global_mutations = None;
         }
         let routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
+        // Bind the already-admitted logical mutation view to the rebuilt
+        // manifest before the optional quantizer metadata publication. That
+        // publication validates against its immediate predecessor; leaving the
+        // overlay on the pre-compaction key would make it look stale and drop it
+        // even though this full rebuild preserved the covered mutation state.
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            mutation_snapshot_key_before_frontier_clear,
+        );
         // Compaction rebuilt the cell layout; refresh the persisted cold
         // quantizer so a cold/paged query routes through the IVF probe list.
         self.refresh_persisted_quantizer()?;
@@ -15620,6 +15636,12 @@ impl BorsukIndex {
             routing_page_indexes_written = 1;
         }
 
+        // Rebind before the optional metadata-only quantizer publication. Its
+        // exact predecessor check can then carry the covered view forward
+        // instead of discarding a still-pre-compaction key as stale.
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            mutation_snapshot_key_before_compaction,
+        );
         // Compaction rebuilt the (paged) cell layout; refresh the persisted cold
         // quantizer from the full active summary set so a cold/paged query routes
         // through the IVF probe list instead of the degraded routing tree.
@@ -40592,6 +40614,99 @@ mod tests {
             reopened.get_vector("v14-life-fresh").unwrap(),
             Some(vec![-0.5; 8])
         );
+    }
+
+    #[test]
+    fn full_compaction_rekeys_the_covered_mutation_overlay_before_quantizer_republish() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 4,
+                ram_budget_bytes: Some(512 * 1024 * 1024),
+                text: false,
+                named_vectors: Default::default(),
+            },
+            WalConfig {
+                enabled: true,
+                flush_threshold_runs: usize::MAX,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+            },
+        )
+        .unwrap();
+        index
+            .add(
+                (0..512)
+                    .map(|row| {
+                        VectorRecord::new(format!("covered-compaction-{row}"), vec![row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index
+            .upsert(vec![VectorRecord::new(
+                "covered-compaction-0",
+                vec![0.25; 8],
+            )])
+            .unwrap();
+        index
+            .add(
+                (0..59)
+                    .map(|row| {
+                        VectorRecord::new(
+                            format!("covered-compaction-insert-{row}"),
+                            vec![-10_000.0 - row as f32; 8],
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.flush().unwrap();
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some(),
+            "the pre-compaction overlay must be complete"
+        );
+
+        let version_before_compaction = index.manifest.version;
+        index
+            .compact(CompactionOptions {
+                source_level: 0,
+                target_level: 1,
+                max_segments: None,
+                min_segments: 1,
+                target_segment_max_vectors: Some(4),
+                target_segment_max_radius: None,
+            })
+            .unwrap();
+        assert!(
+            index.manifest.version >= version_before_compaction + 2,
+            "the fixture must exercise compaction publication plus quantizer metadata republish"
+        );
+
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some(),
+            "the quantizer metadata republish must not discard a covered mutation overlay"
+        );
+        let report = index
+            .search_with_report(
+                &[0.25; 8],
+                SearchOptions::approx(4, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
+        assert_eq!(report.hits[0].id, RecordId::from("covered-compaction-0"));
     }
 
     #[test]
