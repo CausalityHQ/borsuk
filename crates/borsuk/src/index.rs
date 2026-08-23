@@ -5042,18 +5042,37 @@ impl BorsukIndex {
     }
 
     fn prepare_fitting_cell_card_code_planes(&self, pins: &ResidentGlobalAnnPins) -> Result<()> {
+        if let Some(prepared) = self.stage_fitting_cell_card_code_planes(pins, false)? {
+            *self
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(prepared);
+        }
+        Ok(())
+    }
+
+    /// Build a complete prepared generation without changing the shared
+    /// serving slot. Generation publishers use `replacement_only` so offline
+    /// builds do not fetch serving-only code planes and an unsuccessful CAS
+    /// leaves the authoritative generation warm.
+    fn stage_fitting_cell_card_code_planes(
+        &self,
+        pins: &ResidentGlobalAnnPins,
+        replacement_only: bool,
+    ) -> Result<Option<PreparedCellCardCodePlanes>> {
         let Some(root) = pins.cell_card_root.as_ref() else {
-            return Ok(());
+            return Ok(None);
         };
         let Some(pool) = self.read_runtime.retained_pool.as_ref() else {
-            return Ok(());
+            return Ok(None);
         };
         let groups = root.groups();
         let expected_keys = groups
             .iter()
             .map(|group| cell_card_code_plane_cache_key(&group.path, group.code_plane_checksum))
             .collect::<BTreeSet<_>>();
-        let mut prepared = self
+        let prepared = self
             .read_runtime
             .prepared_cell_card_code_planes
             .lock()
@@ -5066,22 +5085,30 @@ impl BorsukIndex {
                     .keys()
                     .all(|key| expected_keys.contains(key))
         }) {
-            return Ok(());
+            return Ok(None);
         }
+        if replacement_only
+            && !prepared
+                .as_ref()
+                .is_some_and(|current| current.owner_modality == self.manifest_reference.modality)
+        {
+            return Ok(None);
+        }
+        drop(prepared);
 
-        // A refreshed generation must not compete with stale prepared planes
-        // for the same bounded pool. Exact identity keys prevent stale bytes
-        // from being reused while this replacement is prepared.
-        *prepared = None;
+        // Keep the authoritative generation admitted and queryable throughout
+        // staging. If the bounded pool cannot hold both generations briefly,
+        // skip this optional handoff rather than exposing uncharged memory or
+        // evicting the old snapshot before publication.
         let available = pool.capacity_bytes().saturating_sub(pool.used_bytes());
         let Some(total_bytes) = admitted_cell_card_code_plane_bytes(
             groups.iter().map(|group| group.code_plane_bytes),
             available,
         ) else {
-            return Ok(());
+            return Ok(None);
         };
         let Some(retained) = pool.try_reserve(total_bytes) else {
-            return Ok(());
+            return Ok(None);
         };
         let mut entries = HashMap::with_capacity(groups.len());
         for group in groups {
@@ -5106,12 +5133,30 @@ impl BorsukIndex {
             })
             .collect::<Result<Vec<_>>>()?;
         root.validate_complete_code_planes(&complete_planes)?;
-        *prepared = Some(PreparedCellCardCodePlanes {
+        Ok(Some(PreparedCellCardCodePlanes {
             owner_modality: self.manifest_reference.modality.clone(),
             entries,
             _retained: retained,
-        });
-        Ok(())
+        }))
+    }
+
+    fn stage_replacement_cell_card_code_planes(
+        &self,
+        pins: Option<&ResidentGlobalAnnPins>,
+    ) -> Result<Option<PreparedCellCardCodePlanes>> {
+        pins.map(|pins| self.stage_fitting_cell_card_code_planes(pins, true))
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    fn install_staged_cell_card_code_planes(&self, prepared: Option<PreparedCellCardCodePlanes>) {
+        if let Some(prepared) = prepared {
+            *self
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(prepared);
+        }
     }
 
     fn install_resident_global_ann_pins(&mut self, next: Option<ResidentGlobalAnnPins>) {
@@ -5134,11 +5179,11 @@ impl BorsukIndex {
         let prepared_keys = prepared
             .as_ref()
             .map(|prepared| prepared.entries.keys().cloned().collect::<BTreeSet<_>>());
-        if prepared
+        let replaces_prepared_generation = prepared
             .as_ref()
             .is_some_and(|prepared| prepared.owner_modality == self.manifest_reference.modality)
-            && keys_for(next.as_ref()).as_ref() != prepared_keys.as_ref()
-        {
+            && keys_for(next.as_ref()).as_ref() != prepared_keys.as_ref();
+        if replaces_prepared_generation {
             *prepared = None;
         }
         drop(prepared);
@@ -9113,6 +9158,8 @@ impl BorsukIndex {
         manifest.global_ann_ref = None;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
+        let prepared_cell_card_code_planes =
+            self.stage_replacement_cell_card_code_planes(prepared_global_ann_pins.as_ref())?;
         // Generation shard counters are shared monotonic allocators and must
         // survive purge. They contain no record ownership or visibility state;
         // retaining them prevents a later upsert from reusing a generation that
@@ -9120,6 +9167,7 @@ impl BorsukIndex {
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
+        self.install_staged_cell_card_code_planes(prepared_cell_card_code_planes);
         // Purge rebuilt the cell layout; refresh the persisted cold quantizer.
         self.refresh_persisted_quantizer()?;
         self.rekey_resident_global_mutations_after_manifest_publish(
@@ -15127,10 +15175,13 @@ impl BorsukIndex {
         );
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
+        let prepared_cell_card_code_planes =
+            self.stage_replacement_cell_card_code_planes(prepared_global_ann_pins.as_ref())?;
         let previous = self.manifest.clone();
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
+        self.install_staged_cell_card_code_planes(prepared_cell_card_code_planes);
         // Frontier just changed (tail folded in and cleared). Immutable decoded
         // runs can remain in the bounded collection cache and age out by LRU.
         if clear_frontier {
@@ -15406,6 +15457,8 @@ impl BorsukIndex {
         // resident state that the budget is meant to prevent.
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
+        let prepared_cell_card_code_planes =
+            self.stage_replacement_cell_card_code_planes(prepared_global_ann_pins.as_ref())?;
         let needs_leaf_page_append = replacement_pages.len() > dirty_page_count;
         if let Some(mut page_refs) = full_leaf_page_refs {
             let mut occupied_leaf_ranges = leaf_page_occupied_ranges_from_cached_tree(
@@ -15539,6 +15592,7 @@ impl BorsukIndex {
         // through the IVF probe list instead of the degraded routing tree.
         self.refresh_persisted_quantizer()?;
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
+        self.install_staged_cell_card_code_planes(prepared_cell_card_code_planes);
         self.rekey_resident_global_mutations_after_manifest_publish(
             mutation_snapshot_key_before_compaction,
         );
@@ -22046,6 +22100,8 @@ impl BorsukIndex {
         }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
+        let prepared_cell_card_code_planes =
+            self.stage_replacement_cell_card_code_planes(prepared_global_ann_pins.as_ref())?;
         if !manifest.has_complete_inline_segments() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 previous.version,
@@ -22068,6 +22124,7 @@ impl BorsukIndex {
                 .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         }
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
+        self.install_staged_cell_card_code_planes(prepared_cell_card_code_planes);
         self.rekey_resident_global_mutations_after_manifest_publish(
             Self::mutation_snapshot_key_for(previous.version, &self.cell_wal_snapshot),
         );
@@ -39688,7 +39745,7 @@ mod tests {
             metric: VectorMetric::Angular,
             dimensions: 8,
             segment_max_vectors: 512,
-            ram_budget_bytes: None,
+            ram_budget_bytes: Some(64 * 1024 * 1024),
             text: false,
             named_vectors: Default::default(),
         })
@@ -39714,6 +39771,16 @@ mod tests {
             )
             .unwrap();
         builder.finish_bulk_load().unwrap();
+        assert!(builder.read_runtime.retained_pool.is_some());
+        assert!(
+            builder
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap()
+                .is_none(),
+            "an offline build must not pay to prepare serving-only code planes"
+        );
         drop(builder);
 
         let index = BorsukIndex::open_with_options(
@@ -39744,6 +39811,117 @@ mod tests {
         assert_eq!(report.global_leaf_code_requests, 0, "{report:?}");
         assert!(report.decoded_cache_hits > 0, "{report:?}");
         assert!(report.global_leaf_page_bytes > 0, "{report:?}");
+    }
+
+    #[test]
+    fn finish_bulk_load_prepares_the_replacement_cell_card_code_planes() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut builder = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Angular,
+            dimensions: 8,
+            segment_max_vectors: 512,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..80)
+            .map(|row| {
+                (0..8)
+                    .map(|dimension| {
+                        (((row + 5) * (dimension + 11) * 29) % 131) as f32 / 130.0 + 0.01
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        builder
+            .add(
+                vectors[..64]
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| {
+                        VectorRecord::new(format!("replacement-plane-{row}"), vector.clone())
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        builder.finish_bulk_load().unwrap();
+        drop(builder);
+
+        let mut index = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                cache_max_bytes: Some(0),
+                ram_budget_bytes: Some(64 * 1024 * 1024),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+        index.prepare_serving_metadata().unwrap();
+        let old_root = index
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .unwrap()
+            .root_checksum();
+
+        index
+            .add(
+                vectors[64..]
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, vector)| {
+                        VectorRecord::new(
+                            format!("replacement-plane-{}", 64 + offset),
+                            vector.clone(),
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.flush().unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let reference = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
+        assert_ne!(reference.root_checksum(), old_root);
+        let root = index
+            .resident_global_ann_pins
+            .as_ref()
+            .and_then(|pins| pins.cell_card_root.as_ref())
+            .unwrap();
+        let expected_keys = root
+            .groups()
+            .iter()
+            .map(|group| cell_card_code_plane_cache_key(&group.path, group.code_plane_checksum))
+            .collect::<BTreeSet<_>>();
+        {
+            let prepared = index
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap();
+            let prepared = prepared
+                .as_ref()
+                .expect("the replacement generation must be prepared before it is published");
+            assert_eq!(
+                prepared.entries.keys().cloned().collect::<BTreeSet<_>>(),
+                expected_keys
+            );
+        }
+
+        let report = index
+            .search_with_report(
+                &vectors[70],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(64)
+                    .with_max_candidates_per_segment(128),
+            )
+            .unwrap();
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
+        assert_eq!(report.global_leaf_code_bytes, 0, "{report:?}");
+        assert_eq!(report.global_leaf_code_requests, 0, "{report:?}");
     }
 
     #[test]

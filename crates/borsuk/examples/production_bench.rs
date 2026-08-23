@@ -636,6 +636,33 @@ fn lifecycle_progress_line(stage: &str, status: &str, elapsed_ms: u128) -> Strin
     format!("BORSUK_LIFECYCLE_PROGRESS stage={stage} status={status} elapsed_ms={elapsed_ms}")
 }
 
+struct LifecycleQueryProgress<'a> {
+    sample: usize,
+    elapsed_us: u128,
+    engine: &'a str,
+    termination: &'a str,
+    backing_reads: u64,
+    backing_bytes: u64,
+    code_bytes: u64,
+    exact_bytes: u64,
+}
+
+fn lifecycle_query_progress_line(progress: LifecycleQueryProgress<'_>) -> String {
+    let LifecycleQueryProgress {
+        sample,
+        elapsed_us,
+        engine,
+        termination,
+        backing_reads,
+        backing_bytes,
+        code_bytes,
+        exact_bytes,
+    } = progress;
+    format!(
+        "BORSUK_LIFECYCLE_QUERY sample={sample} elapsed_us={elapsed_us} engine={engine} termination={termination} backing_reads={backing_reads} backing_bytes={backing_bytes} code_bytes={code_bytes} exact_bytes={exact_bytes}",
+    )
+}
+
 struct LifecycleProgress {
     stage: &'static str,
     started: Option<Instant>,
@@ -4791,7 +4818,25 @@ fn run_queries(
         } else {
             None
         };
-        summary.push(elapsed_ms(started), &report, recall);
+        let query_elapsed = started.elapsed();
+        if *LIFECYCLE_PROGRESS_ENABLED.get_or_init(|| {
+            env::var_os("BORSUK_LIFECYCLE_PROGRESS").is_some_and(|value| value == "1")
+        }) {
+            eprintln!(
+                "{}",
+                lifecycle_query_progress_line(LifecycleQueryProgress {
+                    sample: query_index,
+                    elapsed_us: query_elapsed.as_micros(),
+                    engine: &report.leaf_mode,
+                    termination: report.termination_reason.as_str(),
+                    backing_reads: report.backing_reads,
+                    backing_bytes: report.backing_bytes_read,
+                    code_bytes: report.global_leaf_code_bytes,
+                    exact_bytes: report.global_leaf_page_bytes,
+                })
+            );
+        }
+        summary.push(query_elapsed.as_secs_f64() * 1_000.0, &report, recall);
     }
     Ok(summary)
 }
@@ -5222,15 +5267,16 @@ mod tests {
         ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES,
         DEFAULT_RECALL_CANDIDATES, EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig,
         LIFECYCLE_HEADER, LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleInsertMode,
-        MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, PreparedRecordBatch,
-        QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES,
-        ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
-        allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
-        cache_coverage_cohort_size, cache_coverage_enabled, cache_state_summary_enabled,
-        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
-        default_serving_leaf_mode, deterministic_mutation_vector, dollars_per_million_queries,
-        execute_put_wave, finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
-        ingest_generated_batch, is_hot_workload_position, lifecycle_progress_line,
+        LifecycleQueryProgress, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER,
+        PreparedRecordBatch, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER,
+        SERVING_CANDIDATES, ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER,
+        WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase, approximate_options,
+        benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
+        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
+        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
+        dollars_per_million_queries, execute_put_wave, finalize_fresh_build,
+        first_logical_batch_publish_ms, ingest_batch_size, ingest_generated_batch,
+        is_hot_workload_position, lifecycle_progress_line, lifecycle_query_progress_line,
         lifecycle_write_operation_count, lifecycle_write_waves, lifecycle_writer_open_options,
         mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
         parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
@@ -5259,6 +5305,23 @@ mod tests {
         assert!(lifecycle_progress_line(&"x".repeat(65), "start", 0).is_empty());
         assert!(lifecycle_progress_line("after insert", "start", 0).is_empty());
         assert!(lifecycle_progress_line("insert", "unknown", 0).is_empty());
+    }
+
+    #[test]
+    fn lifecycle_query_progress_exposes_the_selected_engine_and_io_boundary() {
+        assert_eq!(
+            lifecycle_query_progress_line(LifecycleQueryProgress {
+                sample: 7,
+                elapsed_us: 12_345,
+                engine: "bounded-cell-card-v20",
+                termination: "complete",
+                backing_reads: 3,
+                backing_bytes: 4_096,
+                code_bytes: 1_024,
+                exact_bytes: 2_048,
+            }),
+            "BORSUK_LIFECYCLE_QUERY sample=7 elapsed_us=12345 engine=bounded-cell-card-v20 termination=complete backing_reads=3 backing_bytes=4096 code_bytes=1024 exact_bytes=2048"
+        );
     }
 
     #[test]
