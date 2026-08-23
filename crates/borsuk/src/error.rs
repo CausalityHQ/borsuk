@@ -89,6 +89,27 @@ pub enum BorsukError {
         max_records: u64,
     },
 
+    /// The online immutable delta beside a corpus-wide ANN base is full.
+    /// Already-committed WAL mutations remain visible; background or explicit
+    /// compaction must publish a fresh base before another flush can drain them.
+    #[error(
+        "global ANN delta requires maintenance: {segments} segments/{rows} rows/{vector_bytes} vector bytes would exceed limits {max_segments}/{max_rows}/{max_vector_bytes}"
+    )]
+    GlobalDeltaCapacityExceeded {
+        /// Segment count the requested flush would publish.
+        segments: usize,
+        /// Logical row count the requested flush would publish.
+        rows: usize,
+        /// Conservative uncompressed vector bytes represented by those rows.
+        vector_bytes: usize,
+        /// Maximum online delta segments.
+        max_segments: usize,
+        /// Maximum online delta rows.
+        max_rows: usize,
+        /// Maximum online delta vector bytes.
+        max_vector_bytes: usize,
+    },
+
     /// A prior mutation is durable, but this handle could not finish its one
     /// deferred claim-authorization cleanup before starting another mutation.
     #[error(
@@ -208,6 +229,7 @@ impl BorsukError {
             Self::LeafModeNotConfigured { .. } => "leaf_mode_not_configured",
             Self::RamBudgetExceeded { .. } => "ram_budget_exceeded",
             Self::IngestBackpressure { .. } => "ingest_backpressure",
+            Self::GlobalDeltaCapacityExceeded { .. } => "maintenance_required",
             Self::DeferredClaimCleanupFailed { .. } => "deferred_claim_cleanup_failed",
             Self::RecallGuaranteeViolated { .. } => "recall_guarantee_violated",
             Self::InvalidStorage(_) => "invalid_storage",

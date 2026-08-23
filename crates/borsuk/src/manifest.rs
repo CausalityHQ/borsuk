@@ -26,6 +26,18 @@ pub(crate) const SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES: usize = 256;
 pub const DEFAULT_ROUTING_PAGE_FANOUT: usize = 128;
 /// Default maximum segment-local graph neighbors per source record.
 pub const DEFAULT_GRAPH_NEIGHBORS: usize = 8;
+/// Maximum ANN segment wave retained beside an immutable global ANN base.
+pub(crate) const MAX_GLOBAL_DELTA_SEGMENTS: usize = 16;
+/// Maximum logical rows retained in the online ANN delta.
+///
+/// The segment count alone is not a work bound because callers may choose very
+/// large physical segments. Foreground flush stops before this limit and leaves
+/// the still-durable suffix in the WAL for off-request-path maintenance.
+pub(crate) const MAX_GLOBAL_DELTA_ROWS: usize = 65_536;
+/// Maximum uncompressed float32 vector bytes represented by the online delta.
+/// This keeps query work bounded across realistic dimensionalities even when
+/// the row limit would otherwise admit a very wide vector set.
+pub(crate) const MAX_GLOBAL_DELTA_VECTOR_BYTES: usize = 64 * 1024 * 1024;
 const SEGMENT_ID_BLOOM_HASHES: usize = 4;
 const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 
@@ -173,6 +185,9 @@ pub struct Manifest {
     pub text_tokenizer: Option<String>,
     /// Immutable segment summaries used for routing and lower-bound pruning.
     pub segments: Vec<SegmentSummary>,
+    /// `segments` is an online L0 overlay searched beside the pinned global
+    /// ANN base; the paged routing tree remains the complete segment authority.
+    pub(crate) segments_are_global_delta: bool,
     /// Global pivot/router rows kept resident with segment summaries.
     pub pivots: Vec<PivotSummary>,
     /// Next numeric id reserved for generated-id add paths.
@@ -554,6 +569,10 @@ impl TombstonePageRef {
 }
 
 impl Manifest {
+    pub(crate) fn has_complete_inline_segments(&self) -> bool {
+        !self.segments_are_global_delta && !self.segments.is_empty()
+    }
+
     pub(crate) fn new_with_routing_page_fanout(
         config: IndexConfig,
         routing_page_fanout: usize,
@@ -566,6 +585,7 @@ impl Manifest {
             config,
             text_tokenizer: None,
             segments: Vec::new(),
+            segments_are_global_delta: false,
             pivots: Vec::new(),
             next_generated_id: 0,
             routing_max_level: 0,
@@ -603,6 +623,7 @@ impl Manifest {
             config: self.config.clone(),
             text_tokenizer: self.text_tokenizer.clone(),
             segments: self.segments.clone(),
+            segments_are_global_delta: self.segments_are_global_delta,
             pivots: self.pivots.clone(),
             next_generated_id: self.next_generated_id,
             routing_max_level: self.routing_max_level,

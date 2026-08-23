@@ -2787,6 +2787,10 @@ impl GlobalCellCardAnnRef {
     pub(crate) fn leaf_epoch(&self) -> u64 {
         self.leaf_epoch
     }
+
+    pub(crate) fn purge_epoch(&self) -> u64 {
+        self.purge_epoch
+    }
 }
 
 #[derive(Debug)]

@@ -86,9 +86,10 @@ use crate::{
     maintenance::{self, MaintenanceConfig, MaintenanceHandle, MaintenanceReport},
     manifest::{
         Bm25StatsDeltaPageRef, Bm25StatsDeltaRef, DEFAULT_GRAPH_NEIGHBORS,
-        DEFAULT_ROUTING_PAGE_FANOUT, LexicalRootRef, Manifest, QuantizerRef, RoutingLayerPageRef,
-        SegmentLexicalShardRef, SegmentSummary, TombstonePageRef, TombstoneSummary, WalConfig,
-        segment_id_bloom, segment_vector_signature_bloom,
+        DEFAULT_ROUTING_PAGE_FANOUT, LexicalRootRef, MAX_GLOBAL_DELTA_ROWS,
+        MAX_GLOBAL_DELTA_SEGMENTS, MAX_GLOBAL_DELTA_VECTOR_BYTES, Manifest, QuantizerRef,
+        RoutingLayerPageRef, SegmentLexicalShardRef, SegmentSummary, TombstonePageRef,
+        TombstoneSummary, WalConfig, segment_id_bloom, segment_vector_signature_bloom,
     },
     metric::{
         VectorMetric, angular_distance_with_norms, angular_distance_with_query_norm,
@@ -168,7 +169,6 @@ const MAX_PARALLEL_SEGMENT_UPLOADS: usize = crate::DEFAULT_BUILD_THREADS;
 /// Newest segments are still resolved first; only independent candidates in a
 /// bounded window are fetched together to hide object-store RTT.
 const POINT_READ_IO_BATCH: usize = 8;
-
 struct PreparedObjectWrite {
     path: String,
     bytes: Vec<u8>,
@@ -193,6 +193,27 @@ fn parallel_segment_write_batch_size(segment_max_vectors: usize) -> usize {
         .checked_div(segment_max_vectors.max(1))
         .unwrap_or(0)
         .clamp(1, MAX_PARALLEL_SEGMENT_WRITES)
+}
+
+fn ensure_global_delta_capacity(dimensions: usize, segments: usize, rows: usize) -> Result<()> {
+    let vector_bytes = rows
+        .checked_mul(dimensions)
+        .and_then(|bytes| bytes.checked_mul(std::mem::size_of::<f32>()))
+        .unwrap_or(usize::MAX);
+    if segments > MAX_GLOBAL_DELTA_SEGMENTS
+        || rows > MAX_GLOBAL_DELTA_ROWS
+        || vector_bytes > MAX_GLOBAL_DELTA_VECTOR_BYTES
+    {
+        return Err(BorsukError::GlobalDeltaCapacityExceeded {
+            segments,
+            rows,
+            vector_bytes,
+            max_segments: MAX_GLOBAL_DELTA_SEGMENTS,
+            max_rows: MAX_GLOBAL_DELTA_ROWS,
+            max_vector_bytes: MAX_GLOBAL_DELTA_VECTOR_BYTES,
+        });
+    }
+    Ok(())
 }
 
 fn parallel_segment_upload_wave_size(segment_count: usize) -> usize {
@@ -5156,7 +5177,8 @@ impl BorsukIndex {
         if !self.global_leaf_mutation_state_required() {
             return Some(None);
         }
-        let snapshot_key = self.live_wal_snapshot_key();
+        let snapshot_key =
+            Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
         self.resident_global_mutations
             .as_deref()
             .filter(|overlay| overlay.snapshot_key == snapshot_key)
@@ -5182,7 +5204,7 @@ impl BorsukIndex {
         &self,
         manifest: &Manifest,
         cell_wal_snapshot: &[CommittedCellWalTransaction],
-        lane_log_head_checksums: &[[u8; 32]],
+        _lane_log_head_checksums: &[[u8; 32]],
     ) -> Result<Option<Arc<ResidentGlobalMutationOverlay>>> {
         if manifest.global_ann_ref.is_none() && manifest.global_cell_card_ann_ref.is_none()
             || !Self::global_leaf_mutation_state_required_for(manifest, cell_wal_snapshot)
@@ -5229,11 +5251,7 @@ impl BorsukIndex {
             return Ok(None);
         }
         Ok(Some(Arc::new(ResidentGlobalMutationOverlay {
-            snapshot_key: Self::live_wal_snapshot_key_for(
-                manifest.version,
-                lane_log_head_checksums,
-                cell_wal_snapshot,
-            ),
+            snapshot_key: Self::mutation_snapshot_key_for(manifest.version, cell_wal_snapshot),
             states,
             _retained: retained,
         })))
@@ -5725,7 +5743,7 @@ impl BorsukIndex {
     }
 
     fn stats_totals(&self) -> Result<StatsTotals> {
-        if !self.manifest.segments.is_empty() {
+        if self.manifest.has_complete_inline_segments() {
             return Ok(self.manifest_stats_totals());
         }
 
@@ -8994,6 +9012,7 @@ impl BorsukIndex {
         let previous = self.manifest.clone();
         let mut manifest = self.manifest.next_version();
         manifest.segments = Vec::with_capacity(active.len());
+        manifest.segments_are_global_delta = false;
         let mut segments_rewritten = 0_usize;
         let mut records_purged = 0_usize;
         for summary in &active {
@@ -9506,6 +9525,7 @@ impl BorsukIndex {
                 .filter(|summary| !removed.contains(&summary.id))
                 .collect();
             manifest.segments.extend(added.iter().cloned());
+            manifest.segments_are_global_delta = false;
             manifest.rebuild_pivots();
             manifest.global_ann_ref = None;
             manifest.global_cell_card_ann_ref = None;
@@ -11672,7 +11692,7 @@ impl BorsukIndex {
             return Ok(report);
         }
 
-        if self.manifest.segments.is_empty() {
+        if !self.manifest.has_complete_inline_segments() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 self.manifest.version,
                 self.manifest.routing_max_level,
@@ -11713,6 +11733,7 @@ impl BorsukIndex {
         // newly published segment.
         manifest.global_ann_ref = None;
         manifest.global_cell_card_ann_ref = None;
+        manifest.segments_are_global_delta = false;
         manifest.next_generated_id = next_generated_id;
         let _ = tombstone_update;
         let _ = bm25_stats_delta_update;
@@ -12659,6 +12680,13 @@ impl BorsukIndex {
                 // conflicts to maintenance callers.
                 self.reload_mutation_snapshot_after_manifest_change()?;
             }
+            Err(BorsukError::GlobalDeltaCapacityExceeded { .. }) => {
+                // The mutation committed before automatic maintenance began.
+                // Keep it visible in the bounded durable WAL and let explicit or
+                // background compaction publish a fresh corpus-wide base. A
+                // foreground add must not inherit a full-index rebuild cliff.
+                return Ok(false);
+            }
             Err(error) => return Err(error),
         }
         Ok(false)
@@ -12930,6 +12958,40 @@ impl BorsukIndex {
         {
             return Ok(());
         }
+        let previous = self.manifest.clone();
+        let global_base_present =
+            previous.global_ann_ref.is_some() || previous.global_cell_card_ann_ref.is_some();
+        let prior_global_delta = if previous.segments_are_global_delta {
+            previous.segments.clone()
+        } else {
+            Vec::new()
+        };
+        if global_base_present {
+            let prior_rows = prior_global_delta
+                .iter()
+                .try_fold(0_usize, |total, segment| {
+                    total.checked_add(segment.object_count).ok_or_else(|| {
+                        BorsukError::InvalidStorage("global delta row count overflows".to_string())
+                    })
+                })?;
+            let incoming_rows = cell_runs
+                .iter()
+                .filter(|run| run.kind == CellWalRunKind::Records)
+                .try_fold(0_usize, |total, run| {
+                    total.checked_add(run.record_count).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "selected WAL row count overflows global delta capacity".to_string(),
+                        )
+                    })
+                })?;
+            ensure_global_delta_capacity(
+                previous.config.dimensions,
+                prior_global_delta.len(),
+                prior_rows.checked_add(incoming_rows).ok_or_else(|| {
+                    BorsukError::InvalidStorage("global delta row count overflows".to_string())
+                })?,
+            )?;
+        }
         // Resolve the CURRENT active segment set. For a paged index (e.g. after a
         // compaction) `manifest.segments` is empty and the real segments live in
         // routing pages, so seed the new manifest's segment list from the
@@ -12937,20 +12999,18 @@ impl BorsukIndex {
         // built from only the newly-flushed segments and silently drop every
         // pre-existing segment.
         let active_summaries = self.active_segment_summaries()?;
-        let previous = self.manifest.clone();
-        let paged_manifest = previous.segments.is_empty()
-            && previous.routing_max_level > 0
-            && !self.manifest.config.text;
+        let paged_manifest = global_base_present
+            || previous.segments_are_global_delta
+            || (previous.segments.is_empty()
+                && previous.routing_max_level > 0
+                && !self.manifest.config.text);
         let lexical_roots_will_rebuild = cell_runs
             .iter()
             .any(|run| run.kind == CellWalRunKind::Records);
         let mut manifest = self.manifest.next_version();
         manifest.segments = active_summaries;
-        // The frontier is now being materialized into segments; the consumed
-        // identities published below let readers skip it and GC reclaim it.
-        Self::apply_cell_mutation_metadata_to_manifest(&mut manifest, &selected_transactions)?;
-        self.consolidate_mutation_frontiers(&mut manifest, lexical_roots_will_rebuild)?;
-
+        manifest.segments_are_global_delta = false;
+        let existing_segment_count = manifest.segments.len();
         // Coalesce record runs by logical cell toward the target segment size.
         // A stream of small transactions must not create one physical segment
         // per immutable WAL object. Keep only one target-sized pending batch per
@@ -12970,7 +13030,11 @@ impl BorsukIndex {
             }
         }
         let write_batch_size = parallel_segment_write_batch_size(segment_max_vectors);
-        let mut segments_to_write = Vec::with_capacity(write_batch_size);
+        // Keep the bounded (at most 64 MiB of logical vectors) candidate set in
+        // memory until its exact physical segment count is known. This makes a
+        // capacity rejection side-effect free: no immutable object is orphaned
+        // merely because maintenance has not yet consolidated the prior delta.
+        let mut segments_to_write = Vec::new();
         for entries in record_runs_by_cell.into_values() {
             let mut pending = Vec::with_capacity(segment_max_vectors);
             let mut pending_ids = HashSet::with_capacity(segment_max_vectors);
@@ -13001,11 +13065,6 @@ impl BorsukIndex {
                                 .normalized_angular_coarse_geometry,
                         )?;
                         segments_to_write.push(segment);
-                        if segments_to_write.len() == write_batch_size {
-                            manifest
-                                .segments
-                                .extend(self.write_segment_batch(&mut segments_to_write)?);
-                        }
                         pending = Vec::with_capacity(segment_max_vectors);
                         pending_ids.clear();
                     }
@@ -13027,11 +13086,6 @@ impl BorsukIndex {
                             .normalized_angular_coarse_geometry,
                     )?;
                     segments_to_write.push(segment);
-                    if segments_to_write.len() == write_batch_size {
-                        manifest
-                            .segments
-                            .extend(self.write_segment_batch(&mut segments_to_write)?);
-                    }
                     pending = Vec::with_capacity(segment_max_vectors);
                     pending_ids.clear();
                 }
@@ -13054,9 +13108,41 @@ impl BorsukIndex {
                 segments_to_write.push(segment);
             }
         }
-        manifest
-            .segments
-            .extend(self.write_segment_batch(&mut segments_to_write)?);
+        if global_base_present {
+            let prior_rows = prior_global_delta
+                .iter()
+                .map(|segment| segment.object_count)
+                .sum::<usize>();
+            let new_rows = segments_to_write
+                .iter()
+                .map(|segment| segment.records.len())
+                .sum::<usize>();
+            ensure_global_delta_capacity(
+                previous.config.dimensions,
+                prior_global_delta
+                    .len()
+                    .saturating_add(segments_to_write.len()),
+                prior_rows.saturating_add(new_rows),
+            )?;
+        }
+        // Capacity rejection must be side-effect free even when the selected
+        // transaction set includes deletes. Tombstone consolidation writes
+        // immutable objects, so perform it only after the complete delta shape
+        // has passed every foreground bound.
+        Self::apply_cell_mutation_metadata_to_manifest(&mut manifest, &selected_transactions)?;
+        self.consolidate_mutation_frontiers(&mut manifest, lexical_roots_will_rebuild)?;
+        while !segments_to_write.is_empty() {
+            let mut remaining = if segments_to_write.len() > write_batch_size {
+                segments_to_write.split_off(write_batch_size)
+            } else {
+                Vec::new()
+            };
+            manifest
+                .segments
+                .extend(self.write_segment_batch(&mut segments_to_write)?);
+            std::mem::swap(&mut segments_to_write, &mut remaining);
+        }
+        let new_global_delta = manifest.segments[existing_segment_count..].to_vec();
         let remaining_transactions = self
             .cell_wal_snapshot
             .iter()
@@ -13066,29 +13152,42 @@ impl BorsukIndex {
         manifest.cell_wal_visible_runs = cell_wal_run_count(&remaining_transactions);
         manifest.cell_wal_visible_tombstone_runs =
             cell_wal_tombstone_run_count(&remaining_transactions);
-        let routing_summaries = manifest.segments.clone();
+        let mut routing_summaries = Vec::new();
         if paged_manifest {
-            manifest.segments.clear();
+            routing_summaries = std::mem::take(&mut manifest.segments);
+            if global_base_present {
+                manifest.segments = prior_global_delta;
+                manifest.segments.extend(new_global_delta);
+                manifest.segments_are_global_delta = !manifest.segments.is_empty();
+            } else {
+                manifest.segments.clear();
+            }
             manifest.pivots.clear();
         } else {
             manifest.rebuild_pivots();
         }
-        // A segment-changing online flush invalidates the offline base run;
-        // this path does not publish incremental V12 leaf runs.
-        manifest.global_ann_ref = None;
-        manifest.global_cell_card_ann_ref = None;
+        // The immutable global base remains valid for its original rows. New
+        // online segments form a bounded L0 overlay and are searched beside
+        // that base until consolidation publishes a replacement epoch.
+        if !global_base_present {
+            manifest.global_ann_ref = None;
+            manifest.global_cell_card_ann_ref = None;
+        }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let published = if paged_manifest {
             self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery(
                 manifest,
                 Some(&previous),
                 &routing_summaries,
+                &routing_summaries[..existing_segment_count],
             )?
         } else {
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?
         };
         self.manifest = published;
-        self.install_resident_global_ann_pins(None);
+        if !global_base_present {
+            self.install_resident_global_ann_pins(None);
+        }
         // Positioned payloads/envelopes were retained from the authenticated
         // positioned snapshot above. Only an actual legacy-authority handle
         // needs the retired per-cell frontier walk and consumed-run recovery.
@@ -13355,6 +13454,28 @@ impl BorsukIndex {
         *hasher.finalize().as_bytes()
     }
 
+    fn mutation_snapshot_key_for(
+        manifest_version: u64,
+        cell_wal_snapshot: &[CommittedCellWalTransaction],
+    ) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"borsuk-resident-mutation-snapshot-v1");
+        hasher.update(&manifest_version.to_le_bytes());
+        for transaction in cell_wal_snapshot {
+            for run in &transaction.runs {
+                if run.kind != CellWalRunKind::Tombstones {
+                    continue;
+                }
+                hasher.update(run.transaction_id.as_bytes());
+                hasher.update(&run.cell.routing_epoch.to_le_bytes());
+                hasher.update(&run.cell.cell_ordinal.to_le_bytes());
+                hasher.update(&[run.lane]);
+                hasher.update(run.checksum.as_bytes());
+            }
+        }
+        *hasher.finalize().as_bytes()
+    }
+
     fn live_wal_snapshot_flight_key(key: &[u8; 32]) -> String {
         blake3::Hash::from_bytes(*key).to_hex().to_string()
     }
@@ -13521,7 +13642,7 @@ impl BorsukIndex {
     ) -> Result<Manifest> {
         Ok(self
             .publish_manifest_reusing_routing_pages_with_summaries_with_recovery_report(
-                manifest, previous, None,
+                manifest, previous, None, None,
             )?
             .0)
     }
@@ -13531,12 +13652,14 @@ impl BorsukIndex {
         manifest: Manifest,
         previous: Option<&Manifest>,
         routing_summaries: &[SegmentSummary],
+        previous_routing_summaries: &[SegmentSummary],
     ) -> Result<Manifest> {
         Ok(self
             .publish_manifest_reusing_routing_pages_with_summaries_with_recovery_report(
                 manifest,
                 previous,
                 Some(routing_summaries),
+                Some(previous_routing_summaries),
             )?
             .0)
     }
@@ -13550,7 +13673,7 @@ impl BorsukIndex {
         manifest: Manifest,
         previous: &Manifest,
     ) -> Result<Manifest> {
-        if manifest.segments.is_empty() {
+        if !manifest.has_complete_inline_segments() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 previous.version,
                 previous.routing_max_level,
@@ -13562,6 +13685,12 @@ impl BorsukIndex {
                     &top_read.page_refs,
                 );
             }
+            if manifest.segments_are_global_delta {
+                return Err(BorsukError::InvalidStorage(
+                    "global delta metadata publication has no complete routing-page authority"
+                        .to_string(),
+                ));
+            }
         }
         self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(previous))
     }
@@ -13572,7 +13701,7 @@ impl BorsukIndex {
         previous: Option<&Manifest>,
     ) -> Result<(Manifest, StorageWriteReport)> {
         self.publish_manifest_reusing_routing_pages_with_summaries_with_recovery_report(
-            manifest, previous, None,
+            manifest, previous, None, None,
         )
     }
 
@@ -13581,8 +13710,20 @@ impl BorsukIndex {
         mut manifest: Manifest,
         previous: Option<&Manifest>,
         routing_summaries: Option<&[SegmentSummary]>,
+        previous_routing_summaries: Option<&[SegmentSummary]>,
     ) -> Result<(Manifest, StorageWriteReport)> {
-        if !manifest.segments.is_empty() {
+        let lexical_authority_required = manifest.config.text
+            || !manifest.lexical_roots.is_empty()
+            || manifest
+                .segments
+                .iter()
+                .any(|segment| !segment.lexical_shards.is_empty());
+        if lexical_authority_required && let Some(routing_summaries) = routing_summaries {
+            let resident_segments =
+                std::mem::replace(&mut manifest.segments, routing_summaries.to_vec());
+            self.rebuild_lexical_roots(&mut manifest)?;
+            manifest.segments = resident_segments;
+        } else if lexical_authority_required && manifest.has_complete_inline_segments() {
             self.rebuild_lexical_roots(&mut manifest)?;
         }
         let base_version = self.manifest.version;
@@ -13594,6 +13735,7 @@ impl BorsukIndex {
                     &manifest,
                     previous,
                     routing_summaries,
+                    previous_routing_summaries,
                 ) {
                 Ok((staged, mut report)) => {
                     match self.publish_staged_collection_manifest(staged, &mut report) {
@@ -13618,7 +13760,7 @@ impl BorsukIndex {
         page_refs: &[RoutingLayerPageRef],
         report: &mut StorageWriteReport,
     ) -> Result<Manifest> {
-        if !manifest.segments.is_empty() {
+        if manifest.has_complete_inline_segments() {
             self.rebuild_lexical_roots(&mut manifest)?;
         }
         let base_version = self.manifest.version;
@@ -13668,7 +13810,7 @@ impl BorsukIndex {
         page_refs: &[RoutingLayerPageRef],
         report: &mut StorageWriteReport,
     ) -> Result<Manifest> {
-        if !manifest.segments.is_empty() {
+        if manifest.has_complete_inline_segments() {
             self.rebuild_lexical_roots(&mut manifest)?;
         }
         let base_version = self.manifest.version;
@@ -13897,6 +14039,7 @@ impl BorsukIndex {
         manifest.global_ann_ref = None;
         manifest.global_cell_card_ann_ref = None;
         manifest.segments.clear();
+        manifest.segments_are_global_delta = false;
         manifest.pivots.clear();
         manifest.next_generated_id = next_generated_id;
         let _ = tombstone_update;
@@ -14165,7 +14308,7 @@ impl BorsukIndex {
             return Ok(results);
         }
 
-        if self.manifest.segments.is_empty() {
+        if !self.manifest.has_complete_inline_segments() {
             if let Some(summaries) = self.resident_routing_summaries() {
                 self.resolve_point_read_batch(&summaries, &mut unresolved, &mut results)?;
                 return Ok(results);
@@ -14299,7 +14442,7 @@ impl BorsukIndex {
             }
         }
 
-        if self.manifest.segments.is_empty() {
+        if !self.manifest.has_complete_inline_segments() {
             if let Some(summaries) = self.resident_routing_summaries() {
                 for summary in summaries.iter().rev() {
                     if !summary.might_contain_record_id(id_bytes) {
@@ -14346,7 +14489,7 @@ impl BorsukIndex {
             }
         }
 
-        if self.manifest.segments.is_empty() {
+        if !self.manifest.has_complete_inline_segments() {
             if let Some(summaries) = self.resident_routing_summaries() {
                 for summary in summaries.iter().rev() {
                     if !summary.might_contain_record_id(id_bytes) {
@@ -14572,7 +14715,7 @@ impl BorsukIndex {
             }
         }
 
-        if self.manifest.segments.is_empty() {
+        if !self.manifest.has_complete_inline_segments() {
             return self.validate_record_ids_against_routing_pages(records);
         }
 
@@ -14706,8 +14849,20 @@ impl BorsukIndex {
         // from a corrupt page index ahead of the input validation).
         validate_compaction_options(&options)?;
         if self.compaction_is_paged()? {
-            self.flush_wal()?;
-            self.compact_primary_impl(options, Vec::new(), false)
+            match self.flush_wal() {
+                Ok(()) => self.compact_primary_impl(options, Vec::new(), false),
+                Err(BorsukError::GlobalDeltaCapacityExceeded { .. }) => {
+                    // Consolidation is explicitly off the foreground write
+                    // path. Compact the already-published base+delta first,
+                    // which opens bounded L0 headroom, then drain the durable
+                    // WAL suffix without immediately rebuilding the corpus a
+                    // second time.
+                    let report = self.compact_primary_impl(options, Vec::new(), false)?;
+                    self.flush_wal()?;
+                    Ok(report)
+                }
+                Err(error) => Err(error),
+            }
         } else {
             let tail = self.live_wal_tail_records()?;
             self.compact_primary_impl(options, tail, true)
@@ -14842,6 +14997,7 @@ impl BorsukIndex {
             .map(|summary| summary.id.as_str())
             .collect::<HashSet<_>>();
         let mut manifest = self.manifest.next_version();
+        manifest.segments_are_global_delta = false;
         manifest.segments = active_summaries;
         manifest
             .segments
@@ -15102,6 +15258,7 @@ impl BorsukIndex {
 
         let mut manifest = self.manifest.next_version();
         manifest.segments.clear();
+        manifest.segments_are_global_delta = false;
         manifest.pivots.clear();
         manifest.global_ann_ref = None;
         manifest.global_cell_card_ann_ref = None;
@@ -16881,7 +17038,7 @@ impl BorsukIndex {
             current_page_refs = child_read.page_refs;
         };
 
-        let active_summaries = if !self.manifest.segments.is_empty() {
+        let active_summaries = if self.manifest.has_complete_inline_segments() {
             RoutingSummariesRead {
                 summaries: self.manifest.segments.clone(),
                 ..Default::default()
@@ -17015,7 +17172,7 @@ impl BorsukIndex {
         if let Some(summaries) = self.resident_routing_summaries() {
             return Ok(summaries.as_ref().clone());
         }
-        if !self.manifest.segments.is_empty() {
+        if self.manifest.has_complete_inline_segments() {
             return Ok(self.manifest.segments.clone());
         }
 
@@ -17040,7 +17197,7 @@ impl BorsukIndex {
         if let Some(summaries) = self.resident_routing_summaries() {
             return Ok(summaries);
         }
-        if !self.manifest.segments.is_empty() {
+        if self.manifest.has_complete_inline_segments() {
             return Ok(Arc::new(self.manifest.segments.clone()));
         }
 
@@ -19285,7 +19442,19 @@ impl BorsukIndex {
         let mutation_states = context.mutation_states;
         let cell_card_v14 = self.manifest.global_cell_card_ann_ref.is_some();
         if resident_global_latency_expired(options, started) {
-            let segments_total = self.manifest.segments.len();
+            let base_segments = self
+                .manifest
+                .global_cell_card_ann_ref
+                .as_ref()
+                .map(|reference| usize::try_from(reference.source_segments()).unwrap_or(usize::MAX))
+                .or_else(|| {
+                    self.manifest.global_ann_ref.as_ref().map(|reference| {
+                        usize::from(reference.base().is_some())
+                            .saturating_add(reference.incremental_runs().len())
+                    })
+                })
+                .unwrap_or(0);
+            let segments_total = base_segments.saturating_add(self.manifest.segments.len());
             return Ok(Some(SearchExecution {
                 report: SearchReport {
                     hits: Vec::new(),
@@ -19969,7 +20138,7 @@ impl BorsukIndex {
         // is empty), rebuilding routing pages from the empty segment list would
         // publish an empty index; re-publish referencing the existing routing
         // pages instead (only the manifest metadata is rewritten).
-        if manifest.segments.is_empty() {
+        if !manifest.has_complete_inline_segments() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 previous.version,
                 previous.routing_max_level,
@@ -21799,9 +21968,13 @@ impl BorsukIndex {
         let mut manifest = self.manifest.next_version();
         manifest.global_cell_card_ann_ref = desired;
         manifest.global_ann_ref = None;
+        if manifest.segments_are_global_delta {
+            manifest.segments.clear();
+            manifest.segments_are_global_delta = false;
+        }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
-        if manifest.segments.is_empty() {
+        if !manifest.has_complete_inline_segments() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 previous.version,
                 previous.routing_max_level,
@@ -22917,6 +23090,61 @@ impl BorsukIndex {
         Ok(execution)
     }
 
+    fn search_global_segment_delta(
+        &self,
+        query: &[f32],
+        mut options: SearchOptions,
+        include_vectors: bool,
+    ) -> Result<Option<SearchExecution>> {
+        if !self.manifest.segments_are_global_delta || self.manifest.segments.is_empty() {
+            return Ok(None);
+        }
+        let mut overlay = self.clone();
+        overlay.manifest.global_ann_ref = None;
+        overlay.manifest.global_cell_card_ann_ref = None;
+        overlay.manifest.segments_are_global_delta = false;
+        overlay.manifest.quantizer_ref = None;
+        overlay.resident_global_ann_pins = None;
+        // The caller already scores live WAL records exactly once. Retain only
+        // its tombstone authority here so a newer upsert/delete still suppresses
+        // an older copy in the immutable delta without double-scoring records.
+        overlay.cell_wal_snapshot = overlay
+            .cell_wal_snapshot
+            .into_iter()
+            .filter_map(|mut transaction| {
+                transaction
+                    .runs
+                    .retain(|run| run.kind == CellWalRunKind::Tombstones);
+                (!transaction.runs.is_empty()).then_some(transaction)
+            })
+            .collect();
+        overlay.manifest.cell_wal_visible_runs = cell_wal_run_count(&overlay.cell_wal_snapshot);
+        overlay.manifest.cell_wal_visible_tombstone_runs =
+            cell_wal_tombstone_run_count(&overlay.cell_wal_snapshot);
+        overlay.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
+        let summaries = Arc::new(overlay.manifest.segments.clone());
+        overlay.resident_routing_summaries =
+            Arc::new(Mutex::new(Some((overlay.manifest.version, summaries))));
+        overlay.coarse_quantizer = Arc::new(Mutex::new(None));
+        // Search every bounded delta segment, but use each segment's ANN instead
+        // of full-scanning up to 64 MiB of raw vectors. The immutable base is
+        // already approximate; probing every delta segment at the caller's leaf
+        // quality preserves that contract while bounding GET and decode work.
+        if let SearchMode::Approx {
+            max_segments,
+            adaptive_stop,
+            ..
+        } = &mut options.mode
+        {
+            *max_segments = Some(overlay.manifest.segments.len());
+            *adaptive_stop = None;
+        }
+        options.guaranteed_recall = false;
+        overlay
+            .search_execution_with_routing_cache(query, options, include_vectors, None, false)
+            .map(Some)
+    }
+
     fn isolated_search_handle(&self) -> Self {
         let mut scoped = self.clone();
         scoped.storage = self.storage.isolated_read_scope();
@@ -23003,7 +23231,21 @@ impl BorsukIndex {
         // a V12 reference therefore certifies the active immutable set without
         // a routing-tree walk or a dual-format fallback.
         let global_available = global_eligible;
-        let global_active_segment_count = global_eligible.then_some(self.manifest.segments.len());
+        let global_active_segment_count = global_eligible.then(|| {
+            let base = self
+                .manifest
+                .global_cell_card_ann_ref
+                .as_ref()
+                .map(|reference| usize::try_from(reference.source_segments()).unwrap_or(usize::MAX))
+                .or_else(|| {
+                    self.manifest.global_ann_ref.as_ref().map(|reference| {
+                        usize::from(reference.base().is_some())
+                            .saturating_add(reference.incremental_runs().len())
+                    })
+                })
+                .unwrap_or(0);
+            base.saturating_add(self.manifest.segments.len())
+        });
         let mut wal_execution = if zero_distance_wal_eligible || global_available {
             self.search_live_wal_execution(
                 query,
@@ -23082,6 +23324,23 @@ impl BorsukIndex {
                 &requests_before,
             )?
         {
+            let mut delta_options = options.clone();
+            let wal_bytes = wal_execution
+                .as_ref()
+                .map_or(0, |wal| wal.report.bytes_read);
+            if let Some(reason) = restrict_to_recursive_search_budget(
+                &mut delta_options,
+                execution.report.bytes_read.saturating_add(wal_bytes),
+                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            ) {
+                execution.report.termination_reason =
+                    merged_search_termination_reason(execution.report.termination_reason, reason);
+                execution.report.recall_guarantee = RecallGuarantee::Degraded;
+            } else if let Some(delta) =
+                self.search_global_segment_delta(query, delta_options, include_vectors)?
+            {
+                merge_search_execution_hits(&mut execution, delta, options.k, include_vectors);
+            }
             if let Some(wal_execution) = wal_execution.take() {
                 merge_search_execution_hits(
                     &mut execution,
@@ -23105,7 +23364,7 @@ impl BorsukIndex {
         // Resolve it once when the declared resident-routing estimate fits the
         // configured RAM budget; the shared slot is invalidated by manifest
         // version changes and does not affect the WAL tail's visibility.
-        if self.manifest.segments.is_empty() && self.retain_routing_summaries {
+        if !self.manifest.has_complete_inline_segments() && self.retain_routing_summaries {
             let _ = self.active_segment_summaries_for_search()?;
         }
         let page_index_read = self.routing_layer_page_index_read_for_search()?;
@@ -24233,7 +24492,7 @@ impl BorsukIndex {
             return Ok(routing_read);
         }
 
-        if self.manifest.segments.is_empty() {
+        if !self.manifest.has_complete_inline_segments() {
             return Ok(routing_read);
         }
 
@@ -24252,7 +24511,7 @@ impl BorsukIndex {
                 object_cache_misses: 0,
             });
         }
-        if self.manifest.segments.is_empty() {
+        if !self.manifest.has_complete_inline_segments() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
                 self.manifest.version,
                 self.manifest.routing_max_level,
@@ -24270,7 +24529,7 @@ impl BorsukIndex {
         if let Some(summaries) = self.resident_routing_summaries() {
             return summaries.len();
         }
-        if !self.manifest.segments.is_empty() {
+        if self.manifest.has_complete_inline_segments() {
             return self.manifest.segments.len();
         }
 
@@ -31608,6 +31867,28 @@ fn restrict_to_remaining_search_budget(
     None
 }
 
+/// Restrict a nested search that starts a fresh latency clock. Byte limits are
+/// always consumptive; latency is converted from the caller's absolute budget
+/// to the duration the nested layer may still spend.
+fn restrict_to_recursive_search_budget(
+    options: &mut SearchOptions,
+    bytes_spent: u64,
+    elapsed_ms: u64,
+) -> Option<SearchTerminationReason> {
+    let exhausted = restrict_to_remaining_search_budget(options, bytes_spent, elapsed_ms);
+    if exhausted.is_some() {
+        return exhausted;
+    }
+    if let SearchMode::Approx {
+        max_latency_ms: Some(limit),
+        ..
+    } = &mut options.mode
+    {
+        *limit -= elapsed_ms;
+    }
+    None
+}
+
 fn search_prefetch_segment_budget_exhausted(mode: &SearchMode, reserved_segments: usize) -> bool {
     match mode {
         SearchMode::Exact => false,
@@ -32668,8 +32949,26 @@ mod tests {
         assert_eq!(
             max_latency_ms,
             Some(50),
-            "recursive layers share the original absolute deadline"
+            "layers sharing the caller's clock retain the absolute deadline"
         );
+
+        let mut recursive = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+            .with_max_bytes(100)
+            .with_max_latency_ms(50);
+        assert_eq!(
+            restrict_to_recursive_search_budget(&mut recursive, 40, 20),
+            None
+        );
+        let SearchMode::Approx {
+            max_bytes,
+            max_latency_ms,
+            ..
+        } = recursive.mode
+        else {
+            panic!("approximate options changed mode");
+        };
+        assert_eq!(max_bytes, Some(60));
+        assert_eq!(max_latency_ms, Some(30));
 
         let mut byte_exhausted = SearchOptions::approx(10, LeafMode::SrhtPqScan)
             .with_max_bytes(100)
@@ -34424,15 +34723,15 @@ mod tests {
         );
 
         let mut manifest = previous.next_version();
-        manifest.segments = index.active_segment_summaries().unwrap();
-        manifest
-            .segments
-            .push(fake_segment_summary("appended", 0, 2_000));
-        let routing_summaries = manifest.segments.clone();
-        manifest.segments.clear();
+        let mut routing_summaries = index.active_segment_summaries().unwrap();
+        let appended = fake_segment_summary("appended", 0, 2_000);
+        routing_summaries.push(appended.clone());
+        manifest.segments = vec![appended];
+        manifest.segments_are_global_delta = true;
         manifest.pivots.clear();
         let mut previous_for_publish = previous.clone();
-        previous_for_publish.segments = routing_summaries[..2_000].to_vec();
+        previous_for_publish.segments = vec![fake_segment_summary("prior-delta", 0, 1_999)];
+        previous_for_publish.segments_are_global_delta = true;
         let (_, report) = index
             .storage
             .stage_manifest_with_report_and_routing_summaries(
@@ -34440,13 +34739,61 @@ mod tests {
                 &manifest,
                 Some(&previous_for_publish),
                 Some(&routing_summaries),
+                Some(&routing_summaries[..2_000]),
             )
             .unwrap();
 
+        assert_eq!(
+            report.routing_pages_written, 2,
+            "only the final extended leaf and its parent index may be encoded and written"
+        );
+    }
+
+    #[test]
+    fn global_delta_metadata_publish_fails_closed_without_complete_routing_authority() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 4,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        index
+            .add(vec![VectorRecord::new("base", vec![0.0, 0.0])])
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let staged_empty = index.manifest.next_version();
+        let mut report = StorageWriteReport::default();
+        index
+            .storage
+            .stage_manifest_with_routing_page_refs_with_report(
+                PRIMARY_MODALITY,
+                &staged_empty,
+                &[],
+                &mut report,
+            )
+            .unwrap();
+        let mut previous = staged_empty;
+        previous.segments = vec![fake_segment_summary("delta", 0, 1)];
+        previous.segments_are_global_delta = true;
+        let candidate = previous.next_version();
+
+        let error = index
+            .publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
+                candidate, &previous,
+            )
+            .unwrap_err();
+
         assert!(
-            report.routing_pages_written < 10,
-            "drain publication rewrote the paged base: {} pages",
-            report.routing_pages_written
+            error
+                .to_string()
+                .contains("complete routing-page authority"),
+            "{error}"
         );
     }
 
@@ -39378,6 +39725,16 @@ mod tests {
             .upsert(vec![VectorRecord::new("refresh-plane-0", vec![0.5; 8])])
             .unwrap();
         writer.flush().unwrap();
+        writer
+            .compact(CompactionOptions {
+                source_level: 0,
+                target_level: 1,
+                max_segments: None,
+                min_segments: 1,
+                target_segment_max_vectors: Some(64),
+                target_segment_max_radius: None,
+            })
+            .unwrap();
 
         assert!(reader.refresh().unwrap());
         assert!(
@@ -39582,7 +39939,7 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v14_tracks_online_flush_and_compaction_lifecycle() {
+    fn resident_global_v20_keeps_a_bounded_online_flush_overlay() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -39590,7 +39947,7 @@ mod tests {
             metric: VectorMetric::Euclidean,
             dimensions: 8,
             segment_max_vectors: 32,
-            ram_budget_bytes: None,
+            ram_budget_bytes: Some(512 * 1024 * 1024),
             text: false,
             named_vectors: Default::default(),
         })
@@ -39603,16 +39960,163 @@ mod tests {
             )
             .unwrap();
         index.finish_bulk_load().unwrap();
-        assert!(index.manifest.global_cell_card_ann_ref.is_some());
+        let base_root = index
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .expect("bulk load must publish the immutable global base")
+            .root_checksum();
 
         index
             .upsert(vec![VectorRecord::new("v14-life-0", vec![0.25; 8])])
             .unwrap();
         index.flush().unwrap();
-        assert!(
-            index.manifest.global_cell_card_ann_ref.is_none(),
-            "an online segment change must not leave the prior offline ANN visible"
+        assert_eq!(
+            index
+                .manifest
+                .global_cell_card_ann_ref
+                .as_ref()
+                .expect("online flush must preserve the immutable global base")
+                .root_checksum(),
+            base_root
         );
+        assert!(index.manifest.segments_are_global_delta);
+        assert_eq!(index.manifest.segments.len(), 1);
+        assert!(index.resident_global_ann_pins.is_some());
+        assert!(index.global_leaf_mutation_state_required());
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some(),
+            "flush must prepare the exact MVCC overlay for the retained global base: prepared={:?} current={}",
+            index
+                .resident_global_mutations
+                .as_ref()
+                .map(|overlay| blake3::Hash::from_bytes(overlay.snapshot_key)
+                    .to_hex()
+                    .to_string()),
+            blake3::Hash::from_bytes(BorsukIndex::mutation_snapshot_key_for(
+                index.manifest.version,
+                &index.cell_wal_snapshot,
+            ))
+            .to_hex()
+        );
+        let after_flush = index
+            .search_with_report(
+                &[0.25; 8],
+                SearchOptions::approx(4, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(
+            after_flush.hits[0].id,
+            RecordId::from("v14-life-0"),
+            "{after_flush:?}"
+        );
+        assert_eq!(
+            after_flush.leaf_mode, "bounded-cell-card-v20",
+            "{after_flush:?}"
+        );
+        assert_eq!(after_flush.segments_searched, 1, "{after_flush:?}");
+        assert!(after_flush.global_leaf_exact_scores > 0, "{after_flush:?}");
+        assert_eq!(index.active_segment_summaries().unwrap().len(), 5);
+
+        index
+            .add(vec![VectorRecord::new("v14-life-wal", vec![-0.25; 8])])
+            .unwrap();
+        let with_wal = index
+            .search_with_report(
+                &[10.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(with_wal.hits[0].id, RecordId::from("v14-life-10"));
+        assert_eq!(with_wal.leaf_mode, "bounded-cell-card-v20");
+        assert_eq!(
+            with_wal.wal_records_examined, 1,
+            "the base and delta layers must share one WAL evaluation: {with_wal:?}"
+        );
+
+        drop(index);
+        let mut index = BorsukIndex::open(&uri).unwrap();
+        assert!(index.resident_global_ann_pins.is_some());
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some(),
+            "cold reopen must prepare the retained base's MVCC overlay"
+        );
+        let cold_after_flush = index
+            .search_with_report(
+                &[0.25; 8],
+                SearchOptions::approx(4, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(
+            cold_after_flush.hits[0].id,
+            RecordId::from("v14-life-0"),
+            "{cold_after_flush:?}"
+        );
+        assert_eq!(cold_after_flush.leaf_mode, "bounded-cell-card-v20");
+        assert_eq!(
+            cold_after_flush.segments_searched, 1,
+            "{cold_after_flush:?}"
+        );
+        assert_eq!(index.active_segment_summaries().unwrap().len(), 5);
+        let cold_exact = index
+            .search_with_report(&[0.25; 8], SearchOptions::exact(1))
+            .unwrap();
+        assert_eq!(
+            cold_exact.hits[0].id,
+            RecordId::from("v14-life-0"),
+            "{cold_exact:?}"
+        );
+        assert_eq!(cold_exact.segments_total, 5, "{cold_exact:?}");
+
+        index
+            .add(vec![VectorRecord::new("v14-life-fresh", vec![-0.5; 8])])
+            .unwrap();
+        index.flush().unwrap();
+        assert_eq!(index.manifest.segments.len(), 2);
+        let second_flush = index
+            .search_with_report(
+                &[-0.5; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(
+            second_flush.hits[0].id,
+            RecordId::from("v14-life-fresh"),
+            "{second_flush:?}"
+        );
+        assert_eq!(second_flush.leaf_mode, "bounded-cell-card-v20");
+        assert_eq!(second_flush.segments_total, 6, "{second_flush:?}");
+        assert!(second_flush.segments_searched <= 2, "{second_flush:?}");
+
+        index.delete(["v14-life-0"]).unwrap();
+        index.flush().unwrap();
+        assert_eq!(index.manifest.segments.len(), 2);
+        let after_delete = index
+            .search_with_report(
+                &[0.25; 8],
+                SearchOptions::approx(4, LeafMode::SrhtPqScan)
+                    .with_max_segments(1)
+                    .with_max_candidates_per_segment(1),
+            )
+            .unwrap();
+        assert!(
+            after_delete.hits.iter().all(|hit| hit.id != "v14-life-0"),
+            "{after_delete:?}"
+        );
+        assert_eq!(after_delete.segments_total, 6, "{after_delete:?}");
+        assert!(after_delete.segments_searched <= 2, "{after_delete:?}");
 
         index
             .compact(CompactionOptions {
@@ -39629,6 +40133,7 @@ mod tests {
             .global_cell_card_ann_ref
             .as_ref()
             .expect("a full compaction must publish a fresh V14 authority");
+        assert!(!index.manifest.segments_are_global_delta);
         assert_eq!(
             rebuilt.source_segments() as usize,
             index.active_segment_summaries().unwrap().len()
@@ -39650,9 +40155,178 @@ mod tests {
         );
         drop(index);
         let reopened = BorsukIndex::open(&uri).unwrap();
+        assert_eq!(reopened.get_vector("v14-life-0").unwrap(), None);
         assert_eq!(
-            reopened.get_vector("v14-life-0").unwrap(),
-            Some(vec![0.25; 8])
+            reopened.get_vector("v14-life-fresh").unwrap(),
+            Some(vec![-0.5; 8])
+        );
+    }
+
+    #[test]
+    fn resident_global_v20_live_wal_supersedes_and_suppresses_flushed_delta() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 32,
+            ram_budget_bytes: Some(512 * 1024 * 1024),
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..32)
+                    .map(|row| {
+                        VectorRecord::new(format!("wal-delta-base-{row}"), vec![row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        index
+            .upsert(vec![VectorRecord::new("wal-delta-x", vec![10.0; 8])])
+            .unwrap();
+        index.flush().unwrap();
+        index
+            .upsert(vec![VectorRecord::new("wal-delta-x", vec![-10.0; 8])])
+            .unwrap();
+
+        let updated = index
+            .search_with_report(
+                &[-10.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(updated.hits[0].id, RecordId::from("wal-delta-x"));
+        assert_eq!(updated.hits[0].distance, 0.0, "{updated:?}");
+
+        index.delete(["wal-delta-x"]).unwrap();
+        let deleted = index
+            .search_with_report(
+                &[10.0; 8],
+                SearchOptions::approx(4, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert!(
+            deleted.hits.iter().all(|hit| hit.id != "wal-delta-x"),
+            "{deleted:?}"
+        );
+    }
+
+    #[test]
+    fn resident_global_v20_backpressures_before_foreground_flush_rebuilds_the_corpus() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 32,
+            ram_budget_bytes: Some(512 * 1024 * 1024),
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..32)
+                    .map(|row| {
+                        VectorRecord::new(format!("bounded-base-{row}"), vec![row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let base_root = index
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .unwrap()
+            .root_checksum();
+
+        for row in 0..MAX_GLOBAL_DELTA_SEGMENTS {
+            index
+                .add(vec![VectorRecord::new(
+                    format!("bounded-delta-{row}"),
+                    vec![-(row as f32) - 1.0; 8],
+                )])
+                .unwrap();
+            index.flush().unwrap();
+            assert!(index.manifest.segments.len() <= MAX_GLOBAL_DELTA_SEGMENTS);
+        }
+
+        index
+            .add(vec![VectorRecord::new(
+                "bounded-delta-overflow",
+                vec![-1_000.0; 8],
+            )])
+            .unwrap();
+        index.delete(["bounded-delta-0"]).unwrap();
+        let writes_before_rejected_flush = index.storage.request_counts().puts;
+        let error = index.flush().unwrap_err();
+        assert!(
+            matches!(error, BorsukError::GlobalDeltaCapacityExceeded { .. }),
+            "{error}"
+        );
+        assert!(index.manifest.segments_are_global_delta);
+        assert_eq!(index.manifest.segments.len(), MAX_GLOBAL_DELTA_SEGMENTS);
+        assert_eq!(
+            index.storage.request_counts().puts,
+            writes_before_rejected_flush,
+            "capacity rejection must occur before immutable segment artifacts are emitted"
+        );
+        assert_eq!(
+            index
+                .manifest
+                .global_cell_card_ann_ref
+                .as_ref()
+                .unwrap()
+                .root_checksum(),
+            base_root,
+            "foreground flush must never rebuild the corpus-wide ANN"
+        );
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_none(),
+            "the rejected delete must invalidate the older prepared mutation authority"
+        );
+        let report = index
+            .search_with_report(
+                &[-1_000.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan).with_max_segments(4),
+            )
+            .unwrap();
+        assert_eq!(
+            report.hits[0].id,
+            RecordId::from("bounded-delta-overflow"),
+            "{report:?}"
+        );
+        assert_eq!(report.wal_records_examined, 1, "{report:?}");
+
+        index
+            .compact(CompactionOptions {
+                source_level: 0,
+                target_level: 1,
+                max_segments: None,
+                min_segments: 1,
+                target_segment_max_vectors: Some(32),
+                target_segment_max_radius: None,
+            })
+            .unwrap();
+        assert!(index.manifest.segments_are_global_delta);
+        assert_eq!(index.manifest.segments.len(), 1);
+        assert_eq!(
+            index.get_vector("bounded-delta-overflow").unwrap(),
+            Some(vec![-1_000.0; 8])
         );
     }
 

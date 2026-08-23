@@ -36,7 +36,8 @@ use crate::{
         LexicalTermPage, LexicalTermPageRef, SparsePosting,
     },
     manifest::{
-        DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, Manifest, PivotSummary,
+        DEFAULT_GRAPH_NEIGHBORS, DEFAULT_ROUTING_PAGE_FANOUT, MAX_GLOBAL_DELTA_ROWS,
+        MAX_GLOBAL_DELTA_SEGMENTS, MAX_GLOBAL_DELTA_VECTOR_BYTES, Manifest, PivotSummary,
         RoutingLayerPageRef, SEGMENT_ID_BLOOM_BYTES, SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES,
         SegmentSummary,
     },
@@ -171,7 +172,10 @@ use crate::{
 // authenticated logical cell with deterministic raw-vector locality down to
 // the bounded exact-block boundary. Pre-release v42 manifests bind a physical
 // order that scatters geometrically adjacent exact candidates across blocks.
-const CURRENT_VERSION: u16 = 43;
+// Bumped 43 -> 44 when online flushes began retaining a bounded segment L0
+// beside the immutable global ANN base. The manifest must distinguish that
+// overlay from a complete inline segment authority.
+const CURRENT_VERSION: u16 = 44;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -201,9 +205,10 @@ pub(crate) const LEAN_SEGMENT_SCORING_COLUMNS: &[&str] = &[
     "mutation_digest",
 ];
 pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
-    if manifest.global_ann_ref.is_some() && manifest.global_cell_card_ann_ref.is_some() {
+    validate_manifest_global_ann_authority(manifest)?;
+    if manifest.segments_are_global_delta && manifest.segments.is_empty() {
         return Err(BorsukError::InvalidStorage(
-            "manifest cannot publish V13 and V17 global ANN authority together".to_string(),
+            "manifest global segment delta must not be empty".to_string(),
         ));
     }
     validate_manifest_config(
@@ -305,6 +310,9 @@ pub(crate) fn manifest_to_parquet(manifest: &Manifest) -> Result<Vec<u8>> {
         array(StringArray::from_iter([manifest.text_tokenizer.clone()])),
         array(UInt64Array::from_iter_values([manifest.next_generated_id])),
         array(UInt8Array::from_iter_values([manifest.routing_max_level])),
+        array(BooleanArray::from_iter(
+            [manifest.segments_are_global_delta],
+        )),
         array(UInt64Array::from_iter_values([
             manifest.routing_page_fanout as u64,
         ])),
@@ -480,6 +488,45 @@ fn validate_manifest_global_ann_authority(manifest: &Manifest) -> Result<()> {
     if manifest.global_ann_ref.is_some() && manifest.global_cell_card_ann_ref.is_some() {
         return Err(BorsukError::InvalidStorage(
             "manifest contains both V13 and V17 global ANN authority".to_string(),
+        ));
+    }
+    if manifest.segments_are_global_delta && manifest.segments.len() > MAX_GLOBAL_DELTA_SEGMENTS {
+        return Err(BorsukError::InvalidStorage(format!(
+            "manifest global segment delta has {} segments, above the bounded maximum {MAX_GLOBAL_DELTA_SEGMENTS}",
+            manifest.segments.len()
+        )));
+    }
+    if manifest.segments_are_global_delta {
+        let rows = manifest
+            .segments
+            .iter()
+            .try_fold(0_usize, |total, segment| {
+                total.checked_add(segment.object_count).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "manifest global segment delta row count overflows".to_string(),
+                    )
+                })
+            })?;
+        let vector_bytes = rows
+            .checked_mul(manifest.config.dimensions)
+            .and_then(|bytes| bytes.checked_mul(std::mem::size_of::<f32>()))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "manifest global segment delta vector-byte count overflows".to_string(),
+                )
+            })?;
+        if rows > MAX_GLOBAL_DELTA_ROWS || vector_bytes > MAX_GLOBAL_DELTA_VECTOR_BYTES {
+            return Err(BorsukError::InvalidStorage(format!(
+                "manifest global segment delta has {rows} rows/{vector_bytes} vector bytes, above bounded maxima {MAX_GLOBAL_DELTA_ROWS}/{MAX_GLOBAL_DELTA_VECTOR_BYTES}"
+            )));
+        }
+    }
+    if manifest.segments_are_global_delta
+        && manifest.global_ann_ref.is_none()
+        && manifest.global_cell_card_ann_ref.is_none()
+    {
+        return Err(BorsukError::InvalidStorage(
+            "manifest global segment delta has no pinned ANN base".to_string(),
         ));
     }
     Ok(())
@@ -712,6 +759,16 @@ fn manifest_text_enabled(batch: &RecordBatch) -> Result<bool> {
     boolean_value(batch, column, 0, "text_enabled")
 }
 
+fn manifest_segments_are_global_delta(batch: &RecordBatch) -> Result<bool> {
+    let column = batch
+        .schema()
+        .index_of("segments_are_global_delta")
+        .map_err(|_| {
+            BorsukError::InvalidStorage("manifest is missing segments_are_global_delta".to_string())
+        })?;
+    boolean_value(batch, column, 0, "segments_are_global_delta")
+}
+
 fn manifest_text_tokenizer(batch: &RecordBatch) -> Result<Option<String>> {
     let Ok(column) = batch.schema().index_of("text_tokenizer") else {
         return Ok(None);
@@ -823,6 +880,7 @@ pub(crate) fn manifest_from_parquet(
         },
         text_tokenizer: manifest_text_tokenizer(&batch)?,
         segments,
+        segments_are_global_delta: manifest_segments_are_global_delta(&batch)?,
         pivots: Vec::new(),
         next_generated_id,
         routing_max_level: manifest_routing_max_level(&batch)?,
@@ -864,6 +922,11 @@ pub(crate) fn manifest_from_parquet(
         )?;
     }
     validate_manifest_global_ann_authority(&manifest)?;
+    if manifest.segments_are_global_delta && manifest.segments.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "manifest global segment delta must not be empty".to_string(),
+        ));
+    }
 
     Ok(manifest)
 }
@@ -934,6 +997,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         },
         text_tokenizer: manifest_text_tokenizer(&batch)?,
         segments: Vec::new(),
+        segments_are_global_delta: manifest_segments_are_global_delta(&batch)?,
         pivots: Vec::new(),
         next_generated_id: if batch.schema().field_with_name("next_generated_id").is_ok() {
             primitive_value_by_name::<UInt64Type>(&batch, 0, "next_generated_id")?
@@ -4924,6 +4988,7 @@ fn manifest_schema_with_named_vectors_and_wal(
         Field::new("text_tokenizer", DataType::Utf8, true),
         Field::new("next_generated_id", DataType::UInt64, false),
         Field::new("routing_max_level", DataType::UInt8, false),
+        Field::new("segments_are_global_delta", DataType::Boolean, false),
         Field::new("routing_page_fanout", DataType::UInt64, false),
         Field::new("graph_neighbors", DataType::UInt64, false),
         Field::new("leaf_capability", DataType::Utf8, true),
@@ -9599,7 +9664,7 @@ mod tests {
         let bytes = manifest_to_parquet(&valid_manifest()).unwrap();
         let batch = first_batch(&bytes, "manifest").unwrap();
         let mut columns = batch.columns().to_vec();
-        for old_version in [35_u16, 37, 38, 39, 42] {
+        for old_version in [35_u16, 37, 38, 39, 42, 43] {
             columns[batch.schema().index_of("format_version").unwrap()] =
                 array(UInt16Array::from_iter_values([old_version]));
             let old = write_batch(RecordBatch::try_new(batch.schema(), columns.clone()).unwrap())
@@ -9645,7 +9710,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_global_ann_manifest_is_rejected_instead_of_silently_upgraded() {
+    fn pre_v44_manifest_is_rejected_instead_of_silently_upgraded() {
         let manifest_bytes = legacy_external_manifest_parquet_without_routing_page_fanout(2, 100);
         let routing_bytes = routing_to_parquet(&valid_manifest()).unwrap();
 
@@ -9654,7 +9719,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("missing required global_ann_ref_json column"),
+                .contains("manifest is missing segments_are_global_delta"),
             "{error}"
         );
     }
@@ -10478,6 +10543,7 @@ mod tests {
             },
             text_tokenizer: None,
             segments: Vec::new(),
+            segments_are_global_delta: false,
             pivots: Vec::new(),
             next_generated_id: 0,
             routing_max_level: 0,
@@ -10518,7 +10584,7 @@ mod tests {
             primitive_value_by_name::<UInt16Type>(&batch, 0, "format_version").unwrap(),
             CURRENT_VERSION
         );
-        assert_eq!(CURRENT_VERSION, 43);
+        assert_eq!(CURRENT_VERSION, 44);
         assert_eq!(
             crate::logical_cell_catalog::LOGICAL_CELL_CATALOG_FORMAT_VERSION,
             34
@@ -10567,6 +10633,30 @@ mod tests {
         let mut manifest = valid_manifest();
         manifest.segments = vec![segment];
         manifest
+    }
+
+    #[test]
+    fn manifest_rejects_a_segment_delta_without_a_pinned_global_base() {
+        let mut manifest = valid_manifest();
+        manifest.segments = vec![valid_segment_summary()];
+        manifest.segments_are_global_delta = true;
+
+        let error = manifest_to_parquet(&manifest).unwrap_err().to_string();
+
+        assert!(error.contains("has no pinned ANN base"), "{error}");
+    }
+
+    #[test]
+    fn manifest_rejects_a_global_delta_above_the_exact_row_bound() {
+        let mut manifest = valid_manifest();
+        let mut segment = valid_segment_summary();
+        segment.object_count = MAX_GLOBAL_DELTA_ROWS + 1;
+        manifest.segments = vec![segment];
+        manifest.segments_are_global_delta = true;
+        let error = manifest_to_parquet(&manifest).unwrap_err().to_string();
+
+        assert!(error.contains("global segment delta has"), "{error}");
+        assert!(error.contains("rows"), "{error}");
     }
 
     #[test]
@@ -11174,6 +11264,7 @@ mod tests {
                 array(StringArray::from_iter([None::<String>])),
                 array(UInt64Array::from_iter_values([0])),
                 array(UInt8Array::from_iter_values([0])),
+                array(BooleanArray::from_iter([false])),
                 array(UInt64Array::from_iter_values([
                     DEFAULT_ROUTING_PAGE_FANOUT as u64
                 ])),

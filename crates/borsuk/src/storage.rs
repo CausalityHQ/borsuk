@@ -2183,7 +2183,9 @@ impl Storage {
         manifest: &Manifest,
         previous: Option<&Manifest>,
     ) -> Result<(StagedManifest, StorageWriteReport)> {
-        self.stage_manifest_with_report_and_routing_summaries(modality, manifest, previous, None)
+        self.stage_manifest_with_report_and_routing_summaries(
+            modality, manifest, previous, None, None,
+        )
     }
 
     pub(crate) fn stage_manifest_with_report_and_routing_summaries(
@@ -2192,6 +2194,7 @@ impl Storage {
         manifest: &Manifest,
         previous: Option<&Manifest>,
         routing_summaries: Option<&[SegmentSummary]>,
+        previous_routing_summaries: Option<&[SegmentSummary]>,
     ) -> Result<(StagedManifest, StorageWriteReport)> {
         let span = observability::publish_span(manifest.version);
         let _entered = span.enter();
@@ -2202,6 +2205,7 @@ impl Storage {
             0,
             &mut report,
             routing_summaries,
+            previous_routing_summaries,
         )?;
         let staged = self.stage_manifest_with_routing_page_refs_with_report(
             modality,
@@ -2273,6 +2277,28 @@ impl Storage {
         };
         let mut paged_resident_bytes =
             manifest_metadata_from_parquet(&manifest_bytes)?.resident_bytes_estimate();
+        if manifest.segments_are_global_delta {
+            paged_resident_bytes =
+                manifest
+                    .segments
+                    .iter()
+                    .try_fold(paged_resident_bytes, |total, segment| {
+                        total
+                            .checked_add(u64::try_from(segment.resident_bytes_estimate()).map_err(
+                                |_| {
+                                    BorsukError::InvalidStorage(
+                                        "global segment delta resident estimate exceeds u64"
+                                            .to_string(),
+                                    )
+                                },
+                            )?)
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "global segment delta resident estimate overflow".to_string(),
+                                )
+                            })
+                    })?;
+        }
         if let Some(reference) = &manifest.logical_cell_catalog_ref {
             paged_resident_bytes = paged_resident_bytes
                 .checked_add(reference.decoded_resident_bytes()?)
@@ -2441,6 +2467,7 @@ impl Storage {
         routing_level: u8,
         report: &mut StorageWriteReport,
         routing_summaries: Option<&[SegmentSummary]>,
+        previous_routing_summaries: Option<&[SegmentSummary]>,
     ) -> Result<Vec<RoutingLayerPageRef>> {
         let previous_refs = previous
             .map(|previous| self.read_routing_layer_page_index(previous.version, routing_level))
@@ -2451,16 +2478,19 @@ impl Storage {
         let segments = routing_summaries.unwrap_or(&manifest.segments);
         for (page_ordinal, segments) in segments.chunks(manifest.routing_page_fanout).enumerate() {
             if let Some(previous_manifest) = previous
-                && routing_layer_page_unchanged(
+                && let Some(page_ref) = previous_refs.get(page_ordinal)
+            {
+                let unchanged = routing_layer_page_unchanged(
                     previous_manifest,
+                    previous_routing_summaries.unwrap_or(&previous_manifest.segments),
                     manifest.routing_page_fanout,
                     page_ordinal,
                     segments,
-                )
-                && let Some(page_ref) = previous_refs.get(page_ordinal)
-            {
-                page_refs.push(page_ref.clone());
-                continue;
+                );
+                if unchanged {
+                    page_refs.push(page_ref.clone());
+                    continue;
+                }
             }
 
             page_refs.push(self.write_routing_layer_page_with_report(
@@ -2683,7 +2713,23 @@ impl Storage {
                 pivots_from_parquet(&pivots_bytes, manifest.config.dimensions, manifest.version)?;
             manifest
         } else {
-            manifest_metadata_from_parquet(&manifest_bytes)?
+            let mut manifest = manifest_metadata_from_parquet(&manifest_bytes)?;
+            // A global ANN manifest normally avoids loading the complete
+            // routing table. Its online-flush delta is deliberately bounded,
+            // however, and is stored in the checksum-pinned compatibility
+            // routing object so a cold handle can search base + delta without
+            // walking the complete paged routing tree.
+            if manifest.segments_are_global_delta {
+                let routing_bytes = self
+                    .read_bytes_with_cache_status_and_checksum(
+                        &reference.routing_path,
+                        &reference.routing_checksum,
+                    )?
+                    .bytes;
+                manifest.segments =
+                    manifest_from_parquet(&manifest_bytes, &routing_bytes)?.segments;
+            }
+            manifest
         };
         if manifest.version != reference.version {
             return Err(BorsukError::InvalidStorage(format!(
@@ -4751,6 +4797,7 @@ fn has_uri_scheme(uri: &str) -> bool {
 
 fn routing_layer_page_unchanged(
     previous: &Manifest,
+    previous_segments: &[SegmentSummary],
     routing_page_fanout: usize,
     page_ordinal: usize,
     segments: &[SegmentSummary],
@@ -4762,8 +4809,7 @@ fn routing_layer_page_unchanged(
         return false;
     };
     let end = start + segments.len();
-    previous
-        .segments
+    previous_segments
         .get(start..end)
         .is_some_and(|previous_segments| previous_segments == segments)
 }
