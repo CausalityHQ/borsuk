@@ -5478,6 +5478,68 @@ fn wal_flush_overlaps_bounded_immutable_segment_writes() {
 }
 
 #[test]
+fn wal_flush_overlaps_positioned_payload_reads() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let instrumented = common::FaultInjectingObjectStore::new(inner).with_get_latency_for(
+        Duration::from_millis(20),
+        |operation, path| {
+            operation == common::StoreOperation::Get
+                && path.as_ref().starts_with("positioned-log/payloads/")
+        },
+    );
+    let (instrumented, concurrency) = instrumented.with_get_concurrency_probe(|operation, path| {
+        operation == common::StoreOperation::Get
+            && path.as_ref().starts_with("positioned-log/payloads/")
+    });
+    let uri = "memory:///parallel-wal-tail-flush";
+    let mut index = BorsukIndex::create_with_object_store_and_wal(
+        Arc::new(instrumented),
+        IndexConfig {
+            uri: uri.to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 64,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        WalConfig {
+            enabled: true,
+            flush_threshold_runs: usize::MAX,
+            flush_threshold_records: usize::MAX,
+            flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
+        },
+    )
+    .unwrap();
+    for ordinal in 0..8 {
+        index
+            .add(vec![VectorRecord::new(
+                format!("parallel-tail-{ordinal}"),
+                vec![ordinal as f32, ordinal as f32 + 0.5],
+            )])
+            .unwrap();
+    }
+
+    concurrency.reset();
+    index.flush().unwrap();
+
+    assert!(
+        concurrency.peak() >= 2,
+        "independent positioned payload reads must overlap; observed peak {}",
+        concurrency.peak()
+    );
+    for ordinal in 0..8 {
+        assert_eq!(
+            index
+                .get_vector(&format!("parallel-tail-{ordinal}"))
+                .unwrap(),
+            Some(vec![ordinal as f32, ordinal as f32 + 0.5])
+        );
+    }
+}
+
+#[test]
 fn search_batch_reuses_request_scoped_routing_page_cache() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut writer = BorsukIndex::create_with_object_store(

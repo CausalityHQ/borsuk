@@ -219,6 +219,35 @@ impl<T> DecodedObjectCache<T> {
 }
 
 impl<T> InFlightReads<T> {
+    /// Return an already-published flight value without waiting for a leader.
+    ///
+    /// Slot-valued users publish their coordination object before starting
+    /// backing I/O, so followers can join without first competing for the
+    /// leader's byte-admission capacity.
+    pub(crate) fn get(&self, checksum: &str) -> Option<Arc<T>> {
+        let flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
+        let flight = flights.get(checksum)?;
+        let state = flight.state.lock().unwrap_or_else(|e| e.into_inner());
+        match &*state {
+            ReadFlightState::Ready(value) => value.upgrade(),
+            ReadFlightState::Loading | ReadFlightState::Failed => None,
+        }
+    }
+
+    /// Remove a published coordination value only if it is still the value
+    /// registered for this key.
+    pub(crate) fn discard_value(&self, checksum: &str, value: &Arc<T>) {
+        let mut flights = self.flights.lock().unwrap_or_else(|e| e.into_inner());
+        let remove = flights.get(checksum).is_some_and(|flight| {
+            let state = flight.state.lock().unwrap_or_else(|e| e.into_inner());
+            matches!(&*state, ReadFlightState::Ready(current)
+                if current.upgrade().is_some_and(|current| Arc::ptr_eq(&current, value)))
+        });
+        if remove {
+            flights.remove(checksum);
+        }
+    }
+
     /// Load `checksum` once for callers whose load or consumption overlaps.
     ///
     /// The leader reports the physical bytes read; followers report zero so
@@ -1004,6 +1033,31 @@ impl ByteAdmissionGate {
         }
     }
 
+    /// Admit immediately without joining the FIFO queue.
+    ///
+    /// A failed attempt consumes no ticket, so an opportunistic sliding-window
+    /// fill cannot move ahead of an already-blocked caller or leave a phantom
+    /// waiter behind.
+    pub(crate) fn try_acquire_owned(
+        self: &Arc<Self>,
+        bytes: u64,
+    ) -> Option<OwnedByteAdmissionPermit> {
+        let weight = bytes.max(1).min(self.capacity);
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.next_ticket != state.serving_ticket
+            || state.used.saturating_add(weight) > self.capacity
+        {
+            return None;
+        }
+        state.used = state.used.saturating_add(weight);
+        state.peak = state.peak.max(state.used);
+        state.admitted = state.admitted.saturating_add(1);
+        Some(OwnedByteAdmissionPermit {
+            gate: Arc::clone(self),
+            weight,
+        })
+    }
+
     fn acquire_weight(&self, bytes: u64) -> u64 {
         let weight = bytes.max(1).min(self.capacity);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1510,6 +1564,23 @@ mod tests {
         assert_eq!(finished.admitted, 2);
         assert_eq!(finished.wait_count, 1);
         assert!(finished.wait_micros > 0);
+    }
+
+    #[test]
+    fn byte_admission_try_does_not_queue_or_block_fifo_waiters() {
+        let gate = Arc::new(ByteAdmissionGate::new(100));
+        let held = gate.acquire_owned(60);
+
+        assert!(gate.try_acquire_owned(60).is_none());
+        assert_eq!(gate.snapshot().waiting, 0);
+        let fitting = gate
+            .try_acquire_owned(40)
+            .expect("remaining capacity must be admitted immediately");
+        assert_eq!(gate.used_bytes(), 100);
+
+        drop(fitting);
+        drop(held);
+        assert_eq!(gate.used_bytes(), 0);
     }
 
     #[test]

@@ -63,3 +63,12 @@ where
 {
     io_pool().install(work)
 }
+
+/// Queue one blocking object-store operation without waiting for a worker.
+/// The task itself must never wait on another task in this same fixed pool.
+pub(crate) fn spawn_io<F>(work: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    io_pool().spawn(work);
+}

@@ -144,6 +144,7 @@ pub struct FaultInjectingObjectStore {
     put_barrier: Option<Arc<PutBarrier>>,
     put_overlap_barrier: Option<Arc<PutOverlapBarrier>>,
     put_concurrency: Option<Arc<PutConcurrencyProbe>>,
+    get_concurrency: Option<(Arc<PutConcurrencyProbe>, Arc<PathPredicate>)>,
     get_group_concurrency: Option<Arc<GetGroupConcurrencyProbe>>,
     fail_after_put: bool,
 }
@@ -254,6 +255,11 @@ impl PutConcurrencyProbe {
     pub fn peak(&self) -> usize {
         self.peak.load(Ordering::SeqCst)
     }
+
+    pub fn reset(&self) {
+        assert_eq!(self.active.load(Ordering::SeqCst), 0);
+        self.peak.store(0, Ordering::SeqCst);
+    }
 }
 
 struct ActivePut<'a> {
@@ -292,6 +298,7 @@ impl FaultInjectingObjectStore {
             put_barrier: None,
             put_overlap_barrier: None,
             put_concurrency: None,
+            get_concurrency: None,
             get_group_concurrency: None,
             fail_after_put: false,
         }
@@ -342,6 +349,7 @@ impl FaultInjectingObjectStore {
             put_barrier: None,
             put_overlap_barrier: None,
             put_concurrency: None,
+            get_concurrency: None,
             get_group_concurrency: None,
             fail_after_put: false,
         }
@@ -451,6 +459,15 @@ impl FaultInjectingObjectStore {
     pub fn with_put_concurrency_probe(mut self) -> (Self, Arc<PutConcurrencyProbe>) {
         let probe = Arc::new(PutConcurrencyProbe::default());
         self.put_concurrency = Some(Arc::clone(&probe));
+        (self, probe)
+    }
+
+    pub fn with_get_concurrency_probe<F>(mut self, predicate: F) -> (Self, Arc<PutConcurrencyProbe>)
+    where
+        F: Fn(StoreOperation, &ObjectPath) -> bool + Send + Sync + 'static,
+    {
+        let probe = Arc::new(PutConcurrencyProbe::default());
+        self.get_concurrency = Some((Arc::clone(&probe), Arc::new(predicate)));
         (self, probe)
     }
 
@@ -599,15 +616,20 @@ impl ObjectStore for FaultInjectingObjectStore {
         Self: Sync + 'async_trait,
     {
         Box::pin(async move {
-            let _active_group_get = self
-                .get_group_concurrency
-                .as_deref()
-                .map(|probe| probe.enter(location));
             let operation = if options.head {
                 StoreOperation::Head
             } else {
                 StoreOperation::Get
             };
+            let _active_get = self
+                .get_concurrency
+                .as_ref()
+                .filter(|(_, predicate)| predicate(operation, location))
+                .map(|(probe, _)| probe.enter());
+            let _active_group_get = self
+                .get_group_concurrency
+                .as_deref()
+                .map(|probe| probe.enter(location));
             self.maybe_sleep_get(operation, location).await;
             self.maybe_fail(operation, location)?;
             self.record_operation(operation, location);

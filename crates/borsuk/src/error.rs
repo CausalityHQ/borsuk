@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf};
+use std::{io, path::PathBuf, sync::Arc};
 
 use crate::record::{LeafCapability, LeafMode, SearchTerminationReason};
 
@@ -8,6 +8,10 @@ pub type Result<T> = std::result::Result<T, BorsukError>;
 /// Errors returned by BORSUK operations.
 #[derive(Debug, thiserror::Error)]
 pub enum BorsukError {
+    /// One immutable asynchronous operation failed for multiple overlapping
+    /// callers. Preserve the original classification while sharing ownership.
+    #[error(transparent)]
+    Shared(Arc<BorsukError>),
     /// A vector or query dimension did not match the index dimension.
     #[error("dimension mismatch: expected {expected}, got {actual}")]
     DimensionMismatch {
@@ -219,6 +223,7 @@ impl BorsukError {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            Self::Shared(error) => error.code(),
             Self::DimensionMismatch { .. } => "dimension_mismatch",
             Self::InvalidMetricInput(_) => "invalid_metric_input",
             Self::InvalidRecordInput(_) => "invalid_record_input",

@@ -3022,9 +3022,12 @@ fn wal_records_to_batch(
 
 /// Decode a WAL object back into its records, reconstructing each row's primary
 /// vector from the dedicated record-only table.
-pub(crate) fn wal_records_from_table(bytes: Vec<u8>, path: &str) -> Result<Vec<VectorRecord>> {
+pub(crate) fn wal_records_from_table(
+    bytes: impl AsRef<[u8]>,
+    path: &str,
+) -> Result<Vec<VectorRecord>> {
     let batches = if path.ends_with(".parquet") {
-        read_batches(&bytes)?
+        read_batches(bytes.as_ref())?
     } else {
         return Err(BorsukError::InvalidStorage(format!(
             "WAL records object `{path}` has no supported table extension"

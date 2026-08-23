@@ -186,9 +186,163 @@ const MAX_PARALLEL_SEGMENT_UPLOADS: usize = crate::DEFAULT_BUILD_THREADS;
 /// Newest segments are still resolved first; only independent candidates in a
 /// bounded window are fetched together to hide object-store RTT.
 const POINT_READ_IO_BATCH: usize = 8;
+/// Bound one WAL-tail materialization wave. The byte-admission gate applies a
+/// tighter limit when runs are large; this count hides S3 RTT for small runs
+/// without multiplying task or result bookkeeping.
+const WAL_TAIL_READ_IO_BATCH: usize = 8;
+/// Reserve one third of bounded transient RAM for compressed WAL-tail objects;
+/// decode, ranking, and other transient work share the remaining two thirds.
+const WAL_TAIL_FETCH_TRANSIENT_BUDGET_DIVISOR: u64 = 3;
 struct PreparedObjectWrite {
     path: String,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+enum FetchedWalTailRun {
+    Cached(Arc<Vec<VectorRecord>>),
+    Bytes(FetchedWalTailTicket),
+}
+
+#[derive(Debug)]
+struct FetchedWalTailBytes {
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct FetchedWalTailFetch {
+    state: Mutex<Option<std::result::Result<Arc<FetchedWalTailBytes>, Arc<BorsukError>>>>,
+    ready: std::sync::Condvar,
+    _permit: Mutex<Option<OwnedByteAdmissionPermit>>,
+    participation: Mutex<FetchedWalTailParticipation>,
+}
+
+#[derive(Debug, Default)]
+struct FetchedWalTailParticipation {
+    consumers: usize,
+    sealed: bool,
+}
+
+impl FetchedWalTailFetch {
+    fn pending() -> Self {
+        Self {
+            state: Mutex::new(None),
+            ready: std::sync::Condvar::new(),
+            _permit: Mutex::new(None),
+            participation: Mutex::new(FetchedWalTailParticipation::default()),
+        }
+    }
+
+    fn start<F>(self: &Arc<Self>, permit: OwnedByteAdmissionPermit, loader: F)
+    where
+        F: FnOnce() -> Result<Vec<u8>> + Send + 'static,
+    {
+        *self
+            ._permit
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(permit);
+        let fetch = Arc::clone(self);
+        crate::parallel::spawn_io(move || {
+            if fetch.seal_if_unobserved() {
+                fetch
+                    ._permit
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .take();
+                let error = BorsukError::InvalidStorage(
+                    "WAL-tail object fetch was abandoned before it started".to_owned(),
+                );
+                *fetch
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(Err(Arc::new(error)));
+                fetch.ready.notify_all();
+                return;
+            }
+            let result = loader()
+                .map(|bytes| Arc::new(FetchedWalTailBytes { bytes }))
+                .map_err(Arc::new);
+            *fetch
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(result);
+            fetch.ready.notify_all();
+        });
+    }
+
+    fn wait(&self) -> Result<Arc<FetchedWalTailBytes>> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        while state.is_none() {
+            state = self
+                .ready
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+        match state.as_ref().expect("wait loop requires completed fetch") {
+            Ok(bytes) => Ok(Arc::clone(bytes)),
+            Err(error) => Err(BorsukError::Shared(Arc::clone(error))),
+        }
+    }
+
+    #[cfg(test)]
+    fn has_consumers(&self) -> bool {
+        self.participation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .consumers
+            > 0
+    }
+
+    fn seal_if_unobserved(&self) -> bool {
+        let mut participation = self
+            .participation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if participation.consumers > 0 {
+            return false;
+        }
+        participation.sealed = true;
+        true
+    }
+}
+
+#[derive(Debug)]
+struct FetchedWalTailTicket {
+    fetch: Arc<FetchedWalTailFetch>,
+}
+
+impl FetchedWalTailTicket {
+    fn attach(fetch: Arc<FetchedWalTailFetch>) -> Option<Self> {
+        {
+            let mut participation = fetch
+                .participation
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if participation.sealed {
+                return None;
+            }
+            participation.consumers = participation.consumers.saturating_add(1);
+        }
+        Some(Self { fetch })
+    }
+
+    fn wait(&self) -> Result<Arc<FetchedWalTailBytes>> {
+        self.fetch.wait()
+    }
+}
+
+impl Drop for FetchedWalTailTicket {
+    fn drop(&mut self) {
+        let mut participation = self
+            .fetch
+            .participation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        participation.consumers = participation
+            .consumers
+            .checked_sub(1)
+            .expect("WAL-tail fetch ticket count underflow");
+    }
 }
 
 struct PreparedLexicalSegmentWrite {
@@ -1368,7 +1522,9 @@ type ResidentLexicalRoots = Arc<Mutex<Option<(u64, BTreeMap<(String, String), Ar
 #[derive(Debug)]
 pub(crate) struct WalTailRuntime {
     decoded_runs: DecodedObjectCache<Vec<VectorRecord>>,
+    inflight_fetches: InFlightReads<FetchedWalTailFetch>,
     inflight_runs: InFlightReads<Vec<VectorRecord>>,
+    fetch_admission: Arc<ByteAdmissionGate>,
     decode_admission: Arc<ByteAdmissionGate>,
 }
 
@@ -1379,12 +1535,14 @@ impl WalTailRuntime {
             cache_max_bytes,
             None,
             Arc::new(ByteAdmissionGate::new(decode_max_bytes)),
+            Arc::new(ByteAdmissionGate::new(decode_max_bytes)),
         )
     }
 
     fn new_with_shared(
         cache_max_bytes: u64,
         retained_pool: Option<Arc<RetainedBytePool>>,
+        fetch_admission: Arc<ByteAdmissionGate>,
         decode_admission: Arc<ByteAdmissionGate>,
     ) -> Self {
         Self {
@@ -1392,8 +1550,59 @@ impl WalTailRuntime {
                 || DecodedObjectCache::new(cache_max_bytes),
                 |pool| DecodedObjectCache::new_with_pool(cache_max_bytes, pool),
             ),
+            inflight_fetches: InFlightReads::default(),
             inflight_runs: InFlightReads::default(),
+            fetch_admission,
             decode_admission,
+        }
+    }
+
+    fn issue_fetched_run<F>(
+        &self,
+        key: &str,
+        encoded_bytes: u64,
+        may_block: bool,
+        loader: F,
+    ) -> Result<Option<FetchedWalTailTicket>>
+    where
+        F: FnOnce() -> Result<Vec<u8>> + Send + 'static,
+    {
+        let mut loader = Some(loader);
+        loop {
+            if let Some(fetch) = self.inflight_fetches.get(key) {
+                if let Some(ticket) = FetchedWalTailTicket::attach(Arc::clone(&fetch)) {
+                    return Ok(Some(ticket));
+                }
+                self.inflight_fetches.discard_value(key, &fetch);
+                continue;
+            }
+
+            let permit = if may_block {
+                None
+            } else {
+                let Some(permit) = self.fetch_admission.try_acquire_owned(encoded_bytes) else {
+                    return Ok(None);
+                };
+                Some(permit)
+            };
+            // Publish the pending slot before a blocking admission so same-key
+            // followers can attach without queueing behind the leader's bytes.
+            let (fetch, _, shared) = self
+                .inflight_fetches
+                .load(key, || Ok((FetchedWalTailFetch::pending(), 0)))?;
+            let Some(ticket) = FetchedWalTailTicket::attach(Arc::clone(&fetch)) else {
+                drop(permit);
+                self.inflight_fetches.discard_value(key, &fetch);
+                continue;
+            };
+            if shared {
+                drop(permit);
+            } else {
+                let permit =
+                    permit.unwrap_or_else(|| self.fetch_admission.acquire_owned(encoded_bytes));
+                fetch.start(permit, loader.take().expect("fetch leader owns its loader"));
+            }
+            return Ok(Some(ticket));
         }
     }
 
@@ -1419,6 +1628,34 @@ impl WalTailRuntime {
             decoded_wal_records_bytes(&records),
         );
         Ok(records)
+    }
+
+    fn load_admitted_record_run<F>(
+        &self,
+        key: &str,
+        decode_bytes: u64,
+        loader: F,
+    ) -> Result<Arc<Vec<VectorRecord>>>
+    where
+        F: FnOnce() -> Result<Vec<VectorRecord>>,
+    {
+        if let Some(records) = self.decoded_runs.get(key) {
+            return Ok(records);
+        }
+        let (records, _, _) = self.inflight_runs.load(key, || {
+            let _permit = self.decode_admission.acquire_owned(decode_bytes);
+            loader().map(|records| (records, 0))
+        })?;
+        self.decoded_runs.insert(
+            key.to_string(),
+            Arc::clone(&records),
+            decoded_wal_records_bytes(&records),
+        );
+        Ok(records)
+    }
+
+    fn cached_record_run(&self, key: &str) -> Option<Arc<Vec<VectorRecord>>> {
+        self.decoded_runs.get(key)
     }
 
     #[cfg(test)]
@@ -3272,16 +3509,29 @@ impl CollectionReadRuntime {
             .map(|(budget, resident_capacity)| budget.saturating_sub(resident_capacity));
         let retained_capacity = remaining.map(|bytes| bytes / 2);
         let transient_capacity = remaining.map(|bytes| bytes.saturating_sub(bytes / 2));
+        let wal_fetch_capacity = transient_capacity.map(|capacity| {
+            (capacity / WAL_TAIL_FETCH_TRANSIENT_BUDGET_DIVISOR)
+                .max(1)
+                .min(capacity.max(1))
+        });
+        let transient_work_capacity = transient_capacity.map(|capacity| {
+            capacity
+                .saturating_sub(wal_fetch_capacity.unwrap_or(0))
+                .max(1)
+        });
         let retained_pool =
             retained_capacity.map(|capacity| Arc::new(RetainedBytePool::new(capacity)));
         let transient_admission =
-            transient_capacity.map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)));
+            transient_work_capacity.map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)));
         let lexical_admission = transient_admission.clone().or_else(|| {
             automatic_lexical_capacity_bytes(effective_ram_budget)
                 .map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)))
         });
         let wal_decode_admission = transient_admission
             .clone()
+            .unwrap_or_else(|| Arc::new(ByteAdmissionGate::new(options.wal_tail_decode_max_bytes)));
+        let wal_fetch_admission = wal_fetch_capacity
+            .map(|capacity| Arc::new(ByteAdmissionGate::new(capacity)))
             .unwrap_or_else(|| Arc::new(ByteAdmissionGate::new(options.wal_tail_decode_max_bytes)));
         let segment_cache = options
             .segment_cache_max_bytes
@@ -3411,6 +3661,7 @@ impl CollectionReadRuntime {
             wal_tail_runtime: Arc::new(WalTailRuntime::new_with_shared(
                 options.wal_tail_cache_max_bytes,
                 retained_pool,
+                wal_fetch_admission,
                 wal_decode_admission,
             )),
         })
@@ -13227,8 +13478,8 @@ impl BorsukIndex {
         for entries in record_runs_by_cell.into_values() {
             let mut pending = Vec::with_capacity(segment_max_vectors);
             let mut pending_ids = HashSet::with_capacity(segment_max_vectors);
-            for entry in entries {
-                let mut records = self.load_wal_tail_records(std::slice::from_ref(entry))?;
+            self.for_each_loaded_wal_tail_record_run(&entries, |entry, decoded| {
+                let mut records = decoded.as_ref().clone();
                 if records.len() > segment_max_vectors {
                     sort_records_by_vector_locality(
                         &mut records,
@@ -13281,7 +13532,8 @@ impl BorsukIndex {
                 manifest
                     .cell_wal_consumed_runs
                     .insert(cell_wal_run_identity(entry));
-            }
+                Ok(())
+            })?;
             if !pending.is_empty() {
                 let segment = Segment::from_records_with_quantizer_and_geometry(
                     Uuid::new_v4().to_string(),
@@ -13440,47 +13692,115 @@ impl BorsukIndex {
     /// frontier order. Used by flush; reads go through [`Self::wal_tail`] which
     /// caches the result.
     fn load_wal_tail_records(&self, cell_runs: &[PreparedCellWalRun]) -> Result<Vec<VectorRecord>> {
+        let cell_runs = cell_runs.iter().collect::<Vec<_>>();
         let mut records = Vec::new();
-        for entry in cell_runs {
-            if entry.kind != CellWalRunKind::Records {
-                continue;
-            }
-            let projection = positioned_projection_from_metadata(&entry.metadata)?;
-            let mut key = cell_wal_run_identity(entry);
-            if projection.is_some() {
-                // Root and every named child share one decoded-run cache, but
-                // positioned children project different logical records from
-                // the same root payload. Keep those decoded views distinct.
-                key.push(':');
-                key.push_str(&blake3::hash(&entry.metadata).to_hex());
-            }
-            let decode_bytes = entry.byte_len.max(1);
-            let decoded = self
-                .wal_tail_runtime
-                .load_record_run(&key, decode_bytes, || {
-                    let read = if projection.is_some() {
-                        self.collection_storage
-                            .read_bytes_with_cache_status_and_checksum(
-                                &entry.path,
-                                &entry.checksum,
-                            )?
-                    } else {
-                        self.storage.read_bytes_with_cache_status_and_checksum(
-                            &entry.path,
-                            &entry.checksum,
-                        )?
-                    };
-                    let records = wal_records_from_table(read.bytes, &entry.path)?;
-                    match projection {
-                        Some((kind, name)) => {
-                            Self::positioned_named_projection(records, name, kind)
-                        }
-                        None => Ok(records),
-                    }
-                })?;
+        self.for_each_loaded_wal_tail_record_run(&cell_runs, |_entry, decoded| {
             records.extend(decoded.iter().cloned());
-        }
+            Ok(())
+        })?;
         Ok(records)
+    }
+
+    fn for_each_loaded_wal_tail_record_run<F>(
+        &self,
+        cell_runs: &[&PreparedCellWalRun],
+        mut consume: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&PreparedCellWalRun, Arc<Vec<VectorRecord>>) -> Result<()>,
+    {
+        // Issue a byte-bounded window of independent object reads, but decode
+        // and consume only its frontier item. A blocking admission happens only
+        // with an empty window; deeper fills are opportunistic and therefore
+        // cannot hold earlier permits while waiting for later ones.
+        let mut next = 0_usize;
+        let mut window = VecDeque::new();
+        while next < cell_runs.len() || !window.is_empty() {
+            while next < cell_runs.len() && window.len() < WAL_TAIL_READ_IO_BATCH {
+                let entry = cell_runs[next];
+                if entry.kind != CellWalRunKind::Records {
+                    next += 1;
+                    continue;
+                }
+                let may_block = window.is_empty();
+                let Some(fetched) = self.issue_wal_tail_record_run(entry, may_block)? else {
+                    break;
+                };
+                window.push_back((entry, fetched));
+                next += 1;
+            }
+            let Some((entry, fetched)) = window.pop_front() else {
+                continue;
+            };
+            let decoded = self.decode_fetched_wal_tail_record_run(entry, &fetched)?;
+            consume(entry, decoded)?;
+        }
+        Ok(())
+    }
+
+    fn wal_tail_record_run_key(entry: &PreparedCellWalRun) -> Result<String> {
+        let projection = positioned_projection_from_metadata(&entry.metadata)?;
+        let mut key = cell_wal_run_identity(entry);
+        if projection.is_some() {
+            // Root and every named child share one decoded-run cache, but
+            // positioned children project different logical records from
+            // the same root payload. Keep those decoded views distinct.
+            key.push(':');
+            key.push_str(&blake3::hash(&entry.metadata).to_hex());
+        }
+        Ok(key)
+    }
+
+    fn issue_wal_tail_record_run(
+        &self,
+        entry: &PreparedCellWalRun,
+        may_block: bool,
+    ) -> Result<Option<FetchedWalTailRun>> {
+        let projection = positioned_projection_from_metadata(&entry.metadata)?;
+        let positioned = projection.is_some();
+        let key = Self::wal_tail_record_run_key(entry)?;
+        if let Some(records) = self.wal_tail_runtime.cached_record_run(&key) {
+            return Ok(Some(FetchedWalTailRun::Cached(records)));
+        }
+        let storage = if positioned {
+            self.collection_storage.clone()
+        } else {
+            self.storage.clone()
+        };
+        let path = entry.path.clone();
+        let checksum = entry.checksum.clone();
+        let fetched = self.wal_tail_runtime.issue_fetched_run(
+            &key,
+            entry.byte_len,
+            may_block,
+            move || {
+                Ok(storage
+                    .read_bytes_with_cache_status_and_checksum(&path, &checksum)?
+                    .bytes)
+            },
+        )?;
+        Ok(fetched.map(FetchedWalTailRun::Bytes))
+    }
+
+    fn decode_fetched_wal_tail_record_run(
+        &self,
+        entry: &PreparedCellWalRun,
+        fetched: &FetchedWalTailRun,
+    ) -> Result<Arc<Vec<VectorRecord>>> {
+        let fetched = match fetched {
+            FetchedWalTailRun::Cached(records) => return Ok(Arc::clone(records)),
+            FetchedWalTailRun::Bytes(fetch) => fetch.wait()?,
+        };
+        let projection = positioned_projection_from_metadata(&entry.metadata)?;
+        let key = Self::wal_tail_record_run_key(entry)?;
+        self.wal_tail_runtime
+            .load_admitted_record_run(&key, entry.byte_len, || {
+                let records = wal_records_from_table(&fetched.bytes, &entry.path)?;
+                match projection {
+                    Some((kind, name)) => Self::positioned_named_projection(records, name, kind),
+                    None => Ok(records),
+                }
+            })
     }
 
     fn wal_query_cells(
@@ -34158,6 +34478,222 @@ mod tests {
                 .all(|value| Arc::ptr_eq(&values[0], value))
         );
         assert_eq!(runtime.resident_bytes(), 0);
+    }
+
+    #[test]
+    fn wal_tail_runtime_single_flights_overlapping_encoded_fetches() {
+        let runtime = Arc::new(WalTailRuntime::new(0, 1024));
+        let loads = Arc::new(AtomicUsize::new(0));
+        let callers = (0..4)
+            .map(|_| {
+                let runtime = Arc::clone(&runtime);
+                let loads = Arc::clone(&loads);
+                thread::spawn(move || {
+                    let fetch = runtime
+                        .issue_fetched_run("immutable-run", 128, true, move || {
+                            loads.fetch_add(1, Ordering::SeqCst);
+                            thread::sleep(Duration::from_millis(50));
+                            Ok(vec![7_u8; 128])
+                        })
+                        .unwrap()
+                        .unwrap();
+                    fetch.wait().unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let values = callers
+            .into_iter()
+            .map(|caller| caller.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert!(
+            values
+                .iter()
+                .skip(1)
+                .all(|value| Arc::ptr_eq(&values[0], value))
+        );
+    }
+
+    #[test]
+    fn wal_tail_runtime_overlapping_callers_share_one_admitted_fetch() {
+        let runtime = Arc::new(WalTailRuntime::new(0, 100));
+        let loads = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(Barrier::new(5));
+        let callers = (0..4)
+            .map(|_| {
+                let runtime = Arc::clone(&runtime);
+                let loads = Arc::clone(&loads);
+                let start = Arc::clone(&start);
+                thread::spawn(move || {
+                    start.wait();
+                    let fetch = runtime
+                        .issue_fetched_run("same-run", 60, true, move || {
+                            loads.fetch_add(1, Ordering::SeqCst);
+                            thread::sleep(Duration::from_millis(100));
+                            Ok(vec![7_u8; 60])
+                        })
+                        .unwrap()
+                        .expect("an empty window may wait for admission");
+                    fetch.wait().unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        start.wait();
+        let values = callers
+            .into_iter()
+            .map(|caller| caller.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert!(values.iter().all(|value| value.bytes.len() == 60));
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert!(runtime.fetch_admission.peak_bytes() <= 100);
+    }
+
+    #[test]
+    fn wal_tail_runtime_interleaves_fetches_within_collection_byte_cap() {
+        let runtime = Arc::new(WalTailRuntime::new(0, 100));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let issue = |key: &'static str, bytes: u64, may_block: bool| {
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            runtime
+                .issue_fetched_run(key, bytes, may_block, move || {
+                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(50));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(vec![bytes as u8; usize::try_from(bytes).unwrap()])
+                })
+                .unwrap()
+        };
+
+        let first = issue("run-60-a", 60, true).unwrap();
+        let second = issue("run-40", 40, false).unwrap();
+        assert!(issue("run-60-b", 60, false).is_none());
+        assert_eq!(first.wait().unwrap().bytes.len(), 60);
+        drop(first);
+        assert_eq!(second.wait().unwrap().bytes.len(), 40);
+        drop(second);
+        let third = issue("run-60-b", 60, true).unwrap();
+        assert_eq!(third.wait().unwrap().bytes.len(), 60);
+
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        assert!(runtime.fetch_admission.peak_bytes() <= 100);
+    }
+
+    #[test]
+    fn wal_tail_fetch_admission_does_not_block_decode_admission() {
+        let runtime = Arc::new(WalTailRuntime::new(0, 100));
+        let fetch = runtime
+            .issue_fetched_run("encoded", 100, true, || Ok(vec![1_u8; 100]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetch.wait().unwrap().bytes.len(), 100);
+
+        let (sent, received) = std::sync::mpsc::channel();
+        let worker_runtime = Arc::clone(&runtime);
+        let worker = thread::spawn(move || {
+            let result = worker_runtime.load_record_run("decoded", 100, || {
+                Ok(vec![VectorRecord::new("row", vec![1.0, 2.0])])
+            });
+            sent.send(result.is_ok()).unwrap();
+        });
+        let completed = received.recv_timeout(Duration::from_millis(100));
+
+        // Always release the fetch and join so a failing regression cannot
+        // strand a blocked test thread in the process.
+        drop(fetch);
+        worker.join().unwrap();
+        assert_eq!(completed.unwrap(), true);
+    }
+
+    #[test]
+    fn wal_tail_async_fetch_preserves_error_classification() {
+        let runtime = WalTailRuntime::new(0, 100);
+        let fetch = runtime
+            .issue_fetched_run("bad-checksum", 1, true, || {
+                Err(BorsukError::ChecksumMismatch {
+                    path: "payload.parquet".to_owned(),
+                    expected: "expected".to_owned(),
+                    actual: "actual".to_owned(),
+                })
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(fetch.wait().unwrap_err().code(), "checksum_mismatch");
+    }
+
+    #[test]
+    fn wal_tail_fetch_ticket_abandons_an_unobserved_slot() {
+        let fetch = Arc::new(FetchedWalTailFetch::pending());
+        let first = FetchedWalTailTicket::attach(Arc::clone(&fetch)).unwrap();
+        let second = FetchedWalTailTicket::attach(Arc::clone(&fetch)).unwrap();
+        assert!(fetch.has_consumers());
+
+        drop(first);
+        assert!(fetch.has_consumers());
+        drop(second);
+        assert!(!fetch.has_consumers());
+        assert!(fetch.seal_if_unobserved());
+        assert!(FetchedWalTailTicket::attach(Arc::clone(&fetch)).is_none());
+    }
+
+    #[test]
+    fn wal_tail_queued_fetch_skips_io_after_its_ticket_is_abandoned() {
+        let workers = crate::configured_io_threads();
+        let release = Arc::new(Barrier::new(workers + 1));
+        let (started_send, started_receive) = std::sync::mpsc::channel();
+        for _ in 0..workers {
+            let release = Arc::clone(&release);
+            let started_send = started_send.clone();
+            crate::parallel::spawn_io(move || {
+                started_send.send(()).unwrap();
+                release.wait();
+            });
+        }
+        drop(started_send);
+        for _ in 0..workers {
+            started_receive.recv().unwrap();
+        }
+
+        let runtime = WalTailRuntime::new(0, 100);
+        let loads = Arc::new(AtomicUsize::new(0));
+        let loader_loads = Arc::clone(&loads);
+        let ticket = runtime
+            .issue_fetched_run("queued", 100, true, move || {
+                loader_loads.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![1_u8; 100])
+            })
+            .unwrap()
+            .unwrap();
+        let fetch = Arc::clone(&ticket.fetch);
+        drop(ticket);
+        release.wait();
+
+        assert_eq!(fetch.wait().unwrap_err().code(), "invalid_storage");
+        assert_eq!(loads.load(Ordering::SeqCst), 0);
+        assert_eq!(runtime.fetch_admission.used_bytes(), 0);
+    }
+
+    #[test]
+    fn bounded_runtime_splits_one_transient_budget_between_fetch_and_decode() {
+        let runtime = CollectionReadRuntime::new(&OpenOptions::default(), Some(600), 0);
+        let fetch = runtime.wal_tail_runtime.fetch_admission.capacity_bytes();
+        let decode = runtime
+            .transient_admission
+            .as_ref()
+            .unwrap()
+            .capacity_bytes();
+
+        // 600 total -> 150 resident + 225 retained + 225 transient.
+        assert_eq!(fetch.saturating_add(decode), 225);
+        assert!(fetch > 0);
+        assert!(decode > fetch);
     }
 
     #[test]
